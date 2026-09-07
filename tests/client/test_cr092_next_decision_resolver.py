@@ -1567,5 +1567,268 @@ class NextBlockCitationsTest(unittest.TestCase):
             "declares no citation the block does not carry")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CR-CRU-108 §S2 — the client READS the published track fact
+#
+# RED (2026-09-07). §S1 shipped on this branch: `GET …/queue` now publishes
+# `tracks` — the sorted distinct non-blank values, TRIMMED (`declaredTracks`,
+# src/store.ts:380, called from `handleQueueGet`, src/v2.ts:1848). §S2 makes
+# the fleet READ that list instead of re-deriving one, and the reason is
+# measured rather than aesthetic: `queue_tracks` filters on TRUTHINESS and
+# never trims, so over the fixture AC6 names the two rules answer FOUR tracks
+# and TWO (measured 2026-09-07).
+#
+# Every behavioural test below drives the PAYLOAD rather than grepping the
+# SUT: a queue read whose `entries` and whose published `tracks` DISAGREE is
+# the one instrument a client that still recomputes cannot pass, and it is
+# driven in BOTH directions — a published list that NARROWS the answer to one
+# lane, and one that WIDENS it to two. The second is the CR's stated risk:
+# "a queue read that fails or omits `tracks` must not silently make a
+# multi-track project look single-track".
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _published_queue(entries, tracks):
+    """The §S1 queue read: the entries AND the track list the server DECLARED.
+
+    `tracks` is passed EXPLICITLY, never derived here — a fixture that
+    computed the list would be running the very rule under test and could
+    never disagree with the entries, which is precisely the disagreement these
+    tests need."""
+    return {"ok": True, "entries": list(entries), "tracks": list(tracks)}
+
+
+# The fixture AC6 names, in the shape the read publishes it. The `null` row is
+# spelled literally (the server OMITS a null `track`, so `_entry` cannot carry
+# one) beside the absent-key row, because AC6 names both cases.
+CR108_DIVERGENT_ENTRIES = (
+    {**_entry("CR-CRU-600", 10), "track": None},
+    _entry("CR-CRU-601", 20),
+    _entry("CR-CRU-602", 30, track=""),
+    _entry("CR-CRU-603", 40, track="   "),
+    _entry("CR-CRU-604", 50, track="2"),
+    _entry("CR-CRU-605", 60, track="track-2"),
+    _entry("CR-CRU-606", 70, track=" track-2 "),
+)
+
+# What §S1 publishes over it: blank-dropped, TRIMMED, distinct, sorted — TWO
+# lanes, with the legacy `"2"` echoed as stored rather than re-spelled (AC2).
+CR108_PUBLISHED_TRACKS = ["2", "track-2"]
+
+
+def _truthy_untrimmed_tracks(entries):
+    """The PRE-CUTOVER client rule §S2 deletes, kept in the TEST file and never
+    in the SUT — the `_status_only_pick` idiom. Its job is to prove the fixture
+    above genuinely DIVIDES the two rules, so AC4/AC5b rest on a demonstrated
+    wrong answer rather than on an assertion nobody could fail."""
+    return sorted({e.get("track") for e in entries or [] if e.get("track")})
+
+
+def _published_tracks_reads(path):
+    """AC8 — every read of the published `tracks` KEY in `path`, as
+    `(receiver, expression)`: `resp.get("tracks")`, `queue["tracks"]`. A dict
+    LITERAL that writes the key is not a read, so the resolver building its own
+    refusal is not counted, and reads off the `fields` dict the resolver itself
+    built (`_next_legacy_line`) are the producer inspecting its own envelope
+    rather than a caller consuming the server's fact — the caller filter below
+    excludes them by receiver."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    reads = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "tracks"):
+            reads.append((ast.unparse(node.func.value), ast.unparse(node)))
+        elif (isinstance(node, ast.Subscript)
+              and isinstance(node.slice, ast.Constant)
+              and node.slice.value == "tracks"
+              and isinstance(node.ctx, ast.Load)):
+            reads.append((ast.unparse(node.value), ast.unparse(node)))
+    return reads
+
+
+class PublishedTrackFactTest(_NextTestBase):
+    """§S2/AC4 — `queue_tracks` stops computing and starts reading. Asserted
+    BEHAVIOURALLY, through the real `cmd_next` over a real payload: the source
+    guard is AC4's second half and lives with the fleet's other source sweeps
+    (`tests/client/test_cr054_fleet_inventory.py`)."""
+
+    # Two lanes by BOTH rules — the disagreement is supplied by the published
+    # list, so the entries can never be the reason a test here passes.
+    TWO_LANE_ENTRIES = (_entry("CR-CRU-610", 10, track="track-1"),
+                        _entry("CR-CRU-611", 20, track="track-2"))
+
+    def test_the_fixture_genuinely_divides_the_two_rules(self):
+        """Non-vacuity for everything below (the CR's own measurement,
+        2026-09-07). If these two lists ever agreed, every assertion in this
+        class would pass against a client that never changed."""
+        old = _truthy_untrimmed_tracks(CR108_DIVERGENT_ENTRIES)
+        self.assertEqual(old, ["   ", " track-2 ", "2", "track-2"])
+        self.assertEqual(CR108_PUBLISHED_TRACKS, ["2", "track-2"])
+        self.assertNotEqual(
+            old, CR108_PUBLISHED_TRACKS,
+            "the AC6 fixture must divide the pre-cutover client rule from the "
+            "published one, or AC4/AC5b measure nothing")
+
+    def test_the_refusal_lists_the_published_tracks_never_a_recomputed_set(self):
+        """AC4 — the refusal's `tracks[]` is the list the READ published. A
+        client still deriving its own answers FOUR lanes over this payload,
+        two of which are a whitespace-only string and a padded duplicate."""
+        code, _out, _err, axi, _ops = self.drive(
+            _published_queue(CR108_DIVERGENT_ENTRIES, CR108_PUBLISHED_TRACKS))
+        self.assertEqual(code, 2)
+        self.assertIs(axi.get("ok"), False)
+        self.assertEqual(axi.get("needs"), ["track"])
+        self.assertEqual(
+            axi.get("tracks"), CR108_PUBLISHED_TRACKS,
+            "AC4 — `tracks[]` is what the queue read published, not what the "
+            "client re-derived from the entries beside it")
+        self.assertEqual(
+            axi.get("totalCount"), len(CR108_PUBLISHED_TRACKS),
+            "§S6 P4 — the count is of the PUBLISHED list, so a caller is never "
+            "told there are four lanes to choose between")
+        self.assertNotIn("decision", axi)
+
+    def test_a_published_single_track_answers_where_the_entries_read_as_two(self):
+        """AC4, the narrowing direction. The payload is the INSTRUMENT: its
+        entries carry two lanes and its published list carries one, so a
+        client that recomputes refuses and a client that reads answers. Only
+        the second is §S2's cutover."""
+        code, _out, _err, axi, _ops = self.drive(
+            _published_queue(self.TWO_LANE_ENTRIES, ["track-1"]))
+        self.assertEqual(
+            code, 0,
+            "AC4 — the published list declares ONE lane, so `next` owes an "
+            "answer; exit 2 is the client re-deriving the fact it was given")
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("decision"), "NEXT")
+        self.assertEqual(axi.get("cr"), "CR-CRU-610")
+        self.assertNotIn("needs", axi)
+        self.assertNotIn("tracks", axi)
+
+    def test_a_published_two_track_list_refuses_where_the_entries_read_as_one(self):
+        """AC4, the widening direction — and the CR's stated RISK: a read whose
+        `tracks` says two lanes must never be quietly narrowed to one by a
+        client re-deriving from the entries, because that lets the scheduling
+        oracle pick a lane design §11 forbids it to pick."""
+        entries = (_entry("CR-CRU-620", 10, track="track-1"),
+                   _entry("CR-CRU-621", 20, track="track-1"))
+        published = ["track-1", "track-2"]
+        code, _out, _err, axi, _ops = self.drive(
+            _published_queue(entries, published))
+        self.assertEqual(
+            code, 2,
+            "AC4/Risk — the published list declares TWO lanes; answering "
+            "anyway is `next` picking a lane it was never told it could")
+        self.assertIs(axi.get("ok"), False)
+        self.assertEqual(axi.get("needs"), ["track"])
+        self.assertEqual(axi.get("tracks"), published)
+        self.assertEqual(axi.get("totalCount"), 2)
+        self.assertNotIn("decision", axi)
+
+    def test_a_whitespace_only_second_value_is_not_a_second_track(self):
+        """AC5b — THE behaviour change this CR makes, asserted as a change. A
+        queue declaring `"   "` beside `"2"` is multi-track to `next` TODAY (it
+        refuses without `--track`) and is SINGLE-track after: the server's rule
+        is the one that survives, and whitespace is not a lane."""
+        entries = (_entry("CR-CRU-630", 10, track="   "),
+                   _entry("CR-CRU-631", 20, track="2"))
+        code, _out, _err, axi, _ops = self.drive(
+            _published_queue(entries, ["2"]))
+        self.assertEqual(
+            code, 0,
+            "AC5b — `\"   \"` is not a declared lane, so this queue is "
+            "single-track and `next` answers rather than refusing")
+        self.assertEqual(axi.get("decision"), "NEXT")
+        self.assertEqual(axi.get("cr"), "CR-CRU-630")
+        self.assertNotIn(
+            "needs", axi,
+            "AC5b — a single-track queue never prompts for `--track`")
+        self.assertNotIn("tracks", axi)
+
+    def test_a_padded_value_collapses_into_the_track_it_pads(self):
+        """AC5b's second half — `" track-2 "` beside `"track-2"` is ONE track,
+        not two. Identity is the TRIMMED value (§S1), so preserving the padding
+        would draw the second lane `normalizeTrack` exists to prevent."""
+        entries = (_entry("CR-CRU-640", 10, track=" track-2 "),
+                   _entry("CR-CRU-641", 20, track="track-2"))
+        code, _out, _err, axi, _ops = self.drive(
+            _published_queue(entries, ["track-2"]))
+        self.assertEqual(
+            code, 0,
+            "AC5b — a padded value and the value it pads are ONE lane, so "
+            "this queue is single-track")
+        self.assertEqual(axi.get("decision"), "NEXT")
+        self.assertEqual(axi.get("cr"), "CR-CRU-640")
+        self.assertNotIn("needs", axi)
+        self.assertNotIn("tracks", axi)
+
+    def test_the_fields_projection_can_still_select_the_published_tracks(self):
+        """AC3's client half — there is no `?fields=` on the wire, so the only
+        projection is `next_projection`/`select_row_fields`. `tracks` must stay
+        SELECTABLE through it, carrying the PUBLISHED value; the refusal's
+        structural exemption (§S6 P2) is what keeps the rest of the scaffolding
+        beside it."""
+        payload = _published_queue(CR108_DIVERGENT_ENTRIES,
+                                   CR108_PUBLISHED_TRACKS)
+        for spelling in ("tracks", "tracks,totalCount", "needs,tracks"):
+            with self.subTest(fields=spelling):
+                code, _out, _err, axi, _ops = self.drive(
+                    payload, fields=spelling)
+                self.assertEqual(code, 2)
+                self.assertEqual(
+                    axi.get("tracks"), CR108_PUBLISHED_TRACKS,
+                    "AC3 — a projection selecting `tracks` gets the list the "
+                    "server published")
+                self.assertEqual(axi.get("totalCount"),
+                                 len(CR108_PUBLISHED_TRACKS))
+                self.assertEqual(axi.get("needs"), ["track"])
+                self.assertTrue(axi.get("help"))
+
+    def test_a_projection_omitting_tracks_narrows_without_moving_the_decision(self):
+        """AC3's second half — narrowing is a PRINTING concern: the same
+        payload must yield the same decision with and without `--fields`, and
+        the unrequested keys must be gone."""
+        payload = _published_queue(self.TWO_LANE_ENTRIES, ["track-1"])
+        whole = self.drive(payload)[3]
+        code, _out, _err, axi, _ops = self.drive(payload, fields="decision,cr")
+        self.assertEqual(
+            code, 0,
+            "AC3 — the projection may not change the decision, and the "
+            "published list declares ONE lane, so the decision is an answer")
+        self.assertEqual(axi.get("decision"), "NEXT")
+        self.assertEqual(axi.get("decision"), whole.get("decision"))
+        self.assertEqual(axi.get("cr"), whole.get("cr"))
+        for dropped in ("seq", "wave", "help"):
+            self.assertNotIn(
+                dropped, axi,
+                f"a projection omitting `{dropped}` must narrow it away")
+
+
+class PublishedTrackFactIsWiredTest(unittest.TestCase):
+    """AC8 — integration, not stub. `handleQueueGet` produces the list (the
+    server half is pinned by the bun suite); the fleet half is that at least
+    one NON-TEST caller in `clients/_crucible_axi.py` actually READS it. Zero
+    non-test callers means the field is unwired and the CR is incomplete."""
+
+    def test_a_non_test_caller_reads_the_published_tracks_field(self):
+        reads = _published_tracks_reads(AXI_MODULE_PATH)
+        self.assertTrue(
+            reads,
+            "non-vacuity: the scan found no `tracks` key read of ANY kind in "
+            "clients/_crucible_axi.py, so a passing verdict below would mean "
+            "the scanner is broken rather than the field wired")
+        consumers = [expr for receiver, expr in reads if receiver != "fields"]
+        self.assertTrue(
+            consumers,
+            f"AC8 — no caller in clients/_crucible_axi.py reads the published "
+            f"`tracks`: the only reads are off the refusal dict the resolver "
+            f"itself built ({[e for _r, e in reads]!r}), which is the producer "
+            f"inspecting its own envelope. Zero non-test callers means the "
+            f"field is unwired.")
+
+
 if __name__ == "__main__":
     unittest.main()

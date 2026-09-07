@@ -1982,5 +1982,104 @@ class Cr075SharedRegistrarParityTest(unittest.TestCase):
             f"that missed it must be named: {offenders!r}")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-108 §S2/AC4 -- the fleet's own copy of the track rule is DELETED.
+#
+# The retired construct is a distinct-SET COMPUTATION over the entries'
+# `track` values -- `sorted({e.get("track") for e in entries ...})` -- and the
+# sweep is repo-wide over `clients/`, not one file, because `queue_tracks` is
+# the shared delegator all five `*-crucible.py` clients reach: one cutover
+# covers the fleet, and a client that grew a private copy would defeat it.
+#
+# The rule is AST-shaped rather than a text grep, and it keys on the
+# comprehension's ELEMENT, for one reason that matters: `resolve_next`'s lane
+# FILTER (`[e for e in entries if canonical_track(e.get("track")) == wanted]`)
+# reads the same key and must SURVIVE §S2. A text grep for `e.get("track")`
+# would demand deleting it; this reads what the comprehension COLLECTS, so it
+# bans deriving the track LIST and leaves selecting a lane alone. Both halves
+# are proven on synthetic sources below rather than asserted.
+# ---------------------------------------------------------------------------
+
+_CR108_RETIRED_TRACK_RULE = (
+    'sorted({e.get("track") for e in entries or [] if e.get("track")})')
+
+_CR108_SURVIVING_LANE_FILTER = (
+    '[e for e in entries if canonical_track(e.get("track")) == wanted]')
+
+
+def _reads_track_key(node):
+    """True iff `node` reads an entry's `track` key, either spelling."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get" and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "track"):
+        return True
+    return (isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "track")
+
+
+def _track_set_computations(source, filename="<scratch>"):
+    """Every comprehension in `source` that COLLECTS `track` values -- the
+    distinct-set computation AC4 retires -- as its unparsed text. A
+    comprehension that merely TESTS the key (the lane filter) collects the
+    entry itself and is not matched."""
+    found = []
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if isinstance(node, (ast.SetComp, ast.ListComp, ast.GeneratorExp)):
+            collected = [node.elt]
+        elif isinstance(node, ast.DictComp):
+            collected = [node.key, node.value]
+        else:
+            continue
+        if any(_reads_track_key(sub) for part in collected
+               for sub in ast.walk(part)):
+            found.append(ast.unparse(node))
+    return found
+
+
+class Cr108TrackRuleIsNotRederivedByTheFleetTest(unittest.TestCase):
+    """AC4 -- `queue_tracks` contains no distinct-set computation: it reads the
+    published `tracks`. The BEHAVIOURAL half (a payload whose entries and whose
+    published list disagree) lives in
+    `tests/client/test_cr092_next_decision_resolver.py`; this is the sweep that
+    proves the deletion reached the whole fleet rather than one function."""
+
+    def test_the_sweep_finds_the_retired_computation_in_a_synthetic_source(self):
+        """Non-vacuity, half one: after §S2 lands, a broken detector would make
+        the fleet verdict below pass for the wrong reason."""
+        found = _track_set_computations(
+            f"def queue_tracks(entries):\n"
+            f"    return {_CR108_RETIRED_TRACK_RULE}\n")
+        self.assertEqual(len(found), 1, f"the sweep missed it: {found!r}")
+
+    def test_the_sweep_leaves_the_lane_filter_alone(self):
+        """Non-vacuity, half two -- and the reason this is AST-shaped. The lane
+        filter reads the same key and MUST survive §S2; a sweep that flagged it
+        would demand deleting the one construct `--track` needs."""
+        found = _track_set_computations(
+            f"def resolve_next(entries, wanted):\n"
+            f"    return {_CR108_SURVIVING_LANE_FILTER}\n")
+        self.assertEqual(
+            found, [],
+            f"selecting a lane is not deriving the track list: {found!r}")
+
+    def test_no_file_in_clients_derives_the_track_list_itself(self):
+        offenders = {}
+        for path in sorted(CLIENTS_DIR.glob("*.py")):
+            found = _track_set_computations(
+                path.read_text(encoding="utf-8"), filename=str(path))
+            if found:
+                offenders[path.name] = found
+        self.assertEqual(
+            offenders, {},
+            f"AC4 -- the distinct-set computation over the entries' `track` "
+            f"values must survive NOWHERE under clients/: the queue read "
+            f"publishes that list and the fleet reads it. A second copy is "
+            f"the divergence CR-CRU-108 removes -- measured 2026-09-07, the "
+            f"client rule answered FOUR tracks where the server's answered "
+            f"TWO. Still derived in: {offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
