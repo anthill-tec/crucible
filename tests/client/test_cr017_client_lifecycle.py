@@ -671,5 +671,320 @@ class EveryLifecyclePathStaysToonAxiShapedTest(_BaseCr017ClientTest):
                 self._assert_toon_axi_shaped(stdout_text, "test", name)
 
 
+# ── CR-CRU-094 §S3 — a missing attribution is announced BEFORE the run ──────
+#
+# §S3 verbatim (re-timed 2026-09-07 by user ruling): the warning is
+# "pre-flight -- emitted when the run starts, while `--cycle` can still be
+# supplied", because "there is no run-level cycle backfill verb" and "a
+# post-hoc warning on a 9-minute gate names no remedy anyone will take; the
+# same warning before the suite starts does."
+#
+# And its two load-bearing constraints, verbatim:
+#   "Best-effort, never blocking. A failed or slow lookup produces NO warning
+#    and NEVER prevents the run."
+#   "Both channels. The line prints to stderr at start ... AND the same
+#    {code, detail} entry rides the final envelope's warnings[]."
+#
+# The mechanism §S3 fixes is already on the wire: `GET /api/v2/agents?project=
+# <key>` projects `boundCycleId` (ABSENT when unbound), so pre-flight is
+# "`--cycle` supplied -> nothing to warn about; else read the binding; absent
+# -> warn". No new endpoint.
+#
+# RED, and the exact reason: `cmd_test`/`cmd_regression` in
+# clients/bun-crucible.py issue NO read at all before spawning the runner --
+# the only pre-run call is `_open_gate_identity`'s register/heartbeat POST --
+# and no `no-cycle` warning exists anywhere in the client or in
+# `_crucible_axi.py` (whose warning family today is `no-wave`, `no-title`,
+# `no-test-reports`, `prefer-gate-run`). Every assertion below that requires
+# either the binding read or the warning therefore fails today.
+#
+# WHY THIS FILE: the pre-flight contract is an ORDERING claim about a wrapped
+# run -- "before the suite's own output, not after the ingest" -- and this
+# harness is the one that can prove ordering rather than assert it by proxy:
+# `FAKE_BUN_SPAWN_STAMP` already makes the fake runner record the instant it
+# starts, so "pre-flight" is asserted against the real spawn time. Reusing it
+# is the whole reason these tests live beside CR-CRU-017's rather than in a
+# parallel harness.
+
+
+# The warning's code, derived from the family it joins: `no_wave_warning` ->
+# "no-wave", `no_title_warning` -> "no-title", so a missing cycle attribution
+# -> "no-cycle". (Deliberately NOT the retired "no-cycle-id" of CR-CRU-030
+# §S3, whose client-side active-cycle resolver CR-CRU-056 §S3 deleted.)
+MISSING_CYCLE_CODE = "no-cycle"
+
+
+class _Cr094PreflightBase(_BaseCr017ClientTest):
+    """Adds one thing to the CR-CRU-017 harness: a `_get` seam that can ANSWER
+    the binding read (`GET /api/v2/agents?project=<key>`) and records every
+    path and the wall-clock instant it was asked, so both "did the client read
+    the binding" and "did it read it before the suite started" are decidable."""
+
+    AGENT = "preflight-attribution-fixture"
+
+    def _agents_ok(self, bound_cycle_id=None):
+        """The real `handleAgentsList` shape: `boundCycleId` is ABSENT for an
+        unbound agent, never null and never 0 (Store.toAgent's convention)."""
+        agent = {"agentId": self.AGENT, "projectKey": self.PROJECT_KEY,
+                 "liveness": "online", "role": "ORCHESTRATOR"}
+        if bound_cycle_id is not None:
+            agent["boundCycleId"] = bound_cycle_id
+        return lambda _path: {"ok": True, "agents": [agent]}
+
+    def _drive(self, server, verb, get_side_effect, extra_argv=()):
+        """Run the REAL CLI dispatch for `verb` against `server`, with `_get`
+        answered by `get_side_effect`. Returns (code, stdout, stderr, gets)
+        where `gets` is [(path, wall_clock_seconds)] in call order."""
+        gets = []
+
+        def _get(path, timeout=10):
+            gets.append((path, time.time()))
+            return get_side_effect(path)
+
+        argv = [verb, "--bun", self.fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", self.AGENT] + list(extra_argv)
+        with mock.patch.object(self.module, "_post", side_effect=server.post), \
+             mock.patch.object(self.module, "_get", create=True, side_effect=_get):
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, gets
+
+    def _binding_reads(self, gets):
+        return [path for path, _at in gets if path.startswith("/api/v2/agents")]
+
+    def _missing_cycle_warnings(self, axi):
+        return [w for w in (axi.get("warnings") or [])
+                if w.get("code") == MISSING_CYCLE_CODE]
+
+
+class UnboundRunIsWarnedOnBothChannelsTest(_Cr094PreflightBase):
+    """AC5 direction 1 — no binding, no `--cycle`, no explicit context: the
+    warning rides BOTH channels and the run still lands. Stderr alone is
+    invisible to a scripted reader; `warnings[]` alone defeats the ruling."""
+
+    def test_the_envelope_carries_the_missing_cycle_warning_and_the_run_still_ingests(self):
+        server = _FakeCrucible()
+
+        code, out, _err, gets = self._drive(server, "test", self._agents_ok())
+
+        # The binding was actually READ -- the warning is a fact about the
+        # server's registration state, not about a local flag being unset.
+        self.assertTrue(
+            self._binding_reads(gets),
+            f"pre-flight must read the binding via GET /api/v2/agents; the "
+            f"client issued no such GET (paths={[p for p, _ in gets]!r})")
+
+        axi = self._assert_toon_axi_shaped(out, "test", "unbound pre-flight")
+        found = self._missing_cycle_warnings(axi)
+        self.assertEqual(
+            len(found), 1,
+            f"exactly ONE `{MISSING_CYCLE_CODE}` warning must ride the final "
+            f"envelope; got codes={self._warning_codes(axi)!r}")
+
+        # WARN-AND-WRITE (CR-CRU-091 §S5's severity ladder): the write is not
+        # the problem, the silence is.
+        self.assertIs(axi.get("ok"), True,
+                      f"the ingest still succeeds; axi={axi!r}")
+        self.assertEqual(code, 0, f"a green run still exits 0; stdout={out!r}")
+        self.assertIsNotNone(
+            server.payload_for("/api/v2/runs/parsed"),
+            f"the run must still be STORED, not refused; paths={server.paths()}")
+
+    def test_the_warning_line_prints_on_stderr_and_before_the_ingest_line(self):
+        server = _FakeCrucible()
+
+        _code, _out, err, _gets = self._drive(server, "test", self._agents_ok())
+
+        at = err.find(MISSING_CYCLE_CODE)
+        self.assertNotEqual(
+            at, -1,
+            f"the pre-flight line must print on STDERR (the channel "
+            f"`gate_identity_skipped_line` already uses to tell an operator "
+            f"why something did not happen); stderr={err!r}")
+        ingest_at = err.find("ingest: ok=")
+        self.assertNotEqual(
+            ingest_at, -1,
+            f"the run's own stderr line must still be there; stderr={err!r}")
+        self.assertLess(
+            at, ingest_at,
+            f"the warning is PRE-flight -- it must precede the ingest line, "
+            f"not follow it; stderr={err!r}")
+
+    def test_the_warning_is_emitted_before_the_runner_process_is_spawned(self):
+        """The ruling's whole point: it fires "while `--cycle` can still be
+        supplied", i.e. before the suite burns its minutes. Proven against the
+        runner's OWN recorded start instant, not against stream interleaving."""
+        stamp = os.path.join(self.tmpdir, "spawn-stamp")
+        os.environ["FAKE_BUN_SPAWN_STAMP"] = stamp
+        server = _FakeCrucible()
+
+        _code, _out, _err, gets = self._drive(server, "test", self._agents_ok())
+
+        reads = [at for path, at in gets if path.startswith("/api/v2/agents")]
+        self.assertTrue(
+            reads,
+            f"pre-flight must read the binding at all; paths={[p for p, _ in gets]!r}")
+        self.assertTrue(os.path.exists(stamp), "the fake bun must have spawned")
+        with open(stamp) as f:
+            spawned_at = float(f.read())
+        self.assertLessEqual(
+            reads[0], spawned_at,
+            "the binding read must land BEFORE the runner starts -- a warning "
+            "computed after the suite is already running names a remedy that "
+            "can no longer be applied to this run")
+
+    def test_the_detail_names_the_missing_attribution_and_how_to_supply_it(self):
+        server = _FakeCrucible()
+
+        _code, out, _err, _gets = self._drive(server, "test", self._agents_ok())
+
+        axi = self._decode_axi(out)
+        found = self._missing_cycle_warnings(axi)
+        self.assertEqual(len(found), 1,
+                         f"codes={self._warning_codes(axi)!r}")
+        detail = found[0].get("detail") or ""
+        # The voice of `no_wave_warning`/`no_title_warning`: name the omission,
+        # then name the lever that fixes it.
+        self.assertIn(
+            "cycle", detail.lower(),
+            f"the detail must name the attribution that is missing; got {detail!r}")
+        self.assertIn(
+            "--cycle", detail,
+            f"the detail must name the flag that supplies it -- there is no "
+            f"run-level backfill verb, so the remedy only exists BEFORE the "
+            f"run; got {detail!r}")
+
+
+class BoundCallerIsNotWarnedTest(_Cr094PreflightBase):
+    """AC5 direction 2 -- the assertion that forces pre-flight to READ the
+    binding. This caller registered `--cycle N` in an earlier process and
+    passes NO flag now, so a flag-derived implementation would warn here (and
+    would pass AC6, which is exactly why AC5 states both directions)."""
+
+    def test_a_bound_caller_passing_no_flag_reads_its_binding_and_is_not_warned(self):
+        server = _FakeCrucible()
+
+        code, out, err, gets = self._drive(server, "test", self._agents_ok(bound_cycle_id=412))
+
+        self.assertTrue(
+            self._binding_reads(gets),
+            f"the client must ASK the board whether it is bound -- inferring "
+            f"'unbound' from a missing local --cycle flag is the failure mode "
+            f"this test exists to catch; paths={[p for p, _ in gets]!r}")
+        axi = self._assert_toon_axi_shaped(out, "test", "bound pre-flight")
+        self.assertEqual(
+            self._missing_cycle_warnings(axi), [],
+            f"a BOUND caller has nothing missing; got warnings={axi.get('warnings')!r}")
+        self.assertNotIn(
+            MISSING_CYCLE_CODE, err,
+            f"...and nothing is printed on stderr either; stderr={err!r}")
+        self.assertEqual(code, 0, f"stdout={out!r}")
+
+
+class PreflightIsBestEffortTest(_Cr094PreflightBase):
+    """AC5's second constraint, verbatim: "A failed or slow lookup produces NO
+    warning and NEVER prevents the run." A test suite must not become
+    unrunnable because attribution could not be computed."""
+
+    def test_an_unreachable_board_produces_no_warning_and_the_run_still_ingests(self):
+        server = _FakeCrucible()
+
+        code, out, err, gets = self._drive(
+            server, "test",
+            lambda _path: {"ok": False, "error": "HTTP 000: connection refused"})
+
+        self.assertTrue(
+            self._binding_reads(gets),
+            f"the lookup must be ATTEMPTED (best-effort, not skipped); "
+            f"paths={[p for p, _ in gets]!r}")
+        axi = self._assert_toon_axi_shaped(out, "test", "unreachable board")
+        self.assertEqual(
+            self._missing_cycle_warnings(axi), [],
+            f"an UNANSWERED lookup is not evidence of a missing binding -- "
+            f"warning here would cry wolf; got warnings={axi.get('warnings')!r}")
+        self.assertNotIn(MISSING_CYCLE_CODE, err, f"stderr={err!r}")
+        self.assertIs(axi.get("ok"), True, f"axi={axi!r}")
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertIsNotNone(
+            server.payload_for("/api/v2/runs/parsed"),
+            f"the run must still be stored; paths={server.paths()}")
+
+    def test_a_binding_lookup_that_raises_never_prevents_the_run(self):
+        def _boom(_path):
+            raise TimeoutError("binding lookup timed out")
+
+        server = _FakeCrucible()
+
+        code, out, _err, _gets = self._drive(server, "test", _boom)
+
+        self.assertEqual(
+            code, 0,
+            f"a raising pre-flight must be swallowed -- attribution is"
+            f" best-effort and NEVER blocking; stdout={out!r}")
+        axi = self._assert_toon_axi_shaped(out, "test", "raising lookup")
+        self.assertIs(axi.get("ok"), True, f"axi={axi!r}")
+        self.assertEqual(self._missing_cycle_warnings(axi), [],
+                         f"got warnings={axi.get('warnings')!r}")
+        self.assertIsNotNone(
+            server.payload_for("/api/v2/runs/parsed"),
+            f"the run must still be stored; paths={server.paths()}")
+
+
+class OrchestratorGateIsAttributableTest(_Cr094PreflightBase):
+    """AC6 -- the case that prompted the CR, as a test rather than a
+    convention. `regression --agent <orc> --cycle <id>` binds the run to that
+    cycle (the binding is what the server stamps the run's `events.cycle_id`
+    from -- the column itself is asserted server-side by
+    tests/v2-runs-events.test.ts's "AC1" case, which reads it straight out of
+    the store FILE); the SAME command with no `--cycle` gets AC5's warning."""
+
+    def test_regression_with_a_cycle_binds_the_run_and_raises_no_missing_cycle_warning(self):
+        server = _FakeCrucible()
+
+        code, out, err, _gets = self._drive(
+            server, "regression", self._agents_ok(bound_cycle_id=359),
+            extra_argv=["--cycle", "359"])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        # A gated verb opens its identity on the ROLE-OPTIONAL heartbeat route
+        # (never /register — CR-CRU-056's `GatedRunIdentity.PATH`).
+        opened = server.payload_for("/api/v2/agents/heartbeat")
+        self.assertIsNotNone(
+            opened,
+            f"a gated regression opens its identity first; paths={server.paths()}")
+        self.assertEqual(
+            opened.get("cycleId"), 359,
+            f"`--cycle 359` must BIND the gate's identity -- that binding is "
+            f"the only thing the server can stamp the run's cycle from; got "
+            f"opening payload={opened!r}")
+
+        axi = self._assert_toon_axi_shaped(out, "regression", "bound gate")
+        self.assertEqual(
+            self._missing_cycle_warnings(axi), [],
+            f"`--cycle` was supplied -- there is nothing to warn about; got "
+            f"warnings={axi.get('warnings')!r}")
+        self.assertNotIn(MISSING_CYCLE_CODE, err, f"stderr={err!r}")
+        self.assertIsNotNone(server.payload_for("/api/v2/runs/parsed"))
+
+    def test_regression_without_a_cycle_gets_the_preflight_warning_on_both_channels(self):
+        server = _FakeCrucible()
+
+        code, out, err, gets = self._drive(server, "regression", self._agents_ok())
+
+        self.assertTrue(
+            self._binding_reads(gets),
+            f"paths={[p for p, _ in gets]!r}")
+        axi = self._assert_toon_axi_shaped(out, "regression", "unbound gate")
+        self.assertEqual(
+            len(self._missing_cycle_warnings(axi)), 1,
+            f"the orchestrator's own gate, run with no --cycle, is exactly the "
+            f"unattributable run this CR was filed for; got "
+            f"codes={self._warning_codes(axi)!r}")
+        self.assertIn(MISSING_CYCLE_CODE, err, f"stderr={err!r}")
+        # Still warn-and-write: the gate is not blocked.
+        self.assertIs(axi.get("ok"), True, f"axi={axi!r}")
+        self.assertEqual(code, 0, f"stdout={out!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
