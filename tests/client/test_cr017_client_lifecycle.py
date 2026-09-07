@@ -717,8 +717,10 @@ MISSING_CYCLE_CODE = "no-cycle"
 class _Cr094PreflightBase(_BaseCr017ClientTest):
     """Adds one thing to the CR-CRU-017 harness: a `_get` seam that can ANSWER
     the binding read (`GET /api/v2/agents?project=<key>`) and records every
-    path and the wall-clock instant it was asked, so both "did the client read
-    the binding" and "did it read it before the suite started" are decidable."""
+    path, the wall-clock instant it was asked and the TIMEOUT it was asked
+    with, so "did the client read the binding", "did it read it before the
+    suite started" and "did it read it under the pre-flight bound rather than
+    the 10s hook-safe default" are all decidable."""
 
     AGENT = "preflight-attribution-fixture"
 
@@ -734,11 +736,13 @@ class _Cr094PreflightBase(_BaseCr017ClientTest):
     def _drive(self, server, verb, get_side_effect, extra_argv=()):
         """Run the REAL CLI dispatch for `verb` against `server`, with `_get`
         answered by `get_side_effect`. Returns (code, stdout, stderr, gets)
-        where `gets` is [(path, wall_clock_seconds)] in call order."""
+        where `gets` is [(path, wall_clock_seconds, timeout)] in call order --
+        the timeout is recorded because the bound the read is issued under is
+        part of "best-effort, never blocking", not an implementation detail."""
         gets = []
 
         def _get(path, timeout=10):
-            gets.append((path, time.time()))
+            gets.append((path, time.time(), timeout))
             return get_side_effect(path)
 
         argv = [verb, "--bun", self.fake_bun, "--project-dir", self.tmpdir,
@@ -750,7 +754,12 @@ class _Cr094PreflightBase(_BaseCr017ClientTest):
         return code, out, err, gets
 
     def _binding_reads(self, gets):
-        return [path for path, _at in gets if path.startswith("/api/v2/agents")]
+        return [path for path, _at, _timeout in gets
+                if path.startswith("/api/v2/agents")]
+
+    def _binding_read_timeouts(self, gets):
+        return [timeout for path, _at, timeout in gets
+                if path.startswith("/api/v2/agents")]
 
     def _missing_cycle_warnings(self, axi):
         return [w for w in (axi.get("warnings") or [])
@@ -772,7 +781,7 @@ class UnboundRunIsWarnedOnBothChannelsTest(_Cr094PreflightBase):
         self.assertTrue(
             self._binding_reads(gets),
             f"pre-flight must read the binding via GET /api/v2/agents; the "
-            f"client issued no such GET (paths={[p for p, _ in gets]!r})")
+            f"client issued no such GET (paths={[p for p, _, _ in gets]!r})")
 
         axi = self._assert_toon_axi_shaped(out, "test", "unbound pre-flight")
         found = self._missing_cycle_warnings(axi)
@@ -820,10 +829,12 @@ class UnboundRunIsWarnedOnBothChannelsTest(_Cr094PreflightBase):
 
         _code, _out, _err, gets = self._drive(server, "test", self._agents_ok())
 
-        reads = [at for path, at in gets if path.startswith("/api/v2/agents")]
+        reads = [at for path, at, _timeout in gets
+                 if path.startswith("/api/v2/agents")]
         self.assertTrue(
             reads,
-            f"pre-flight must read the binding at all; paths={[p for p, _ in gets]!r}")
+            f"pre-flight must read the binding at all; "
+            f"paths={[p for p, _, _ in gets]!r}")
         self.assertTrue(os.path.exists(stamp), "the fake bun must have spawned")
         with open(stamp) as f:
             spawned_at = float(f.read())
@@ -870,7 +881,7 @@ class BoundCallerIsNotWarnedTest(_Cr094PreflightBase):
             self._binding_reads(gets),
             f"the client must ASK the board whether it is bound -- inferring "
             f"'unbound' from a missing local --cycle flag is the failure mode "
-            f"this test exists to catch; paths={[p for p, _ in gets]!r}")
+            f"this test exists to catch; paths={[p for p, _, _ in gets]!r}")
         axi = self._assert_toon_axi_shaped(out, "test", "bound pre-flight")
         self.assertEqual(
             self._missing_cycle_warnings(axi), [],
@@ -896,7 +907,7 @@ class PreflightIsBestEffortTest(_Cr094PreflightBase):
         self.assertTrue(
             self._binding_reads(gets),
             f"the lookup must be ATTEMPTED (best-effort, not skipped); "
-            f"paths={[p for p, _ in gets]!r}")
+            f"paths={[p for p, _, _ in gets]!r}")
         axi = self._assert_toon_axi_shaped(out, "test", "unreachable board")
         self.assertEqual(
             self._missing_cycle_warnings(axi), [],
@@ -908,6 +919,25 @@ class PreflightIsBestEffortTest(_Cr094PreflightBase):
         self.assertIsNotNone(
             server.payload_for("/api/v2/runs/parsed"),
             f"the run must still be stored; paths={server.paths()}")
+
+    def test_the_binding_read_is_issued_under_the_short_preflight_bound(self):
+        """`Never blocking` is a claim about the BOUND, not just about the
+        exception handling: the client's own `_get` defaults to the 10s
+        hook-safe read timeout, so an implementation that simply forgot to
+        pass the pre-flight bound would pass every other test here and still
+        cost every run up to 10s of dead wait against a degraded board. The
+        expected value is READ from the module that owns it, so retuning the
+        constant retunes this assertion with it."""
+        server = _FakeCrucible()
+
+        _code, _out, _err, gets = self._drive(server, "test", self._agents_ok())
+
+        expected = self.module._axi().PREFLIGHT_TIMEOUT_S
+        self.assertEqual(
+            self._binding_read_timeouts(gets), [expected],
+            f"the binding read must be issued with the pre-flight bound "
+            f"({expected}s), not the inherited hook-safe default; "
+            f"gets={gets!r}")
 
     def test_a_binding_lookup_that_raises_never_prevents_the_run(self):
         def _boom(_path):
@@ -973,7 +1003,7 @@ class OrchestratorGateIsAttributableTest(_Cr094PreflightBase):
 
         self.assertTrue(
             self._binding_reads(gets),
-            f"paths={[p for p, _ in gets]!r}")
+            f"paths={[p for p, _, _ in gets]!r}")
         axi = self._assert_toon_axi_shaped(out, "regression", "unbound gate")
         self.assertEqual(
             len(self._missing_cycle_warnings(axi)), 1,

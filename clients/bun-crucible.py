@@ -979,17 +979,25 @@ def _abandon_trap(run_id):
             signal.signal(sig, handler)
 
 
-def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned):
+def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
+                        warnings=None):
     """The signal path's ONLY output: one ok:false envelope naming the signal
     and the open run the server will settle. No POST of any kind is made here —
     the closing `_close_gate_identity` tombstone in the caller's `finally` is
-    what ARMS the server's `agent died` auto-abort."""
+    what ARMS the server's `agent died` auto-abort.
+
+    CR-CRU-094 §S3 — `warnings` are the findings this run had ALREADY
+    accumulated when the signal landed (the pre-flight `no-cycle` among them).
+    The envelope here is built from a literal, so without them this one exit
+    would print a warning on stderr and omit it from `warnings[]`; the
+    two-channel guarantee holds on EVERY exit or on none."""
     signame = signal.Signals(abandoned.signum).name
     _emit_axi(
         verb, False,
         {"runId": run_id, "signal": signame, "help": _run_left_open_help()},
         _axi_context(project_dir, agent_id=agent_id),
-        [_run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
+        list(warnings or [])
+        + [_run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
         f"{verb}: ok=False — {signame} interrupted the run; run {run_id} left "
         f"open for the server's auto-abort")
     return 128 + abandoned.signum
@@ -1067,7 +1075,7 @@ def cmd_test(args):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
         except _RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
-                                       run_id, abandoned)
+                                       run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not args.agent:
@@ -1172,7 +1180,7 @@ def cmd_regression(args, verb="regression"):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
         except _RunAbandoned as abandoned:
             return _emit_run_abandoned(verb, project_dir, args.agent,
-                                       run_id, abandoned)
+                                       run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not os.path.exists(junit_path):
@@ -1233,22 +1241,42 @@ def cmd_auto_ingest(args):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
     summary, tree, files = _parse_junit_file(junit_path)
+    # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is
+    # the furthest of any from the run that produced the report, so an
+    # unattributed store here is the hardest to notice; the check runs before
+    # the POST, on the same best-effort terms as the wrapped verbs.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
                           context=_run_context())
-    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent)
+    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
+                     warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
 
 
 def cmd_check(args):
     """`tsc --noEmit` typecheck gate over the package. With --agent, ingest errors."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # CR-CRU-094 §S3 — `check` INGESTS on a failing tsc, so it is one of the
+    # five ingesting verbs the pre-flight covers. The seam is HERE rather than
+    # in `_check_gate`: that helper is also `pre-merge-gate`'s step 0, whose
+    # own regression step already makes this check, and whose step form must
+    # stay emit-free (CR-CRU-058 §S1). Before the tsc spawn, so a caller who
+    # sees the line can still re-run bound.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     state = _check_gate(args, project_dir)
     # §S2/§S13/§S15 — the typecheck gate returns the §S1 envelope (verb=check,
     # ok, exit code, help[]) on BOTH clean and error compile, not ad-hoc prints.
     legacy = f"check: ok={state['ok']} exit={state['exit']}"
     _emit_axi("check", state["ok"],
               {"exit": state["exit"], "help": _HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+              _axi_context(project_dir, agent_id=args.agent),
+              preflight_warnings, legacy)
     return 0 if state["ok"] else 1
 
 

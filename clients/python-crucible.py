@@ -360,7 +360,8 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None,
+                     warnings=None):
     """Emit the §S1 envelope for an ingest verb:
     run{passed,failed,pending,total,files}. `files` (CR-CRU-051 §S2, propagating
     CR-CRU-047 §S2 from the bun reference) is the distinct-source count from
@@ -376,7 +377,9 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
 
     CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
     next step for the run it just made (`_axi().run_help`), instead of the
-    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly."""
+    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
+    CR-CRU-094 §S3 — `warnings` carries the run's pre-flight finding onto the
+    envelope, so the stderr line and `warnings[]` say the same thing."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
@@ -389,7 +392,7 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
         # Faithful pass-through: a 409 (stale binding / unregistered poster)
         # carries the server's structured envelope inside the HTTP error body.
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 def cmd_register(args):
@@ -663,6 +666,14 @@ def cmd_test(args):
 
     cmd = _xmlrunner_cmd(python, args.tests, args.start_dir, args.pattern, reports_dir)
     env = os.environ.copy()
+    # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
+    # can still be supplied: ask the board whether this agent is bound and say
+    # so on both channels if it is not. Best-effort — a failed lookup warns
+    # about nothing and never delays the run. One implementation, shared.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
@@ -675,7 +686,8 @@ def cmd_test(args):
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                               context=_run_context(),
                               raw=result.stdout, files=files)
-        _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent)
+        _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
+                         warnings=preflight_warnings)
         if summary["failed"] > 0:
             return 1
         return 0 if resp.get("ok") else 1
@@ -688,8 +700,9 @@ def cmd_test(args):
     _emit_axi("test", False,
               {"help": _axi().no_report_help("test", "TEST-*.xml")},
               _axi_context(project_dir, agent_id=args.agent),
-              [_axi().no_report_warning("test", "TEST-*.xml", result.returncode,
-                                        result.stdout or "")],
+              preflight_warnings
+              + [_axi().no_report_warning("test", "TEST-*.xml", result.returncode,
+                                          result.stdout or "")],
               "[crucible] ERROR: no JUnit XML produced — ingested as compile")
     return result.returncode or 1
 
@@ -707,20 +720,32 @@ def cmd_regression(args, verb="regression"):
     project_dir = _resolve_project_dir(args.project_dir)
     identity = None
     try:
+        preflight_warnings = []
         if getattr(args, "agent", None):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
-        return _regression_run(args, verb)
+            # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
+            # makes, before this (far longer) sweep burns its minutes.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), args.agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
+        return _regression_run(args, verb, preflight_warnings)
     finally:
         _close_gate_identity(project_dir, identity)
 
 
-def _regression_run(args, verb="regression"):
+def _regression_run(args, verb="regression", preflight_warnings=()):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
     coverage.py and post /api/v2/runs/parsed with coverage. A bound agent's run is
     server-stamped with its registered cycle. `verb` (CR-CRU-058 §S1) names the
-    envelope — see `cmd_regression`."""
+    envelope — see `cmd_regression`.
+
+    CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight finding,
+    decided BEFORE the sweep started; it rides every envelope this body can
+    emit, ahead of whatever the run itself discovers."""
+    preflight_warnings = list(preflight_warnings)
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
@@ -765,7 +790,8 @@ def _regression_run(args, verb="regression"):
             _emit_axi(verb, False,
                       {"help": ["check --start-dir / --pattern; ensure the test dir "
                                 "is a package (has __init__.py)"]},
-                      _axi_context(project_dir, agent_id=args.agent), [warning])
+                      _axi_context(project_dir, agent_id=args.agent),
+                      preflight_warnings + [warning])
             return result.returncode or 1
         print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
               file=sys.stderr)
@@ -778,9 +804,10 @@ def _regression_run(args, verb="regression"):
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "TEST-*.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
-                  [_axi().no_report_warning(verb, "TEST-*.xml",
-                                            result.returncode,
-                                            result.stdout or "")],
+                  preflight_warnings
+                  + [_axi().no_report_warning(verb, "TEST-*.xml",
+                                              result.returncode,
+                                              result.stdout or "")],
                   f"{verb}: ok=False — no JUnit XML, ingested as compile")
         return result.returncode or 1
 
@@ -795,7 +822,7 @@ def _regression_run(args, verb="regression"):
     help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
                   if verb != "regression" else None)
     _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
-                     help_steps=help_steps)
+                     help_steps=help_steps, warnings=preflight_warnings)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -817,9 +844,17 @@ def cmd_auto_ingest(args):
                   f"auto-ingest: ok=False — no TEST-*.xml in {reports_dir}")
         return 1
     summary, tree, files = _parse_junit_dir(reports_dir)
+    # CR-CRU-094 §S3 — this verb runs no runner and offers no `--cycle`, so its
+    # ingest is the furthest from the run that produced the reports and an
+    # unattributed store here is the hardest to notice; checked before the POST.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                           context=_run_context(), files=files)
-    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent)
+    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
+                     warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
 
 
@@ -827,11 +862,21 @@ def cmd_check(args):
     """python -m py_compile over the given paths (default app/ + tests/). With --agent,
     ingest any errors as a compile failure. §S2/§S15 — returns the §S1 envelope."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # CR-CRU-094 §S3 — `check` INGESTS on a failing compile, so it is one of
+    # the five ingesting verbs. The seam is HERE and not in `_check_gate`:
+    # that helper is also `pre-merge-gate`'s step 0, whose regression step
+    # already makes this check and whose step form must stay emit-free
+    # (CR-CRU-058 §S1). Before py_compile spawns.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     state = _check_gate(args, project_dir)
     legacy = f"check: ok={state['ok']} exit={state['exit']}"
     _emit_axi("check", state["ok"],
               {"exit": state["exit"], "help": _axi().HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+              _axi_context(project_dir, agent_id=args.agent),
+              preflight_warnings, legacy)
     return 0 if state["ok"] else (state["exit"] or 1)
 
 

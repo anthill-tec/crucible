@@ -169,10 +169,14 @@ export interface RunEvent {
   /**
    * CR-CRU-094 §S1 — the plan cycle this run is bound to, served from the
    * `events.cycle_id` COLUMN so a reader can tell a bound run from an unbound
-   * one without unpacking `context`. Never written directly: the column is
-   * DERIVED at the single row-insert seam from `context.cycleId` (itself
-   * stamped at the one ingest seam, `resolveIngestAttach`), so the two
-   * representations of the one fact cannot disagree. ABSENT — never null,
+   * one without unpacking `context`. The column is DERIVED at the single
+   * row-insert seam (`insertEvent`), which PREFERS `context.cycleId` — itself
+   * stamped at the one ingest seam, `resolveIngestAttach`. §S2 — the field is
+   * set directly by exactly ONE constructor, `recordLifecycleEvent`, whose
+   * event carries no `context` of its own (giving it one would enrol a
+   * register/unregister event in the cycle's RUN lists); every run-bearing
+   * constructor stamps `context` alone. The two representations are therefore
+   * disjoint per event kind and cannot disagree. ABSENT — never null,
    * never 0 — on an unbound run and on every pre-094 row, which the retrofit
    * leaves NULL rather than reconstructing a binding that was never recorded.
    */

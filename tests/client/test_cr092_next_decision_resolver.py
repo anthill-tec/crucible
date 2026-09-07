@@ -1509,7 +1509,11 @@ class NextBlockCitationsTest(unittest.TestCase):
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is
         # the guard doing its job — the CR that shifted the file is the CR
         # that re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1370, 1384,
+        # Re-pinned 2026-09-07 (CR-CRU-094 §S3): wiring the pre-flight
+        # attribution check into this client's `test`/`regression`/
+        # `auto-ingest`/`check` verbs added lines above this block, drifting
+        # it 1370-1384 -> 1422-1436. Same rule, same guard.
+        ("_next_start_help", "clients/python-crucible.py", 1422, 1436,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

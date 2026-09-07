@@ -247,7 +247,7 @@ def _open_plans(project_dir):
 
 
 def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
-                             help_steps=None):
+                             help_steps=None, warnings=None):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path).
     CR-CRU-051 §S2 — `files` (the distinct-source count from `_parse_junit`,
     per-FILE when the native harness stamps `file=`, else per-class/per-suite)
@@ -262,7 +262,9 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
 
     CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
     next step for the run it just made (`_axi().run_help`), instead of the
-    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly."""
+    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
+    CR-CRU-094 §S3 — `warnings` carries the run's pre-flight finding onto the
+    envelope, so the stderr line and `warnings[]` say the same thing."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
@@ -273,7 +275,7 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 # ── project self-registration + JUnit parsing ────────────────────────────────
@@ -473,6 +475,7 @@ def _run_native_tests(args, verb, tier, want_coverage):
     caller who registered BEFORE the run keeps its registration and binding."""
     pd = _project_dir(args)
     identity = None
+    preflight_warnings = []
     try:
         if getattr(args, "agent", None):
             # Open under the SAME id the run will ingest under. The body
@@ -486,12 +489,26 @@ def _run_native_tests(args, verb, tier, want_coverage):
             identity = _open_gate_identity(pd, _agent_id(args),
                                            getattr(args, "cycle", None),
                                            f"gated {verb} run starting")
-        return _run_native_tests_body(args, verb, tier, want_coverage, pd)
+            # CR-CRU-094 §S3 — PRE-FLIGHT, before `make junit` spawns and while
+            # `--cycle` can still be supplied: ask the board whether this agent
+            # is bound and say so on both channels if it is not. Best-effort —
+            # a failed lookup warns about nothing and never delays the run.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(pd), _agent_id(args),
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
+        return _run_native_tests_body(args, verb, tier, want_coverage, pd,
+                                      preflight_warnings)
     finally:
         _close_gate_identity(pd, identity)
 
 
-def _run_native_tests_body(args, verb, tier, want_coverage, pd):
+def _run_native_tests_body(args, verb, tier, want_coverage, pd,
+                           preflight_warnings=()):
+    """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
+    finding, decided BEFORE the runner spawned; it rides every envelope this
+    body can emit, ahead of whatever the run itself discovers."""
+    preflight_warnings = list(preflight_warnings)
     key, name = _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
     # no-ingest early return below), so it needs no declared identity; the id is
@@ -513,8 +530,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "TEST-*.xml")},
                   _axi_context(pd, agent_id=agent_id),
-                  [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
-                                            (run.stdout or "") + (run.stderr or ""))],
+                  preflight_warnings
+                  + [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
+                                              (run.stdout or "") + (run.stderr or ""))],
                   message)
         return 1
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
@@ -577,7 +595,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE)
                   if verb == "pre-merge-gate" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
-                             help_steps=help_steps)
+                             help_steps=help_steps,
+                             warnings=preflight_warnings)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
@@ -607,11 +626,22 @@ def _compile_gate(args, verb):
     build output to /api/v2/runs/compile. Returns the §S1 envelope under `verb`
     (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
+    # CR-CRU-094 §S3 — this gate INGESTS the build output on a failing compile,
+    # so `check` is one of the five ingesting verbs the pre-flight covers. The
+    # seam is HERE, in the envelope-owning caller, and not in `_compile_run`:
+    # that helper is also `pre-merge-gate`'s step 0, whose regression step
+    # already makes this check and whose step form must stay emit-free
+    # (CR-CRU-058 §S1). Asked before arduino-cli spawns.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(pd), _axi().optional_agent_id(args),
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     state = _compile_run(args, pd)
     legacy = f"{verb}: ok={state['ok']} exit={state['exit']}"
     _emit_axi(verb, state["ok"],
               {"exit": state["exit"], "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              _axi_context(pd, agent_id=state["agent_id"]), [], legacy)
+              _axi_context(pd, agent_id=state["agent_id"]),
+              preflight_warnings, legacy)
     return 0 if state["ok"] else (state["exit"] or 1)
 
 
@@ -700,11 +730,18 @@ def cmd_auto_ingest(args):
     context = _run_context()
     if context:
         payload["context"] = context
+    # CR-CRU-094 §S3 — this verb invokes no toolchain and offers no `--cycle`,
+    # so its ingest is the furthest from the run that produced the reports and
+    # an unattributed store here is the hardest to notice; before the POST.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, key, agent_id, cycle_id=getattr(args, "cycle", None),
+        context=context)
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id)
+    _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id,
+                             warnings=preflight_warnings)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
