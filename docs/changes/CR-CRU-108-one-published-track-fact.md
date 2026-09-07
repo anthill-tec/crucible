@@ -3,7 +3,7 @@
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 085, 092, 097
-- **Status**: PENDING (0.2.0) — filed 2026-09-06 at the SCRUM after CR-CRU-085 merged. The printed-help half was split out to CR-CRU-110 on 2026-09-07: its stated cause was disproved by measurement, so it needs a diagnosis this CR should not wait on.
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-07. Filed 2026-09-06 at the SCRUM after CR-CRU-085 merged; the printed-help half was split out to CR-CRU-110 on 2026-09-07 because its stated cause was disproved by measurement. Four cycles: §S1 published field, §S2 fleet cutover, §S3 cross-surface guards (no GREEN phase — §S1/§S2 had already made them true), then VERIFY + FIX.
 - **Design reference**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §7 (the conditional-chrome rule) and §11 (the multi/single-track distinction is DERIVED from reported data — "nothing new has to be declared"); `docs/research/DN-model-b-language.md` (LOCKED — `track` absent = implicit solo lane)
 
 ## Context
