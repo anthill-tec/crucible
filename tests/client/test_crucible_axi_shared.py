@@ -1303,5 +1303,345 @@ class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
             f"fleet must agree on: {offenders!r}")
 
 
+# ── CR-CRU-107 §S1 + §S2 — one label per flag, and the refusals are structured ──
+#
+# WHERE THIS LIVES, AND WHY. The contract has two halves and they fail in two
+# different places. This class drives `_crucible_axi.cmd_plan_file` itself —
+# the ONE function all five clients delegate to — because the payload
+# composition, the no-splitting rule and the hard-stop route are shared code:
+# asserting them five times would pin one implementation through five
+# telescopes. The per-client AXI suites assert the same contract through each
+# client's REAL argparse and `run_verb` dispatch, because the flag
+# DECLARATION (`--cycle`, and `--cycles` losing `required=True`) is per-client
+# text that can drift one client at a time — there, a failure names the client.
+#
+# The historical-label fixture lives here, beside the split it indicts.
+
+
+class _PlanFileArgs:
+    """The parsed-namespace shape `cmd_plan_file` reads: `cr`, `cycles`,
+    `cycle`, `title`, `wave`, `agent`, plus `cmd` for `run_verb`'s converter.
+
+    `cycles=None` is not a fixture convenience — it is exactly what argparse
+    hands the verb once AC5 drops `required=True` from the five clients."""
+
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+
+class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
+    """CR-CRU-107 §S1/§S2 on the shared verb.
+
+    §S1 — `plan-file` gains a repeatable `--cycle`: one occurrence per cycle,
+    in order, and a value passed that way is NEVER split, whatever delimiter
+    it happens to contain. `--cycles` keeps its comma split, unpoliced.
+    §S2 — both flags together, neither flag, and an empty `--cycles` are all
+    refused through the fleet's hard-stop route (a typed exception converted
+    by `run_verb`): nothing posted, an `ok:false` envelope on stdout, exit 2.
+
+    RED, measured against `clients/_crucible_axi.py` today: `cmd_plan_file`
+    reads `args.cycles` unconditionally and splits it on `,` in one line, so
+    a run carrying only `--cycle` dies with
+    `AttributeError: 'NoneType' object has no attribute 'split'` on that very
+    line (AC1/AC2/AC5); both flags together silently file the `--cycles` half
+    and POST (AC4); and an empty value reaches
+    `sys.exit("[crucible] ERROR: --cycles must name at least one cycle")` —
+    exit 1, stderr, no envelope (AC6). AC3 passes on arrival, by design: it
+    is the guard that §S1 changed nothing for the legacy form."""
+
+    # The labels this project's own board carries because the delimiter
+    # collided with the content, in BOTH directions: the first four are
+    # cycles 281 / 324 / 328 / 340, filed semicolon-delimited and stored as
+    # ONE cycle each; the fifth is the CR-CRU-078 label whose ordinary commas
+    # became three cycles nobody planned. Byte-for-byte off the board, used
+    # as INPUT ONLY — the rows themselves stay out of every fixture (AC9) and
+    # every id below is synthetic.
+    HISTORICAL_LABELS = (
+        "C1 release gating — diamonds connected · membership from crs "
+        "(AC1/AC1b/AC1c);C2 ordering — depends-on + queue sequence · fan-out "
+        "· no synthetic wave edge (AC2/AC3/AC8);C3 labels — CR id + status · "
+        "no title · track rides the node (AC6/AC5);C4 collapse by release "
+        "(AC4);C5 live motion for IN_PROGRESS only · live roadmap renders "
+        "(AC7/AC9);C6 VERIFY",
+        "the role-preservation contract on a synthetic store;the real store "
+        "keeps its equality and skips with a reason;VERIFY audit and "
+        "close-out",
+        "C1 S1 precondition + client scope record;C2 S2 fixture proves the "
+        "bunfig guard is load-bearing;C3 VERIFY",
+        "C1 the verb and its writer - route/gate/prospective-cycle/"
+        "registered-subject/replace-semantics;C2 the reporting envelope and "
+        "the remedy hint - warnings/unknownDependencies/hint retarget/CR-104 "
+        "comment;C3 VERIFY",
+        "C1 data + authored order - proposals read, formatter wiring, seq "
+        "verbatim",
+    )
+
+    # AC2's literal shape — commas AND semicolons in ONE value. No single
+    # historical label carries both (281/324/328/340 are semicolon-only, the
+    # CR-CRU-078 label comma-only), so this is that comma label sitting inside
+    # a semicolon-delimited list: the exact collision, in one string.
+    UNSPLIT_LABELS = HISTORICAL_LABELS + (f"{HISTORICAL_LABELS[4]};C2 VERIFY",)
+
+    def setUp(self):
+        self.axi = _load_axi_module()
+        self.toon = _load_toon_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="crucible-axi-plan-file-")
+        self._saved_env = {k: os.environ.get(k)
+                           for k in ("WORKFLOW_WAVE", "WORKFLOW_ROLE")}
+        for key in self._saved_env:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _ops(self, posts):
+        """A real `ClientOps` whose `post` RECORDS instead of reaching a
+        server, and whose every other transport callable is a tripwire: a
+        refusal that GETs, PATCHes or resolves a plan has already done work
+        the refusal exists to prevent."""
+
+        def post(path, payload):
+            posts.append((path, payload))
+            return {"ok": True, "planId": "plan-x", "cr": "CR-FLAG",
+                    "cycles": [{"label": "x", "id": 9001}]}
+
+        def unreachable(*_args, **_kwargs):
+            raise AssertionError(
+                "plan-file must not touch this client callable")
+
+        return self.axi.ClientOps(
+            get=unreachable, post=post, patch=unreachable,
+            emit=self.axi.emit_axi,
+            context=lambda project_dir, **kw: dict({"projectKey": "pk"}, **kw),
+            agent_id=self.axi.require_agent_id,
+            project_key=lambda project_dir: "pk",
+            plans_path=lambda project_dir: "/api/v2/projects/pk/plans",
+            open_plans=unreachable, resolve_plan=unreachable,
+            post_gate=unreachable, post_milestone=unreachable,
+            base_url="http://127.0.0.1:0")
+
+    def _run(self, **overrides):
+        """Drive the shared verb through the fleet dispatcher every client
+        routes every verb through, so the refusal is asserted on the SAME
+        conversion seam `emit_agent_identity_hard_stop` already uses."""
+        fields = {"cr": "CR-FLAG", "agent": "test-agent", "title": "a plan",
+                  "wave": "5", "cycles": None, "cycle": None,
+                  "project_dir": self.tmpdir, "cmd": "plan-file"}
+        fields.update(overrides)
+        args = _PlanFileArgs(**fields)
+        posts = []
+        ops = self._ops(posts)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = self.axi.run_verb(
+                    lambda a: self.axi.cmd_plan_file(a, self.tmpdir, ops), args)
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue(), err.getvalue(), posts
+
+    def _decode(self, stdout_text):
+        decoded = self.toon.decode(stdout_text)
+        self.assertIn("axi", decoded,
+                      f"the refusal must reach stdout as a TOON envelope with "
+                      f"a top-level 'axi' key; got stdout={stdout_text!r}")
+        return decoded["axi"]
+
+    def _assert_structured_refusal(self, code, out, err, posts, *, ac):
+        """The envelope shape §S2 gives all three refusals: nothing posted, an
+        `ok:false` plan-file envelope on stdout, a `help[]` carrying the
+        corrected `--cycle` call, exit 2, and the human line on stderr only."""
+        self.assertEqual(
+            posts, [],
+            f"{ac}: a refused plan-file must POST NOTHING — a mis-filed plan "
+            f"is what this refusal exists to prevent; got {posts!r}")
+        axi = self._decode(out)
+        self.assertEqual(axi.get("verb"), "plan-file",
+                         f"{ac}: got {axi!r}")
+        self.assertIs(axi.get("ok"), False,
+                      f"{ac}: a refusal is an ok:false envelope; got {axi!r}")
+        self.assertEqual(
+            code, 2,
+            f"{ac}: the fleet's hard-stop exit code is 2 (the same code "
+            f"emit_agent_identity_hard_stop returns); got {code!r} with "
+            f"stdout={out!r} stderr={err!r}")
+        help_list = [str(h) for h in (axi.get("help") or [])]
+        corrected = [h for h in help_list
+                     if "--cycle " in h and "--cycles" not in h]
+        self.assertTrue(
+            corrected,
+            f"{ac}: help[] must hand back the CORRECTED repeatable-`--cycle` "
+            f"call, not the form that was refused; got help={help_list!r}")
+        self.assertTrue(
+            err.strip(),
+            f"{ac}: the human-readable error line still goes to stderr")
+        self.assertNotIn(
+            "axi", self.toon.decode(err),
+            f"{ac}: the envelope is the MACHINE channel — it belongs on "
+            f"stdout only; got stderr={err!r}")
+        return axi
+
+    def test_repeatable_cycle_flag_composes_one_payload_cycle_per_occurrence_in_order(self):
+        code, out, err, posts = self._run(cycle=["a", "b", "c"])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        self.assertEqual(len(posts), 1,
+                         f"exactly one plans POST expected; got {posts!r}")
+        self.assertEqual(
+            posts[0][1].get("cycles"),
+            [{"label": "a"}, {"label": "b"}, {"label": "c"}],
+            f"AC1: three `--cycle` occurrences post three cycles, in the order "
+            f"given and unsplit; got payload={posts[0][1]!r}")
+
+    def test_a_single_cycle_value_is_never_split_whatever_delimiters_it_carries(self):
+        """AC2 — every label this board actually lost to the delimiter files as
+        ONE cycle when it rides `--cycle`, in both directions: the four
+        semicolon values that became one cycle each, the comma value that
+        became three, and a value carrying both delimiters at once."""
+        for label in self.UNSPLIT_LABELS:
+            with self.subTest(label=f"{label[:48]}…"):
+                code, out, err, posts = self._run(cycle=[label])
+                self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+                self.assertEqual(
+                    len(posts), 1,
+                    f"exactly one plans POST expected; got {posts!r}")
+                self.assertEqual(
+                    posts[0][1].get("cycles"), [{"label": label}],
+                    f"AC2: one `--cycle` is ONE cycle whose label is the value "
+                    f"byte-for-byte, however many commas or semicolons it "
+                    f"carries; got payload={posts[0][1]!r}")
+
+    def test_the_legacy_cycles_flag_still_posts_todays_byte_identical_payload(self):
+        """AC3 — the legacy form is untouched: same comma split, same order,
+        same payload. Passes on arrival, and is meant to: it is the guard that
+        catches §S1 changing the form ~40 call sites already depend on."""
+        code, out, err, posts = self._run(cycles="a,b")
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        self.assertEqual(len(posts), 1,
+                         f"exactly one plans POST expected; got {posts!r}")
+        path, payload = posts[0]
+        self.assertEqual(path, "/api/v2/projects/pk/plans",
+                         f"got path={path!r}")
+        self.assertEqual(
+            payload,
+            {"cr": "CR-FLAG", "agentId": "test-agent",
+             "cycles": [{"label": "a"}, {"label": "b"}],
+             "title": "a plan", "wave": "5", "orchestrator": "test-agent"},
+            f"AC3: `--cycles \"a,b\"` must post the payload it posts today, "
+            f"key for key; got {payload!r}")
+
+    def test_both_cycle_flags_together_are_refused_before_anything_is_posted(self):
+        """AC4 — the two flags are mutually exclusive: with both given the
+        intended cycle list is ambiguous, so the call is refused rather than
+        resolved in one flag's favour."""
+        code, out, err, posts = self._run(cycle=["a"], cycles="b,c")
+        axi = self._assert_structured_refusal(code, out, err, posts, ac="AC4")
+        error = str(axi.get("error") or "")
+        self.assertRegex(
+            error, r"--cycle\b",
+            f"AC4: the error must name BOTH flags so the caller knows which "
+            f"pair collided; got error={error!r}")
+        self.assertRegex(
+            error, r"--cycles\b",
+            f"AC4: the error must name BOTH flags so the caller knows which "
+            f"pair collided; got error={error!r}")
+
+    def test_neither_cycle_flag_is_refused_with_the_same_envelope_shape(self):
+        """AC5 — the requirement moves OUT of the five argparse declarations
+        and into the shared verb, so one rule covers both flags and the caller
+        gets an envelope instead of argparse's bare usage error."""
+        code, out, err, posts = self._run()
+        axi = self._assert_structured_refusal(code, out, err, posts, ac="AC5")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycle\b",
+            f"AC5: the error must name the canonical flag the caller is "
+            f"missing; got {axi!r}")
+
+    def test_an_empty_cycles_value_is_refused_with_an_envelope_not_a_bare_sys_exit(self):
+        """AC6 — the pre-existing empty-list refusal is converted: it is in the
+        function §S1 edits, it is the same defect class, and a bare `sys.exit`
+        string on stderr violates AXI principle 6."""
+        code, out, err, posts = self._run(cycles=",,")
+        axi = self._assert_structured_refusal(code, out, err, posts, ac="AC6")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycles\b",
+            f"AC6: the converted refusal still names the flag that was empty; "
+            f"got {axi!r}")
+        self.assertNotIn(
+            "[crucible] ERROR:", err,
+            f"AC6: the bare `sys.exit(\"[crucible] ERROR: …\")` string is "
+            f"replaced by the envelope, not printed beside it; got "
+            f"stderr={err!r}")
+
+    def _legacy_empty_help(self):
+        """The `help[]` an empty `--cycles` hands back, read off a REAL run of
+        the refusal rather than the module constant — it is the caller-visible
+        remedy the empty-`--cycle` half has to match."""
+        code, out, err, posts = self._run(cycles=",,")
+        self.assertEqual(code, 2, f"stdout={out!r} stderr={err!r}")
+        return [str(h) for h in (self._decode(out).get("help") or [])]
+
+    def test_an_empty_cycle_occurrence_is_refused_at_the_door_not_by_the_server(self):
+        """§S2 — `--cycle ""` composed `cycles: [{"label": ""}]` and POSTed it;
+        the server rejects the whole request with a bare `label is required`
+        and no `help[]`, so the caller learned nothing and nothing landed. The
+        realistic trigger is an unset shell variable, `--cycle "$LABEL"`. It is
+        the same defect as the empty `--cycles`, so it is the same refusal:
+        posted nothing, `cycle-list-empty`, and the SAME actionable help[]."""
+        code, out, err, posts = self._run(cycle=[""])
+        axi = self._assert_structured_refusal(code, out, err, posts,
+                                              ac="empty --cycle")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycle\b",
+            f"the error must name the flag whose value named no cycle; got "
+            f"{axi!r}")
+        self.assertIn(
+            "cycle-list-empty", err,
+            f"the empty `--cycle` is the SAME refusal code as the empty "
+            f"`--cycles`, so a caller matching on the code catches both; got "
+            f"stderr={err!r}")
+        self.assertEqual(
+            [str(h) for h in (axi.get("help") or [])], self._legacy_empty_help(),
+            f"both halves of the empty-cycle-list defect must hand back the "
+            f"same remedy, or the caller's fix depends on which flag they "
+            f"happened to use; got {axi!r}")
+
+    def test_a_whitespace_only_cycle_names_no_cycle_but_a_kept_value_is_never_stripped(self):
+        """The ruling, pinned in one place because the two halves are easy to
+        confuse: `--cycle " "` names no cycle and is REFUSED (a filed label of
+        one space is a mis-filed plan nobody asked for, and `" "` arrives the
+        same way `""` does — from an unset variable). The strip that decides
+        that is a TEST only: a value that is kept still files byte-for-byte, so
+        `--cycle " a "` posts `' a '` with its spaces intact (AC2)."""
+        for blank in (" ", "\t", "   \n"):
+            with self.subTest(refused=blank):
+                code, out, err, posts = self._run(cycle=[blank])
+                self._assert_structured_refusal(code, out, err, posts,
+                                                ac=f"whitespace-only {blank!r}")
+        code, out, err, posts = self._run(cycle=[" a "])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        self.assertEqual(
+            posts[0][1].get("cycles"), [{"label": " a "}],
+            f"AC2: refusing whitespace-ONLY values must not put a strip on the "
+            f"values that are kept — ' a ' files with its spaces; got "
+            f"payload={posts[0][1]!r}")
+
+    def test_one_empty_occurrence_among_valid_ones_refuses_the_whole_call(self):
+        """An empty occurrence beside good labels is refused, not dropped: the
+        caller asked for three cycles, and silently filing two is exactly the
+        mis-filed plan this CR exists to end. Nothing is posted, so no partial
+        plan lands for the caller to notice later."""
+        code, out, err, posts = self._run(cycle=["", "a"])
+        self._assert_structured_refusal(code, out, err, posts,
+                                        ac="empty among valid")
+        code, out, err, posts = self._run(cycle=["a", "", "b"])
+        self._assert_structured_refusal(code, out, err, posts,
+                                        ac="empty between valid")
+
+
 if __name__ == "__main__":
     unittest.main()
