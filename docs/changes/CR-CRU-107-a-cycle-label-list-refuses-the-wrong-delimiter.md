@@ -117,8 +117,18 @@ close-out step. `src` and `public` must not move.
 `tests/roadmap-visual-grammar.test.ts`. If it is updated, that suite re-runs.
 
 Two user-authored skills teach `--cycles` — `~/.agents/skills/crucible/SKILL.md` and
-`~/.agents/skills/model-b/SKILL.md`. This CR does not edit them; until they are updated, a dispatched
-agent will keep typing the legacy form, which still works. Recommend the update at close-out.
+`~/.agents/skills/model-b/SKILL.md`. This CR does not edit them; the legacy form keeps working, so a
+dispatched agent reading them stays correct. **User direction 2026-09-07: they are updated AFTER this
+CR ships**, in one pass that carries `--cycle` together with the drift already measured against the
+shipped client — `--phase` (retired by CR-CRU-059 in favour of `--role`, with its enum
+`RED|GREEN|FIX|VERIFY|ORCHESTRATOR|report`), the server-driven `resolve_attach_cycle` /
+`no-active-cycle` withhold (deleted by CR-CRU-056 in favour of an explicit `register --cycle <id>`,
+which TDD roles MUST pass), "agents never pass a cycle id" (now false), `--orchestrator` (retired),
+`lastRunCr` (now `lastClosedCr`), `queue-file` as python-only (fleet-wide since CR-CRU-075), the
+missing verbs (`cycle-add`, `checkpoint`, `stop`, `abort`, `status`/`plans`, `queue`, `queue-file`,
+`release-propose`, `cr-plan`, `wave-sequence`, `cr-supersede`, `cr-void`, `cr-depends`, `next`,
+`gate-run`, `plan-backfill`), the CR-CRU-094 pre-flight `no-cycle` warning, and a `~/.claude/skills/`
+path that is now `~/.agents/skills/`.
 
 ## Non-goals
 
