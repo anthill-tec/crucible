@@ -1008,8 +1008,38 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // baseline" is the standing half of the claim and only the equality pin is
 // re-recorded, exactly as CR-CRU-093 re-recorded 405 -> 431. The `develop`
 // baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-094 §S1. `src/` HEAD moves 550 -> 556 (+6),
+// all of it the cycle binding's own lineage in the three files the CR
+// touched, written where a reader of the code will meet it: `src/store.ts`
+// +4 (243 -> 247) — the `EventRow.cycle_id` field (stating that the column is
+// DERIVED at insert and NULL on every pre-094 row), the appended migration
+// body's `apply` (why an ALTER and not a rebuild, and why history is left
+// NULL), the `createBaseTables` DDL line (so a fresh store and the end of the
+// chain agree and the retrofit never runs) and `insertEvent`'s note that the
+// column is derived at the ONE row-insert seam from the context the ONE
+// ingest seam stamped, plus `toEvent`'s note that the projection is served
+// from the COLUMN rather than re-derived from the blob — those last two are
+// two lines and two occurrences, and the body's `description:` string
+// (`CR-094`) and the DDL's own `--` line inside the template literal are NOT
+// among them, the first because CR_LITERAL requires two-or-more capitals in
+// the project segment and the second because a template literal is a string;
+// `src/types.ts` +1 (49 -> 50) — `RunEvent.cycleId`'s JSDoc, stating the key
+// is ABSENT rather than null when a run carries no cycle; `src/v2.ts` +1
+// (185 -> 186) — `eventBrief`'s note that the top-level key sits BESIDE an
+// untouched `context`, which §S1 keeps authoritative for the frontend.
+// Measured by classifying `git show 97deaa8:<path>` — the RED commit this
+// CR's implementation builds on, not `HEAD`, because the implementation is
+// already committed and the working tree equals `HEAD` — against the working
+// tree file by file with this file's own `extractCitableText`; the +6
+// decomposes exactly into the three per-file deltas above (4 + 1 + 1) and
+// every other `src/` file re-measures unchanged. `public/` and `clients/` are
+// untouched by this CR and re-measure at 435 and 639.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin is
+// re-recorded, exactly as CR-CRU-093 re-recorded 405 -> 431 and CR-CRU-109
+// 431 -> 435 for `public/`. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 556 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
   clients: { exts: [".py"], develop: 601, head: 639 },
 };
