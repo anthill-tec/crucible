@@ -1700,7 +1700,9 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
   // ── CR-CRU-108 §S1 — the queue read publishes the tracks it stores ───────
   //
   // WHY HERE: this file owns the queue GET route's behaviour. Measured
-  // 2026-09-07, `handleQueueGet` (src/v2.ts:1833) answers
+  // 2026-09-07, `handleQueueGet` (src/v2.ts:1833 ON DEVELOP — §S1 moved the
+  // same function to :1840 on this branch; the line cited is the one the
+  // measurement was taken at) answers
   // `{ok: true, entries: store.listQueue(key)}` and states NO track fact — so
   // every assertion below fails on a missing field, never on a 404 or a
   // crash. The rule is CR-CRU-092 §S3's, restated by AC1: the sorted distinct

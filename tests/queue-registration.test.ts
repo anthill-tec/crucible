@@ -1909,7 +1909,9 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   //
   // WHY HERE: this suite owns the queue WRITE → READ round trip, and the
   // published list is a fact about what the write path stored. Measured
-  // 2026-09-07: `handleQueueGet` (src/v2.ts:1833) answers
+  // 2026-09-07: `handleQueueGet` (src/v2.ts:1833 ON DEVELOP — §S1 landed 25
+  // lines of `declaredTracks` above it, so the same function reads at :1840 on
+  // this branch; the line cited is the one the measurement was taken at) answers
   // `{ok: true, entries: store.listQueue(key)}` and states no track fact at
   // all — so both tests below fail on a MISSING FIELD (`tracks` is
   // undefined), never on a wrong value, a crash or a 404.
