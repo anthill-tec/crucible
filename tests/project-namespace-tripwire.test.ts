@@ -1038,10 +1038,37 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // re-recorded, exactly as CR-CRU-093 re-recorded 405 -> 431 and CR-CRU-109
 // 431 -> 435 for `public/`. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-094 §S2/§S3. TWO heads move: `src/` 556 -> 560
+// (+4) and `clients/` 639 -> 642 (+3). Seven citation lines, one per new
+// comment block, each written where a reader of the code will meet the fact
+// it explains. `src/store.ts` +2 (247 -> 249) — `recordLifecycleEvent`'s note
+// that the cycle is carried TOP-LEVEL and never as a `context`, because a
+// cycle's RUNS are selected through `context.cycleId`, and `insertEvent`'s
+// note that the lifecycle record is the second source the one row-insert seam
+// derives the column from, the run-bearing constructors still stamping
+// `context` alone; `src/v2.ts` +2 (186 -> 188) — the register route's note
+// that the binding validated one statement earlier is what the registration
+// event records, and the unregister route's note that the binding joins
+// firstSeen/role in the SAME pre-deletion snapshot. `clients/` is the §S3
+// half: `clients/_crucible_axi.py` +1 (120 -> 121) — the pre-flight section
+// header, stating that the binding is READ from the board and never inferred
+// from a missing local `--cycle`; `clients/bun-crucible.py` +2 (122 -> 124) —
+// the `cmd_test` and `cmd_regression` call sites, each stating that the check
+// runs while `--cycle` can still be supplied and is best-effort. Measured by
+// classifying `git show c5e9f27:<path>` — the RED commit this cycle's
+// implementation builds on — against the working tree file by file with this
+// file's own `extractCitableText`; the +4 and the +3 decompose exactly into
+// the per-file deltas above (2 + 2 and 1 + 2) and every other `src/` and
+// `clients/` file re-measures unchanged. `public/` is untouched by this cycle
+// and re-measures at 435 — §S2 touches no rendering and §S3 no frontend.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pins are
+// re-recorded, as CR-CRU-093 re-recorded 405 -> 431, CR-CRU-109 431 -> 435
+// and CR-CRU-094 §S1 550 -> 556. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 556 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 560 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 639 },
+  clients: { exts: [".py"], develop: 601, head: 642 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
