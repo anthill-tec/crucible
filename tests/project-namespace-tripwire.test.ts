@@ -48,6 +48,7 @@ import {
   balancedEnd,
   extractCitableText,
   joinWrapped,
+  jsLiveCode,
   listFiles,
   REPO_ROOT,
   unnestedEnd,
@@ -171,6 +172,81 @@ function titleSpans(text: string): Span[] {
 // almost always the EXPECTED error of a product call
 // (`expect(fn).toThrow(new Error(...))`), which is a product contract and
 // must stay reportable.
+
+// THE OTHER HALF OF THAT KIND, AND THIS ONE IS CODED — the MESSAGE argument
+// of an `expect(` call. Ruled 2026-09-07, at CR-CRU-109's merge gate
+// (CR-CRU-109 §S3/AC10), when this checker reported that CR's four AC8 cap
+// guards and two live-board probes as literals asserted on a real project.
+//
+// The ROLE is identical to the thrown diagnostic above: bun's API defines
+// the second parameter of `expect` as the failure message, so it is the test
+// telling a maintainer WHICH CONTRACT IT WAS CHECKING when it broke. It is
+// never compared against a product value and never rendered to any project's
+// user. What it does NOT share is the CONSTRUCTION — a `throw` sits outside
+// every assertion span and so needs no code, while bun puts the identical
+// diagnostic INSIDE the span. The exemption therefore follows the role, not
+// the syntax carrying it, and this half is written down precisely because it
+// cannot be spared by construction.
+//
+// THE BOUNDARY, narrow on purpose; every clause is planted as a case in the
+// AC10 self-tests below rather than asserted here:
+//   • the FIRST argument stays reportable — it is the actual value, which is
+//     a product value;
+//   • `toThrow(` / `toThrowError(` arguments stay reportable — they sit
+//     outside `expect`'s own parens, where `balancedEnd` stops. That is the
+//     case the block above named as its reason for refusing an exemption
+//     keyed on `new Error(`, so it is the case that must keep failing;
+//   • a callback beginning inside the call ENDS the span, exactly as it ends
+//     a title's;
+//   • the span stops at the SECOND top-level comma, so anything past the
+//     message — a third argument, if a shape ever permits one — is not a
+//     message. The same clause is what makes the trailing comma of the real
+//     multi-line shape safe.
+// The span is the whole ARGUMENT, not the first string literal in it, for
+// the reason `titleSpans` states above: the real messages are concatenated
+// chunks and interpolated templates (`"... (CR-CRU-109 §S1) ..." + "..."`,
+// `` `... ${capOf()} ...` ``), and stopping at the first closing quote would
+// leave the rest of the same message looking like live code.
+//
+// The walk runs over `jsLiveCode`, whose offsets ARE the raw file's: a comma,
+// paren or quote inside a string or a comment is blanked before it is
+// counted, so a message reading `", so its "` cannot be mistaken for an
+// argument boundary and an `expect(` quoted in a comment opens no span over
+// the code beneath it — the same protection `proseMask` gives the assertion
+// openers. A `${...}` substitution stays live and balanced, so
+// `${JSON.stringify(declared)}` is walked as the code it is. Where the walk
+// is unsure it ends the span EARLY and the tripwire OVER-reports, loudly, in
+// the file that wrote the message — never a silent hole.
+//
+// Python has no such parameter (`assert x, "msg"` is a statement whose second
+// operand IS the message, but no client test writes one and Python's opener
+// is a different branch of `assertionSpans`), so the exemption is scoped to
+// the branch it was ruled for.
+function expectMessageSpans(relPath: string, text: string): Span[] {
+  if (relPath.endsWith(".py")) return [];
+  const live = jsLiveCode(text);
+  const spans: Span[] = [];
+  for (const m of live.matchAll(/\bexpect\(/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1;
+    const close = balancedEnd(live, open);
+    const commas: number[] = [];
+    let depth = 0;
+    for (let i = open; i < close; i++) {
+      const c = live[i];
+      if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        depth--;
+        if (depth === 0) break;
+      } else if (c === "," && depth === 1) commas.push(i);
+    }
+    if (commas.length === 0) continue;
+    const start = commas[0]! + 1;
+    const callback = /=>|\bfunction\s*\(/.exec(live.slice(open, close));
+    const end = Math.min(commas[1] ?? close - 1, callback === null ? close : open + callback.index);
+    if (end > start) spans.push([start, end]);
+  }
+  return spans;
+}
 
 // EXEMPT BY NAME — the named constants that are ALLOWED to hold real ids,
 // each with the reason it is allowed. AC5's dated reproduction is the whole
@@ -304,7 +380,11 @@ export interface Leak {
 function assertedLiterals(relPath: string, text: string): Leak[] {
   const foreign = FOREIGN_FIXTURE_FILES[relPath];
   const assertions = assertionSpans(relPath, text);
-  const exempt = [...titleSpans(text), ...exemptConstantSpans(relPath, text)];
+  const exempt = [
+    ...titleSpans(text),
+    ...expectMessageSpans(relPath, text),
+    ...exemptConstantSpans(relPath, text),
+  ];
   return classifyOccurrences(relPath, text)
     .filter((o) => !o.isProse)
     .filter((o) => SYNTHETIC_NAMESPACES[o.id.replace(/-\d+$/, "")] === undefined)
@@ -505,6 +585,42 @@ const SYNTHETIC_TRIPWIRE_FIXTURE = {
   foreignPlanted: 'test("x", () => { expect(a).toBe("CR-NAI-203"); expect(b).toBe("CR-ZZZ-8"); });',
   foreignLeaks: ["CR-ZZZ-8"],
   foreignNamespace: "CR-NAI",
+  // AC10's self-test inputs (CR-CRU-109 §S3, ruled 2026-09-07) — the message
+  // exemption above and each boundary that keeps it narrow, planted as source
+  // text and fed to the same pure checker. One DISTINCT id per case, so a
+  // regression names the case that broke rather than moving a count; the
+  // shapes are the real ones the ruling was made about (a concatenated
+  // message with a trailing comma, an interpolated one carrying live
+  // substitutions). `CR-ZZZ` names no project and is deliberately NOT in
+  // SYNTHETIC_NAMESPACES — listing it would make every case below pass
+  // vacuously.
+  expectMessageConcatenated: [
+    "expect(",
+    "  typeof value,",
+    '  "the fixture exports no numeric CAP — CR-ZZZ-11 §S1 has no single " +',
+    '    "definition for this suite to read (CR-ZZZ-12)",',
+    '  ).toBe("number");',
+  ].join("\n"),
+  expectMessageConcatenatedLeaks: [],
+  expectMessageInterpolated:
+    "expect(four.length, `no DRAWN row renders ${BARE.length} ids in the capped bare form " +
+    "(CR-ZZZ-13) — this board reads ${JSON.stringify(declared)}, so its box is not the case ` +\n" +
+    "  `the figure is stated against`).toBeGreaterThan(0);",
+  expectMessageInterpolatedLeaks: [],
+  expectOrdinaryAssertion: 'expect(row.cr).toBe("CR-ZZZ-14");',
+  expectOrdinaryAssertionLeaks: ["CR-ZZZ-14"],
+  expectThrownContract: [
+    'expect(() => load()).toThrow(new Error("CR-ZZZ-15 is absent from the published order"));',
+    'expect(() => load()).toThrowError("CR-ZZZ-16 is absent from the published order");',
+  ].join("\n"),
+  expectThrownContractLeaks: ["CR-ZZZ-15", "CR-ZZZ-16"],
+  expectFirstArgument: 'expect("CR-ZZZ-17", "the actual value is a product value").toBe(cr);',
+  expectFirstArgumentLeaks: ["CR-ZZZ-17"],
+  expectCallbackInsideCall:
+    'expect(() => load("CR-ZZZ-18"), "a callback begins inside — CR-ZZZ-19").toThrow();',
+  expectCallbackInsideCallLeaks: ["CR-ZZZ-18", "CR-ZZZ-19"],
+  expectThirdArgument: 'expect(v, "the message — CR-ZZZ-20", "past the message — CR-ZZZ-21").toBe(1);',
+  expectThirdArgumentLeaks: ["CR-ZZZ-21"],
 };
 
 describe("CR-CRU-097 §S2/AC2 — no help string any client PRINTS names a project's CR namespace", () => {
@@ -871,9 +987,30 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // branch-cut count, and the branch cut itself re-measures at the recorded
 // 423. `src/` and `clients/` are untouched and re-measure at 550 and 639.
 // The `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-109 §S1/AC10. `public/` HEAD moves 431 -> 435
+// (+4), which is the whole of this CR's production diff's prose: the display
+// cap got a name, and each of the four places that name is met carries the
+// reason it exists — `public/app-logic.mjs` +1 (84 -> 85, the
+// `DEPENDENCY_ANNOTATION_CAP` block comment stating what a row STATES before
+// it counts the rest), `public/app-logic.d.mts` +1 (52 -> 53, the
+// declaration's own citation) and `public/app.js` +2 (223 -> 225, the
+// annotation builder's cap comment and the note that the cap bounds the TEXT
+// and nothing else, so `deps` still carries every declared id — CR-CRU-102
+// AC3's rule, unmoved). Every one is prose on a `//` or ` * ` line, none in a
+// string (the rendered remainder is a `+N` token carrying no CR literal) —
+// measured with THIS file's own `extractCitableText` over the working tree,
+// which attributes the whole +4 to those THREE files and leaves
+// `public/styles.css` at 72 and the other six `public/` files at 0;
+// `git diff develop..HEAD -- public/` shows those same four added citation
+// lines and no removed one. `src/` and `clients/` are untouched by this CR
+// and re-measure at 550 and 639.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — "never below its develop
+// baseline" is the standing half of the claim and only the equality pin is
+// re-recorded, exactly as CR-CRU-093 re-recorded 405 -> 431. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 431 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
   clients: { exts: [".py"], develop: 601, head: 639 },
 };
 
@@ -973,5 +1110,83 @@ describe("CR-CRU-097 AC7/AC7a — no test asserts on a project CR literal outsid
     expect(
       assertedLiterals(rel, SYNTHETIC_TRIPWIRE_FIXTURE.foreignPlanted).map((l) => l.id),
     ).toEqual(SYNTHETIC_TRIPWIRE_FIXTURE.foreignLeaks);
+  });
+});
+
+// AC10's PROOF, on this file's own planted fixture rather than on the four
+// suites the ruling was made about: a checker that stopped reporting them
+// because it stopped reporting anything would look identical from those
+// files. Each case is its own test naming its own reason, and each carries
+// its own planted id, so a leak is identifiable rather than a count.
+//
+// The FOURTH case AC10 lists — a `describe`/`test` title carrying a
+// real-shaped id stays exempt — is already proven and is NOT duplicated
+// here: `"the tripwire FIRES on a planted literal, and on nothing that is
+// exempt by kind or by name"` (this file, in the AC7/AC7a describe above)
+// runs the checker over a fixture whose FIRST line is
+// `describe("CR-ZZZ-1 — ...")` and asserts the leak set is exactly
+// `["CR-ZZZ-3"]`. Title handling is untouched by this CR, and a second test
+// of it would pin the same fixture twice.
+describe("CR-CRU-109 §S3/AC10 — an expect() message is a diagnostic, and the boundary that keeps it narrow", () => {
+  const planted = (source: string): string[] =>
+    assertedLiterals(join("tests", "synthetic-probe.ts"), source).map((l) => l.id);
+
+  test("a real-shaped id in a CONCATENATED expect() message is not reported", () => {
+    // The shape the ruling was made about: chunks joined with `+`, a trailing
+    // comma after the last one. Both planted ids sit past the first closing
+    // quote, so a span that stopped there would still report the second.
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectMessageConcatenated)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectMessageConcatenatedLeaks,
+    );
+  });
+
+  test("a real-shaped id in an INTERPOLATED expect() message is not reported", () => {
+    // The other real shape: template chunks carrying `${...}` substitutions,
+    // one of them a call with its own parens, and a comma inside the prose —
+    // the argument boundary must be read from live code, not from raw text.
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectMessageInterpolated)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectMessageInterpolatedLeaks,
+    );
+  });
+
+  test("the same id in ordinary assertion position IS still reported — the exemption is narrow, not a file-level pass", () => {
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectOrdinaryAssertion)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectOrdinaryAssertionLeaks,
+    );
+  });
+
+  test("an expected error message IS still reported, through toThrow and toThrowError alike", () => {
+    // The case the thrown-diagnostic ruling named as its reason for refusing
+    // an exemption keyed on `new Error(`: inside an assertion that string is
+    // the product's own contract. Both matchers are planted because both take
+    // the argument OUTSIDE `expect`'s parens, which is the property that
+    // spares them; a rule keyed on a matcher NAME would have to list them.
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectThrownContract)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectThrownContractLeaks,
+    );
+  });
+
+  test("expect()'s FIRST argument stays reportable — the actual value is a product value", () => {
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectFirstArgument)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectFirstArgumentLeaks,
+    );
+  });
+
+  test("a callback beginning inside the call ends the span, so BOTH its ids are reported", () => {
+    // The boundary AC10 states, and the direction of error it chooses: the
+    // message of `expect(() => f("CR-..."), "...")` is over-reported rather
+    // than guessed at, loudly, in the file that wrote it.
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectCallbackInsideCall)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectCallbackInsideCallLeaks,
+    );
+  });
+
+  test("the span ends at the second top-level comma, so nothing past the message is a message", () => {
+    // Bun's `expect` takes two arguments, so this shape is planted as TEXT
+    // and never compiled — it pins the RULE, and the rule is what makes the
+    // trailing comma of the concatenated case above safe.
+    expect(planted(SYNTHETIC_TRIPWIRE_FIXTURE.expectThirdArgument)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.expectThirdArgumentLeaks,
+    );
   });
 });
