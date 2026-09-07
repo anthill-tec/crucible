@@ -1084,6 +1084,28 @@ export function bareDependencyId(cr, dependency) {
   return ALL_DIGITS.test(remainder) ? remainder : dependency;
 }
 
+/**
+ * CR-CRU-109 §S1/AC8 — how many dependency ids a wave row STATES before it
+ * states the count of the rest. The ONE definition of the number: zone 2's
+ * call site (`RoadmapFlowNode`, public/app.js) bounds its list by this name,
+ * never by a literal of its own.
+ *
+ * TWO, by measurement rather than by taste. The unbounded list put the live
+ * wave box at 332.4px against the design's ~300px budget
+ * (.lavish/crucible-workflow-flowchart.html §14, measured at 1600px), and
+ * `bareDependencyId` has already shortened each id as far as it goes — what
+ * was left to bound is HOW MANY. §S1 measured the alternatives on the running
+ * board: three ids still overflow at 321.0px, two fit at 292.5px. It is also
+ * what the approved artifact draws (`deps 091, 092`).
+ *
+ * DISPLAY ONLY, exactly like the abbreviation it composes with: `dependsOn`
+ * carries every full id on the wire, zone 3's `deps` column still states the
+ * whole set, and every consumer that RESOLVES a dependency reads them all.
+ * The row says how many it withheld (a COUNT, never an ellipsis), so a reader
+ * is never misled about the size of what the table below holds.
+ */
+export const DEPENDENCY_ANNOTATION_CAP = 2;
+
 /** The id prefix a CR's own H1 opens with, and the separator that ends it. */
 const TITLE_ID_SEPARATOR = /^\s*[—–:·|-]+\s*/;
 
@@ -1537,6 +1559,7 @@ if (typeof window !== "undefined") {
     lifecycleBadge,
     crStatusMark,
     bareDependencyId,
+    DEPENDENCY_ANNOTATION_CAP,
     projectRollupLabel,
     projectActivity,
     orderProjects,

@@ -349,6 +349,13 @@ export declare function bareDependencyId(
   dependency: string | null | undefined,
 ): string;
 
+/** CR-CRU-109 §S1/AC8 — how many dependency ids a wave row STATES before the
+ *  COUNT of the rest, and the ONE place the number is spelled. TWO, by §S1's
+ *  measurement of the live wave box (three ids leave it at 321.0px against
+ *  the design's ~300px, two bring it to 292.5px). DISPLAY ONLY: `dependsOn`
+ *  keeps every full id and zone 3 still states the whole set. */
+export declare const DEPENDENCY_ANNOTATION_CAP: number;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;

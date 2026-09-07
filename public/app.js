@@ -2949,11 +2949,20 @@
       // which stay with the CR that is actually running (CR-078 AC24). The row
       // keeps its PENDING styling — being next adds a word, not a state.
       //
-      // AC13 — every declared dependency is named. No truncation and no
-      // `and N more` fold. AC13 states the slot for a PENDING row, which is
-      // the row whose declared dependencies are still a constraint; a merged
-      // or running member's are settled or moot, so the slot stays empty for
-      // it.
+      // AC13 — the slot names the row's declared dependencies, BOUNDED by
+      // CR-CRU-109 §S1's cap: the first `DEPENDENCY_ANNOTATION_CAP` in
+      // authored order and then ` +N`, the COUNT of the rest. §S1 supersedes
+      // AC13's completeness claim for zone 2 by user ruling ("cap wins") —
+      // the unbounded list measured 332.4px against the design's ~300px wave
+      // box, and the two ACs could not both hold. Completeness MOVES rather
+      // than disappearing: zone 3's `deps` column (`RoadmapRow`) still states
+      // the whole set for the same row. The remainder is a NUMBER and never
+      // an ellipsis or an `and N more`, so a reader can tell four declared
+      // dependencies from seven without opening the table, and a row
+      // declaring the cap or fewer renders exactly as before — never a `+0`.
+      // AC13 states the slot for a PENDING row, which is the row whose
+      // declared dependencies are still a constraint; a merged or running
+      // member's are settled or moot, so the slot stays empty for it.
       //
       // HOW each one is WRITTEN is `bareDependencyId`, and CR-CRU-102 §S1
       // SUPERSEDES the full-id decision that stood here. The reasoning that
@@ -2988,7 +2997,14 @@
       const annotation = [];
       if (marked === true) annotation.push(span({ class: "app-flow-node-next" }, "next"));
       if (deps.length > 0) {
-        annotation.push(`deps ${deps.map((dep) => L.bareDependencyId(entry.cr, dep)).join(", ")}`);
+        // CR-CRU-109 §S1 — the cap bounds the TEXT and nothing else: `deps` is
+        // sliced for rendering while `entry.dependsOn` above is read whole by
+        // every consumer that resolves an id.
+        const stated = deps
+          .slice(0, L.DEPENDENCY_ANNOTATION_CAP)
+          .map((dep) => L.bareDependencyId(entry.cr, dep));
+        const withheld = deps.length - L.DEPENDENCY_ANNOTATION_CAP;
+        annotation.push(`deps ${stated.join(", ")}${withheld > 0 ? ` +${withheld}` : ""}`);
       }
       return div(
         props,
