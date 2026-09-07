@@ -1160,10 +1160,46 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // 639 -> 642, and CR-CRU-075 `clients/` 672 -> 687. The `develop` baselines
 // are UNCHANGED at 512/378/601 and stay the floors — a floor never moves for
 // a re-pin.
+// UPDATED 2026-09-07 by CR-CRU-108 §S1/§S2. `src/` HEAD moves 560 -> 563 and
+// `clients/` 691 -> 694, +3 each. The whole +6 lands in three files, all of
+// them files this CR's own §S1/§S2 edited, and every added line is a
+// `/** */` docblock line or a `#` docstring line — none is a string literal,
+// so the prose-only classifier and a raw literal count agree on all six.
+//
+// `src/` 560 -> 563. `src/store.ts` +2 (255 -> 257): `declaredTracks`'
+// docblock opens `CR-CRU-108 §S1/AC1 — the DECLARED tracks over a set of queue
+// entries`, and its closing sentence names `the divergence CR-CRU-108
+// removes`. `src/v2.ts` +1 (188 -> 189): `handleQueueGet`'s comment recording
+// that `CR-CRU-108 §S1/AC1 — the reply also STATES the project's declared
+// tracks`. No other `src/` file moves: §S1 added ONE call site and changed no
+// other prose.
+//
+// `clients/` 691 -> 694. All three in `clients/_crucible_axi.py` (129 -> 132):
+// `QueueTrackFactUnpublished`'s docstring (`CR-CRU-108 §S2 — raised when a
+// queue READ states no track fact`), `queue_tracks`' docstring recording that
+// the deleted set-comprehension was `a second copy of the rule CR-CRU-108
+// deleted`, and `resolve_next`'s parameter docstring stating that `tracks` is
+// the list the queue read PUBLISHED. The other six `clients/` files
+// re-measure UNCHANGED — §S2 is a change to the SHARED module only, and the
+// five `*-crucible.py` clients each carry nothing but a thin `cmd_next`
+// delegator that this CR never touched (verified: one caller repo-wide).
+//
+// `public/` is UNCHANGED at 435: §S3 pinned the browser's predicate from the
+// test side and edited no shipped browser prose.
+//
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show develop:<path>`, file by file, at the END of the cycle —
+// after the FIX commits, so the figure is final rather than re-recorded twice.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin moves, as
+// CR-CRU-093 re-recorded `public/` 405 -> 431, CR-CRU-109 431 -> 435,
+// CR-CRU-094 `src/` 550 -> 556 and 556 -> 560, and CR-CRU-075 `clients/`
+// 672 -> 687 (then CR-CRU-107 687 -> 691). The `develop` baselines are
+// UNCHANGED at 512/378/601 and stay the floors — a floor never moves for a
+// re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 560 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 563 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 691 },
+  clients: { exts: [".py"], develop: 601, head: 694 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
