@@ -735,7 +735,20 @@ class ArduinoCrucibleStatusHookSafeTest(_BaseArduinoAxiTest):
         self.assertEqual(axi.get("plans"), [],
                           "the unavailable state must report an EMPTY board, never "
                           "fabricated/stale plan rows")
-        self.assertIsNone(axi.get("lastRunCr"))
+        # CR-CRU-094 §S4/AC7 — the field now states the fact it computes (the
+        # `cr` of the plan with the latest `closedAt`), and the old name that
+        # read as "the CR of the most recent run" is a CLEAN BREAK, not an
+        # alias (the CR-CRU-059 §S0 precedent: no dual-key handling).
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the unavailable envelope must still carry the last-closed-CR key "
+            f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
         help_steps = axi.get("help") or []
         self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
                                      "next-step hint (AXI principle 9)")

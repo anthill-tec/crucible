@@ -2933,5 +2933,187 @@ class Cr092HarnessLanePlanIsolationTest(unittest.TestCase):
             "the recording `worktree-flow` on PATH was called")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-094 §S4 (AC7/AC8) — the renamed status field, on the CHANGED verb, in
+# every client, measured by the SAME census machinery the rest of this file
+# uses (AC8: "asserted by extending the two EXISTING harnesses ... rather than
+# a parallel checker" — the pattern CR-091 AC19 and CR-092 AC15 both follow).
+#
+# The changed verb is the `status`/`plans` PAIR (one implementation, two
+# registered names), so both are driven: an alias left emitting the old key
+# would be a client-visible dual-key envelope, which AC7 forbids.
+#
+# The census drives against an UNREACHABLE server, so the envelope measured
+# here is the §S1 tolerant degrade — where the field is an EXPLICIT null. That
+# is the strongest thing this harness can measure and it is worth measuring:
+# a rename that silently DROPPED the key on the degrade path would leave a
+# reader unable to distinguish "nothing has closed" from "this client predates
+# the field". The populated-board discrimination (latest `closedAt`) is pinned
+# where a fixture can supply a closed plan: `test_bun_crucible_status.py`.
+# ---------------------------------------------------------------------------
+
+# The registered names of the one changed verb (implementation + alias).
+CR094_STATUS_VERBS = ("status", "plans")
+
+# The client's own top-level help, where argparse prints the verb pair's
+# one-line description — the surface that advertises this field.
+CR094_ROOT_HELP = "<root>"
+
+_CR094_STATUS_HELP_CACHE = None
+
+
+def _get_status_help_drives():
+    """Every LIVE help surface on which the changed verb advertises this field:
+    the client's ROOT `--help` (argparse prints the verb pair's one-line help
+    there, which is where the field is named at all today) and each verb's own
+    `<client> <verb> --help`. Both are driven because the rename must reach
+    the surface that advertises the field AND must not survive on any other:
+    a positive check on one surface alone would let the retired name live on
+    in the other. COLUMNS is pinned so argparse's wrap width is deterministic
+    across terminals and CI."""
+    global _CR094_STATUS_HELP_CACHE
+    if _CR094_STATUS_HELP_CACHE is not None:
+        return _CR094_STATUS_HELP_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    helps = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                for surface in (CR094_ROOT_HELP,) + CR094_STATUS_VERBS:
+                    argv = (["--help"] if surface == CR094_ROOT_HELP
+                            else [surface, "--help"])
+                    helps[(client_key, surface)] = drive_verb(
+                        script_path, argv, project_dir, fake_bin_dir,
+                        extra_env={"COLUMNS": "200"})
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _CR094_STATUS_HELP_CACHE = helps
+    return helps
+
+
+class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
+    """CR-CRU-094 AC7/AC8 — the field states the fact it computes (the `cr` of
+    the plan with the latest `closedAt`), the old name is a CLEAN BREAK
+    (CR-CRU-059 §S0's precedent: no alias, no dual-key handling), and both
+    hold on every one of the 10 (client x changed-verb) pairs."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.census = _get_census()
+        cls.helps = _get_status_help_drives()
+
+    def _pairs(self):
+        for client_key in CLIENT_FILES:
+            for verb in CR094_STATUS_VERBS:
+                yield client_key, verb
+
+    def test_every_changed_verb_still_emits_an_envelope_in_every_client(self):
+        """Non-vacuity for the two tests below: a missing/bare envelope would
+        make "the old key is absent" vacuously true everywhere."""
+        bare = [f"{c}:{v}" for c, v in self._pairs()
+                if not self.census[c].get(v)]
+        self.assertEqual(
+            bare, [],
+            f"both registered names of the changed verb must still emit a "
+            f"decodable envelope in every client, or the key assertions below "
+            f"measure nothing: {bare!r}")
+
+    def test_every_changed_verb_reports_the_last_closed_cr_key(self):
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = self.census[client_key].get(verb) or {}
+            if "lastClosedCr" not in axi:
+                offenders[f"{client_key}:{verb}"] = sorted(axi)
+        self.assertEqual(
+            offenders, {},
+            f"every client must report the last-closed-CR under the name that "
+            f"states what it computes, on BOTH registered names of the verb; "
+            f"envelope keys seen: {offenders!r}")
+
+    def test_the_last_closed_cr_key_is_an_explicit_null_on_an_unreadable_board(self):
+        """The degrade must not fabricate a CR, and must not drop the key: an
+        explicit null is the definitive "nothing to report" (AXI principle
+        5), a missing key is indistinguishable from an older client."""
+        offenders = {f"{c}:{v}": self.census[c].get(v, {}).get("lastClosedCr")
+                     for c, v in self._pairs()
+                     if (self.census[c].get(v) or {}).get("lastClosedCr") is not None}
+        self.assertEqual(
+            offenders, {},
+            f"an unreadable board has no closed plan to report -- the field "
+            f"must be null, never a fabricated or stale value: {offenders!r}")
+
+    def test_no_changed_verb_envelope_still_carries_the_old_key(self):
+        """AC7's clean break, measured on the wire rather than in the source: a
+        response carrying BOTH keys fails the AC."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = self.census[client_key].get(verb) or {}
+            if "lastRunCr" in axi:
+                offenders[f"{client_key}:{verb}"] = axi.get("lastRunCr")
+        self.assertEqual(
+            offenders, {},
+            f"the old key must be ABSENT from every envelope -- it is replaced "
+            f"outright, not aliased alongside the new one: {offenders!r}")
+
+    def _squeezed_help(self, client_key, surface):
+        run = self.helps[(client_key, surface)]
+        return run, " ".join(f"{run.stdout}{run.stderr}".split()).lower()
+
+    def test_the_advertised_help_states_the_fact_the_field_computes(self):
+        """The live surface on which the verb pair advertises this field is the
+        client's own `--help` listing (the pair shares one description, so
+        both names are covered by construction; the per-client string itself
+        is pinned exactly by the sibling fleet-inventory harness)."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run, squeezed = self._squeezed_help(client_key, CR094_ROOT_HELP)
+            if run.returncode != 0:
+                offenders[client_key] = f"exit {run.returncode}"
+            elif "lastclosedcr" not in squeezed:
+                offenders[client_key] = "help does not name the field"
+            elif "last cr to close" not in squeezed:
+                offenders[client_key] = "help does not state the fact computed"
+        self.assertEqual(
+            offenders, {},
+            f"all five clients advertise this field in their help; each must "
+            f"name it and say what it is -- the last CR to close: "
+            f"{offenders!r}")
+
+    def test_each_verb_name_still_has_a_working_help_of_its_own(self):
+        """Non-vacuity for the rejection below: a `--help` that errored out
+        would carry no wording to reject."""
+        offenders = {f"{c}:{v}": self.helps[(c, v)].returncode
+                     for c, v in self._pairs()
+                     if self.helps[(c, v)].returncode != 0
+                     or not self.helps[(c, v)].stdout.strip()}
+        self.assertEqual(
+            offenders, {},
+            f"both registered names must still print their own help and exit "
+            f"0: {offenders!r}")
+
+    def test_no_live_help_surface_still_describes_the_field_as_the_most_recent_run(self):
+        """The DEFECT, stated as a rejection rather than only as a new
+        expectation: five clients advertise this field, and one left naming it
+        for the most recent run keeps the misreading alive however correct the
+        envelope is. Checked on EVERY live help surface -- the root listing
+        and each verb's own help -- so the retired name cannot survive by
+        moving between them."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for surface in (CR094_ROOT_HELP,) + CR094_STATUS_VERBS:
+                _run, squeezed = self._squeezed_help(client_key, surface)
+                stale = [phrase for phrase in ("lastruncr", "most recent run")
+                         if phrase in squeezed]
+                if stale:
+                    offenders[f"{client_key}:{surface}"] = stale
+        self.assertEqual(
+            offenders, {},
+            f"no client may still advertise the retired name or the 'most "
+            f"recent run' reading of this field: {offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
