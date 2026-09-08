@@ -84,9 +84,11 @@ zero-discovery and the compile-tier fallback alike.
 ## Acceptance criteria
 
 - **AC1** — each of the six `Tier` values of `src/types.ts` (`unit`, `module`, `integration`, `e2e`,
-  `regression`, `bdd`) is an invocable VERB, asserted by driving the client's own `--help` and then
-  the verb itself, not by reading source. A seventh name is `invalid choice` from argparse's own
-  refusal, and the six appear in the root help's choices group.
+  `regression`, `bdd`) is an invocable VERB in **EACH of the five clients**, asserted by driving
+  every client's own `--help` and then the verb itself, not by reading source. Five assertions and
+  the client count asserted — "the client exposes the verbs" is satisfiable by one client (DN D2:
+  the set is the six tiers, *uniformly*). A seventh name is `invalid choice` from argparse's own
+  refusal, and the six appear in each root help's choices group.
 - **AC2** — the tier a run is stamped with is the tier the caller stated, asserted on the POST body
   the client sends (`payload["tier"]`) for each of the six values.
 - **AC3** — `cmd_test` with no stated tier sends NO `tier` key. Asserted on the POST body: the key
@@ -128,6 +130,17 @@ zero-discovery and the compile-tier fallback alike.
   explicitly: it appears in no client (`add_argument("--tier` returns zero fleet-wide, as today) and
   the retirement is recorded, so a reader of CR-CRU-008 is not left expecting a flag that never
   existed.
+- **AC12** — `rust-crucible.py`'s higher tiers stop reporting as `unit`. Asserted on the POST body
+  per verb: `smoke-test` and `docker-e2e-gate` carry the tier the DN's mapping gives them, and a run
+  driven under a nextest profile (`-P ci`, `-P e2e`, the docker-infra tier) carries that profile's
+  tier rather than the `unit` both call sites hardcode today. The drift this closes is measured: two
+  `tier="unit"` call sites are the client's only tier statements.
+- **AC13** — `arduino-crucible.py` stamps a tier on EVERY test ingest, so no run relies on the
+  server's default. Asserted on the POST body: the native-host run carries its own tier, and the
+  `arduino-cli` target build continues to post to `/api/v2/runs/compile` as a COMPILE ingest — a
+  build is not a test tier, and conflating them would put a compile in the test record. Today this
+  client stamps nothing at all, so a native run and a target build are indistinguishable on the
+  board.
 
 ## Estimated size
 
@@ -151,6 +164,10 @@ acceptable for a targeted run rather than assuming it.
   (`src/v2.ts`), the ingest endpoints, and `EventRow`/`RunRow` (`src/store.ts`). This CR is
   client-side only; `src/` is READ as the source of the vocabulary and touched not at all. A new
   field, endpoint or enum value would be out of scope by construction.
+- **The vscode stack.** The DN records its split (Vitest for unit, Mocha under
+  `@vscode/test-electron` for integration), but there is no vscode client to carry a verb surface;
+  it inherits this mapping when that client is built, and until then its interim inline ingest
+  states the tier explicitly. Five clients are in scope here, not six.
 - Classifying files into tiers. That is the project's decision, per the DN.
 - Per-tier coverage (DN open question 4) and e2e ownership (open question 5) — both still open.
   The wall-vs-CPU check is NOT deferred: DN **D3** settled it as a warning and it is §S4/AC6b of

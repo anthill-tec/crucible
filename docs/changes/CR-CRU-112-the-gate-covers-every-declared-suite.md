@@ -100,6 +100,12 @@ this CR depends on 111.
 - **Any server-side change.** The gate composes CLIENT-side; each suite ingests through its own
   stack's client using the endpoints and the `{tier, stack, context}` contract the server already
   declares (`src/v2.ts`, `src/store.ts`). No new field, endpoint or enum value.
+- **Guarding a project's own target partition.** The DN's gate contract names it as a clause, and it
+  is PROJECT-side: here `tests/test-targets.test.ts` asserts that every test file belongs to exactly
+  one non-regression target. This gate asserts SUITE coverage — that every declared suite ran and
+  none was skipped — not that a project's targets partition its files correctly. Building a
+  cross-project partition checker into the gate would be machinery for a guarantee each project can
+  make locally in one test.
 - Teaching any client to run another language's tests.
 - Changing what `e2e` covers or who ingests it (DN open question 5).
 - Fixing whatever the python suite reveals beyond the CR-CRU-107/108 case named in AC7.
