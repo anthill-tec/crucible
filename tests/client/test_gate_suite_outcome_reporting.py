@@ -559,7 +559,15 @@ class SingleSuiteProjectGateIsUnchangedTest(_OutcomeCase):
         """'Same envelope shape, same exit codes.' One-directional by design
         (ESCALATION 2): a field the snapshot carried and this envelope does not
         is an information regression, while the `suites[]` key §S1 adds is not
-        asserted against."""
+        asserted against.
+
+        The `files` member of `run` is asserted for a reason of its own:
+        CR-CRU-051 §S2 carries that count 'so a suite that silently shrinks is
+        visible in the gate output itself', which is this CR's own thesis, so a
+        composition that dropped it would hide precisely what the gate exists
+        to show (ESCALATION 4). The lineage lives HERE and not in the assertion
+        message below, which a client-tree test may not EMIT a project CR
+        literal into."""
         drive, exc = self.gate_outcome()
         self.assertGateReported(drive, exc, "AC4")
         envelope = self.gate_envelope(drive)
@@ -589,9 +597,9 @@ class SingleSuiteProjectGateIsUnchangedTest(_OutcomeCase):
             lost, [],
             "AC4 — the `run` of a one-suite project's gate no longer reports "
             "%r as %s did: it reported %r and this gate reports %r. `files` is "
-            "the count CR-CRU-051 §S2 carries 'so a suite that silently "
-            "shrinks is visible in the gate output itself', which is this CR's "
-            "own thesis (ESCALATION 4). envelope=%s"
+            "the count the gate carries 'so a suite that silently shrinks is "
+            "visible in the gate output itself' (see this test's docstring for "
+            "the lineage, ESCALATION 4). envelope=%s"
             % (lost, PRE_COMPOSITION_REF, PRE_COMPOSITION_RUN, run,
                _text(envelope)))
         self.assertEqual(
