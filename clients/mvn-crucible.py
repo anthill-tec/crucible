@@ -1809,6 +1809,41 @@ def _add_log_arg(p):
                                  "Lets an agent read a long run back instead of re-running.")
 
 
+# ── CR-CRU-111 §S1/AC5 — the flags each tier-named verb OWNS ─────────────
+#
+# These four verbs pre-date the shared tier registration and keep every flag
+# they had: the registrar supplies the name, the help and the tier binding,
+# and each verb's own surface rides its `TierVerb.add_args`. A flag lost in
+# the migration would be a silent capability regression on a verb agents
+# already drive, which is why they are lifted into named adders rather than
+# re-typed at the call site.
+
+
+def _add_unit_tier_args(p):
+    p.add_argument("--test", help="Surefire -Dtest pattern, e.g. FooTest or FooTest#method or 'Foo*'")
+    p.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
+
+
+def _add_module_tier_args(p):
+    p.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
+
+
+def _add_e2e_tier_args(p):
+    p.add_argument("--agent", help="If set, ingest failsafe+surefire results (parsed, no coverage)")
+    p.add_argument("--failsafe-only", action="store_true",
+                   help="Run only failsafe:integration-test+verify (package assumed already built, e.g. native)")
+    p.add_argument("--with-docker", action="store_true", help="docker compose up/down around the run")
+    p.add_argument("--compose-file", default=None, help="Compose file (rel to project root); else .env/auto-discovery")
+    p.add_argument("--no-wait", action="store_true", help="docker-up without --wait")
+
+
+def _add_regression_tier_args(p):
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
+    p.add_argument("--goal", default="verify", help="Maven goal (default: verify; use test for libs without IT)")
+    p.add_argument("--coverage-profile", help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+    _add_gate_cycle_arg(p)
+
+
 # CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
 # `__doc__`. The module docstring is this client's design record: it cites the
 # CRs that shaped it, and argparse printed all of it to every user of every
@@ -1882,49 +1917,43 @@ def main():
     _add_project_args(u)
     u.set_defaults(func=cmd_unregister)
 
-    un = sub.add_parser("unit", help="UNIT tier: mvn clean test -Dtest=<pattern>. Surefire ingest.")
-    un.add_argument("--test", help="Surefire -Dtest pattern, e.g. FooTest or FooTest#method or 'Foo*'")
-    un.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
-    _add_mvn_flags(un)
-    _add_project_args(un)
-    _add_log_arg(un)
-    un.set_defaults(func=cmd_unit)
-
-    mo = sub.add_parser("module", help="MODULE tier: mvn clean test [-pl <module> -am]. Surefire ingest.")
-    mo.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
-    _add_mvn_flags(mo)
-    _add_project_args(mo)
-    _add_log_arg(mo)
-    mo.set_defaults(func=cmd_module)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # maven's four pre-existing tier-named verbs migrate onto it and keep
+    # their handlers, their flags and their behaviour (the module tier is
+    # maven's reactor scoping, as its shipped help has always said); the two
+    # cells maven declares no target for answer their help and refuse. A
+    # `dict(...)` rather than a `{...}` literal, deliberately: the six values
+    # live in ONE place (the shared module's mirror) and a client dict keyed
+    # by tier NAMES would be the second copy that is forbidden.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(unit=tier_verb(
+                 cmd_unit,
+                 "Runs `mvn clean test -Dtest=<pattern>` and ingests surefire.",
+                 (_add_unit_tier_args, _add_mvn_flags, _add_log_arg)),
+             module=tier_verb(
+                 cmd_module,
+                 "Runs `mvn clean test [-pl <module> -am]` — maven's own "
+                 "reactor scoping — and ingests surefire.",
+                 (_add_module_tier_args, _add_mvn_flags, _add_log_arg)),
+             e2e=tier_verb(
+                 cmd_e2e,
+                 "Runs failsafe IT / @QuarkusIntegrationTest. No coverage.",
+                 (_add_e2e_tier_args, _add_mvn_flags, _add_log_arg)),
+             regression=tier_verb(
+                 cmd_regression,
+                 "Runs the full reactor `mvn clean verify` with JaCoCo "
+                 "coverage, parsed.",
+                 (_add_regression_tier_args, _add_mvn_flags, _add_log_arg))),
+        add_args=(_add_project_args,))
 
     co = sub.add_parser("compile", help="mvn clean test-compile → ingest /api/v2/runs/compile (RED compile path).")
     co.add_argument("--agent", help="If set, ingest the build output as a compile result")
     _add_mvn_flags(co)
     _add_project_args(co)
     co.set_defaults(func=cmd_compile)
-
-    e = sub.add_parser("e2e", help="E2E tier: failsafe IT / @QuarkusIntegrationTest. No coverage.")
-    e.add_argument("--agent", help="If set, ingest failsafe+surefire results (parsed, no coverage)")
-    e.add_argument("--failsafe-only", action="store_true",
-                   help="Run only failsafe:integration-test+verify (package assumed already built, e.g. native)")
-    e.add_argument("--with-docker", action="store_true", help="docker compose up/down around the run")
-    e.add_argument("--compose-file", default=None, help="Compose file (rel to project root); else .env/auto-discovery")
-    e.add_argument("--no-wait", action="store_true", help="docker-up without --wait")
-    _add_mvn_flags(e)
-    _add_project_args(e)
-    _add_log_arg(e)
-    e.set_defaults(func=cmd_e2e)
-
-    g = sub.add_parser("regression",
-                       help="REGRESSION tier: full reactor mvn clean verify + JaCoCo coverage → parsed.")
-    g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
-    g.add_argument("--goal", default="verify", help="Maven goal (default: verify; use test for libs without IT)")
-    g.add_argument("--coverage-profile", help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
-    _add_gate_cycle_arg(g)
-    _add_mvn_flags(g)
-    _add_project_args(g)
-    _add_log_arg(g)
-    g.set_defaults(func=cmd_regression)
 
     ai = sub.add_parser("auto-ingest", help="Ingest EXISTING surefire/failsafe reports (no mvn run).")
     ai.add_argument("--agent", required=True)

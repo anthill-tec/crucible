@@ -25,6 +25,7 @@ same way the clients do.
 """
 
 import argparse
+import collections
 import datetime
 import importlib.util
 import json
@@ -1110,6 +1111,69 @@ def emit_cycle_selection_hard_stop(verb, refusal, context=None):
     return 2
 
 
+# ── CR-CRU-111 §S1 — the third hard stop: a tier verb with no declared run ─
+#
+# The vocabulary and the project's targets are two different facts, and
+# conflating them is what let a targeted run claim `unit` for everything. A
+# tier the vocabulary does not contain is argparse's own `invalid choice`; a
+# tier it DOES contain, registered on this client with no target declared for
+# it, is THIS refusal — it names the missing declaration rather than falling
+# back to another target, because a run that silently widened to the whole
+# suite would report a tier it did not perform.
+#
+# Same route as the two hard stops above (a typed exception, converted by
+# `run_verb`, an `ok:false` envelope on stdout, nothing run and nothing
+# posted), so all five clients inherit it without a line of per-client code.
+# The exit code is 1 rather than the 2 those two return: this is a
+# declaration the PROJECT has not made, not a malformed call the caller can
+# retype.
+
+TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
+
+
+def tier_run_undeclared_help(tier, declared):
+    """§S1 — the next moves for a tier with no declared target: declare one, or
+    run a tier this client DOES run. The second step names those tiers by
+    reading what the client actually wired, so a caller is never sent to a
+    target that does not exist here either."""
+    runnable = ", ".join(declared) if declared else "none yet"
+    return [f"declare this stack's {tier} target, then re-run `{tier}`",
+            f"tier verbs this client runs today: {runnable}",
+            f"`{tier}` never falls back to another target: a run that widened "
+            f"to the whole suite would report a tier it did not perform"]
+
+
+class TierRunUndeclared(Exception):
+    """§S1 — raised by a tier verb that is REGISTERED on this client and has
+    no target declared for it, so there is nothing to run.
+
+    Like the two refusals above it carries no fallback, because every fallback
+    here runs something the caller did not ask for and reports it under the
+    tier they did. Carries the AXI `detail` and the `help[]` for this refusal;
+    `run_verb` converts it into the `ok:false` envelope and the non-zero exit,
+    and NO test is run and NO ingest is posted from this path."""
+
+    def __init__(self, tier, declared=()):
+        self.tier = tier
+        self.declared = sorted(declared)
+        self.detail = (f"no {tier} target is declared for this stack, so the "
+                       f"{tier} verb has nothing to run")
+        self.help = tier_run_undeclared_help(tier, self.declared)
+        super().__init__(self.detail)
+
+
+def emit_tier_run_undeclared_hard_stop(verb, refusal, context=None):
+    """§S1 — emit the `ok:false` refusal envelope (stdout) plus the human error
+    line (stderr) for a tier with no declared target, and return the NON-ZERO
+    exit code the client's `main` must exit with. Nothing is run, nothing is
+    posted from this path."""
+    emit_axi(verb or refusal.tier, False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {TIER_RUN_UNDECLARED_CODE} — {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -1128,9 +1192,10 @@ def _hard_stop_context(args, project_key_fn):
 
 def run_verb(func, args, project_key_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
-    typed hard stop — an undeclared agent identity (§S5) or an unresolvable
-    cycle list (CR-CRU-107 §S2) — into the `ok:false` envelope and a non-zero
-    exit code instead of an unhandled traceback."""
+    typed hard stop — an undeclared agent identity (§S5), an unresolvable
+    cycle list (CR-CRU-107 §S2) or a tier with no declared target
+    (CR-CRU-111 §S1) — into the `ok:false` envelope and a non-zero exit code
+    instead of an unhandled traceback."""
     try:
         return func(args)
     except AgentIdentityRequired:
@@ -1138,6 +1203,10 @@ def run_verb(func, args, project_key_fn=None):
             getattr(args, "cmd", None), _hard_stop_context(args, project_key_fn))
     except CycleSelectionRefused as refusal:
         return emit_cycle_selection_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn))
+    except TierRunUndeclared as refusal:
+        return emit_tier_run_undeclared_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
 
@@ -1535,7 +1604,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1422-1438`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1437-1453`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
@@ -3572,6 +3641,117 @@ def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
     for adder in add_args:
         adder(qf)
     qf.set_defaults(func=func)
+
+
+# ── CR-CRU-111 §S1/AC10 — the tier vocabulary, mirrored ONCE ─────────────
+#
+# PROVENANCE: the server DECLARES this vocabulary as the `Tier` union in
+# `src/types.ts`, and that declaration is authoritative. The dict below is the
+# client side's ONLY copy of it: `tests/client/test_client_tier_surface.py`
+# parses that union out by SYMBOL and asserts the two are the same set, so a
+# seventh server-side value fails a test rather than quietly narrowing five
+# clients. Reading `src/types.ts` at client RUNTIME is not the requirement and
+# cannot be — an installed wheel ships no `src/` — so this is the
+# mirror-plus-guard pattern `canonical_track` already uses for `normalizeTrack`
+# above. What is forbidden is a SECOND mirror: no client carries its own copy
+# of the six, they take them from here through `add_tier_verbs`.
+#
+# The VALUE is what the tier means: the DEPENDENCY a run of it takes. That is
+# the only definition portable across five toolchains — a tier is never a
+# subject matter and never a size.
+TIER_MEANINGS = {
+    "unit": "no dependency beyond the code under test — no process, no "
+            "socket, no live service, no wait on the clock",
+    "module": "one module or package of this project, across its own boundary",
+    "integration": "a real dependency — a spawned process, a socket, a live "
+                   "service, or a wait on real time",
+    "e2e": "the assembled system, driven the way it is really driven",
+    "regression": "every tier the project declares, run as one suite",
+    "bdd": "executable specifications, in the project's own BDD form",
+}
+
+# What a client hands `add_tier_verbs` for a tier it actually RUNS:
+#
+#   * `func` — that client's own delegator, exactly as the other registrars
+#     take one;
+#   * `runs` — one sentence naming what this tier runs ON THIS STACK, which
+#     the registrar folds into the verb's help. It says what the verb DOES and
+#     never what a run claims: printed help asserting a tier the client does
+#     not send is a defect this CR's own Context measured, not a pattern to
+#     copy;
+#   * `add_args` — that ONE verb's own flag adders. The client-wide pieces
+#     ride `parents=`/`add_args=` as they do for `add_roadmap_verbs`, but a
+#     flag belonging to a single tier (mvn's `unit --test`, arduino's
+#     `regression --coverage`) belongs here — so migrating a pre-existing
+#     tier-named verb onto the shared registration cannot cost it a flag.
+TierVerb = collections.namedtuple(
+    "TierVerb", ("func", "runs", "add_args"), defaults=((),))
+
+
+def tier_verb_help(tier, meaning, wired):
+    """§S1 — the one line a tier verb prints in its client's help: what the
+    tier MEANS (from the mirror, so all five clients teach one vocabulary) and
+    what THIS client does with it — the run it performs, or the refusal it
+    answers with while the project has declared no target for it."""
+    if wired is not None:
+        return f"{tier.upper()} tier — {meaning}. {wired.runs}"
+    return (f"{tier.upper()} tier — {meaning}. No target for it is declared on "
+            f"this stack: the verb refuses (ok:false, exit 1) naming what to "
+            f"declare, and never falls back to another target.")
+
+
+def undeclared_tier_run(tier, funcs):
+    """§S1 — the handler a tier with no declared target is registered with.
+
+    It RAISES, so the refusal travels the fleet's own hard-stop route through
+    `run_verb` (the `ok:false` envelope carrying the project context, exit 1,
+    nothing run and nothing posted) and no client repeats a line of it. Never
+    a no-op, and never a fall-back run: the verb has to ANSWER, and what it
+    answers is which declaration is missing."""
+    declared = sorted(funcs)
+
+    def _refuse_undeclared_tier(_args):
+        raise TierRunUndeclared(tier, declared)
+
+    return _refuse_undeclared_tier
+
+
+def add_tier_verbs(sub, funcs, *, parents=(), add_args=()):
+    """§S1 — register the SIX tier subparsers on `sub`, in every client that
+    runs tests.
+
+    The vocabulary is the mirror's, never an argument: the loop is driven off
+    `TIER_MEANINGS`, so the six a client exposes cannot drift from the six the
+    server declares, and a client cannot quietly expose five. That is the
+    whole reason this registration is shared rather than hand-rolled five
+    times — the fleet answered the same question two different ways before it
+    (mvn had `unit`/`module`/`e2e` as verbs, everyone else had a hardcoded
+    tier literal buried in a run path).
+
+    What stays per-client is exactly what the other registrars leave
+    per-client:
+
+      * `funcs` — tier → that client's `TierVerb` for the tiers it RUNS. A
+        tier absent from the mapping is registered all the same: it answers
+        its own `--help` and refuses with `TierRunUndeclared`, because the
+        vocabulary containing a tier and this project having a target for it
+        are two different facts and conflating them is the defect;
+      * `parents` — the shared parent a client like arduino already carries
+        (its `common` bundles `--agent`/`--project-dir`);
+      * `add_args` — the client's own per-verb conventions, applied to all
+        six (each client's project-dir flag), with a single verb's own flags
+        riding that verb's `TierVerb.add_args`.
+    """
+    for tier, meaning in TIER_MEANINGS.items():
+        wired = funcs.get(tier)
+        tp = sub.add_parser(tier, parents=list(parents),
+                            help=tier_verb_help(tier, meaning, wired))
+        for adder in add_args:
+            adder(tp)
+        for adder in (wired.add_args if wired is not None else ()):
+            adder(tp)
+        tp.set_defaults(func=(wired.func if wired is not None
+                              else undeclared_tier_run(tier, funcs)))
 
 
 def remove_agent_silent(project_dir, agent_id, ops):

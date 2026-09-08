@@ -1898,6 +1898,15 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_regression_tier_args(p):
+    """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
+    shared tier registration and keeps every flag it had; the registrar
+    supplies the name, the help and the tier binding, this supplies the rest."""
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
+    p.add_argument("--coverage", action="store_true",
+                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+
+
 # §S14 — content-first: the one-line tool purpose printed by a bare invocation
 # (the no-arg live dashboard), alongside the ~-abbreviated executable path.
 _DASHBOARD_PURPOSE_LINE = (
@@ -2007,18 +2016,25 @@ def main():
     _add_no_lifecycle_arg(t)
     t.set_defaults(func=cmd_test)
 
-    g = sub.add_parser("regression", help="Full-suite `bun test` + ingest. --coverage for lcov.")
-    g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    g.add_argument("--coverage", action="store_true",
-                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
-    _add_gate_cycle_arg(g)
-    _add_reports_arg(g)
-    _add_bun_arg(g)
-    _add_package_dir_arg(g)
-    _add_project_dir_arg(g)
-    _add_log_arg(g)
-    _add_no_lifecycle_arg(g)
-    g.set_defaults(func=cmd_regression)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # `regression` migrates onto it and keeps its handler, its flags and its
+    # behaviour; `bun test` splits no tiers of its own, so the other five
+    # cells answer their help and refuse until this project declares a target
+    # for them. A `dict(...)` rather than a `{...}` literal, deliberately: the
+    # six values live in ONE place (the shared module's mirror) and a client
+    # dict keyed by tier NAMES would be the second copy that is forbidden.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(regression=tier_verb(
+            cmd_regression,
+            "Runs the full-suite `bun test` and ingests it; --coverage adds "
+            "lcov.",
+            (_add_regression_tier_args, _add_gate_cycle_arg, _add_reports_arg,
+             _add_bun_arg, _add_package_dir_arg, _add_log_arg,
+             _add_no_lifecycle_arg))),
+        add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")
     a.add_argument("--agent", required=True)

@@ -1260,6 +1260,17 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_regression_tier_args(p):
+    """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
+    shared tier registration and keeps every flag it had; the registrar
+    supplies the name, the help and the tier binding, this supplies the rest."""
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
+    p.add_argument("--coverage", action="store_true",
+                   help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
+    p.add_argument("--cov-source", default="crucible_axi,clients",
+                   help="coverage --source package/dir (default: crucible_axi,clients)")
+
+
 _DASHBOARD_PURPOSE_LINE = (
     "python-crucible.py -- Python/unittest Crucible CLI "
     "(agent lifecycle, test/ingest, plan/cycle verbs)."
@@ -1370,21 +1381,25 @@ def main():
     _add_log_arg(t)
     t.set_defaults(func=cmd_test)
 
-    g = sub.add_parser(
-        "regression",
-        help="Full-suite discover via xmlrunner + ingest. --coverage for coverage.py.",
-    )
-    g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    g.add_argument("--coverage", action="store_true",
-                   help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
-    g.add_argument("--cov-source", default="crucible_axi,clients",
-                   help="coverage --source package/dir (default: crucible_axi,clients)")
-    _add_gate_cycle_arg(g)
-    _add_discover_args(g)
-    _add_python_arg(g)
-    _add_project_dir_arg(g)
-    _add_log_arg(g)
-    g.set_defaults(func=cmd_regression)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # `regression` migrates onto it and keeps its handler, its flags and its
+    # behaviour; `unittest` discovery splits no tiers of its own, so the other
+    # five cells answer their help and refuse until this project declares a
+    # target for them. A `dict(...)` rather than a `{...}` literal,
+    # deliberately: the six values live in ONE place (the shared module's
+    # mirror) and a client dict keyed by tier NAMES would be the second copy
+    # that is forbidden.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(regression=tier_verb(
+            cmd_regression,
+            "Runs full-suite unittest discovery via xmlrunner and ingests it; "
+            "--coverage adds coverage.py.",
+            (_add_regression_tier_args, _add_gate_cycle_arg,
+             _add_discover_args, _add_python_arg, _add_log_arg))),
+        add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest",
                        help="Ingest an already-produced reports dir (parsed).")

@@ -1038,6 +1038,28 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+# The native target-dir help, at module scope because the tier verbs' flag
+# adders below are module-level functions the shared registrar calls.
+_DIR_HELP = ("test-target subdir under the project (default tests/native; "
+             "e.g. tests/native-mock for the ArduinoFake L2 tier)")
+
+
+# ── CR-CRU-111 §S1/AC5 — the flags each tier-named verb OWNS ─────────────
+#
+# `unit` and `regression` pre-date the shared tier registration and keep every
+# flag they had: the registrar supplies the name, the help and the tier
+# binding, each verb's own surface rides its `TierVerb.add_args`.
+
+
+def _add_native_dir_arg(p):
+    p.add_argument("--dir", default="tests/native", help=_DIR_HELP)
+
+
+def _add_native_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help="attach lcov coverage from <native_dir>/coverage/lcov.info")
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -1054,32 +1076,40 @@ def main():
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    _dir_help = ("test-target subdir under the project (default tests/native; "
-                 "e.g. tests/native-mock for the ArduinoFake L2 tier)")
-
     t = sub.add_parser("test", parents=[common],
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
-    t.add_argument("--dir", default="tests/native", help=_dir_help)
+    t.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     _add_gate_cycle_arg(t)
     t.set_defaults(func=cmd_test)
 
-    un = sub.add_parser("unit", parents=[common],
-                        help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S3)")
-    un.add_argument("--dir", default="tests/native", help=_dir_help)
-    _add_gate_cycle_arg(un)
-    un.set_defaults(func=cmd_unit)
-
-    rg = sub.add_parser("regression", parents=[common],
-                        help="full native suite -> /api/v2/runs/parsed, tier regression (§S3)")
-    rg.add_argument("--dir", default="tests/native", help=_dir_help)
-    rg.add_argument("--coverage", action="store_true",
-                    help="attach lcov coverage from <native_dir>/coverage/lcov.info")
-    _add_gate_cycle_arg(rg)
-    rg.set_defaults(func=cmd_regression)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # `unit` and `regression` migrate onto it and keep their handlers, their
+    # flags and their behaviour; the four cells this stack declares no target
+    # for answer their help and refuse. The help each verb prints says what it
+    # RUNS and no longer what tier the run claims — this client sends no tier
+    # yet, and help that says otherwise contradicts the board. `common` is the
+    # parent for the reason the other registrars take it: these verbs write,
+    # so they carry --agent.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(unit=tier_verb(
+                 cmd_unit,
+                 "Runs the native host tests (`make junit`) under --dir -> "
+                 "/api/v2/runs/parsed.",
+                 (_add_native_dir_arg, _add_gate_cycle_arg)),
+             regression=tier_verb(
+                 cmd_regression,
+                 "Runs the full native suite under --dir -> "
+                 "/api/v2/runs/parsed; --coverage attaches lcov.",
+                 (_add_native_dir_arg, _add_native_coverage_arg,
+                  _add_gate_cycle_arg))),
+        parents=[common])
 
     ai = sub.add_parser("auto-ingest", parents=[common],
                         help="ingest a PRE-EXISTING native reports dir (no toolchain) (§S3)")
-    ai.add_argument("--dir", default="tests/native", help=_dir_help)
+    ai.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     ai.add_argument("--reports",
                     help="reports dir holding TEST-*.xml (default <native_dir>/reports)")
     ai.set_defaults(func=cmd_auto_ingest)
@@ -1094,7 +1124,7 @@ def main():
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],
                          help="fail-fast compile -> regression --coverage (§S3)")
-    pmg.add_argument("--dir", default="tests/native", help=_dir_help)
+    pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
     _add_gate_cycle_arg(pmg)

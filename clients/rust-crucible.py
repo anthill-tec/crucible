@@ -2627,6 +2627,14 @@ def main():
     _axi().add_queue_file_verb(sub, cmd_queue_file,
                                add_args=(_add_project_dir_arg,))
 
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # rust is the one client with no pre-existing tier-named verb, so nothing
+    # migrates here and every cell is registered without a run: each answers
+    # its own --help and refuses, naming the declaration it needs, rather than
+    # widening to a target nobody asked for.
+    _axi().add_tier_verbs(sub, {}, add_args=(_add_project_dir_arg,))
+
     gr = sub.add_parser("gate-run",
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
                              "+ final gates, relay the axi detail to the caller.")
