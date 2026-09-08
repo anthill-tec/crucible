@@ -119,7 +119,6 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | PENDING (0.2.0) | 097 | 5 (0.2.0) |
 | [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | PENDING (0.2.0) | 016, 075 | 5 (0.2.0) |
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | PENDING (0.2.0) | 047, 111 | 5 (0.2.0) |
-| [CR-CRU-113](CR-CRU-113-the-client-states-which-target-a-cycle-needs.md) | the client states which target a cycle needs | feature | PENDING (0.2.0) | 111 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 

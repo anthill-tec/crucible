@@ -115,8 +115,29 @@ that exists was green".
 | the assembled product | `e2e` (`bun run test:e2e`, separate harness) |
 
 A RED/GREEN cycle picks the tier its contract lives in. A cycle that only ever runs `unit` has not
-tested a browser contract, and a cycle that runs `regression` for every edit is paying 400 s to
-learn what 18 s would have told it.
+tested a browser contract, and a cycle that runs `regression` for every edit is paying 433 s to
+learn what 17.8 s would have told it (measured here, 2026-09-08).
+
+### Who decides — the client offers, the agent chooses
+
+**The client provides the tier verbs; it does not decide which one a cycle runs.** That decision is
+the calling agent's, taken from the contract it is testing, and it therefore lives in the AGENT
+DEFINITIONS and the SKILLS — not in a client feature. An earlier draft of this DN decomposed this
+section into a CR that would have had the client name the target for a cycle; that was mis-scoped
+(CR-CRU-113, VOID 2026-09-08) and conflated a verb being AVAILABLE with a decision being MADE.
+
+The carriers, therefore:
+
+| carrier | what it states |
+|---|---|
+| each stack's RED / GREEN / FIX agent definition | run the tier the contract under test lives in; `unit` for a pure function, `integration` for a browser, a spawned CLI, an HTTP surface or anything that waits |
+| each stack's VERIFY agent definition | re-run the union — `regression` — because verification is the whole gate contract, never the fast target alone |
+| the `crucible` skill | the tier verbs exist, what each means, and that the choice is the agent's; a run ingested under the wrong tier makes the board lie |
+| the orchestrator's dispatch brief | name the target for the phase it is dispatching, so the choice is explicit rather than inherited from whatever the agent last did |
+
+A run ingested under the wrong tier is worse than an unlabelled one: the board reports coverage the
+project does not have. That is the reason this section is normative rather than advisory, even
+though nothing mechanically enforces it.
 
 ## Decisions
 
@@ -160,7 +181,7 @@ sections above are the contract each CR implements.
 |---|---|---|
 | "What a tier is" · "Who classifies, and who drives" · D1–D4 | **CR-CRU-111** | the six verbs, the true tier on every run, the per-stack seam, the wall-vs-CPU warning |
 | "The gate contract" · STANDING DECISION 1 | **CR-CRU-112** | a gate over every declared suite, each ingesting through its own stack's client |
-| "What an agent is expected to run" | **CR-CRU-113** | the client TELLS an agent which target its cycle needs, so the table is executable rather than read |
+| "What an agent is expected to run" | **not a CR** | the client provides the tier VERBS (CR-CRU-111); WHICH tier to run is the calling agent's decision, so this section is carried by the agent definitions and the skills — see "Who decides" below |
 | Q4 (per-tier coverage) · Q5 (e2e ownership) | not yet filed | candidates; Q4 costs a second instrumented run, Q5 waits on 111 landing |
 | Q7 (mount cost) | not a CR | maintenance task — per-file behavioural change, no design surface |
 
