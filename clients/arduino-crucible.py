@@ -369,7 +369,7 @@ def _ingest_compile(project_dir, key, agent_id, errors, context=None):
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(f"[crucible] compile FAILED -> /api/v2/runs/compile (ok={resp.get('ok')})",
           file=sys.stderr)
     return resp
@@ -598,7 +598,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     raw = (run.stdout or "") + (run.stderr or "")
     if raw:
         payload["raw"] = raw
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
@@ -767,7 +767,7 @@ def cmd_auto_ingest(args):
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, key, agent_id, cycle_id=getattr(args, "cycle", None),
         context=context)
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)

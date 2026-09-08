@@ -222,8 +222,16 @@ def echoed_cycle_id(resp):
 
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
-    optional human-readable line to stderr (interactive only)."""
-    axi = {"verb": verb, "ok": ok}
+    optional human-readable line to stderr (interactive only).
+
+    CR-CRU-111 §S5/AC7 — the envelope names the tier of the run this exit
+    ingested, beside `verb`/`ok` and on EVERY exit path, so an orchestrator
+    reading it knows what was covered without inspecting the board. The
+    statement is ASSEMBLED HERE, once for the fleet, from what the ingest seam
+    recorded (`ingested_tier`, and the closed vocabulary beside
+    `TIER_MEANINGS`): a client that ingested nothing on this exit says so
+    rather than claiming coverage it never obtained."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = warnings
@@ -1208,7 +1216,12 @@ def run_verb(func, args, project_key_fn=None):
     typed hard stop — an undeclared agent identity (§S5), an unresolvable
     cycle list (CR-CRU-107 §S2) or a tier with no declared target
     (CR-CRU-111 §S1) — into the `ok:false` envelope and a non-zero exit code
-    instead of an unhandled traceback."""
+    instead of an unhandled traceback.
+
+    CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
+    tier statement starts from `none` here: an invocation may never inherit
+    what an earlier one in the same process put on the board."""
+    forget_ingested_run()
     try:
         return func(args)
     except AgentIdentityRequired:
@@ -3699,6 +3712,91 @@ TIER_MEANINGS = {
 #     tier-named verb onto the shared registration cannot cost it a flag.
 TierVerb = collections.namedtuple(
     "TierVerb", ("func", "runs", "add_args"), defaults=((),))
+
+
+# CR-CRU-111 §S5/AC7 — WHAT THE ENVELOPE SAYS IT INGESTED.
+#
+# "The AXI envelope names the tier of the run it just ingested, so an
+# orchestrator reading the envelope knows what was covered without inspecting
+# the board. Every exit path states it." The value is a CLOSED vocabulary,
+# because a consumer MATCHES on it, and it lives HERE — once, beside the
+# `Tier` mirror it extends (`TIER_MEANINGS` above IS this fleet's one mirror of
+# `Tier` in `src/types.ts`; AC10 forbids a second copy, and five clients each
+# spelling their own sentinel would be exactly that second mirror). Ratified at
+# cycle 381 rather than left to GREEN, so AC7 fails on a defect and never on a
+# naming disagreement.
+#
+#   one of `TIER_MEANINGS`   a TEST run reached the board under THAT tier;
+#   ENVELOPE_TIER_UNSTATED   a test run reached the board and the client stated
+#                            NO tier (§S2/AC3), so the server applied its own
+#                            documented default. The envelope neither invents a
+#                            tier nor prints a null — it says, positively, that
+#                            the client asserted nothing;
+#   ENVELOPE_TIER_COMPILE    a COMPILE event was ingested, which is not a test
+#                            tier at all (AC13a): a build in the test-tier
+#                            record is the conflation that AC forbids;
+#   ENVELOPE_TIER_NONE       this exit ingested nothing — python's
+#                            zero-discovery, §S1's `tier-run-undeclared`
+#                            refusal, a no-report exit, and every verb that
+#                            runs no tests at all.
+ENVELOPE_TIER_UNSTATED = "unstated"
+ENVELOPE_TIER_COMPILE = "compile"
+ENVELOPE_TIER_NONE = "none"
+
+# The ingest endpoints, by what an ingest to them MEANS. `/api/v2/runs/start`
+# is deliberately NOT here: it OPENS a run before any test has finished, so a
+# verb that opened a run and then ingested a compile failure (bun `test` with
+# no JUnit) has ingested no test run at all, and must say `compile`.
+RUN_INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed")
+COMPILE_INGEST_PATH = "/api/v2/runs/compile"
+
+# What THIS invocation has put on the board so far. Module state, because the
+# statement belongs to the whole exit and not to the one call site that made
+# it: the client that ingests and the client that emits are the same process,
+# and `run_verb` clears it before every verb so a second invocation inside one
+# process cannot inherit the first one's claim.
+_ingested_run_tier = AXI_UNSET
+_ingested_compile = False
+
+
+def forget_ingested_run():
+    """§S5 — clear what this process claims to have ingested. Called once per
+    verb dispatch (`run_verb`), so an envelope can only ever state the ingest
+    of the invocation it belongs to."""
+    global _ingested_run_tier, _ingested_compile
+    _ingested_run_tier = AXI_UNSET
+    _ingested_compile = False
+
+
+def post_ingest(post_fn, path, payload):
+    """§S5/AC7 — send a run to the board through the client's own `_post` seam
+    and REMEMBER what went out, so `emit_axi` can state the tier of the run it
+    ingested without any client deciding that answer for itself.
+
+    `post_fn` is that client's `_post`, taken as a parameter the way
+    `post_gate`/`post_milestone` already take it: this module owns the meaning
+    of an ingest, never the transport. The tier is read off the BODY rather
+    than from a parameter, so the envelope can only repeat what the wire
+    carried — an ingest that stated no tier is remembered as having stated
+    none, which §S2/AC3 made the honest answer."""
+    global _ingested_run_tier, _ingested_compile
+    if path in RUN_INGEST_PATHS:
+        _ingested_run_tier = (payload or {}).get("tier")
+    elif path == COMPILE_INGEST_PATH:
+        _ingested_compile = True
+    return post_fn(path, payload)
+
+
+def ingested_tier():
+    """§S5/AC7 — the envelope's tier statement for this exit, drawn from the
+    closed vocabulary above.
+
+    A TEST ingest decides the answer whether or not a compile event also rode
+    out on the same exit: a run that reached the board as a test run IS what an
+    orchestrator reading the envelope is asking about."""
+    if _ingested_run_tier is not AXI_UNSET:
+        return _ingested_run_tier or ENVELOPE_TIER_UNSTATED
+    return ENVELOPE_TIER_COMPILE if _ingested_compile else ENVELOPE_TIER_NONE
 
 
 def tier_verb_help(tier, meaning, wired):

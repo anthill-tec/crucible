@@ -129,8 +129,14 @@ class ClientEmitSelfRoundTripThroughRealSeamTest(unittest.TestCase):
         with contextlib.redirect_stdout(stdout):
             axi_mod.emit_axi("status", True, result_fields, context, warnings)
 
-        expected_axi = {"verb": "status", "ok": True, **result_fields,
-                         "context": context, "warnings": warnings}
+        # CR-CRU-111 §S5/AC7 (2026-09-08) — `emit_axi` also states the tier of
+        # the run the exit ingested. It is READ from the module that assembled
+        # it, never frozen here: this test's subject is encode/decode fidelity,
+        # and a literal would make it a second definition of a vocabulary
+        # `clients/_crucible_axi.py` owns.
+        expected_axi = {"verb": "status", "ok": True,
+                        "tier": axi_mod.ingested_tier(), **result_fields,
+                        "context": context, "warnings": warnings}
         decoded = axi_mod._toon().decode(stdout.getvalue())
 
         self.assertEqual(

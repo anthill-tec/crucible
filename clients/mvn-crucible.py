@@ -718,7 +718,7 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
-    resp = _post("/api/v2/runs", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
     s = resp.get("run", {})
     print(f"ingest junit: ok={resp.get('ok')} dir={report_dir} "
           f"passed={s.get('passed')} failed={s.get('failed')} "
@@ -751,7 +751,7 @@ def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
     # server-stored run carries real output for the run-detail raw-toggle.
     if raw:
         payload["raw"] = raw
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     cov = ""
     if coverage:
         cov = (f" lines={coverage['lines']['percent']}% "
@@ -778,7 +778,7 @@ def _ingest_compile(project_dir, agent, output, context=None):
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(f"ingest compile: ok={resp.get('ok')} error_lines={err_count}", file=sys.stderr)
     return 0 if resp.get("ok") else 1
 

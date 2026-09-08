@@ -574,7 +574,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["context"] = context
     if raw:
         payload["raw"] = raw
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -606,7 +606,7 @@ def _ingest_compile(project_dir, agent_id, errors_text):
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(f"ingest compile (python): ok={resp.get('ok')}"
           + (f" error={resp['error']}" if resp.get("error") else ""),
           file=sys.stderr)

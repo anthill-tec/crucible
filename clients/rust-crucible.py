@@ -817,7 +817,7 @@ def cmd_auto_ingest(args):
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     # CR-CRU-058 §S1/§S3 — this branch used to end in TWO unguarded stdout
     # prints and no emitter at all: the last path in the fleet putting a
     # `[crucible] …` human line on the machine channel, and the only outcome of
@@ -960,7 +960,7 @@ def _regression_ingest_run(args, preflight_warnings=()):
     if raw:
         payload["raw"] = raw
 
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
@@ -1019,7 +1019,7 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
         payload["tier"] = tier
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
     s = resp.get("run", {}) or {}
     print(
         f"ingest junit: ok={resp.get('ok')} "
@@ -1044,7 +1044,7 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(
         f"ingest compile ({kind}): ok={resp.get('ok')} "
         f"errors={err_count} warnings={warn_count}",
@@ -1543,7 +1543,7 @@ def _smoke_test(args, verb):
         context = _run_context()
         if context:
             payload["context"] = context
-        resp = _post("/api/v2/runs", payload)
+        resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
         s = resp.get("run", {})
         # The `run:` block is parsed CLIENT-side: the ingest response carries no
         # counts when the server could not be reached, and an envelope that
@@ -1690,7 +1690,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     if context:
         payload["context"] = context
 
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
