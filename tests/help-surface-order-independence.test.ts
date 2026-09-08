@@ -62,16 +62,27 @@ const HELP_FILE = join("tests", "project-namespace-tripwire.test.ts");
 const HELP_TEST_NAME =
   "every verb's --help and every client's root help, driven for real, print no CR namespace literal";
 
-// THE BUDGET, DERIVED FROM THE STARVED RUN RATHER THAN GUESSED. This guard's
-// own first run took 218.27s, of which the help test's cap is 180.00s — so
-// EVERYTHING ELSE in the pairing (Chromium's 90 tests, the help file's other
-// 20, two process starts) costs 38.27s. Add the 12.00s that collecting all 168
-// surfaces costs when it is not starved and a healthy pairing is ~50s. 90s is
-// ~1.8x above that and ~2.4x below the starved run — wide enough that ordinary
-// load cannot trip it, tight enough that the stall cannot pass itself off as
-// slowness. It is NOT a copy of the help test's own 180s cap: that cap bounds
-// one test's collection loop, this bounds the whole paired invocation.
-const PAIRED_RUN_BUDGET_MS = 90_000;
+// TWO BUDGETS, BOTH DERIVED FROM THE STARVED RUN RATHER THAN GUESSED, because
+// one whole-invocation number is a weak signal: it is the sum of Chromium's
+// cost, this machine's load and the collection loop, so any bound tight enough
+// to catch the stall is also tight enough to flake on a busy machine — which
+// would reintroduce the very disease this guard cures.
+//
+// THE SHARP ONE is the help test's OWN duration, read out of the child's JUnit
+// report. Healthy it is 12.00s (all 168 surfaces, collected synchronously);
+// starved it is 180.00s, its cap, every time. 60s sits ~5x above healthy and
+// 3x below starved, and it is immune to how long Chromium's half of the run
+// took or to load on anything else in the pairing. It is NOT a copy of the
+// help test's own 180s cap: that cap is the ceiling a starved run reaches,
+// this is the ceiling an honest one stays under.
+const HELP_TEST_BUDGET_MS = 60_000;
+// THE LOOSE ONE bounds the whole invocation, and catches a stall that moved to
+// some other test in the pairing. This guard's own first run took 218.27s and
+// the CR's first reproduction 202.72s, so the starved signature is 202-218s;
+// everything in the pairing EXCEPT the help test costs 30.9-38.3s, so a
+// healthy pairing is ~43-50s. 150s is ~3x above that — ordinary load cannot
+// reach it — and still clear of the starved signature.
+const PAIRED_RUN_BUDGET_MS = 150_000;
 // The net under the child, held clear of the 218.27s a starved run takes to end
 // ITSELF (the CR's first reproduction was 202.72s, so this varies by ~8%), so a
 // starved child still writes the report that names WHY it was slow instead of
@@ -114,9 +125,24 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
         ...report.matchAll(/<testcase name="([^"]*)"[^>]*file="([^"]*)"[^>]*>\s*<failure type="([^"]*)"/g),
       ].map(([, name, file, type]) => `${file} › ${name.replaceAll("&apos;", "'")} [${type}]`);
 
+      // THE SHARP SIGNAL, read out of the child's own report: bun's junit
+      // reporter emits `time` in SECONDS on each testcase, so this is the help
+      // test's duration as the run that ran it measured it — not a subtraction
+      // from the wall clock, and not affected by Chromium's half of the run.
+      // NaN when the testcase is absent, which fails the budget below rather
+      // than passing vacuously.
+      const helpTestMs = Math.round(
+        Number(
+          [...report.matchAll(/<testcase name="([^"]*)"[^>]*time="([^"]*)"[^>]*file="([^"]*)"/g)].find(
+            ([, name, , file]) => `${file} › ${name.replaceAll("&apos;", "'")}` === `${HELP_FILE} › ${HELP_TEST_NAME}`,
+          )?.[2] ?? "NaN",
+        ) * 1000,
+      );
+
       console.error(
         `[help-surface-order] child bun test: exit=${child.exitCode} signal=${child.signalCode ?? "none"} ` +
           `elapsed=${elapsedMs}ms budget=${PAIRED_RUN_BUDGET_MS}ms ` +
+          `helpTest=${helpTestMs}ms budget=${HELP_TEST_BUDGET_MS}ms ` +
           `order=${filesRun.map((f) => `${f.file}(${f.tests})`).join(" then ")} failed=${failed.length}`,
       );
       if (child.exitCode !== 0) {
@@ -151,8 +177,11 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
 
       // AND IT COMPLETED ON ITS MERITS, not eventually. The starved run is
       // green-but-late for nobody: it ends at 202.72s BECAUSE the help test
-      // gave up, so this line is the one that turns "slower than it can
+      // gave up, so these two lines are the ones that turn "slower than it can
       // honestly be" into a failure even if the counts ever come back clean.
+      // The help test's own duration is asserted FIRST because it is the sharp
+      // one: it names the starved test rather than the slow invocation.
+      expect(helpTestMs).toBeLessThanOrEqual(HELP_TEST_BUDGET_MS);
       expect(elapsedMs).toBeLessThanOrEqual(PAIRED_RUN_BUDGET_MS);
     },
     GUARD_TIMEOUT_MS,
