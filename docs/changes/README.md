@@ -116,7 +116,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | COMPLETED (0.2.0) | 056 | 5 (0.2.0) |
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact.md) | one published multi-track fact | patch | COMPLETED (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
-| [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | PENDING (0.2.0) | 097 | 5 (0.2.0) |
+| [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | COMPLETED (0.2.0) | 097 | 5 (0.2.0) |
 | [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | PENDING (0.2.0) | 016, 075 | 5 (0.2.0) |
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | PENDING (0.2.0) | 047, 111 | 5 (0.2.0) |
 
@@ -487,6 +487,18 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (`ForwardMarryingGuardTest`, which the CR promoted from a characterisation to a real assertion).
 
 ## Notes
+- 🚨 **2026-09-08 (CR-CRU-110 dispatch — AGENT-ID STANDARD BREACHED, recorded because the board
+  now carries the evidence).** The four phase agents of plan 118 registered as `Cr110Red`,
+  `Cr110Green`, `Cr110Verify` and `Cr110Fix`. The standard is
+  `CR-<ACRONYM>-NNN-<cycle>-<ROLE>` — here `CR-CRU-110-C1-RED`, `-C1-GREEN`, `-C2-VERIFY`,
+  `-C3-FIX` — and it is **assigned by the orchestrator, never minted by the agent**
+  (`~/.agents/skills/crucible/SKILL.md:36-44`). Both halves were broken: the ids were invented, and
+  the dispatch briefs said `register --agent <your-id>`, which handed the naming decision to the
+  agents. Five ingested runs on plan 118 are therefore mis-attributed permanently; they are NOT
+  re-ingested, because re-ingesting to correct a label is run spam (the rule the 2026-08-18 note
+  below established). No live ghosts — all four unregistered cleanly. **The rule that prevents
+  recurrence: a dispatch brief states the assigned id VERBATIM, and a brief containing
+  `<your-id>` is malformed.**
 - 🧪 **2026-09-08 — TESTING STRATEGY: a DN, two CRs, and a standing gate step (user rulings).**
   `docs/research/DN-testing-tiers-in-crucible-projects.md` is now the design authority for every
   testing decision in a Crucible-managed project: a tier names the DEPENDENCY a test takes (not its
@@ -515,6 +527,29 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (29×)**, now 92% CPU-bound. Two classifier defects were found by measurement, not review: a greedy
   regex read a six-second wait as `0`, and `startServer` (the real production server) was not a
   marker — those two files were 27.8 s of the remaining 29 s. Both pinned as tests.
+- ✅ **2026-09-08 — CR-CRU-110 SHIPPED, and the mechanism is named rather than worked around.**
+  §S1 was a bisection, not a build, and it ended somewhere none of the three prior readings
+  predicted: after a file drives Chromium through playwright in the same bun process, ONE child of
+  a concurrently spawned batch has its stderr pipe torn down without its reader promise settling
+  and without the child being reaped — zombie child (`State: Z`, ppid = the bun test process), bun
+  holding **0 pipes** among 536 fds against a 1 048 576 limit — so
+  `new Response(proc.stderr).text()` can never resolve. It does not complete late: 20 s, 90 s,
+  150 s and 180 s caps were all reached and a natural completion was never once observed. What the
+  bisection ELIMINATED matters as much: file-mates (the help-test-only copy still hangs), the spawn
+  shape (reversing six variants' order makes every one pass), concurrency (8 concurrent trivial
+  spawns = 15.3 ms), the client (8 real client helps = 85 ms) and any particular verb (the stalling
+  batch's own eight verbs, alone = 83 ms). **Both earlier explanations were wrong** — CR-CRU-108's
+  subprocess starvation, and then the replica reading: the 2.28 s replica passed because something
+  had already spawned before it, not because it was a replica. Remedy: collect the 168 surfaces via
+  `Bun.spawnSync`, the one shape measured immune — no cap raise, no skip, no exclusion, no second
+  invocation, all 168 surfaces and every floor intact. Cost stated in full: ~12 s vs ~3.1 s for the
+  collection, plus **~46 s** for the new nested guard, which launches Chromium a second time.
+  Evidence: pairing 111/0 in 47 s with the help test's own duration **12.2 s** (was pinned at its
+  180 s cap); **three gate runs of one tree at 2191 pass / 0 fail** (519/514/499 s) where the same
+  defect had previously produced 2122/1, 2122/1, 2123/0; python client suite 1445/0. Ownership is
+  **bun's**, not ours (`bun 1.3.14 (0d9b296a)` pinned by AC8), and the exposure is recorded rather
+  than over-fixed: 12 test files use async `Bun.spawn` with a piped stderr and 5 launch browsers,
+  so this test is not structurally unique — it is the one that spawns 168 times.
 - 📐 **2026-09-08 (CR-CRU-110 gap analysis) — the defect is ADJACENCY, not precedence, and the
   spec was corrected.** In a full-suite run the Chromium suite executes at position **137/152** and
   the printed-help test at **147/152** — ten files later, same process — and it passes in 3.2 s with

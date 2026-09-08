@@ -151,6 +151,25 @@ Concurrency was the only thing the async shape bought, and the loop is I/O-bound
 startups; it was never the assertion. `spawnSync` also removes the `Promise.all` fan-out that made
 the defect reachable at all.
 
+**The guard, and its FULL cost — stated because the ~9 s above is not the whole bill.**
+`tests/help-surface-order-independence.test.ts` drives the pairing as a CHILD `bun test` and asserts
+that child's own JUnit report, because the condition lives in one process's state and only when the
+browser file is the immediately preceding file — so no in-process assertion can reach it. It spawns
+synchronously itself, deliberately: it is INTEGRATION and may run after the browser suite inside one
+invocation, i.e. in exactly the state that breaks the asynchronous path, so the guard must not be
+takeable-out by the defect it exists to detect.
+
+What it costs the gate, measured: **~46 s** (43.99 s, 45.67 s), which includes a SECOND Chromium
+launch and a SECOND full 168-surface collection. The geometry suite therefore runs twice per
+regression run — once as itself, once inside the guard. That is the real price of this CR, not the
+~9 s spawnSync delta, and it is accepted for one reason: the defect corrupted three gate runs of a
+single unchanged tree (2122/1, 2122/1, 2123/0) and two of CR-CRU-107's close-out runs, and nothing
+in the suite could see it.
+
+For AC4 and AC5 read the counts with this in mind: the guard reports as **1 test** in the parent
+run while running 111 internally, so a nested failure appears as `1 fail`, never as a count shift.
+AC5's three runs are compared on the parent's own figures.
+
 Whatever §S1 names, the fix makes the CR-CRU-097 §S2/AC2 test order-independent. Three constraints
 bound the remedy:
 
