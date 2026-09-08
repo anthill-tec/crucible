@@ -326,7 +326,42 @@ if _log:
                              "cwd": os.getcwd()}) + "\\n")
 """
 
+# §S6/AC14a — a FAITHFUL fake nextest, and the faithfulness is the point. Real
+# nextest writes a JUnit report only where the project's own
+# `.config/nextest.toml` configures one for the profile it ran
+# (`[profile.<p>.junit] path`, or the `[profile.default.junit]` every profile
+# inherits — a `ci` sibling's junit reaches nothing). A fake that wrote a report
+# unconditionally would supply the half an incomplete declaration instruction
+# omitted, and the fixture would then COMPLETE the instruction under test: a
+# declared cell would pass here while refusing to produce anything on a real
+# toolchain, which is exactly the finding this behaviour exists to make
+# unmaskable. Nothing is written unless a config asks for it AND the run's
+# output content is supplied, so every drive with no `.config/nextest.toml` is
+# unaffected.
 _CARGO_TAIL = """
+import tomllib
+
+_argv = sys.argv[1:]
+if "nextest" in _argv:
+    _profile = "default"
+    for _flag in ("-P", "--profile"):
+        if _flag in _argv and _argv.index(_flag) + 1 < len(_argv):
+            _profile = _argv[_argv.index(_flag) + 1]
+    try:
+        with open(os.path.join(os.getcwd(), ".config", "nextest.toml"), "rb") as _f:
+            _profiles = (tomllib.load(_f) or {}).get("profile") or {}
+    except (OSError, tomllib.TOMLDecodeError):
+        _profiles = {}
+    _junit = (_profiles.get(_profile) or {}).get("junit")
+    if not isinstance(_junit, dict):
+        _junit = (_profiles.get("default") or {}).get("junit") or {}
+    _content = os.environ.get("FAKE_CARGO_JUNIT_CONTENT", "")
+    if _junit.get("path") and _content:
+        _out = os.path.join(os.getcwd(), "target", "nextest", _profile,
+                            _junit["path"])
+        os.makedirs(os.path.dirname(_out), exist_ok=True)
+        with open(_out, "w") as _f:
+            _f.write(_content)
 sys.exit(int(os.environ.get("FAKE_CARGO_EXIT_CODE", "0")))
 """
 
@@ -417,7 +452,8 @@ def _fake(name):
 
 # ── the case base: cycle 378's drive, plus the argv log ────────────────────
 
-_MY_ENV_KEYS = ("FAKE_ARGV_LOG", "FAKE_MAKE_EXIT_CODE", "FAKE_PY_EXIT_CODE")
+_MY_ENV_KEYS = ("FAKE_ARGV_LOG", "FAKE_MAKE_EXIT_CODE", "FAKE_PY_EXIT_CODE",
+                "FAKE_CARGO_JUNIT_CONTENT")
 
 
 class _ModalityCase(_ClientDriveCase):

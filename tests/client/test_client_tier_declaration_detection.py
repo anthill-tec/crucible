@@ -306,13 +306,33 @@ version = "0.1.0"
 edition = "2021"
 """
 
+# The `ci` sibling every real cargo project has, carrying junit of its own:
+# §S6/AC14a's measured trap. A profile does NOT inherit a sibling's junit
+# configuration (only `default`'s), so a fixture whose declaration stops at
+# `[profile.<tier>]` would run and produce no report — which is what makes the
+# junit sub-table below part of the declaration rather than decoration.
 NEXTEST_TOML = """[profile.default]
 retries = 0
+
+[profile.ci]
+retries = 0
+
+[profile.ci.junit]
+path = "junit.xml"
 
 [profile.__PROFILE__]
 retries = 0
 fail-fast = false
+
+[profile.__PROFILE__.junit]
+path = "junit.xml"
 """
+
+# A backtick-quoted fragment of the refusal that is TOML: a table header, or a
+# `key = value`. Used to build a declaration out of the printed instruction and
+# nothing else — see `_RustDeclarationCase.declare_from_help`.
+_TOML_FRAGMENT_RE = re.compile(r"`([^`]+)`")
+_TOML_LINE_RE = re.compile(r"^(?:\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_-]*\s*=\s*\S.*)$")
 
 
 # ── the shared body: declare, drive, and read what actually ran ────────────
@@ -731,6 +751,7 @@ class _RustDeclarationCase(_RustModalityCase, _DeclarationProbe):
     def setUp(self):
         super().setUp()
         self.profile = None
+        self.declared_toml = None
         (Path(self.tmpdir) / "Cargo.toml").write_text(CARGO_TOML)
 
     def refuse_argv(self, tier):
@@ -739,33 +760,57 @@ class _RustDeclarationCase(_RustModalityCase, _DeclarationProbe):
     def run_argv(self, tier, extra=()):
         return self.rust_argv(tier, extra)
 
-    def _declare(self, profile):
+    def _declare(self, profile, toml_text):
+        """Write `toml_text` as this project's `.config/nextest.toml` and NOTHING
+        else — no report is planted here.
+
+        The fixture's fake cargo is nextest's own rule: it writes a report only
+        where the config it was handed asks for one, under the profile it ran.
+        So whether this cell can be ingested at all is decided by the
+        DECLARATION under test, which is the property a fixture that
+        hand-wrote `target/nextest/<profile>/junit.xml` destroyed — it supplied
+        the half the instruction omitted and reported success."""
         self.profile = profile
+        self.declared_toml = toml_text
         config = Path(self.tmpdir, ".config")
         config.mkdir(parents=True, exist_ok=True)
-        (config / "nextest.toml").write_text(
-            NEXTEST_TOML.replace("__PROFILE__", profile))
-        # nextest writes junit under the profile it ran; `ci` is written too, so
-        # a run that took the shipped default still has a report to ingest and
-        # the assertion falls on the PROFILE rather than on a missing file.
-        self.write_nextest_junit(profile=profile)
-        self.write_nextest_junit(profile="ci")
+        (config / "nextest.toml").write_text(toml_text)
+        # The RUN's output, exactly as bun's and python's fakes take theirs —
+        # what a passing suite prints, never where it is written to.
+        os.environ["FAKE_CARGO_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
         return []
 
     def declare(self, tier):
-        return self._declare(tier)
+        return self._declare(tier, NEXTEST_TOML.replace("__PROFILE__", tier))
 
     def declare_from_help(self, steps, tier):
+        """AC14a's own property, restored: the declaration is BUILT OUT OF the
+        printed instruction — every backtick-quoted TOML fragment the refusal
+        gave, in the order it gave them, and not one line this file supplies.
+
+        An instruction that names only `[profile.<tier>]` therefore produces a
+        config with only `[profile.<tier>]`, nextest writes no report for it,
+        and the cell cannot be ingested — which is how this test FAILS when the
+        printed instruction is insufficient rather than passing on a fixture's
+        good manners."""
         blob = " ".join(steps)
         self.assertIn(
             "nextest.toml", blob,
             f"AC14a — rust/{tier}: §S6 says rust reads a profile in "
             f"`.config/nextest.toml`, and the refusal names no such file: "
             f"{steps!r}")
-        return self._declare(tier)
+        lines = [f for f in _TOML_FRAGMENT_RE.findall(blob)
+                 if _TOML_LINE_RE.match(f.strip())]
+        self.assertTrue(
+            lines,
+            f"AC14a — rust/{tier}: the refusal names `.config/nextest.toml` "
+            f"but prints no TOML to put in it, so there is nothing to follow "
+            f"— the caller is left to guess the declaration: {steps!r}")
+        return self._declare(tier, "\n".join(lines) + "\n")
 
     def declaration_text(self):
-        return f"`.config/nextest.toml` [profile.{self.profile}]"
+        return (f"`.config/nextest.toml` = "
+                f"{self.declared_toml!r} (profile {self.profile})")
 
     def expected_invocations(self, tier):
         return (["-P", tier], ["--profile", tier])
