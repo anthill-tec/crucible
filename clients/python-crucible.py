@@ -29,7 +29,7 @@ an unbound agent's runs attach only via an explicit `context.cycleId`.
 Subcommands:
   register, unregister  Agent lifecycle.
   test                  Run a TARGETED test (dotted path) or discover, via xmlrunner →
-                        JUnit XML → /api/v2/runs/parsed (tier unit). The per-cycle
+                        JUnit XML → /api/v2/runs/parsed (no tier claimed). The per-cycle
                         RED/GREEN workhorse. The reports dir is wiped first so only THIS
                         run's XML is ingested. If --agent omitted, just runs (exit code
                         only). If NO XML is produced (import/collection failure), the
@@ -591,16 +591,18 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, tier=None):
-    """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context)."""
+def _ingest_compile(project_dir, agent_id, errors_text):
+    """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context).
+
+    CR-CRU-111 AC13a — no COMPILE ingest carries a test tier, so this helper takes
+    none: it is the shape `arduino-crucible.py:_ingest_compile` already had, and the
+    only way to keep a build event out of the board's test-tier record for good."""
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "python",
         "errors": errors_text,
         "agentId": agent_id,
     }
-    if tier:
-        payload["tier"] = tier
     context = _run_context()
     if context:
         payload["context"] = context
@@ -653,11 +655,18 @@ def _collect_coverage(python, project_dir, env):
     }
 
 
-def cmd_test(args):
-    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed
-    (tier unit). With --agent the result is ingested (regardless of pass/fail); a
-    bound agent's run is server-stamped with its registered cycle. Exit code
-    reflects the runner."""
+def cmd_test(args, tier=None):
+    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed.
+    With --agent the result is ingested (regardless of pass/fail); a bound agent's
+    run is server-stamped with its registered cycle. Exit code reflects the runner.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter the
+    way mvn's `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A dotted path
+    says nothing about the dependency that target takes, so absent a stated tier
+    this run claims none: the `tier` key is ABSENT from the ingest body and the
+    server applies its own documented default."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
@@ -683,7 +692,7 @@ def cmd_test(args):
 
     if _produced_xml(reports_dir):
         summary, tree, files = _parse_junit_dir(reports_dir)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
+        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files)
         _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
@@ -693,7 +702,9 @@ def cmd_test(args):
         return 0 if resp.get("ok") else 1
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
-    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result), tier="unit")
+    # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
+    # tier, whatever verb reached it.
+    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result))
     # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
     # additive, so a starved toolchain stops returning an exit code with empty
     # stdout. The exit code is untouched (AC5).
@@ -795,8 +806,10 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
             return result.returncode or 1
         print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
               file=sys.stderr)
-        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
-                        tier="regression")
+        # CR-CRU-111 AC13a — this ingest is a build event, not a run of the
+        # `regression` tier: an earned verb name does not make a compile event a
+        # test tier, so no tier goes on this body.
+        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result))
         # CR-CRU-064 §S2/AC6 — emitted under the `verb` PARAMETER, never the
         # literal "regression": `pre-merge-gate` runs this body as its
         # regression step, so a starved GATE must speak as the gate. The
@@ -851,7 +864,9 @@ def cmd_auto_ingest(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
+    # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests reports it merely
+    # found, so it cannot know their tier by construction and states none.
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                           context=_run_context(), files=files)
     _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      warnings=preflight_warnings)

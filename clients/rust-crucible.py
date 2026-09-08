@@ -790,7 +790,10 @@ def cmd_auto_ingest(args):
     junit_path = ci if os.path.exists(ci) else (default if os.path.exists(default) else None)
 
     if junit_path:
-        resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
+        # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests whatever junit
+        # an earlier run left in `target/nextest/<profile>/`, so it cannot know
+        # that run's tier by construction and states none.
+        resp = _ingest_junit_axi(project_dir, args.agent, junit_path,
                                  context=_run_context())
         _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
                          preflight_warnings)
@@ -1050,9 +1053,17 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     return 0 if resp.get("ok") else 1
 
 
-def cmd_test(args):
+def cmd_test(args, tier=None):
     """cargo nextest run -p <crate> [--features ...] [--filter EXPR] -P <profile>.
-    If --agent passed, also auto-ingest junit afterwards."""
+    If --agent passed, also auto-ingest junit afterwards.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter the
+    way mvn's `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A crate, a
+    filter expression and a nextest profile say nothing about the dependency the
+    selected tests take, so absent a stated tier this run claims none and the
+    server applies its own documented default."""
     project_dir = _resolve_project_dir(args.project_dir)
     _clean_stale_junit(project_dir, args.profile)
     cmd = ["cargo", "nextest", "run", "-p", args.crate, "-P", args.profile]
@@ -1082,7 +1093,7 @@ def cmd_test(args):
         # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml.
         junit_path = _resolve_junit_path(project_dir, args.profile)
         if junit_path:
-            resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
+            resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context())
             _emit_ingest_axi("test", resp, project_dir, args.agent,
                              preflight_warnings)

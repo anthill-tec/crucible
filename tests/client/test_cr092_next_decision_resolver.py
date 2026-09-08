@@ -1572,7 +1572,12 @@ class NextBlockCitationsTest(unittest.TestCase):
         # `_add_regression_tier_args` and the shared `add_tier_verbs` call
         # ABOVE this block, drifting it 1422-1438 -> 1437-1453. Same rule,
         # same guard: the CR that shifted the file re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1437, 1453,
+        # Re-pinned 2026-09-08 (CR-CRU-111 §S2): stripping the unearned tier
+        # stamp rewrote `cmd_test`/`cmd_auto_ingest`/`_ingest_compile` ABOVE
+        # this block (their docstrings and comments now state what the client
+        # does NOT claim), drifting it 1437-1453 -> 1452-1468. Same rule, same
+        # guard, third time: the CR that shifted the file re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1452, 1468,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

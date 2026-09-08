@@ -1604,7 +1604,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1437-1453`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1452-1468`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')

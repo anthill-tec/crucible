@@ -1236,10 +1236,18 @@ def _regression_run(args, identity=None, verb="regression",
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
-def cmd_test(args):
+def cmd_test(args, tier=None):
     """§S2 fleet-uniform test verb — `mvn clean test [-Dtest=…]` → surefire
     junit-dir ingest (/api/v2/runs). With --agent the result is ingested; a bound
-    agent's run is server-stamped with its registered cycle."""
+    agent's run is server-stamped with its registered cycle.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter
+    exactly as `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A `-Dtest=`
+    pattern says nothing about the dependency the matched tests take, so absent a
+    stated tier this run claims none on EITHER ingest path — the junit-dir one and
+    the multi-module parsed one — and the server applies its own default."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
@@ -1267,13 +1275,13 @@ def cmd_test(args):
     _warn_if_stale(dirs)
     ctx = _run_context()
     if len(dirs) == 1:
-        resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
+        resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx)
         _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
                               preflight_warnings)
         failed = (resp.get("run") or {}).get("failed") or 0
     else:
         summary, tree, files = _parse_junit(dirs)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit", context=ctx,
+        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier, context=ctx,
                               files=files)
         _emit_ingest_summary_axi("test", resp, summary, files, project_dir, args.agent,
                                  warnings=preflight_warnings)
@@ -1335,15 +1343,19 @@ def cmd_auto_ingest(args):
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None), context=ctx)
+    # CR-CRU-111 §S2/AC3 — this verb runs NO maven: it ingests surefire/failsafe
+    # reports it merely discovered, so it cannot know their tier by construction
+    # and states none on either branch. `--coverage` selects the parsed path, not
+    # a `regression` run: nothing here ran a suite.
     if len(dirs) == 1 and not args.coverage:
-        resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
+        resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], context=ctx)
         _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent,
                               preflight_warnings)
     else:
         summary, tree, files = _parse_junit(dirs)
         coverage = _collect_jacoco(maven_dir) if (args.coverage and summary["failed"] == 0) else None
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier="regression", context=ctx, files=files)
+                              context=ctx, files=files)
         _emit_ingest_summary_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                                  warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1

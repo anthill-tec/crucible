@@ -1003,7 +1003,17 @@ def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
     return 128 + abandoned.signum
 
 
-def cmd_test(args):
+def cmd_test(args, tier=None):
+    """Targeted/whole-suite `bun test` → junit → ingest.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter the
+    way mvn's `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A file path
+    says nothing about the dependency the tests under it take, so absent a stated
+    tier this run claims none — on BOTH endpoints, the run this verb OPENS
+    (`/api/v2/runs/start`) as well as the one it ingests (`/api/v2/runs/parsed`),
+    since the run row is what the board's tier column reads first."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1062,7 +1072,7 @@ def cmd_test(args):
             )
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
-                                                  tier="unit",
+                                                  tier=tier,
                                                   context=_run_context())
             # The pre-flight finding rides the SAME envelope warnings[] the
             # run's own lifecycle warnings do, ahead of them (it was decided
@@ -1086,7 +1096,7 @@ def cmd_test(args):
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                  tier="unit",
+                                  tier=tier,
                                   context=_run_context(),
                                   raw=getattr(result, "stdout", None),
                                   run_id=run_id)
@@ -1249,7 +1259,9 @@ def cmd_auto_ingest(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
+    # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests a report it merely
+    # found, so it cannot know its tier by construction and states none.
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                           context=_run_context())
     _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      warnings=preflight_warnings)
