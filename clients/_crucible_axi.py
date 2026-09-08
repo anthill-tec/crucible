@@ -3715,9 +3715,18 @@ TIER_MEANINGS = {
 # The VALUE is the sentence the gate's envelope prints beside that suite: an
 # excluded target is NAMED as excluded rather than omitted, so a reader can
 # tell a decision from an oversight (§S1).
+#
+# That sentence NAMES the open question and cites no CR id, and the omission is
+# deliberate: the value is EMITTED into `suites[].excluded`, and a project
+# namespace literal at a position a client EMITS is what this project's own
+# tripwire forbids. The lineage belongs in this comment, where it already is;
+# the reader of the envelope needs the REASON, which is the unanswered
+# question, not the number of the CR that declined to answer it.
 GATE_UNCOVERED_TIERS = {
     "e2e": ("excluded from the gate fleet-wide — who runs the e2e suite and "
-            "who ingests it is DN open question 5, deferred by CR-CRU-112"),
+            "who ingests it is DN open question 5 (`docs/research/DN-testing-"
+            "tiers-in-crucible-projects.md`), still unanswered; this gate "
+            "defers to that answer rather than invent one"),
 }
 
 # What a client hands `add_tier_verbs` for a tier it actually RUNS:
