@@ -141,6 +141,14 @@ zero-discovery and the compile-tier fallback alike.
   itself asserted, and a `tier="..."` literal surviving anywhere outside a verb whose own NAME is
   that tier fails this AC. `auto-ingest` is asserted explicitly: it runs no tests, so it may state
   no tier at all.
+  **Two clarifications from RED, because each hides a way to pass while failing.** (i) bun's two
+  `cmd_test` sites are DIFFERENT endpoints — `:1065` opens the run (`POST /api/v2/runs/start`) and
+  `:1089` ingests it (`POST /api/v2/runs/parsed`) — and both must be tier-less: the run ROW is what
+  the board's tier column reads first, so fixing the ingest alone leaves the run still stamped
+  `unit`. Asserted per endpoint, not per verb. (ii) The `tier=` PARAMETER stays everywhere it is:
+  mvn's earned `unit`/`module` verbs reach the same helpers through
+  `_run_surefire_tier(..., tier=label)`, so this AC is satisfied by changing unearned CALL SITES,
+  never by deleting the parameter. The converse pins are what catch that overshoot.
 - **AC4** — the tier surface is registered from ONE place for every client that runs tests by
   `add_tier_verbs(sub, funcs, *, parents=(), add_args=())` in `clients/_crucible_axi.py`. The name is
   FIXED here, not left to GREEN: the fleet's own convention is plural for a multi-verb registrar
@@ -226,10 +234,13 @@ zero-discovery and the compile-tier fallback alike.
   asserted against BOTH: the POST body carries the tier, and the printed help's claim matches what
   is sent.
 - **AC13a** — no COMPILE ingest carries a test tier, asserted fleet-wide on the POST body to
-  `/api/v2/runs/compile`. `python-crucible.py:696` does exactly what AC13 forbids for arduino today:
-  a collection/syntax failure with no XML is ingested as a compile event stamped `tier="unit"`, so a
-  build failure is recorded on the board as a unit test tier. The same rule, the same reason, and it
-  is asserted for every client that has a compile path rather than for arduino alone.
+  `/api/v2/runs/compile`. There are **two** offenders in `python-crucible.py`, not the one this AC
+  first named: `:696` stamps `tier="unit"` on a collection/syntax failure under `test`, and `:799`
+  stamps `tier="regression"` on the same kind of failure under `regression` (found at RED). Both do
+  exactly what AC13 forbids for arduino — a build failure recorded as a test tier — and `:799` shows
+  why the rule must be fleet-wide rather than one example: an earned verb name does not make a
+  COMPILE event a test run. Asserted for every client that has a compile path; arduino's is already
+  clean and is pinned to stay clean.
 
 ## Estimated size
 
@@ -242,9 +253,19 @@ The fleet-wide spelling is a one-way door: five clients teaching six values is e
 later, which is why DN **D1** settles the spelling before this CR is cut rather than during it.
 
 Removing the `tier="unit"` default from `cmd_test` changes what the board records for targeted runs.
-Historical rows are untouched and stay `unit`; the change is forward-only, and the board's own
-reading of a tier-less run is the server default — so §S2 must confirm the server's default is
-acceptable for a targeted run rather than assuming it.
+Historical rows are untouched and stay `unit`; the change is forward-only.
+
+**That confirmation, now made rather than deferred (RED escalation, cycle 378).** `src/store.ts`
+defaults `tier: meta?.tier ?? "unit"` at `:1911` and `:1950`, so a tier-less run still LANDS as
+`unit` and the board column looks identical before and after this CR. The default is accepted, for
+a reason worth stating plainly: what changes is WHO asserts. Today the client asserts a fact it
+cannot know from a file path; after this CR the client asserts nothing and the server applies its
+own documented default — and the caller who DOES know now has six verbs (§S1) to say so. Two
+consequences follow and both are deliberate: the improvement is not visible in the board's tier
+column, and no test in this CR can assert the stored value without a server change, which AC10
+forbids. **So AC3 is judged on the POST body alone; a green tier column is not evidence either
+way.** Changing the server's default is a separate question for a separate CR, on evidence this CR
+does not have.
 
 ## Non-goals
 
