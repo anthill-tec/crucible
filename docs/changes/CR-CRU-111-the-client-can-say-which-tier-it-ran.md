@@ -141,13 +141,26 @@ zero-discovery and the compile-tier fallback alike.
   itself asserted, and a `tier="..."` literal surviving anywhere outside a verb whose own NAME is
   that tier fails this AC. `auto-ingest` is asserted explicitly: it runs no tests, so it may state
   no tier at all.
-- **AC4** — the tier surface is registered from ONE place for every client that runs tests, and the
-  registrar-parity check counts the call sites: the shared registration in
-  `clients/_crucible_axi.py` is invoked by EACH of `bun-crucible.py`, `python-crucible.py`,
-  `mvn-crucible.py`, `rust-crucible.py` and `arduino-crucible.py`, proven by a derived count over
-  the five files rather than by a frozen list.
-- **AC5** — `mvn-crucible.py`'s `unit`, `module` and `e2e` verbs still run and still stamp their
-  own tiers after the migration; their existing behaviour is preserved, asserted per verb.
+- **AC4** — the tier surface is registered from ONE place for every client that runs tests by
+  `add_tier_verbs(sub, funcs, *, parents=(), add_args=())` in `clients/_crucible_axi.py`. The name is
+  FIXED here, not left to GREEN: the fleet's own convention is plural for a multi-verb registrar
+  (`add_roadmap_verbs`) and singular for a single-verb one (`add_next_verb`, `add_cr_depends_verb`,
+  `add_queue_file_verb`), and an unnamed registrar makes AC4 fail on a naming disagreement rather
+  than on a defect. The registrar-parity check counts the call sites: it is invoked by EACH of
+  `bun-crucible.py`, `python-crucible.py`, `mvn-crucible.py`, `rust-crucible.py` and
+  `arduino-crucible.py`, proven by a derived count over the five files rather than by a frozen list.
+- **AC5** — EVERY pre-existing verb whose name is already a tier keeps its behaviour and its own
+  flags after migrating onto the shared registration — not mvn's three alone. Enumerated on
+  `develop`@`d804286`, because "the migration" was written as if only mvn had such verbs:
+  `mvn` `unit` :1885, `module` :1893, `e2e` :1906, `regression` :1918 · `arduino` `unit` :1066,
+  `regression` :1072 · `bun` `regression` :2010 · `python` `regression` :1373. Eight verbs across
+  four clients; `rust` is the only client with no collision.
+  **The ruling, so GREEN does not invent one:** the shared registrar supplies the NAME, the help
+  text and the tier binding; everything stack-specific rides the `parents=`/`add_args=` injection
+  the existing `add_roadmap_verbs` pattern already provides. So `arduino unit` still runs
+  `make junit` under `--dir tests/native` and `arduino regression` still takes `--coverage` and its
+  lcov path. Asserted PER colliding verb — eight assertions — and a flag lost in the migration fails
+  this AC.
 - **AC6** — each TOOLCHAIN-SPLIT cell of §S3's matrix runs through that stack's own split, asserted
   against a fixture project of that stack: maven's surefire / `-pl <m> -am` / failsafe lifecycle,
   cargo's `--lib` / `--test` / profile selection, arduino's native-host build. The invocation the
@@ -176,8 +189,11 @@ zero-discovery and the compile-tier fallback alike.
   ONE-TIME re-record is `PROSE_CITATIONS.clients.head` in the tripwire, today **694** against a
   `develop` floor of 601: this CR adds provenance prose to five clients and the shared module, so
   the head figure moves. It is re-recorded ONCE, as a named close-out step, never as a per-cycle
-  approval round-trip. The help surface also grows from **168** to ~195, which the CR-CRU-110 guard
-  bounds at 60 s against a measured ~12 s — headroom stays above 4x.
+  approval round-trip. The help surface grows from **168** to **190**: 22 of the 30 (client × tier)
+  pairs are missing today (measured — 8 already answer: mvn `unit`/`module`/`e2e`/`regression`,
+  arduino `unit`/`regression`, bun `regression`, python `regression`), so the earlier "~195" was
+  arithmetic, not measurement. The CR-CRU-110 guard bounds that surface at 60 s against a measured
+  ~12 s, so headroom stays above 4x.
 - **AC10** — the diff touches NO server file: `git diff --stat` over `src/` is empty. The vocabulary
   lives in ONE place on the client side — a single mirror in `clients/_crucible_axi.py` carrying a
   provenance comment naming `Tier` in `src/types.ts` — and a DRIFT GUARD test parses that union out
@@ -202,6 +218,13 @@ zero-discovery and the compile-tier fallback alike.
   build is not a test tier, and conflating them would put a compile in the test record. Today this
   client stamps nothing at all, so a native run and a target build are indistinguishable on the
   board.
+  **The live consequence, found at RED and measured, which is worse than "indistinguishable":** this
+  client's own printed help already CLAIMS the tier it never sends — `:1067` reads "tier unit (§S3)"
+  and `:1073` reads "tier regression (§S3)" — while the code sends no `tier` at all, so
+  `src/store.ts:1911`'s `tier: meta?.tier ?? "unit"` records **every arduino full-suite regression
+  run as `unit`**. The help string is not merely aspirational, it contradicts the board. AC13 is
+  asserted against BOTH: the POST body carries the tier, and the printed help's claim matches what
+  is sent.
 - **AC13a** — no COMPILE ingest carries a test tier, asserted fleet-wide on the POST body to
   `/api/v2/runs/compile`. `python-crucible.py:696` does exactly what AC13 forbids for arduino today:
   a collection/syntax failure with no XML is ingested as a compile event stamped `tier="unit"`, so a
