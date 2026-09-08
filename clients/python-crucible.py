@@ -29,7 +29,7 @@ an unbound agent's runs attach only via an explicit `context.cycleId`.
 Subcommands:
   register, unregister  Agent lifecycle.
   test                  Run a TARGETED test (dotted path) or discover, via xmlrunner →
-                        JUnit XML → /api/v2/runs/parsed (tier unit). The per-cycle
+                        JUnit XML → /api/v2/runs/parsed (no tier claimed). The per-cycle
                         RED/GREEN workhorse. The reports dir is wiped first so only THIS
                         run's XML is ingested. If --agent omitted, just runs (exit code
                         only). If NO XML is produced (import/collection failure), the
@@ -574,7 +574,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["context"] = context
     if raw:
         payload["raw"] = raw
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -591,20 +591,22 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, tier=None):
-    """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context)."""
+def _ingest_compile(project_dir, agent_id, errors_text):
+    """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context).
+
+    CR-CRU-111 AC13a — no COMPILE ingest carries a test tier, so this helper takes
+    none: it is the shape `arduino-crucible.py:_ingest_compile` already had, and the
+    only way to keep a build event out of the board's test-tier record for good."""
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "python",
         "errors": errors_text,
         "agentId": agent_id,
     }
-    if tier:
-        payload["tier"] = tier
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(f"ingest compile (python): ok={resp.get('ok')}"
           + (f" error={resp['error']}" if resp.get("error") else ""),
           file=sys.stderr)
@@ -653,18 +655,31 @@ def _collect_coverage(python, project_dir, env):
     }
 
 
-def cmd_test(args):
-    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed
-    (tier unit). With --agent the result is ingested (regardless of pass/fail); a
-    bound agent's run is server-stamped with its registered cycle. Exit code
-    reflects the runner."""
+def cmd_test(args, tier=None, verb="test"):
+    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed.
+    With --agent the result is ingested (regardless of pass/fail); a bound agent's
+    run is server-stamped with its registered cycle. Exit code reflects the runner.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter the
+    way mvn's `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A dotted path
+    says nothing about the dependency that target takes, so absent a stated tier
+    this run claims none: the `tier` key is ABSENT from the ingest body and the
+    server applies its own documented default.
+
+    §S6 ruling 1 — python's declaration surface IS this invocation, so a tier
+    verb whose `--start-dir`/`--pattern` the caller stated runs THIS body under
+    that tier, and `verb` names the envelope the run belongs to (the tier the
+    caller invoked), exactly as the gate verbs elsewhere pass theirs."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
 
-    cmd = _xmlrunner_cmd(python, args.tests, args.start_dir, args.pattern, reports_dir)
+    cmd = _xmlrunner_cmd(python, getattr(args, "tests", None), args.start_dir,
+                         args.pattern, reports_dir)
     env = os.environ.copy()
     # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
     # can still be supplied: ask the board whether this agent is bound and say
@@ -675,7 +690,13 @@ def cmd_test(args):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
-    result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the day
+    # this project declares a `unit` start-dir, that cell runs THIS body and a
+    # run of it that spends its wall clock waiting says so in its own envelope.
+    # The shared check is scoped to `unit` by the tier it is handed, so an
+    # untiered targeted run measures and warns about nothing.
+    with _axi().ChildRunTiming() as timing:
+        result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not args.agent:
@@ -683,25 +704,29 @@ def cmd_test(args):
 
     if _produced_xml(reports_dir):
         summary, tree, files = _parse_junit_dir(reports_dir)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
+        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files)
-        _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
-                         warnings=preflight_warnings)
+        _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
+                         warnings=(list(preflight_warnings)
+                                   + _axi().unit_run_wall_vs_cpu_warnings(
+                                       tier, "python", timing)))
         if summary["failed"] > 0:
             return 1
         return 0 if resp.get("ok") else 1
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
-    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result), tier="unit")
+    # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
+    # tier, whatever verb reached it.
+    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result))
     # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
     # additive, so a starved toolchain stops returning an exit code with empty
     # stdout. The exit code is untouched (AC5).
-    _emit_axi("test", False,
-              {"help": _axi().no_report_help("test", "TEST-*.xml")},
+    _emit_axi(verb, False,
+              {"help": _axi().no_report_help(verb, "TEST-*.xml")},
               _axi_context(project_dir, agent_id=args.agent),
               preflight_warnings
-              + [_axi().no_report_warning("test", "TEST-*.xml", result.returncode,
+              + [_axi().no_report_warning(verb, "TEST-*.xml", result.returncode,
                                           result.stdout or "")],
               "[crucible] ERROR: no JUnit XML produced — ingested as compile")
     return result.returncode or 1
@@ -795,8 +820,10 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
             return result.returncode or 1
         print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
               file=sys.stderr)
-        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
-                        tier="regression")
+        # CR-CRU-111 AC13a — this ingest is a build event, not a run of the
+        # `regression` tier: an earned verb name does not make a compile event a
+        # test tier, so no tier goes on this body.
+        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result))
         # CR-CRU-064 §S2/AC6 — emitted under the `verb` PARAMETER, never the
         # literal "regression": `pre-merge-gate` runs this body as its
         # regression step, so a starved GATE must speak as the gate. The
@@ -851,7 +878,9 @@ def cmd_auto_ingest(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
+    # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests reports it merely
+    # found, so it cannot know their tier by construction and states none.
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                           context=_run_context(), files=files)
     _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      warnings=preflight_warnings)
@@ -1260,6 +1289,76 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_regression_tier_args(p):
+    """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
+    shared tier registration and keeps every flag it had; the registrar
+    supplies the name, the help and the tier binding, this supplies the rest."""
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
+    p.add_argument("--coverage", action="store_true",
+                   help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
+    p.add_argument("--cov-source", default="crucible_axi,clients",
+                   help="coverage --source package/dir (default: crucible_axi,clients)")
+
+
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. `unittest` discovery has
+# no tier notion, so every cell but `regression` is a DECLARED cell and the
+# declaration this runner can actually READ is the discovery selection itself.
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    sibling (`regression`) already takes, so the instruction a refusal gives
+    can actually be typed (AC14b — the measured defect was exactly this verb
+    exiting 2 on the `--start-dir`/`--pattern` its own refusal instructs).
+
+    `--start-dir` carries NO default here, where `_add_discover_args` defaults
+    it to `tests`: on this stack the declaration IS the invocation (ruling 1),
+    so a defaulted start-dir would declare every cell silently and the refusal
+    could never fire. `--agent` is accepted and not required for the same
+    reason bun's is: argparse's usage error is not a refusal."""
+    p.add_argument("--agent", help="If set, ingest the declared run's result")
+    p.add_argument("--start-dir",
+                   help="Discovery start dir DECLARING this tier's target. No "
+                        "default: with none stated the tier has no declared "
+                        "target and the verb refuses.")
+    p.add_argument("--pattern", default="test_*.py",
+                   help="Discovery filename pattern (default: test_*.py)")
+    p.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    _add_python_arg(p)
+    _add_log_arg(p)
+    _add_gate_cycle_arg(p)
+
+
+def _read_declared_discovery(args, _target):
+    """§S6, python's READ — the discovery selection the caller stated (ruling 1:
+    "python's surface is the INVOCATION, not a project file"). `unittest` has
+    no project config this repo has agreed, and inventing a format would be a
+    new artifact nobody asked for.
+
+    The templated target is UNUSED here, and that asymmetry is this stack's:
+    on the other four it is the NAME a declaration is looked up under, while
+    here it is the example start-dir the refusal prints — the same string from
+    the same template, but a value the flag accepts rather than a key."""
+    return getattr(args, "start_dir", None)
+
+
+def _run_declared_discovery(args, tier, start_dir):
+    """§S6, python's RUN — that discovery, under the tier of the VERB that
+    asked for it. `start_dir` is already on `args`, where `cmd_test` reads it;
+    it is named here because the seam hands the run what it detected."""
+    args.start_dir = start_dir
+    return cmd_test(args, tier=tier, verb=tier)
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="tests/<tier>",
+    names="a discovery start-dir/pattern for it "
+          "(`--start-dir <target> --pattern 'test_*.py'`)",
+    read=_read_declared_discovery,
+    run=_run_declared_discovery,
+    add_args=(_add_declared_tier_args,),
+)
+
+
 _DASHBOARD_PURPOSE_LINE = (
     "python-crucible.py -- Python/unittest Crucible CLI "
     "(agent lifecycle, test/ingest, plan/cycle verbs)."
@@ -1370,21 +1469,26 @@ def main():
     _add_log_arg(t)
     t.set_defaults(func=cmd_test)
 
-    g = sub.add_parser(
-        "regression",
-        help="Full-suite discover via xmlrunner + ingest. --coverage for coverage.py.",
-    )
-    g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    g.add_argument("--coverage", action="store_true",
-                   help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
-    g.add_argument("--cov-source", default="crucible_axi,clients",
-                   help="coverage --source package/dir (default: crucible_axi,clients)")
-    _add_gate_cycle_arg(g)
-    _add_discover_args(g)
-    _add_python_arg(g)
-    _add_project_dir_arg(g)
-    _add_log_arg(g)
-    g.set_defaults(func=cmd_regression)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # `regression` migrates onto it and keeps its handler, its flags and its
+    # behaviour; `unittest` discovery splits no tiers of its own, so the other
+    # five cells answer their help and refuse until this project declares a
+    # target for them. A `dict(...)` rather than a `{...}` literal,
+    # deliberately: the six values live in ONE place (the shared module's
+    # mirror) and a client dict keyed by tier NAMES would be the second copy
+    # that is forbidden.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(regression=tier_verb(
+            cmd_regression,
+            "Runs full-suite unittest discovery via xmlrunner and ingests it; "
+            "--coverage adds coverage.py.",
+            (_add_regression_tier_args, _add_gate_cycle_arg,
+             _add_discover_args, _add_python_arg, _add_log_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
+        add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest",
                        help="Ingest an already-produced reports dir (parsed).")

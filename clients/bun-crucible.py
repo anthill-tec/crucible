@@ -78,6 +78,7 @@ CR-SAN-013-C1-RED) are readability habits only. Identity carries displayName + s
 
 import argparse
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -462,6 +463,22 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
     return cmd
 
 
+def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir):
+    """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
+    is run BY NAME (`bun run test:unit`), never by re-parsing its body.
+
+    That is the whole point of a declaration: the project can change what the
+    script does without this client noticing, and the client never classifies
+    what the project declared. The reporter flags ride after the script name,
+    where `bun run` forwards them to it, so a declared target is ingested by
+    the same junit path every other run here takes."""
+    cmd = [bun, "run", script,
+           "--reporter=junit", f"--reporter-outfile={junit_path}"]
+    if coverage:
+        cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
+    return cmd
+
+
 def _parse_junit_file(junit_path):
     """Parse a bun JUnit XML file into (summary, tree, files) with per-test leaf
     names. `files` (CR-CRU-047 §S2) is the number of DISTINCT test FILES the run
@@ -785,7 +802,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # pre-lifecycle one and the server stores no lifecycle fields at all.
     if run_id:
         payload["runId"] = run_id
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -813,7 +830,7 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
     # the run this client opened, so the span is measured instead of abandoned.
     if run_id:
         payload["runId"] = run_id
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
     # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
     # path, and with it `pre-merge-gate`'s), leaving stdout un-decodable.
@@ -1003,7 +1020,17 @@ def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
     return 128 + abandoned.signum
 
 
-def cmd_test(args):
+def cmd_test(args, tier=None):
+    """Targeted/whole-suite `bun test` → junit → ingest.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter the
+    way mvn's `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A file path
+    says nothing about the dependency the tests under it take, so absent a stated
+    tier this run claims none — on BOTH endpoints, the run this verb OPENS
+    (`/api/v2/runs/start`) as well as the one it ingests (`/api/v2/runs/parsed`),
+    since the run row is what the board's tier column reads first."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1062,7 +1089,7 @@ def cmd_test(args):
             )
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
-                                                  tier="unit",
+                                                  tier=tier,
                                                   context=_run_context())
             # The pre-flight finding rides the SAME envelope warnings[] the
             # run's own lifecycle warnings do, ahead of them (it was decided
@@ -1070,8 +1097,13 @@ def cmd_test(args):
             run_warnings = preflight_warnings + run_warnings
         # §S4 — the wrapped span: the run is already OPEN, so a signal from here
         # on has an open run to disclose (the trap is inert without one).
+        # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the
+        # day this project declares a `unit` script, that cell runs THIS body
+        # and a run of it that spends its wall clock waiting says so in its own
+        # envelope. The shared check is scoped to `unit` by the tier it is
+        # handed, so an untiered `bun test` measures and warns about nothing.
         try:
-            with _abandon_trap(run_id):
+            with _axi().ChildRunTiming() as timing, _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
         except _RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
@@ -1086,12 +1118,15 @@ def cmd_test(args):
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                  tier="unit",
+                                  tier=tier,
                                   context=_run_context(),
                                   raw=getattr(result, "stdout", None),
                                   run_id=run_id)
             _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
-                             warnings=run_warnings, run_id=run_id)
+                             warnings=(run_warnings
+                                       + _axi().unit_run_wall_vs_cpu_warnings(
+                                           tier, "bun", timing)),
+                             run_id=run_id)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
             if summary["failed"] > 0:
@@ -1120,10 +1155,16 @@ def cmd_test(args):
         _close_gate_identity(project_dir, identity)
 
 
-def cmd_regression(args, verb="regression"):
+def cmd_regression(args, verb="regression", tier="regression", script=None):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
-    carries ONE document under the GATE's own verb, not the inner one's."""
+    carries ONE document under the GATE's own verb, not the inner one's.
+
+    §S6 — `script` is a DECLARED `package.json` target detected for a tier verb
+    (run by name; `None` is this verb's own full-suite `bun test`), and `tier`
+    is the tier the run is stamped with. They move together because §S2's rule
+    is unchanged: the tier a run reports is the VERB's, so a declared target
+    detected for `unit` rides `unit` and never this body's own name."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1144,7 +1185,9 @@ def cmd_regression(args, verb="regression"):
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
     try:
-        cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
+        cmd = (_bun_run_script_cmd(bun, script, junit_path, coverage_on,
+                                   coverage_dir) if script
+               else _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir))
         print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
         # §S2c — capture the run output (failure detail lives only there).
         log_path = getattr(args, "log", None)
@@ -1172,7 +1215,7 @@ def cmd_regression(args, verb="regression"):
             )
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
-                                                  tier="regression",
+                                                  tier=tier,
                                                   context=_run_context())
             run_warnings = preflight_warnings + run_warnings
         try:
@@ -1216,7 +1259,7 @@ def cmd_regression(args, verb="regression"):
                 print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
                       file=sys.stderr)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier="regression", context=_run_context(),
+                              tier=tier, context=_run_context(),
                               run_id=run_id)
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
@@ -1249,7 +1292,9 @@ def cmd_auto_ingest(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
+    # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests a report it merely
+    # found, so it cannot know its tier by construction and states none.
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                           context=_run_context())
     _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      warnings=preflight_warnings)
@@ -1898,6 +1943,73 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_regression_tier_args(p):
+    """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
+    shared tier registration and keeps every flag it had; the registrar
+    supplies the name, the help and the tier binding, this supplies the rest."""
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
+    p.add_argument("--coverage", action="store_true",
+                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+
+
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. `bun test` splits no tiers
+# of its own (it has no tier notion at all), so every cell but `regression` is
+# a DECLARED cell and the only surface that can carry the declaration is the
+# package manifest's script table — which is also where this project's other
+# run targets already live.
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    sibling (`regression`) already takes, so the instruction a refusal gives
+    can actually be typed (AC14b). `--agent` is accepted here and NOT required
+    as it is on `regression`: a cell with no declaration must reach the §S3
+    refusal, and argparse's usage error is not a refusal."""
+    p.add_argument("--agent", help="If set, ingest the declared run's junit result")
+    p.add_argument("--coverage", action="store_true",
+                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+    _add_gate_cycle_arg(p)
+    _add_reports_arg(p)
+    _add_bun_arg(p)
+    _add_package_dir_arg(p)
+    _add_log_arg(p)
+    _add_no_lifecycle_arg(p)
+
+
+def _read_declared_script(args, target):
+    """§S6, bun's READ — the `package.json` script table, which is where this
+    project's other run targets already live. Returns the script NAME when the
+    manifest declares it, so what is run is the declaration and never a body
+    this client re-parsed."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    manifest = os.path.join(package_dir, "package.json")
+    try:
+        with open(manifest, encoding="utf-8") as handle:
+            scripts = (json.load(handle) or {}).get("scripts") or {}
+    except OSError:
+        return None
+    except ValueError as error:
+        print(f"[crucible] WARN: {manifest} is not readable JSON ({error}) — "
+              f"no declared tier target can be read from it", file=sys.stderr)
+        return None
+    return target if scripts.get(target) else None
+
+
+def _run_declared_script(args, tier, script):
+    """§S6, bun's RUN — the declared script, by name, ingested under the tier
+    of the VERB that asked for it."""
+    return cmd_regression(args, verb=tier, tier=tier, script=script)
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="test:<tier>",
+    names='a `package.json` script for it (e.g. "<target>": "bun test <paths>")',
+    read=_read_declared_script,
+    run=_run_declared_script,
+    add_args=(_add_declared_tier_args,),
+)
+
+
 # §S14 — content-first: the one-line tool purpose printed by a bare invocation
 # (the no-arg live dashboard), alongside the ~-abbreviated executable path.
 _DASHBOARD_PURPOSE_LINE = (
@@ -2007,18 +2119,26 @@ def main():
     _add_no_lifecycle_arg(t)
     t.set_defaults(func=cmd_test)
 
-    g = sub.add_parser("regression", help="Full-suite `bun test` + ingest. --coverage for lcov.")
-    g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    g.add_argument("--coverage", action="store_true",
-                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
-    _add_gate_cycle_arg(g)
-    _add_reports_arg(g)
-    _add_bun_arg(g)
-    _add_package_dir_arg(g)
-    _add_project_dir_arg(g)
-    _add_log_arg(g)
-    _add_no_lifecycle_arg(g)
-    g.set_defaults(func=cmd_regression)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # `regression` migrates onto it and keeps its handler, its flags and its
+    # behaviour; `bun test` splits no tiers of its own, so the other five
+    # cells answer their help and refuse until this project declares a target
+    # for them. A `dict(...)` rather than a `{...}` literal, deliberately: the
+    # six values live in ONE place (the shared module's mirror) and a client
+    # dict keyed by tier NAMES would be the second copy that is forbidden.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(regression=tier_verb(
+            cmd_regression,
+            "Runs the full-suite `bun test` and ingests it; --coverage adds "
+            "lcov.",
+            (_add_regression_tier_args, _add_gate_cycle_arg, _add_reports_arg,
+             _add_bun_arg, _add_package_dir_arg, _add_log_arg,
+             _add_no_lifecycle_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
+        add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")
     a.add_argument("--agent", required=True)

@@ -25,11 +25,13 @@ same way the clients do.
 """
 
 import argparse
+import collections
 import datetime
 import importlib.util
 import json
 import os
 import re
+import resource
 import subprocess
 import sys
 import time
@@ -220,8 +222,16 @@ def echoed_cycle_id(resp):
 
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
-    optional human-readable line to stderr (interactive only)."""
-    axi = {"verb": verb, "ok": ok}
+    optional human-readable line to stderr (interactive only).
+
+    CR-CRU-111 §S5/AC7 — the envelope names the tier of the run this exit
+    ingested, beside `verb`/`ok` and on EVERY exit path, so an orchestrator
+    reading it knows what was covered without inspecting the board. The
+    statement is ASSEMBLED HERE, once for the fleet, from what the ingest seam
+    recorded (`ingested_tier`, and the closed vocabulary beside
+    `TIER_MEANINGS`): a client that ingested nothing on this exit says so
+    rather than claiming coverage it never obtained."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = warnings
@@ -1110,6 +1120,81 @@ def emit_cycle_selection_hard_stop(verb, refusal, context=None):
     return 2
 
 
+# ── CR-CRU-111 §S1 — the third hard stop: a tier verb with no declared run ─
+#
+# The vocabulary and the project's targets are two different facts, and
+# conflating them is what let a targeted run claim `unit` for everything. A
+# tier the vocabulary does not contain is argparse's own `invalid choice`; a
+# tier it DOES contain, registered on this client with no target declared for
+# it, is THIS refusal — it names the missing declaration rather than falling
+# back to another target, because a run that silently widened to the whole
+# suite would report a tier it did not perform.
+#
+# Same route as the two hard stops above (a typed exception, converted by
+# `run_verb`, an `ok:false` envelope on stdout, nothing run and nothing
+# posted), so all five clients inherit it without a line of per-client code.
+# The exit code is 1 rather than the 2 those two return: this is a
+# declaration the PROJECT has not made, not a malformed call the caller can
+# retype.
+
+TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
+
+
+def tier_run_undeclared_help(tier, declared, surface):
+    """§S1/§S3 — the next moves for a tier with no declared target: declare one
+    ON THIS STACK'S OWN SURFACE, or run a tier this client DOES run. The second
+    step names those tiers by reading what the client actually wired, so a
+    caller is never sent to a target that does not exist here either.
+
+    CR-CRU-111 §S3/AC6a — `surface` is the caller client's one-line naming of
+    WHERE the declaration goes (a `package.json` script, a discovery start-dir,
+    a profile in `pom.xml`, a profile in `.config/nextest.toml`, a native `make`
+    target). It is a REQUIRED argument, never a defaulted one: a refusal that
+    prints the same sentence in all five clients tells a caller the tier is
+    unwired and never where to wire it, which is a refusal that cannot be acted
+    on. The SHAPE of the sentence is fleet-wide and lives here; the surface it
+    names is that stack's own fact and is stated by that client, exactly as
+    `TierVerb.runs` already is."""
+    runnable = ", ".join(declared) if declared else "none yet"
+    return [f"declare this stack's {tier} target — {surface} — then re-run "
+            f"`{tier}`",
+            f"tier verbs this client runs today: {runnable}",
+            f"`{tier}` never falls back to another target: a run that widened "
+            f"to the whole suite would report a tier it did not perform"]
+
+
+class TierRunUndeclared(Exception):
+    """§S1 — raised by a tier verb that is REGISTERED on this client and has
+    no target declared for it, so there is nothing to run.
+
+    Like the two refusals above it carries no fallback, because every fallback
+    here runs something the caller did not ask for and reports it under the
+    tier they did. Carries the AXI `detail` and the `help[]` for this refusal;
+    `run_verb` converts it into the `ok:false` envelope and the non-zero exit,
+    and NO test is run and NO ingest is posted from this path."""
+
+    def __init__(self, tier, declared, surface):
+        self.tier = tier
+        self.declared = sorted(declared)
+        self.surface = surface
+        self.detail = (f"no {tier} target is declared for this stack, so the "
+                       f"{tier} verb has nothing to run")
+        self.help = tier_run_undeclared_help(tier, self.declared, surface)
+        super().__init__(self.detail)
+
+
+def emit_tier_run_undeclared_hard_stop(verb, refusal, context=None):
+    """§S1 — emit the `ok:false` refusal envelope (stdout) plus the human error
+    line (stderr) for a tier with no declared target, and return the NON-ZERO
+    exit code the client's `main` must exit with. Nothing is run, nothing is
+    posted from this path."""
+    emit_axi(verb or refusal.tier, False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {TIER_RUN_UNDECLARED_CODE} — {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -1128,9 +1213,15 @@ def _hard_stop_context(args, project_key_fn):
 
 def run_verb(func, args, project_key_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
-    typed hard stop — an undeclared agent identity (§S5) or an unresolvable
-    cycle list (CR-CRU-107 §S2) — into the `ok:false` envelope and a non-zero
-    exit code instead of an unhandled traceback."""
+    typed hard stop — an undeclared agent identity (§S5), an unresolvable
+    cycle list (CR-CRU-107 §S2) or a tier with no declared target
+    (CR-CRU-111 §S1) — into the `ok:false` envelope and a non-zero exit code
+    instead of an unhandled traceback.
+
+    CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
+    tier statement starts from `none` here: an invocation may never inherit
+    what an earlier one in the same process put on the board."""
+    forget_ingested_run()
     try:
         return func(args)
     except AgentIdentityRequired:
@@ -1138,6 +1229,10 @@ def run_verb(func, args, project_key_fn=None):
             getattr(args, "cmd", None), _hard_stop_context(args, project_key_fn))
     except CycleSelectionRefused as refusal:
         return emit_cycle_selection_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn))
+    except TierRunUndeclared as refusal:
+        return emit_tier_run_undeclared_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
 
@@ -1535,7 +1630,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1422-1438`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1526-1542`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
@@ -3572,6 +3667,398 @@ def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
     for adder in add_args:
         adder(qf)
     qf.set_defaults(func=func)
+
+
+# ── CR-CRU-111 §S1/AC10 — the tier vocabulary, mirrored ONCE ─────────────
+#
+# PROVENANCE: the server DECLARES this vocabulary as the `Tier` union in
+# `src/types.ts`, and that declaration is authoritative. The dict below is the
+# client side's ONLY copy of it: `tests/client/test_client_tier_surface.py`
+# parses that union out by SYMBOL and asserts the two are the same set, so a
+# seventh server-side value fails a test rather than quietly narrowing five
+# clients. Reading `src/types.ts` at client RUNTIME is not the requirement and
+# cannot be — an installed wheel ships no `src/` — so this is the
+# mirror-plus-guard pattern `canonical_track` already uses for `normalizeTrack`
+# above. What is forbidden is a SECOND mirror: no client carries its own copy
+# of the six, they take them from here through `add_tier_verbs`.
+#
+# The VALUE is what the tier means: the DEPENDENCY a run of it takes. That is
+# the only definition portable across five toolchains — a tier is never a
+# subject matter and never a size.
+TIER_MEANINGS = {
+    "unit": "no dependency beyond the code under test — no process, no "
+            "socket, no live service, no wait on the clock",
+    "module": "one module or package of this project, across its own boundary",
+    "integration": "a real dependency — a spawned process, a socket, a live "
+                   "service, or a wait on real time",
+    "e2e": "the assembled system, driven the way it is really driven",
+    "regression": "every tier the project declares, run as one suite",
+    "bdd": "executable specifications, in the project's own BDD form",
+}
+
+# What a client hands `add_tier_verbs` for a tier it actually RUNS:
+#
+#   * `func` — that client's own delegator, exactly as the other registrars
+#     take one;
+#   * `runs` — one sentence naming what this tier runs ON THIS STACK, which
+#     the registrar folds into the verb's help. It says what the verb DOES and
+#     never what a run claims: printed help asserting a tier the client does
+#     not send is a defect this CR's own Context measured, not a pattern to
+#     copy;
+#   * `add_args` — that ONE verb's own flag adders. The client-wide pieces
+#     ride `parents=`/`add_args=` as they do for `add_roadmap_verbs`, but a
+#     flag belonging to a single tier (mvn's `unit --test`, arduino's
+#     `regression --coverage`) belongs here — so migrating a pre-existing
+#     tier-named verb onto the shared registration cannot cost it a flag.
+TierVerb = collections.namedtuple(
+    "TierVerb", ("func", "runs", "add_args"), defaults=((),))
+
+
+# CR-CRU-111 §S5/AC7 — WHAT THE ENVELOPE SAYS IT INGESTED.
+#
+# "The AXI envelope names the tier of the run it just ingested, so an
+# orchestrator reading the envelope knows what was covered without inspecting
+# the board. Every exit path states it." The value is a CLOSED vocabulary,
+# because a consumer MATCHES on it, and it lives HERE — once, beside the
+# `Tier` mirror it extends (`TIER_MEANINGS` above IS this fleet's one mirror of
+# `Tier` in `src/types.ts`; AC10 forbids a second copy, and five clients each
+# spelling their own sentinel would be exactly that second mirror). Ratified at
+# cycle 381 rather than left to GREEN, so AC7 fails on a defect and never on a
+# naming disagreement.
+#
+#   one of `TIER_MEANINGS`   a TEST run reached the board under THAT tier;
+#   ENVELOPE_TIER_UNSTATED   a test run reached the board and the client stated
+#                            NO tier (§S2/AC3), so the server applied its own
+#                            documented default. The envelope neither invents a
+#                            tier nor prints a null — it says, positively, that
+#                            the client asserted nothing;
+#   ENVELOPE_TIER_COMPILE    a COMPILE event was ingested, which is not a test
+#                            tier at all (AC13a): a build in the test-tier
+#                            record is the conflation that AC forbids;
+#   ENVELOPE_TIER_NONE       this exit ingested nothing — python's
+#                            zero-discovery, §S1's `tier-run-undeclared`
+#                            refusal, a no-report exit, and every verb that
+#                            runs no tests at all.
+ENVELOPE_TIER_UNSTATED = "unstated"
+ENVELOPE_TIER_COMPILE = "compile"
+ENVELOPE_TIER_NONE = "none"
+
+# The ingest endpoints, by what an ingest to them MEANS. `/api/v2/runs/start`
+# is deliberately NOT here: it OPENS a run before any test has finished, so a
+# verb that opened a run and then ingested a compile failure (bun `test` with
+# no JUnit) has ingested no test run at all, and must say `compile`.
+RUN_INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed")
+COMPILE_INGEST_PATH = "/api/v2/runs/compile"
+
+# What THIS invocation has put on the board so far. Module state, because the
+# statement belongs to the whole exit and not to the one call site that made
+# it: the client that ingests and the client that emits are the same process,
+# and `run_verb` clears it before every verb so a second invocation inside one
+# process cannot inherit the first one's claim.
+_ingested_run_tier = AXI_UNSET
+_ingested_compile = False
+
+
+def forget_ingested_run():
+    """§S5 — clear what this process claims to have ingested. Called once per
+    verb dispatch (`run_verb`), so an envelope can only ever state the ingest
+    of the invocation it belongs to."""
+    global _ingested_run_tier, _ingested_compile
+    _ingested_run_tier = AXI_UNSET
+    _ingested_compile = False
+
+
+def post_ingest(post_fn, path, payload):
+    """§S5/AC7 — send a run to the board through the client's own `_post` seam
+    and REMEMBER what went out, so `emit_axi` can state the tier of the run it
+    ingested without any client deciding that answer for itself.
+
+    `post_fn` is that client's `_post`, taken as a parameter the way
+    `post_gate`/`post_milestone` already take it: this module owns the meaning
+    of an ingest, never the transport. The tier is read off the BODY rather
+    than from a parameter, so the envelope can only repeat what the wire
+    carried — an ingest that stated no tier is remembered as having stated
+    none, which §S2/AC3 made the honest answer."""
+    global _ingested_run_tier, _ingested_compile
+    if path in RUN_INGEST_PATHS:
+        _ingested_run_tier = (payload or {}).get("tier")
+    elif path == COMPILE_INGEST_PATH:
+        _ingested_compile = True
+    return post_fn(path, payload)
+
+
+def ingested_tier():
+    """§S5/AC7 — the envelope's tier statement for this exit, drawn from the
+    closed vocabulary above.
+
+    A TEST ingest decides the answer whether or not a compile event also rode
+    out on the same exit: a run that reached the board as a test run IS what an
+    orchestrator reading the envelope is asking about."""
+    if _ingested_run_tier is not AXI_UNSET:
+        return _ingested_run_tier or ENVELOPE_TIER_UNSTATED
+    return ENVELOPE_TIER_COMPILE if _ingested_compile else ENVELOPE_TIER_NONE
+
+
+def tier_verb_help(tier, meaning, wired):
+    """§S1 — the one line a tier verb prints in its client's help: what the
+    tier MEANS (from the mirror, so all five clients teach one vocabulary) and
+    what THIS client does with it — the run it performs, or the refusal it
+    answers with while the project has declared no target for it."""
+    if wired is not None:
+        return f"{tier.upper()} tier — {meaning}. {wired.runs}"
+    return (f"{tier.upper()} tier — {meaning}. No target for it is declared on "
+            f"this stack: the verb refuses (ok:false, exit 1) naming what to "
+            f"declare, and never falls back to another target.")
+
+
+# ── §S6 — a DECLARED target is DETECTED and RUN, not merely demanded ──────
+#
+# §S3 said a cell with no toolchain split "requires a project declaration", and
+# what shipped was the REFUSAL half only: nothing read a declaration, so a cell
+# refused even when the project HAD declared its target. "An instruction that
+# changes nothing when followed is worse than no instruction" (§S6), so the
+# refusal stays exactly as it was for the case it was written for and becomes
+# REACHABLE-PAST for every other.
+#
+# WHAT LIVES HERE IS THE POLICY, and it is the whole of it: the NAME a declared
+# target is looked up under is one template applied to the tier
+# (`declared_target_name`), the refusal's example is that SAME string
+# (`declared_tier_surface_line`, §S6 ruling 5 — "a refusal that shows an example
+# the client would not then find is the defect AC14a exists to catch"), a miss
+# is the §S1 refusal and never a fallback, and a hit runs under the VERB's own
+# tier. Five clients repeating that policy would be the second mirror AC10
+# forbids; what stays per-stack is the two facts only that stack knows — how to
+# READ its own surface and how to RUN what it found.
+#
+#   `target`    the ONE template, `<tier>` substituted: a bun `package.json`
+#               script (`test:<tier>`), an arduino native make target
+#               (`junit-<tier>`), a maven / nextest profile whose id IS the
+#               tier (`<tier>`), python's example discovery start-dir.
+#   `names`     this stack's one-line naming of WHERE the declaration goes,
+#               with `<target>` filled from the template above.
+#   `read`      `(args, target) -> declared-or-None`, that stack's own read.
+#   `run`       `(args, tier, declared) -> exit code`, that stack's own run.
+#   `add_args`  ruling 4 — the flag surface every DECLARED cell of this client
+#               takes: the one its test-running sibling already takes, so the
+#               instruction a refusal gives can actually be typed (AC14b).
+DeclaredTierSurface = collections.namedtuple(
+    "DeclaredTierSurface", ("target", "names", "read", "run", "add_args"),
+    defaults=((),))
+
+
+def declared_target_name(surface, tier):
+    """§S6 ruling 5 — THE template, applied. The lookup and the refusal's help
+    example are both this string, so the two cannot drift apart."""
+    return surface.target.replace("<tier>", tier)
+
+
+def declared_tier_surface_line(surface, tier):
+    """§S3/AC6a — the surface sentence a refusal names, carrying the example
+    `declared_target_name` would find."""
+    return surface.names.replace("<target>",
+                                 declared_target_name(surface, tier))
+
+
+def declared_tier_run(tier, funcs, surface):
+    """§S1/§S6 — the handler a DECLARED cell is registered with: DETECT this
+    project's declaration at this stack's own surface and RUN it, or refuse.
+
+    The refusal is unchanged in shape — it RAISES, so it travels the fleet's
+    own hard-stop route through `run_verb` (the `ok:false` envelope carrying
+    the project context, exit 1, nothing run and nothing posted) and no client
+    repeats a line of it. Never a no-op, and never a fall-back run: the verb
+    has to ANSWER, and what it answers is which declaration is missing and
+    WHERE on this stack it goes.
+
+    What §S6 adds is the other branch. A declaration the project HAS made is
+    read and run, and the run rides the VERB's own tier — §S2's rule holds
+    without exception, and a detected declaration is the project's
+    classification decision being honoured, never the client classifying."""
+    declared = sorted(funcs)
+
+    def _run_declared_tier(args):
+        target = declared_target_name(surface, tier)
+        found = surface.read(args, target)
+        if not found:
+            raise TierRunUndeclared(tier, declared,
+                                    declared_tier_surface_line(surface, tier))
+        return surface.run(args, tier, found)
+
+    return _run_declared_tier
+
+
+def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
+    """§S1 — register the SIX tier subparsers on `sub`, in every client that
+    runs tests.
+
+    The vocabulary is the mirror's, never an argument: the loop is driven off
+    `TIER_MEANINGS`, so the six a client exposes cannot drift from the six the
+    server declares, and a client cannot quietly expose five. That is the
+    whole reason this registration is shared rather than hand-rolled five
+    times — the fleet answered the same question two different ways before it
+    (mvn had `unit`/`module`/`e2e` as verbs, everyone else had a hardcoded
+    tier literal buried in a run path).
+
+    What stays per-client is exactly what the other registrars leave
+    per-client:
+
+      * `funcs` — tier → that client's `TierVerb` for the tiers it RUNS. A
+        tier absent from the mapping is registered all the same: it answers
+        its own `--help` and refuses with `TierRunUndeclared`, because the
+        vocabulary containing a tier and this project having a target for it
+        are two different facts and conflating them is the defect;
+      * `parents` — the shared parent a client like arduino already carries
+        (its `common` bundles `--agent`/`--project-dir`);
+      * `add_args` — the client's own per-verb conventions, applied to all
+        six (each client's project-dir flag), with a single verb's own flags
+        riding that verb's `TierVerb.add_args`;
+      * `declares` — §S3/AC6a and §S6: this stack's `DeclaredTierSurface` —
+        WHERE a declaration goes, how to READ it, how to RUN it, and the flag
+        surface a declared cell takes. Required, because §S3's rule is per
+        CELL: a client wires the cells its toolchain already splits and
+        DETECTS the rest, and a refusal that cannot say where the declaration
+        goes is not actionable. The surface is the client's fact (a
+        `package.json` script, a discovery start-dir, a profile in `pom.xml` /
+        `.config/nextest.toml`, a native `make` target); the policy it rides —
+        the template, the refusal, the verb's tier — is this module's.
+    """
+    for tier, meaning in TIER_MEANINGS.items():
+        wired = funcs.get(tier)
+        tp = sub.add_parser(tier, parents=list(parents),
+                            help=tier_verb_help(tier, meaning, wired))
+        for adder in add_args:
+            adder(tp)
+        # §S6 ruling 4 — a DECLARED cell takes its client's declared-cell flag
+        # surface. Before this it took NOTHING, not even `--agent`, so it
+        # exited 2 before any declaration could be read: unusable, not merely
+        # inert, and a refusal naming a flag its own verb rejects (AC14b).
+        for adder in (wired.add_args if wired is not None else declares.add_args):
+            adder(tp)
+        tp.set_defaults(func=(wired.func if wired is not None
+                              else declared_tier_run(tier, funcs, declares)))
+
+
+# ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
+#
+# `unit` is the one tier of the six whose MEANING forbids waiting ("no wait on
+# the clock", `TIER_MEANINGS` above), so a run of it that spends its wall clock
+# not computing has taken a dependency its tier does not name. The check is
+# scoped to that tier alone and it is deliberate: `integration`, `e2e`,
+# `regression` and `bdd` name real elapsed time as a dependency by definition,
+# and a warning there would be noise, not a finding.
+#
+# It WARNS and never refuses. Classification is the project's decision, so the
+# client reports the contradiction rather than vetoing it: `ok` and the exit
+# code are the run's own, untouched, and a check that turned a passing suite
+# red would be a worse defect than the one it detects.
+#
+# The measurement is `resource.getrusage(RUSAGE_CHILDREN)` deltas taken around
+# the client's OWN `subprocess.run` — stdlib, no dependency. Measured
+# discrimination: a sleeping child reads 38.4x, a CPU-bound child 1.00x, and
+# this repo's own unit target 1.09x (17.8 s wall / 16.3 s CPU), so 2x sits ~1.8x
+# above a real unit suite and ~19x below a sleeping one. `RUSAGE_CHILDREN` sums
+# CPU across cores, so a PARALLEL runner reads BELOW 1x and can never
+# false-positive — the asymmetry is the reason this factor is safe.
+#
+# BOUND, stated where the mechanism is: `RUSAGE_CHILDREN` is a per-PROCESS
+# cumulative counter, so a delta taken around one `subprocess.run` is
+# attributable to that child only while the bracketed call spawns exactly ONE.
+# Every `unit` run in the fleet does. Widening this check past `unit` would
+# demand a delta per `subprocess.run` rather than one per verb (a gate that
+# brings a compose stack up spawns two), which is why widening it is not a
+# wording change.
+UNIT_RUN_WALL_EXCEEDS_CPU_CODE = "unit-run-wall-exceeds-cpu"
+
+# The tier the check is scoped to, and the factor §S4 states: wall at or over
+# 2x CPU. Named rather than spelled at the comparison so the one definition the
+# fleet shares is also the one it prints.
+WALL_VS_CPU_TIER = "unit"
+WALL_VS_CPU_FACTOR = 2.0
+
+
+class ChildRunTiming:
+    """§S4 — the bracket around a child run: wall seconds, child CPU seconds,
+    and the ratio between them.
+
+    Used as a context manager around the ONE `subprocess.run` a test verb makes
+    (`with ChildRunTiming() as timing: result = _run_logged(...)`), so the
+    rusage delta covers that child and nothing else. `wall` and `cpu` are 0.0
+    until the block exits, and never negative: a monotonic clock cannot go
+    backwards, and a rusage counter is cumulative, but clamping costs nothing
+    and keeps a nonsense figure out of a warning.
+
+    `ratio` is None when no CPU was measurable at all rather than raising or
+    reporting an infinity — a child that consumed no measurable CPU is the
+    STRONGEST form of the condition this exists to detect, so the division is
+    guarded and the caller words that case for itself."""
+
+    __slots__ = ("wall", "cpu", "_wall_at", "_cpu_at")
+
+    def __init__(self):
+        self.wall = 0.0
+        self.cpu = 0.0
+        self._wall_at = None
+        self._cpu_at = None
+
+    @staticmethod
+    def _child_cpu():
+        """CPU seconds this process's waited-for children have consumed, user
+        plus system — the whole cost of a child, since a run that spends its
+        time in the kernel is computing just as much as one in user space."""
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return usage.ru_utime + usage.ru_stime
+
+    def __enter__(self):
+        self._wall_at = time.monotonic()
+        self._cpu_at = self._child_cpu()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.wall = max(time.monotonic() - self._wall_at, 0.0)
+        self.cpu = max(self._child_cpu() - self._cpu_at, 0.0)
+        return False
+
+    @property
+    def ratio(self):
+        """wall / cpu, or None when no child CPU was measurable."""
+        return self.wall / self.cpu if self.cpu > 0 else None
+
+
+def unit_run_wall_vs_cpu_warnings(tier, client, timing,
+                                  factor=WALL_VS_CPU_FACTOR):
+    """§S4/AC6b — the envelope `warnings[]` fragment for a `unit` run that spent
+    its wall clock waiting: `[]` or exactly one `{code, detail}`, in the shape
+    `preflight_cycle_warnings` returns its finding, so a call site adds it to
+    the warnings it already carries and changes nothing else.
+
+    ONE definition for the fleet: five clients reach this, and a consumer
+    matches on `UNIT_RUN_WALL_EXCEEDS_CPU_CODE`, so `client` (this client's own
+    name — its own fact, like the declaration surface it hands
+    `add_tier_verbs`) is what tells a reader of the board WHICH stack waited.
+
+    `tier` is the tier the caller STATED, so an untiered run (`tier=None`) and
+    every tier but `unit` return `[]` without measuring anything twice. A run
+    with no wall time at all — nothing was bracketed — is not a finding
+    either."""
+    if tier != WALL_VS_CPU_TIER or timing is None or timing.wall <= 0.0:
+        return []
+    if timing.wall < factor * timing.cpu:
+        return []
+    ratio = timing.ratio
+    measured = (f"{ratio:.1f}x" if ratio is not None
+                else "no child CPU was measurable at all")
+    return [{
+        "code": UNIT_RUN_WALL_EXCEEDS_CPU_CODE,
+        "detail": (f"{client} {tier}: this run spent {timing.wall:.3f}s of "
+                   f"wall time against {timing.cpu:.3f}s of child CPU "
+                   f"({measured}, at or over the {factor:g}x mark) — a "
+                   f"{tier} run that spends its time WAITING is taking a "
+                   f"dependency its tier does not name (a process, a socket, "
+                   f"a live service, or the clock itself). Reclassify the "
+                   f"run, or find what it waits on; it is reported either "
+                   f"way, because which tier these tests belong to is the "
+                   f"project's call and not this client's"),
+    }]
 
 
 def remove_agent_silent(project_dir, agent_id, ops):

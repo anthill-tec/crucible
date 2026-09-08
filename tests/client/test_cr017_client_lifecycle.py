@@ -433,9 +433,18 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     is exactly the pre-CR one."""
 
     # The pre-CR single-shot `/api/v2/runs/parsed` body for a gated `test` run
-    # with no coverage: projectKey, agentId, summary, tree, tier, raw. (`context`
+    # with no coverage: projectKey, agentId, summary, tree, raw. (`context`
     # is omitted when no WORKFLOW_* env is set — `_run_context()` returns None.)
-    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "summary", "tree", "tier", "raw"}
+    #
+    # Re-pinned 2026-09-08 (CR-CRU-111 §S2/AC3): `tier` LEFT this key set, and
+    # deliberately. `test` used to stamp `tier="unit"` on a run it could not
+    # classify from a file path; it now states only the tier its CALLER named,
+    # so an un-tiered `bun test` sends no `tier` key and the server applies its
+    # own documented default (`src/store.ts:1911`). This test's own subject —
+    # `--no-lifecycle` makes NO run-start call, sends NO runId, and adds NOTHING
+    # to the single-shot body — is untouched: the key set is re-recorded against
+    # today's single-shot ingest, not loosened.
+    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "summary", "tree", "raw"}
 
     def test_no_lifecycle_flag_makes_no_start_call_and_sends_no_run_id(self):
         server = _FakeCrucible()
