@@ -220,7 +220,22 @@ zero-discovery and the compile-tier fallback alike.
   not refused. Asserted twice: once on a deliberately sleeping fixture (warning present) and once on
   a CPU-bound fixture (warning absent), so the check cannot pass by always warning.
 - **AC7** — the AXI envelope carries the ingested tier on every exit path: success, a failing suite,
-  zero-discovery, and the compile-tier fallback. Four assertions, one per path.
+  zero-discovery, and the compile-tier fallback. Four assertions per client, and both the client
+  count and the path count asserted by derivation — "the envelope states the tier" is otherwise
+  satisfied once, on one client's happy path.
+  **The vocabulary is CLOSED and lives in ONE place (ratified at cycle 381's RED).** A consumer
+  matches on these values, so five clients spelling their own sentinel would be exactly the second
+  mirror AC10 forbids. `clients/_crucible_axi.py` owns them: a `Tier` value when a tier was
+  ingested, `ENVELOPE_TIER_UNSTATED` when the client sent none (honest after AC3 — the client stated
+  nothing and the server applied its own default; the envelope must not invent a tier, nor surface a
+  bare `None`), and `ENVELOPE_TIER_COMPILE` for a compile ingest, which is not a test tier (AC13a).
+  The `tier-run-undeclared` refusal (§S3) ingested nothing and must claim nothing; the no-report
+  exits bun and arduino each have are the same case. Neither is one of the four paths.
+  **Per-client path reality, derived at RED rather than assumed:** all five clients have success and
+  failing-suite paths; only python has a distinct zero-discovery branch (elsewhere an empty report
+  flows through the ordinary ingest with total 0); the compile fallback exists on the tier verb in
+  python, mvn and rust, on bun's untiered `test` verb, and in arduino as a first-class `compile`
+  verb. Where a client lacks a path, the AC is satisfied by the paths it has, stated explicitly.
 - **AC8** — caller existence: a grep at VERIFY time returns ≥1 non-test caller of the shared tier
   registration per client, and zero clients still pass a hardcoded tier literal into
   `_ingest_parsed`/`_start_run` except where the verb's own name IS the tier (`regression`, `e2e`).
