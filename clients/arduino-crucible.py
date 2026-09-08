@@ -573,7 +573,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # identity must be DECLARED (hard stop when it is not).
     agent_id = _agent_id(args)
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree, "tier": tier}
+               "summary": summary, "tree": tree}
+    # CR-CRU-111 §S2/AC3 — the tier rides ONLY when the caller stated one (a
+    # verb whose own name is the tier). A `tier: None` key is not the same
+    # thing as no key: the field would be on the wire, asserting emptiness
+    # where the honest body asserts nothing and lets the server's default
+    # apply.
+    if tier is not None:
+        payload["tier"] = tier
     if coverage:
         payload["coverage"] = coverage
     context = _run_context()
@@ -603,9 +610,19 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
 
 
 def cmd_test(args):
-    """§S2 fleet-uniform test verb — native host tests (`make junit`) → tier
-    `unit`. Retained (byte-compatible verb + envelope) alongside the `unit` alias."""
-    return _run_native_tests(args, "test", "unit", False)
+    """§S2 fleet-uniform test verb — native host tests (`make junit`), under NO
+    stated tier. Retained (byte-compatible verb + envelope) alongside the
+    `unit` alias.
+
+    CR-CRU-111 §S2/AC3/AC13 — this verb's name is not a tier, so it earns none:
+    it ran the native host build over whatever `--dir` pointed at, which says
+    nothing about the dependency those tests take. It stated `unit`
+    POSITIONALLY here (the spelling cycle 378's keyword-only census could not
+    see), and its printed help claimed no tier at all — help and wire now agree,
+    in both directions. A caller who knows the tier says so with the `unit` verb
+    beside it; absent that the run carries none and the server's own documented
+    default applies."""
+    return _run_native_tests(args, "test", None, False)
 
 
 def cmd_unit(args):
@@ -725,8 +742,13 @@ def cmd_auto_ingest(args):
         # CR-CRU-051 §S1 — and `files`, per the same aggregation trap.
         files += f
         tree.extend(t)
+    # CR-CRU-111 §S2/AC3 — NO tier: this verb runs no tests at all. It ingests
+    # TEST-*.xml files it merely FOUND under `--reports`, so it cannot know
+    # what dependency that run took — the DICT-KEY spelling of the unearned
+    # stamp, and AC3's own named worse case. AC13's "every test ingest carries
+    # a tier" governs the runs this client RUNS, never the reports it finds.
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree, "tier": "unit"}
+               "summary": summary, "tree": tree}
     context = _run_context()
     if context:
         payload["context"] = context
@@ -1060,6 +1082,19 @@ def _add_native_coverage_arg(p):
                    help="attach lcov coverage from <native_dir>/coverage/lcov.info")
 
 
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. This client's ONE
+# toolchain split is the native host build (`make junit` under --dir), which
+# `unit` and `regression` already run; every other cell is a DECLARED cell, and
+# the surface that can carry it is that native Makefile's own target list. Two
+# directories behind one `--dir` flag is not a split this client can READ, so
+# `integration` is declared here rather than invented.
+_TIER_DECLARATION_SURFACE = (
+    "a native-host `make` target for it in the Makefile under --dir "
+    "(e.g. `make junit-integration`)"
+)
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -1105,6 +1140,7 @@ def main():
                  "/api/v2/runs/parsed; --coverage attaches lcov.",
                  (_add_native_dir_arg, _add_native_coverage_arg,
                   _add_gate_cycle_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
         parents=[common])
 
     ai = sub.add_parser("auto-ingest", parents=[common],

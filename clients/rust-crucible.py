@@ -1053,9 +1053,10 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     return 0 if resp.get("ok") else 1
 
 
-def cmd_test(args, tier=None):
-    """cargo nextest run -p <crate> [--features ...] [--filter EXPR] -P <profile>.
-    If --agent passed, also auto-ingest junit afterwards.
+def cmd_test(args, tier=None, select=()):
+    """cargo nextest run -p <crate> [target selection] [--features ...]
+    [--filter EXPR] -P <profile>. If --agent passed, also auto-ingest junit
+    afterwards.
 
     CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
     that can state one is a §S1 tier VERB, which passes it here as a parameter the
@@ -1063,15 +1064,29 @@ def cmd_test(args, tier=None):
     `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A crate, a
     filter expression and a nextest profile say nothing about the dependency the
     selected tests take, so absent a stated tier this run claims none and the
-    server applies its own documented default."""
+    server applies its own documented default.
+
+    CR-CRU-111 §S3/AC6 — `select` is cargo's OWN target selection for the tier
+    the caller named (`--lib` for `unit`, `--tests`/`--test <t>` for
+    `integration`), passed by the tier verb rather than flagged here: which
+    cargo targets a tier means is a property of the tier, not of the call.
+    `--crate` stays OPTIONAL for those verbs — absent one the run is
+    `--workspace`, cargo's own way to say "every crate" — so a tier verb never
+    fails on argparse where cargo itself would have run."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # §S1's one-document rule, as `_smoke_test` already applies it: a tier verb
+    # runs THIS body, so the envelope must carry the verb the caller actually
+    # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
+    verb = tier or "test"
     _clean_stale_junit(project_dir, args.profile)
-    cmd = ["cargo", "nextest", "run", "-p", args.crate, "-P", args.profile]
+    crate_selection = ["-p", args.crate] if args.crate else ["--workspace"]
+    cmd = (["cargo", "nextest", "run"] + crate_selection + list(select)
+           + ["-P", args.profile])
     if args.features:
         cmd += ["--features", args.features]
     if args.no_fail_fast:
         cmd += ["--no-fail-fast"]
-    if args.test:
+    if getattr(args, "test", None):
         cmd += ["--test", args.test]
     if args.filter:
         cmd += ["-E", args.filter]
@@ -1095,7 +1110,7 @@ def cmd_test(args, tier=None):
         if junit_path:
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context())
-            _emit_ingest_axi("test", resp, project_dir, args.agent,
+            _emit_ingest_axi(verb, resp, project_dir, args.agent,
                              preflight_warnings)
             s = resp.get("run", {}) or {}
             if (s.get("failed") or 0) > 0:
@@ -1103,17 +1118,56 @@ def cmd_test(args, tier=None):
             return 0 if resp.get("ok") else 1
         # If tests didn't even compile, capture cargo check stderr → ingest compile
         # and emit an ok:false test envelope (no junit run to report).
-        check_cmd = ["cargo", "check", "-p", args.crate, "--tests"]
+        check_cmd = ["cargo", "check"] + crate_selection + ["--tests"]
         if args.features:
             check_cmd += ["--features", args.features]
         check_result = subprocess.run(check_cmd, capture_output=True, text=True,
                                       cwd=project_dir, env=env)
         _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr, kind="test-compile")
-        _emit_axi("test", False, {"help": _axi().HELP_STEPS["test"]},
+        _emit_axi(verb, False, {"help": _axi().HELP_STEPS["test"]},
                   _axi_context(project_dir, agent_id=args.agent),
                   preflight_warnings)
         return result.returncode or 1
     return result.returncode
+
+
+# ── CR-CRU-111 §S3/AC6 — cargo's own tier split, reachable from a tier verb ─
+#
+# Cargo makes the split itself: `--lib` compiles and runs the in-crate `#[test]`
+# functions, `tests/*.rs` are separate integration TARGETS selected by
+# `--tests`/`--test <name>`, and nextest PROFILES (`.config/nextest.toml`) carve
+# out the docker-infra tier. Before this the split was real in the toolchain and
+# unreachable from the client: `--lib` appeared nowhere in this file, and
+# `--test` shipped only on the untiered `test` verb. These three verbs are that
+# reach — no project declaration is asked for, because asking would invent a
+# second description of a distinction cargo already makes.
+
+
+def cmd_unit(args):
+    """UNIT tier — cargo's in-crate `--lib` target.
+
+    `--lib` is cargo's OWN unit selection, and it is the whole point of the
+    cell: a run over the crate's every target would sweep in `tests/`, whose
+    integration targets are by definition not `unit`."""
+    return cmd_test(args, tier="unit", select=["--lib"])
+
+
+def cmd_integration(args):
+    """INTEGRATION tier — cargo's `tests/` targets.
+
+    `--test <name>` selects ONE of them (the flag this verb carries); with none
+    named the cell is every integration target, which cargo spells `--tests`."""
+    select = [] if args.test else ["--tests"]
+    return cmd_test(args, tier="integration", select=select)
+
+
+def cmd_e2e(args):
+    """E2E tier — the nextest PROFILE that carves this tier out
+    (`.config/nextest.toml`), `--profile e2e` by default here.
+
+    The profile is the selection: it is where a project states which tests need
+    the assembled system, and `-P` is how cargo-nextest is told."""
+    return cmd_test(args, tier="e2e")
 
 
 def cmd_check(args):
@@ -1356,6 +1410,22 @@ def cmd_smoke_test(args):
     return _smoke_test(args, "smoke-test")
 
 
+def _smoke_run_tier(verb, profile):
+    """CR-CRU-111 §S3/AC12 (PURE) — the tier a smoke drive of this client ran,
+    from the two facts that decide it: which verb drove it, and which nextest
+    profile it ran under.
+
+    `docker-e2e-gate` brings a compose stack up and runs the docker-infra
+    profile against it, and `smoke-test --profile e2e` is that same run — the
+    profile's name, the verb's name and a live service all agree, so both are
+    `e2e`. The default drive (`-P ci`) is `cargo nextest run --workspace`,
+    which covers every crate's `tests/` integration targets: it takes real
+    dependencies, so it is `integration` and on no reading a `unit` run. Before
+    this these bodies sent no tier at all and the server's `?? unit` default
+    recorded the docker e2e gate as a unit run."""
+    return "e2e" if verb == "docker-e2e-gate" or profile == "e2e" else "integration"
+
+
 def _smoke_test(args, verb):
     """The smoke run body, shared by `smoke-test` and its thin wrapper
     `docker-e2e-gate` (CR-CRU-058 §S1): `verb` names the envelope this run
@@ -1458,6 +1528,10 @@ def _smoke_test(args, verb):
             "codec": "junit",
             "dataPath": junit_path,
             "agentId": args.agent,
+            # CR-CRU-111 §S3/AC12 — this run EARNS its tier: it is stated by
+            # the verb the caller drove and the profile it ran under, never
+            # assumed from a path.
+            "tier": _smoke_run_tier(verb, args.profile),
         }
         context = _run_context()
         if context:
@@ -2155,6 +2229,53 @@ def _add_log_arg(p):
     )
 
 
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. Cargo's own split covers
+# `unit`/`integration`/`e2e`; nothing in cargo describes a MODULE boundary or a
+# BDD form, so those cells are DECLARED, and the surface a cargo project has
+# for naming a run of its own is a nextest profile.
+_TIER_DECLARATION_SURFACE = (
+    "a profile for it in `.config/nextest.toml` "
+    "(run by `cargo nextest run -P <profile>`)"
+)
+
+
+# ── CR-CRU-111 §S3/AC6 — the tier verbs' own flags ────────────────────────
+#
+# What a run of a tier needs, minus the target selection: that is the TIER's
+# property and the verb supplies it (`--lib`, `--tests`, `-P <profile>`), never
+# a flag. `--crate` is OPTIONAL here where the untiered `test` verb requires it
+# — absent one the run is the workspace, which is what a tier means when the
+# caller names no crate.
+def _add_cargo_tier_run_args(p):
+    p.add_argument("--crate", help="Cargo package to scope to (`-p`); default: the whole workspace")
+    p.add_argument("--features", help="Comma-separated feature flags")
+    p.add_argument("--filter", help="Nextest -E filter expression")
+    p.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
+    p.add_argument("--agent", help="If set, auto-ingest junit after the run")
+    _add_gate_cycle_arg(p)
+    _add_log_arg(p)
+
+
+def _add_unit_tier_args(p):
+    _add_cargo_tier_run_args(p)
+    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+
+
+def _add_integration_tier_args(p):
+    _add_cargo_tier_run_args(p)
+    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+    p.add_argument("--test",
+                   help="A single `tests/<name>.rs` integration target (cargo --test <name>); "
+                        "default: every integration target (cargo --tests)")
+
+
+def _add_e2e_tier_args(p):
+    _add_cargo_tier_run_args(p)
+    p.add_argument("--profile", default="e2e",
+                   help="Nextest profile carving out this tier (default: e2e)")
+
+
 # CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
 # `__doc__`. The module docstring is this client's design record: it cites the
 # CRs that shaped it, and argparse printed all of it to every user of every
@@ -2638,13 +2759,34 @@ def main():
     _axi().add_queue_file_verb(sub, cmd_queue_file,
                                add_args=(_add_project_dir_arg,))
 
-    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
-    #
-    # rust is the one client with no pre-existing tier-named verb, so nothing
-    # migrates here and every cell is registered without a run: each answers
-    # its own --help and refuses, naming the declaration it needs, rather than
-    # widening to a target nobody asked for.
-    _axi().add_tier_verbs(sub, {}, add_args=(_add_project_dir_arg,))
+    # ── CR-CRU-111 §S1/§S3 — the SIX tier verbs, from the fleet's own
+    # registrar. rust is the one client with no pre-existing tier-named verb,
+    # so nothing migrates here. Cargo splits three of them itself (`--lib`,
+    # the `tests/` targets, a nextest profile) and those three RUN; `module`,
+    # `regression` and `bdd` are cells cargo describes no distinction for, so they answer
+    # their help and refuse until this project declares a target. A `dict(...)`
+    # rather than a `{...}` literal, deliberately: a client dict keyed by tier
+    # NAMES would be the second copy of the vocabulary AC10 forbids.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(unit=tier_verb(
+                 cmd_unit,
+                 "Runs `cargo nextest run --lib` — cargo's own in-crate unit "
+                 "target — and ingests junit.",
+                 (_add_unit_tier_args,)),
+             integration=tier_verb(
+                 cmd_integration,
+                 "Runs cargo's `tests/` integration targets "
+                 "(`--test <name>`, else `--tests`) and ingests junit.",
+                 (_add_integration_tier_args,)),
+             e2e=tier_verb(
+                 cmd_e2e,
+                 "Runs the nextest profile that carves out this tier "
+                 "(`-P e2e`) and ingests junit.",
+                 (_add_e2e_tier_args,))),
+        declares=_TIER_DECLARATION_SURFACE,
+        add_args=(_add_project_dir_arg,))
 
     gr = sub.add_parser("gate-run",
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "

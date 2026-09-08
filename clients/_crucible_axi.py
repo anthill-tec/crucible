@@ -1131,13 +1131,24 @@ def emit_cycle_selection_hard_stop(verb, refusal, context=None):
 TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
 
 
-def tier_run_undeclared_help(tier, declared):
-    """§S1 — the next moves for a tier with no declared target: declare one, or
-    run a tier this client DOES run. The second step names those tiers by
-    reading what the client actually wired, so a caller is never sent to a
-    target that does not exist here either."""
+def tier_run_undeclared_help(tier, declared, surface):
+    """§S1/§S3 — the next moves for a tier with no declared target: declare one
+    ON THIS STACK'S OWN SURFACE, or run a tier this client DOES run. The second
+    step names those tiers by reading what the client actually wired, so a
+    caller is never sent to a target that does not exist here either.
+
+    CR-CRU-111 §S3/AC6a — `surface` is the caller client's one-line naming of
+    WHERE the declaration goes (a `package.json` script, a discovery start-dir,
+    a profile in `pom.xml`, a profile in `.config/nextest.toml`, a native `make`
+    target). It is a REQUIRED argument, never a defaulted one: a refusal that
+    prints the same sentence in all five clients tells a caller the tier is
+    unwired and never where to wire it, which is a refusal that cannot be acted
+    on. The SHAPE of the sentence is fleet-wide and lives here; the surface it
+    names is that stack's own fact and is stated by that client, exactly as
+    `TierVerb.runs` already is."""
     runnable = ", ".join(declared) if declared else "none yet"
-    return [f"declare this stack's {tier} target, then re-run `{tier}`",
+    return [f"declare this stack's {tier} target — {surface} — then re-run "
+            f"`{tier}`",
             f"tier verbs this client runs today: {runnable}",
             f"`{tier}` never falls back to another target: a run that widened "
             f"to the whole suite would report a tier it did not perform"]
@@ -1153,12 +1164,13 @@ class TierRunUndeclared(Exception):
     `run_verb` converts it into the `ok:false` envelope and the non-zero exit,
     and NO test is run and NO ingest is posted from this path."""
 
-    def __init__(self, tier, declared=()):
+    def __init__(self, tier, declared, surface):
         self.tier = tier
         self.declared = sorted(declared)
+        self.surface = surface
         self.detail = (f"no {tier} target is declared for this stack, so the "
                        f"{tier} verb has nothing to run")
-        self.help = tier_run_undeclared_help(tier, self.declared)
+        self.help = tier_run_undeclared_help(tier, self.declared, surface)
         super().__init__(self.detail)
 
 
@@ -1604,7 +1616,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1452-1468`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1463-1479`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
@@ -3700,23 +3712,24 @@ def tier_verb_help(tier, meaning, wired):
             f"declare, and never falls back to another target.")
 
 
-def undeclared_tier_run(tier, funcs):
+def undeclared_tier_run(tier, funcs, surface):
     """§S1 — the handler a tier with no declared target is registered with.
 
     It RAISES, so the refusal travels the fleet's own hard-stop route through
     `run_verb` (the `ok:false` envelope carrying the project context, exit 1,
     nothing run and nothing posted) and no client repeats a line of it. Never
     a no-op, and never a fall-back run: the verb has to ANSWER, and what it
-    answers is which declaration is missing."""
+    answers is which declaration is missing — and, since §S3, WHERE on this
+    stack that declaration goes (`surface`)."""
     declared = sorted(funcs)
 
     def _refuse_undeclared_tier(_args):
-        raise TierRunUndeclared(tier, declared)
+        raise TierRunUndeclared(tier, declared, surface)
 
     return _refuse_undeclared_tier
 
 
-def add_tier_verbs(sub, funcs, *, parents=(), add_args=()):
+def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
     """§S1 — register the SIX tier subparsers on `sub`, in every client that
     runs tests.
 
@@ -3740,7 +3753,15 @@ def add_tier_verbs(sub, funcs, *, parents=(), add_args=()):
         (its `common` bundles `--agent`/`--project-dir`);
       * `add_args` — the client's own per-verb conventions, applied to all
         six (each client's project-dir flag), with a single verb's own flags
-        riding that verb's `TierVerb.add_args`.
+        riding that verb's `TierVerb.add_args`;
+      * `declares` — §S3/AC6a: this stack's own declaration SURFACE, in one
+        line, carried by every refusal this registration builds. Required,
+        because §S3's rule is per CELL: a client wires the cells its toolchain
+        already splits and refuses the rest, and a refusal that cannot say
+        where the declaration goes is not actionable. The surface is the
+        client's fact (a `package.json` script, a discovery start-dir, a
+        profile in `pom.xml` / `.config/nextest.toml`, a native `make`
+        target); the sentence it rides is this module's.
     """
     for tier, meaning in TIER_MEANINGS.items():
         wired = funcs.get(tier)
@@ -3751,7 +3772,7 @@ def add_tier_verbs(sub, funcs, *, parents=(), add_args=()):
         for adder in (wired.add_args if wired is not None else ()):
             adder(tp)
         tp.set_defaults(func=(wired.func if wired is not None
-                              else undeclared_tier_run(tier, funcs)))
+                              else undeclared_tier_run(tier, funcs, declares)))
 
 
 def remove_agent_silent(project_dir, agent_id, ops):

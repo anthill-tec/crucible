@@ -1286,6 +1286,16 @@ def _add_regression_tier_args(p):
                    help="coverage --source package/dir (default: crucible_axi,clients)")
 
 
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. `unittest` discovery has
+# no tier notion, so every cell but `regression` is a DECLARED cell and the
+# declaration this runner can actually READ is the discovery selection itself.
+_TIER_DECLARATION_SURFACE = (
+    "a discovery start-dir/pattern for it "
+    "(`--start-dir tests/<tier> --pattern 'test_*.py'`)"
+)
+
+
 _DASHBOARD_PURPOSE_LINE = (
     "python-crucible.py -- Python/unittest Crucible CLI "
     "(agent lifecycle, test/ingest, plan/cycle verbs)."
@@ -1414,6 +1424,7 @@ def main():
             "--coverage adds coverage.py.",
             (_add_regression_tier_args, _add_gate_cycle_arg,
              _add_discover_args, _add_python_arg, _add_log_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest",

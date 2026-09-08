@@ -1577,7 +1577,11 @@ class NextBlockCitationsTest(unittest.TestCase):
         # this block (their docstrings and comments now state what the client
         # does NOT claim), drifting it 1437-1453 -> 1452-1468. Same rule, same
         # guard, third time: the CR that shifted the file re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1452, 1468,
+        # Re-pinned 2026-09-08 (CR-CRU-111 §S3): AC6a's refusal now NAMES this
+        # stack's declaration surface, and the constant carrying it plus the
+        # registrar's `declares=` argument sit ABOVE this block, drifting it
+        # 1452-1468 -> 1463-1479. Same rule, same guard, fourth time.
+        ("_next_start_help", "clients/python-crucible.py", 1463, 1479,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

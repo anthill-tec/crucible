@@ -1919,6 +1919,17 @@ def _add_regression_tier_args(p):
                    help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
 
 
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. `bun test` splits no tiers
+# of its own (it has no tier notion at all), so every cell but `regression` is
+# a DECLARED cell and the only surface that can carry the declaration is the
+# package manifest's script table — which is also where this project's other
+# run targets already live.
+_TIER_DECLARATION_SURFACE = (
+    'a `package.json` script for it (e.g. "test:unit": "bun test <paths>")'
+)
+
+
 # §S14 — content-first: the one-line tool purpose printed by a bare invocation
 # (the no-arg live dashboard), alongside the ~-abbreviated executable path.
 _DASHBOARD_PURPOSE_LINE = (
@@ -2046,6 +2057,7 @@ def main():
             (_add_regression_tier_args, _add_gate_cycle_arg, _add_reports_arg,
              _add_bun_arg, _add_package_dir_arg, _add_log_arg,
              _add_no_lifecycle_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")

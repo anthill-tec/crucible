@@ -988,6 +988,69 @@ def cmd_module(args):
     return _run_surefire_tier(args, [], "module")
 
 
+def _run_failsafe_tier(args, goals, label):
+    """CR-CRU-111 §S3/AC6 — the shared body for the two cells maven's FAILSAFE
+    half serves, exactly as `_run_surefire_tier` is the shared body for the two
+    its surefire half serves.
+
+    Maven's own lifecycle separates failsafe (`*IT`) from surefire, so
+    `integration` and `e2e` are TOOLCHAIN-SPLIT cells: asking the project to
+    declare a target for either would invent a second description of a
+    distinction the build already makes. What differs between them is the
+    GOALS the caller hands in — `integration` runs the `integration-test`
+    phase, `e2e` the `verify` phase failsafe binds its IT verification to (or
+    the two failsafe goals directly, under `--failsafe-only`) — and the tier
+    each ingests under, which is the verb's own name.
+
+    Both ingest failsafe (the IT results) AND surefire (the unit tests the
+    lifecycle runs on the way to that phase) together, because both were
+    produced by this one run; on no reports at all the run is a build failure
+    and takes the compile fallback, like every other tier verb here."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    common = _common_mvn_flags(args)
+    cmd = _mvn_base(maven_dir) + goals + common
+    env = os.environ.copy()
+    # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
+    print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
+    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
+    print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
+    if not args.agent:
+        return result.returncode
+    module = getattr(args, "module", None)
+    fs = _dirs_with_xml(_report_dirs(maven_dir, module, "failsafe"))
+    su = _dirs_with_xml(_report_dirs(maven_dir, module, "surefire"))
+    dirs = fs + su
+    if not dirs:
+        rc, build_output = _compile_fallback(maven_dir, project_dir,
+                                             args.agent, common)
+        _emit_compile_fallback_axi(label, rc, build_output, project_dir,
+                                   args.agent)
+        return rc
+    _warn_if_stale(dirs)
+    summary, tree, files = _parse_junit(dirs)
+    # The subcommand name IS the tier, as it is for `unit`/`module`: a tier
+    # PARAMETER, never a literal this body asserts about a run it did not name.
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
+                          tier=label, files=files)
+    # CR-CRU-058 §S1 — the run this body measured rides a real envelope.
+    _emit_tier_run_axi(label, {"resp": resp, "summary": summary, "files": files},
+                       project_dir, args.agent)
+    return 0 if summary["failed"] == 0 else 1
+
+
+def cmd_integration(args):
+    """INTEGRATION tier — maven's `integration-test` phase, which is where
+    failsafe runs the `*IT` suites the lifecycle keeps apart from surefire's.
+
+    The `verify` phase is `e2e`'s (it adds failsafe's post-run verification of
+    the assembled artifact); this cell stops at the phase that RUNS the ITs, so
+    the two failsafe cells are distinguishable in the invocation and not only
+    in the tier they report. The verdict is read from the reports either way,
+    so a failing IT is a failing run here regardless of the phase's own exit."""
+    return _run_failsafe_tier(args, ["clean", "integration-test"], "integration")
+
+
 def cmd_compile(args):
     """Compile-only: mvn clean test-compile → ingest /api/v2/runs/compile."""
     project_dir = _resolve_project_dir(args.project_dir)
@@ -1046,7 +1109,6 @@ def cmd_e2e(args):
     optionally native. No coverage. Optional docker compose lifecycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
-    common = _common_mvn_flags(args)
     _docker_clean_check(maven_dir)
 
     docker_up = False
@@ -1076,36 +1138,10 @@ def cmd_e2e(args):
     try:
         if args.failsafe_only:
             # Package assumed already built (e.g. native package step done in CI).
-            cmd = _mvn_base(maven_dir) + ["failsafe:integration-test", "failsafe:verify"] + common
+            goals = ["failsafe:integration-test", "failsafe:verify"]
         else:
-            cmd = _mvn_base(maven_dir) + ["clean", "verify"] + common
-        env = os.environ.copy()
-        print(f"[e2e] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-        result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
-        print(f"[e2e] mvn exit={result.returncode}", file=sys.stderr)
-        if not args.agent:
-            e2e_rc = result.returncode
-        else:
-            # Ingest failsafe (the IT results) + surefire (unit run by verify) together.
-            fs = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "failsafe"))
-            su = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "surefire"))
-            dirs = fs + su
-            if dirs:
-                _warn_if_stale(dirs)
-                summary, tree, files = _parse_junit(dirs)
-                resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                      tier="e2e", files=files)
-                e2e_rc = 0 if summary["failed"] == 0 else 1
-                # CR-CRU-058 §S1 — `cmd_e2e` ended in a bare `_ingest_parsed`
-                # before this; the run it measured now rides a real envelope.
-                _emit_tier_run_axi("e2e", {"resp": resp, "summary": summary,
-                                           "files": files},
-                                   project_dir, args.agent)
-            else:
-                e2e_rc, build_output = _compile_fallback(
-                    maven_dir, project_dir, args.agent, common)
-                _emit_compile_fallback_axi("e2e", e2e_rc, build_output,
-                                           project_dir, args.agent)
+            goals = ["clean", "verify"]
+        e2e_rc = _run_failsafe_tier(args, goals, "e2e")
     finally:
         if docker_up:
             # STEP form — the teardown must not put a second document on stdout.
@@ -1840,6 +1876,13 @@ def _add_module_tier_args(p):
     p.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
 
 
+def _add_integration_tier_args(p):
+    """CR-CRU-111 §S3/AC6 — `integration`'s own flags: the failsafe half of
+    maven's lifecycle, without `e2e`'s packaging/docker options (this cell runs
+    the ITs; it does not stand the assembled system up)."""
+    p.add_argument("--agent", help="If set, ingest failsafe+surefire results (parsed, no coverage)")
+
+
 def _add_e2e_tier_args(p):
     p.add_argument("--agent", help="If set, ingest failsafe+surefire results (parsed, no coverage)")
     p.add_argument("--failsafe-only", action="store_true",
@@ -1847,6 +1890,19 @@ def _add_e2e_tier_args(p):
     p.add_argument("--with-docker", action="store_true", help="docker compose up/down around the run")
     p.add_argument("--compose-file", default=None, help="Compose file (rel to project root); else .env/auto-discovery")
     p.add_argument("--no-wait", action="store_true", help="docker-up without --wait")
+
+
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. Maven's lifecycle already
+# splits four of the six (surefire unscoped, surefire scoped by `-pl`, failsafe
+# under `integration-test`, failsafe under `verify`), so only the cells its
+# lifecycle says nothing about — `bdd` above all — are DECLARED cells, and
+# maven's own way to declare a run that its lifecycle does not name is a
+# profile.
+_TIER_DECLARATION_SURFACE = (
+    "a profile in `pom.xml` binding that tier's executions "
+    "(`mvn -P<profile>`)"
+)
 
 
 def _add_regression_tier_args(p):
@@ -1950,6 +2006,11 @@ def main():
                  "Runs `mvn clean test [-pl <module> -am]` — maven's own "
                  "reactor scoping — and ingests surefire.",
                  (_add_module_tier_args, _add_mvn_flags, _add_log_arg)),
+             integration=tier_verb(
+                 cmd_integration,
+                 "Runs `mvn clean integration-test` — the failsafe half of "
+                 "maven's own lifecycle — and ingests failsafe+surefire.",
+                 (_add_integration_tier_args, _add_mvn_flags, _add_log_arg)),
              e2e=tier_verb(
                  cmd_e2e,
                  "Runs failsafe IT / @QuarkusIntegrationTest. No coverage.",
@@ -1959,6 +2020,7 @@ def main():
                  "Runs the full reactor `mvn clean verify` with JaCoCo "
                  "coverage, parsed.",
                  (_add_regression_tier_args, _add_mvn_flags, _add_log_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_args,))
 
     co = sub.add_parser("compile", help="mvn clean test-compile → ingest /api/v2/runs/compile (RED compile path).")
