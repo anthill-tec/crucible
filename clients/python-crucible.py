@@ -85,6 +85,11 @@ import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
+# The STACK this client's runs belong to — the server's own `{tier, stack,
+# context}` field (`src/v2.ts`). CR-CRU-112 AC5, measured at cycle 388's RED:
+# this client sent NO stack key at all, so nothing this project had ever
+# ingested from its python suite was attributable to it.
+_STACK = "python"
 
 # §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
 
@@ -563,6 +568,10 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
+        # CR-CRU-112 AC5 — the run says which STACK produced it. This client
+        # opens no run of its own (there is no `/api/v2/runs/start` here), so
+        # the parsed ingest is the ONE place a python run can carry it.
+        "stack": _STACK,
         "summary": summary,
         "tree": tree,
     }
@@ -973,9 +982,20 @@ def cmd_pre_merge_gate(args):
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
     )
-    # §S1 — the regression body emits under THIS gate's verb, so the gate puts
-    # exactly one envelope on stdout under the name the caller invoked.
-    return cmd_regression(reg_args, verb="pre-merge-gate")
+    # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
+    # composed once for the fleet. This stack's surface enumerates none (the
+    # declaration IS the invocation), so the composition answers with the
+    # fallback below — this client's own regression, which is the one suite the
+    # invocation declared. The hooks a dispatch would take are stated as the
+    # None they are rather than as lambdas that could never run.
+    # §S1 (CR-CRU-058) — that body emits under THIS gate's verb, so the gate
+    # puts exactly one envelope on stdout under the name the caller invoked.
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+        verb="pre-merge-gate", run_local=None, dispatch=None,
+        fallback=lambda: cmd_regression(reg_args, verb="pre-merge-gate"),
+        context=_axi_context(project_dir, agent_id=args.agent),
+        crucible_url=CRUCIBLE_URL)
 
 
 # ── CR-CRU-008/030 — plan verbs ─────────────────────────────────────────────
@@ -1356,6 +1376,12 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     read=_read_declared_discovery,
     run=_run_declared_discovery,
     add_args=(_add_declared_tier_args,),
+    # CR-CRU-112 §S1 — this surface enumerates NOTHING, and that is CR-CRU-111
+    # ruling 1 restated: on this stack the declaration is the INVOCATION, not a
+    # project artefact, so there is no set of declared targets to read. A gate
+    # here therefore composes exactly what its invocation declared — its own
+    # regression — which is the single-suite case, not a hole.
+    suites=None,
 )
 
 

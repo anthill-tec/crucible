@@ -4,8 +4,16 @@
 //
 //   bun run test:unit           fast feedback: no browser, no spawns, no server
 //   bun run test:integration    the real thing: browser, clients, HTTP, live board
-//   bun run test:client         the 65-file python client suite (1445 tests)
 //   bun run test:regression     everything: the WHOLE bun suite + the python suite
+//
+// `test:client` no longer routes through here: CR-CRU-112 §S1 made it declare
+// its own stack (`python3 -m unittest discover -s tests/client -t .`), which is
+// what lets the pre-merge gate dispatch that suite to `python-crucible.py`
+// instead of running it blind. The `client` target below still answers a direct
+// `bun scripts/run-test-target.ts client`, and it runs the SAME discovery: the
+// python client suite is 73 files / 1622 tests (measured 2026-09-08 — it was
+// 65 / 1445 when this comment was written, which is why a frozen figure here
+// is a liability and this one carries its date).
 //
 // `regression` deliberately runs `bun test` with NO path arguments — the same
 // single invocation the gate has always used, so the target switch cannot
@@ -36,9 +44,12 @@ if (target === undefined || !isTarget(target)) {
   process.exit(2);
 }
 
-// The python client suite: `tests/client/` is 67 files of `unittest` cases that
+// The python client suite: `tests/client/` is 73 files of `unittest` cases that
 // `bun test` cannot see at all. Before 2026-09-08 no gate ran them, and a
-// shipped CR (CR-CRU-108) had broken one without anything reporting it.
+// shipped CR (CR-CRU-108) had broken one without anything reporting it. This
+// path ingests NOTHING — that is the finding CR-CRU-112 closes: the gate reads
+// the project's declaration and dispatches the suite to its own stack's client,
+// so a run of it is attributable; this script stays the developer convenience.
 const PYTHON_SUITE = ["-m", "unittest", "discover", "-s", "tests/client", "-t", "."];
 
 let exitCode = 0;

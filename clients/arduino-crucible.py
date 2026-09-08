@@ -73,6 +73,10 @@ CRUCIBLE = (os.environ.get("CRUCIBLE_URL") or os.environ.get("CRUCIBLE_BASE")
 ARDUINO_CLI = os.environ.get(
     "ARDUINO_CLI", "/opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli")
 FQBN = os.environ.get("ARDUINO_FQBN", "arduino:renesas_uno:minima")
+# The STACK this client's runs belong to — the name its sibling clients address
+# it by (`arduino-crucible.py`), which is what a gate composes declared suites
+# over (CR-CRU-112 §S1).
+_STACK = "arduino"
 
 # §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
 
@@ -818,9 +822,24 @@ def cmd_pre_merge_gate(args):
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
         cycle=getattr(args, "cycle", None))
-    # §S1 — the native-test body emits under THIS gate's verb, so the gate puts
-    # exactly one envelope on stdout under the name the caller invoked.
-    return _run_native_tests(reg_args, "pre-merge-gate", "regression", True)
+    # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
+    # each run under the tier that declared it; a project that declares none
+    # keeps this client's own native regression, which is its one suite.
+    # §S1 (CR-CRU-058) — either body emits under THIS gate's verb, so the gate
+    # puts exactly one envelope on stdout under the name the caller invoked.
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+        verb="pre-merge-gate",
+        run_local=lambda suite: _run_declared_make_target(
+            reg_args, suite.tier, suite.target),
+        # A native `make` target declaration is a NAME and carries no command,
+        # so it can name no other stack: every suite declared here is this
+        # client's own, and there is nothing to dispatch.
+        dispatch=None,
+        fallback=lambda: _run_native_tests(reg_args, "pre-merge-gate",
+                                           "regression", True),
+        context=_axi_context(pd, agent_id=args.agent),
+        crucible_url=CRUCIBLE)
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────
@@ -1144,6 +1163,11 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     read=_read_declared_make_target,
     run=_run_declared_make_target,
     add_args=(_add_declared_tier_args,),
+    # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
+    # vocabulary itself (`junit-<tier>`), so the enumeration is the lookup
+    # above asked for each tier: the same Makefile read, without the
+    # single-name filter.
+    suites=_axi().template_declared_suites,
 )
 
 

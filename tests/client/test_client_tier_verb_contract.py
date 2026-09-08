@@ -12,7 +12,28 @@ share one harness.
     the six values."
   * **AC16** — "AC5's flag retention is asserted for all EIGHT migrated verbs,
     not four, by comparing each verb's resolved argparse option set before and
-    after (`git show develop:<file>`) rather than by driving a chosen flag."
+    after rather than by driving a chosen flag."
+
+HOW "BEFORE" IS OBTAINED, and why it is NOT a base ref — repaired at
+CR-CRU-112 cycle 388, which is the CR that found this file red on a branch
+nobody had touched it from:
+
+  This file originally read "before" as `git show develop:<file>`. That
+  comparison SELF-INVALIDATES on merge: the moment CR-CRU-111 merged into
+  `develop`, the base ref and the working tree became the same thing, the
+  derivation returned all THIRTY of today's tier verbs instead of the eight
+  that existed before the migration, and every comparison became a tautology
+  (`test_the_migrated_verbs_are_the_eight_the_base_ref_shipped` and
+  `test_the_verbs_the_base_ref_did_not_have_are_not_counted_as_migrated` both
+  failed, and the one in between silently measured nothing).
+
+  "Before" is a HISTORICAL FACT, so it is recorded as one:
+  `MIGRATED_VERB_OPTIONS` below is a named, dated snapshot — the eight verbs'
+  resolved option sets as `develop`@`d804286` shipped them, the pre-migration
+  commit AC5 enumerated on, read off those clients' own parsers on 2026-09-08.
+  It cannot rot when a branch merges, and it is the same guarantee: a verb that
+  answers to fewer flags than that fails, whatever the branch topology is
+  today. DO NOT reintroduce a base-ref read here.
 
 WHAT VERIFY MEASURED, because both ACs exist for a measured reason and not a
 suspicion:
@@ -80,10 +101,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
-import shutil
-import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -92,10 +110,57 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 DECLARATION_PATH = Path(__file__).resolve().parent / "test_client_tier_declaration_detection.py"
 
-# The branch AC16 compares against, named once. AC5 enumerated the eight verbs
-# on `develop`@`d804286`; the comparison is against the branch rather than that
-# commit so a `develop` that has moved is still the honest "before".
-BASE_REF = "develop"
+# AC16's "BEFORE", as a named and dated FACT rather than a branch that moves:
+# the resolved option set of each of the eight pre-existing tier-named verbs as
+# `develop`@`d804286` shipped them — the commit AC5 enumerated on, which is the
+# first parent of CR-CRU-111's merge — read off those clients' own parsers on
+# 2026-09-08 by the same `_option_strings` measurement this file makes today.
+#
+# A snapshot and NOT `git show <ref>:<file>`, repaired at CR-CRU-112 cycle 388:
+# a base-ref comparison self-invalidates the moment the branch under
+# measurement merges into the base, because the base and the tree become the
+# same thing and every comparison becomes a tautology. See the module docstring.
+# A NINTH pre-existing tier verb cannot appear now — "pre-existing" is a closed
+# historical set — so this table is complete by construction.
+MIGRATED_VERB_OPTIONS = {
+    ("arduino", "regression"): (
+        "--agent", "--coverage", "--cycle", "--dir", "--help",
+        "--project-dir", "-h",
+    ),
+    ("arduino", "unit"): (
+        "--agent", "--cycle", "--dir", "--help", "--project-dir", "-h",
+    ),
+    ("bun", "regression"): (
+        "--agent", "--bun", "--coverage", "--cycle", "--help", "--log",
+        "--no-lifecycle", "--package-dir", "--project-dir", "--reports", "-h",
+    ),
+    ("mvn", "e2e"): (
+        "--agent", "--also-make", "--compose-file", "--failsafe-only",
+        "--help", "--log", "--maven-dir", "--module", "--native", "--no-wait",
+        "--profile", "--project-dir", "--system-prop", "--update-snapshots",
+        "--with-docker", "-h",
+    ),
+    ("mvn", "module"): (
+        "--agent", "--also-make", "--help", "--log", "--maven-dir",
+        "--module", "--native", "--profile", "--project-dir", "--system-prop",
+        "--update-snapshots", "-h",
+    ),
+    ("mvn", "regression"): (
+        "--agent", "--also-make", "--coverage-profile", "--cycle", "--goal",
+        "--help", "--log", "--maven-dir", "--module", "--native", "--profile",
+        "--project-dir", "--system-prop", "--update-snapshots", "-h",
+    ),
+    ("mvn", "unit"): (
+        "--agent", "--also-make", "--help", "--log", "--maven-dir",
+        "--module", "--native", "--profile", "--project-dir", "--system-prop",
+        "--test", "--update-snapshots", "-h",
+    ),
+    ("python", "regression"): (
+        "--agent", "--cov-source", "--coverage", "--cycle", "--help", "--log",
+        "--pattern", "--project-dir", "--python", "--reports", "--start-dir",
+        "-h",
+    ),
+}
 
 
 def _load_module(path, name):
@@ -124,61 +189,29 @@ TIER_VOCABULARY = _DECL.TIER_VOCABULARY
 DECLARED_CELLS = _DECL.DECLARED_CELLS
 
 
-# ── `develop`'s clients, materialised once ─────────────────────────────────
-
-_DEVELOP_DIR = None
-
-
-def _materialise_base_clients():
-    """Every `clients/*.py` as `develop` has it, laid out in one directory.
-
-    The whole directory, not the four files under comparison: a client loads
-    `_crucible_axi.py` from beside itself, so `develop`'s verb surface has to
-    be composed by `develop`'s own registrar or the comparison would measure
-    this branch's shared module wearing the old client."""
-    global _DEVELOP_DIR
-    subprocess.run(["git", "rev-parse", "--verify", BASE_REF], cwd=REPO_ROOT,
-                   check=True, capture_output=True, text=True)
-    listing = subprocess.run(
-        ["git", "ls-tree", "--name-only", BASE_REF, "clients/"],
-        cwd=REPO_ROOT, check=True, capture_output=True, text=True)
-    _DEVELOP_DIR = tempfile.mkdtemp(prefix="cr111-tier-base-clients-")
-    for entry in listing.stdout.splitlines():
-        if not entry.endswith(".py"):
-            continue
-        blob = subprocess.run(["git", "show", f"{BASE_REF}:{entry}"],
-                              cwd=REPO_ROOT, check=True, capture_output=True,
-                              text=True)
-        (Path(_DEVELOP_DIR) / Path(entry).name).write_text(blob.stdout)
-
-
 def setUpModule():
     _DECL.setUpModule()
-    _materialise_base_clients()
 
 
 def tearDownModule():
     _DECL.tearDownModule()
-    if _DEVELOP_DIR:
-        shutil.rmtree(_DEVELOP_DIR, ignore_errors=True)
 
 
 _PARSER_LOADS = {}
 
 
-def _root_parser(client, base):
+def _root_parser(client):
     """The client's ROOT argparse parser, captured at the moment it parses.
 
     `main()` builds the parser inline — there is no `build_parser()` seam in
     any client and inventing one would be production code this cycle may not
     write — so `parse_args` is spied on and the bound `self` kept. The verb is
     never dispatched: capturing the parser is the whole measurement."""
-    directory = Path(_DEVELOP_DIR) if base else CLIENTS_DIR
-    key = (client, base)
+    key = client
     if key in _PARSER_LOADS:
         return _PARSER_LOADS[key]
-    module = _load_module(directory / f"{client}-crucible.py",
-                          f"cr111_c9_{'base' if base else 'head'}_{client}")
+    module = _load_module(CLIENTS_DIR / f"{client}-crucible.py",
+                          f"cr111_c9_head_{client}")
     captured = {}
 
     def spy(self, args=None, namespace=None):
@@ -199,32 +232,28 @@ def _root_parser(client, base):
     return root
 
 
-def _verb_parsers(client, base):
-    root = _root_parser(client, base)
+def _verb_parsers(client):
+    root = _root_parser(client)
     for action in root._actions:
         if isinstance(action, argparse._SubParsersAction):
             return action.choices
     return {}
 
 
-def _option_strings(client, verb, base):
-    """The RESOLVED option set of one verb: every option string argparse itself
-    would match, `parents=` and `add_args=` already composed in."""
-    parser = _verb_parsers(client, base)[verb]
+def _option_strings(client, verb):
+    """The RESOLVED option set of one verb AS IT STANDS: every option string
+    argparse itself would match, `parents=` and `add_args=` already composed
+    in. The snapshot above was taken by this same reading of the pre-migration
+    clients, so the two sides of the comparison are measured alike."""
+    parser = _verb_parsers(client)[verb]
     return frozenset(option for action in parser._actions
                      for option in action.option_strings)
 
 
 def _migrated_tier_verbs():
-    """AC5's eight, DERIVED: "EVERY pre-existing verb whose name is already a
-    tier" — the subparser choices each client shipped on the base ref,
-    intersected with the six-value mirror."""
-    found = []
-    for path in sorted(Path(_DEVELOP_DIR).glob("*-crucible.py")):
-        client = path.name[: -len("-crucible.py")]
-        for verb in sorted(set(_verb_parsers(client, base=True)) & TIER_VOCABULARY):
-            found.append((client, verb))
-    return tuple(found)
+    """AC5's eight — "EVERY pre-existing verb whose name is already a tier",
+    read off the snapshot that records what those verbs were."""
+    return tuple(sorted(MIGRATED_VERB_OPTIONS))
 
 
 # ── AC2: each of the six values, on the wire ───────────────────────────────
@@ -436,16 +465,16 @@ class MigratedVerbFlagRetentionTest(unittest.TestCase):
     declared cells to accept their sibling's flags — but it may lose none.
     "a flag lost in the migration fails this AC"."""
 
-    def test_the_migrated_verbs_are_the_eight_the_base_ref_shipped(self):
-        """AC16's count, DERIVED — "Eight verbs across four clients; `rust` is
-        the only client with no collision"."""
+    def test_the_migrated_verbs_are_the_eight_the_snapshot_records(self):
+        """AC16's count — "Eight verbs across four clients; `rust` is the only
+        client with no collision"."""
         migrated = _migrated_tier_verbs()
         self.assertEqual(
             len(migrated), 8,
-            f"AC5 enumerated eight pre-existing tier-named verbs; the base ref "
-            f"`{BASE_REF}` ships {len(migrated)}: {list(migrated)!r}. If a "
-            f"ninth exists it must be compared too, and if one has vanished "
-            f"the migration dropped a whole verb.")
+            f"AC5 enumerated eight pre-existing tier-named verbs and the "
+            f"snapshot records {len(migrated)}: {list(migrated)!r}. "
+            f"`MIGRATED_VERB_OPTIONS` is a closed historical set — an entry "
+            f"added or dropped there rewrites what 'before' means.")
         self.assertEqual(
             sorted({client for client, _verb in migrated}),
             ["arduino", "bun", "mvn", "python"],
@@ -456,13 +485,13 @@ class MigratedVerbFlagRetentionTest(unittest.TestCase):
         losses = {}
         for client, verb in _migrated_tier_verbs():
             with self.subTest(client=client, verb=verb):
-                before = _option_strings(client, verb, base=True)
-                after = _option_strings(client, verb, base=False)
+                before = frozenset(MIGRATED_VERB_OPTIONS[(client, verb)])
+                after = _option_strings(client, verb)
                 self.assertTrue(
                     before,
-                    f"AC16 — {client} {verb}: the base ref's parser exposes no "
-                    f"options at all, so this comparison would pass against "
-                    f"anything")
+                    f"AC16 — {client} {verb}: the snapshot records no options "
+                    f"at all for this verb, so this comparison would pass "
+                    f"against anything")
                 lost = sorted(before - after)
                 if lost:
                     losses[f"{client} {verb}"] = lost
@@ -477,17 +506,18 @@ class MigratedVerbFlagRetentionTest(unittest.TestCase):
                     f"{sorted(before & after)!r}.")
         self.assertEqual(losses, {})
 
-    def test_the_verbs_the_base_ref_did_not_have_are_not_counted_as_migrated(self):
-        """The instrument's own bound. All six tier verbs exist in all five
-        clients NOW, so a derivation that read the working tree instead of the
-        base ref would report thirty 'migrated' verbs, twenty-two of which
-        never existed to lose a flag — and every comparison would be a
-        tautology."""
+    def test_the_verbs_that_did_not_exist_before_are_not_counted_as_migrated(self):
+        """The instrument's own bound, and the reason the snapshot replaced a
+        base ref. All six tier verbs exist in all five clients NOW, so a
+        "before" that reads the working tree — which is exactly what a base ref
+        BECOMES once the branch it names has merged — reports thirty 'migrated'
+        verbs, twenty-two of which never existed to lose a flag, and every
+        comparison above becomes a tautology."""
         migrated = set(_migrated_tier_verbs())
         here_now = {(client, verb)
                     for client in sorted(p.name[: -len("-crucible.py")]
                                          for p in CLIENTS_DIR.glob("*-crucible.py"))
-                    for verb in sorted(set(_verb_parsers(client, base=False))
+                    for verb in sorted(set(_verb_parsers(client))
                                        & TIER_VOCABULARY)}
         self.assertTrue(
             migrated < here_now,
@@ -496,7 +526,7 @@ class MigratedVerbFlagRetentionTest(unittest.TestCase):
             f"{sorted(migrated)!r} today={len(here_now)} cells")
         self.assertEqual(
             sorted(migrated - here_now), [],
-            "a verb that existed on the base ref and is absent today was not "
+            "a verb the snapshot records and that is absent today was not "
             "migrated, it was deleted")
 
 
