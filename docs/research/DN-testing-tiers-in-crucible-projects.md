@@ -118,22 +118,57 @@ A RED/GREEN cycle picks the tier its contract lives in. A cycle that only ever r
 tested a browser contract, and a cycle that runs `regression` for every edit is paying 400 s to
 learn what 18 s would have told it.
 
+## Decisions
+
+Recorded 2026-09-08 by the co-author, with the reasoning, for the user to override. A decision here
+is what the CRs below derive from; an open question is not implementable, which is why each of these
+had to be settled before CR-CRU-111 could be cut.
+
+- **D1 — per-tier VERBS, not a `--tier` flag** (settles Q1). `mvn-crucible.py` already exposes
+  `unit`/`module`/`e2e` as verbs, so verbs are the fleet's existing shape and a flag would leave
+  `regression` and `e2e` inconsistent with it. A tier is not a modifier of "run some tests" — it IS
+  the run's identity, and the AXI manifesto's self-explanatory requirement is served by six
+  discoverable verbs in `--help` rather than by one flag whose legal values a reader must find. Cost
+  accepted: the fleet verb-surface census (CR-CRU-075 §S2) moves, and that move is asserted rather
+  than absorbed.
+- **D2 — the verb set is the six tiers, uniformly** (settles Q2). `module` is exposed because the
+  server already accepts it and this repo already has its subject: nine files open a real SQLite
+  store on disk, which is a module boundary and not a unit. A stack that declares no target for a
+  tier answers a structured refusal naming the missing declaration — the tier existing and the
+  project having one are different facts, and conflating them is what let `cmd_test` claim `unit`
+  for everything.
+- **D3 — a mislabelled `unit` run WARNS, it is not refused** (settles Q3, closes the gap that the
+  DN's falsifiability claim was enforced by nothing). The client measures the run's wall time against
+  its CPU time and, when wall exceeds CPU by the stated factor, carries a structured warning in the
+  envelope naming both figures. Warning, not refusal: classification is the project's decision (see
+  the portability boundary), so the client reports the contradiction rather than vetoing it — but it
+  MUST report it, or `unit` means nothing as the suite grows.
+- **D4 — the declaration seam is per-stack convention, enumerated per client** (settles Q6). Each
+  client detects its own stack's idiom and no Crucible-specific config file is invented: bun/npm
+  `package.json` scripts, python `unittest`/`pytest` start-dirs, maven profiles, cargo
+  `--test`/features, arduino sketch directories. Convention is zero-config and idiomatic; a
+  stack-neutral declaration file would be a second description of the project's tests beside the
+  one its own toolchain already has. The consequence is a requirement PER CLIENT, not one
+  requirement about "the client" — five seams, five assertions.
+
+## How this DN decomposes
+
+The decomposition is the co-author's recommendation and lives here plus the queue and board; the
+sections above are the contract each CR implements.
+
+| DN section | CR | Carries |
+|---|---|---|
+| "What a tier is" · "Who classifies, and who drives" · D1–D4 | **CR-CRU-111** | the six verbs, the true tier on every run, the per-stack seam, the wall-vs-CPU warning |
+| "The gate contract" · STANDING DECISION 1 | **CR-CRU-112** | a gate over every declared suite, each ingesting through its own stack's client |
+| "What an agent is expected to run" | **CR-CRU-113** | the client TELLS an agent which target its cycle needs, so the table is executable rather than read |
+| Q4 (per-tier coverage) · Q5 (e2e ownership) | not yet filed | candidates; Q4 costs a second instrumented run, Q5 waits on 111 landing |
+| Q7 (mount cost) | not a CR | maintenance task — per-file behavioural change, no design surface |
+
 ## Open questions — for refinement
 
-These are deliberately unresolved; this DN is the place to settle them.
+Q1, Q2, Q3 and Q6 were settled as D1-D4 above. What remains is deliberately unresolved; the
+numbering is kept so the CRs' references stay valid.
 
-1. **`--tier` flag or per-tier verbs?** The fleet is inconsistent today: `mvn-crucible.py` exposes
-   `unit` / `module` / `e2e` as verbs; `bun-crucible.py` exposes neither and hardcodes the tier. A
-   flag is one surface for six values; verbs are discoverable in `--help` and match the existing
-   mvn precedent. Whichever wins should win FLEET-WIDE (CR-CRU-075 set that precedent for
-   `queue-file`).
-2. **Is `module` worth exposing at all?** Nine files here open a real SQLite store on disk — genuinely
-   `module` by the definition above, and currently `unit`. Adding the tier is honest; leaving it
-   folded into `integration` is simpler.
-3. **Does `unit` get a wall-vs-CPU assertion?** The corollary above is a real, cheap check
-   (`resource.getrusage(RUSAGE_CHILDREN)`), and it is the only assertion that keeps `unit` honest as
-   the suite grows. Should the client REFUSE a `unit` run whose wall time exceeds CPU by a stated
-   factor, or merely warn in the envelope?
 4. **Coverage per tier.** Coverage is currently a `regression --coverage` concern. Per-tier coverage
    would let a project see what its fast target actually protects — at the cost of a second
    instrumented run.

@@ -5,7 +5,9 @@
 - **Depends on**: 016, 075
 - **Status**: PENDING (0.2.0)
 - **Design reference**: `docs/research/DN-testing-tiers-in-crucible-projects.md` — "What a tier is",
-  "Who classifies, and who drives", open questions 1, 2, 3 and 6
+  "Who classifies, and who drives", and decisions **D1** (per-tier verbs), **D2** (the verb set is
+  the six tiers), **D3** (a mislabelled `unit` run warns) and **D4** (the declaration seam is
+  per-stack convention, enumerated per client)
 
 ## Context
 
@@ -24,17 +26,18 @@ default in `src/store.ts`.
 
 ## Scope
 
-### §S1 One way to name a tier, fleet-wide
+### §S1 Per-tier verbs, fleet-wide (DN D1, D2)
 
-The fleet gains ONE spelling for "which tier did this run belong to", chosen once and applied to
-every client that runs tests. The choice between a `--tier` flag and per-tier verbs is the user's
-(DN open question 1); whichever is chosen, `mvn-crucible.py`'s existing `unit`/`module`/`e2e` verbs
-and `bun-crucible.py`'s hardcoded tiers both end up expressed through it, and the shared
-registration lives in `clients/_crucible_axi.py` beside the other fleet-wide verb surfaces rather
-than being hand-rolled per client.
+Every client that runs tests exposes the tier as a VERB — the six values of `Tier` and no others —
+registered from one place in `clients/_crucible_axi.py` beside the other fleet-wide verb surfaces
+rather than hand-rolled per client. `mvn-crucible.py`'s existing `unit`/`module`/`e2e` verbs migrate
+onto that registration and keep their behaviour; `bun-crucible.py`'s hardcoded tiers stop being
+hardcoded.
 
-An unrecognised tier is a structured refusal, not a silent passthrough: the six values are the whole
-vocabulary and the server's own type is the source of that list.
+A tier the vocabulary does not contain is a structured refusal. A tier the vocabulary contains but
+the PROJECT has declared no target for is a DIFFERENT refusal, naming the missing declaration: the
+tier existing and the project having one are separate facts, and conflating them is what let
+`cmd_test` claim `unit` for everything.
 
 ### §S2 A targeted run stops claiming to be `unit`
 
@@ -42,15 +45,34 @@ vocabulary and the server's own type is the source of that list.
 caller names; absent a stated tier the run carries no tier and the server's own default applies,
 which is honest, rather than the client asserting a fact it cannot know from a file path.
 
-### §S3 The client drives a project-declared target
+### §S3 Each client drives its own stack's declaration seam (DN D4)
 
-A project declares its own target membership; the client runs it and tags it. For bun/npm the
-declaration seam is `package.json` scripts (`test:unit`, `test:integration`, …) — detected, not
-invented, and absent scripts the verb refuses with the missing script named rather than falling back
-to the whole suite. The client never classifies files: which file is which is the project's
-decision (DN, "the portability boundary").
+A project declares its own target membership in its own toolchain's idiom, and each client detects
+THAT idiom — no Crucible-specific config file is invented, because it would be a second description
+of the project's tests beside the one the toolchain already has. Per client:
 
-### §S4 The envelope states the tier it ingested
+| client | seam |
+|---|---|
+| `bun-crucible.py` | `package.json` scripts (`test:unit`, `test:integration`, …) |
+| `python-crucible.py` | `unittest`/`pytest` start-dirs (the existing `--start-dir`/`--pattern`) |
+| `mvn-crucible.py` | maven profiles |
+| `rust-crucible.py` | cargo `--test` targets / features |
+| `arduino-crucible.py` | sketch directories |
+
+Absent a declaration the verb refuses with the missing declaration named, and never falls back to
+the whole suite. The client never classifies files: which file is which is the project's decision
+(DN, "the portability boundary"). This is a requirement PER CLIENT, not one requirement about "the
+client" — five seams, five assertions.
+
+### §S4 A `unit` run that waits says so (DN D3)
+
+The client measures a run's wall time against its CPU time and, when wall exceeds CPU by the stated
+factor, carries a structured warning naming both figures. It does not refuse: classification is the
+project's decision, so the client reports the contradiction rather than vetoing it — but it must
+report it, or `unit` means nothing as a suite grows. This is the DN's falsifiability corollary made
+mechanical; without it the tier definitions are prose.
+
+### §S5 The envelope states the tier it ingested
 
 The AXI envelope names the tier of the run it just ingested, so an orchestrator reading the envelope
 knows what was covered without inspecting the board. Every exit path states it — success, failure,
@@ -58,10 +80,10 @@ zero-discovery and the compile-tier fallback alike.
 
 ## Acceptance criteria
 
-- **AC1** — the tier vocabulary the client accepts is exactly the six values of `Tier` in
-  `src/types.ts` (`unit`, `module`, `integration`, `e2e`, `regression`, `bdd`), asserted by driving
-  the client, not by reading its source. A seventh value is refused with `ok:false`, exit 1, a
-  `warnings[]` entry naming the offending value, and `help[]` listing the six.
+- **AC1** — each of the six `Tier` values of `src/types.ts` (`unit`, `module`, `integration`, `e2e`,
+  `regression`, `bdd`) is an invocable VERB, asserted by driving the client's own `--help` and then
+  the verb itself, not by reading source. A seventh name is `invalid choice` from argparse's own
+  refusal, and the six appear in the root help's choices group.
 - **AC2** — the tier a run is stamped with is the tier the caller stated, asserted on the POST body
   the client sends (`payload["tier"]`) for each of the six values.
 - **AC3** — `cmd_test` with no stated tier sends NO `tier` key. Asserted on the POST body: the key
@@ -73,9 +95,18 @@ zero-discovery and the compile-tier fallback alike.
   the five files rather than by a frozen list.
 - **AC5** — `mvn-crucible.py`'s `unit`, `module` and `e2e` verbs still run and still stamp their
   own tiers after the migration; their existing behaviour is preserved, asserted per verb.
-- **AC6** — a project-declared target is driven by name: with `test:integration` present in
-  `package.json`, the client runs it and stamps `integration`; with the script absent, the client
-  refuses with `ok:false`, exit 1, and `help[]` naming the missing script. Asserted for both cases.
+- **AC6** — a project-declared target is driven from the seam §S3 names, asserted for EACH of the
+  five clients against a fixture project carrying that stack's declaration: the declared target runs
+  and the run is stamped with the verb's tier. Five assertions, and the count of clients exercised
+  is itself asserted — "the client drives the seam" is satisfiable by one client and that is the
+  defect this AC exists to prevent.
+- **AC6a** — a tier whose target the project has NOT declared refuses with `ok:false`, exit 1, and
+  `help[]` naming the missing declaration for that stack (the `package.json` script, the start-dir,
+  the profile). Asserted per client, and it may never fall back to running the whole suite.
+- **AC6b** — a `unit` run whose wall time exceeds its CPU time by the stated factor carries a
+  structured warning naming both figures and the factor, with `ok` unchanged — the run is reported,
+  not refused. Asserted twice: once on a deliberately sleeping fixture (warning present) and once on
+  a CPU-bound fixture (warning absent), so the check cannot pass by always warning.
 - **AC7** — the AXI envelope carries the ingested tier on every exit path: success, a failing suite,
   zero-discovery, and the compile-tier fallback. Four assertions, one per path.
 - **AC8** — caller existence: a grep at VERIFY time returns ≥1 non-test caller of the shared tier
@@ -93,7 +124,7 @@ the only new mechanism; §S2 and §S4 are corrections to existing call sites.
 ## Risk
 
 The fleet-wide spelling is a one-way door: five clients teaching six values is expensive to respell
-later, which is why DN open question 1 is settled before this CR is cut rather than during it.
+later, which is why DN **D1** settles the spelling before this CR is cut rather than during it.
 
 Removing the `tier="unit"` default from `cmd_test` changes what the board records for targeted runs.
 Historical rows are untouched and stay `unit`; the change is forward-only, and the board's own
@@ -103,6 +134,7 @@ acceptable for a targeted run rather than assuming it.
 ## Non-goals
 
 - Classifying files into tiers. That is the project's decision, per the DN.
-- Per-tier coverage (DN open question 4) and the wall-vs-CPU assertion for `unit`
-  (open question 3) — both wait on the DN being settled.
+- Per-tier coverage (DN open question 4) and e2e ownership (open question 5) — both still open.
+  The wall-vs-CPU check is NOT deferred: DN **D3** settled it as a warning and it is §S4/AC6b of
+  this CR.
 - Changing what any existing test asserts.

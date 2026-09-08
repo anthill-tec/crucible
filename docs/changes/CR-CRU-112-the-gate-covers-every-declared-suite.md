@@ -5,7 +5,9 @@
 - **Depends on**: 047, 111
 - **Status**: PENDING (0.2.0)
 - **Design reference**: `docs/research/DN-testing-tiers-in-crucible-projects.md` — "The gate
-  contract", STANDING DECISION 1, open question 5
+  contract" (every clause: declared suites, per-stack ingest, `regression` means the union, additive
+  never exclusionary, the guarded partition), STANDING DECISION 1, and decision **D4** for the
+  declaration seam this CR reads
 
 ## Context
 
