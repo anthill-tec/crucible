@@ -4131,6 +4131,20 @@ GATE_SUITE_UNDISPATCHABLE_CODE = "gate-suite-undispatchable"
 # with it.
 GATE_SUITE_UNRUNNABLE_CODE = "gate-suite-unrunnable"
 
+# The OSError shapes a PROCESS LAUNCH raises, and the ONLY ones AC3's "the
+# runner is not there" produces: `Popen` re-raises the child's failed `exec` as
+# one of these three, and a run that never started is the whole content of
+# `gate-suite-unrunnable`.
+#
+# It is a closed list rather than a bare `OSError` because `OSError` is not the
+# spawn's alone. `urllib.error.URLError` is an `OSError` SUBCLASS, and so is
+# `TimeoutError`: a board that goes unreachable during a run's INGEST raises
+# one of those out of the run body, LONG after the suite has run to completion.
+# Reading that as "could NOT be run" would have the gate tell a reader a suite
+# that ran and passed never ran at all — the one misreport a gate must not
+# make, because a reader cannot tell it from a real one.
+SPAWN_FAILURES = (FileNotFoundError, NotADirectoryError, PermissionError)
+
 
 def declared_target_tier(surface, target):
     """The `<tier>` slot's value in a declared target's NAME, or None when the
@@ -4202,7 +4216,15 @@ def _captured_suite_run(call):
     lets that propagate reports NOTHING — no envelope, no verdict, and not a
     word about the suites it could have run. The `OSError` is caught and
     handed back so the gate can name the suite and the reason; there is then no
-    exit code and no document, which is what `code=None` says."""
+    exit code and no document, which is what `code=None` says.
+
+    The catch stays WIDE and the reading is narrow. It has to stay wide: an
+    error the gate does not catch here kills the composition, which is the very
+    defect AC3 exists to close. But `call()` is a whole run — spawn, collect,
+    ingest — so an `OSError` out of it is not evidence the suite failed to
+    START; the board going unreachable at the ingest raises one too. Deciding
+    WHICH failure this was belongs to `_run_outcome`, once, for this path and
+    the dispatched one alike (`SPAWN_FAILURES`)."""
     buffer = io.StringIO()
     try:
         with contextlib.redirect_stdout(buffer):
@@ -4272,9 +4294,19 @@ def _run_outcome(code, counts, error):
     warning detail)`, the detail None for a run that simply passed.
 
     One reading for the whole-suite run and for a dispatched suite, so the two
-    cannot report the same condition differently."""
-    if error is not None:
+    cannot report the same condition differently.
+
+    A raised error is CLASSIFIED and never taken at face value. Only a
+    `SPAWN_FAILURES` shape means the run never happened; every other `OSError`
+    that reaches here — an unreachable board during the INGEST above all — was
+    raised by a suite that HAD already run, and it is reported as the thing it
+    actually is: a run with no counts to show for it."""
+    if isinstance(error, SPAWN_FAILURES):
         return False, GATE_SUITE_UNRUNNABLE_CODE, f"could NOT be run: {error}"
+    if error is not None:
+        return False, GATE_SUITE_UNREPORTED_CODE, (
+            f"RAN, and then failed before it could report what it ran, so the "
+            f"gate cannot say what it covered: {error}")
     if counts is None:
         return False, GATE_SUITE_UNREPORTED_CODE, (
             f"reported no run counts (exit {code}), so the gate cannot say "

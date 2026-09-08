@@ -119,7 +119,9 @@ ESCALATIONS (full text in the report):
 
 TIER: `integration` by the DN's definition — the drives here open a TCP
 listener and spawn real client processes. Reported under the python
-`tests/client` suite.
+`tests/client` suite. The one exception is the last class, whose two methods
+are `unit` — they ask the shared module what a raised error MEANS and take no
+process, socket, service or clock; the class says so itself.
 
 Invocation:
     python3 clients/python-crucible.py test --tests tests.client.test_gate_suite_outcome_reporting --agent <id>
@@ -131,6 +133,7 @@ import importlib.util
 import json
 import os
 import unittest
+import urllib.error
 from pathlib import Path
 
 TESTS_CLIENT_DIR = Path(__file__).resolve().parent
@@ -156,6 +159,11 @@ FAKE_BUN = _GATE.FAKE_BUN
 CHILD_PYTHON = _GATE.CHILD_PYTHON
 _attributed_counts = _GATE._attributed_counts
 _text = _GATE._text
+
+# The shared module itself, for the one class below that asks it what an error
+# MEANS rather than driving a gate end to end. Loaded by the harness's own
+# `AXI_PATH` so this file names the path in no second place.
+_AXI = _load_module(_GATE.AXI_PATH, "cr112_c5_axi_under_test")
 
 
 def setUpModule():
@@ -640,6 +648,90 @@ class SingleSuiteProjectGateIsUnchangedTest(_OutcomeCase):
             "test` it replaced, so the same project gates fewer files than it "
             "did before the composition."
             % (PRE_COMPOSITION_REF, PRE_COMPOSITION_STEPS, steps))
+
+
+# ── AC3, the OTHER half of "could NOT be run": what an error MEANS ──────
+
+
+class RunOutcomeTellsASpawnFailureFromAFailedIngestTest(unittest.TestCase):
+    """GREEN — both methods, and the defect they defend against was REAL: the
+    gate read every `OSError` out of a locally-run suite as "the runner is not
+    there". `urllib.error.URLError` is an `OSError` subclass and so is
+    `TimeoutError`, so a board that went unreachable during the whole-suite
+    run's INGEST — after the suite had run to completion — was reported as
+    `gate-suite-unrunnable`, "could NOT be run". A reader cannot tell that from
+    a real one, which makes it the one misreport a gate must not make.
+
+    Falsifiable, and MEASURED against the build that had the defect —
+    `git show 5ecb200:clients/_crucible_axi.py`, this branch's commit before
+    the fix (`develop` has no `_captured_suite_run` at all; the composition is
+    this CR's own). Driven through the same seam, that build answers
+    `gate-suite-unrunnable`/"could NOT be run" for ALL FOUR errors below,
+    including the missing runner; this one answers it for the missing runner
+    alone. The second method fails there and passes here.
+
+    The pair is the point. Asserting only that a failed ingest is not
+    `unrunnable` would pass on a build that answered `unrunnable` for nothing
+    at all, so the spawn shape AC3 is actually about is asserted beside it.
+
+    TIER: `unit` by the DN's definition, unlike the rest of this file — these
+    two drive two pure functions of the shared module with no process, no
+    socket, no live service and no wait on the clock. They are reported under
+    the same declared python `tests/client` suite, which is that suite's union,
+    not a tier claim."""
+
+    def outcome_of_a_run_that_raises(self, error):
+        """What the gate SAYS about a locally-run suite whose run body raised
+        `error` — composed exactly as `run_gate_suites` composes it, so the
+        classification is exercised through the seam that uses it and never
+        by calling the classifier with a hand-made argument tuple."""
+        def raising_run():
+            raise error
+
+        code, out, caught = _AXI._captured_suite_run(raising_run)
+        self.assertIs(
+            caught, error,
+            "the gate's local-run guard must hand the raised error back "
+            "rather than let it kill the composition; it returned %r"
+            % (caught,))
+        counts = _AXI._suite_counts(_AXI._suite_envelope(out))
+        return _AXI._run_outcome(code, counts, caught)
+
+    def test_a_local_suite_whose_runner_is_not_there_is_reported_as_unrunnable(self):
+        ok, warning, detail = self.outcome_of_a_run_that_raises(
+            FileNotFoundError(2, "No such file or directory",
+                              MISSING_LOCAL_RUNNER))
+        self.assertFalse(
+            ok, "a suite whose runner is missing may not report a pass")
+        self.assertEqual(
+            warning, _AXI.GATE_SUITE_UNRUNNABLE_CODE,
+            "a run that never started must be reported as %r, not %r"
+            % (_AXI.GATE_SUITE_UNRUNNABLE_CODE, warning))
+        self.assertIn(
+            MISSING_LOCAL_RUNNER, detail,
+            "the warning has to NAME what was missing, not merely refuse: "
+            "detail=%r" % (detail,))
+
+    def test_a_board_lost_at_the_ingest_is_not_reported_as_a_suite_that_never_ran(self):
+        for error in (urllib.error.URLError("connection refused"),
+                      TimeoutError("the read timed out"),
+                      ConnectionResetError(104, "Connection reset by peer")):
+            with self.subTest(error=type(error).__name__):
+                ok, warning, detail = self.outcome_of_a_run_that_raises(error)
+                self.assertFalse(
+                    ok, "a run the gate has no counts from may not report a "
+                        "pass either")
+                self.assertNotEqual(
+                    warning, _AXI.GATE_SUITE_UNRUNNABLE_CODE,
+                    "%s is raised AFTER the suite has run — reporting it as %r "
+                    "tells a reader a suite that ran to completion never ran. "
+                    "detail=%r"
+                    % (type(error).__name__, warning, detail))
+                self.assertEqual(
+                    warning, _AXI.GATE_SUITE_UNREPORTED_CODE,
+                    "a run that happened and then reported nothing is %r; the "
+                    "gate answered %r"
+                    % (_AXI.GATE_SUITE_UNREPORTED_CODE, warning))
 
 
 if __name__ == "__main__":
