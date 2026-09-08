@@ -129,7 +129,12 @@ carries precisely so a silently shrinking suite is visible — this CR's own the
 was re-stamped `unit` where it had been `regression`, and the invocation became `bun run test:unit`,
 a strictly narrower collection. A gate that covers LESS than it did is the opposite of this CR.
 
-The rule, which the DN's gate contract already stated and the composition failed to honour:
+The rule. It is NOT the DN clause of the same name, and the distinction matters because a reader who
+follows the citation would find a different rule (VERIFY, cycle 391): the DN's "additive, never
+exclusionary" (`DN-testing-tiers-in-crucible-projects.md`, the gate contract) is about DISCOVERY
+exclusions — no `pathIgnorePatterns`, which is this CR's §S3/AC6. What follows is a NEW clause this
+CR adds, in the same spirit but about a different thing: the union's BASE. It belongs to the gate
+contract and should be read into it:
 
 - **the invoking stack's own whole-suite regression ALWAYS runs**, unchanged — same argv, same
   `regression` tier, same `run` block including `files`;
