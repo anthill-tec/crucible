@@ -1200,10 +1200,50 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // 672 -> 687 (then CR-CRU-107 687 -> 691). The `develop` baselines are
 // UNCHANGED at 512/378/601 and stay the floors — a floor never moves for a
 // re-pin.
+// UPDATED 2026-09-08 by CR-CRU-111 §S6/AC9 — the ONE deliberate re-record
+// this CR planned for at gap analysis. `clients/` HEAD moves 694 -> 747,
+// +53, and `src/` and `public/` do not move at all: this CR edits nothing
+// under `src/` or `public/`, and both re-measure at the recorded 563 and 435.
+//
+// The re-pin is ONE cycle of its own, and that is the whole reason it exists
+// as a cycle: this CR adds provenance prose to all five `*-crucible.py`
+// clients AND to the shared `_crucible_axi.py`, so the equality pin
+// necessarily moved in every one of the five implementation cycles
+// (377-381). Re-recording it once at the END, after those cycles are
+// committed, costs one approval instead of five.
+//
+// `clients/` 694 -> 747. The +53 decomposes exactly into six per-file deltas,
+// with the seventh file flat:
+//   `clients/rust-crucible.py`     111 -> 122  (+11)
+//   `clients/python-crucible.py`   106 -> 116  (+10)
+//   `clients/mvn-crucible.py`      119 -> 129  (+10)
+//   `clients/_crucible_axi.py`     132 -> 140   (+8)
+//   `clients/bun-crucible.py`      130 -> 137   (+7)
+//   `clients/arduino-crucible.py`   95 -> 102   (+7)
+//   `clients/toon.py`                1 ->   1   (+0)
+// That shape is the one the CR predicted: the five clients each gain the
+// prose of the tier VERBS §S1 added plus the modality and envelope-tier prose
+// of §S3-§S5, and the shared module gains the tier registrar's own.
+// `clients/toon.py` is a pure serializer this CR never touched.
+//
+// Every one of the +53 is PROSE, and that is measured rather than asserted:
+// AC3a's checker ("no CR literal sits at a live-code position in any client")
+// passes over the same working tree in the same run, so no added citation
+// sits in a string literal — each is a `#` comment or a docstring line.
+//
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show develop:<path>`, file by file, at the END of the CR —
+// after all five implementation cycles are committed, so the figure is final
+// rather than re-recorded twice.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin moves, as
+// CR-CRU-094 re-recorded `src/` 550 -> 556 and 556 -> 560, CR-CRU-075
+// `clients/` 672 -> 687 and CR-CRU-107 687 -> 691. The `develop` baselines
+// are UNCHANGED at 512/378/601 and stay the floors — a floor never moves for
+// a re-pin, least of all for the largest re-pin the table has recorded.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 563 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 694 },
+  clients: { exts: [".py"], develop: 601, head: 747 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
