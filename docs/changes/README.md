@@ -117,7 +117,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact.md) | one published multi-track fact | patch | COMPLETED (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | COMPLETED (0.2.0) | 097 | 5 (0.2.0) |
-| [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | PENDING (0.2.0) | 016, 075 | 5 (0.2.0) |
+| [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | COMPLETED (0.2.0) | 016, 075 | 5 (0.2.0) |
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | PENDING (0.2.0) | 047, 111 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
@@ -527,6 +527,38 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (29×)**, now 92% CPU-bound. Two classifier defects were found by measurement, not review: a greedy
   regex read a six-second wait as `0`, and `startServer` (the real production server) was not a
   marker — those two files were 27.8 s of the remaining 29 s. Both pinned as tests.
+- ✅ **2026-09-08 — CR-CRU-111 SHIPPED in 11 cycles, and the CR was wrong seven times before it was
+  right.** Every client now exposes the six `Tier` values as VERBS from one shared registrar
+  (`add_tier_verbs`), runs each tier through its own stack's split where one exists, DETECTS and runs
+  a project-declared target where one does not, refuses by naming exactly what to declare, stops
+  stamping tiers it did not earn, warns when a `unit` run spends its time waiting, and states the
+  ingested tier in the envelope. Gate: **2191 pass / 0 fail** (83.3% lines / 86.8% funcs); python
+  client suite **1615 / 0** (grew from 1445); `git diff` over `src/` and `public/` **empty across all
+  24 commits** — the server interface was read, never redefined (AC10).
+  **What the process actually caught, because this is the record worth keeping.** Five REDs and two
+  VERIFYs escalated instead of guessing, and it corrected the spec seven times:
+  (1) my §S2 census scanned `tier=` KEYWORD literals only, so it read arduino as "stamps nothing"
+  when that client stamps on every path — AC13's whole premise was false and the "its help lies"
+  inference with it; (2) AC5 was written as if only mvn owned tier-named verbs — there were EIGHT
+  across FOUR clients; (3) AC10 demanded clients read `src/types.ts` at runtime, which no client does
+  and an installed wheel cannot; (4) AC12 cited a DN mapping the DN does not contain; (5) rust's
+  `--lib`/`--test` selectors did not exist and had to be BUILT; (6) AC2 was unassertable because
+  `bdd` was wired nowhere; and (7) the largest — **§S3's declaration DETECTION was never built**, so
+  18 of 30 cells refused unconditionally and told users to declare targets that changed nothing when
+  declared. That last one was found by VERIFY, not by the cycles that shipped it, and it cost three
+  more cycles (§S6, ACs 14-16). The final BLOCKING find was sharper still: rust's declared cells were
+  reachable-past only because the TEST FIXTURE hand-wrote the JUnit report the help never told anyone
+  to configure — nextest emits one only with a `[profile.<tier>.junit]` sub-table. The fixture was
+  completing an incomplete instruction, which is the exact defect §S6 exists to remove.
+  **Corrected figure for future baselines:** the fleet carries **10** literal tier sites (not the 8
+  the cycles reported), all EARNED, zero unearned — measured twice, independently, at re-VERIFY.
+  **Two candidate CRs recorded, neither in scope here:** (a) the tripwire's `expect()`-message
+  exemption is JS-only because CR-CRU-109 scoped it on the premise that "no client test writes one" —
+  cycle 377 falsified that, so Python's `unittest` msg argument is now a real gap, and closing it
+  needs the span rules designed deliberately with planted fixtures rather than bolted on; (b) python's
+  zero-discovery branch (CR-CRU-039) is asserted only against a synthetic capture and is unreachable
+  with the shipped xmlrunner — a path nobody has seen run. Pre-existing on `develop`, confirmed not
+  caused by this CR.
 - ✅ **2026-09-08 — CR-CRU-110 SHIPPED, and the mechanism is named rather than worked around.**
   §S1 was a bisection, not a build, and it ended somewhere none of the three prior readings
   predicted: after a file drives Chromium through playwright in the same bun process, ONE child of
