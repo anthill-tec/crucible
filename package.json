@@ -22,6 +22,10 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:unit": "bun scripts/run-test-target.ts unit",
+    "test:integration": "bun scripts/run-test-target.ts integration",
+    "test:client": "bun scripts/run-test-target.ts client",
+    "test:regression": "bun scripts/run-test-target.ts regression",
     "test:e2e": "bunx bddgen && bunx playwright test",
     "start": "bun run src/server.ts"
   },

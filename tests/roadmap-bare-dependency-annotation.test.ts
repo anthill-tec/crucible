@@ -51,6 +51,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as AppLogic from "../public/app-logic.mjs";
 import { REPO_ROOT, jsUncommented, listFiles } from "./helpers/source-scan";
+import { settleDom } from "./helpers/dom-settle";
 
 const VAN_SRC = readFileSync(join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"), "utf8");
 const VAN_X_SRC = readFileSync(join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"), "utf8");
@@ -408,11 +409,7 @@ async function mountApp(queue: QueueFixture[]): Promise<void> {
  *  test (and the strip's own measure tick) — the sibling roadmap suites tick
  *  the real clock for the same reason. */
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 20);
-    await promise;
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

@@ -53,6 +53,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { workspaceTabs } from "../public/app-logic.mjs";
 import type { WorkspaceTab } from "../public/app-logic.mjs";
+import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -174,11 +175,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
  * mechanism as every sibling shell test (tests/roadmap-pane.test.ts).
  */
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 20);
-    await promise;
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {
