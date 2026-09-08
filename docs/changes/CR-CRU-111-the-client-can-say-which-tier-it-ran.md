@@ -152,6 +152,41 @@ target reads **1.09x** (17.8 s wall, 16.3 s CPU). 2x therefore sits ~1.8x above 
 and ~19x below a sleeping one. Note the asymmetry deliberately: `RUSAGE_CHILDREN` sums CPU across
 cores, so a parallel runner reads BELOW 1x and can never false-positive.
 
+### §S6 A declared target is DETECTED and RUN, not merely demanded
+
+**Added after VERIFY, because the CR promised this mechanism and did not build it.** §S3 says a tier
+without a toolchain split "requires a project declaration", and the Estimated size named "§S3's
+script detection" as this CR's one genuinely new mechanism. What shipped was the REFUSAL half only:
+every client's `funcs` map is a static literal, nothing reads a declaration, and so **18 of the 30
+cells refuse unconditionally** — including cells whose target the project HAS declared. Measured at
+VERIFY: with `"test:unit": "bun test tests/unit"` present in `package.json`, `bun-crucible.py unit`
+still answers `ok:false — declare this stack's unit target … then re-run`. An instruction that
+changes nothing when followed is worse than no instruction, and a client that refuses work it could
+do is the same dishonesty this CR exists to remove — merely pointed the other way.
+
+So each stack DETECTS its own declaration, at the surface §S3 already names for it, and runs it:
+
+| client | reads | runs |
+|---|---|---|
+| `bun` | a `package.json` script named for the tier (`test:unit`, `test:integration`, …) | that script |
+| `python` | a per-tier discovery declaration (start-dir/pattern) | that discovery |
+| `mvn` | a profile in `pom.xml` bound to the tier | maven under that profile |
+| `rust` | a profile in `.config/nextest.toml` named for the tier | nextest under that profile |
+| `arduino` | a native-host `make` target named for the tier | that target |
+
+The refusal survives, unchanged in shape, for the case it was written for: no declaration present.
+What changes is that it is now REACHABLE-PAST — following its instruction produces a run. The tier
+that run reports is the verb's own, so §S2's rule holds without exception, and a detected declaration
+is the project's classification decision being honoured, never the client classifying (DN, "the
+portability boundary").
+
+Two consequences are requirements, not side effects: **rust's `regression` cell is wired** onto the
+workspace-regression body it already has (`_regression_ingest_run` posts `tier="regression"` today,
+so refusing it was the client declining work it demonstrably does), and **a gate verb inherits the
+tier of the run it drives** — `arduino cmd_pre_merge_gate` states `regression` because it runs the
+full native regression suite. Classification is by the tier PASSED to the run, never by the enclosing
+function's name.
+
 ### §S5 The envelope states the tier it ingested
 
 The AXI envelope names the tier of the run it just ingested, so an orchestrator reading the envelope
@@ -168,6 +203,13 @@ zero-discovery and the compile-tier fallback alike.
   refusal, and the six appear in each root help's choices group.
 - **AC2** — the tier a run is stamped with is the tier the caller stated, asserted on the POST body
   the client sends (`payload["tier"]`) for each of the six values.
+  **This AC was found UNASSERTED and UNSATISFIABLE at VERIFY, and the reason matters more than the
+  gap.** No test referenced AC2 at all, and only five of the six values could be observed on the
+  wire, because `bdd` is absent from every client's `funcs` map — so no invocation could produce
+  `"tier": "bdd"`. The sixth value is not a labelling oversight: it is the visible end of the missing
+  half of §S3 (see §S6). Once a declared target can be DETECTED and run, `bdd` becomes producible
+  like any other declared cell, and AC2 is asserted against a fixture project that declares one — six
+  values, on the wire, per stated tier.
 - **AC3** — a verb with no stated tier sends NO `tier` key: asserted on the POST body (the key is
   absent, not `"unit"`) at EACH of the eight unearned call sites §S2 enumerates — `cmd_test` in bun
   (:1065, :1089), mvn (:1270, :1276), python (:686), rust (:1085), and `cmd_auto_ingest` in bun
@@ -228,7 +270,11 @@ zero-discovery and the compile-tier fallback alike.
   mirror AC10 forbids. `clients/_crucible_axi.py` owns them: a `Tier` value when a tier was
   ingested, `ENVELOPE_TIER_UNSTATED` when the client sent none (honest after AC3 — the client stated
   nothing and the server applied its own default; the envelope must not invent a tier, nor surface a
-  bare `None`), and `ENVELOPE_TIER_COMPILE` for a compile ingest, which is not a test tier (AC13a).
+  bare `None`), `ENVELOPE_TIER_COMPILE` for a compile ingest, which is not a test tier (AC13a), and
+  **`ENVELOPE_TIER_NONE`** for a verb that ingested nothing at all — the refusal, the no-report exits,
+  and every non-ingesting verb. That fourth value was shipped by cycle 381 and is ratified here at
+  VERIFY's prompting: a positive claim of nothing beats a null, and since a consumer matches on this
+  set, the set must be written down completely.
   The `tier-run-undeclared` refusal (§S3) ingested nothing and must claim nothing; the no-report
   exits bun and arduino each have are the same case. Neither is one of the four paths.
   **Per-client path reality, derived at RED rather than assumed:** all five clients have success and
@@ -301,6 +347,37 @@ zero-discovery and the compile-tier fallback alike.
   why the rule must be fleet-wide rather than one example: an earned verb name does not make a
   COMPILE event a test run. Asserted for every client that has a compile path; arduino's is already
   clean and is pinned to stay clean.
+
+- **AC14** — a DECLARED target that the project HAS declared RUNS, per stack, asserted against a
+  fixture project of that stack: bun reads a `package.json` script, python a per-tier discovery
+  declaration, mvn a `pom.xml` profile, rust a `.config/nextest.toml` profile, arduino a native-host
+  `make` target. Five assertions and the count asserted. Each asserts three things together, because
+  any one alone is passable while broken: the declared command is what the client invoked, the run is
+  ingested, and the POST body carries the VERB's tier.
+- **AC14a** — the refusal is REACHABLE-PAST: for each stack, the same cell that refuses with no
+  declaration RUNS once the declaration named in that refusal's `help[]` is added, and nothing else
+  about the invocation changes. Asserted as a pair per stack — refuse, declare exactly what the help
+  said, run — because "the refusal names a surface" (AC6a) is satisfied by naming a surface that does
+  nothing, which is what shipped.
+- **AC14b** — a refusal never names a flag its own verb rejects. Measured at VERIFY:
+  `python-crucible.py unit --start-dir … --pattern …` exits 2 with `unrecognized arguments` while the
+  refusal instructs exactly that. Asserted per stack by driving the instruction the help gives.
+- **AC14c** — rust's `regression` cell runs its existing workspace-regression body rather than
+  refusing, and `bdd` is producible on at least one stack via a declared target, which is what makes
+  AC2's sixth value assertable.
+- **AC15** — the AC3 census guard sees EVERY spelling a tier can be stated in: keyword
+  (`tier="unit"`), positional (`_run_native_tests(args, "test", "unit", …)`), dict key
+  (`"tier": "unit"`) and subscript (`payload["tier"] = …`). The instrument's own blindness is
+  asserted against: a planted unearned stamp in EACH of the four spellings must make the guard fail.
+  This is the same defect twice — §S2's census read arduino as stamping nothing for exactly this
+  reason — so the guard that enforces the rule may not repeat the mistake the rule was written from.
+  Classification is by the tier PASSED to the run, never by the enclosing function's name, so a gate
+  verb inherits the tier of the run it drives (`arduino cmd_pre_merge_gate` → `regression`).
+- **AC16** — AC5's flag retention is asserted for all EIGHT migrated verbs, not four, by comparing
+  each verb's resolved argparse option set before and after (`git show develop:<file>`) rather than by
+  driving a chosen flag. VERIFY measured 0 of 8 lost anything, so this AC pins a property that holds
+  today; it exists because four of the eight were unasserted and a later migration would not be
+  caught.
 
 ## Estimated size
 
