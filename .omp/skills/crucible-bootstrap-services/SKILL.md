@@ -16,6 +16,19 @@ curl -s http://127.0.0.1:3849/api/v2/health   # {"ok":true,"status":"healthy",..
 ```
 Plain `bun run` (no `--watch`); restart after every merge to develop so it serves the merged code.
 
+## 1b. CDP relay (`:9224`) — restore it BEFORE the tabs
+
+```
+ss -ltnp | grep 9224                     # is the relay listening?
+hub start name=omp-relay application=omp args=[browser-relay, serve] ready.port=9224
+curl -s http://127.0.0.1:9224/json/list  # the user's tabs, as JSON
+```
+The relay is a bootstrap service and it DIES between runs — after an omp restart it is absent from
+`hub ps` and nothing listens on 9224, and step 4 then silently degrades to driving the user's
+visible tab. Default grouping is what puts your tabs in Chrome's **omp** group — never
+`--no-group`. The extension half is the user's: if `/json/list` answers but control fails, say so
+and wait; never cold-start Chrome, and never `browser-relay install` behind the user's back.
+
 ## 2. Orchestrator registration
 
 ```
@@ -31,28 +44,60 @@ npx -y lavish-axi .lavish/crucible-workflow-flowchart.html # design authority fo
 ```
 Take the printed `url:` of each session. Do NOT rely on Lavish's own browser open — the workstation default is Zen, not Chrome. If a session was ended from the browser, `lavish-axi` refuses; pass `--reopen` only because bootstrap needs the surfaces back.
 
-## 4. Chrome tabs under the omp group (relay)
+## 4. Chrome tabs — CREATE your own, NEVER navigate the user's
 
-The user's visual contract: the three project tabs sit in Chrome's **omp** tab group, which only happens while the omp relay holds them. In `eval` (JS):
+**The hazard that broke this on 2026-09-08:** with `app: { relay: true }`, passing `url`
+**navigates the adopted tab**, and with no `target` the adopted tab is the **user's visible tab**.
+`browser.open({ name, url, app: { relay: true } })` — the pattern this section used to prescribe —
+hijacked the user's `claude.ai` tab twice: total page count stayed at 30 while three tabs were
+"opened", and all three handles collapsed onto one URL. **Never pass `url` to `browser.open`
+against the user's Chrome.** `/json/new` is 405 on the relay, so Puppeteer `newPage()` is the ONLY
+creation path. In `eval` (JS):
 
 ```js
-const specs = [
-  ["storyboard", "session/<storyboard-session-id>", "<storyboard url>"],
-  ["flowchart",  "session/<flowchart-session-id>",  "<flowchart url>"],
-  ["board",      "127.0.0.1:3849/",                 "http://127.0.0.1:3849/"],
-];
-const list = await fetch("http://127.0.0.1:9224/json/list").then(r => r.json());
-for (const [name, target, url] of specs) {
-  const exists = list.some(t => t.type === "page" && t.url.includes(target));
-  await browser.open(exists
-    ? { name, app: { relay: true, target } }        // adopt the existing tab
-    : { name, url, app: { relay: true } });        // open a new managed tab
+const snap = async () => (await fetch("http://127.0.0.1:9224/json/list").then(r => r.json()))
+  .filter(t => t.type === "page").map(t => t.url);
+
+await browser.close({ all: true });   // 1. drop stale handles FIRST — a dead handle falls back to the visible tab
+const before = await snap();          // 2. baseline of the USER's tabs
+
+// 3. read-only anchor: `target` and NO `url` => attaches, navigates nothing
+const anchor = await browser.open({
+  name: "anchor",
+  app: { relay: true, target: before.find(u => u.includes("status.claude.com")) ?? before[0] },
+});
+
+// 4. CREATE each tab through the anchor's Puppeteer connection
+for (const url of [boardUrl, storyboardUrl, flowchartUrl]) {
+  await anchor.run(async ({ page }, target) => {
+    const p = await page.browser().newPage();
+    await p.goto(target, { waitUntil: "domcontentloaded" });
+  }, { args: [url] });
 }
+
+// 5. attach handles by unique target (still NO `url`) — marks them controllable, so the relay
+//    gathers them into Chrome's "omp" group
+for (const [name, target] of [
+  ["board", "127.0.0.1:3849/"],
+  ["storyboard", "session/<storyboard-session-id>"],
+  ["flowchart", "session/<flowchart-session-id>"],
+]) await browser.open({ name, app: { relay: true, target } });
+await browser.close({ name: "anchor" });
+
+const after = await snap();           // 6. PROVE isolation before reporting
+// after.length - before.length === 3   &&   before.filter(u => !after.includes(u)).length === 0
 ```
-- `target` goes INSIDE `app` — a top-level `target` is ignored and the visible tab is adopted instead.
-- Check `/json/list` first so nothing is opened twice.
-- **Keep the handles for the whole session.** `browser.close({ all: true })` releases them and pulls the tabs out of the omp group. Release only at `/shutdown`.
-- Never `xdg-open`, never `google-chrome-stable <url>` from bash, never chrome-devtools-axi (cold-starts its own Chrome), never a supervised Chrome via hub.
+- **Verify by delta, never by assertion.** `+3` pages AND zero baseline URLs lost. A flat page
+  count means you are navigating the user's tabs, not creating your own — stop immediately.
+- Also assert every handle is bound to a distinct URL and none of them is a baseline URL. Three
+  handles reading the same URL is the hijack signature.
+- **Keep the handles for the whole session**; release only at `/shutdown`.
+- Never `xdg-open`, never `google-chrome-stable <url>` from bash, never chrome-devtools-axi
+  (cold-starts its own Chrome), never a supervised Chrome via hub.
+- If the user says stop, **STOP**. Do not restart the relay verbose and retry — that turned one
+  hijacked tab into two.
+- If the user closes your tabs or disconnects the relay mid-session, redo this whole sequence from
+  step 1; stale handles are the danger, not the closed tabs.
 
 ## 5. One storyboard poll
 
@@ -104,11 +149,14 @@ python3 clients/python-crucible.py unregister --agent vidushi
 ```
 Must run while the board is still up.
 
-## 5. Board server — LAST
+## 5. Board server + relay — LAST
 
 ```
 hub stop name=crucible-board
+hub stop name=omp-relay          # only if THIS session started it
 ```
-State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows it exited and `:3849` answers nothing.
+State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exited, `:3849` answers
+nothing, and 9224 has no listener. The relay is stopped AFTER the tabs are closed — closing a tab
+needs the relay alive.
 
 Then the shutdown report names each of the five as down/closed, with the evidence (`json/list` count, `hub ps` line).
