@@ -73,9 +73,21 @@ re-reading of an existing verb only in its OUTCOME; the mechanism is the declara
 **`test:e2e` is DECLARED and deliberately OUTSIDE the gate.** The repo declares a fifth script
 (`bunx bddgen && bunx playwright test`). Read literally, "the gate covers every declared suite" would
 drag it in, while this CR's own non-goals defer e2e ownership to DN open question 5. Both cannot
-hold, so the declaration carries the answer explicitly: a declared target states whether the GATE
-covers it, and `test:e2e` is declared OUT with that question cited. An omission by silence would
-leave the next reader unable to tell a decision from an oversight.
+hold, so the answer is stated explicitly rather than omitted — an omission by silence leaves the next
+reader unable to tell a decision from an oversight.
+
+**Gate coverage is a property of the TIER, not a per-project flag — ruled after cycle 388's RED
+showed a `package.json` script table cannot carry one.** `TIER_MEANINGS` already lives in
+`clients/_crucible_axi.py` as the fleet's one mirror, so the tier that is not gate-covered is named
+there, beside the vocabulary it belongs to. `e2e` is excluded fleet-wide with DN open question 5
+cited; every other tier is covered. This invents no format, adds no per-project field, and keeps the
+client owning the mapping exactly as the DN's layering requires. A project that wants its e2e suite
+gated is a decision for the CR that answers open question 5.
+
+**The envelope shape is NAMED here, so "named" and "attributed" are checkable.** The gate's envelope
+carries `suites[]`, one entry per declared target: `{suite, stack, gated, run: {passed, failed,
+total}}`. A not-gate-covered target appears with `gated: false` and no `run`. One flat total for two
+suites does not satisfy AC1; the counts must hang off the entry that names the suite.
 
 ### §S2 `regression` means the union
 
@@ -107,9 +119,14 @@ makes suite size unreconcilable.
   pass.
 - **AC4** — a single-suite project's gate output is unchanged: same steps, same envelope shape, same
   exit codes, asserted against a one-suite fixture.
-- **AC5** — each suite's runs are ingested by its own stack's client, asserted on the board rows: the
-  python suite's run carries the python stack and the bun suite's run carries the bun stack, from one
-  gate invocation.
+- **AC5** — each suite's runs are ingested by its own stack's client, asserted on the POST BODY each
+  ingest sends (the rows are made of those bodies, and the wire is what every sibling tier suite
+  asserts on — no live-board dependency): the python suite's run carries the python stack and the bun
+  suite's carries the bun stack, from ONE gate invocation. The DISPATCH is asserted too, not just the
+  field: the python suite must be run by invoking `python-crucible.py`, because a test that checked
+  only the `stack` value would pass if the bun client ran the tests and mislabelled them.
+  **Measured at RED: `python-crucible.py` sends no `stack` key at all**, so nothing this repo has ever
+  ingested from the python suite was attributable to it. Closing that is part of this AC.
 - **AC6** — `bunfig.toml` still carries no `pathIgnorePatterns` and `tests/suite-integrity.test.ts`
   passes unchanged; the count of discovery exclusions the repo declares is still zero, asserted by
   that file's own `discoveryExclusions` over the real config.
@@ -154,4 +171,12 @@ this CR depends on 111.
   make locally in one test.
 - Teaching any client to run another language's tests.
 - Changing what `e2e` covers or who ingests it (DN open question 5).
-- Fixing whatever the python suite reveals beyond the CR-CRU-107/108 case named in AC7.
+- Fixing whatever the python suite reveals beyond the CR-CRU-107/108 case named in AC7 — with ONE
+  exception, ruled at cycle 388's RED because it is this CR's own prerequisite: the branch baseline is
+  **1615 / 2**, not 1615 / 0. Two tests in `tests/client/test_client_tier_verb_contract.py` compare
+  against `develop` as a BASE REF (CR-CRU-111's AC16 flag-retention proof), and that comparison went
+  degenerate the moment CR-CRU-111 merged into `develop` — the base and the tree became the same
+  thing. A self-invalidating test is repaired here, not deferred: the comparison is re-pinned to a
+  NAMED, DATED snapshot of the eight migrated verbs' option sets, which is the durable form of the
+  same guarantee and cannot rot when a branch merges. It is also a live instance of this CR's own
+  thesis — the bun gate cannot see it, which is why it reached `develop` at all.
