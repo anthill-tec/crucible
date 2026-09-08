@@ -9,9 +9,10 @@
 ## Problem
 
 `tests/project-namespace-tripwire.test.ts`'s CR-CRU-097 §S2/AC2 test drives every client verb's
-`--help` for real — 163 verbs across five clients, ~168 `python3` spawns in batches of eight —
-behind a 180 s timeout. Standalone it passes in **2.5 s**. Run in the same `bun test` invocation as
-the Chromium geometry suite it hits the cap exactly:
+`--help` for real — 163 verbs across five clients, **168** surfaces (5 root + 163) in batches of
+eight — behind a 180 s timeout. Standalone it passes in **3.1 s** (measured 2026-09-08,
+`develop`@`8640e4c`; 57x headroom against the cap). Paired IMMEDIATELY BEFORE it, the Chromium
+geometry suite makes it hit the cap exactly:
 
 ```
 bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.test.ts
@@ -21,6 +22,21 @@ bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.t
 A gate that answers differently on re-run cannot gate. Three `pre-merge-gate` runs of one tree
 reported 2122/1, 2122/1 and 2123/0, with every other slow test's duration identical to the
 millisecond; three runs during CR-CRU-107's close-out reported 2171/0 twice and a 180 s hang once.
+
+**ADJACENCY, NOT MERE PRECEDENCE — measured 2026-09-08 and it narrows this CR.** "Same process,
+Chromium earlier" is NOT sufficient. In a full-suite run the Chromium suite executes at position
+**137/152** and this test at **147/152** — ten files later, same process — and it passes in **3.2 s**
+with the suite green (2183 pass / 0 fail, twice, JUnit-instrumented). The hang reproduces 4/4 only
+when the two files are the WHOLE invocation, i.e. when Chromium is the immediately preceding file.
+So the trigger is adjacency (or something the nine intervening files clear), and the defect reaches
+us through TARGETED runs — which is how agents run tests — not through the gate's own full run.
+
+**Bun's file order is not the argument order.** Passing this file FIRST does not make it run first:
+four runs (both argument orders, native shell and MCP shell, before and after `touch`) executed the
+Chromium suite first every time. mtime-ascending is falsified (this file is the OLDER of the two and
+still ran second), and neither alphabetical nor size fits the probes. Whatever bun's rule is, the
+reverse order is NOT producible by swapping two paths — which is why AC2 below no longer asks for
+that.
 
 **The obvious explanation is wrong, and was measured wrong before this CR was split out.**
 CR-CRU-108 originally carried this defect and asserted the cause was subprocess starvation — "a
@@ -63,13 +79,21 @@ The output of §S1 is a named cause recorded in this CR, not a code change.
 
 ### §S2 The test answers the same way whatever ran before it
 
-Whatever §S1 names, the fix makes the CR-CRU-097 §S2/AC2 test order-independent. Two constraints
+Whatever §S1 names, the fix makes the CR-CRU-097 §S2/AC2 test order-independent. Three constraints
 bound the remedy:
 
 - **It may not weaken what the test asserts** (§S3).
 - **It may not move the test out of the gate.** If the remedy is a separate invocation, then
   `pre-merge-gate` runs that invocation. A test the gate no longer runs is worse than a test that
   sometimes times out.
+- **It may not be an exclusion.** The file stays discoverable by a bare `bun test`; see AC9.
+
+**Standing infrastructure this CR inherits (maintenance, 2026-09-08, not a CR).** The suite now
+carries `test:unit` / `test:integration` / `test:client` / `test:regression` targets, membership
+DERIVED per file (browser, subprocess, HTTP server, live board, or any wait of a second or more) and
+guarded by `tests/test-targets.test.ts` so no file falls outside every target. This test is
+INTEGRATION and the Chromium suite is INTEGRATION, so both still share one invocation and the defect
+is NOT dissolved by the split - which is why this CR stands rather than being absorbed by it.
 
 ### §S3 The assertions are unchanged
 
@@ -83,7 +107,10 @@ surfaces, ≥25 verbs per client, all five root helps present, and no non-zero e
   the failure, plus the bisection evidence that isolated it. A remedy committed before AC1 fails
   this CR.
 - **AC2** — `bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.test.ts`
-  is green, and so is the reverse order.
+  is green. The order is stated as the one bun ACTUALLY produces (Chromium first, verified in the run
+  output, not assumed from the argument order), and tripwire-first is proven by a SEPARATE
+  invocation of each file rather than by swapping the two paths — a swap does not change bun's order
+  and would evidence nothing.
 - **AC3** — the help test's own count is unchanged and its floors are intact: ≥150 surfaces, ≥25
   verbs per client, five root helps, zero non-zero exits, and the same leak assertion. A test
   asserting fewer surfaces than before does not satisfy this CR — quote the surface count before
@@ -96,6 +123,16 @@ surfaces, ≥25 verbs per client, all five root helps present, and no non-zero e
 - **AC6** — the Chromium suite that triggers it is unchanged, or its change is justified against
   what it exists to assert. `tests/roadmap-visual-grammar.test.ts` is CR-CRU-096/103's live-board
   corroboration; making it cheaper by asserting less fails this AC.
+- **AC7** — the remedy is NEITHER of the two non-fixes this CR was filed to refuse: it does not skip
+  or conditionally disable the test when a browser ran, and it does not consist solely of raising the
+  180 s cap. Stated as an AC because AC1-AC6 are ALL satisfiable by "raise the cap to 600 s", which
+  is the outcome the Risk section forbids in prose and prose is measured against nothing.
+- **AC8** — if the remedy depends on the runner's scheduling, it says so and pins the version it was
+  measured against (`bun 1.3.14`), so a runner upgrade re-opens the question deliberately.
+- **AC9** — no test-discovery exclusion is introduced. `bunfig.toml` carries no `pathIgnorePatterns`
+  (CR-CRU-047 §S1) and `tests/suite-integrity.test.ts` asserts the key is ABSENT, so any separation
+  is additive - naming paths in one invocation - never a carve-out. A remedy that adds an exclusion
+  fails that guard and this AC.
 
 ## Estimated size
 

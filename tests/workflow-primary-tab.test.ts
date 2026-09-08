@@ -34,6 +34,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { workspaceTabs } from "../public/app-logic.mjs";
+import { settleDom } from "./helpers/dom-settle";
 
 interface TabShape {
   name: string;
@@ -234,9 +235,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

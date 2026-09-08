@@ -385,7 +385,13 @@ class NextEnvelopeCarriesTheCanonicalFlagTest(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _queue(self):
-        return {"ok": True, "entries": [
+        # `tracks` is published BESIDE `entries` since CR-CRU-108 §S2/AC4, and a
+        # read that omits it is a hard stop (`queue-track-fact-unpublished`), not
+        # "no tracks". These entries declare no `track`, so the server's own
+        # `declaredTracks` answers the empty list -- which is what this stub must
+        # mirror. Written 2026-09-08: the omission made this AC8 test fail while
+        # the gate stayed green, because the gate runs no python client tests.
+        return {"ok": True, "tracks": [], "entries": [
             {"cr": FIXTURE_CR, "wave": FIXTURE_WAVE, "dependsOn": [],
              "status": "PENDING", "seq": 10},
         ]}

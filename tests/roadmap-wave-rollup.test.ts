@@ -64,6 +64,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
+import { settleDom } from "./helpers/dom-settle";
 
 // ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
 //
@@ -484,11 +485,7 @@ async function mountApp(opts: MountOpts = {}): Promise<void> {
 /** Real timers, deliberately: the subject is the production shell driving its
  *  own fetch chain and van.js's real reactive scheduler. */
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 20);
-    await promise;
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

@@ -65,6 +65,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -388,11 +389,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
  *  tick inside happy-dom. Faking the clock would freeze the render pass under
  *  test, and AC31's channel IS the app's real `setInterval(refetch, 5000)`. */
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 20);
-    await promise;
-  }
+  await settleDom({ ticks });
 }
 
 /** public/app.js:373 — `startPolling()` is `setInterval(refetch, 5000)`, and

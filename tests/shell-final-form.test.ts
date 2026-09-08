@@ -25,6 +25,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -138,9 +139,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
 /** Lets pending microtasks (Promise.all in refetch()) and VanJS's reactive re-render flush. */
 async function settle(ticks = 5): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

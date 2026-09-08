@@ -36,6 +36,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -201,9 +202,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 /** Waits past one real poll tick (POLL_INTERVAL_MS), then settles VanJS. */
