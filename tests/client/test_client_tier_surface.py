@@ -223,6 +223,9 @@ class TierVerbSurfaceFleetParityTest(unittest.TestCase):
     is satisfied by a list of one."""
 
     def test_every_client_root_help_prints_all_six_tier_verbs_in_its_choices_group(self):
+        """CR-CRU-111 §S1/AC1 -- the six `Tier` values are VERBS in every
+        client's own argparse choices group, read from the root `--help` each
+        client really prints."""
         groups = {client: _argparse_choices_group(_drive_help(client).stdout)
                   for client in CLIENTS}
 
@@ -249,12 +252,14 @@ class TierVerbSurfaceFleetParityTest(unittest.TestCase):
                    if TIER_VOCABULARY.difference(group)}
         self.assertEqual(
             missing, {},
-            f"CR-CRU-111 §S1/AC1 -- every one of {list(TIER_VERBS)!r} must "
+            f"every one of {list(TIER_VERBS)!r} must "
             f"appear in EACH client's own argparse choices group; these "
             f"clients print fewer (client -> tiers absent from its root "
             f"help): {missing!r}")
 
     def test_every_tier_verb_answers_its_own_help_in_every_client(self):
+        """CR-CRU-111 §S1/AC1 -- `<client> <tier> --help` is answered by
+        argparse in every one of the (client, tier) pairs, never refused."""
         refusals = {}
         exercised = set()
         for client in CLIENTS:
@@ -281,7 +286,7 @@ class TierVerbSurfaceFleetParityTest(unittest.TestCase):
             f"drove {len(exercised)}")
         self.assertEqual(
             refusals, {},
-            f"CR-CRU-111 §S1/AC1 -- `<client> <tier> --help` must be answered "
+            f"`<client> <tier> --help` must be answered "
             f"by argparse in every (client, tier) pair, never refused: "
             f"{refusals!r}")
 
@@ -367,6 +372,9 @@ class TierRegistrarSingleLocusTest(unittest.TestCase):
             f"hand-rolled in five clients (§S1); got {registrar!r}")
 
     def test_every_client_invokes_the_shared_tier_registrar_exactly_once(self):
+        """CR-CRU-111 AC4 -- every client wires the SHARED tier registrar, and
+        wires it exactly once; the count is derived by scanning the five
+        files, never compared to a frozen list."""
         sites = {client: _registrar_call_lines(path, TIER_REGISTRAR)
                  for client, path in CLIENT_FILES.items()}
 
@@ -388,7 +396,7 @@ class TierRegistrarSingleLocusTest(unittest.TestCase):
             f"(client -> call lines): {duplicated!r}")
         self.assertEqual(
             wired, sorted(CLIENTS),
-            f"CR-CRU-111 AC4 -- `_crucible_axi.{TIER_REGISTRAR}` must be "
+            f"`_crucible_axi.{TIER_REGISTRAR}` must be "
             f"invoked by EACH of the five clients; unwired: "
             f"{sorted(set(CLIENTS) - set(wired))!r}")
         self.assertEqual(
@@ -492,13 +500,16 @@ class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
             f"{sorted(union)!r}, this suite says {sorted(TIER_VOCABULARY)!r}")
 
     def test_the_client_side_mirror_equals_the_tier_union_set_for_set(self):
+        """CR-CRU-111 AC10 -- the tier vocabulary is mirrored on the client
+        side in exactly ONE place, and that mirror equals the `Tier` union of
+        `src/types.ts` set for set."""
         union = _tier_union_from_types_ts()
         self.assertIsNotNone(union, "`Tier` must parse out of src/types.ts")
 
         mirrors = _tier_mirrors(AXI_MODULE_PATH)
         self.assertEqual(
             len(mirrors), 1,
-            f"CR-CRU-111 AC10 -- the tier vocabulary lives in exactly ONE "
+            f"the tier vocabulary must live in exactly ONE "
             f"place on the client side: a single mirror in "
             f"clients/_crucible_axi.py carrying a provenance comment naming "
             f"`Tier` in src/types.ts. Found {len(mirrors)} collection "
@@ -515,8 +526,9 @@ class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
             f"{sorted(mirrored)!r}, src/types.ts declares {sorted(union)!r}")
 
     def test_no_client_file_carries_a_second_copy_of_the_tier_vocabulary(self):
-        """PASSES TODAY -- the second BOUND, and the half of AC10 that says what
-        is FORBIDDEN: "a SECOND mirror: no per-client copy of the six values".
+        """CR-CRU-111 AC10, PASSES TODAY -- the second BOUND, and the half of
+        AC10 that says what is FORBIDDEN: "a SECOND mirror: no per-client copy
+        of the six values".
 
         It is green now only because no client holds ANY copy; it turns RED the
         moment GREEN hand-rolls `choices=("unit", ..., "bdd")` in a client
@@ -535,7 +547,7 @@ class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
             f"second copy; scanned {sorted(CLIENT_FILES)!r}")
         self.assertEqual(
             offenders, {},
-            f"CR-CRU-111 AC10 -- what is FORBIDDEN is a SECOND mirror. These "
+            f"what is FORBIDDEN is a SECOND mirror. These "
             f"clients carry their own copy of the tier vocabulary instead of "
             f"taking it from clients/_crucible_axi.py: {offenders!r}")
 
@@ -573,6 +585,10 @@ class RetiredTierFlagTest(unittest.TestCase):
         return scanned, hits
 
     def test_the_never_implemented_tier_flag_appears_in_no_client(self):
+        """CR-CRU-111 AC11 -- the `--tier` flag CR-CRU-008's contract named,
+        and no client ever implemented, stays RETIRED: this CR settles that
+        question the other way, so the flag must not reappear as a second
+        spelling of the tier VERB."""
         scanned, hits = self._scan_clients(RETIRED_TIER_FLAG_SPELLINGS)
 
         # Non-vacuity: the SAME scan must find a flag that IS declared, or
@@ -587,8 +603,7 @@ class RetiredTierFlagTest(unittest.TestCase):
 
         self.assertEqual(
             hits, {},
-            f"CR-CRU-111 AC11 -- the `--tier` flag named in CR-CRU-008's "
-            f"contract is RETIRED: the tier is a VERB (§S1), so "
+            f"the `--tier` flag is RETIRED: the tier is a VERB (§S1), so "
             f"`add_argument(\"--tier` must return zero across clients/. "
             f"Found: {hits!r}")
 
