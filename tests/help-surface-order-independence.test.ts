@@ -45,6 +45,14 @@
 // PINNED TO bun 1.3.14 (0d9b296a). Every duration below was measured against
 // that runner and the budget is a claim about its scheduling, so a runner
 // upgrade re-opens this question deliberately rather than silently.
+//
+// IT PINS THAT RUNNER'S JUNIT FORMAT TOO, deliberately and loudly. The order
+// regex below depends on the reporter's INDENTATION (two leading spaces is the
+// file level) and the duration regex on its ATTRIBUTE ORDER (`name` … `time` …
+// `file`). Neither can fail quietly: a format change empties `filesRun` and
+// reddens the order assertion, or drops `time` and reddens the budget with a
+// NaN. So if this guard goes red in those two shapes at once, suspect the
+// reporter's format before suspecting a starved run.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,27 +70,39 @@ const HELP_FILE = join("tests", "project-namespace-tripwire.test.ts");
 const HELP_TEST_NAME =
   "every verb's --help and every client's root help, driven for real, print no CR namespace literal";
 
-// TWO BUDGETS, BOTH DERIVED FROM THE STARVED RUN RATHER THAN GUESSED, because
-// one whole-invocation number is a weak signal: it is the sum of Chromium's
-// cost, this machine's load and the collection loop, so any bound tight enough
-// to catch the stall is also tight enough to flake on a busy machine — which
-// would reintroduce the very disease this guard cures.
+// TWO BUDGETS WITH DIFFERENT JOBS — a DETECTOR and a BACKSTOP — both derived
+// from measured runs rather than guessed, because one whole-invocation number
+// is a weak signal on its own: it is the sum of Chromium's cost, this machine's
+// load and the collection loop, so any bound tight enough to catch the stall is
+// also tight enough to flake on a busy machine — which would reintroduce the
+// very disease this guard cures.
 //
-// THE SHARP ONE is the help test's OWN duration, read out of the child's JUnit
-// report. Healthy it is 12.00s (all 168 surfaces, collected synchronously);
-// starved it is 180.00s, its cap, every time. 60s sits ~5x above healthy and
-// 3x below starved, and it is immune to how long Chromium's half of the run
-// took or to load on anything else in the pairing. It is NOT a copy of the
-// help test's own 180s cap: that cap is the ceiling a starved run reaches,
-// this is the ceiling an honest one stays under.
+// THE DETECTOR is the help test's OWN duration, read out of the child's JUnit
+// report. It measures the thing this CR is about, and it is immune to how long
+// Chromium's share of the run took or to load on anything else in the pairing.
+// Healthy it is 11.65-12.25s (all 168 surfaces, collected synchronously);
+// starved it is 180.00s, its cap, every time. 60s is ~4.9x healthy (60 / 12.25)
+// and 3x below starved. It is NOT a copy of the help test's own 180s cap: that
+// cap is the ceiling a starved run reaches, this is the ceiling an honest one
+// stays under.
 const HELP_TEST_BUDGET_MS = 60_000;
-// THE LOOSE ONE bounds the whole invocation, and catches a stall that moved to
-// some other test in the pairing. This guard's own first run took 218.27s and
-// the CR's first reproduction 202.72s, so the starved signature is 202-218s;
-// everything in the pairing EXCEPT the help test costs 30.9-38.3s, so a
-// healthy pairing is ~43-50s. 150s is ~3x above that — ordinary load cannot
-// reach it — and still clear of the starved signature.
-const PAIRED_RUN_BUDGET_MS = 150_000;
+// THE BACKSTOP bounds the whole invocation. Its ONLY job is catching a hang
+// somewhere ELSE in the pairing — one the outcome assertion cannot see, and
+// which would otherwise surface only when the child is killed mute at its 280s
+// net. It is therefore held FAR out, because a backstop that competes with the
+// detector is worse than no backstop: at the 150s this line used to carry it
+// sat ~3.1x above a healthy 48.43s pairing while the detector sits ~4.9x above
+// a healthy 12.25s help test, so a uniform machine slowdown reddened THIS line
+// first, at ~3.1x, with the help test still at ~38s and honestly passing — the
+// guard would have gone red naming the invocation instead of the starved test,
+// exactly the flake mode the paragraph above exists to avoid. 180s puts that
+// crossing at ~3.7x (180 / 48.43), by which point the help test is at ~45s and
+// closing on its own bound, and it stays clear of the starved signature
+// (202.72s and 210.89s reproduced) and under the child's 280s net. The
+// starvation itself is not a uniform slowdown — the help test pins at 180s
+// while the rest of the pairing is unchanged — and the detector is asserted
+// FIRST, so it is the line that names the starved test.
+const PAIRED_RUN_BUDGET_MS = 180_000;
 // The net under the child, held clear of the 218.27s a starved run takes to end
 // ITSELF (the CR's first reproduction was 202.72s, so this varies by ~8%), so a
 // starved child still writes the report that names WHY it was slow instead of
