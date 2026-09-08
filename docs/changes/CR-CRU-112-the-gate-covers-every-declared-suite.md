@@ -85,9 +85,35 @@ client owning the mapping exactly as the DN's layering requires. A project that 
 gated is a decision for the CR that answers open question 5.
 
 **The envelope shape is NAMED here, so "named" and "attributed" are checkable.** The gate's envelope
-carries `suites[]`, one entry per declared target: `{suite, stack, gated, run: {passed, failed,
-total}}`. A not-gate-covered target appears with `gated: false` and no `run`. One flat total for two
-suites does not satisfy AC1; the counts must hang off the entry that names the suite.
+carries `suites[]`, one entry per declared target: `{suite, stack, gated, passed, failed, total}`,
+the counts FLAT on the row that names the suite. A not-gate-covered target appears with
+`gated: false` and no counts. One flat total for two suites does not satisfy AC1.
+
+*(The counts were first ruled as a nested `run: {…}` sub-object; that layout was withdrawn at cycle
+388's GREEN. The requirement is that the counts hang off the entry NAMING the suite, and a nested
+sub-object does not contain the suite name — so the flatter row satisfies the requirement and the
+instrument both. A RED instrument is not edited to accommodate a layout invented after it.)*
+
+**How a suite's STACK is known, and why nothing new is declared.** `DeclaredTierSurface` gains
+exactly one field — `suites`, returning `(target, command)` pairs — and the stack is DERIVED from the
+declared command by one shared rule: a sibling client named in it, else the stack's interpreter as
+the command's first token; absent, the reading client's own stack. So a project states its suites in
+the words it already writes, and `test:client` reading `python3 -m unittest discover -s tests/client`
+is a python-owned suite by inspection. This repo's own line is changed to exactly that, dropping the
+bun indirection: the script still runs locally with no agent and no ingest, while the GATE does the
+client dispatch itself and supplies its own `--agent`. Making the script BE the client invocation
+would have made every local `bun run test:client` demand an agent and ingest to the live board.
+
+**All five gates route through the one composition** (rule 15 — "the gate composes the suites" is
+otherwise satisfied by one client). Enumeration turned out cheaper than feared, and it was measured
+rather than assumed: because mvn/rust/arduino declare targets by the template `<tier>` /
+`junit-<tier>`, the complete set of declarable names IS the tier vocabulary, so enumeration is
+CR-CRU-111's own `read` asked six times — **no new parsing code in any client**. python alone cannot
+enumerate (its declaration IS the invocation, CR-CRU-111 ruling 1), so its composition answers with
+the fallback: this client's own regression, which is AC4's single-suite case rather than a hole.
+
+**`regression` is never a member of the union** — a union is not an element of itself, so a declared
+`test:regression` is skipped by the composition rather than run twice.
 
 ### §S2 `regression` means the union
 
