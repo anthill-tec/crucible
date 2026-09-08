@@ -43,7 +43,11 @@
 export interface SettleOptions {
   /** Macrotask yields — the caller's own tick count, unchanged. */
   ticks?: number;
-  /** Sleep per yield. 2ms replaces the copied 20ms; see the measurement above. */
+  /** Sleep per yield. 0 replaces the copied 20ms; a bare yield is enough
+   *  because nothing production schedules lands between 0ms and 5000ms, and
+   *  measured 3.5% of one representative file's wall time (213ms of 6110ms)
+   *  once the step was gone — the rest of that file was a real 5.7s poll wait,
+   *  which is why waiting files are INTEGRATION rather than tuned here. */
   stepMs?: number;
 }
 

@@ -18,6 +18,7 @@ import { readdirSync } from "node:fs";
 import * as path from "node:path";
 import {
   classifyTestSource,
+  declaresRealWait,
   enumerateTestFiles,
   INTEGRATION_MARKERS,
   partitionTestFiles,
@@ -66,6 +67,27 @@ describe("test targets partition every test file", () => {
       expect(classifyTestSource(`const probe = "${marker}";`)).toBe("integration");
     }
     expect(classifyTestSource("expect(add(1, 2)).toBe(3);")).toBe("unit");
+  });
+  // EVERY planted wait below is CONCATENATED, never written as a literal call.
+  // A six-second wait spelled out in this file — even inside a COMMENT, which
+  // is how this bit twice — makes the classifier read a real wait here and
+  // moves the guard into the slow target. The classifier reads raw text by
+  // design (see scripts/test-targets.ts), so prose counts.
+  const call = (fn: string, arg: string): string => `await ${fn}(${arg});`;
+
+  test("a single-argument wait of a second or more is a real wait — the greedy-regex defect", () => {
+    // The pattern once backtracked into the number: `6_000` captured as `0`, so
+    // a six-second wait read as none and a 12.7s file sat in the fast target.
+    expect(declaresRealWait(call("sleep", "6_000"))).toBe(true);
+    expect(declaresRealWait(call("Bun.sleep", "2_500"))).toBe(true);
+    expect(declaresRealWait(`setTimeout(resolve, ${"11_000"});`)).toBe(true);
+    expect(declaresRealWait(`const POLL_INTERVAL${"_MS"} = ${"5000"};`)).toBe(true);
+  });
+
+  test("sub-second yields are NOT a real wait — the render flush must stay in the fast target", () => {
+    expect(declaresRealWait(call("sleep", "0"))).toBe(false);
+    expect(declaresRealWait(call("sleep", "20"))).toBe(false);
+    expect(declaresRealWait(`setTimeout(resolve, ${"200"});`)).toBe(false);
   });
 
   test("this guard itself sits in the fast target", async () => {

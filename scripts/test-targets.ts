@@ -41,6 +41,11 @@ export const INTEGRATION_MARKERS = [
   "spawnSync",
   // Stands up a throwaway HTTP server on a real port (7 files).
   "Bun.serve",
+  // Boots the REAL production server in-process and talks to it over HTTP —
+  // `startServer` from src/server.ts. Missing this marker left
+  // tests/v2-stream-paging.test.ts (9 tests, 15.1s of SSE deadline reads) in
+  // the fast target, which is how it was found.
+  "startServer",
   // Corroborates against the LIVE board, which must be running (12 files).
   "3849",
 ] as const;
@@ -63,7 +68,12 @@ export type TargetName = "unit" | "integration";
 // behavioural by nature: its subject IS elapsed time. So a file declaring any
 // wait of a second or more is integration too, and `unit` means "no browser,
 // no process, no server, no live board AND no waiting".
-const REAL_WAIT = /(?:setTimeout|setInterval|Bun\.sleep|sleep)\s*\(\s*[^,)]*,?\s*([\d_]+)\s*\)/g;
+// `[^,)]*` was greedy here and BACKTRACKED into the number: for `sleep(6_000)`
+// it consumed `6_00` and captured `0`, so a six-second sleep read as zero and
+// tests/workspace-rail-collapse.test.ts (12.7s of real waiting) classified as
+// unit. The first argument may now contain no parens or commas, and the delay
+// must be the WHOLE final literal.
+const REAL_WAIT = /(?:setTimeout|setInterval|Bun\.sleep|sleep)\s*\(\s*(?:[^,()]*,\s*)?([\d_]+)\s*\)/g;
 const NAMED_WAIT = /(?:MS|INTERVAL|WAIT|TIMEOUT|CADENCE)\w*\s*=\s*([\d_]+)/g;
 
 /** Does the file wait on real time — a second or more, anywhere? */
