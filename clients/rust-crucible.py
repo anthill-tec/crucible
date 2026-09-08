@@ -2266,10 +2266,37 @@ def _add_declared_tier_args(p):
     _add_cargo_tier_run_args(p)
 
 
+# §S6 ruling 5 — the report half of rust's ONE declaration template, named
+# once so the lookup below and the refusal's own example cannot drift apart.
+#
+# A bare `[profile.<tier>]` is only HALF a declaration: nextest runs it happily
+# and writes no report at all, because it emits JUnit only where the profile
+# carries its own `[profile.<tier>.junit]` sub-table (or inherits
+# `[profile.default.junit]` — the one profile every other inherits from; a `ci`
+# sibling's junit confers nothing on a new profile). Declaring only the profile
+# therefore runs the tests and leaves nothing to ingest: the run falls through
+# to the compile path and the envelope states no tier — an instruction that
+# changes nothing when followed, which is the defect §S6 exists to remove.
+#
+# The file name is pinned, not merely required to exist, because
+# `_resolve_junit_path` reads exactly this name back out of
+# `target/nextest/<profile>/`: a profile pointing its report somewhere else is
+# as unreachable-past as one declaring no report.
+_DECLARED_NEXTEST_JUNIT_FILE = "junit.xml"
+
+
 def _read_declared_nextest_profile(args, target):
     """§S6, cargo's READ — a profile in `.config/nextest.toml` whose name IS
-    the tier. Parsed as TOML rather than pattern-matched, so a profile named in
-    a comment is not a declaration."""
+    the tier, WITH the junit sub-table that makes nextest write a report for
+    it. Parsed as TOML rather than pattern-matched, so a profile named in a
+    comment is not a declaration.
+
+    Both halves are the ONE declaration (see `_DECLARED_NEXTEST_JUNIT_FILE`):
+    a profile that produces no ingestable report is an INCOMPLETE declaration,
+    and it is refused as such — with the specific reason on stderr, so a
+    caller who wrote half of it is told which half is missing rather than
+    reading the same 'nothing is declared' refusal over a file they can see
+    their profile in."""
     project_dir = _resolve_project_dir(args.project_dir)
     config = os.path.join(project_dir, ".config", "nextest.toml")
     try:
@@ -2281,7 +2308,24 @@ def _read_declared_nextest_profile(args, target):
         print(f"[crucible] WARN: {config} does not parse ({error}) — no "
               f"declared tier profile can be read from it", file=sys.stderr)
         return None
-    return target if target in profiles else None
+    profile = profiles.get(target)
+    if not isinstance(profile, dict):
+        return None
+    junit = profile.get("junit")
+    if not isinstance(junit, dict):
+        junit = (profiles.get("default") or {}).get("junit")
+    path = junit.get("path") if isinstance(junit, dict) else None
+    if path != _DECLARED_NEXTEST_JUNIT_FILE:
+        why = (f"points its report at {path!r}, which is not the "
+               f"`{_DECLARED_NEXTEST_JUNIT_FILE}` this client reads back from "
+               f"target/nextest/{target}/" if path else
+               "declares no junit report, so nextest runs it and writes "
+               "nothing to ingest")
+        print(f"[crucible] WARN: `[profile.{target}]` in {config} {why} — an "
+              f"INCOMPLETE declaration; add `[profile.{target}.junit]` with "
+              f"`path = \"{_DECLARED_NEXTEST_JUNIT_FILE}\"`", file=sys.stderr)
+        return None
+    return target
 
 
 def _run_declared_nextest_profile(args, tier, profile):
@@ -2327,8 +2371,11 @@ def _add_regression_tier_args(p):
 
 _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     target="<tier>",
-    names="a profile for it in `.config/nextest.toml` "
-          "(run by `cargo nextest run -P <target>`)",
+    names=("a profile for it in `.config/nextest.toml` WITH the junit "
+           "sub-table that makes nextest write a report for it: "
+           "`[profile.<target>]` `[profile.<target>.junit]` "
+           f'`path = "{_DECLARED_NEXTEST_JUNIT_FILE}"`, run by '
+           "`cargo nextest run -P <target>`"),
     read=_read_declared_nextest_profile,
     run=_run_declared_nextest_profile,
     add_args=(_add_declared_tier_args,),
