@@ -127,6 +127,16 @@ file leaves in the process (bun still holds four `playwright-core/lib` fds and r
 `bun 1.3.14 (0d9b296a)` per AC8. This project cannot fix bun; §S2 is therefore a remedy that does
 not depend on the broken path.
 
+**The position is not fixed, which is why the exposure is stated as a risk and not as a count.**
+Across runs the lost child moved: once it was in the second wave of eight (spawns 9-16), once in
+the third (spawns 17-24). So this is a race that becomes reachable once a file spawns enough
+children, not a threshold at a known spawn number. Twelve test files use async `Bun.spawn` with a
+piped stderr and five launch a browser, so this test is not structurally unique — it is simply the
+one that spawns **168** times, which makes a rare loss near-certain. Three low-spawn files paired
+immediately after the browser file stayed green (`toon-conformance` 1 spawn, `shim-retirement` 1,
+`clients-narration` 2 — one repetition each, 109/121/106 pass, 0 fail), which bounds the practical
+exposure without claiming those files are immune.
+
 ### §S2 The test answers the same way whatever ran before it
 
 **The remedy §S1 licenses: collect the help surfaces with `Bun.spawnSync`.** It is the one shape
@@ -211,6 +221,13 @@ depends on bun's current scheduling should say so — a runner upgrade could re-
 
 ## Non-goals
 
+- **Hardening the other eleven async-spawn test files.** The exposure above is recorded as a
+  finding, not fixed here: those files spawn one to three children each and none has been observed
+  to lose one. Converting the fleet on the strength of a race none of them has hit would be a
+  change with no failing test behind it. If one ever does hang, this CR's §S1 names the mechanism
+  and the remedy is already proven.
+- Reporting the defect upstream to bun, or waiting on a runner fix. AC8 pins the version so an
+  upgrade re-opens the question deliberately.
 - Fixing the Chromium suite's own resource handling beyond what AC2 requires.
 - Changing what `CR-CRU-097` §S2/AC2 asserts, or which verbs it covers.
 - The multi-track publication half of the original CR-CRU-108 — that CR keeps §S1–§S3 and its
