@@ -174,6 +174,30 @@ So each stack DETECTS its own declaration, at the surface §S3 already names for
 | `rust` | a profile in `.config/nextest.toml` named for the tier | nextest under that profile |
 | `arduino` | a native-host `make` target named for the tier | that target |
 
+**Five things §S6 left to the reader, ruled here after cycle 384's RED declined to invent them.**
+1. **python's surface is the INVOCATION, not a project file.** `unittest` has no project config this
+   repo has agreed, and inventing a format would be a new artifact nobody asked for. So python's
+   declared cell ACCEPTS `--start-dir`/`--pattern` and runs that discovery under the verb's tier.
+   This is what makes python's existing refusal honest: it already names those flags, and after this
+   the verb takes them.
+2. **bun runs a declared script BY NAME** (`bun run test:unit`), never by re-parsing its body. The
+   script is the project's declaration; running it by name means the project can change the body
+   without the client noticing, which is the whole point of a declaration. A bare full-suite
+   `bun test` satisfies nothing.
+3. **rust's `regression` tier verb reports `regression` whichever body runs it.** The client has two:
+   `_regression_ingest_run` (per-crate, already posts `tier="regression"`) and
+   `_workspace_regression_run` (`--workspace`, posts no tier at all). §S6 means the tier verb, not one
+   body — so the verb states its earned tier, and the workspace body stops being the one path where a
+   `regression` run says nothing.
+4. **A declared tier verb accepts the same flags its test-running sibling already takes** — `--agent`
+   in every client, plus `--bun`, `--python`/`--reports`, `--maven-dir`, `--dir`, `--project-dir` as
+   that client already spells them. Today those verbs accept NOTHING, not even `--agent`, so they
+   exit 2 before any declaration could be read: unusable, not merely inert.
+5. **The lookup and the help example are generated from ONE template**, so they cannot drift:
+   `test:<tier>` for a bun script, `junit-<tier>` for an arduino make target, a profile whose id IS
+   the tier for maven and nextest. A refusal that shows an example the client would not then find is
+   the defect AC14a exists to catch.
+
 The refusal survives, unchanged in shape, for the case it was written for: no declaration present.
 What changes is that it is now REACHABLE-PAST — following its instruction produces a run. The tier
 that run reports is the verb's own, so §S2's rule holds without exception, and a detected declaration
