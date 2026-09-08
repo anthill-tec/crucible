@@ -77,7 +77,69 @@ file does. The bisection follows that:
 
 The output of §S1 is a named cause recorded in this CR, not a code change.
 
+#### §S1 ANSWERED — the mechanism, named 2026-09-08 on `develop`@`a87af0a`
+
+**One sentence.** After a file that has driven Chromium through playwright in the same bun process,
+one child among a concurrently spawned batch has its stderr pipe torn down WITHOUT its reader
+promise being settled and without the child being reaped — the child becomes a zombie, bun holds no
+fd for it at all, so `new Response(proc.stderr).text()` can never resolve and the test waits until
+its cap.
+
+**What that predicts, and each prediction held:**
+
+| prediction | measured |
+|---|---|
+| ONE child is lost while its siblings all succeed | wave of 8: seven finished within 6 ms of each other, `#1` never returned |
+| it never completes — it is not slow | 20 s, 90 s, 150 s and 180 s caps all reached; no natural completion ever observed |
+| the lost child EXITED, so the loss is bookkeeping, not the child | `/proc/<pid>/status` → `State: Z (zombie)`, `ps` → `[python3] <defunct>`, ppid = the bun test process |
+| bun no longer holds the pipe it is waiting on | at stall: 536 open fds, of which **0 pipes**; `Max open files` 1 048 576, so no limit is in play |
+| it is the STDERR read specifically | the watchdog names the await: `STALLED on w2#1 stderrRead`; the stdout read for that same child had already returned |
+| any earlier spawn clears it | the same six variants that hang when run first ALL pass when the order is reversed (96 pass / 0 fail) |
+| `spawnSync` is immune | full 168-surface loop via `spawnSync`, FIRST after the browser file: 168 surfaces, 0 non-zero exits, **12.00 s** |
+
+**The bisection that isolated it**, in the order the steps were taken:
+
+1. The reproducer still reproduces on `a87af0a`: 110 pass / 1 fail, **202.72 s**; the same file alone
+   is 21 pass / 0 fail in **3.22 s**.
+2. Step 1 of the bisection above — the tripwire copy with every test but the help test deleted —
+   **hangs** (201 s). File-mates are exonerated; the trigger is not their residue.
+3. Six variants of the spawn shape, each capped at 20 s: only the exact real shape hung. Reversing
+   their declaration order made ALL SIX pass, which killed the shape hypothesis and revealed the
+   condition is one-shot and cleared by any earlier spawn.
+4. Narrowing what is required: one spawn after the browser file is **12.4 ms**; eight CONCURRENT
+   trivial spawns are **15.3 ms**; eight concurrent REAL client help spawns are **85 ms**; the eight
+   verbs of the batch that stalls, run alone, are **83 ms**. So neither concurrency, nor the client,
+   nor any particular verb is the trigger.
+5. The instrumented full loop names the stall point exactly: `arduino-crucible.py` batch 0 (nine
+   spawns) completes in 80 ms, and batch 1 never completes.
+6. Successive identical waves reproduce it without any verb variation — wave 0 completes, wave 1
+   loses exactly one child — which is how the per-await watchdog and `/proc` snapshot above became
+   possible.
+
+**Why the earlier subprocess-starvation reading was wrong, restated with this evidence.** The
+replica probe that ran in 2.28 s did not fail because it was a replica; it did not fail because
+something before it had already spawned. Spawning is not degraded — 10.8 ms per spawn, `0` pipes
+leaked, no fd or process limit approached. Exactly one child per triggering batch is dropped.
+
+**Ownership.** This is a defect in `Bun.spawn`'s pipe/exit bookkeeping under state the playwright
+file leaves in the process (bun still holds four `playwright-core/lib` fds and reports
+`killed 1 dangling process` when that file ends), not in this repo's test. Pinned to
+`bun 1.3.14 (0d9b296a)` per AC8. This project cannot fix bun; §S2 is therefore a remedy that does
+not depend on the broken path.
+
 ### §S2 The test answers the same way whatever ran before it
+
+**The remedy §S1 licenses: collect the help surfaces with `Bun.spawnSync`.** It is the one shape
+measured immune as the FIRST work after the browser file, it needs no cap change, no exclusion, no
+skip and no second invocation, and it keeps all 168 surfaces and every assertion. Its cost is
+measured, not assumed: **12.00 s paired / 11.70 s standalone**, against the existing 180 s cap —
+15x headroom, where the async batched loop's 3.1 s had 57x. The trade is stated plainly: ~9 s of
+wall time bought in exchange for a result that does not depend on what ran before it, in a file
+that is INTEGRATION and already carries a browser suite's worth of cost.
+
+Concurrency was the only thing the async shape bought, and the loop is I/O-bound on 168 python
+startups; it was never the assertion. `spawnSync` also removes the `Promise.all` fan-out that made
+the defect reachable at all.
 
 Whatever §S1 names, the fix makes the CR-CRU-097 §S2/AC2 test order-independent. Three constraints
 bound the remedy:
