@@ -164,13 +164,40 @@ had to be settled before CR-CRU-111 could be cut.
   envelope naming both figures. Warning, not refusal: classification is the project's decision (see
   the portability boundary), so the client reports the contradiction rather than vetoing it — but it
   MUST report it, or `unit` means nothing as the suite grows.
-- **D4 — the declaration seam is per-stack convention, enumerated per client** (settles Q6). Each
-  client detects its own stack's idiom and no Crucible-specific config file is invented: bun/npm
-  `package.json` scripts, python `unittest`/`pytest` start-dirs, maven profiles, cargo
-  `--test`/features, arduino sketch directories. Convention is zero-config and idiomatic; a
-  stack-neutral declaration file would be a second description of the project's tests beside the
-  one its own toolchain already has. The consequence is a requirement PER CLIENT, not one
-  requirement about "the client" — five seams, five assertions.
+- **D4 — the modality is the TOOLCHAIN's own where the toolchain has one; a project declaration
+  only where it does not** (settles Q6). Measured across the fleet 2026-09-08: three of five stacks
+  already distinguish the tiers natively, so asking those projects to declare anything would be
+  inventing a second description of a split their build system already makes. Only bun and python
+  need a declaration, because neither `bun test` nor `unittest` has any notion of a tier. See
+  "Per-stack modality" below for the verified table. The consequence is a requirement PER CLIENT,
+  not one requirement about "the client" — five modalities, five assertions.
+
+## Per-stack modality — how each toolchain runs a tier
+
+**The decision of WHICH tier to write or run is the feature's, and therefore the agent's. HOW that
+tier is run locally, and what it is reported as, is the client's — and it differs per stack.** This
+is the table CR-CRU-111 derives from; every row was read off the client and its toolchain on
+2026-09-08, not assumed.
+
+| Stack | Does the toolchain split tiers itself? | The modality the client drives | Tier verbs it has TODAY |
+|---|---|---|---|
+| java / maven | **Yes** — surefire (`*Test`) vs failsafe (`*IT`)/`integration-test`; the client already names `failsafe` in 36 places | maven lifecycle + profiles | `unit`, `module`, `e2e`, `regression`, `compile` — the fleet's most complete surface |
+| rust / cargo | **Yes** — in-crate `--lib` unit tests vs `tests/` integration targets; the client already passes `--test`/`--tests`/`--all-targets` | cargo target selection, plus `smoke-test` and `docker-e2e-gate` for higher tiers | none named as tiers (`test --crate`, `workspace-regression`) |
+| arduino | **Yes** — three separate build systems: native host `g++`/`make`, `arduino-cli` target compile, and HIL on hardware | whichever build the tier belongs to | `unit` (native host) + `compile` (target); HIL is not a verb |
+| bun / TS | **No** — `bun test` has no tier notion at all | a project-declared target: `package.json` scripts (`test:unit`, `test:integration`) | none (`test`, `regression`) |
+| python | **No** — `unittest` discovery has none either | a project-declared target: start-dir / pattern per suite (`--start-dir`, `--pattern`) | none (`test`, `regression`) |
+| vscode | **Yes, by runner** — Vitest (unit) vs Mocha under `@vscode/test-electron` (integration, launches VS Code) | the runner the tier belongs to | no client yet |
+
+Two consequences the CRs must respect:
+
+- **The fleet starts asymmetric, and the asymmetry is not arbitrary.** maven exposes tiers as verbs
+  because maven has tiers; bun exposes none because bun has none. Levelling the VOCABULARY is right;
+  levelling the MECHANISM would force a bun-shaped declaration onto cargo, which already knows the
+  answer.
+- **The agent definitions must match their own stack's tooling.** A rust RED agent told to "run the
+  integration target" needs cargo's `tests/` convention, not a `package.json` script; an arduino
+  agent needs to know that a hardware contract is not reachable from the native host build at all.
+  One generic paragraph across five stacks would be wrong in three of them.
 
 ## How this DN decomposes
 

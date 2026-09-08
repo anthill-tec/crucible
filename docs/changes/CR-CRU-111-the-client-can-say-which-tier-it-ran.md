@@ -45,24 +45,27 @@ tier existing and the project having one are separate facts, and conflating them
 caller names; absent a stated tier the run carries no tier and the server's own default applies,
 which is honest, rather than the client asserting a fact it cannot know from a file path.
 
-### §S3 Each client drives its own stack's declaration seam (DN D4)
+### §S3 Each client runs the tier the way ITS OWN toolchain runs it (DN D4)
 
-A project declares its own target membership in its own toolchain's idiom, and each client detects
-THAT idiom — no Crucible-specific config file is invented, because it would be a second description
-of the project's tests beside the one the toolchain already has. Per client:
+A tier verb runs the local modality that stack actually has, and reports the run under that tier.
+Where the toolchain already splits the tiers, the client uses THAT split — asking such a project to
+declare anything would invent a second description of a distinction its build system already makes.
+Only where the toolchain has no tier notion does the project declare one. Per client, from the DN's
+verified table:
 
-| client | seam |
-|---|---|
-| `bun-crucible.py` | `package.json` scripts (`test:unit`, `test:integration`, …) |
-| `python-crucible.py` | `unittest`/`pytest` start-dirs (the existing `--start-dir`/`--pattern`) |
-| `mvn-crucible.py` | maven profiles |
-| `rust-crucible.py` | cargo `--test` targets / features |
-| `arduino-crucible.py` | sketch directories |
+| client | how a tier is run | declaration needed? |
+|---|---|---|
+| `mvn-crucible.py` | maven's own split — surefire (`*Test`) for unit, failsafe / `integration-test` for integration | **no** — the lifecycle is the split |
+| `rust-crucible.py` | cargo target selection — in-crate `--lib` for unit, `tests/` targets (`--test`) for integration; `smoke-test`/`docker-e2e-gate` above | **no** — cargo is the split |
+| `arduino-crucible.py` | the build the tier belongs to — native host `g++`/`make` for unit, `arduino-cli` for target compile, HIL for hardware | **no** — three build systems are the split |
+| `bun-crucible.py` | a project-declared target: `package.json` scripts (`test:unit`, `test:integration`, …) | **yes** — `bun test` has no tier notion |
+| `python-crucible.py` | a project-declared suite: `--start-dir`/`--pattern` per tier | **yes** — `unittest` discovery has none |
 
-Absent a declaration the verb refuses with the missing declaration named, and never falls back to
-the whole suite. The client never classifies files: which file is which is the project's decision
-(DN, "the portability boundary"). This is a requirement PER CLIENT, not one requirement about "the
-client" — five seams, five assertions.
+The client never classifies files: which file is which is the project's decision (DN, "the
+portability boundary"). Where a declaration IS required and absent, the verb refuses with the
+missing declaration named and never falls back to the whole suite. This is a requirement PER
+CLIENT — five modalities, five assertions — and levelling the vocabulary must not level the
+mechanism.
 
 ### §S4 A `unit` run that waits says so (DN D3)
 
@@ -95,14 +98,17 @@ zero-discovery and the compile-tier fallback alike.
   the five files rather than by a frozen list.
 - **AC5** — `mvn-crucible.py`'s `unit`, `module` and `e2e` verbs still run and still stamp their
   own tiers after the migration; their existing behaviour is preserved, asserted per verb.
-- **AC6** — a project-declared target is driven from the seam §S3 names, asserted for EACH of the
-  five clients against a fixture project carrying that stack's declaration: the declared target runs
-  and the run is stamped with the verb's tier. Five assertions, and the count of clients exercised
-  is itself asserted — "the client drives the seam" is satisfiable by one client and that is the
-  defect this AC exists to prevent.
-- **AC6a** — a tier whose target the project has NOT declared refuses with `ok:false`, exit 1, and
-  `help[]` naming the missing declaration for that stack (the `package.json` script, the start-dir,
-  the profile). Asserted per client, and it may never fall back to running the whole suite.
+- **AC6** — each client runs the tier through the modality §S3 names for it, asserted for EACH of
+  the five clients against a fixture project of that stack: the invocation the client builds is the
+  stack's own (maven's failsafe lifecycle, cargo's `--test` target selection, arduino's native-host
+  build, the declared bun script, the declared python start-dir) and the ingested run carries the
+  verb's tier. Five assertions, and the count of clients exercised is itself asserted — "the client
+  runs the tier" is satisfiable by one client, and that is the defect this AC exists to prevent.
+- **AC6a** — for the two stacks that REQUIRE a declaration (bun, python), a tier whose target the
+  project has not declared refuses with `ok:false`, exit 1, and `help[]` naming the missing
+  declaration (the `package.json` script, the start-dir). It may never fall back to running the
+  whole suite. Asserted for both, and asserted NOT to apply to maven/cargo/arduino, whose split is
+  the toolchain's — a refusal demanding a declaration from cargo would be the defect.
 - **AC6b** — a `unit` run whose wall time exceeds its CPU time by the stated factor carries a
   structured warning naming both figures and the factor, with `ok` unchanged — the run is reported,
   not refused. Asserted twice: once on a deliberately sleeping fixture (warning present) and once on
