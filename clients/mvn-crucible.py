@@ -92,6 +92,10 @@ import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 STALE_THRESHOLD_S = 120
+# The STACK this client's runs belong to — the name its sibling clients address
+# it by (`mvn-crucible.py`), which is what a gate composes declared suites over
+# (CR-CRU-112 §S1).
+_STACK = "mvn"
 
 # §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
 
@@ -1575,20 +1579,43 @@ def cmd_pre_merge_gate(args):
         return rc
     reg_rc = 1
     try:
-        # §S1 — the regression body emits under THIS gate's verb, so the gate
-        # puts exactly one envelope on stdout under the name the caller invoked.
-        reg_rc = cmd_regression(argparse.Namespace(
-            project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
-            module=None, also_make=False, update_snapshots=False, native=False,
-            profile=None, system_prop=None, goal=args.goal,
-            coverage_profile=args.coverage_profile, log=None,
-            cycle=getattr(args, "cycle", None)), verb="pre-merge-gate")
+        # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own regression always
+        # runs, and every declared profile it covers is a SUBSET of that run
+        # rather than a replacement for it, so the gate's `suites[]` names them
+        # beside it.
+        # §S1 (CR-CRU-058) — that body emits under THIS gate's verb, so the
+        # gate puts exactly one envelope on stdout under the name the caller
+        # invoked.
+        reg_rc = _axi().gate_regression(
+            args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+            verb="pre-merge-gate",
+            # A `pom.xml` profile declaration is a NAME and carries no command,
+            # so it can name no other stack: every suite declared here is this
+            # client's own, and there is nothing to dispatch.
+            dispatch=None,
+            whole_suite=lambda: cmd_regression(_gate_regression_args(args),
+                                               verb="pre-merge-gate"),
+            context=_axi_context(project_dir, agent_id=args.agent),
+            crucible_url=CRUCIBLE_URL)
     finally:
         # STEP form — the teardown must not put a second document on stdout.
         _docker_down(argparse.Namespace(
             project_dir=args.project_dir, compose_file=args.compose_file,
             maven_dir=args.maven_dir), project_dir)
     return reg_rc
+
+
+def _gate_regression_args(args):
+    """CR-CRU-058 §S1 / CR-CRU-112 §S2 — the regression step's own Namespace:
+    the flags the gate's ALWAYS-RUN whole-suite regression takes, so the run
+    that covers every own-stack declared target cannot run under different
+    flags from the gate that asked for it."""
+    return argparse.Namespace(
+        project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
+        module=None, also_make=False, update_snapshots=False, native=False,
+        profile=None, system_prop=None, goal=args.goal,
+        coverage_profile=args.coverage_profile, log=None,
+        cycle=getattr(args, "cycle", None))
 
 
 # --------------------------------------------------------------------------- #
@@ -1966,6 +1993,10 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     read=_read_declared_profile,
     run=_run_declared_profile,
     add_args=(_add_declared_tier_args,),
+    # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
+    # vocabulary itself, so the enumeration is the lookup above asked for each
+    # tier: the same parse, without the single-name filter.
+    suites=_axi().template_declared_suites,
 )
 
 

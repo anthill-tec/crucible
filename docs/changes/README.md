@@ -118,7 +118,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | COMPLETED (0.2.0) | 097 | 5 (0.2.0) |
 | [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | COMPLETED (0.2.0) | 016, 075 | 5 (0.2.0) |
-| [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | PENDING (0.2.0) | 047, 111 | 5 (0.2.0) |
+| [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | COMPLETED (0.2.0) | 047, 111 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -527,6 +527,49 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (29×)**, now 92% CPU-bound. Two classifier defects were found by measurement, not review: a greedy
   regex read a six-second wait as `0`, and `startServer` (the real production server) was not a
   marker — those two files were 27.8 s of the remaining 29 s. Both pinned as tests.
+- ✅ **2026-09-09 — CR-CRU-112 SHIPPED, and the gate caught its own author.** One
+  `pre-merge-gate` invocation now covers every declared suite: **ok=true, tier `regression`, 3824
+  passed / 0 failed / 3825 total / 229 files** — the bun suite (2191/154) plus `tests/client`
+  (1633/75) DISPATCHED to `python-crucible.py`, with `test:e2e` present as `gated:false` carrying the
+  reason it is deferred. `src/` and `public/` untouched.
+  **The declaration is CR-CRU-111's, extended by one field**, which is what this CR's own Risk section
+  demanded ("one declaration serves both or they will drift"): a declared target gains a STACK,
+  derived from the command the project already writes; a suite IS a declared target owned by a stack;
+  one owned by another stack is dispatched to that stack's client, so "no client learns another
+  language's tests" is true by construction. `regression` is the union, and a union is not an element
+  of itself. The composition is SHARED — all five gates route through it, because "the gate composes
+  the suites" is otherwise satisfied by one client.
+  **Two corrections were mine, both caught by measurement.** Cycle 388's composition SUBTRACTED: with
+  one declared target the union REPLACED the invoking stack's whole-suite run, so `run.files`
+  vanished from every gate envelope (the count that exists precisely so a shrinking suite is
+  visible — this CR's own thesis, deleted by its own implementation), the tier was re-stamped `unit`,
+  and the invocation narrowed. Cycle 389 made it additive: the whole-suite run is always the union's
+  base, foreign suites are ADDED, an own-stack target is not re-run but says so. And my §S2 cited the
+  DN's "additive, never exclusionary" for that rule — VERIFY found the DN clause of that name is
+  about DISCOVERY exclusions, a different rule; borrowed authority is worse than none, so the CR now
+  says plainly that this is a new gate-contract clause.
+  **Then the gate found four failures its own implementation had shipped** — a live-code `CR-CRU-112`
+  literal EMITTED by a client (CR-CRU-097 AC3a), the clients prose citation count at 785 against a
+  pinned 747, one asserted CR literal in a new test, and the CR-CRU-110 guard failing as a
+  consequence of those three. The mechanism working on its author is the best evidence it works.
+  **AC7 is proven against the REAL history, not a synthetic:** with the CR-CRU-108 `tracks` fix
+  reverted in a scratch copy, the gate fails and names the python suite, and the failure is asserted
+  from the dispatched client's own JUnit XML to be `queue-track-fact-unpublished` on the exact test
+  CR-CRU-108 broke — the one both CRs shipped green past.
+  **STANDING DECISION 1 is now SUPERSEDED by the gate itself.** The separate
+  `python-crucible.py regression --start-dir tests/client` step beside the bun gate was the manual
+  stand-in for this CR; the gate runs that suite itself, so the standing step is redundant rather
+  than wrong. Keep running it only if you want the python suite alone.
+  **Candidate CRs recorded:** `GET …/plans` takes **6–9 s at 102 open plans** against the client's
+  10 s hook-safe bound, so plan-resolving verbs (`cycle-activate`, `cycle-done`) intermittently raise
+  an UNCAUGHT `TimeoutError` — a traceback instead of an envelope, and the WRITE may still have
+  landed, so the caller cannot tell (observed twice this session); the client has
+  `plans_unavailable_warning` for exactly this and does not use it there. Also: the client offers no
+  verb for the server-supported `pending → skipped` cycle transition, which forced a verify cycle to
+  run before the fix cycle it should have followed. Also: the tsc `check` step's `subprocess.run`
+  (`bun-crucible.py:1346`) is the one launch reachable from the gate that still raises out of it.
+  Also: the dispatched python run carries no `--coverage`, so gate coverage is the bun half's
+  presented as the whole project's — the same class of blind spot this CR closed.
 - ✅ **2026-09-08 — CR-CRU-111 SHIPPED in 11 cycles, and the CR was wrong seven times before it was
   right.** Every client now exposes the six `Tier` values as VERBS from one shared registrar
   (`add_tier_verbs`), runs each tier through its own stack's split where one exists, DETECTS and runs

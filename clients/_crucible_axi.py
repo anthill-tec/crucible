@@ -26,12 +26,15 @@ same way the clients do.
 
 import argparse
 import collections
+import contextlib
 import datetime
 import importlib.util
+import io
 import json
 import os
 import re
 import resource
+import shlex
 import subprocess
 import sys
 import time
@@ -1630,7 +1633,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1526-1542`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1552-1568`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
@@ -3696,6 +3699,36 @@ TIER_MEANINGS = {
     "bdd": "executable specifications, in the project's own BDD form",
 }
 
+# CR-CRU-112 §S1 — WHICH TIERS THE GATE COVERS, ruled at cycle 388 after RED
+# measured that a `package.json` script table cannot carry a per-target flag.
+# Gate coverage is a property of the TIER, so it is named HERE, beside the
+# vocabulary it belongs to and for the same reason `TIER_MEANINGS` lives here:
+# a per-project field would be the second declaration format §S1 forbids, and
+# five clients each deciding coverage would be the second mirror AC10 forbids.
+#
+# `e2e` is the ONE tier the gate does not cover, fleet-wide, and the reason is
+# a citation rather than a preference: who runs an e2e suite and who ingests it
+# is DN open question 5 (`docs/research/DN-testing-tiers-in-crucible-
+# projects.md`), which CR-CRU-112's non-goals defer. A project that wants its
+# e2e suite gated is the CR that answers that question, never a flag here.
+#
+# The VALUE is the sentence the gate's envelope prints beside that suite: an
+# excluded target is NAMED as excluded rather than omitted, so a reader can
+# tell a decision from an oversight (§S1).
+#
+# That sentence NAMES the open question and cites no CR id, and the omission is
+# deliberate: the value is EMITTED into `suites[].excluded`, and a project
+# namespace literal at a position a client EMITS is what this project's own
+# tripwire forbids. The lineage belongs in this comment, where it already is;
+# the reader of the envelope needs the REASON, which is the unanswered
+# question, not the number of the CR that declined to answer it.
+GATE_UNCOVERED_TIERS = {
+    "e2e": ("excluded from the gate fleet-wide — who runs the e2e suite and "
+            "who ingests it is DN open question 5 (`docs/research/DN-testing-"
+            "tiers-in-crucible-projects.md`), still unanswered; this gate "
+            "defers to that answer rather than invent one"),
+}
+
 # What a client hands `add_tier_verbs` for a tier it actually RUNS:
 #
 #   * `func` — that client's own delegator, exactly as the other registrars
@@ -3841,9 +3874,21 @@ def tier_verb_help(tier, meaning, wired):
 #   `add_args`  ruling 4 — the flag surface every DECLARED cell of this client
 #               takes: the one its test-running sibling already takes, so the
 #               instruction a refusal gives can actually be typed (AC14b).
+#   `suites`    CR-CRU-112 §S1 — THE ONE FIELD THIS CR ADDS: how this stack
+#               ENUMERATES what the project declared, and with what command,
+#               `(args, surface) -> ((target, command-or-None), …)`. A target's
+#               COMMAND is what names the stack that owns it
+#               (`declaring_stack`); a target that names none is the reading
+#               client's own, so every CR-CRU-111 declaration keeps its
+#               meaning. `template_declared_suites` is the default reading for
+#               a stack whose declarable names ARE the tier vocabulary, and
+#               `None` says this surface cannot enumerate a project's
+#               declaration at all (python, whose declaration IS the
+#               invocation — CR-CRU-111 ruling 1).
 DeclaredTierSurface = collections.namedtuple(
-    "DeclaredTierSurface", ("target", "names", "read", "run", "add_args"),
-    defaults=((),))
+    "DeclaredTierSurface",
+    ("target", "names", "read", "run", "add_args", "suites"),
+    defaults=((), None))
 
 
 def declared_target_name(surface, tier):
@@ -3936,6 +3981,475 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
             adder(tp)
         tp.set_defaults(func=(wired.func if wired is not None
                               else declared_tier_run(tier, funcs, declares)))
+
+
+# ── CR-CRU-112 §S1/§S2 — THE GATE COVERS EVERY DECLARED SUITE ─────────────
+#
+# §S1: "the gate's scope becomes the project's declared suites rather than one
+# runner's discovery … each suite ingests through THAT stack's client … No
+# client learns to run another language's tests." §S2: "`regression` is the
+# union of the declared targets."
+#
+# The composition lives HERE, once, for the reason `add_tier_verbs` does: all
+# five clients own a `cmd_pre_merge_gate` (`check` then `regression`), and a
+# per-suite gate written five times would diverge five ways. What stays
+# per-client is what only that client knows — how to RUN one of its own
+# declared targets, and WHERE a declared command of its project runs.
+#
+# The declaration is CR-CRU-111's extended by ONE field (`DeclaredTierSurface.
+# suites`): the targets a project declares, each with the command that declares
+# it where the surface has one. Which STACK owns a target is then read off that
+# command by ONE shared rule, so five surfaces cannot answer it five ways.
+
+SIBLING_CLIENT = "<stack>-crucible.py"
+
+_SIBLING_CLIENT_RE = re.compile(
+    SIBLING_CLIENT.replace(".", r"\.").replace("<stack>", r"([a-z][a-z0-9_]*)"))
+
+# The INTERPRETER a stack's suite is driven by, for a declaration that spells
+# the suite out instead of naming that stack's client. Cycle 388 ruling 3: a
+# project's test script must stay runnable with no agent and no ingest, so this
+# repo declares `test:client` as `python3 -m unittest discover -s tests/client
+# -t .` — the FIRST TOKEN identifies the stack, the flags identify the paths,
+# and the GATE does the client dispatch itself. One entry per stack whose
+# declarations take that form; a head that is not here names no stack, and a
+# target that names no stack is the reading client's own.
+STACK_INTERPRETERS = {"python": ("python",)}
+
+
+def sibling_client(stack):
+    """§S1 — the file name of the client that OWNS `stack`. The fleet's one
+    naming of a sibling client, so a gate's dispatch and a declaration's
+    ownership read the same string."""
+    return SIBLING_CLIENT.replace("<stack>", stack)
+
+
+def clients_dir():
+    """The directory this shared module lives in — where every sibling client
+    sits beside it, which is how a gate finds the one it must dispatch to."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def declaring_stack(command):
+    """§S1 — the stack a declared target's COMMAND names, or None when it names
+    none (→ the reading client's own stack).
+
+    Two spellings and no third: the command INVOKES that stack's client
+    (`…/python-crucible.py regression …`), or its first token is that stack's
+    INTERPRETER (`python3 -m unittest …`). Both are read off the command the
+    project already wrote, so neither invents the second declaration format
+    §S1 forbids."""
+    if not command:
+        return None
+    match = _SIBLING_CLIENT_RE.search(command)
+    if match:
+        return match.group(1)
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    head = os.path.basename(tokens[0]) if tokens else ""
+    for stack, heads in STACK_INTERPRETERS.items():
+        if any(head.startswith(prefix) for prefix in heads):
+            return stack
+    return None
+
+
+def _python_suite_argv(tokens):
+    """`python -m unittest discover -s <dir> [-p <pattern>]` → the python
+    client's own `regression` over that SAME discovery.
+
+    Nothing is invented: the flags that client takes are the discovery's own
+    (CR-CRU-111 ruling 1 — on that stack the declaration IS the invocation), so
+    the gate reads the declared paths and hands them to the client that can
+    ingest them. `-t` has no client flag and is dropped: the run's top-level
+    dir is the project dir the client resolves. None when the command declares
+    no discovery this gate can read, which the gate REPORTS against the suite
+    rather than skipping."""
+    if "unittest" not in tokens:
+        return None
+    flags = {"-s": "--start-dir", "--start-dir": "--start-dir",
+             "-p": "--pattern", "--pattern": "--pattern"}
+    argv = [tokens[0], os.path.join(clients_dir(), sibling_client("python")),
+            "regression"]
+    start_dir = False
+    for index, token in enumerate(tokens[:-1]):
+        flag = flags.get(token)
+        if flag is None:
+            continue
+        argv += [flag, tokens[index + 1]]
+        start_dir = start_dir or flag == "--start-dir"
+    return argv if start_dir else None
+
+
+_SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
+
+
+def sibling_client_argv(stack, command, agent=None):
+    """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
+    `command` declares, or None when this declaration cannot be dispatched.
+
+    A command that already invokes that client IS the invocation and runs as
+    declared. One that spells its suite out is translated by the one rule that
+    stack's declarations take (`_SUITE_ARGV_BY_STACK`) — the gate reading the
+    declared paths, never a re-implementation of the suite: what runs the tests
+    is that stack's client, in its own process, ingesting under its own stack,
+    which is §S1's "no client learns another language's tests" enforced by
+    construction.
+
+    The gate's `--agent` rides last so the dispatched run is attributed to the
+    gate that asked for it; a client handed the flag twice takes the last,
+    which is this one."""
+    try:
+        tokens = shlex.split(command or "")
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    if any(os.path.basename(token) == sibling_client(stack) for token in tokens):
+        argv = list(tokens)
+    else:
+        builder = _SUITE_ARGV_BY_STACK.get(stack)
+        argv = builder(tokens) if builder else None
+    if argv and agent:
+        argv += ["--agent", agent]
+    return argv
+
+
+# One declared suite of a project: the target, the stack that owns it, the tier
+# it names (None when it names none of the vocabulary — `test:client` is a
+# declared target and not a tier), the command it was declared with, and
+# whether the GATE covers it.
+GateSuite = collections.namedtuple(
+    "GateSuite", ("target", "stack", "tier", "command", "gated", "excluded"))
+
+GATE_SUITE_FAILED_CODE = "gate-suite-failed"
+GATE_SUITE_UNREPORTED_CODE = "gate-suite-unreported"
+GATE_SUITE_UNDISPATCHABLE_CODE = "gate-suite-undispatchable"
+# AC3 — a suite whose RUNNER is not there: the run never happened, so it has no
+# exit code and no envelope of its own, and the gate NAMES it instead of dying
+# with it.
+GATE_SUITE_UNRUNNABLE_CODE = "gate-suite-unrunnable"
+
+# The OSError shapes a PROCESS LAUNCH raises, and the ONLY ones AC3's "the
+# runner is not there" produces: `Popen` re-raises the child's failed `exec` as
+# one of these three, and a run that never started is the whole content of
+# `gate-suite-unrunnable`.
+#
+# It is a closed list rather than a bare `OSError` because `OSError` is not the
+# spawn's alone. `urllib.error.URLError` is an `OSError` SUBCLASS, and so is
+# `TimeoutError`: a board that goes unreachable during a run's INGEST raises
+# one of those out of the run body, LONG after the suite has run to completion.
+# Reading that as "could NOT be run" would have the gate tell a reader a suite
+# that ran and passed never ran at all — the one misreport a gate must not
+# make, because a reader cannot tell it from a real one.
+SPAWN_FAILURES = (FileNotFoundError, NotADirectoryError, PermissionError)
+
+
+def declared_target_tier(surface, target):
+    """The `<tier>` slot's value in a declared target's NAME, or None when the
+    name does not fit this stack's template at all.
+
+    It is not necessarily a TIER: `test:client` fits `test:<tier>` and names no
+    tier of the vocabulary, which is why every caller checks the answer against
+    `TIER_MEANINGS` rather than assuming it."""
+    head, _, tail = surface.target.partition("<tier>")
+    if not target.startswith(head) or not target.endswith(tail):
+        return None
+    return target[len(head):len(target) - len(tail) if tail else None]
+
+
+def template_declared_suites(args, surface):
+    """The DEFAULT enumeration, for a stack whose declarable target NAMES are
+    the tier vocabulary itself (`<tier>` for a maven / nextest profile,
+    `junit-<tier>` for a native make target): every tier whose target this
+    surface can READ.
+
+    It is CR-CRU-111's own lookup asked six times instead of once — the same
+    parse, without the single-name filter — so enumeration and lookup cannot
+    disagree about what a project declared. Such a target carries no command,
+    so it names no stack and belongs to the client reading it."""
+    return tuple((declared_target_name(surface, tier), None)
+                 for tier in TIER_MEANINGS
+                 if surface.read(args, declared_target_name(surface, tier)))
+
+
+def declared_gate_suites(args, surface, stack):
+    """§S1/§S2 — the SUITES this project declares: every declared target, the
+    stack that owns it, and whether the gate covers it.
+
+    EMPTY when this stack's surface cannot enumerate a project's declaration
+    (`suites=None`) or the project declares nothing; the gate then keeps its
+    own single-runner regression, which is the one suite such a project has
+    (§S2: "where a project declares one suite, behaviour is unchanged").
+
+    `regression` is never a MEMBER: §S2 makes it the UNION of the declared
+    targets, and a union is not an element of itself."""
+    reader = surface.suites
+    if reader is None:
+        return ()
+    suites = []
+    for target, command in reader(args, surface) or ():
+        named = declared_target_tier(surface, target)
+        tier = named if named in TIER_MEANINGS else None
+        if tier == "regression":
+            continue
+        excluded = GATE_UNCOVERED_TIERS.get(tier)
+        suites.append(GateSuite(target=target, tier=tier, command=command,
+                                stack=declaring_stack(command) or stack,
+                                gated=excluded is None, excluded=excluded))
+    return tuple(suites)
+
+
+def _captured_suite_run(call):
+    """Run one suite in THIS process and take the envelope it emits, as
+    `(exit code, stdout, error)`.
+
+    The gate puts exactly ONE document on stdout (CR-CRU-058 §S1) and it is now
+    composing N runs, so a locally-run suite's own envelope is READ here
+    instead of printed. Nothing else about the run changes: it ingests,
+    narrates on stderr and returns its exit code exactly as a standalone run
+    does — only the destination of the document it emits differs.
+
+    AC3, the LOCAL half of the guard: a runner that is not there raises out of
+    the client's own run body (`bun-crucible.py`'s `Popen`), and a gate that
+    lets that propagate reports NOTHING — no envelope, no verdict, and not a
+    word about the suites it could have run. The `OSError` is caught and
+    handed back so the gate can name the suite and the reason; there is then no
+    exit code and no document, which is what `code=None` says.
+
+    The catch stays WIDE and the reading is narrow. It has to stay wide: an
+    error the gate does not catch here kills the composition, which is the very
+    defect AC3 exists to close. But `call()` is a whole run — spawn, collect,
+    ingest — so an `OSError` out of it is not evidence the suite failed to
+    START; the board going unreachable at the ingest raises one too. Deciding
+    WHICH failure this was belongs to `_run_outcome`, once, for this path and
+    the dispatched one alike (`SPAWN_FAILURES`)."""
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            code = call()
+    except OSError as error:
+        return None, buffer.getvalue(), error
+    return code, buffer.getvalue(), None
+
+
+def _suite_envelope(stdout_text):
+    """The AXI envelope a suite's run put on stdout — the LAST decodable
+    document, because a DISPATCHED client's stdout carries whatever its own
+    children printed before it."""
+    for match in reversed(list(re.finditer(r"(?m)^axi:", stdout_text or ""))):
+        decoded = _decode_axi_snapshot(stdout_text[match.start():])
+        axi = decoded.get("axi") if isinstance(decoded, dict) else None
+        if isinstance(axi, dict):
+            return axi
+    return None
+
+
+# Everything a run's own envelope counts, `files` INCLUDED. CR-CRU-051 §S2
+# carries that count "so a suite that silently shrinks is visible in the gate
+# output itself", which is this CR's own thesis — a composition that dropped it
+# would hide precisely what the gate exists to show (AC4).
+SUITE_COUNT_KEYS = ("passed", "failed", "pending", "total", "files")
+
+
+def _suite_counts(envelope):
+    """The run counts a suite's own envelope reports, or None when it reported
+    none — a suite that never said what it ran is not a suite the gate can
+    claim it covered."""
+    run = (envelope or {}).get("run")
+    if not isinstance(run, dict):
+        return None
+    counts = {key: run[key] for key in SUITE_COUNT_KEYS
+              if isinstance(run.get(key), int)}
+    return counts or None
+
+
+def _gate_suite_warning(code, suite, detail):
+    return {"code": code,
+            "detail": f"declared suite `{suite.target}` ({suite.stack}) {detail}"}
+
+
+def whole_suite_label(stack):
+    """§S2 rule 1 — what the invoking stack's own regression IS, named once so
+    the `suites[]` row that points at it and the warning that reports it read
+    alike."""
+    return f"the whole {stack} suite this gate ran"
+
+
+def _whole_suite_warning(code, stack, covered, detail):
+    """The same finding, for the run that is no declared suite but COVERS them:
+    §S2 rule 3 makes an own-stack declared target a subset of the whole-suite
+    run, so that run's outcome is reported against every declared target it
+    covered — which is how AC2's `warnings[]` still NAMES the suite whose
+    caller has somewhere to look."""
+    covers = (" covering " + ", ".join(f"`{target}`" for target in covered)
+              if covered else "")
+    return {"code": code,
+            "detail": f"{whole_suite_label(stack)}{covers} {detail}"}
+
+
+def _run_outcome(code, counts, error):
+    """What the gate has to SAY about ONE run it made: `(ok, warning code,
+    warning detail)`, the detail None for a run that simply passed.
+
+    One reading for the whole-suite run and for a dispatched suite, so the two
+    cannot report the same condition differently.
+
+    A raised error is CLASSIFIED and never taken at face value. Only a
+    `SPAWN_FAILURES` shape means the run never happened; every other `OSError`
+    that reaches here — an unreachable board during the INGEST above all — was
+    raised by a suite that HAD already run, and it is reported as the thing it
+    actually is: a run with no counts to show for it."""
+    if isinstance(error, SPAWN_FAILURES):
+        return False, GATE_SUITE_UNRUNNABLE_CODE, f"could NOT be run: {error}"
+    if error is not None:
+        return False, GATE_SUITE_UNREPORTED_CODE, (
+            f"RAN, and then failed before it could report what it ran, so the "
+            f"gate cannot say what it covered: {error}")
+    if counts is None:
+        return False, GATE_SUITE_UNREPORTED_CODE, (
+            f"reported no run counts (exit {code}), so the gate cannot say "
+            f"what it covered")
+    if counts.get("failed") or code != 0:
+        return False, GATE_SUITE_FAILED_CODE, (
+            f"FAILED: {counts.get('failed', 0)} of {counts.get('total', 0)} "
+            f"test(s) failed (exit {code})")
+    return True, None, None
+
+
+def _adopt_suite_warnings(gate_warnings, envelope):
+    """A run's own findings are the gate's: the document they rode on is not
+    printed any more, so they ride this one."""
+    for warning in (envelope or {}).get("warnings") or []:
+        if isinstance(warning, dict) and warning not in gate_warnings:
+            gate_warnings.append(warning)
+
+
+def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
+                    crucible_url, warnings=()):
+    """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
+    plus one dispatched run for every declared suite another stack owns, in ONE
+    envelope naming them all.
+
+    Three rules, and only the second adds a run to a project that already had a
+    gate:
+
+    1. the invoking stack's whole-suite regression ALWAYS runs (`whole_suite`),
+       unchanged — same argv, same `regression` tier, same `run` block
+       INCLUDING `files`. It is the gate's union BASE, so the union is never
+       smaller than what the gate covered before this CR (AC4);
+    2. a declared suite owned by ANOTHER stack is ADDED — one dispatched run
+       each, run and ingested by that stack's own client, under its own stack;
+    3. a declared target owned by THIS stack is NOT re-run. The whole-suite run
+       already collected it — there is no discovery exclusion (AC6/§S3), so an
+       own-stack target is a SUBSET of a run that has already happened — and
+       its `suites[]` row records which run covered it rather than running it
+       twice.
+
+    Each row's counts are attributed to the suite that produced them (AC1),
+    never pooled into one total. A run that FAILED, that could not be RUN at
+    all, that could not be dispatched, or that reported no counts makes the
+    gate NOT ok and is NAMED in `warnings[]`: "a gate that ran a subset reports
+    as a gate that ran a subset"."""
+    rows, gate_warnings = [], list(warnings)
+    ok, worst = True, 0
+
+    # Rule 1, and FIRST: every own-stack declared target is reported against
+    # this run, so its outcome has to be known before they are named.
+    covered = tuple(suite.target for suite in suites
+                    if suite.gated and suite.stack == stack)
+    code, out, error = _captured_suite_run(whole_suite)
+    envelope = _suite_envelope(out)
+    whole_counts = _suite_counts(envelope)
+    _adopt_suite_warnings(gate_warnings, envelope)
+    totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
+    totals.update(whole_counts or {})
+    whole_ok, warning_code, detail = _run_outcome(code, whole_counts, error)
+    if not whole_ok:
+        gate_warnings.append(
+            _whole_suite_warning(warning_code, stack, covered, detail))
+        ok, worst = False, worst or (code or 0)
+
+    for suite in suites:
+        row = {"suite": suite.target, "stack": suite.stack, "gated": suite.gated}
+        if not suite.gated:
+            # §S1 — declared and OUT, with the reason, so an omission by
+            # silence cannot pass for a decision.
+            row["excluded"] = suite.excluded
+            rows.append(row)
+            continue
+        if suite.stack == stack:
+            # Rule 3 — covered by the run that already happened, and SAYING so
+            # rather than collecting the same files a second time. The counts
+            # are that run's, and they are NOT added to the union again.
+            row["coveredBy"] = whole_suite_label(stack)
+            row.update(whole_counts or {})
+            rows.append(row)
+            continue
+        row["client"] = sibling_client(suite.stack)
+        argv, cwd = dispatch(suite) if dispatch else (None, None)
+        if not argv:
+            rows.append(row)
+            gate_warnings.append(_gate_suite_warning(
+                GATE_SUITE_UNDISPATCHABLE_CODE, suite,
+                f"declares no invocation this gate can dispatch to "
+                f"{sibling_client(suite.stack)}, so it did NOT run"))
+            ok, worst = False, worst or 1
+            continue
+        print(f"[crucible] {verb}: dispatching `{suite.target}` to "
+              f"{' '.join(argv)}  (cwd={cwd})", file=sys.stderr)
+        try:
+            result = subprocess.run(argv, cwd=cwd, capture_output=True,
+                                    text=True)
+        except OSError as spawn_error:
+            # AC3, the DISPATCHED half of the guard: a declared command whose
+            # first token is not there would otherwise kill the gate
+            # mid-composition, taking the suites that DID run with it.
+            code, out, error = None, "", spawn_error
+        else:
+            sys.stderr.write(result.stderr or "")
+            code, out, error = result.returncode, result.stdout or "", None
+        envelope = _suite_envelope(out)
+        counts = _suite_counts(envelope)
+        if counts:
+            row.update(counts)
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + value
+        rows.append(row)
+        _adopt_suite_warnings(gate_warnings, envelope)
+        suite_ok, warning_code, detail = _run_outcome(code, counts, error)
+        if not suite_ok:
+            gate_warnings.append(
+                _gate_suite_warning(warning_code, suite, detail))
+            ok = False
+        worst = worst or (code or 0)
+    emit_axi(verb, ok,
+             {"run": totals, "suites": rows,
+              "help": run_help(verb, ok, totals["failed"], crucible_url)},
+             context, gate_warnings,
+             f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
+             f"failed={totals['failed']} total={totals['total']}")
+    return 0 if ok else (worst or 1)
+
+
+def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
+                    context, crucible_url):
+    """§S1/§S2 — the GATE's regression step: the one composition all five gates
+    run, so "the gate covers every declared suite" is a property of the fleet
+    and not of one client.
+
+    `whole_suite` is this client's OWN whole-suite regression, and §S2's
+    additive rule runs it either way — as the gate's whole answer for a project
+    whose declaration this stack cannot enumerate or that declares nothing (it
+    IS that project's one suite), and as the union BASE for a project that
+    declares suites, which are added to it and never substituted for it."""
+    suites = declared_gate_suites(args, surface, stack)
+    if not suites:
+        return whole_suite()
+    return run_gate_suites(suites, stack=stack, verb=verb,
+                           whole_suite=whole_suite, dispatch=dispatch,
+                           context=context, crucible_url=crucible_url)
 
 
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────

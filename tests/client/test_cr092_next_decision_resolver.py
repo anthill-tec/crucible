@@ -1590,7 +1590,11 @@ class NextBlockCitationsTest(unittest.TestCase):
         # seam — this stack's declared-cell flag adder, its READ of the
         # discovery declaration and its RUN — sits ABOVE this block, drifting
         # it 1471-1487 -> 1526-1542. Same rule, same guard, sixth time.
-        ("_next_start_help", "clients/python-crucible.py", 1526, 1542,
+        # Re-pinned 2026-09-08 (CR-CRU-112 §S1): this client's `_STACK`, the
+        # `stack` key on its ingest and its gate's composition over the
+        # declared suites all sit ABOVE this block, drifting it
+        # 1526-1542 -> 1552-1568. Same rule, same guard, seventh time.
+        ("_next_start_help", "clients/python-crucible.py", 1552, 1568,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

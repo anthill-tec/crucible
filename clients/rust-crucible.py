@@ -86,6 +86,10 @@ import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 STALE_THRESHOLD_S = 60
+# The STACK this client's runs belong to — the name its sibling clients address
+# it by (`rust-crucible.py`), which is what a gate composes declared suites over
+# (CR-CRU-112 §S1).
+_STACK = "rust"
 
 # Parallel rustc cap for the FULL-workspace `--all-features` compiles (smoke-test,
 # workspace-regression, pre-merge-gate, workspace clippy gate). Per-crate / `-p`-scoped
@@ -1897,9 +1901,23 @@ def cmd_pre_merge_gate(args):
         min_free_g=getattr(args, "min_free_g", 80),
         keep_target=getattr(args, "keep_target", False),
     )
-    # §S1 — the regression body emits under THIS gate's verb, so the gate puts
-    # exactly one envelope on stdout under the name the caller invoked.
-    return cmd_workspace_regression(ws_args, verb="pre-merge-gate")
+    # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own workspace regression
+    # always runs, and every declared profile it covers is a SUBSET of that run
+    # rather than a replacement for it, so the gate's `suites[]` names them
+    # beside it.
+    # §S1 (CR-CRU-058) — that body emits under THIS gate's verb, so the gate
+    # puts exactly one envelope on stdout under the name the caller invoked.
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+        verb="pre-merge-gate",
+        # A `.config/nextest.toml` profile declaration is a NAME and carries no
+        # command, so it can name no other stack: every suite declared here is
+        # this client's own, and there is nothing to dispatch.
+        dispatch=None,
+        whole_suite=lambda: cmd_workspace_regression(ws_args,
+                                                     verb="pre-merge-gate"),
+        context=_axi_context(project_dir, agent_id=args.agent),
+        crucible_url=CRUCIBLE_URL)
 
 
 def cmd_docker_e2e_gate(args):
@@ -2379,6 +2397,11 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     read=_read_declared_nextest_profile,
     run=_run_declared_nextest_profile,
     add_args=(_add_declared_tier_args,),
+    # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
+    # vocabulary itself, so the enumeration is the lookup above asked for each
+    # tier: the same parse (junit sub-table completeness included), without the
+    # single-name filter.
+    suites=_axi().template_declared_suites,
 )
 
 

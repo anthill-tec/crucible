@@ -91,6 +91,10 @@ import xml.etree.ElementTree as ET
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
 DEFAULT_JUNIT = "junit.xml"
+# The STACK this client's runs belong to — the server's own `{tier, stack,
+# context}` field (`src/v2.ts`), stated once so the ingest that claims it and
+# the gate that composes by it cannot disagree (CR-CRU-112 §S1/AC5).
+_STACK = "bun"
 
 
 def _resolve_project_dir(arg_value):
@@ -934,7 +938,7 @@ def _start_run(project_dir, agent_id, tier=None, context=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
-        "stack": "bun",
+        "stack": _STACK,
     }
     if tier:
         payload["tier"] = tier
@@ -1382,7 +1386,30 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the tsc check step")
             return 1
-    reg_args = argparse.Namespace(
+    # CR-CRU-112 §S1/§S2 — the gate's scope is this stack's whole suite PLUS
+    # every declared suite another stack owns, each run by the client of the
+    # stack that OWNS it. Additive, never exclusionary: the whole-suite
+    # regression below always runs, and a declared bun target is a subset of it
+    # rather than a replacement for it.
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+        verb="pre-merge-gate",
+        dispatch=lambda suite: _dispatch_gate_suite(args, suite),
+        # §S1 — the regression body emits under THIS gate's verb, so the gate
+        # puts exactly one envelope on stdout under the name the caller
+        # invoked.
+        whole_suite=lambda: cmd_regression(_gate_regression_args(args),
+                                           verb="pre-merge-gate"),
+        context=_axi_context(project_dir, agent_id=args.agent),
+        crucible_url=CRUCIBLE_URL)
+
+
+def _gate_regression_args(args):
+    """CR-CRU-058 §S1 / CR-CRU-112 §S2 — the regression step's own Namespace:
+    the flags the gate's ALWAYS-RUN whole-suite regression takes, so the run
+    that covers every own-stack declared target cannot run under different
+    flags from the gate that asked for it."""
+    return argparse.Namespace(
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
         log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
@@ -1390,9 +1417,20 @@ def cmd_pre_merge_gate(args):
         # regression it runs; the step must never re-decide it.
         no_lifecycle=getattr(args, "no_lifecycle", True),
     )
-    # §S1 — the regression body emits under THIS gate's verb, so the gate puts
-    # exactly one envelope on stdout under the name the caller invoked.
-    return cmd_regression(reg_args, verb="pre-merge-gate")
+
+
+def _dispatch_gate_suite(args, suite):
+    """CR-CRU-112 §S1, bun's DISPATCH — how THIS client invokes the sibling
+    client that owns a declared target it does not.
+
+    The shared builder turns the declaration into that client's own invocation
+    (the declaration is what named the stack in the first place), and this
+    client supplies only WHERE a declared command of its project runs: the
+    package dir, which is where `bun run` would have run it."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    return (_axi().sibling_client_argv(suite.stack, suite.command,
+                                       agent=args.agent), package_dir)
 
 
 # ── CR-CRU-008 — plan verbs (plan-file / cycle-activate / cycle-done / cr-close) ──
@@ -1975,24 +2013,47 @@ def _add_declared_tier_args(p):
     _add_no_lifecycle_arg(p)
 
 
-def _read_declared_script(args, target):
-    """§S6, bun's READ — the `package.json` script table, which is where this
-    project's other run targets already live. Returns the script NAME when the
-    manifest declares it, so what is run is the declaration and never a body
-    this client re-parsed."""
+def _package_scripts(args):
+    """The `package.json` script table — bun's declaration surface, read in ONE
+    place for both the by-name lookup (§S6) and the enumeration a gate composes
+    over (CR-CRU-112 §S1), so the two cannot disagree about what is declared."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     manifest = os.path.join(package_dir, "package.json")
     try:
         with open(manifest, encoding="utf-8") as handle:
-            scripts = (json.load(handle) or {}).get("scripts") or {}
+            return (json.load(handle) or {}).get("scripts") or {}
     except OSError:
-        return None
+        return {}
     except ValueError as error:
         print(f"[crucible] WARN: {manifest} is not readable JSON ({error}) — "
               f"no declared tier target can be read from it", file=sys.stderr)
-        return None
-    return target if scripts.get(target) else None
+        return {}
+
+
+def _read_declared_script(args, target):
+    """§S6, bun's READ — the `package.json` script table, which is where this
+    project's other run targets already live. Returns the script NAME when the
+    manifest declares it, so what is run is the declaration and never a body
+    this client re-parsed."""
+    return target if _package_scripts(args).get(target) else None
+
+
+def _read_declared_suites(args, surface):
+    """CR-CRU-112 §S1, bun's ENUMERATION — every target this project declares
+    in that same script table, each with the COMMAND it was declared with.
+
+    The template's own head (`test:`) is what marks a script as a declared test
+    target, so the set is the PROJECT's and never a list this client keeps: a
+    `test:client` that names no tier is a declared suite exactly as `test:unit`
+    is. The command rides along because it is what names the STACK that owns
+    the target (`_crucible_axi.declaring_stack`) — the only place a script
+    table can state ownership without inventing the second format §S1 forbids.
+    Reading it decides WHO owns the target and never what to run: an own-stack
+    target is still run by NAME (`bun run <target>`)."""
+    head = surface.target.split("<tier>")[0]
+    return tuple((name, body) for name, body in _package_scripts(args).items()
+                 if name.startswith(head))
 
 
 def _run_declared_script(args, tier, script):
@@ -2007,6 +2068,7 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     read=_read_declared_script,
     run=_run_declared_script,
     add_args=(_add_declared_tier_args,),
+    suites=_read_declared_suites,
 )
 
 

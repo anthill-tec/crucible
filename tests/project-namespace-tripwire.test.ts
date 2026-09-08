@@ -1240,10 +1240,46 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // `clients/` 672 -> 687 and CR-CRU-107 687 -> 691. The `develop` baselines
 // are UNCHANGED at 512/378/601 and stay the floors — a floor never moves for
 // a re-pin, least of all for the largest re-pin the table has recorded.
+// UPDATED 2026-09-09 by CR-CRU-112 §S1/§S2 — the ONE re-record this CR needs.
+// `clients/` HEAD moves 747 -> 785, +38, and `src/` and `public/` do not move
+// at all: this CR edits nothing under either tree, and both re-measure at the
+// recorded 563 and 435.
+//
+// The +38 decomposes exactly into six per-file deltas, with the seventh file
+// flat:
+//   `clients/_crucible_axi.py`     140 -> 151  (+11)
+//   `clients/bun-crucible.py`      137 -> 144   (+7)
+//   `clients/python-crucible.py`   116 -> 122   (+6)
+//   `clients/mvn-crucible.py`      129 -> 135   (+6)
+//   `clients/arduino-crucible.py`  102 -> 106   (+4)
+//   `clients/rust-crucible.py`     122 -> 126   (+4)
+//   `clients/toon.py`                1 ->   1   (+0)
+// That shape is the one the CR predicted: the gate's composition, its suite
+// vocabulary and its warning codes are declared ONCE in the shared module,
+// which is why it carries the largest delta, and each of the five clients
+// gains the prose of its own enumeration and dispatch hooks plus the
+// additive-gate scope §S1/§S2 wires into it. `clients/toon.py` is a pure
+// serializer this CR never touched.
+//
+// A re-pin is not a licence to EMIT, and the two halves are measured in the
+// SAME run: AC3a's checker ("no CR literal sits at a live-code position in any
+// client") passes over this very working tree, so every one of the 38 is a `#`
+// comment or a docstring line. The gate's `e2e` exclusion reason — a string
+// this CR added and the gate EMITS into `suites[].excluded` — names the DN's
+// open question and no CR id for exactly that reason.
+//
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show develop:<path>`, file by file, at the END of the cycle —
+// after the FIX commits, so the figure is final rather than re-recorded twice.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin moves, as
+// CR-CRU-094 re-recorded `src/` 550 -> 556 and 556 -> 560, CR-CRU-075
+// `clients/` 672 -> 687, CR-CRU-107 687 -> 691 and CR-CRU-111 694 -> 747. The
+// `develop` baselines are UNCHANGED at 512/378/601 and stay the floors — a
+// floor never moves for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 563 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 747 },
+  clients: { exts: [".py"], develop: 601, head: 785 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
