@@ -1,7 +1,11 @@
 """CR-CRU-111 §S2 — a run stops claiming a tier it did not earn (AC3), and no
 COMPILE ingest carries a test tier (AC13a).
 
-Two acceptance criteria live here, and they are the two cycle 378 owns. Both
+AC15 joined them at cycle 385 — the guard's own instrument, widened to every
+spelling a tier can be stated in, with the widening PROVEN against planted
+fixtures rather than asserted (see "AC15, at cycle 385" below).
+
+Three acceptance criteria live here; the first two are cycle 378's. Both
 are asserted the way the CR asks for them: **on the POST body the client
 actually sends**, driven through the client's own real argparse verb, with the
 client's single HTTP transport seam (`_post`) recorded. Nothing here greps a
@@ -71,6 +75,37 @@ nothing:
          the two COVERAGE bounds, derived by scanning the five client files:
          they fail if this suite misses a site the scan can see, which is the
          way a per-call-site AC silently shrinks.
+
+AC15, at cycle 385 — "the AC3 census guard sees EVERY spelling a tier can be
+stated in: keyword, positional, dict key and subscript … a planted unearned
+stamp in EACH of the four spellings must make the guard fail". What VERIFY
+measured: `_tier_literal_sites` matched `kw.arg == "tier"` and nothing else, so
+`arduino-crucible.py` contributed ZERO rows to a census whose own table names
+it in five cells — the client where AC3's two hardest sites lived — and a
+re-introduced positional or dict-key stamp passed the guard green. §S2 had
+already written the diagnosis down ("a census is only as wide as its
+instrument") and the guard enforcing it repeated the mistake anyway.
+
+  RED  `CensusInstrumentSeesEverySpellingTest` — the positional, dict-key and
+         subscript proofs. Against the keyword-only instrument the guard they
+         require to FAIL passes instead; only the keyword proof can pass. The
+         narrow instrument is KEPT in this file, as
+         `_keyword_only_tier_literal_sites`, and
+         `test_the_keyword_only_instrument_is_blind_to_three_of_the_four_spellings`
+         runs it over the same four planted clients — so the widening is
+         demonstrated, not claimed.
+  PIN  `ArduinoUnearnedTierTest`, `ArduinoEarnedTierTest`,
+         `RustEarnedTierTest` — five tier statements driven on the wire for
+         the first time, in the two spellings the old instrument could not
+         see. They pass today; what was missing was any test at all.
+         `test_arduino_pre_merge_gate_inherits_the_tier_of_the_run_it_drives`
+         is §S6's gate ruling on the wire, and the reason
+         `GATE_TIER_RULINGS` may exist without becoming an unexamined
+         exemption.
+  PIN  `test_every_site_the_widening_revealed_is_driven_on_the_wire` — the
+         coverage bound the narrow instrument made unstatable, derived by
+         running BOTH instruments over the five clients and requiring every
+         newly visible site to be asserted on a POST body here.
 
 HARNESS, and where it comes from: the fleet's dominant client-test idiom —
 `tests/client/test_bun_crucible_toon_envelope.py` and
@@ -177,15 +212,115 @@ def _test_tier_vocabulary():
 # ── the census: which literal tiers does each client hand its ingest calls ──
 
 
-def _tier_literal_sites(source, filename="<client>"):
-    """Every call in `source` passing a STRING-LITERAL `tier=` keyword, as
-    `(function, lineno, tier)` triples attributed to the INNERMOST enclosing
-    function.
+# AC15's four spellings, named once and used as the instrument's own
+# vocabulary — "keyword (`tier="unit"`), positional (`_run_native_tests(args,
+# "test", "unit", …)`), dict key (`"tier": "unit"`) and subscript
+# (`payload["tier"] = …`, which rust now uses)".
+KEYWORD, POSITIONAL, DICT_KEY, SUBSCRIPT = (
+    "keyword", "positional", "dict-key", "subscript")
+SPELLINGS = (KEYWORD, POSITIONAL, DICT_KEY, SUBSCRIPT)
 
-    A `tier=` fed by a VARIABLE (mvn's `_run_surefire_tier(..., tier=label)`,
-    where the verb's own name supplies the value) is deliberately not a site:
-    the defect §S2 names is a literal the client asserts about a run it cannot
-    classify, never the act of passing a tier the caller stated."""
+
+def _tier_parameter_positions(tree):
+    """`{callee name: index of its `tier` parameter}` for every function DEFINED
+    in this module.
+
+    This is what makes the POSITIONAL spelling readable without guessing. A
+    scanner that treated any string literal equal to a tier value as a tier
+    statement would read `sub.add_parser("unit", ...)` — every verb
+    registration in the fleet — as a stamp. Resolving the literal to the
+    PARAMETER it fills is exact, and a client is one file, so the run helper a
+    verb hands its tier to is always defined beside it."""
+    positions = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names = [a.arg for a in node.args.posonlyargs + node.args.args]
+            if "tier" in names:
+                positions[node.name] = names.index("tier")
+    return positions
+
+
+def _callee_name(call):
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+
+
+def _tier_literal_sites(source, filename="<client>"):
+    """Every STRING-LITERAL tier this source STATES, as
+    `(function, lineno, tier, spelling)` attributed to the INNERMOST enclosing
+    function — in all FOUR spellings AC15 enumerates.
+
+    AC15, and why the widening is the AC rather than a refactor: cycle 378's
+    instrument matched `kw.arg == "tier"` and nothing else, so
+    `arduino-crucible.py` — which states its tiers positionally and as a dict
+    key — read as a client that stamps nothing anywhere while in fact stamping
+    on every path, and its two unearned sites were invisible to the very census
+    meant to find them. §S2: "a census is only as wide as its instrument". The
+    narrow instrument is kept below, under
+    `_keyword_only_tier_literal_sites`, for one purpose: to be shown failing.
+
+    A tier fed by a VARIABLE (mvn's `_run_surefire_tier(..., tier=label)`,
+    where the verb's own name supplies the value) is deliberately not a site in
+    ANY spelling: the defect §S2 names is a literal the client asserts about a
+    run it cannot classify, never the act of passing a tier the caller
+    stated."""
+    tree = ast.parse(source, filename=filename)
+    positions = _tier_parameter_positions(tree)
+    sites = []
+
+    def literal(node):
+        return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+    def walk(node, function):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(child, child.name)
+                continue
+            if isinstance(child, ast.Call):
+                for kw in child.keywords:
+                    if kw.arg == "tier" and literal(kw.value):
+                        sites.append((function, kw.value.lineno,
+                                      kw.value.value, KEYWORD))
+                index = positions.get(_callee_name(child))
+                if index is not None and index < len(child.args):
+                    arg = child.args[index]
+                    if literal(arg):
+                        sites.append((function, arg.lineno, arg.value, POSITIONAL))
+            elif isinstance(child, ast.Dict):
+                for key, value in zip(child.keys, child.values):
+                    if (isinstance(key, ast.Constant) and key.value == "tier"
+                            and literal(value)):
+                        sites.append((function, value.lineno, value.value,
+                                      DICT_KEY))
+            elif isinstance(child, (ast.Assign, ast.AnnAssign)):
+                targets = (child.targets if isinstance(child, ast.Assign)
+                           else [child.target])
+                for target in targets:
+                    if (isinstance(target, ast.Subscript)
+                            and isinstance(target.slice, ast.Constant)
+                            and target.slice.value == "tier"
+                            and child.value is not None
+                            and literal(child.value)):
+                        sites.append((function, child.value.lineno,
+                                      child.value.value, SUBSCRIPT))
+            walk(child, function)
+
+    walk(tree, "<module>")
+    return sites
+
+
+def _keyword_only_tier_literal_sites(source, filename="<client>"):
+    """Cycle 378's instrument, transcribed from this file's own history and kept
+    for ONE purpose: to be shown failing.
+
+    AC15 claims the widening was necessary. A widened scanner standing alone
+    asserts that; the narrow one beside it, run over the same planted
+    fixtures, PROVES it — three of the four spellings walk straight past it.
+
+    One mechanical change from the original, and no behavioural one: each site
+    carries the `keyword` spelling tag, so both instruments feed the SAME
+    guard and the demonstration cannot be dismissed as a shape mismatch. What
+    it MATCHES is untouched — `kw.arg == "tier"`, and nothing else."""
     sites = []
 
     def walk(node, function):
@@ -198,30 +333,66 @@ def _tier_literal_sites(source, filename="<client>"):
                     if (kw.arg == "tier"
                             and isinstance(kw.value, ast.Constant)
                             and isinstance(kw.value.value, str)):
-                        sites.append((function, kw.value.lineno, kw.value.value))
+                        sites.append((function, kw.value.lineno,
+                                      kw.value.value, KEYWORD))
             walk(child, function)
 
     walk(ast.parse(source, filename=filename), "<module>")
     return sites
 
 
-def _is_earned(function, tier):
+# §S6's gate ruling, transcribed: "a gate verb inherits the tier of the run it
+# drives — `arduino cmd_pre_merge_gate` states `regression` because it runs the
+# full native regression suite. Classification is by the tier PASSED to the
+# run, never by the enclosing function's name."
+#
+# It is written down as a RULING because no property of the source can derive
+# it: a gate driving the whole regression suite and a `cmd_test` stamping
+# `unit` on whatever a path pointed at do the SAME thing to the AST — hand a
+# literal to a run helper. The tempting derivation ("earned when a verb NAMED
+# for the tier hands the same helper the same tier") is exactly the one that
+# would let `cmd_test`'s `unit` back in, because `cmd_unit` calls that helper
+# too. So: one entry per ruled site, and
+# `test_every_gate_ruling_names_a_site_the_census_still_finds` fails on a
+# stale entry — an allow-list nobody re-measures is the census defect again,
+# wearing the opposite sign.
+GATE_TIER_RULINGS = frozenset({
+    ("arduino", "cmd_pre_merge_gate", "regression"),
+})
+
+
+def _is_earned(client, function, tier):
     """§S2's rule: "a tier a verb states where `regression` or `e2e` IS the
-    verb's own name is EARNED and stays". The enclosing function's name is
-    split into words, so `cmd_regression`, `_regression_run` and `cmd_e2e`
-    earn theirs and `cmd_test`/`cmd_auto_ingest` earn nothing."""
-    return tier in [w for w in re.split(r"[^a-z0-9]+", function.lower()) if w]
+    verb's own name is EARNED and stays" — the enclosing function's name is
+    split into words, so `cmd_regression`, `_regression_run` and `cmd_e2e` earn
+    theirs and `cmd_test`/`cmd_auto_ingest` earn nothing — plus §S6's gate
+    ruling above, which is the one case where the enclosing name is NOT the
+    question."""
+    words = [w for w in re.split(r"[^a-z0-9]+", function.lower()) if w]
+    return tier in words or (client, function, tier) in GATE_TIER_RULINGS
 
 
-def _census():
-    """`{client: [(function, lineno, tier), ...]}` for every literal tier site
-    in the five clients, and the unearned subset of the same shape."""
+def _census_of_sources(sources, scan=_tier_literal_sites):
+    """`{client: [(function, lineno, tier, spelling), ...]}` and its unearned
+    subset, over sources handed in rather than read off disk.
+
+    Taking the SOURCES and the INSTRUMENT as arguments is what lets AC15's
+    planted fixtures and the narrow instrument go through the identical
+    classifier the fleet does: a proof that ran a different code path would
+    prove nothing about the guard."""
     earned, unearned = {}, {}
-    for client, path in CLIENT_FILES.items():
-        sites = _tier_literal_sites(path.read_text(), filename=str(path))
-        earned[client] = [s for s in sites if _is_earned(s[0], s[2])]
-        unearned[client] = [s for s in sites if not _is_earned(s[0], s[2])]
+    for client, source in sources.items():
+        sites = scan(source, filename=f"<{client}>")
+        earned[client] = [s for s in sites if _is_earned(client, s[0], s[2])]
+        unearned[client] = [s for s in sites if not _is_earned(client, s[0], s[2])]
     return earned, unearned
+
+
+def _census(scan=_tier_literal_sites):
+    """The same census over the five clients as they stand on disk."""
+    return _census_of_sources(
+        {client: path.read_text() for client, path in CLIENT_FILES.items()},
+        scan=scan)
 
 
 def _flat(census):
@@ -249,6 +420,28 @@ SITES_DRIVEN_ON_THE_WIRE = frozenset({
     ("python", "cmd_auto_ingest", "unit", PARSED),
     ("rust", "cmd_test", "unit", RUNS),
     ("rust", "cmd_auto_ingest", "unit", RUNS),
+    # AC15/AC13(ii) — arduino's two, added at cycle 385. They belong in this
+    # set by AC3's own rule and were absent for exactly one reason: the
+    # keyword-only instrument could not SEE them, so nothing ever required
+    # them to be driven. `cmd_test` stated `unit` POSITIONALLY and
+    # `cmd_auto_ingest` stated it as a DICT KEY — "the two arduino sites above
+    # ARE AC3 sites and were invisible to cycle 378".
+    ("arduino", "cmd_test", "unit", PARSED),
+    ("arduino", "cmd_auto_ingest", "unit", PARSED),
+})
+
+
+# The EARNED sites this file drives on the wire, same shape. Its counterpart
+# above is compared against the unearned census; this one exists because the
+# widened instrument made three arduino sites visible for the first time —
+# including the one §S6's gate ruling earns — and a tier the census now calls
+# EARNED has to be earned on the WIRE too, not merely in the scan.
+EARNED_SITES_DRIVEN_ON_THE_WIRE = frozenset({
+    ("arduino", "cmd_unit", "unit", PARSED),
+    ("arduino", "cmd_regression", "regression", PARSED),
+    ("arduino", "cmd_pre_merge_gate", "regression", PARSED),
+    ("rust", "_workspace_regression_run", "regression", PARSED),
+    ("rust", "_regression_ingest_run", "regression", PARSED),
 })
 
 
@@ -357,10 +550,21 @@ sys.stdout.write("probe.ino:1:1: error: 'setup' was not declared in this scope\\
 sys.exit(1)
 """
 
-# Only these two are looked up on PATH by the clients under drive; every other
+# arduino's native-host runs shell out to `make -C <native dir> <target>`; the
+# reports are written by the fixture, never by this wrapper, so a drive
+# measures the ingest and not a fake build. Added at cycle 385 with arduino's
+# own tier sites, which the keyword-only census could not see.
+_FAKE_MAKE = """#!{python}
+import os
+import sys
+
+sys.exit(int(os.environ.get("FAKE_MAKE_EXIT_CODE", "0")))
+"""
+
+# Only these are looked up on PATH by the clients under drive; every other
 # fake is addressed by an explicit path or a patched module constant, so this
 # file prepends as little to PATH as it can.
-_PATH_TOOLS = {"cargo": _FAKE_CARGO, "docker": _FAKE_DOCKER}
+_PATH_TOOLS = {"cargo": _FAKE_CARGO, "docker": _FAKE_DOCKER, "make": _FAKE_MAKE}
 _NAMED_TOOLS = {
     "fake-bun": _FAKE_BUN,
     "fake-python-runner": _FAKE_PY_RUNNER,
@@ -451,7 +655,7 @@ _ENV_KEYS = (
     "AGENT_ID", "CRUCIBLE_URL", "CRUCIBLE_BASE",
     "FAKE_BUN_JUNIT_CONTENT", "FAKE_BUN_EXIT_CODE", "FAKE_BUN_OUTPUT",
     "FAKE_PY_JUNIT_CONTENT", "FAKE_PY_EXIT_CODE", "FAKE_PY_OUTPUT",
-    "FAKE_MVN_EXIT_CODE", "FAKE_CARGO_EXIT_CODE",
+    "FAKE_MVN_EXIT_CODE", "FAKE_CARGO_EXIT_CODE", "FAKE_MAKE_EXIT_CODE",
     "BUN_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_PACKAGE_DIR",
     "BUN_CRUCIBLE_NO_LIFECYCLE",
     "PY_CRUCIBLE_PROJECT_DIR", "PY_CRUCIBLE_PYTHON",
@@ -510,6 +714,45 @@ class _ClientDriveCase(unittest.TestCase):
                                   create=True):
             code, out, err = _run_main(self.module, self.CLIENT, argv)
         return _Drive(code, out, err, calls)
+
+    def drive_with_real_std(self, argv, response=None):
+        """The same drive, with REAL file descriptors for stdout/stderr.
+
+        `rust-crucible.py`'s workspace-regression body hands the nextest child
+        the client's own stream (`subprocess.run(..., stdout=sys.stderr)`), and
+        an `io.StringIO` has no `fileno()`, so the ordinary drive raises
+        `UnsupportedOperation` before the run happens — a harness artefact that
+        would masquerade as a finding. Identical `_post` recording; the streams
+        are files this fixture reads back. Adopted from the sibling
+        `test_client_tier_run_modality.py`, which met the same wall, rather
+        than invented a second time."""
+        calls = []
+
+        def fake_post(path, payload):
+            calls.append((path, copy.deepcopy(payload)))
+            return copy.deepcopy(response if response is not None else _OK_RESPONSE)
+
+        out_path = os.path.join(self.tmpdir, "drive-stdout.txt")
+        err_path = os.path.join(self.tmpdir, "drive-stderr.txt")
+        with open(out_path, "w") as out, open(err_path, "w") as err:
+            with mock.patch.object(self.module, "_post", side_effect=fake_post,
+                                   create=True), \
+                    mock.patch.object(self.module, "_get", return_value=None,
+                                      create=True), \
+                    mock.patch.object(self.module, "_patch",
+                                      return_value={"ok": True}, create=True), \
+                    mock.patch.object(sys, "argv",
+                                      [f"{self.CLIENT}-crucible.py"] + list(argv)), \
+                    contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                try:
+                    self.module.main()
+                    code = 0
+                except SystemExit as exc:
+                    code = (exc.code if isinstance(exc.code, int)
+                            else (0 if exc.code is None else 1))
+        return _Drive(code, Path(out_path).read_text(),
+                      Path(err_path).read_text(), calls)
 
     # ── the two assertions every test in this file is built from ───────────
 
@@ -613,9 +856,12 @@ class _MvnCase(_ClientDriveCase):
 class _RustCase(_ClientDriveCase):
     CLIENT = "rust"
 
-    def rust_argv(self, verb, extra=()):
-        return [verb, "--crate", "probe_crate", "--agent", AGENT,
-                "--project-dir", self.tmpdir] + list(extra)
+    def rust_argv(self, verb, extra=(), crate=True):
+        """`--crate` is a flag of the per-crate verbs; the workspace-wide tier
+        verb (`regression`) does not take it and argparse exits 2 on it, which
+        would look like a finding and be a fixture bug."""
+        argv = [verb] + (["--crate", "probe_crate"] if crate else [])
+        return argv + ["--agent", AGENT, "--project-dir", self.tmpdir] + list(extra)
 
     def write_nextest_junit(self, profile="ci"):
         directory = Path(self.tmpdir, "target", "nextest", profile)
@@ -627,6 +873,19 @@ class _RustCase(_ClientDriveCase):
 
 class _ArduinoCase(_ClientDriveCase):
     CLIENT = "arduino"
+    NATIVE_DIR = "tests/native"
+
+    def arduino_argv(self, verb, extra=()):
+        return [verb, "--agent", AGENT, "--project-dir", self.tmpdir] + list(extra)
+
+    def write_native_reports(self):
+        """The `TEST-*.xml` a native-host run leaves under `<native>/reports`.
+        `make` is faked on PATH, so the reports come from here: a drive of this
+        client measures what it INGESTS, never a real g++ build."""
+        reports = Path(self.tmpdir, *self.NATIVE_DIR.split("/"), "reports")
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "TEST-probe.xml").write_text(_JUNIT_SUITE_ONE_PASS)
+        return str(reports)
 
 
 # ── AC3, on the wire: the twelve unearned sites ────────────────────────────
@@ -756,6 +1015,38 @@ class RustUnearnedTierTest(_RustCase):
         self.assertNoStatedTier(drive, RUNS, "rust cmd_auto_ingest -> POST /runs")
 
 
+class ArduinoUnearnedTierTest(_ArduinoCase):
+    """PIN (both) — arduino's two AC3 sites, driven on the wire for the FIRST
+    time at cycle 385.
+
+    They are pins rather than reds because cycle 380 corrected the client; what
+    was missing was any test at all. Neither site appeared in cycle 378's
+    census, and not because anyone omitted them: `cmd_test` stated `unit`
+    POSITIONALLY (`_run_native_tests(args, "test", "unit", False)`) and
+    `cmd_auto_ingest` stated it as a DICT KEY (`"tier": "unit"`), and a
+    keyword-only instrument sees neither. So the whole client — the one where
+    AC3's two hardest sites lived — contributed zero rows to the guard, and a
+    re-introduced stamp in either spelling would pass it green."""
+
+    def test_arduino_test_ingests_the_native_run_without_claiming_a_tier(self):
+        """AC3, arduino `cmd_test` — the POSITIONAL spelling. This verb ran the
+        native host build over whatever `--dir` pointed at, which says nothing
+        about the dependency those tests take."""
+        self.write_native_reports()
+        drive = self.drive(self.arduino_argv("test"))
+        self.assertNoStatedTier(drive, PARSED,
+                                "arduino cmd_test -> POST /runs/parsed")
+
+    def test_arduino_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
+        """AC3's auto-ingest clause, arduino — the DICT-KEY spelling, and the
+        CR's own named worse case: the verb invokes no toolchain at all, it
+        ingests `TEST-*.xml` files it merely FOUND."""
+        self.write_native_reports()
+        drive = self.drive(self.arduino_argv("auto-ingest"))
+        self.assertNoStatedTier(drive, PARSED,
+                                "arduino cmd_auto_ingest -> POST /runs/parsed")
+
+
 # ── the converse: an EARNED tier survives ──────────────────────────────────
 
 
@@ -817,6 +1108,78 @@ class MvnEarnedTierTest(_MvnCase):
         drive = self.drive(self.mvn_argv("regression"))
         self.assertStatedTier(drive, PARSED, "regression",
                               "mvn regression -> POST /runs/parsed")
+
+
+class ArduinoEarnedTierTest(_ArduinoCase):
+    """PIN (all three) — the converse for the client the narrow census excluded
+    entirely, and the wire half of §S6's gate ruling.
+
+    AC13(i) already reads these as pins in principle ("every run arduino
+    actually runs carries its own tier on the POST body"); what cycle 385 adds
+    is that the census can now SEE them, so a patch stripping them would fail
+    here as well as in the scan."""
+
+    def test_arduino_unit_ingests_the_native_run_under_its_own_tier(self):
+        """§S2's converse, arduino `cmd_unit` — the POSITIONAL spelling of an
+        EARNED tier: the verb's own name is the tier it states."""
+        self.write_native_reports()
+        drive = self.drive(self.arduino_argv("unit"))
+        self.assertStatedTier(drive, PARSED, "unit",
+                              "arduino unit -> POST /runs/parsed")
+
+    def test_arduino_regression_ingests_the_full_native_suite_as_regression(self):
+        """§S2's converse, arduino `cmd_regression`, driven with `--coverage` —
+        AC5's own example of a flag the migration had to keep."""
+        self.write_native_reports()
+        drive = self.drive(self.arduino_argv("regression", ["--coverage"]))
+        self.assertStatedTier(drive, PARSED, "regression",
+                              "arduino regression --coverage -> POST /runs/parsed")
+
+    def test_arduino_pre_merge_gate_inherits_the_tier_of_the_run_it_drives(self):
+        """§S6's gate ruling, on the WIRE — "a gate verb inherits the tier of
+        the run it drives … Classification is by the tier PASSED to the run,
+        never by the enclosing function's name".
+
+        This is the site the widened instrument would otherwise turn red for a
+        behaviourally correct client, and the reason `GATE_TIER_RULINGS`
+        exists. Driving it is what stops that ruling from being an unexamined
+        exemption: the gate must actually put `regression` on the wire to keep
+        it. `--skip-check` bypasses the arduino-cli compile step, so this
+        measures the regression the gate drives and not the build ahead of
+        it."""
+        self.write_native_reports()
+        drive = self.drive(self.arduino_argv("pre-merge-gate", ["--skip-check"]))
+        self.assertStatedTier(drive, PARSED, "regression",
+                              "arduino pre-merge-gate -> POST /runs/parsed")
+
+
+class RustEarnedTierTest(_RustCase):
+    """PIN (both) — rust's two regression bodies, the fleet's only instances of
+    the SUBSCRIPT spelling (`payload["tier"] = "regression"`), driven on the
+    wire for the first time at cycle 385.
+
+    Same reason as arduino's: the keyword-only census could not see either
+    site, so nothing required them to be driven, and §S6's ruling 3 — "the
+    workspace body stops being the one path where a `regression` run says
+    nothing" — could regress silently in the one spelling the old guard was
+    blind to. Both use `drive_with_real_std`: the workspace body hands the
+    nextest child a real file descriptor."""
+
+    def test_rust_regression_ingests_the_workspace_run_as_regression(self):
+        """§S2's converse, rust `_workspace_regression_run` — the tier verb's
+        own body."""
+        self.write_nextest_junit()
+        drive = self.drive_with_real_std(self.rust_argv("regression", (), crate=False))
+        self.assertStatedTier(drive, PARSED, "regression",
+                              "rust regression -> POST /runs/parsed")
+
+    def test_rust_regression_ingest_carries_the_per_crate_regression_tier(self):
+        """§S2's converse, rust `_regression_ingest_run` — the per-crate body,
+        which has posted `tier="regression"` since before this CR was cut."""
+        self.write_nextest_junit()
+        drive = self.drive_with_real_std(self.rust_argv("regression-ingest"))
+        self.assertStatedTier(drive, PARSED, "regression",
+                              "rust regression-ingest -> POST /runs/parsed")
 
 
 # ── AC13a: a compile ingest is not a test tier ─────────────────────────────
@@ -955,7 +1318,31 @@ class ArduinoCompileTierTest(_ArduinoCase, _CompileTierAssertion):
 # ── the derived census ─────────────────────────────────────────────────────
 
 
-class UnearnedTierLiteralCensusTest(unittest.TestCase):
+class _UnearnedStampGuard:
+    """The guard AC3 is enforced by, as ONE method on a mixin.
+
+    A mixin rather than a test body, and shared rather than copied, for the
+    reason AC15 exists: the planted proofs must be shown making THIS guard
+    fail. A proof aimed at a re-implementation proves nothing about the guard
+    the fleet is actually held to."""
+
+    def assertNoUnearnedStamps(self, unearned):
+        sites = _flat(unearned)
+        rendered = "; ".join(
+            f"{client} {function}:{lineno} tier={tier!r} ({spelling})"
+            for client, function, lineno, tier, spelling in sorted(sites))
+        offending_clients = sorted(c for c, s in unearned.items() if s)
+        self.assertEqual(
+            len(sites), 0,
+            f"AC3 — {len(sites)} call site(s) across {len(offending_clients)} "
+            f"client(s) {offending_clients!r} still stamp a tier their own verb "
+            f"did not earn. A verb that ran no tests, or ran whatever a path "
+            f"pointed at, cannot know the tier; absent a stated tier the run "
+            f"carries none and the server's own default applies. Survivors: "
+            f"{rendered}")
+
+
+class UnearnedTierLiteralCensusTest(_UnearnedStampGuard, unittest.TestCase):
     """AC3's count, DERIVED: "The count of corrected sites is itself asserted,
     and a `tier="..."` literal surviving anywhere outside a verb whose own NAME
     is that tier fails this AC."
@@ -966,21 +1353,12 @@ class UnearnedTierLiteralCensusTest(unittest.TestCase):
     forgetting `auto-ingest` leaves five."""
 
     def test_no_client_stamps_a_tier_its_own_verb_did_not_earn(self):
-        """RED — the derived count is 12 on `feature/CR-CRU-111`@`c6dc208`."""
+        """PIN as of cycle 385, and a WIDER pin than it was: the derived count
+        was 12 at cycle 378 with a keyword-only instrument, is 0 now, and is 0
+        under an instrument that reads three spellings the old one could not.
+        The count did not move; what the count MEANS did."""
         _earned, unearned = _census()
-        sites = _flat(unearned)
-        rendered = "; ".join(
-            f"{client} {function}:{lineno} tier={tier!r}"
-            for client, function, lineno, tier in sorted(sites))
-        offending_clients = sorted(c for c, s in unearned.items() if s)
-        self.assertEqual(
-            len(sites), 0,
-            f"AC3 — {len(sites)} call site(s) across {len(offending_clients)} "
-            f"client(s) {offending_clients!r} still stamp a tier their own verb "
-            f"did not earn. A verb that ran no tests, or ran whatever a path "
-            f"pointed at, cannot know the tier; absent a stated tier the run "
-            f"carries none and the server's own default applies. Survivors: "
-            f"{rendered}")
+        self.assertNoUnearnedStamps(unearned)
 
     def test_the_scanner_reports_an_unearned_stamp_when_it_is_shown_one(self):
         """PIN — the instrument's own bound, and the non-vacuity proof for the
@@ -997,13 +1375,14 @@ class UnearnedTierLiteralCensusTest(unittest.TestCase):
         )
         sites = _tier_literal_sites(probe, filename="<probe>")
         self.assertEqual(
-            sites, [("cmd_test", 2, "unit"), ("cmd_regression", 4, "regression")],
+            sites, [("cmd_test", 2, "unit", KEYWORD),
+                    ("cmd_regression", 4, "regression", KEYWORD)],
             "the scanner must see both literal sites, attribute each to its "
             "enclosing function, and ignore a tier passed as a VARIABLE (the "
             "shape a caller-stated tier takes)")
         self.assertEqual(
-            [s for s in sites if not _is_earned(s[0], s[2])],
-            [("cmd_test", 2, "unit")],
+            [s for s in sites if not _is_earned("probe", s[0], s[2])],
+            [("cmd_test", 2, "unit", KEYWORD)],
             "exactly the site whose enclosing verb does not name the tier is "
             "unearned — a classifier that flagged `cmd_regression` too would "
             "make the fix impossible to pass")
@@ -1015,7 +1394,7 @@ class UnearnedTierLiteralCensusTest(unittest.TestCase):
         per-call-site requirement shrinks unnoticed."""
         _earned, unearned = _census()
         scanned = {(client, function, tier)
-                   for client, function, _lineno, tier in _flat(unearned)}
+                   for client, function, _lineno, tier, _spelling in _flat(unearned)}
         driven = {(client, function, tier)
                   for client, function, tier, _endpoint in SITES_DRIVEN_ON_THE_WIRE}
         self.assertEqual(
@@ -1026,14 +1405,231 @@ class UnearnedTierLiteralCensusTest(unittest.TestCase):
 
     def test_the_earned_sites_the_scan_finds_are_the_verbs_that_name_them(self):
         """PIN — the census's other half, stated so the earned set is visible
-        rather than implied: every literal tier that SURVIVES the fix lives in
-        a function whose own name is that tier."""
+        rather than implied: every literal tier that SURVIVES lives in a
+        function whose own name is that tier, or in one §S6's gate ruling names
+        explicitly."""
         earned, _unearned = _census()
-        for client, function, lineno, tier in _flat(earned):
+        for client, function, lineno, tier, spelling in _flat(earned):
+            if (client, function, tier) in GATE_TIER_RULINGS:
+                continue
             self.assertIn(
                 tier, function.lower(),
-                f"{client} {function}:{lineno} was classified earned but its "
-                f"name does not carry {tier!r}")
+                f"{client} {function}:{lineno} ({spelling}) was classified "
+                f"earned but its name does not carry {tier!r}, and no gate "
+                f"ruling names it")
+
+    def test_every_site_the_widening_revealed_is_driven_on_the_wire(self):
+        """AC15's coverage half, DERIVED by running both instruments over the
+        same five clients: every site the widened scan can see and the
+        keyword-only one could not must be asserted on the POST body here.
+
+        This is the bound the narrow instrument made unstatable. arduino
+        contributed ZERO rows to cycle 378's census, so nothing required its
+        sites to be driven at all — and rust's two subscript sites were in the
+        same position. A guard that can SEE a site but never drives it has
+        moved the blindness rather than removed it."""
+        revealed = _sites_the_widening_revealed()
+        driven = {(client, function, tier) for client, function, tier, _endpoint
+                  in SITES_DRIVEN_ON_THE_WIRE | EARNED_SITES_DRIVEN_ON_THE_WIRE}
+        self.assertTrue(
+            revealed,
+            "the widening revealed no site at all, so this bound is vacuous "
+            "and AC15's premise — that the keyword-only instrument was blind "
+            "to real sites in the shipped fleet — is no longer measurable here")
+        self.assertEqual(
+            revealed - driven, set(),
+            f"the widened census sees tier statements this file never drives "
+            f"on the wire: {sorted(revealed - driven)!r}. These are exactly "
+            f"the sites cycle 378 could not see; making them visible without "
+            f"driving them leaves the same gap one layer up.")
+
+    def test_every_gate_ruling_names_a_site_the_census_still_finds(self):
+        """PIN — the staleness bound on the one hand-written exemption in this
+        file. `GATE_TIER_RULINGS` is a ruling, not a derivation, so its failure
+        mode is a rule outliving the code it was written for: an entry naming a
+        site the census no longer finds is an allow-list nobody re-measures,
+        which is the census defect again with the opposite sign."""
+        earned, _unearned = _census()
+        found = {(client, function, tier)
+                 for client, function, _lineno, tier, _spelling in _flat(earned)}
+        self.assertEqual(
+            GATE_TIER_RULINGS - found, frozenset(),
+            f"gate ruling(s) {sorted(GATE_TIER_RULINGS - found)!r} name a site "
+            f"the census does not find. A ruling that exempts nothing must be "
+            f"deleted, not kept: it can only ever exempt something new by "
+            f"accident.")
+
+
+# ── AC15: the instrument's own blindness, planted and proven ───────────────
+
+
+# The helpers a planted client hands its tier to. `tier` is a real PARAMETER
+# here, exactly as `arduino-crucible.py`'s `_run_native_tests(args, verb, tier,
+# want_coverage)` declares it, because that is what the positional spelling is
+# resolved against.
+_PLANTED_PROLOGUE = (
+    "def _ingest_parsed(payload=None, tier=None):\n"
+    "    return payload\n"
+    "def _run_native_tests(args, verb, tier, want_coverage):\n"
+    "    return tier\n"
+)
+
+# One planted client per spelling: an UNEARNED stamp (a verb whose name is not
+# the tier) and an EARNED control (a verb whose name is), both written in the
+# SAME spelling. The control is what stops a proof from passing because the
+# instrument flags everything.
+_PLANTED_BODIES = {
+    KEYWORD: (
+        "def cmd_test(args):\n"
+        "    return _ingest_parsed(tier=\"unit\")\n"
+        "def cmd_regression(args):\n"
+        "    return _ingest_parsed(tier=\"regression\")\n"
+    ),
+    POSITIONAL: (
+        "def cmd_test(args):\n"
+        "    return _run_native_tests(args, \"test\", \"unit\", False)\n"
+        "def cmd_regression(args):\n"
+        "    return _run_native_tests(args, \"regression\", \"regression\", True)\n"
+    ),
+    DICT_KEY: (
+        "def cmd_auto_ingest(args):\n"
+        "    payload = {\"projectKey\": \"k\", \"tier\": \"unit\"}\n"
+        "    return _ingest_parsed(payload)\n"
+        "def cmd_e2e(args):\n"
+        "    return _ingest_parsed({\"projectKey\": \"k\", \"tier\": \"e2e\"})\n"
+    ),
+    SUBSCRIPT: (
+        "def cmd_test(args):\n"
+        "    payload = {}\n"
+        "    payload[\"tier\"] = \"unit\"\n"
+        "    return _ingest_parsed(payload)\n"
+        "def cmd_regression(args):\n"
+        "    payload = {}\n"
+        "    payload[\"tier\"] = \"regression\"\n"
+        "    return _ingest_parsed(payload)\n"
+    ),
+}
+
+# `(unearned function, tier)` and `(earned function, tier)` per planted client.
+_PLANTED_EXPECTATIONS = {
+    KEYWORD: (("cmd_test", "unit"), ("cmd_regression", "regression")),
+    POSITIONAL: (("cmd_test", "unit"), ("cmd_regression", "regression")),
+    DICT_KEY: (("cmd_auto_ingest", "unit"), ("cmd_e2e", "e2e")),
+    SUBSCRIPT: (("cmd_test", "unit"), ("cmd_regression", "regression")),
+}
+
+
+def _planted(spelling):
+    return _PLANTED_PROLOGUE + _PLANTED_BODIES[spelling]
+
+
+def _sites_the_widening_revealed():
+    """`{(client, function, tier)}` the widened instrument sees in the shipped
+    fleet and cycle 378's keyword-only one cannot — measured by running both
+    over the same five files, never listed by hand."""
+    wide_earned, wide_unearned = _census()
+    narrow_earned, narrow_unearned = _census(scan=_keyword_only_tier_literal_sites)
+    narrow = {(client, function, tier)
+              for client, function, _lineno, tier, _spelling
+              in _flat(narrow_earned) + _flat(narrow_unearned)}
+    return {(client, function, tier)
+            for client, function, _lineno, tier, _spelling
+            in _flat(wide_earned) + _flat(wide_unearned)} - narrow
+
+
+class CensusInstrumentSeesEverySpellingTest(_UnearnedStampGuard, unittest.TestCase):
+    """AC15 — "the AC3 census guard sees EVERY spelling a tier can be stated
+    in … The instrument's own blindness is asserted against: a planted unearned
+    stamp in EACH of the four spellings must make the guard fail."
+
+    RED at cycle 385 for three of the four: against the keyword-only
+    instrument this class's positional, dict-key and subscript proofs cannot
+    pass, because the guard they require to FAIL passes instead — which is the
+    same act of faith the narrow scan was, and the reason arduino contributed
+    zero rows to a census that named it in five of its own table cells.
+
+    It shares `_UnearnedStampGuard` with the census class above, so the guard
+    these proofs make fail is the identical method the fleet is held to."""
+
+    def test_the_planted_fixtures_cover_every_spelling_the_instrument_declares(self):
+        """The count bound, so a FIFTH spelling taught to the instrument
+        without a planted proof fails here rather than shipping unproven."""
+        self.assertEqual(
+            set(_PLANTED_BODIES), set(SPELLINGS),
+            "every spelling the instrument claims to read must have a planted "
+            "unearned stamp proving it does")
+        self.assertEqual(set(_PLANTED_EXPECTATIONS), set(SPELLINGS))
+
+    def test_the_instrument_reads_an_unearned_stamp_in_each_of_the_four_spellings(self):
+        for spelling in SPELLINGS:
+            with self.subTest(spelling=spelling):
+                (bad_fn, bad_tier), (good_fn, good_tier) = _PLANTED_EXPECTATIONS[spelling]
+                sites = _tier_literal_sites(_planted(spelling),
+                                            filename=f"<{spelling}>")
+                read = {(fn, tier, spelt) for fn, _lineno, tier, spelt in sites}
+                self.assertIn(
+                    (bad_fn, bad_tier, spelling), read,
+                    f"AC15 — the instrument must read the {spelling} spelling: "
+                    f"a tier stated as {spelling} is a tier stated. It saw "
+                    f"{sorted(read)!r}")
+                self.assertIn(
+                    (good_fn, good_tier, spelling), read,
+                    f"AC15 — the {spelling} EARNED control must be read too; "
+                    f"an instrument that saw only the unearned one would be "
+                    f"matching the verb name, not the spelling")
+                self.assertFalse(
+                    _is_earned("planted", bad_fn, bad_tier),
+                    f"AC15 — {bad_fn} does not name {bad_tier!r} and no gate "
+                    f"ruling covers it, so the stamp is unearned")
+                self.assertTrue(
+                    _is_earned("planted", good_fn, good_tier),
+                    f"AC15 — {good_fn} IS {good_tier!r}, so its stamp is "
+                    f"earned and must survive")
+
+    def test_a_planted_unearned_stamp_makes_the_guard_fail_in_each_spelling(self):
+        """AC15's own words, executed: "a planted unearned stamp in EACH of the
+        four spellings must make the guard fail". The guard called here is the
+        one `test_no_client_stamps_a_tier_its_own_verb_did_not_earn` calls."""
+        for spelling in SPELLINGS:
+            with self.subTest(spelling=spelling):
+                (bad_fn, bad_tier), _good = _PLANTED_EXPECTATIONS[spelling]
+                _earned, unearned = _census_of_sources(
+                    {"planted": _planted(spelling)})
+                with self.assertRaises(self.failureException) as caught:
+                    self.assertNoUnearnedStamps(unearned)
+                message = str(caught.exception)
+                self.assertIn(
+                    bad_fn, message,
+                    f"AC15 — the guard must NAME the {spelling} survivor it "
+                    f"caught; a failure that does not say where it is sends "
+                    f"the reader back to the scan: {message!r}")
+                self.assertIn(repr(bad_tier), message)
+                self.assertIn(spelling, message)
+
+    def test_the_keyword_only_instrument_is_blind_to_three_of_the_four_spellings(self):
+        """The demonstration AC15 asks for, and the reason the narrow scanner
+        is kept in this file: the SAME four planted clients, read by cycle
+        378's instrument, produce a guard that PASSES on three of them.
+
+        This is not a hypothetical — it is what happened to
+        `arduino-crucible.py`, which stamped a tier on every path while the
+        census recorded it as stamping none."""
+        blind = []
+        for spelling in SPELLINGS:
+            _earned, unearned = _census_of_sources(
+                {"planted": _planted(spelling)},
+                scan=_keyword_only_tier_literal_sites)
+            try:
+                self.assertNoUnearnedStamps(unearned)
+            except self.failureException:
+                continue
+            blind.append(spelling)
+        self.assertEqual(
+            sorted(blind), sorted(set(SPELLINGS) - {KEYWORD}),
+            f"the keyword-only instrument must be blind to exactly the three "
+            f"spellings that are not `tier=`, and see the keyword one — that "
+            f"asymmetry IS the defect AC15 corrects. It was blind to "
+            f"{sorted(blind)!r}.")
 
 
 if __name__ == "__main__":
