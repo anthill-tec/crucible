@@ -117,6 +117,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact.md) | one published multi-track fact | patch | COMPLETED (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | PENDING (0.2.0) | 097 | 5 (0.2.0) |
+| [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | PENDING (0.2.0) | 016, 075 | 5 (0.2.0) |
+| [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | PENDING (0.2.0) | 047, 111 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -398,8 +400,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md)
   (user-directed at the SCRUM after CR-CRU-085 merged) — `CR-CRU-097 §S2/AC2`'s printed-help test
   HANGS when the Chromium suite runs before it in the same bun process.**
-  `tests/project-namespace-tripwire.test.ts:512` drives every client verb's `--help` for real —
-  ~157 `Bun.spawn` calls behind a 180 s cap. Standalone it takes **2.5 s**; run as
+  `tests/project-namespace-tripwire.test.ts:626` drives every client verb's `--help` for real —
+  **168** surfaces (5 root + 163 verbs, re-measured 2026-09-08) behind a 180 s cap. Standalone it
+  takes **3.1 s**; run as
   `bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.test.ts` it hits
   the cap exactly (180002 ms) and nothing else in either file changes timing. **Pre-existing, not
   CR-085's**: the same two-file pairing reproduces on `1f5498c`, develop's head at that branch cut
@@ -484,6 +487,45 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (`ForwardMarryingGuardTest`, which the CR promoted from a characterisation to a real assertion).
 
 ## Notes
+- 🧪 **2026-09-08 — TESTING STRATEGY: a DN, two CRs, and a standing gate step (user rulings).**
+  `docs/research/DN-testing-tiers-in-crucible-projects.md` is now the design authority for every
+  testing decision in a Crucible-managed project: a tier names the DEPENDENCY a test takes (not its
+  subject, not its size), real elapsed time IS a dependency, `unit` is falsifiable by wall-vs-CPU,
+  the project classifies while the client drives and tags, and a gate covers every DECLARED suite.
+  Seven open questions are left in it deliberately — the `--tier`-flag-vs-verbs fork is the one to
+  settle before CR-CRU-111 is cut, because five clients teaching six values is a one-way door.
+  **STANDING DECISION 1, adopted today:** this repo's gate includes
+  `python3 clients/python-crucible.py regression --start-dir tests/client` beside the bun
+  `pre-merge-gate`. Zero new code (`--start-dir`/`--pattern` already exist) and it closes a hole
+  that had already cost us: **CR-CRU-108 broke CR-CRU-107's AC8 test** in
+  `tests/client/test_plan_file_cycle_flag_help.py` (its stub published no `tracks`, which
+  CR-CRU-108 made a hard stop) and **both CRs shipped green**, because `pre-merge-gate` runs
+  `bun test` and the broken test is python — 65 files / 1445 tests the gate never collected. Filed:
+  **CR-CRU-111** (the client can say which tier it ran — `integration` is a tier the server accepts
+  and the bun client cannot emit; `cmd_test` stamps `unit` on every targeted run whatever it
+  touches) and **CR-CRU-112** (the gate covers every declared suite), both wave 5 / 0.2.0.
+- 🔧 **2026-09-08 — test infrastructure streamlined as MAINTENANCE (no CR, merge `460af30`).**
+  Crucible is the SUT, so this was a task, not a change request. Measured first: 2183 tests / 525 s
+  with **516 s spent waiting inside tests**, 81 files running 993 tests in 5.4 s against 13 files
+  taking 302 s. Landed: one shared render flush (`tests/helpers/dom-settle.ts`) replacing 53 private
+  copies of a fixed 20 ms loop — sound because production schedules only 0 ms and 5000 ms timers,
+  nothing in between; `test:unit` / `test:integration` / `test:client` / `test:regression` targets
+  with membership DERIVED per file and a partition guard (`tests/test-targets.test.ts`) so no file
+  falls outside every target; and the python suite in the loop. **A quick check went 525 s → 17.8 s
+  (29×)**, now 92% CPU-bound. Two classifier defects were found by measurement, not review: a greedy
+  regex read a six-second wait as `0`, and `startServer` (the real production server) was not a
+  marker — those two files were 27.8 s of the remaining 29 s. Both pinned as tests.
+- 📐 **2026-09-08 (CR-CRU-110 gap analysis) — the defect is ADJACENCY, not precedence, and the
+  spec was corrected.** In a full-suite run the Chromium suite executes at position **137/152** and
+  the printed-help test at **147/152** — ten files later, same process — and it passes in 3.2 s with
+  the suite green (2183/0, twice, JUnit-instrumented). The hang reproduces 4/4 only when the two
+  files ARE the whole invocation. Also measured: **bun's file order is not the argument order** —
+  passing the tripwire first ran Chromium first in every attempt (both orders, native and MCP shell,
+  before and after `touch`), and mtime-ascending is falsified. So the defect reaches us through
+  TARGETED runs, which is how agents run tests, not through the gate's full run. CR-CRU-110 gained
+  **AC7** (the remedy is neither a conditional skip nor a bare cap raise — AC1–AC6 were ALL
+  satisfiable by "raise the cap to 600 s"), **AC8** (scheduling dependence is stated with the runner
+  version pinned) and **AC9** (no discovery exclusion — `suite-integrity` forbids it).
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
   `crucible-axi` on PyPI: **0.1.0** then **0.1.1** (OIDC trusted publishing, pending publisher
   auto-converted on first upload). `@anthill-tec/crucible-server` on npm: **0.1.1**
