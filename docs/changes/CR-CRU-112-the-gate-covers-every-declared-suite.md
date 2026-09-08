@@ -121,6 +121,27 @@ A `regression` run of a multi-suite project covers every declared suite. Where a
 one suite, behaviour is unchanged — this repo's own bun `regression` keeps its current shape and
 gains the python suite beside it, not inside it.
 
+**ADDITIVE, NEVER EXCLUSIONARY — the composition is corrected at cycle 389's RED, which measured it
+subtracting.** Cycle 388 made the declared union REPLACE the invoking stack's whole-suite run, so a
+project declaring `test:unit` had its gate narrow from `bun test` to that one target, and RED
+measured three consequences: `run.files` vanished from every gate envelope (the count CR-CRU-051 §S2
+carries precisely so a silently shrinking suite is visible — this CR's own thesis), the gate's run
+was re-stamped `unit` where it had been `regression`, and the invocation became `bun run test:unit`,
+a strictly narrower collection. A gate that covers LESS than it did is the opposite of this CR.
+
+The rule, which the DN's gate contract already stated and the composition failed to honour:
+
+- **the invoking stack's own whole-suite regression ALWAYS runs**, unchanged — same argv, same
+  `regression` tier, same `run` block including `files`;
+- **declared suites owned by OTHER stacks are ADDED**, one dispatched run each;
+- **a declared target owned by the invoking stack is NOT re-run** — `bun test` collects everything
+  (there is no `pathIgnorePatterns`, AC6), so an own-stack target is a SUBSET of the run that already
+  happened. Its `suites[]` row says so rather than running it twice.
+
+So the union is never smaller than what the gate covered before this CR, and "a single-suite project
+is unchanged" (AC4) holds for any project with no foreign-stack suite — including a project that
+declares several own-stack targets, which is the common case.
+
 ### §S3 No suite is gained by hiding files
 
 Suites and targets narrow an invocation by naming paths. Nothing in this CR may introduce a
@@ -142,9 +163,18 @@ makes suite size unreconcilable.
   runner's failure is the defect this CR closes.
 - **AC3** — a declared suite that cannot be run (missing interpreter, missing start-dir) fails the
   gate with the suite and the reason named. It may NOT be silently skipped, and it may NOT report a
-  pass.
+  pass. **Asserted at BOTH call sites, because RED found two and a guard on one is no guard:** the
+  dispatched branch (`run_gate_suites`' own `subprocess.run`) and the LOCAL branch (a captured suite
+  run reaching the client's own `subprocess.Popen`). Today either raises `FileNotFoundError` out of
+  the gate, so the caller gets a traceback instead of a verdict and the suite that DID run goes
+  unreported with it. The gate must always emit its envelope.
 - **AC4** — a single-suite project's gate output is unchanged: same steps, same envelope shape, same
-  exit codes, asserted against a one-suite fixture.
+  exit codes, asserted against a one-suite fixture — where "unchanged" means field-for-field against
+  a NAMED, DATED snapshot of the pre-composition envelope, never against a live base ref (a base-ref
+  comparison self-invalidates on merge; that already cost this CR two repaired tests). It covers
+  three things RED measured as regressed: `run.files` is still reported, the gate's run is still
+  stamped `regression`, and the invoking stack's argv is still its whole-suite invocation rather than
+  a narrower declared target.
 - **AC5** — each suite's runs are ingested by its own stack's client, asserted on the POST BODY each
   ingest sends (the rows are made of those bodies, and the wire is what every sibling tier suite
   asserts on — no live-board dependency): the python suite's run carries the python stack and the bun
