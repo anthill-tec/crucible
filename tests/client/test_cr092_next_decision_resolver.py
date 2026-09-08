@@ -1586,7 +1586,11 @@ class NextBlockCitationsTest(unittest.TestCase):
         # envelope sit ABOVE this block, drifting it 1463-1479 -> 1471-1487.
         # Same rule, same guard, fifth time: the CR that shifted the file
         # re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1471, 1487,
+        # Re-pinned 2026-09-08 (CR-CRU-111 §S6): the DECLARED-cell detection
+        # seam — this stack's declared-cell flag adder, its READ of the
+        # discovery declaration and its RUN — sits ABOVE this block, drifting
+        # it 1471-1487 -> 1526-1542. Same rule, same guard, sixth time.
+        ("_next_start_help", "clients/python-crucible.py", 1526, 1542,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

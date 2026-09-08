@@ -655,7 +655,7 @@ def _collect_coverage(python, project_dir, env):
     }
 
 
-def cmd_test(args, tier=None):
+def cmd_test(args, tier=None, verb="test"):
     """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed.
     With --agent the result is ingested (regardless of pass/fail); a bound agent's
     run is server-stamped with its registered cycle. Exit code reflects the runner.
@@ -666,14 +666,20 @@ def cmd_test(args, tier=None):
     `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A dotted path
     says nothing about the dependency that target takes, so absent a stated tier
     this run claims none: the `tier` key is ABSENT from the ingest body and the
-    server applies its own documented default."""
+    server applies its own documented default.
+
+    §S6 ruling 1 — python's declaration surface IS this invocation, so a tier
+    verb whose `--start-dir`/`--pattern` the caller stated runs THIS body under
+    that tier, and `verb` names the envelope the run belongs to (the tier the
+    caller invoked), exactly as the gate verbs elsewhere pass theirs."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
 
-    cmd = _xmlrunner_cmd(python, args.tests, args.start_dir, args.pattern, reports_dir)
+    cmd = _xmlrunner_cmd(python, getattr(args, "tests", None), args.start_dir,
+                         args.pattern, reports_dir)
     env = os.environ.copy()
     # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
     # can still be supplied: ask the board whether this agent is bound and say
@@ -701,7 +707,7 @@ def cmd_test(args, tier=None):
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files)
-        _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
+        _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          warnings=(list(preflight_warnings)
                                    + _axi().unit_run_wall_vs_cpu_warnings(
                                        tier, "python", timing)))
@@ -716,11 +722,11 @@ def cmd_test(args, tier=None):
     # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
     # additive, so a starved toolchain stops returning an exit code with empty
     # stdout. The exit code is untouched (AC5).
-    _emit_axi("test", False,
-              {"help": _axi().no_report_help("test", "TEST-*.xml")},
+    _emit_axi(verb, False,
+              {"help": _axi().no_report_help(verb, "TEST-*.xml")},
               _axi_context(project_dir, agent_id=args.agent),
               preflight_warnings
-              + [_axi().no_report_warning("test", "TEST-*.xml", result.returncode,
+              + [_axi().no_report_warning(verb, "TEST-*.xml", result.returncode,
                                           result.stdout or "")],
               "[crucible] ERROR: no JUnit XML produced — ingested as compile")
     return result.returncode or 1
@@ -1298,9 +1304,58 @@ def _add_regression_tier_args(p):
 # by every refusal the shared registrar builds here. `unittest` discovery has
 # no tier notion, so every cell but `regression` is a DECLARED cell and the
 # declaration this runner can actually READ is the discovery selection itself.
-_TIER_DECLARATION_SURFACE = (
-    "a discovery start-dir/pattern for it "
-    "(`--start-dir tests/<tier> --pattern 'test_*.py'`)"
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    sibling (`regression`) already takes, so the instruction a refusal gives
+    can actually be typed (AC14b — the measured defect was exactly this verb
+    exiting 2 on the `--start-dir`/`--pattern` its own refusal instructs).
+
+    `--start-dir` carries NO default here, where `_add_discover_args` defaults
+    it to `tests`: on this stack the declaration IS the invocation (ruling 1),
+    so a defaulted start-dir would declare every cell silently and the refusal
+    could never fire. `--agent` is accepted and not required for the same
+    reason bun's is: argparse's usage error is not a refusal."""
+    p.add_argument("--agent", help="If set, ingest the declared run's result")
+    p.add_argument("--start-dir",
+                   help="Discovery start dir DECLARING this tier's target. No "
+                        "default: with none stated the tier has no declared "
+                        "target and the verb refuses.")
+    p.add_argument("--pattern", default="test_*.py",
+                   help="Discovery filename pattern (default: test_*.py)")
+    p.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    _add_python_arg(p)
+    _add_log_arg(p)
+    _add_gate_cycle_arg(p)
+
+
+def _read_declared_discovery(args, _target):
+    """§S6, python's READ — the discovery selection the caller stated (ruling 1:
+    "python's surface is the INVOCATION, not a project file"). `unittest` has
+    no project config this repo has agreed, and inventing a format would be a
+    new artifact nobody asked for.
+
+    The templated target is UNUSED here, and that asymmetry is this stack's:
+    on the other four it is the NAME a declaration is looked up under, while
+    here it is the example start-dir the refusal prints — the same string from
+    the same template, but a value the flag accepts rather than a key."""
+    return getattr(args, "start_dir", None)
+
+
+def _run_declared_discovery(args, tier, start_dir):
+    """§S6, python's RUN — that discovery, under the tier of the VERB that
+    asked for it. `start_dir` is already on `args`, where `cmd_test` reads it;
+    it is named here because the seam hands the run what it detected."""
+    args.start_dir = start_dir
+    return cmd_test(args, tier=tier, verb=tier)
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="tests/<tier>",
+    names="a discovery start-dir/pattern for it "
+          "(`--start-dir <target> --pattern 'test_*.py'`)",
+    read=_read_declared_discovery,
+    run=_run_declared_discovery,
+    add_args=(_add_declared_tier_args,),
 )
 
 

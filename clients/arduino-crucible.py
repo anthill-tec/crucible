@@ -460,9 +460,9 @@ def _close_gate_identity(project_dir, identity):
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
-def _run_native_tests(args, verb, tier, want_coverage):
+def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
     """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
-    (`make junit`) → parse → /api/v2/runs/parsed under the given `tier`; a
+    (`make <target>`) → parse → /api/v2/runs/parsed under the given `tier`; a
     bound agent's run is server-stamped with its registered cycle (CR-CRU-056
     §S3). `unit`/`test` ride tier `unit`; `regression` rides tier `regression`
     and, with `want_coverage`, attaches lcov coverage from
@@ -498,16 +498,21 @@ def _run_native_tests(args, verb, tier, want_coverage):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context())
         return _run_native_tests_body(args, verb, tier, want_coverage, pd,
-                                      preflight_warnings)
+                                      preflight_warnings, target)
     finally:
         _close_gate_identity(pd, identity)
 
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
-                           preflight_warnings=()):
+                           preflight_warnings=(), target="junit"):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
     finding, decided BEFORE the runner spawned; it rides every envelope this
-    body can emit, ahead of whatever the run itself discovers."""
+    body can emit, ahead of whatever the run itself discovers.
+
+    §S6 — `target` is the native-host make target to run: `junit`, the one this
+    stack's own split already has, or the one a DECLARED cell detected in the
+    Makefile under `--dir`. Which target a tier means is the project's
+    decision; this body only runs the one it is handed."""
     preflight_warnings = list(preflight_warnings)
     key, name = _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
@@ -523,7 +528,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # alone, because the shared check is scoped to `unit` by the tier it is
     # handed.
     with _axi().ChildRunTiming() as timing:
-        run = subprocess.run(["make", "junit"], cwd=native_dir,
+        run = subprocess.run(["make", target], cwd=native_dir,
                              capture_output=True, text=True)
     reports = sorted(glob.glob(os.path.join(native_dir, "reports", "TEST-*.xml")))
     if not reports:
@@ -1098,9 +1103,47 @@ def _add_native_coverage_arg(p):
 # the surface that can carry it is that native Makefile's own target list. Two
 # directories behind one `--dir` flag is not a split this client can READ, so
 # `integration` is declared here rather than invented.
-_TIER_DECLARATION_SURFACE = (
-    "a native-host `make` target for it in the Makefile under --dir "
-    "(e.g. `make junit-integration`)"
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    siblings (`unit`/`regression`) already take, so the instruction a refusal
+    gives can actually be typed (AC14b — the refusal names `--dir`, and the
+    verb that printed it had no `--dir` to accept). `--agent` and
+    `--project-dir` ride the `common` parent, as they do for every verb here."""
+    _add_native_dir_arg(p)
+    _add_gate_cycle_arg(p)
+
+
+def _read_declared_make_target(args, target):
+    """§S6, arduino's READ — a rule named for the tier in the native-host
+    Makefile under `--dir`. A make RULE is a line beginning with the target
+    name and a colon, so a target merely mentioned in a recipe or a comment is
+    not a declaration."""
+    pd = _project_dir(args)
+    sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
+    makefile = os.path.join(pd, *sub.split("/"), "Makefile")
+    try:
+        with open(makefile, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    return target if re.search(rf"^{re.escape(target)}\s*:", text, re.M) else None
+
+
+def _run_declared_make_target(args, tier, target):
+    """§S6, arduino's RUN — that native-host target, ingested under the tier of
+    the VERB that asked for it."""
+    return _run_native_tests(args, tier, tier,
+                             bool(getattr(args, "coverage", False)),
+                             target=target)
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="junit-<tier>",
+    names="a native-host `make` target for it in the Makefile under --dir "
+          "(e.g. `make <target>`)",
+    read=_read_declared_make_target,
+    run=_run_declared_make_target,
+    add_args=(_add_declared_tier_args,),
 )
 
 

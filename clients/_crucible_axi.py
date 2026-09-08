@@ -1630,7 +1630,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1471-1487`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1526-1542`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
@@ -3811,21 +3811,80 @@ def tier_verb_help(tier, meaning, wired):
             f"declare, and never falls back to another target.")
 
 
-def undeclared_tier_run(tier, funcs, surface):
-    """§S1 — the handler a tier with no declared target is registered with.
+# ── §S6 — a DECLARED target is DETECTED and RUN, not merely demanded ──────
+#
+# §S3 said a cell with no toolchain split "requires a project declaration", and
+# what shipped was the REFUSAL half only: nothing read a declaration, so a cell
+# refused even when the project HAD declared its target. "An instruction that
+# changes nothing when followed is worse than no instruction" (§S6), so the
+# refusal stays exactly as it was for the case it was written for and becomes
+# REACHABLE-PAST for every other.
+#
+# WHAT LIVES HERE IS THE POLICY, and it is the whole of it: the NAME a declared
+# target is looked up under is one template applied to the tier
+# (`declared_target_name`), the refusal's example is that SAME string
+# (`declared_tier_surface_line`, §S6 ruling 5 — "a refusal that shows an example
+# the client would not then find is the defect AC14a exists to catch"), a miss
+# is the §S1 refusal and never a fallback, and a hit runs under the VERB's own
+# tier. Five clients repeating that policy would be the second mirror AC10
+# forbids; what stays per-stack is the two facts only that stack knows — how to
+# READ its own surface and how to RUN what it found.
+#
+#   `target`    the ONE template, `<tier>` substituted: a bun `package.json`
+#               script (`test:<tier>`), an arduino native make target
+#               (`junit-<tier>`), a maven / nextest profile whose id IS the
+#               tier (`<tier>`), python's example discovery start-dir.
+#   `names`     this stack's one-line naming of WHERE the declaration goes,
+#               with `<target>` filled from the template above.
+#   `read`      `(args, target) -> declared-or-None`, that stack's own read.
+#   `run`       `(args, tier, declared) -> exit code`, that stack's own run.
+#   `add_args`  ruling 4 — the flag surface every DECLARED cell of this client
+#               takes: the one its test-running sibling already takes, so the
+#               instruction a refusal gives can actually be typed (AC14b).
+DeclaredTierSurface = collections.namedtuple(
+    "DeclaredTierSurface", ("target", "names", "read", "run", "add_args"),
+    defaults=((),))
 
-    It RAISES, so the refusal travels the fleet's own hard-stop route through
-    `run_verb` (the `ok:false` envelope carrying the project context, exit 1,
-    nothing run and nothing posted) and no client repeats a line of it. Never
-    a no-op, and never a fall-back run: the verb has to ANSWER, and what it
-    answers is which declaration is missing — and, since §S3, WHERE on this
-    stack that declaration goes (`surface`)."""
+
+def declared_target_name(surface, tier):
+    """§S6 ruling 5 — THE template, applied. The lookup and the refusal's help
+    example are both this string, so the two cannot drift apart."""
+    return surface.target.replace("<tier>", tier)
+
+
+def declared_tier_surface_line(surface, tier):
+    """§S3/AC6a — the surface sentence a refusal names, carrying the example
+    `declared_target_name` would find."""
+    return surface.names.replace("<target>",
+                                 declared_target_name(surface, tier))
+
+
+def declared_tier_run(tier, funcs, surface):
+    """§S1/§S6 — the handler a DECLARED cell is registered with: DETECT this
+    project's declaration at this stack's own surface and RUN it, or refuse.
+
+    The refusal is unchanged in shape — it RAISES, so it travels the fleet's
+    own hard-stop route through `run_verb` (the `ok:false` envelope carrying
+    the project context, exit 1, nothing run and nothing posted) and no client
+    repeats a line of it. Never a no-op, and never a fall-back run: the verb
+    has to ANSWER, and what it answers is which declaration is missing and
+    WHERE on this stack it goes.
+
+    What §S6 adds is the other branch. A declaration the project HAS made is
+    read and run, and the run rides the VERB's own tier — §S2's rule holds
+    without exception, and a detected declaration is the project's
+    classification decision being honoured, never the client classifying."""
     declared = sorted(funcs)
 
-    def _refuse_undeclared_tier(_args):
-        raise TierRunUndeclared(tier, declared, surface)
+    def _run_declared_tier(args):
+        target = declared_target_name(surface, tier)
+        found = surface.read(args, target)
+        if not found:
+            raise TierRunUndeclared(tier, declared,
+                                    declared_tier_surface_line(surface, tier))
+        return surface.run(args, tier, found)
 
-    return _refuse_undeclared_tier
+    return _run_declared_tier
 
 
 def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
@@ -3853,14 +3912,15 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
       * `add_args` — the client's own per-verb conventions, applied to all
         six (each client's project-dir flag), with a single verb's own flags
         riding that verb's `TierVerb.add_args`;
-      * `declares` — §S3/AC6a: this stack's own declaration SURFACE, in one
-        line, carried by every refusal this registration builds. Required,
-        because §S3's rule is per CELL: a client wires the cells its toolchain
-        already splits and refuses the rest, and a refusal that cannot say
-        where the declaration goes is not actionable. The surface is the
-        client's fact (a `package.json` script, a discovery start-dir, a
-        profile in `pom.xml` / `.config/nextest.toml`, a native `make`
-        target); the sentence it rides is this module's.
+      * `declares` — §S3/AC6a and §S6: this stack's `DeclaredTierSurface` —
+        WHERE a declaration goes, how to READ it, how to RUN it, and the flag
+        surface a declared cell takes. Required, because §S3's rule is per
+        CELL: a client wires the cells its toolchain already splits and
+        DETECTS the rest, and a refusal that cannot say where the declaration
+        goes is not actionable. The surface is the client's fact (a
+        `package.json` script, a discovery start-dir, a profile in `pom.xml` /
+        `.config/nextest.toml`, a native `make` target); the policy it rides —
+        the template, the refusal, the verb's tier — is this module's.
     """
     for tier, meaning in TIER_MEANINGS.items():
         wired = funcs.get(tier)
@@ -3868,10 +3928,14 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
                             help=tier_verb_help(tier, meaning, wired))
         for adder in add_args:
             adder(tp)
-        for adder in (wired.add_args if wired is not None else ()):
+        # §S6 ruling 4 — a DECLARED cell takes its client's declared-cell flag
+        # surface. Before this it took NOTHING, not even `--agent`, so it
+        # exited 2 before any declaration could be read: unusable, not merely
+        # inert, and a refusal naming a flag its own verb rejects (AC14b).
+        for adder in (wired.add_args if wired is not None else declares.add_args):
             adder(tp)
         tp.set_defaults(func=(wired.func if wired is not None
-                              else undeclared_tier_run(tier, funcs, declares)))
+                              else declared_tier_run(tier, funcs, declares)))
 
 
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────

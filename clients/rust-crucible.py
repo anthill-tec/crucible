@@ -81,6 +81,7 @@ import signal
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
@@ -1053,10 +1054,14 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     return 0 if resp.get("ok") else 1
 
 
-def cmd_test(args, tier=None, select=()):
+def cmd_test(args, tier=None, select=(), profile=None):
     """cargo nextest run -p <crate> [target selection] [--features ...]
     [--filter EXPR] -P <profile>. If --agent passed, also auto-ingest junit
     afterwards.
+
+    §S6 — `profile` is a DECLARED nextest profile detected for a tier verb; it
+    overrides `--profile` because on a declared cell the profile IS the
+    declaration (`.config/nextest.toml`), not a call-site choice.
 
     CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
     that can state one is a §S1 tier VERB, which passes it here as a parameter the
@@ -1078,10 +1083,11 @@ def cmd_test(args, tier=None, select=()):
     # runs THIS body, so the envelope must carry the verb the caller actually
     # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
     verb = tier or "test"
-    _clean_stale_junit(project_dir, args.profile)
+    profile = profile or args.profile
+    _clean_stale_junit(project_dir, profile)
     crate_selection = ["-p", args.crate] if args.crate else ["--workspace"]
     cmd = (["cargo", "nextest", "run"] + crate_selection + list(select)
-           + ["-P", args.profile])
+           + ["-P", profile])
     if args.features:
         cmd += ["--features", args.features]
     if args.no_fail_fast:
@@ -1111,7 +1117,7 @@ def cmd_test(args, tier=None, select=()):
     if args.agent:
         # Test may have failed; ingest result regardless (junit captures fail state).
         # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml.
-        junit_path = _resolve_junit_path(project_dir, args.profile)
+        junit_path = _resolve_junit_path(project_dir, profile)
         if junit_path:
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context())
@@ -1686,6 +1692,12 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     }
     if coverage:
         payload["coverage"] = coverage
+    # §S6 ruling 3 — this body runs the WHOLE workspace under nextest, which is
+    # what `regression` means, and it was the one regression path that stated
+    # nothing at all and let the server's default apply. Classification is by
+    # the tier of the RUN, never by the enclosing verb's name, so a gate verb
+    # that drives this body ingests a regression too.
+    payload["tier"] = "regression"
     context = _run_context()
     if context:
         payload["context"] = context
@@ -2241,9 +2253,85 @@ def _add_log_arg(p):
 # `unit`/`integration`/`e2e`; nothing in cargo describes a MODULE boundary or a
 # BDD form, so those cells are DECLARED, and the surface a cargo project has
 # for naming a run of its own is a nextest profile.
-_TIER_DECLARATION_SURFACE = (
-    "a profile for it in `.config/nextest.toml` "
-    "(run by `cargo nextest run -P <profile>`)"
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    siblings (`unit`/`integration`/`e2e`) already take, so the instruction a
+    refusal gives can actually be typed (AC14b).
+
+    `--profile` is deliberately NOT here where those three carry it: on a
+    declared cell the profile IS the declaration, read from
+    `.config/nextest.toml` by the tier's own name, and a flag that could point
+    somewhere else would be a second source of truth for the one fact this
+    cell exists to detect."""
+    _add_cargo_tier_run_args(p)
+
+
+def _read_declared_nextest_profile(args, target):
+    """§S6, cargo's READ — a profile in `.config/nextest.toml` whose name IS
+    the tier. Parsed as TOML rather than pattern-matched, so a profile named in
+    a comment is not a declaration."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    config = os.path.join(project_dir, ".config", "nextest.toml")
+    try:
+        with open(config, "rb") as handle:
+            profiles = (tomllib.load(handle) or {}).get("profile") or {}
+    except OSError:
+        return None
+    except tomllib.TOMLDecodeError as error:
+        print(f"[crucible] WARN: {config} does not parse ({error}) — no "
+              f"declared tier profile can be read from it", file=sys.stderr)
+        return None
+    return target if target in profiles else None
+
+
+def _run_declared_nextest_profile(args, tier, profile):
+    """§S6, cargo's RUN — nextest under that profile, ingested under the tier of
+    the VERB that asked for it. The profile is the selection: it is where a
+    project states which tests a tier means, and `-P` is how nextest is told."""
+    return cmd_test(args, tier=tier, profile=profile)
+
+
+def cmd_regression(args):
+    """§S6 ruling 3 — REGRESSION tier: this client's own workspace regression.
+
+    It is not a declared cell and never was: the target exists in the client
+    already (`cargo llvm-cov nextest --workspace`, disk-guarded and
+    gate-locked exactly as the orchestrator's own verb runs it), so refusing
+    the cell was the client declining work it demonstrably does. The tier verb
+    reports `regression` whichever of this client's two regression bodies runs
+    it."""
+    return cmd_workspace_regression(args, verb="regression")
+
+
+def _add_regression_tier_args(p):
+    """§S1/AC5 — `regression`'s own flags: the surface of the
+    `workspace-regression` verb whose body it runs, minus the project-dir flag
+    the shared registration already applies to all six."""
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
+    p.add_argument("--all-features", action="store_true",
+                   help="Pass --all-features (recommended for the canonical pre-merge gate)")
+    p.add_argument("--features",
+                   help="Specific --features set (mutually exclusive with --all-features)")
+    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+    p.add_argument("--lcov-output", default="target/lcov.info",
+                   help="lcov output path relative to project root (default: target/lcov.info)")
+    p.add_argument("--ignore-run-fail", action="store_true", default=True,
+                   help="Pass --ignore-run-fail to llvm-cov so coverage is published "
+                        "even on test failures")
+    p.add_argument("--min-free-g", type=int, default=80,
+                   help="Disk-guard floor in GB: after the pre-run clean, hard-abort if "
+                        "free /home is still below this (default: 80).")
+    p.add_argument("--keep-target", action="store_true",
+                   help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).")
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="<tier>",
+    names="a profile for it in `.config/nextest.toml` "
+          "(run by `cargo nextest run -P <target>`)",
+    read=_read_declared_nextest_profile,
+    run=_run_declared_nextest_profile,
+    add_args=(_add_declared_tier_args,),
 )
 
 
@@ -2769,9 +2857,10 @@ def main():
     # ── CR-CRU-111 §S1/§S3 — the SIX tier verbs, from the fleet's own
     # registrar. rust is the one client with no pre-existing tier-named verb,
     # so nothing migrates here. Cargo splits three of them itself (`--lib`,
-    # the `tests/` targets, a nextest profile) and those three RUN; `module`,
-    # `regression` and `bdd` are cells cargo describes no distinction for, so they answer
-    # their help and refuse until this project declares a target. A `dict(...)`
+    # the `tests/` targets, a nextest profile) and those three RUN; `regression`
+    # runs the workspace regression this client already ships (§S6 ruling 3);
+    # `module` and `bdd` are cells cargo describes no distinction for, so they
+    # DETECT a declared nextest profile and refuse only while there is none. A `dict(...)`
     # rather than a `{...}` literal, deliberately: a client dict keyed by tier
     # NAMES would be the second copy of the vocabulary AC10 forbids.
     tier_verb = _axi().TierVerb
@@ -2791,7 +2880,12 @@ def main():
                  cmd_e2e,
                  "Runs the nextest profile that carves out this tier "
                  "(`-P e2e`) and ingests junit.",
-                 (_add_e2e_tier_args,))),
+                 (_add_e2e_tier_args,)),
+             regression=tier_verb(
+                 cmd_regression,
+                 "Runs the workspace coverage regression "
+                 "(`cargo llvm-cov nextest --workspace`) and ingests it.",
+                 (_add_regression_tier_args,))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 

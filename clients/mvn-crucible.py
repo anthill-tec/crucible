@@ -1913,9 +1913,59 @@ def _add_e2e_tier_args(p):
 # lifecycle says nothing about — `bdd` above all — are DECLARED cells, and
 # maven's own way to declare a run that its lifecycle does not name is a
 # profile.
-_TIER_DECLARATION_SURFACE = (
-    "a profile in `pom.xml` binding that tier's executions "
-    "(`mvn -P<profile>`)"
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    siblings already take (`--agent`, maven's own flags, `--log`), so the
+    instruction a refusal gives can actually be typed (AC14b)."""
+    p.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
+    _add_mvn_flags(p)
+    _add_log_arg(p)
+
+
+def _read_declared_profile(args, target):
+    """§S6, maven's READ — a profile in `pom.xml` whose id IS the tier. Parsed
+    rather than pattern-matched, and namespace-agnostic (a POM's default
+    namespace decorates every tag), so what is detected is a real profile
+    declaration and never the word appearing in a comment."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    pom = os.path.join(maven_dir, "pom.xml")
+    try:
+        root = ET.parse(pom).getroot()
+    except OSError:
+        return None
+    except ET.ParseError as error:
+        print(f"[crucible] WARN: {pom} does not parse ({error}) — no declared "
+              f"tier profile can be read from it", file=sys.stderr)
+        return None
+
+    def local(tag):
+        return tag.rsplit("}", 1)[-1]
+
+    for element in root.iter():
+        if local(element.tag) != "profile":
+            continue
+        for child in element:
+            if local(child.tag) == "id" and (child.text or "").strip() == target:
+                return target
+    return None
+
+
+def _run_declared_profile(args, tier, profile):
+    """§S6, maven's RUN — maven under that profile, ingested under the tier of
+    the VERB that asked for it. The body is the one maven's own surefire cells
+    already run: a declared profile binds the executions, and which they are is
+    the project's decision, never this client's."""
+    return _run_surefire_tier(args, [f"-P{profile}"], tier)
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="<tier>",
+    names="a profile in `pom.xml` binding that tier's executions "
+          "(`mvn -P<target>`)",
+    read=_read_declared_profile,
+    run=_run_declared_profile,
+    add_args=(_add_declared_tier_args,),
 )
 
 
