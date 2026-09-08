@@ -992,8 +992,8 @@ def cmd_pre_merge_gate(args):
     # puts exactly one envelope on stdout under the name the caller invoked.
     return _axi().gate_regression(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
-        verb="pre-merge-gate", run_local=None, dispatch=None,
-        fallback=lambda: cmd_regression(reg_args, verb="pre-merge-gate"),
+        verb="pre-merge-gate", dispatch=None,
+        whole_suite=lambda: cmd_regression(reg_args, verb="pre-merge-gate"),
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=CRUCIBLE_URL)
 

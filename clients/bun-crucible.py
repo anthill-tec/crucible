@@ -1386,31 +1386,29 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the tsc check step")
             return 1
-    # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
-    # each run by the client of the stack that OWNS it; a project that declares
-    # none keeps this client's own single-runner regression below, which is the
-    # one suite it has.
+    # CR-CRU-112 §S1/§S2 — the gate's scope is this stack's whole suite PLUS
+    # every declared suite another stack owns, each run by the client of the
+    # stack that OWNS it. Additive, never exclusionary: the whole-suite
+    # regression below always runs, and a declared bun target is a subset of it
+    # rather than a replacement for it.
     return _axi().gate_regression(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
         verb="pre-merge-gate",
-        run_local=lambda suite: cmd_regression(
-            _gate_regression_args(args), verb=suite.target, tier=suite.tier,
-            script=suite.target),
         dispatch=lambda suite: _dispatch_gate_suite(args, suite),
         # §S1 — the regression body emits under THIS gate's verb, so the gate
         # puts exactly one envelope on stdout under the name the caller
         # invoked.
-        fallback=lambda: cmd_regression(_gate_regression_args(args),
-                                        verb="pre-merge-gate"),
+        whole_suite=lambda: cmd_regression(_gate_regression_args(args),
+                                           verb="pre-merge-gate"),
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=CRUCIBLE_URL)
 
 
 def _gate_regression_args(args):
-    """CR-CRU-058 §S1 / CR-CRU-112 §S1 — the regression step's own Namespace.
-    The gate's whole-suite fallback and each of its DECLARED suites take the
-    same one, so no suite can run under different flags from the gate that
-    asked for it."""
+    """CR-CRU-058 §S1 / CR-CRU-112 §S2 — the regression step's own Namespace:
+    the flags the gate's ALWAYS-RUN whole-suite regression takes, so the run
+    that covers every own-stack declared target cannot run under different
+    flags from the gate that asked for it."""
     return argparse.Namespace(
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,

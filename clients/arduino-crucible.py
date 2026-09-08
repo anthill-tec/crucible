@@ -822,22 +822,20 @@ def cmd_pre_merge_gate(args):
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
         cycle=getattr(args, "cycle", None))
-    # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
-    # each run under the tier that declared it; a project that declares none
-    # keeps this client's own native regression, which is its one suite.
-    # §S1 (CR-CRU-058) — either body emits under THIS gate's verb, so the gate
+    # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own native regression always
+    # runs, and every declared target it covers is a SUBSET of that run rather
+    # than a replacement for it, so the gate's `suites[]` names them beside it.
+    # §S1 (CR-CRU-058) — that body emits under THIS gate's verb, so the gate
     # puts exactly one envelope on stdout under the name the caller invoked.
     return _axi().gate_regression(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
         verb="pre-merge-gate",
-        run_local=lambda suite: _run_declared_make_target(
-            reg_args, suite.tier, suite.target),
         # A native `make` target declaration is a NAME and carries no command,
         # so it can name no other stack: every suite declared here is this
         # client's own, and there is nothing to dispatch.
         dispatch=None,
-        fallback=lambda: _run_native_tests(reg_args, "pre-merge-gate",
-                                           "regression", True),
+        whole_suite=lambda: _run_native_tests(reg_args, "pre-merge-gate",
+                                              "regression", True),
         context=_axi_context(pd, agent_id=args.agent),
         crucible_url=CRUCIBLE)
 
