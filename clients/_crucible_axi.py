@@ -31,6 +31,7 @@ import importlib.util
 import json
 import os
 import re
+import resource
 import subprocess
 import sys
 import time
@@ -1616,7 +1617,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1463-1479`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1471-1487`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
@@ -3773,6 +3774,129 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
             adder(tp)
         tp.set_defaults(func=(wired.func if wired is not None
                               else undeclared_tier_run(tier, funcs, declares)))
+
+
+# ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
+#
+# `unit` is the one tier of the six whose MEANING forbids waiting ("no wait on
+# the clock", `TIER_MEANINGS` above), so a run of it that spends its wall clock
+# not computing has taken a dependency its tier does not name. The check is
+# scoped to that tier alone and it is deliberate: `integration`, `e2e`,
+# `regression` and `bdd` name real elapsed time as a dependency by definition,
+# and a warning there would be noise, not a finding.
+#
+# It WARNS and never refuses. Classification is the project's decision, so the
+# client reports the contradiction rather than vetoing it: `ok` and the exit
+# code are the run's own, untouched, and a check that turned a passing suite
+# red would be a worse defect than the one it detects.
+#
+# The measurement is `resource.getrusage(RUSAGE_CHILDREN)` deltas taken around
+# the client's OWN `subprocess.run` — stdlib, no dependency. Measured
+# discrimination: a sleeping child reads 38.4x, a CPU-bound child 1.00x, and
+# this repo's own unit target 1.09x (17.8 s wall / 16.3 s CPU), so 2x sits ~1.8x
+# above a real unit suite and ~19x below a sleeping one. `RUSAGE_CHILDREN` sums
+# CPU across cores, so a PARALLEL runner reads BELOW 1x and can never
+# false-positive — the asymmetry is the reason this factor is safe.
+#
+# BOUND, stated where the mechanism is: `RUSAGE_CHILDREN` is a per-PROCESS
+# cumulative counter, so a delta taken around one `subprocess.run` is
+# attributable to that child only while the bracketed call spawns exactly ONE.
+# Every `unit` run in the fleet does. Widening this check past `unit` would
+# demand a delta per `subprocess.run` rather than one per verb (a gate that
+# brings a compose stack up spawns two), which is why widening it is not a
+# wording change.
+UNIT_RUN_WALL_EXCEEDS_CPU_CODE = "unit-run-wall-exceeds-cpu"
+
+# The tier the check is scoped to, and the factor §S4 states: wall at or over
+# 2x CPU. Named rather than spelled at the comparison so the one definition the
+# fleet shares is also the one it prints.
+WALL_VS_CPU_TIER = "unit"
+WALL_VS_CPU_FACTOR = 2.0
+
+
+class ChildRunTiming:
+    """§S4 — the bracket around a child run: wall seconds, child CPU seconds,
+    and the ratio between them.
+
+    Used as a context manager around the ONE `subprocess.run` a test verb makes
+    (`with ChildRunTiming() as timing: result = _run_logged(...)`), so the
+    rusage delta covers that child and nothing else. `wall` and `cpu` are 0.0
+    until the block exits, and never negative: a monotonic clock cannot go
+    backwards, and a rusage counter is cumulative, but clamping costs nothing
+    and keeps a nonsense figure out of a warning.
+
+    `ratio` is None when no CPU was measurable at all rather than raising or
+    reporting an infinity — a child that consumed no measurable CPU is the
+    STRONGEST form of the condition this exists to detect, so the division is
+    guarded and the caller words that case for itself."""
+
+    __slots__ = ("wall", "cpu", "_wall_at", "_cpu_at")
+
+    def __init__(self):
+        self.wall = 0.0
+        self.cpu = 0.0
+        self._wall_at = None
+        self._cpu_at = None
+
+    @staticmethod
+    def _child_cpu():
+        """CPU seconds this process's waited-for children have consumed, user
+        plus system — the whole cost of a child, since a run that spends its
+        time in the kernel is computing just as much as one in user space."""
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return usage.ru_utime + usage.ru_stime
+
+    def __enter__(self):
+        self._wall_at = time.monotonic()
+        self._cpu_at = self._child_cpu()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.wall = max(time.monotonic() - self._wall_at, 0.0)
+        self.cpu = max(self._child_cpu() - self._cpu_at, 0.0)
+        return False
+
+    @property
+    def ratio(self):
+        """wall / cpu, or None when no child CPU was measurable."""
+        return self.wall / self.cpu if self.cpu > 0 else None
+
+
+def unit_run_wall_vs_cpu_warnings(tier, client, timing,
+                                  factor=WALL_VS_CPU_FACTOR):
+    """§S4/AC6b — the envelope `warnings[]` fragment for a `unit` run that spent
+    its wall clock waiting: `[]` or exactly one `{code, detail}`, in the shape
+    `preflight_cycle_warnings` returns its finding, so a call site adds it to
+    the warnings it already carries and changes nothing else.
+
+    ONE definition for the fleet: five clients reach this, and a consumer
+    matches on `UNIT_RUN_WALL_EXCEEDS_CPU_CODE`, so `client` (this client's own
+    name — its own fact, like the declaration surface it hands
+    `add_tier_verbs`) is what tells a reader of the board WHICH stack waited.
+
+    `tier` is the tier the caller STATED, so an untiered run (`tier=None`) and
+    every tier but `unit` return `[]` without measuring anything twice. A run
+    with no wall time at all — nothing was bracketed — is not a finding
+    either."""
+    if tier != WALL_VS_CPU_TIER or timing is None or timing.wall <= 0.0:
+        return []
+    if timing.wall < factor * timing.cpu:
+        return []
+    ratio = timing.ratio
+    measured = (f"{ratio:.1f}x" if ratio is not None
+                else "no child CPU was measurable at all")
+    return [{
+        "code": UNIT_RUN_WALL_EXCEEDS_CPU_CODE,
+        "detail": (f"{client} {tier}: this run spent {timing.wall:.3f}s of "
+                   f"wall time against {timing.cpu:.3f}s of child CPU "
+                   f"({measured}, at or over the {factor:g}x mark) — a "
+                   f"{tier} run that spends its time WAITING is taking a "
+                   f"dependency its tier does not name (a process, a socket, "
+                   f"a live service, or the clock itself). Reclassify the "
+                   f"run, or find what it waits on; it is reported either "
+                   f"way, because which tier these tests belong to is the "
+                   f"project's call and not this client's"),
+    }]
 
 
 def remove_agent_silent(project_dir, agent_id, ops):

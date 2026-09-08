@@ -856,7 +856,13 @@ def _run_surefire_tier(args, goal_extra, label):
             lambda message: _narrate_heartbeat(project_dir, args.agent, message),
             _xml_total,
         )
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
+    # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
+    # run that spends its wall clock waiting is measured here and says so in its
+    # own envelope. `module` runs this same body and is left alone, because the
+    # shared check is scoped to `unit` by the tier it is handed.
+    with _axi().ChildRunTiming() as timing:
+        result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                             narrator)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
@@ -871,7 +877,9 @@ def _run_surefire_tier(args, goal_extra, label):
         # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
         # helper before this: the run they measured now rides a real envelope,
         # emitted HERE (the verb), never inside the shared ingest helpers.
-        _emit_tier_run_axi(label, ingested, project_dir, args.agent)
+        _emit_tier_run_axi(label, ingested, project_dir, args.agent,
+                           warnings=_axi().unit_run_wall_vs_cpu_warnings(
+                               label, "mvn", timing))
     else:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
                                              args.agent, common)
@@ -883,11 +891,16 @@ def _run_surefire_tier(args, goal_extra, label):
     return rc
 
 
-def _emit_tier_run_axi(verb, ingested, project_dir, agent):
+def _emit_tier_run_axi(verb, ingested, project_dir, agent, warnings=()):
     """CR-CRU-058 §S1 — the `run:` envelope for a test-tier verb, from the
     ingest state `_smart_ingest` measured. §S2 — `help[]` is derived from the
     state actually reached (unrecorded run / red run / green run), never a
-    canned per-verb string."""
+    canned per-verb string.
+
+    CR-CRU-111 §S4 — `warnings` carries what the caller found ABOUT THE RUN
+    (the wall-vs-CPU reading it took around its own child) ahead of what this
+    envelope discovers about the ingest, the order `preflight_cycle_warnings`
+    established."""
     resp = ingested["resp"]
     summary = ingested["summary"]
     ok = bool(resp.get("ok")) and summary["failed"] == 0
@@ -895,9 +908,10 @@ def _emit_tier_run_axi(verb, ingested, project_dir, agent):
                              project_dir, agent,
                              help_steps=_axi().run_help(verb, ok, summary["failed"],
                                                         CRUCIBLE_URL),
-                             warnings=([] if resp.get("ok")
-                                       else [_axi().ingest_failed_warning(
-                                           verb, CRUCIBLE_URL)]))
+                             warnings=(list(warnings)
+                                       + ([] if resp.get("ok")
+                                          else [_axi().ingest_failed_warning(
+                                              verb, CRUCIBLE_URL)])))
 
 
 _MVN_CAUSE_JOINER = " · "

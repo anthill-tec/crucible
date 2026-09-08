@@ -684,7 +684,13 @@ def cmd_test(args, tier=None):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
-    result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the day
+    # this project declares a `unit` start-dir, that cell runs THIS body and a
+    # run of it that spends its wall clock waiting says so in its own envelope.
+    # The shared check is scoped to `unit` by the tier it is handed, so an
+    # untiered targeted run measures and warns about nothing.
+    with _axi().ChildRunTiming() as timing:
+        result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not args.agent:
@@ -696,7 +702,9 @@ def cmd_test(args, tier=None):
                               context=_run_context(),
                               raw=result.stdout, files=files)
         _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
-                         warnings=preflight_warnings)
+                         warnings=(list(preflight_warnings)
+                                   + _axi().unit_run_wall_vs_cpu_warnings(
+                                       tier, "python", timing)))
         if summary["failed"] > 0:
             return 1
         return 0 if resp.get("ok") else 1

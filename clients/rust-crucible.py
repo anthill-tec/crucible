@@ -1101,7 +1101,12 @@ def cmd_test(args, tier=None, select=()):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
-    result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
+    # run that spends its wall clock waiting says so in its own envelope. The
+    # other tiers run this same body and are left alone, because the shared
+    # check is scoped to `unit` by the tier it is handed.
+    with _axi().ChildRunTiming() as timing:
+        result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
         # Test may have failed; ingest result regardless (junit captures fail state).
@@ -1111,7 +1116,9 @@ def cmd_test(args, tier=None, select=()):
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context())
             _emit_ingest_axi(verb, resp, project_dir, args.agent,
-                             preflight_warnings)
+                             list(preflight_warnings)
+                             + _axi().unit_run_wall_vs_cpu_warnings(
+                                 tier, "rust", timing))
             s = resp.get("run", {}) or {}
             if (s.get("failed") or 0) > 0:
                 return 1

@@ -1080,8 +1080,13 @@ def cmd_test(args, tier=None):
             run_warnings = preflight_warnings + run_warnings
         # §S4 — the wrapped span: the run is already OPEN, so a signal from here
         # on has an open run to disclose (the trap is inert without one).
+        # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the
+        # day this project declares a `unit` script, that cell runs THIS body
+        # and a run of it that spends its wall clock waiting says so in its own
+        # envelope. The shared check is scoped to `unit` by the tier it is
+        # handed, so an untiered `bun test` measures and warns about nothing.
         try:
-            with _abandon_trap(run_id):
+            with _axi().ChildRunTiming() as timing, _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
         except _RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
@@ -1101,7 +1106,10 @@ def cmd_test(args, tier=None):
                                   raw=getattr(result, "stdout", None),
                                   run_id=run_id)
             _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
-                             warnings=run_warnings, run_id=run_id)
+                             warnings=(run_warnings
+                                       + _axi().unit_run_wall_vs_cpu_warnings(
+                                           tier, "bun", timing)),
+                             run_id=run_id)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
             if summary["failed"] > 0:

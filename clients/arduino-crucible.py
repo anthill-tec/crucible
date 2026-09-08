@@ -517,7 +517,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     _ensure_project(key, name, pd)
-    run = subprocess.run(["make", "junit"], cwd=native_dir, capture_output=True, text=True)
+    # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
+    # run that spends its wall clock waiting says so in its own envelope. The
+    # untiered `test` verb and `regression` run this same body and are left
+    # alone, because the shared check is scoped to `unit` by the tier it is
+    # handed.
+    with _axi().ChildRunTiming() as timing:
+        run = subprocess.run(["make", "junit"], cwd=native_dir,
+                             capture_output=True, text=True)
     reports = sorted(glob.glob(os.path.join(native_dir, "reports", "TEST-*.xml")))
     if not reports:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
@@ -603,7 +610,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                   if verb == "pre-merge-gate" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
                              help_steps=help_steps,
-                             warnings=preflight_warnings)
+                             warnings=(preflight_warnings
+                                       + _axi().unit_run_wall_vs_cpu_warnings(
+                                           tier, "arduino", timing)))
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
