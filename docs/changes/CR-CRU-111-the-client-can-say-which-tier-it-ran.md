@@ -54,9 +54,17 @@ bun's.** Every `tier="..."` literal in every client, mapped to its enclosing fun
 | `mvn` | `unit` :1270, :1276 | **`unit` :1339**, `regression` :1346 | `e2e` :1097, `regression` :1226 |
 | `python` | `unit` :686, **`unit` :696 (a COMPILE ingest)** | **`unit` :854** | `regression` :799, :817 |
 | `rust` | `unit` :1085 | **`unit` :793** | — |
-| `arduino` | none | none | none — no tier literal anywhere |
+| `arduino` | **`unit` :608 (POSITIONAL)** | **`unit` :729 (DICT KEY)** | `unit` :614, `regression` :621, :787 — the verb IS the tier |
 
-So the unearned stamp lives in `cmd_test` in FOUR clients and `cmd_auto_ingest` in FOUR, and
+**The census above was WRONG for arduino, and the method is why (corrected at cycle 379's RED).**
+It scanned `tier=` KEYWORD literals only. `arduino-crucible.py` states its tiers two other ways —
+positionally (`_run_native_tests(args, "test", "unit", False)`) and as a dict key
+(`"tier": "unit"`) — so a whole client read as "stamps nothing anywhere" when in fact it stamps on
+every path, and has since before this CR was cut (`:576`, identical on `develop`). Two consequences,
+both corrected here rather than quietly: the two arduino sites above ARE AC3 sites and were invisible
+to cycle 378, and AC13's premise was false (see AC13). A census is only as wide as its instrument.
+
+So the unearned stamp lives in `cmd_test` in FIVE clients and `cmd_auto_ingest` in FIVE, and
 `auto-ingest` is the worse case: it runs no tests at all, it ingests report files it merely found, so
 it cannot know the tier by construction — yet bun asserts `e2e` and mvn/python/rust assert `unit`
 over the same discovered reports. A tier a verb states where `regression` or `e2e` IS the verb's own
@@ -89,9 +97,35 @@ the cell, derived from the toolchain, never a property of the client.
 |---|---|---|---|
 | `mvn-crucible.py` | surefire (`*Test`) · surefire scoped to a reactor module (`-pl <m> -am`) · failsafe / `integration-test` | `unit`, `module`, `integration`, `e2e` | declared |
 | `rust-crucible.py` | cargo target selection — `--lib` · `--test <t>` · nextest profiles (`-P ci`, `-P e2e`) | `unit`, `integration`, `e2e` | declared |
-| `arduino-crucible.py` | three builds — native host `g++`/`make` · `arduino-cli` · HIL | `unit` (+ `integration` where the native build separates it) | declared |
+| `arduino-crucible.py` | three builds — native host `g++`/`make` · `arduino-cli` · HIL | `unit` ONLY | declared |
 | `bun-crucible.py` | none — `bun test` has no tier notion | — | **all six** declared (`package.json` scripts) |
 | `python-crucible.py` | none — `unittest` discovery has none | — | **all six** declared (`--start-dir`/`--pattern`) |
+
+**Two corrections to this table, both measured at cycle 379's RED.** (i) rust's `--lib` and its
+`--test <t>` tier selection DO NOT EXIST in the shipped client — `--lib` appears **zero** times in
+`rust-crucible.py`, and `--test <t>` is shipped only on the untiered `test` verb, so cargo's split is
+real in the TOOLCHAIN and unreachable from any tier verb. These selectors are therefore something
+this CR BUILDS, not something it wires up. (ii) arduino's `integration` is NOT a split cell: the
+client has one `--dir` flag (default `tests/native`, with `tests/native-mock` named in its help for
+the ArduinoFake tier), and two directories behind one flag is not a distinction the client can READ.
+So arduino has exactly ONE split cell, `unit`, and `integration` is declared like the rest. The
+earlier "(+ `integration` where the native build separates it)" was a hedge, and a hedge in a matrix
+is an invented cell.
+
+**The rust gate verbs' tiers, STATED HERE because the DN does not contain them.** AC12 cited "the
+tier the DN's mapping gives them"; the DN's rust row points at "`smoke-test` / `docker-e2e-gate`
+above" and there is no such section above it (checked, and `smoke-test` appears nowhere else in the
+DN). The mapping is therefore ruled here: `docker-e2e-gate` and `smoke-test --profile e2e` are
+**`e2e`** — the profile name, the verb name and a live compose stack all agree — and the default
+`smoke-test` under `-P ci` is **`integration`**, because a workspace-wide nextest run covers cargo's
+`tests/` integration targets and is on no reading a unit run.
+
+**What a refusal NAMES, per stack (AC6a).** A declared cell's refusal is only useful if it names the
+surface the project must actually declare on: bun → a `package.json` script; python → a
+`--start-dir`/`--pattern`; maven → a profile in `pom.xml`; cargo → a profile in
+`.config/nextest.toml`. `regression` in bun and python is EXCLUDED from AC6a: that verb already
+means the whole suite by design, and what the union comprises is CR-CRU-112's subject, not a
+declaration this CR can demand.
 
 mvn's `module` verb is NOT a name collision: its shipped help already reads "MODULE tier: mvn clean
 test [-pl <module> -am]", so the module tier is maven's reactor scoping and CR-CRU-008 §S2's
@@ -226,13 +260,24 @@ zero-discovery and the compile-tier fallback alike.
   build is not a test tier, and conflating them would put a compile in the test record. Today this
   client stamps nothing at all, so a native run and a target build are indistinguishable on the
   board.
-  **The live consequence, found at RED and measured, which is worse than "indistinguishable":** this
-  client's own printed help already CLAIMS the tier it never sends — `:1067` reads "tier unit (§S3)"
-  and `:1073` reads "tier regression (§S3)" — while the code sends no `tier` at all, so
-  `src/store.ts:1911`'s `tier: meta?.tier ?? "unit"` records **every arduino full-suite regression
-  run as `unit`**. The help string is not merely aspirational, it contradicts the board. AC13 is
-  asserted against BOTH: the POST body carries the tier, and the printed help's claim matches what
-  is sent.
+  **CORRECTION — this AC's premise was false, and the correction is the finding (cycle 379's RED).**
+  "Today this client stamps nothing at all" is WRONG, and so was the claim built on it that arduino's
+  help lied and its regression runs landed as `unit`. `_run_native_tests_body` has POSTed
+  `"tier": tier` at `:576` since before this CR was cut — identical on `develop` — so every arduino
+  run it actually RUNS already carries its tier, and the help was telling the truth. The error was
+  the census instrument (keyword-only scanning), not the client. What survives as real work is
+  narrower and different:
+  - **(i) PIN, not RED** — every run arduino actually runs carries its own tier on the POST body.
+  - **(ii) the two UNEARNED arduino stamps**, invisible to cycle 378's census: `cmd_test` at `:608`
+    passes `"unit"` positionally for a verb whose name is not a tier, and `cmd_auto_ingest` at `:729`
+    hardcodes `"tier": "unit"` in its payload dict for a verb that runs no tests at all — AC3's own
+    named "worse case". Both are corrected under AC3's rule.
+  - **(iii) the help-vs-wire biconditional** — the printed help's tier claim and the POST body agree,
+    in both directions, for `unit`, `regression` AND `test`.
+  - **(iv)** the `arduino-cli` target build stays a COMPILE ingest carrying no test tier.
+  **The AC3 collision is ruled: AC3 WINS.** "Stamps a tier on EVERY test ingest" and "auto-ingest
+  runs no tests, so it may state no tier at all" contradict each other at `:729` exactly. A verb that
+  ran nothing states nothing; AC13 governs the runs arduino RUNS, never the reports it merely finds.
 - **AC13a** — no COMPILE ingest carries a test tier, asserted fleet-wide on the POST body to
   `/api/v2/runs/compile`. There are **two** offenders in `python-crucible.py`, not the one this AC
   first named: `:696` stamps `tier="unit"` on a collection/syntax failure under `test`, and `:799`
