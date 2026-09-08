@@ -97,6 +97,9 @@ this CR depends on 111.
 
 ## Non-goals
 
+- **Any server-side change.** The gate composes CLIENT-side; each suite ingests through its own
+  stack's client using the endpoints and the `{tier, stack, context}` contract the server already
+  declares (`src/v2.ts`, `src/store.ts`). No new field, endpoint or enum value.
 - Teaching any client to run another language's tests.
 - Changing what `e2e` covers or who ingests it (DN open question 5).
 - Fixing whatever the python suite reveals beyond the CR-CRU-107/108 case named in AC7.

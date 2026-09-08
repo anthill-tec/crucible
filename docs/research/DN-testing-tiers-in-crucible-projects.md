@@ -28,7 +28,32 @@ into another's business:
 agent that hand-rolled a stack's invocation would be duplicating the client's mapping. A server that
 accepted free-text tiers would surrender the comparability that justifies it.
 
-## Layer 1 — the server: what a captured test event IS
+**On breadth — read the examples as instances, not as the model.** Crucible dogfoods its own
+tracking, and Crucible itself is a bun + python project, so bun and python recur below as the cases
+with measurements attached. Nothing normative here is bun- or python-shaped: the model is the three
+layers, and Layer 2's mapping table is deliberately stated for all six stacks the fleet serves —
+including the two (rust, arduino) whose toolchains split tiers in ways bun cannot express and the
+one (vscode) that has no client yet. Where a rule is illustrated with this repo's numbers, the
+numbers are evidence for the rule, never its scope.
+
+## Layer 1 — the server: the interface is ALREADY DECLARED
+
+**Nothing in this DN, and nothing in the CRs it decomposes into, adds or redefines a server-side
+interface.** The test-event API exists and is authoritative; this layer is DESCRIPTIVE so the other
+two layers can be held to it. What the server already declares:
+
+| already declared | where |
+|---|---|
+| the tier vocabulary as a TYPE | `Tier` — `src/types.ts` |
+| VALIDATION of a submitted tier against that vocabulary | `TIERS.has(body.tier)` — `src/v2.ts` |
+| the `{tier, stack, context}` trio taken **verbatim, never fabricated** | `runMeta` — `src/v2.ts` |
+| the ingest and lifecycle endpoints | `POST /api/v2/runs/start`, `/api/v2/runs/parsed`, `/api/v2/runs/compile` |
+| the stored record | `EventRow` / `RunRow` — `src/store.ts` |
+| tier passthrough as a shipped contract | CR-CRU-016 §S4; the per-subcommand map CR-CRU-008 §S2 |
+
+So the work is **entirely client-side and agent-side**. A CR derived from this DN that proposes a new
+server field, endpoint or enum value is out of scope by construction — the server said what a test
+event is, and the fleet has not caught up with it yet.
 
 A captured event is not just a pass/fail count. The record the server stores (`EventRow`,
 `src/store.ts`) carries `tier`, `stack`, `codec`, `kind`, the counts (`total`/`passed`/`failed`/

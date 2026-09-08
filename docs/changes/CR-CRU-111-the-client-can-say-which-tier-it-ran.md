@@ -121,6 +121,13 @@ zero-discovery and the compile-tier fallback alike.
 - **AC9** — no CR-namespace literal reaches printed help (`tests/project-namespace-tripwire.test.ts`
   AC2 stays green), and the fleet verb-surface census (CR-CRU-075 §S2) is updated to the new verb
   count in the same commit that adds the verbs.
+- **AC10** — the diff touches NO server file: `git diff --stat` over `src/` is empty, and the six
+  tier values the clients accept are read from `src/types.ts` rather than re-declared in any client.
+  A second copy of the vocabulary is a second place for it to drift.
+- **AC11** — the never-implemented `--tier` flag named in CR-CRU-008's contract is retired
+  explicitly: it appears in no client (`add_argument("--tier` returns zero fleet-wide, as today) and
+  the retirement is recorded, so a reader of CR-CRU-008 is not left expecting a flag that never
+  existed.
 
 ## Estimated size
 
@@ -139,6 +146,11 @@ acceptable for a targeted run rather than assuming it.
 
 ## Non-goals
 
+- **Any server-side change.** The interface is already declared and authoritative: `Tier`
+  (`src/types.ts`), the `TIERS` validation and the verbatim `{tier, stack, context}` trio
+  (`src/v2.ts`), the ingest endpoints, and `EventRow`/`RunRow` (`src/store.ts`). This CR is
+  client-side only; `src/` is READ as the source of the vocabulary and touched not at all. A new
+  field, endpoint or enum value would be out of scope by construction.
 - Classifying files into tiers. That is the project's decision, per the DN.
 - Per-tier coverage (DN open question 4) and e2e ownership (open question 5) — both still open.
   The wall-vs-CPU check is NOT deferred: DN **D3** settled it as a warning and it is §S4/AC6b of
