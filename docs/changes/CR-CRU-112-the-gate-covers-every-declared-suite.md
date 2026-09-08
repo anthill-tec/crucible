@@ -39,6 +39,44 @@ another language's tests.
 A gate that ran a subset reports as a gate that ran a subset: the envelope names the suites it ran
 and, if any declared suite was skipped or unavailable, the gate does not report a pass.
 
+**THE DECLARATION IS CR-CRU-111'S, EXTENDED BY ONE FIELD — ruled at gap analysis, and it is what the
+Risk section demanded.** That section warned this CR could grow "a second, competing description of
+the project's tests beside the tier targets of CR-CRU-111" and required that "one declaration serves
+both". CR-111 shipped `DeclaredTierSurface(target, names, read, run, add_args)` with a per-stack
+`read` — the seam this CR needs already exists, so this CR adds a **stack** to a declared target and
+defines the rest in terms of it:
+
+- a declared target names the STACK that owns it (absent → the reading client's own stack, so every
+  existing declaration keeps its meaning);
+- a **suite** is simply a declared target owned by a stack, and one owned by a stack OTHER than the
+  invoked client is dispatched to that stack's client rather than run locally — which is §S1's "no
+  client learns another language's tests", enforced by construction instead of by discipline;
+- **`regression` is the union of the declared targets** (§S2), computed from the declaration rather
+  than from a second list.
+
+No new artifact, no second format, and nothing for the two descriptions to drift apart on.
+
+**The composition lives in `clients/_crucible_axi.py`, once.** All five clients have their own
+`cmd_pre_merge_gate` (`check` → `regression`), so a gate that dispatches per-suite must be shared or
+it will be written five times and diverge — the same argument that made `add_tier_verbs` shared in
+CR-CRU-111. Each client supplies only how to invoke a sibling client for a stack.
+
+**What already exists, and why it does NOT satisfy this CR (measured on `develop`@`e7dad2d`).**
+`package.json` declares `test:unit`, `test:integration`, `test:client`, `test:regression` and
+`test:e2e`, and `scripts/run-test-target.ts` ALREADY runs the union: `test:regression` runs
+`bun test` and then `python3 -m unittest discover -s tests/client`, returning the worse exit code. So
+§S2's union is not new — but that path invokes python DIRECTLY, so **nothing is ingested for the
+python suite, no run carries the python stack, and the gate never consults it**. The union exists in
+a place the gate does not look, which is why CR-CRU-107/108 still shipped green. §S2 is therefore a
+re-reading of an existing verb only in its OUTCOME; the mechanism is the declaration the gate reads.
+
+**`test:e2e` is DECLARED and deliberately OUTSIDE the gate.** The repo declares a fifth script
+(`bunx bddgen && bunx playwright test`). Read literally, "the gate covers every declared suite" would
+drag it in, while this CR's own non-goals defer e2e ownership to DN open question 5. Both cannot
+hold, so the declaration carries the answer explicitly: a declared target states whether the GATE
+covers it, and `test:e2e` is declared OUT with that question cited. An omission by silence would
+leave the next reader unable to tell a decision from an oversight.
+
 ### §S2 `regression` means the union
 
 A `regression` run of a multi-suite project covers every declared suite. Where a project declares
@@ -54,9 +92,12 @@ makes suite size unreconcilable.
 
 ## Acceptance criteria
 
-- **AC1** — with two suites declared (this repo: the bun suite and `tests/client` under python), a
-  single gate invocation runs BOTH and its envelope names both, with the per-suite pass/fail counts
-  attributed to the suite that produced them.
+- **AC1** — with two GATE-COVERED suites declared (this repo: the bun suite and `tests/client` under
+  python), a single gate invocation runs BOTH and its envelope names both, with the per-suite
+  pass/fail counts attributed to the suite that produced them. Asserted alongside the negative: the
+  declared-but-not-gate-covered target (`test:e2e`) is NOT run by the gate and is named as excluded
+  rather than absent, so "the gate covers every declared suite" cannot be satisfied by a declaration
+  that quietly omits one.
 - **AC2** — a declared suite that fails fails the gate: exit non-zero, `ok:false`, and the failing
   suite named in `warnings[]`. Asserted by planting one failing python test and one failing bun test
   in a fixture project, separately — two assertions, because a gate that only notices the first
@@ -72,9 +113,14 @@ makes suite size unreconcilable.
 - **AC6** — `bunfig.toml` still carries no `pathIgnorePatterns` and `tests/suite-integrity.test.ts`
   passes unchanged; the count of discovery exclusions the repo declares is still zero, asserted by
   that file's own `discoveryExclusions` over the real config.
-- **AC7** — this repo's own gate, driven end to end, reports the python suite's **1445 tests** beside
-  the bun suite's, and the CR-CRU-107/108 regression is demonstrably caught: with the CR-CRU-108
-  `tracks` fix reverted in a scratch copy, the gate fails and names the python suite.
+- **AC7** — this repo's own gate, driven end to end, reports the python suite beside the bun suite's,
+  and the CR-CRU-107/108 regression is demonstrably caught: with the CR-CRU-108 `tracks` fix reverted
+  in a scratch copy, the gate fails and names the python suite. **The figure is measured at
+  implementation time, not quoted from this AC:** the suite was 1445 tests / 65 files when this CR
+  was filed and is **1615 / 72** on `develop`@`e7dad2d` (CR-CRU-111 added seven files), so a frozen
+  number here would be wrong before the branch was cut. Assert the suite is present and its counts
+  attributed, never a literal total. `scripts/run-test-target.ts:7` still says "the 65-file python
+  client suite (1445 tests)" and is corrected in the same commit.
 - **AC8** — caller existence: a grep at VERIFY time returns ≥1 non-test caller of the multi-suite
   gate path, and the standing python gate step is invoked from the gate itself rather than only from
   documentation.
