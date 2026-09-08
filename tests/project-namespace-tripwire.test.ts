@@ -423,9 +423,20 @@ interface HelpSurface {
   exitCode: number;
 }
 
-async function collectHelpSurfaces(): Promise<HelpSurface[]> {
-  const run = async (client: string, args: string[]): Promise<{ text: string; exitCode: number }> => {
-    const proc = Bun.spawn({
+// COLLECTED SYNCHRONOUSLY, DELIBERATELY (CR-CRU-110 §S2). After a file has
+// driven Chromium through playwright in the same bun process, one child of a
+// CONCURRENTLY spawned batch has its stderr pipe torn down without its reader
+// promise settling and without the child being reaped, so
+// `new Response(proc.stderr).text()` never resolves and this test reached its
+// cap whenever the browser suite ran immediately before it — the runner's
+// bookkeeping, not this repo's; `Bun.spawnSync` is the shape measured immune.
+// The cost is stated, not hidden: ~12s for all 168 surfaces against the
+// unchanged 180s cap, where the concurrent path cost ~3.1s. Concurrency was
+// never the assertion; a result that does not depend on what ran before it is.
+// Pinned to bun 1.3.14 (0d9b296a) — a runner upgrade re-opens the question.
+function collectHelpSurfaces(): HelpSurface[] {
+  const run = (client: string, args: string[]): { text: string; exitCode: number } => {
+    const proc = Bun.spawnSync({
       cmd: ["python3", join(REPO_ROOT, "clients", client), ...args],
       cwd: REPO_ROOT,
       // COLUMNS pins argparse's wrap width so the surface is deterministic
@@ -434,13 +445,12 @@ async function collectHelpSurfaces(): Promise<HelpSurface[]> {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-    return { text: `${out}${err}`, exitCode: await proc.exited };
+    return { text: `${proc.stdout.toString()}${proc.stderr.toString()}`, exitCode: proc.exitCode };
   };
 
   const surfaces: HelpSurface[] = [];
   for (const client of CLIENTS) {
-    const root = await run(client, ["--help"]);
+    const root = run(client, ["--help"]);
     surfaces.push({ client, verb: "<root>", ...root });
     // The verb list comes from argparse's own choices group in the usage
     // line, so a verb added tomorrow is covered without editing this file.
@@ -450,13 +460,7 @@ async function collectHelpSurfaces(): Promise<HelpSurface[]> {
       .replace(/\s+/g, "")
       .split(",")
       .filter((v) => /^[a-z0-9][a-z0-9-]*$/.test(v));
-    const batchSize = 8;
-    for (let i = 0; i < verbs.length; i += batchSize) {
-      const batch = await Promise.all(
-        verbs.slice(i, i + batchSize).map(async (verb) => ({ verb, ...(await run(client, [verb, "--help"])) })),
-      );
-      for (const b of batch) surfaces.push({ client, ...b });
-    }
+    for (const verb of verbs) surfaces.push({ client, verb, ...run(client, [verb, "--help"]) });
   }
   return surfaces;
 }
@@ -626,8 +630,8 @@ const SYNTHETIC_TRIPWIRE_FIXTURE = {
 describe("CR-CRU-097 §S2/AC2 — no help string any client PRINTS names a project's CR namespace", () => {
   test(
     "every verb's --help and every client's root help, driven for real, print no CR namespace literal",
-    async () => {
-      const surfaces = await collectHelpSurfaces();
+    () => {
+      const surfaces = collectHelpSurfaces();
 
       // NON-VACUITY FIRST. A green built on a mis-parsed verb list would be
       // worthless, and the parse is the only fragile step: it reads
