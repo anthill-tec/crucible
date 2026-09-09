@@ -80,6 +80,20 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      # CR-CRU-112 §S1 (measured on the 0.2.0 release, run 34303803078) — this
+      # job runs `bun test`, which collects the WHOLE suite: 2102 tests across
+      # 154 files, including the Chromium integration tier. Only `test-e2e`
+      # installed a browser, so every browser-dependent test here died with
+      # `launch: Executable doesn't exist at …/ms-playwright/
+      # chromium_headless_shell-…`, and CR-CRU-110's order-independence guard
+      # failed WITH them — it drives a child `bun test <chromium> <tripwire>`,
+      # so a runner with no browser fails the child and therefore the guard.
+      # The job that RUNS a tier must own that tier's toolchain (§S1's own
+      # rule); skipping the browser suite here instead would be a gate that
+      # cannot see, which is the defect this CR exists to close. Same command
+      # as test-e2e's, deliberately — one provisioning idiom, not two.
+      - name: Install Playwright browsers (the suite includes the Chromium tier)
+        run: bunx playwright install --with-deps chromium
       - name: Bun suite
         run: bun test
 
