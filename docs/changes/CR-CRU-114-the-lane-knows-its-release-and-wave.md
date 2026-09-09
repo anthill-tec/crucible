@@ -157,6 +157,15 @@ rather than inferring it from the CR that came back.
       crossing of an unnamed wave" by key presence alone.
 - [ ] The EARLIEST published wave announces no completed predecessor: there is no previous distinct
       label, so the key is absent. A first wave has crossed nothing.
+- [ ] **The announcement is scoped to the container asked about** — ruled 2026-09-09 at cycle 401
+      from VERIFY's finding on `_boundary_announcement`. `next --release 0.2.0` announces that wave 5
+      completed WITHIN 0.2.0 even while wave 5 holds an actionable entry that declares no release,
+      because a release-scoped question is answered about that release and nothing else: it is the
+      same rule as §S1's container narrowing and the standing non-goal that release-less work is
+      invisible to a release-scoped view. Asserted as a PAIR on ONE board — with `--release` the
+      answer announces wave 5; with no flag the same board answers about the actionable wave-5 row and
+      announces nothing. The unscoped reading would make the announcement report on work the caller
+      explicitly excluded.
 - [ ] The predecessor is the previous distinct wave LABEL in the published order: asserted with a
       fixture whose labels do not sort into their published sequence, so a parse-based reading answers
       differently from the published-order reading and the test can tell them apart.
@@ -195,9 +204,9 @@ requirement that could not exist when this spec was written.
       driving BOTH on one board — take the answer, file a plan for exactly that CR, and require a
       non-refusal. A `next` answer that trips `already-active` or `out-of-order` is a failure of THIS
       CR, not of the guard.
-- [ ] An entry whose `wave` is empty never resolves the lane's wave, mirroring the guard's own
-      `if (row.wave === "") continue;` (`src/store.ts:3377`). Asserted with a wave-less entry sitting
-      first in the published order.
+- [ ] An entry whose `wave` is empty never resolves the lane's wave, mirroring the wave-scope guard's
+      own `if (row.wave === "") continue;` exclusion in `src/store.ts`. Asserted with a wave-less
+      entry sitting first in the published order.
 - [ ] `--wave <n>` naming a wave CR-CRU-116 would not permit still answers about THAT wave — the
       reader validates the declared sequence and the server enforces the constraint; `next` does not
       grow a refusal of its own. No new `HOLD` trigger kind is added: `HOLD_TRIGGER_KINDS` still has
