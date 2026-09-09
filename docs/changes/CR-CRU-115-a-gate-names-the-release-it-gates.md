@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 6 (0.2.0)
 - **Depends on**: 013, 073
-- **Status**: PENDING (0.2.0)
+- **Status**: COMPLETED (shipped 2026-09-10 on release/0.2.0)
 - **Design reference**: `docs/research/DN-crucible-wave-track-release.md` — the drift section's **D3**
   (the release's in-flight state already has a carrier: the gate), and "What a release IS" §2, which
   makes the no-mistakes run the release workflow's tracked trace
