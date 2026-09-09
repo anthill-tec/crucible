@@ -238,13 +238,28 @@ Two cycles — one for the refusals, one for the marker. `src/store.ts` (the wav
 `clients` head **785**. The head figure is re-recorded in the LAST prose-changing cycle, in the same
 commit as that prose — cycle 394, since cycle 395 is read-only VERIFY.
 
-Measured at that point: only **`public` moves, 435 → 436**. `src` re-measures at 563 and `clients`
-at 785, unchanged — so the prediction that the server work would drift `src` was wrong, and the one
-moving citation is `public/app-logic.mjs` 85 → 86, where the retired `kind === "proposed"` comment
-cited one CR and its replacement cites CR-CRU-116 §S4 **and** names the CR-CRU-096 AC1 reading it
-supersedes. Holding the pin by dropping that second citation is REFUSED: the pin measures provenance,
-so provenance growing is the pin working. The re-record carries the per-file decomposition, so it is
-auditable rather than a nudged constant.
+Measured at that point: **both trees drift, as this step predicted.** `src` 563 → **573** and
+`public` 435 → **436**; `clients` unchanged at 785. Per file:
+
+| tree | file | citations | cycle |
+|---|---|---|---|
+| `src` | `store.ts` | 257 → 265 | 393 |
+| `src` | `v2.ts` | 189 → 190 | 393 |
+| `src` | `hints.ts` | 39 → 40 | 393 |
+| `public` | `app-logic.mjs` | 85 → 86 | 394 |
+| `public` | `app.js` | 225 → 225 | 394 |
+| `public` | `app-logic.d.mts` | 53 → 53 | 394 |
+
+The one moving `public` citation is where the retired `kind === "proposed"` comment cited one CR and
+its replacement cites CR-CRU-116 §S4 **and** names the CR-CRU-096 AC1 reading it supersedes. Holding
+the pin by dropping that second citation is REFUSED: the pin measures provenance, so provenance
+growing is the pin working. Both figures are re-recorded in cycle 394's commit with this
+decomposition, which is what makes a re-record auditable rather than a nudged constant.
+
+**A guarded tree's citation guard lives in a THIRD file.** `src` drifted in cycle 393 and the branch
+carried a red tripwire for two cycles, because that cycle was verified by running its own two test
+files. A cycle that adds prose to `src/`, `public/` or `clients/` is not done until
+`tests/project-namespace-tripwire.test.ts` itself has been run.
 
 **This is the only CR of wave 6 that touches `src/`.** CR-CRU-114 and CR-CRU-115 each assert an empty
 `git diff --stat -- src public` at close; this one owns the server change, so those ACs stay honest.
