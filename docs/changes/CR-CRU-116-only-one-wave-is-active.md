@@ -33,9 +33,24 @@ and which today asks nothing about waves; `hints.ts:183`'s existing ascending-or
 
 ### §S1 A wave is active when it holds open work, and only one may
 
-A wave is **active** while it holds an open plan or an `IN_PROGRESS` CR. Activeness stays DERIVED —
-no wave record, no state to set, no verb to forget — exactly as wave completion does (ruled
-2026-09-09). What this CR adds is the refusal that keeps the derivation single-valued.
+A wave is **active** while it holds a CR the queue derives as `IN_PROGRESS`. That is ONE source, not
+two: `deriveQueueStatus` (`src/store.ts:4098-4111`) already answers "is this CR in flight?" as
+`plans.find((plan) => plan.status === "open")`, so "an open plan" and "an `IN_PROGRESS` CR" are the
+same fact read twice. The guard consumes the existing derivation rather than restating it.
+
+**`aborted` is not `open`.** Measured on this board 2026-09-09: 102 plans, `closed: 96`,
+`aborted: 6`, **`open: 0`**. The six aborted plans sit on completed CRs in waves 4 and 5, and an
+activeness rule keyed on "a plan exists that is not closed" would mark both of those waves active
+forever. `plan.status` has three values and only `open` confers activeness.
+
+**The guard reads the QUEUE's wave, never `plan.wave`.** A plan carries a `wave` its caller supplied,
+and the two can disagree: plan `95` carries `wave: 6` while the queue declares `CR-CRU-092` in wave
+**5** (measured 2026-09-09). Queue membership is the declared fact `cr-plan`/`wave-sequence` author;
+`plan.wave` is a snapshot, so one mislabelled `plan-file` must not be able to poison the constraint.
+
+Activeness stays DERIVED — no wave record, no state to set, no verb to forget — exactly as wave
+completion does (ruled 2026-09-09). What this CR adds is the refusal that keeps the derivation
+single-valued.
 
 Opening a plan for a CR whose wave is not the active wave is **refused** while another wave is
 active, with `code: "already-active"` naming the wave that holds the open work. The existing
@@ -58,11 +73,19 @@ Each refusal carries `help[]` stating what would make the write legal: for `alre
 or aborting the open plan in the active wave; for `out-of-order`, the blocking CR and that it must
 land or be declared dead. A refusal that only says no is a refusal the caller cannot act on.
 
-### §S4 One wave carries the marker
+### §S4 One wave carries the marker — and today the renderer gives it to all of them
 
-With the constraint enforced, at most one wave can satisfy "holds open work", so the roadmap's
-`· active` marker has exactly one candidate by construction. The renderer's marker rule is asserted
-against a two-wave release — the shape 0.2.0 now has — so a second marker cannot appear.
+The roadmap's `· active` marker is currently a **release-level** flag copied into every wave box
+(`public/app-logic.mjs`): `const active = kind === "proposed"`, then each box is built as
+`{ wave, active, … }`. Its own comment states that the `false` branch is "UNREACHABLE by
+construction" — true while a release held one wave, false the moment it holds two. With 0.2.0
+proposed and holding waves 5 and 6, **both boxes render `· active`**, which is the invariant violated
+on screen rather than in data.
+
+Activeness becomes a per-WAVE fact from the same derivation §S1 uses: the box whose wave holds an
+`IN_PROGRESS` CR carries the marker, and no other box does. A release with no work in flight carries
+no marker at all — the `false` branch stops being unreachable, so it is now a state to assert rather
+than a comment to trust.
 
 ## Acceptance criteria
 
@@ -71,6 +94,14 @@ against a two-wave release — the shape 0.2.0 now has — so a second marker ca
 - [ ] With an open plan for a CR in wave 6, a plans POST for a CR in wave 7 is refused with
       `ok: false` and `code: "already-active"`, and the error names wave **6** and the CR whose plan is
       open.
+- [ ] An **aborted** plan confers no activeness: with wave 4 holding an aborted plan and nothing
+      open, a plans POST for a wave-6 CR succeeds. Asserted against the live shape — 6 aborted plans
+      across waves 4 and 5, 0 open (measured 2026-09-09).
+- [ ] The guard reads the wave from the QUEUE entry, not from the plan: a plan whose `wave` disagrees
+      with its CR's queue entry (plan `95` says 6, the queue says 5) does not change which wave is
+      active. Asserted with a fixture carrying exactly that disagreement.
+- [ ] Activeness is computed from the same derivation the queue publishes — a census asserts the
+      guard has no second in-flight rule of its own beside `deriveQueueStatus`.
 - [ ] With an open plan for a CR in wave 6, a plans POST for a **second CR in wave 6** SUCCEEDS —
       the constraint is one active WAVE, never one open plan.
 - [ ] With no open plan and no `IN_PROGRESS` CR anywhere, a plans POST for a CR in the earliest
@@ -103,9 +134,15 @@ against a two-wave release — the shape 0.2.0 now has — so a second marker ca
 
 - [ ] Given a release holding two waves where one has open work, the roadmap's `· active` marker
       renders on exactly **one** wave box — asserted by counting marker nodes across both boxes, not
-      by inspecting one.
-- [ ] Given a release holding two waves with no open work, **zero** markers render, and that is not
-      an error.
+      by inspecting one. Today both carry it, because `active` is `kind === "proposed"`; this is a
+      CODE FIX in `public/app-logic.mjs`, not an assertion over already-correct behaviour.
+- [ ] Given a release holding two waves with no work in flight, **zero** markers render, and that is
+      not an error — the branch the current comment calls "UNREACHABLE by construction".
+- [ ] The header text is asserted whole for both boxes, so `Wave 5` reads without ` · active` while
+      `Wave 6 · active` carries it, in the SAME render — the roadmap suite has no two-wave fixture
+      today, so one is added.
+- [ ] `data-active` on the non-active box is `"false"`, matching the attribute the renderer already
+      publishes.
 
 **Integration**
 
@@ -116,25 +153,32 @@ against a two-wave release — the shape 0.2.0 now has — so a second marker ca
 
 ## Estimated size
 
-One to two cycles. `src/store.ts` (the wave guard beside `transitionCycle`'s siblings),
-`src/v2.ts` (the plans route), `src/hints.ts` (the two help lines), `public/app.js` only if §S4's
-marker count is not already single-valued; tests in `tests/` and `tests/client/`.
+Two cycles — one for the refusals, one for the marker. `src/store.ts` (the wave guard beside
+`transitionCycle`'s siblings), `src/v2.ts` (`handlePlanFile`, which `handlePlansRoute` dispatches at
+`:2918-2928` and which today asks nothing about waves), `src/hints.ts` (the two help lines),
+`public/app-logic.mjs` (§S4's per-wave `active`) and the `public/app.js` render site that reads
+`box.active`; tests in `tests/` and `tests/client/`.
+
+**Close-out step, planned once rather than escalated per cycle:** this CR adds prose to both guarded
+trees, and `PROSE_CITATIONS` pins `src` head at **563** and `public` head at **435**
+(`tests/project-namespace-tripwire.test.ts`, measured 2026-09-09). Both head figures are re-recorded
+in the final cycle, in the same commit as the last prose change.
 
 **This is the only CR of wave 6 that touches `src/`.** CR-CRU-114 and CR-CRU-115 each assert an empty
 `git diff --stat -- src public` at close; this one owns the server change, so those ACs stay honest.
 
 ## Risk
 
-- **A constraint that refuses writes can strand an orchestrator mid-flight.** If two waves already
-  hold open work when this ships, the first refusal it issues may be for work already under way. The
-  ACs must include the migration case: an existing second-wave open plan is reported, never
-  silently closed, and the CR states which of the two is treated as active (the earlier wave).
-- The guard reads the queue on a write path that today reads only plans. Cost is one extra read per
-  plan creation; `GET …/plans` already measured 6-9 s at 102 open plans, so the guard must not add a
-  second full queue scan per request.
-- Activeness derived from "an open plan or an `IN_PROGRESS` CR" has two sources. If they can
-  disagree — a plan open on a CR the queue calls `COMPLETED` — the CR must state which wins rather
-  than let the answer depend on evaluation order.
+- **No migration case exists, and that was measured rather than assumed.** The board holds 0 open
+  plans, 0 active cycles and 0 `IN_PROGRESS` CRs (2026-09-09), so no wave is active and the first
+  refusal this ships cannot strand work already under way. The hazard was real only under an
+  activeness rule that counted aborted plans, which §S1 now excludes by name.
+- The guard reads the queue on a write path that today reads only plans. `GET …/plans` measured
+  6-9 s at 102 plans, so the guard must not add a full queue scan per request — `deriveQueueStatus`
+  is already per-CR, and the wave question needs the entries' `wave` and `status` only.
+- **§S4 makes an "unreachable" branch reachable.** The renderer's `active === false` path has never
+  executed, so nothing about it is proven — including whether the header, the roll-up and the
+  annotation slot read correctly without the marker. That branch needs assertion, not inspection.
 
 ## Non-goals
 
