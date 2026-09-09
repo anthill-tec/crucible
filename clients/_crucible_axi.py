@@ -2422,7 +2422,21 @@ def cmd_plan_file(args, project_dir, ops):
         # CR-CRU-054 §S2b (DN §4 finding #2) — context.cr rides the FAILURE
         # envelope too: a plan-file that could not be filed is exactly when the
         # caller needs to know which CR it was for.
-        ops.emit("plan-file", False, {"cr": args.cr},
+        #
+        # CR-CRU-116 §S3 — and so do the two fields that make the refusal
+        # ACTIONABLE. The wave scope answers `already-active` / `out-of-order`
+        # with a `help[]` naming the move that clears it, and this client is
+        # how an orchestrator files a plan; emitting only `cr` left both
+        # surviving in the legacy stderr line alone, which is the one channel
+        # a machine caller does not read. `code` rides only when the server
+        # declared one — see `server_failure_code`.
+        fields = {"cr": args.cr,
+                  "help": (server_failure_help(resp)
+                           or server_unreachable_help("plan-file", ops.base_url))}
+        refusal_code = server_failure_code(resp)
+        if refusal_code:
+            fields["code"] = refusal_code
+        ops.emit("plan-file", False, fields,
                  ops.context(project_dir, agent_id=agent_id, cr=args.cr),
                  warnings, legacy)
         return 1
@@ -2909,19 +2923,22 @@ def queue_lifecycle_path(project_key, cr, verb):
     return f"/api/v2/projects/{project_key}/queue/{cr}/{verb}"
 
 
-def server_failure_help(resp):
-    """The `help[]` the SERVER derived for a refusal, lifted out of the
-    `http_request` error string (PURE).
+def server_failure_body(resp):
+    """The SERVER's structured refusal, parsed back out of the `http_request`
+    error string (PURE) — or None when the failure carried none (a transport
+    failure, or a body that is not the fleet's JSON refusal).
 
-    `http_request` flattens an HTTP error to `"HTTP <code>: <body>"`, so the
-    structured refusal — including the state-derived `help[]` `roadmapHints`
-    builds (`src/hints.ts:358`) — survives only as text. Lifting it is what
-    keeps §S9's division honest: AC6's "a `help[]` entry
-    `release-propose --label 9.9.9`" is the SERVER's own derivation, and a
-    client re-deriving it would be a second decision-maker for the same rule.
+    `http_request` flattens an HTTP error to `"HTTP <code>: <body>"`, so every
+    field the server derived — its `help[]`, its `code` — survives only as
+    text. ONE parse serves both readers below: CR-CRU-116 §S3 needed the
+    `code` beside the `help[]` that was already lifted here, and a second
+    partition-and-`json.loads` differing by one key is the duplication this
+    module exists to prevent.
 
-    Returns the parsed list, or None when the failure carried none (a
-    transport failure, or a body that is not the fleet's JSON refusal)."""
+    Lifting rather than re-deriving is what keeps CR-CRU-091 §S9's division
+    honest: the refusal's wording and its next move are the SERVER's own
+    derivations, and a client that rebuilt either would be a second
+    decision-maker for the same rule."""
     error = (resp or {}).get("error")
     if not isinstance(error, str):
         return None
@@ -2930,8 +2947,32 @@ def server_failure_help(resp):
         parsed = json.loads(detail)
     except (ValueError, TypeError):
         return None
-    steps = parsed.get("help") if isinstance(parsed, dict) else None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def server_failure_help(resp):
+    """The `help[]` the SERVER derived for a refusal (PURE) — the state-derived
+    steps `roadmapHints` (`src/hints.ts:358`) and `waveHints` build. AC6's "a
+    `help[]` entry `release-propose --label 9.9.9`" is the server's answer,
+    read back verbatim.
+
+    Returns the parsed list, or None when the failure carried none."""
+    parsed = server_failure_body(resp)
+    steps = parsed.get("help") if parsed else None
     return [str(s) for s in steps] if isinstance(steps, list) and steps else None
+
+
+def server_failure_code(resp):
+    """CR-CRU-116 §S3 — the machine-readable `code` the SERVER put on a
+    refusal (PURE), so a caller can BRANCH on which rule refused instead of
+    matching the error sentence.
+
+    Returns None when the failure declared none, and nothing is invented in
+    that case: a transport failure has no server-side code, and a client that
+    synthesised one would be answering a question the server did not."""
+    parsed = server_failure_body(resp)
+    code = parsed.get("code") if parsed else None
+    return code if isinstance(code, str) and code else None
 
 
 def roadmap_failure_fields(verb, resp, ops, full=False):

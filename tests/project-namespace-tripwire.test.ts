@@ -1306,10 +1306,29 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // by running the two suites it edited and not this guard — which is a THIRD
 // file, and the only one that measures a tree rather than a behaviour. A cycle
 // that adds prose to a guarded tree runs this file before it is called done.
+// UPDATED 2026-09-09 by CR-CRU-116's FIX round (cycle 396), which CORRECTS the
+// note above: `clients/` does move after all. VERIFY found the plans route's
+// refusal arriving at an orchestrator stripped of the two fields that make it
+// actionable — the client emitted only `cr` on a failed `plan-file`, so §S3's
+// `help[]` and the `already-active` / `out-of-order` `code` survived in the
+// legacy stderr line alone, which is the one channel a machine caller does not
+// read. Fixing that is a prose change in a guarded tree, so it re-records here
+// in its own commit rather than leaving the head stale for a second time.
+//
+// `clients/` HEAD moves 785 -> 789, +4, all of it `_crucible_axi.py`
+// (151 -> 155) and nothing in the five stack clients, which delegate:
+//   `server_failure_body`   +2   the ONE parse of the server's refusal, and
+//                                the §S9 division that says why the client
+//                                lifts the fields rather than deriving them
+//   `server_failure_code`   +1   why a transport failure gets no invented code
+//   `cmd_plan_file`         +1   the failure branch that now forwards both
+// All four are prose on a `#` or docstring line, none in a string. `src/` and
+// `public/` are untouched by this commit and re-measure at 573 and 436. The
+// `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 573 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 436 },
-  clients: { exts: [".py"], develop: 601, head: 785 },
+  clients: { exts: [".py"], develop: 601, head: 789 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
