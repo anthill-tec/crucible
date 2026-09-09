@@ -1670,11 +1670,17 @@ def _hold_help(trigger):
     return steps
 
 
-def _drained_help(reason, lane):
+def _drained_help(reason, lane, next_wave=None):
     """§S6 — `DRAINED`'s state-derived `help[]`: the move that would REFILL the
     lane. `wave-complete` additionally names the lane's corpses, so a lane that
     drained because its remaining work was declared dead reads as legible
-    rather than mysterious (AC16)."""
+    rather than mysterious (AC16).
+
+    §S2 — on a finished wave the move that OPENS the next one carries that
+    wave's LABEL as data, taken verbatim from the published order, so the
+    caller is not left to re-derive it off the board; a wave with nothing
+    published after it keeps the placeholder, because there is no label to
+    name."""
     sequence = ("wave-sequence --release <v> --wave <n> --crs <a,b,c> "
                 "--agent <agentId>")
     if reason == "no-roadmap":
@@ -1691,7 +1697,9 @@ def _drained_help(reason, lane):
                      + ", ".join(_dead_phrase(cr, lc) for cr, lc in dead))
     steps.append("cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
                  "--agent <agentId>")
-    steps.append(sequence)
+    opens = next_wave or "<n>"
+    steps.append(f"wave-sequence --release <v> --wave {opens} "
+                 f"--crs <a,b,c> --agent <agentId>")
     return steps
 
 
@@ -1780,7 +1788,20 @@ def _lane_fields(release, wave, track, entry=None):
     return fields
 
 
-def _next_answer(entry, lane_fields):
+def _announced_fields(fields, announced):
+    """§S2 — the boundary statement, carried ALONGSIDE the decision on every
+    answer: the crossing is a fact about the resolved WAVE, not about which
+    decision that wave produced.
+
+    It is ABSENT rather than empty or null when there is nothing to announce,
+    so a reader tells "no crossing" from "a crossing of an unnamed wave" by key
+    presence alone, and an expired announcement leaves no residue behind."""
+    if announced:
+        fields["waveCompleted"] = announced
+    return fields
+
+
+def _next_answer(entry, lane_fields, announced=None):
     """§S2/AC14 — `NEXT`'s result fields. Every declared value is CONSUMED
     verbatim and an undeclared `release` is OMITTED, never defaulted, never
     index-derived. The container rides every answer through `_lane_fields`, so
@@ -1790,18 +1811,21 @@ def _next_answer(entry, lane_fields):
     if seq is not None:
         fields["seq"] = seq
     fields.update(lane_fields)
+    _announced_fields(fields, announced)
     fields["help"] = _next_start_help(entry)
     return fields
 
 
-def _drained_answer(reason, rows, lane_fields):
+def _drained_answer(reason, rows, lane_fields, announced=None,
+                    next_wave=None):
     """§S2 — the empty answer, and the container it is empty FOR. `rows` is the
     set the reason is a claim about: the WAVE when the wave itself finished,
     the lane when only the lane did — which is what `help[]` reads to name the
     corpses that emptied it."""
     fields = {"decision": "DRAINED", "reason": reason}
     fields.update(lane_fields)
-    fields["help"] = _drained_help(reason, rows)
+    _announced_fields(fields, announced)
+    fields["help"] = _drained_help(reason, rows, next_wave)
     return fields
 
 
@@ -1828,6 +1852,78 @@ def _wave_of_the_lane(scope, wave):
             return declared
         published = declared
     return published
+
+
+def _previous_published_wave(scope, wave):
+    """§S2 (PURE) — the PREDECESSOR: the previous DISTINCT wave label in the
+    order the server PUBLISHED, or `None` when the resolved wave is the
+    earliest published and has crossed nothing.
+
+    Waves are strings on the wire, so the label standing immediately before the
+    resolved wave's FIRST row is taken verbatim — never parsed as a number,
+    never sorted, never re-derived from the `seq` value, which is the same
+    published-order rule `_wave_of_the_lane` reads the resolved wave by. Every
+    label before that first row differs from the resolved one by construction,
+    so the nearest of them IS the previous distinct label.
+
+    A row whose `wave` is the empty string is in NO wave and can be neither a
+    predecessor nor a step towards one — skipped exactly as the resolution
+    skips it."""
+    if wave is None:
+        return None
+    previous = None
+    for entry in scope:
+        declared = entry.get("wave")
+        if not declared:
+            continue
+        if declared == wave:
+            return previous
+        previous = declared
+    return None
+
+
+def _next_published_wave(scope, wave):
+    """§S2 (PURE) — the wave the lane moves INTO once this one is finished: the
+    next distinct label published after the resolved wave's rows, or `None`
+    when nothing follows it. Read the same verbatim way as the predecessor, so
+    a zero-padded or non-numeric label is reachable without a case of its
+    own."""
+    if wave is None:
+        return None
+    reached = False
+    for entry in scope:
+        declared = entry.get("wave")
+        if not declared:
+            continue
+        if declared == wave:
+            reached = True
+        elif reached:
+            return declared
+    return None
+
+
+def _boundary_announcement(scope, container, wave):
+    """§S2 (PURE) — the predecessor wave this read PROVES has completed, or
+    `None` when there is nothing to announce.
+
+    The crossing has just happened when the predecessor holds no actionable
+    entry left — a landed CR and a declared-dead one are both finished for this
+    predicate, which `_is_actionable` already spells — AND the resolved wave
+    has landed nothing yet. It therefore EXPIRES by itself the moment the new
+    wave's first cr merges, and needs no state on either side.
+
+    A resolved wave nothing precedes announces nothing: "the predecessor
+    completed" is a claim about a predecessor that EXISTS, and a container that
+    selects no row has no first row to stand behind."""
+    predecessor = _previous_published_wave(scope, wave)
+    if predecessor is None:
+        return None
+    if any(_is_actionable(e) for e in scope
+           if e.get("wave") == predecessor):
+        return None
+    if any(e.get("status") in LANDED_STATUSES for e in container):
+        return None
+    return predecessor
 
 
 def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
@@ -1901,6 +1997,9 @@ def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
         e for e in container if canonical_track(e.get("track")) == wanted]
     resolved_track = wanted if len(tracks) > 1 else None
     lane_fields = _lane_fields(release, resolved_wave, resolved_track)
+    # §S2 — the boundary this ONE read already proves, resolved before any
+    # decision so the same statement rides whichever answer the lane produces.
+    announced = _boundary_announcement(scope, container, resolved_wave)
 
     warnings = []
     unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]
@@ -1920,20 +2019,25 @@ def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
         })
 
     if not entries:
-        return (True, 0, _drained_answer("no-roadmap", lane, lane_fields),
+        return (True, 0,
+                _drained_answer("no-roadmap", lane, lane_fields, announced),
                 warnings)
     if not container:
         # The declared container holds no row at all, so nothing is SCHEDULED
         # here — which is not the claim that a wave finished.
         return (True, 0,
-                _drained_answer("awaiting-assignment", lane, lane_fields),
+                _drained_answer("awaiting-assignment", lane, lane_fields,
+                                announced),
                 warnings)
 
     if not [e for e in container if _is_actionable(e)]:
         # A MEMBERSHIP claim, read off the container and nothing else, so it
-        # is the same claim from every lane and from no lane at all.
+        # is the same claim from every lane and from no lane at all. The wave
+        # is finished, so its help[] names the wave the lane moves into.
         return (True, 0,
-                _drained_answer("wave-complete", container, lane_fields),
+                _drained_answer("wave-complete", container, lane_fields,
+                                announced,
+                                _next_published_wave(scope, resolved_wave)),
                 warnings)
 
     actionable = [e for e in lane if _is_actionable(e)]
@@ -1942,7 +2046,8 @@ def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
         # this lane was never scheduled — so this answer makes no claim about
         # the wave.
         return (True, 0,
-                _drained_answer("awaiting-assignment", lane, lane_fields),
+                _drained_answer("awaiting-assignment", lane, lane_fields,
+                                announced),
                 warnings)
 
     target = actionable[0]
@@ -1951,13 +2056,15 @@ def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
     trigger, trigger_warnings = _next_trigger(target, lane, entries)
     warnings.extend(trigger_warnings)
     if trigger is None:
-        return (True, 0, _next_answer(target, target_fields), warnings)
+        return (True, 0, _next_answer(target, target_fields, announced),
+                warnings)
 
     fields = {"decision": "HOLD", "cr": target.get("cr")}
     seq = _entry_seq(target)
     if seq is not None:
         fields["seq"] = seq
     fields.update(target_fields)
+    _announced_fields(fields, announced)
     fields["trigger"] = trigger
     fields["help"] = _hold_help(trigger)
     return (True, 0, fields, warnings)
