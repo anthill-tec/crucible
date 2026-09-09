@@ -1284,7 +1284,7 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 //
 // `src/` HEAD moves 563 -> 573, +10 — §S1/§S2/§S3's wave-scope guard (cycle
 // 393). The three files the sections were scoped to, and no others:
-//   `src/store.ts`            257 -> 265  (+8)   the guard and its refusals
+//   `src/store.ts`            251 -> 259  (+8)   the guard and its refusals
 //   `src/v2.ts`               189 -> 190  (+1)   the plans-POST wiring
 //   `src/hints.ts`             39 ->  40  (+1)   the help line
 //
