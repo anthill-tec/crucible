@@ -119,9 +119,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | COMPLETED (0.2.0) | 097 | 5 (0.2.0) |
 | [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | COMPLETED (0.2.0) | 016, 075 | 5 (0.2.0) |
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | COMPLETED (0.2.0) | 047, 111 | 5 (0.2.0) |
-| [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | PENDING (0.2.0) | 091, 092 | 6 (0.2.0) |
-| [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | PENDING (0.2.0) | 013, 073 | 6 (0.2.0) |
 | [CR-CRU-116](CR-CRU-116-only-one-wave-is-active.md) | only one wave is active, and Crucible refuses the alternative | feature | PENDING (0.2.0) | 091, 104 | 6 (0.2.0) |
+| [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | PENDING (0.2.0) | 091, 092, 116 | 6 (0.2.0) |
+| [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | PENDING (0.2.0) | 013, 073 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 

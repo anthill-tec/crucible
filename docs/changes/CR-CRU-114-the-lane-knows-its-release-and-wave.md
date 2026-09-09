@@ -2,7 +2,7 @@
 
 - **Type**: feature
 - **Wave**: 6 (0.2.0)
-- **Depends on**: 091, 092
+- **Depends on**: 091, 092, 116
 - **Status**: PENDING (0.2.0)
 - **Design reference**: `docs/research/DN-crucible-wave-track-release.md` — "Reading the lane during
   execution — the `next` decision vocabulary" (the three answers, the `DRAINED` reasons, the reader
