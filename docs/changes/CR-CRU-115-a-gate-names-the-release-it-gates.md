@@ -97,10 +97,43 @@ The green fallback is removed from the sealing path. A final gate's `outcome` co
 resolved `outcome`; a failed step still seals `failed`; nothing infers `passed` from the absence of a
 failure.
 
+**The terminus rule in full, ruled 2026-09-10 at cycle 404** from RED's tension report, because the
+prose and the third AC could be read against each other: **no resolved `outcome` AND no failed step ⇒
+HOLD; a failed step ⇒ `failed`, resolved outcome or not.** A failure IS a terminus — the defect being
+fixed is the green bias, not verdicts derived from steps — so a failed step never becomes a hold.
+
+**A hold posts NOTHING**, not merely nothing green. The AC's literal wording ("posts no gate whose
+`outcome` is `passed`") could be satisfied by posting a `checks-passed` ladder, which is self-defeating:
+`workflowLens` gates a wave on `checks-passed` too, so that reading would produce exactly the false
+gate CR-CRU-117 exists to prevent. Both claims are asserted separately so they stay separately
+reportable.
+
 ### §S4 The envelope says what was posted
 
-`gate-run`'s envelope states the release it stamped (or that it stamped none), whether the gate it
-posted was interim or final, and — when it did not seal — that the run is still in flight.
+`gate-run`'s envelope states the release it stamped (or that it stamped none), which gate it posted,
+and — when it did not seal — that the run is still in flight.
+
+**The fields, ruled 2026-09-10 at cycle 404** (§S4 named none, so RED had to; these spellings are now
+the contract, and they reuse the envelope's OWN stated-absence vocabulary rather than inventing a
+third one):
+
+| field | values |
+|---|---|
+| `release` | the stamped label verbatim, or `unstated` |
+| `postedGate` | `final` on a seal, `none` when nothing was posted |
+| `inFlight` | true on a hold |
+| `rawOutcome` | the run's own resolved outcome, verbatim, beside the mapped one |
+| `ok` | false on a hold and on an unsealed unrecognised outcome |
+
+`unstated` and `none` are NOT interchangeable here, and the distinction is the fleet's existing one
+(`ENVELOPE_TIER_UNSTATED` / `ENVELOPE_TIER_NONE`): `unstated` means the CALLER asserted nothing —
+no `--release` was given — while `none` means this exit did the thing ZERO times. So an unstamped
+gate reports `release: unstated`, and a hold reports `postedGate: none`. RED pinned `release: none`
+before this ruling; GREEN corrects that one literal, which is the only edit authorised to cycle 404's
+test file.
+
+Every one of these is a POSITIVELY STATED value, never an absent key — the opposite rule to the gate
+PAYLOAD's `version`, which stays omitted precisely because the server acts on its presence.
 
 ## Acceptance criteria
 
