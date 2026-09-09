@@ -1734,10 +1734,16 @@ class Cr091RoadmapVerbAxiConformanceTest(unittest.TestCase):
 
 CR092_NEXT_VERB = "next"
 
-# §S3/§S6 P2 -- the WHOLE flag surface: the lane selector plus the fleet's
+# §S3/§S6 P2 -- the WHOLE flag surface: the lane selectors plus the fleet's
 # projection flag. `--project-dir` is each client's own convention and is
 # added by the client, not by the shared registrar.
-CR092_NEXT_FLAGS = ("--track", "--fields")
+#
+# CR-CRU-114 §S1 added `--release` and `--wave` beside `--track`: a lane is
+# three dimensions, all three narrow it, and all three are declared by the ONE
+# shared registrar -- which is why this census measures them per client. The
+# ABSENCES below are unchanged, and are the point: two READ dimensions arrive
+# and no identity arrives with them.
+CR092_NEXT_FLAGS = ("--track", "--release", "--wave", "--fields")
 
 # §S6 P3 -- THE DECLARED EXEMPTION, asserted as an ABSENCE.
 #

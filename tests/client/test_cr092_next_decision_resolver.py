@@ -546,12 +546,25 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
 
     def test_the_other_lane_is_reachable_by_its_own_spelling(self):
         """Multi-track, against real stored values: `--track 3` answers about
-        track-3, never track-2."""
+        track-3, never track-2.
+
+        WHICH answer that is moved with CR-CRU-114 §S1/§S3. Every cr in this
+        fixture sits in its OWN wave, and the wave predicate reads `wave`
+        alone, so the resolved wave is the first actionable row's — track-2's.
+        track-3 holds nothing there, and a lane with nothing scheduled inside
+        an unfinished wave is `awaiting-assignment`. Naming `CR-TRK-OTHER`
+        instead would walk into a later wave — the silent crossing this CR
+        exists to end, and work whose `plan-file` the wave-scope guard would
+        refuse. The claim under test is unchanged: the answer is ABOUT the
+        lane asked for, and never track-2's."""
         fields = AXI.resolve_next(self.entries, track="Track 3",
                                   tracks=_published_tracks(self.entries))[2]
-        self.assertEqual(fields.get("decision"), "NEXT")
-        self.assertEqual(fields.get("cr"), "CR-TRK-OTHER")
+        self.assertEqual(fields.get("decision"), "DRAINED")
+        self.assertEqual(fields.get("reason"), "awaiting-assignment")
         self.assertEqual(fields.get("track"), "track-3")
+        self.assertNotIn(
+            "cr", fields,
+            "a drained lane names no cr — least of all the other lane's")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -738,14 +751,28 @@ class NextDecisionTest(_NextTestBase):
         self.assertNotIn("track", fields)
 
     def test_declared_release_and_track_ride_the_answer_verbatim(self):
-        """AC14's positive half, on the same fixture shape."""
+        """AC14's positive half, on the same fixture shape.
+
+        The TRACK half moved with CR-CRU-114 §S4 and is re-pinned here rather
+        than re-worded around: `track` rides an answer only when the project
+        declares MORE THAN ONE lane, because one declared lane is no lane to
+        choose between and echoing the row's stored value would tell a reader
+        a lane was resolved when none was. Its positive half is asserted where
+        it is now true —
+        `TrackCanonicalisationAgreesWithTheServerTest.test_next_resolves_every_spelling_against_the_stored_lane`,
+        over two published lanes. The RELEASE half is untouched: a declared
+        release still rides its own answer verbatim, and an absent one is
+        still omitted (the test above)."""
         entries = [_entry("CR-DECLARED", 10, wave="5", release="0.2.0",
                           track="track-1"),
                    _entry("CR-BARE", 20)]
         fields = self.fields(entries)
         self.assertEqual(fields.get("cr"), "CR-DECLARED")
         self.assertEqual(fields.get("release"), "0.2.0")
-        self.assertEqual(fields.get("track"), "track-1")
+        self.assertNotIn(
+            "track", fields,
+            "this queue publishes ONE lane, so no lane was resolved: a stored "
+            "track echoed here would name a container the answer never chose")
         self.assertEqual(fields.get("seq"), 10)
         self.assertEqual(fields.get("wave"), "5")
 

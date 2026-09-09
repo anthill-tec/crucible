@@ -1753,32 +1753,102 @@ def _next_trigger(target, lane, entries):
     return None, warnings
 
 
-def _next_answer(entry):
+def _lane_fields(release, wave, track, entry=None):
+    """The CONTAINER an answer is ABOUT — its release when one is in scope, its
+    wave, and its track only when the project declares more than one lane.
+
+    A reader can then tell WHICH container an answer covers instead of
+    inferring it from the cr that came back, which a HOLD or a DRAINED does not
+    even name.
+
+    `entry` is the answer's own row where it has one. An explicit `--release`
+    IS the scope; with no flag a row's own declared release still rides its
+    answer verbatim, and a row declaring none carries none — never a
+    neighbour's.
+
+    The track is the RESOLVED lane rather than the row's stored value: one
+    declared lane is no lane to choose between, and echoing a stored track
+    there would tell a reader a lane was resolved when none was."""
+    fields = {}
+    declared = release or (entry.get("release") if entry else None)
+    if declared:
+        fields["release"] = declared
+    if wave:
+        fields["wave"] = wave
+    if track:
+        fields["track"] = track
+    return fields
+
+
+def _next_answer(entry, lane_fields):
     """§S2/AC14 — `NEXT`'s result fields. Every declared value is CONSUMED
-    verbatim and an undeclared `release`/`track` is OMITTED, never defaulted,
-    never index-derived."""
+    verbatim and an undeclared `release` is OMITTED, never defaulted, never
+    index-derived. The container rides every answer through `_lane_fields`, so
+    one rule spells it for all three decisions."""
     fields = {"decision": "NEXT", "cr": entry.get("cr")}
     seq = _entry_seq(entry)
     if seq is not None:
         fields["seq"] = seq
-    if entry.get("release"):
-        fields["release"] = entry["release"]
-    if entry.get("wave"):
-        fields["wave"] = entry["wave"]
-    if entry.get("track"):
-        fields["track"] = entry["track"]
+    fields.update(lane_fields)
     fields["help"] = _next_start_help(entry)
     return fields
 
 
-def _drained_answer(reason, lane):
-    return {"decision": "DRAINED", "reason": reason,
-            "help": _drained_help(reason, lane)}
+def _drained_answer(reason, rows, lane_fields):
+    """§S2 — the empty answer, and the container it is empty FOR. `rows` is the
+    set the reason is a claim about: the WAVE when the wave itself finished,
+    the lane when only the lane did — which is what `help[]` reads to name the
+    corpses that emptied it."""
+    fields = {"decision": "DRAINED", "reason": reason}
+    fields.update(lane_fields)
+    fields["help"] = _drained_help(reason, rows)
+    return fields
 
 
-def resolve_next(entries, track=None, tracks=None):
+def _wave_of_the_lane(scope, wave):
+    """§S2 (PURE) — the ONE wave an answer is about.
+
+    An explicit `--wave` IS the answer. Otherwise it is the wave the first
+    ACTIONABLE row declares, taken in the order the server PUBLISHED and never
+    re-derived from the `seq` value; with nothing actionable anywhere, the last
+    wave published. One pass, because the answer is the first row that
+    qualifies and the fallback is the last row seen.
+
+    A row whose `wave` is the empty string is in NO wave and resolves none —
+    the row the write-side scope guard skips when it derives the wave it
+    permits. A reader that adopted it would offer work the server refuses."""
+    if wave is not None:
+        return wave
+    published = None
+    for entry in scope:
+        declared = entry.get("wave")
+        if not declared:
+            continue
+        if _is_actionable(entry):
+            return declared
+        published = declared
+    return published
+
+
+def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
     """§S2/§S3 (PURE) — the decision resolver: the lane's declared sequence
     plus live state in, exactly one decision out.
+
+    A lane is three dimensions and each does its own job. `release` and `wave`
+    are CONTAINERS, matched VERBATIM against the entry's own strings: nothing
+    is coerced on the way in, so `6` and `06` are two waves and `0.2.0` and
+    `v0.2.0` two releases. Membership is declared, never inferred, so a row
+    with no release is in none. `track` is SCHEDULING — which cr comes next,
+    in what order — and keeps `canonical_track`'s digit rule, a mirror of the
+    server's own write rule.
+
+    The wave predicate therefore reads `wave` and NOTHING else: a wave is a
+    container of CRs, so a track-filtered set can never answer whether one is
+    finished — not as a filter, not as a union of per-track slices, not as a
+    special case for one lane or many. A lane holding no actionable cr inside
+    a wave that still holds some is `awaiting-assignment`; `wave-complete` is
+    reserved for the wave itself, independent of how many tracks it was
+    scheduled across.
 
     `tracks` is the list the queue read PUBLISHED (CR-CRU-108 §S2), handed in
     rather than derived here: the refusal names the SERVER's lanes or it names
@@ -1815,11 +1885,22 @@ def resolve_next(entries, track=None, tracks=None):
                           f"{', '.join(tracks)}"]},
                 [])
 
+    # The CONTAINER, resolved BEFORE any lane is chosen and never from the
+    # lane: the release scope narrows to DECLARED membership, and the wave
+    # follows from that scope's own `wave` values alone.
+    scope = entries if release is None else [
+        e for e in entries if e.get("release") == release]
+    resolved_wave = _wave_of_the_lane(scope, wave)
+    container = scope if resolved_wave is None else [
+        e for e in scope if e.get("wave") == resolved_wave]
+
     # CR-CRU-095 §S1 — the lane is consumed in the order the server PUBLISHED
     # (the canonical key lives in `listQueue`); a reader re-sorting it by the
     # seq VALUE is what CR-091 AC18 outlawed.
-    lane = entries if wanted is None else [
-        e for e in entries if canonical_track(e.get("track")) == wanted]
+    lane = container if wanted is None else [
+        e for e in container if canonical_track(e.get("track")) == wanted]
+    resolved_track = wanted if len(tracks) > 1 else None
+    lane_fields = _lane_fields(release, resolved_wave, resolved_track)
 
     warnings = []
     unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]
@@ -1839,24 +1920,44 @@ def resolve_next(entries, track=None, tracks=None):
         })
 
     if not entries:
-        return (True, 0, _drained_answer("no-roadmap", lane), warnings)
-    if not lane:
-        return (True, 0, _drained_answer("awaiting-assignment", lane), warnings)
+        return (True, 0, _drained_answer("no-roadmap", lane, lane_fields),
+                warnings)
+    if not container:
+        # The declared container holds no row at all, so nothing is SCHEDULED
+        # here — which is not the claim that a wave finished.
+        return (True, 0,
+                _drained_answer("awaiting-assignment", lane, lane_fields),
+                warnings)
+
+    if not [e for e in container if _is_actionable(e)]:
+        # A MEMBERSHIP claim, read off the container and nothing else, so it
+        # is the same claim from every lane and from no lane at all.
+        return (True, 0,
+                _drained_answer("wave-complete", container, lane_fields),
+                warnings)
 
     actionable = [e for e in lane if _is_actionable(e)]
     if not actionable:
-        return (True, 0, _drained_answer("wave-complete", lane), warnings)
+        # The wave still holds actionable work — a sibling lane's, or work
+        # this lane was never scheduled — so this answer makes no claim about
+        # the wave.
+        return (True, 0,
+                _drained_answer("awaiting-assignment", lane, lane_fields),
+                warnings)
 
     target = actionable[0]
+    target_fields = _lane_fields(release, resolved_wave, resolved_track,
+                                 target)
     trigger, trigger_warnings = _next_trigger(target, lane, entries)
     warnings.extend(trigger_warnings)
     if trigger is None:
-        return (True, 0, _next_answer(target), warnings)
+        return (True, 0, _next_answer(target, target_fields), warnings)
 
     fields = {"decision": "HOLD", "cr": target.get("cr")}
     seq = _entry_seq(target)
     if seq is not None:
         fields["seq"] = seq
+    fields.update(target_fields)
     fields["trigger"] = trigger
     fields["help"] = _hold_help(trigger)
     return (True, 0, fields, warnings)
@@ -1864,18 +1965,23 @@ def resolve_next(entries, track=None, tracks=None):
 
 def _next_legacy_line(ok, fields):
     """The human line (stderr only) — one sentence per outcome, never the
-    envelope in prose."""
+    envelope in prose.
+
+    Every decision STATES its wave. This is the channel an orchestrator reads
+    when it is not parsing the envelope, and a line that names no container is
+    how a wave boundary gets crossed silently."""
     if not ok:
         return (f"next: ok=False needs=track — {len(fields['tracks'])} live "
                 f"track(s): {', '.join(fields['tracks'])}")
     decision = fields["decision"]
+    wave = f" wave={fields['wave']}" if fields.get("wave") else ""
     if decision == "NEXT":
         return (f"next: decision=NEXT cr={fields['cr']} "
-                f"seq={fields.get('seq')}")
+                f"seq={fields.get('seq')}{wave}")
     if decision == "HOLD":
         return (f"next: decision=HOLD cr={fields['cr']} "
-                f"trigger={fields['trigger']['kind']}")
-    return f"next: decision=DRAINED reason={fields['reason']}"
+                f"trigger={fields['trigger']['kind']}{wave}")
+    return f"next: decision=DRAINED reason={fields['reason']}{wave}"
 
 
 def next_context(context, ok, track):
@@ -1967,8 +2073,12 @@ def cmd_next(args, project_dir, ops):
                  [{"code": refusal.code, "detail": refusal.detail}],
                  f"next: ok=False — {refusal.detail}")
         return 1
-    ok, code, fields, warnings = resolve_next(resp.get("entries"), track=track,
-                                              tracks=tracks)
+    # All three dimensions ride the ONE read already made: narrowing the lane
+    # is a question about the payload in hand, never a second round-trip.
+    ok, code, fields, warnings = resolve_next(
+        resp.get("entries"), track=track, tracks=tracks,
+        release=getattr(args, "release", None),
+        wave=getattr(args, "wave", None))
     # The legacy line reads the UNprojected decision: the human channel is not
     # narrowed by a machine-channel projection flag.
     ops.emit("next", ok, next_projection(ok, fields, args),
@@ -3672,6 +3782,18 @@ def add_next_verb(sub, func, *, parents=(), add_args=()):
                          "writes nothing and so has no server round-trip to "
                          "normalise it). Required ONLY when the project "
                          "declares more than one track.")
+    nx.add_argument("--release",
+                    help="The release to resolve within — the CRs DECLARED "
+                         "into it, matched VERBATIM against each entry's own "
+                         "label (nothing is coerced, so 0.2.0 and v0.2.0 are "
+                         "two releases). Membership is declared, never "
+                         "inferred: an entry with no release is in none.")
+    nx.add_argument("--wave",
+                    help="The wave to resolve — matched VERBATIM too, so 6 "
+                         "and 06 are two waves and no integer parse merges "
+                         "them. Unset, the wave is the one the first "
+                         "actionable cr declares, in the order the server "
+                         "published.")
     nx.add_argument("--fields",
                     help="Comma-separated keys to NARROW the decision to "
                          "(§S6 P2). There is no --full: the answer is one "
