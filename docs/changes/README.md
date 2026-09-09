@@ -122,6 +122,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-116](CR-CRU-116-only-one-wave-is-active.md) | only one wave is active, and Crucible refuses the alternative | feature | COMPLETED (0.2.0) | 091, 104 | 6 (0.2.0) |
 | [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | COMPLETED (0.2.0) | 091, 092, 116 | 6 (0.2.0) |
 | [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | PENDING (0.2.0) | 013, 073 | 6 (0.2.0) |
+| [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | PENDING | 013, 115 | 6 |
 
 ## Deferred — post-0.2.0
 
@@ -490,6 +491,29 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (`ForwardMarryingGuardTest`, which the CR promoted from a characterisation to a real assertion).
 
 ## Notes
+
+- 🔬 **2026-09-10 — CR-CRU-115 gap analysis: §S2 SPLIT OUT to CR-CRU-117, three ACs rescoped.**
+  Measured, not reasoned. (1) Repairing the interim guard client-only would **permanently false-gate
+  waves**: the interim outcome is `checks-passed`, and `workflowLens` (`public/app-logic.mjs`) flips a
+  wave to `gated` on `passed` OR `checks-passed` from a Set nothing removes from — so a two-second-old
+  in-flight snapshot gates a wave, and a later `failed` seal cannot undo it. There is no legal
+  "in progress" outcome (`checks-passed, passed, failed, cancelled`), so the interim/seal distinction
+  needs a reader change → CR-CRU-117. (2) `no-mistakes axi status` on this project's own release run
+  resolves **`outcome: passed-with-skips`**, which is in NO vocabulary — not the server's
+  `GATE_OUTCOMES`, not the client tuple, not the renderer's gating rule — so today's fallback silently
+  rewrites it to `passed`. CR-115 now maps it by an explicit pass-family table and reports the raw
+  value; making it first-class is a **candidate CR** (three trees: `src/v2.ts`, the client tuple,
+  `public/app-logic.mjs` + `public/app.js`). (3) The integration AC named `cmd_gate_*`, which are
+  single-statement delegators — the identical trap that forced CR-CRU-114's AC to be rescoped; the
+  greppable seam is each client's `_post_gate`. (4) Recorded consequence: stamping `version` makes a
+  gate retention-protected (`LIVE_GATE` in `src/store.ts`), so a release that never ships leaves a
+  permanently live gate. (5) The fleet's existing interim fixtures (3/6/8 growing rows across four
+  client suites) encode a shape the real tool never emits — that agreement between fixture and guard
+  is why the fault reached a release.
+- ❓ **2026-09-10 — USER DECISION OWED: CR-CRU-117's release membership.** Filed with `release`
+  undeclared. It repairs a fault measured during 0.2.0's own release ceremony, but unlike CR-115 it
+  touches `public/` (and possibly `src/`), so it is not a client-only patch. 0.2.0 or post-0.2.0 is
+  the user's call.
 - 🌊 **2026-09-09 — WAVE 6 IS 0.2.0's SECOND WAVE; the release-machinery CRs land on the release
   branch without the feature ceremony (user rulings).** Three decisions, taken on the Lavish
   proposal `.lavish/crucible-in-release-waves.html`, after the 0.2.0 release ceremony exposed the

@@ -55,20 +55,35 @@ This is what makes "a release is in flight" readable without a new record kind: 
 `version: X` with no release recorded for `X` is a release under way, and once `X` ships the server's
 existing transaction retires it.
 
-### §S2 Interim gates are posted while the run is in flight
+### §S2 — MOVED OUT OF THIS CR to CR-CRU-117 (gap analysis, 2026-09-10)
 
-The interim POST's guard tests **whether the snapshot is terminal**, not how many rows it has. A
-snapshot is non-terminal when it carries no resolved `outcome` and at least one step is still
-`pending`, `running`, `fixing` or awaiting a decision. Under the existing cadence, a run that takes
-minutes posts interim gates throughout it, and the nine-row shape that `axi status` always emits is
-no longer read as "already resolved".
+Fault 1 is real and its diagnosis stands: the guard is `if in_flight and 0 < nsteps < 9` while the
+real tool always emits nine rows, so no interim gate can ever be posted. **But turning the stream on
+cannot be done client-only, and doing it as specified would corrupt the roadmap.**
+
+Measured on this tree: `gate_from_axi(..., final=False)` synthesises `checks-passed`, and
+`workflowLens` in `public/app-logic.mjs` flips a wave to `gated` for `passed` OR `checks-passed`,
+from a Set that nothing ever removes from. So a two-second-old in-flight snapshot would mark its
+wave **permanently gated** — and a run that subsequently FAILED could not un-gate it, because a
+`failed` gate is not subtractive. The legal outcome vocabulary is `checks-passed, passed, failed,
+cancelled`: there is no non-gating "in progress" value, so the interim-vs-seal distinction has to be
+made somewhere the reader can see it. That is a design decision touching `public/` (and possibly
+`src/`), which is why it is now CR-CRU-117 rather than a clause here.
+
+This CR therefore keeps its "no server, no renderer change" property, and §S3 no longer leans on
+interim posting to make a hold visible.
 
 ### §S3 A run that is still going is never sealed
 
 A return whose snapshot carries no resolved `outcome` is a **hold**, not a terminus. `gate-run` then:
 posts no gate claiming an outcome; reports the hold, naming the snapshot's own `error` when it carries
-one; and states the reattach move. The step ladder still reaches the board as an interim gate, so the
-hold is visible without being a verdict.
+one; and states the reattach move.
+
+**Amended 2026-09-10 (gap analysis).** The original clause said the ladder "still reaches the board as
+an interim gate, so the hold is visible without being a verdict" — that depended on §S2, which is now
+CR-CRU-117, and on the very outcome (`checks-passed`) the renderer reads as a seal. A hold is
+reported to its CALLER and posts nothing until CR-CRU-117 gives an in-flight gate a shape the reader
+cannot mistake for a verdict. Silence on the board is the honest state today; a false green is not.
 
 The green fallback is removed from the sealing path. A final gate's `outcome` comes from the run's own
 resolved `outcome`; a failed step still seals `failed`; nothing infers `passed` from the absence of a
@@ -95,17 +110,8 @@ posted was interim or final, and — when it did not seal — that the run is st
       `label` is already recorded comes back with `retiredAt` set (CR-CRU-073's insert-time retirement,
       reached through the client for the first time).
 
-**§S2 — streaming**
-
-- [ ] Given a snapshot with `steps[9]` where `review` is `running` and six steps are `pending` and no
-      `outcome` key — the exact shape captured from a live run — `cmd_gate_run` posts an **interim**
-      gate. Today's guard posts none; this is the reversal.
-- [ ] Given a snapshot with `steps[9]` all `completed` and a resolved `outcome`, no interim gate is
-      posted for it.
-- [ ] The interim gate's `steps[]` carries all nine names with their mapped statuses, so `pending` is
-      represented rather than dropped.
-- [ ] Interim posts still obey the existing cadence: two snapshots within one cadence window produce
-      one POST, asserted by counting POSTs.
+**§S2 — MOVED to CR-CRU-117.** These four criteria left with it, unchanged in substance. Nothing in
+this CR alters the interim guard, so the guard's own tests stay exactly as they are.
 
 **§S3 — no false seal**
 
@@ -116,8 +122,22 @@ posted was interim or final, and — when it did not seal — that the run is st
       asserted for `pending`, `running`, `fixing` and `awaiting_approval` step states, all four.
 - [ ] A snapshot with a resolved `outcome: passed` still seals `passed`, and one with a `failed` step
       still seals `failed` — the fix narrows the fallback without changing a real verdict.
-- [ ] `passed-with-skips` — the outcome this release actually produced — seals verbatim and is not
-      remapped.
+- [ ] `passed-with-skips` — the outcome this release actually produced — maps to `passed`
+      **EXPLICITLY, by a named pass-family table**, never by the absence-of-failure fallback, and the
+      envelope reports the RAW outcome verbatim beside it.
+
+  **Rescoped 2026-09-10 (gap analysis).** "Seals verbatim" is unbuildable inside this CR: measured
+  today, `no-mistakes axi status` on this project's own release run resolves
+  `outcome: passed-with-skips`, and that string is in NEITHER vocabulary — not the server's
+  `GATE_OUTCOMES` (`src/v2.ts`, which 400s anything outside `checks-passed, passed, failed,
+  cancelled`), not the client tuple, and not the renderer's gating rule. Sending it verbatim would
+  need all three trees to change and would contradict this CR's own empty-`src`/`public` criterion.
+  The skip information is NOT lost by the mapping: `steps[]` already carries `pr,skipped` and
+  `ci,skipped` on the wire. Extending the vocabulary properly is a candidate CR, recorded in the
+  queue notes.
+- [ ] An outcome that is resolved but belongs to NO pass family is never sealed as `passed`: it is
+      reported verbatim and the run is treated as unsealed. This is the fallback's real defect — a
+      value the fleet does not understand must not become green.
 
 **§S4 — the envelope**
 
@@ -127,9 +147,16 @@ posted was interim or final, and — when it did not seal — that the run is st
 
 **Integration**
 
-- [ ] After this CR, `cmd_gate_run` and `cmd_gate_report` in each of the five clients pass the release
-      through to `post_gate` — a grep for the new argument returns ≥1 non-test caller per client, and
-      VERIFY runs that grep itself.
+- [ ] After this CR, each client's `_post_gate` forwards the release to the shared `post_gate` — a
+      grep for the new argument returns ≥1 non-test caller per client, and VERIFY runs that grep
+      itself.
+
+  **Corrected 2026-09-10 (gap analysis).** The seam is `_post_gate`, not `cmd_gate_*`: all five
+  `cmd_gate_run`/`cmd_gate_report` wrappers are single-statement delegators (CR-CRU-054's DRY rule)
+  and spell no payload parameters, so a grep there would find nothing — the same trap that forced
+  CR-CRU-114's identical AC to be rescoped. `_post_gate(project_dir, agent_id, gate, context=None)`
+  DOES spell its parameters in all five clients and is the injected ops seam each client's harness
+  patches, so the count is genuinely assertable there.
 - [ ] `git diff --stat -- src public` is empty at close: the server already stores `version` and
       already retires by it; this CR only makes the fleet reach that mechanism.
 
@@ -148,6 +175,17 @@ One cycle. `clients/_crucible_axi.py` (`cmd_gate_run`, `cmd_gate_report`, `post_
 - The false `passed` gate already on this project's board (`evt-1788925414091-197`) carries no
   `version` and therefore cannot be retired by 0.2.0's release. Correcting that single event is a data
   decision for the orchestrator, not an AC of this CR.
+- **Stamping `version` changes a gate's RETENTION, measured 2026-09-10.** `src/store.ts` defines a
+  live gate as `kind = 'gate' AND retired_at IS NULL AND json_extract(payload, '$.version') IS NOT
+  NULL` and exempts it from pruning. Today no gate carries `version`, so every gate is prunable;
+  after this CR a release-stamped gate is retention-protected until its release records. A release
+  that is proposed and never ships therefore leaves a permanently live gate — correct behaviour (it
+  IS an unfinished release), but a new one, and it is why `--release` stays optional.
+- **The fleet's existing interim fixtures encode a shape the real tool never emits.** The four
+  per-client axi suites and bun's gates suite drive PROGRESSIVE snapshots of 3, then 6, then 8 rows;
+  the real `axi status` always emits nine with unrun steps `pending`. That agreement between fixture
+  and guard is why fault 1 survived to a release. This CR changes none of them (it no longer touches
+  the guard), and CR-CRU-117 inherits the obligation to drive the real nine-row shape.
 
 ## Non-goals
 
