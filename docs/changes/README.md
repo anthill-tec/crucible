@@ -5,7 +5,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 **Design contract:** [../research/PRD-crucible-v2.md](../research/PRD-crucible-v2.md)
 **Evidence base:** [../research/DN-crucible-api-reconstruction.md](../research/DN-crucible-api-reconstruction.md)
-**Target release:** 0.1.0
+**Target release:** 0.2.0
 
 | CR | Title | Type | Status | Depends on | Wave |
 |---|---|---|---|---|---|
@@ -71,11 +71,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is selected by "last non-empty line", which fits python and node but not maven | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
 | [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (runs the server) and exposes no run command; provision-and-exit + a `serve` verb + bun guarantee | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
-| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 6 (post-0.2.0) |
+| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 7 (post-0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
-| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 6 (post-0.2.0) |
-| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 6 (post-0.2.0) |
-| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 6 |
+| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 7 (post-0.2.0) |
+| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 7 (post-0.2.0) |
+| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 7 (post-0.2.0) |
 | [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened | bugfix | COMPLETED (0.2.0) | 043, 066 | 5 (0.2.0) |
 | [CR-CRU-069](CR-CRU-069-uninstall-inverts-install.md) | Install has no inverse: `crucible-axi uninstall` + `install.sh` teardown | feature | COMPLETED (0.2.0) | 009, 066 | 5 (0.2.0) |
 | [CR-CRU-070](CR-CRU-070-systemd-user-unit.md) | systemd `--user` unit: install script provisions and reverses it | feature | COMPLETED (0.2.0) | 066, 069 | 5 (0.2.0) |
@@ -119,6 +119,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | COMPLETED (0.2.0) | 097 | 5 (0.2.0) |
 | [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | COMPLETED (0.2.0) | 016, 075 | 5 (0.2.0) |
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | COMPLETED (0.2.0) | 047, 111 | 5 (0.2.0) |
+| [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | PENDING (0.2.0) | 091, 092 | 6 (0.2.0) |
+| [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | PENDING (0.2.0) | 013, 073 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -487,6 +489,45 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (`ForwardMarryingGuardTest`, which the CR promoted from a characterisation to a real assertion).
 
 ## Notes
+- 🌊 **2026-09-09 — WAVE 6 IS 0.2.0's SECOND WAVE; the release-machinery CRs land on the release
+  branch without the feature ceremony (user rulings).** Three decisions, taken on the Lavish
+  proposal `.lavish/crucible-in-release-waves.html`, after the 0.2.0 release ceremony exposed the
+  defects behind them. (1) **Wave 6 carries 0.2.0's release-machinery CRs** — CR-CRU-114 and
+  CR-CRU-115 — and `015, 018, 022, 098` move to **wave 7**, release still undeclared. A release
+  bundles the CRs of one or more waves, so a second wave inside 0.2.0 is the model's own shape, not
+  a workaround; renumbering keeps wave order monotonic with release order so `next` behaves until
+  CR-CRU-114 ships. (2) **A wave with no release stays invisible on the roadmap** — membership is
+  declared, never inferred; no backlog zone, the visual contract keeps its three zones. (3) **0.2.0's
+  in-release scope is CR-CRU-114 + CR-CRU-115 + the `cr-close` wording task**; the **release task
+  set** the wave/track/release DN names is DEFERRED past 0.2.0 and recorded, not dropped — it is what
+  would make the ceremony itself trackable, and it is why this release was invisible to the board
+  between the proposal and the tag. **Execution mode:** plans and cycles exactly as normal —
+  `plan-file` → `cycle-activate` → RED/GREEN/VERIFY → `pre-merge-gate` → `cr-close` — but **no
+  `git flow feature start/finish`**: commits land directly on `release/0.2.0`, which merges to master
+  AND develop at `finish`. The cycle machinery never touches git, so nothing in Crucible changes for
+  this mode.
+- 🔧 **2026-09-09 — TASK, not a CR: `cr-close` and `cr-merged` assume a merge.** `--commit`'s help
+  reads "Merge commit sha" and the closing milestone is typed `cr-merged`; under the mode above a CR
+  lands as an ordinary commit. The data is already correct (any sha is recorded), only the wording
+  assumes a merge, and per the CR-vs-task test a help string plus a definition has no design surface.
+  Fix the help text and define `cr-merged` as "the CR landed on its target branch" — minting a second
+  milestone type for the same event would be the parallel mechanism this project keeps refusing.
+- ⚠️ **2026-09-09 — CANDIDATE CR: no verb can re-wave a release-less CR, and the bulk route would
+  wipe membership.** `cr-plan` and `wave-sequence` both REQUIRE `--release`, so the four CRs re-waved
+  to 7 above cannot be re-waved on the board while their release is undeclared. The only other path is
+  the bulk queue POST, and that is destructive: the route stores membership **as received**
+  (`src/v2.ts:1964-1971`) while `queue-file` sends only `{cr, title, wave, dependsOn}`, so re-posting
+  the table would drop **every release assignment and every lifecycle disposition** on the board. The
+  queue table above is therefore the authored truth for those four rows and the board keeps wave 6
+  for them until a post-0.2.0 release is proposed or the re-wave path exists. This supersedes the
+  earlier "`queue-file` drops lifecycle dispositions" note by naming the second field it also drops.
+- 📌 **2026-09-09 — STANDING DECISION 1 is now satisfied BY THE GATE, not beside it.** The standing
+  step `python-crucible.py regression --start-dir tests/client` was adopted 2026-09-08 as a second
+  command run alongside `pre-merge-gate`. CR-CRU-112 shipped the mechanism it was asking for: the
+  gate's own envelope now carries `suites[4]`, one of them `test:client` / `stack: python` /
+  `client: python-crucible.py`, 1633 tests, inside ONE invocation (measured on `release/0.2.0`:
+  3830 passed / 0 failed / 1 pending / 3831 across 229 files, 4 suites, `tsc` exit 0). Running the
+  python step separately is now redundant, not required.
 - 🚨 **2026-09-08 (CR-CRU-110 dispatch — AGENT-ID STANDARD BREACHED, recorded because the board
   now carries the evidence).** The four phase agents of plan 118 registered as `Cr110Red`,
   `Cr110Green`, `Cr110Verify` and `Cr110Fix`. The standard is
