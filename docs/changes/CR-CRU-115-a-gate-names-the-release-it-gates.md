@@ -102,11 +102,29 @@ prose and the third AC could be read against each other: **no resolved `outcome`
 HOLD; a failed step ⇒ `failed`, resolved outcome or not.** A failure IS a terminus — the defect being
 fixed is the green bias, not verdicts derived from steps — so a failed step never becomes a hold.
 
-**A hold posts NOTHING**, not merely nothing green. The AC's literal wording ("posts no gate whose
-`outcome` is `passed`") could be satisfied by posting a `checks-passed` ladder, which is self-defeating:
-`workflowLens` gates a wave on `checks-passed` too, so that reading would produce exactly the false
-gate CR-CRU-117 exists to prevent. Both claims are asserted separately so they stay separately
-reportable.
+**A hold posts no gate claiming a terminal verdict**, and the envelope states truthfully whatever the
+poll loop already put on the board. The AC's literal wording ("posts no gate whose `outcome` is
+`passed`") could be satisfied by posting a `checks-passed` ladder, which is self-defeating:
+`workflowLens` gates a wave on `checks-passed` too. Both claims are asserted separately so they stay
+separately reportable.
+
+**Corrected 2026-09-10 at cycle 405, and the correction is VERIFY's, not mine.** This clause first
+said "a hold posts NOTHING", and ruling 5 justified narrowing the envelope by claiming the interim
+POST is "unreachable until CR-CRU-117 repairs the guard". VERIFY did not take that on trust: it drove
+the real `main()` against a fake tool emitting a 3-row in-flight ladder plus the documented bounded
+hold, and got `gates posted: ["checks-passed"]` with `postedGate: "none"`. So the interim POST is
+unreachable only against the REAL nine-row tool — in code it is reachable for any shorter snapshot,
+which is exactly what the fleet's own existing fixtures produce. Two of this CR's claims were false
+on that path, and the machine-readable field stated a falsehood.
+
+The honest fix is to make the ENVELOPE true rather than to delete the path: a run whose loop posted an
+interim ladder and then held reports `postedGate: interim`. Suppressing the interim POST outright was
+the alternative and was rejected on cost — it would re-pin the interim assertions in five sibling
+suites that CR-CRU-117 then reverts, churning the same code twice. The false-green hazard those posts
+carry is CR-CRU-117's whole subject, and it is asserted there.
+
+The lesson is recorded because it is the CR's own failure mode: an untrue reachability claim in a
+spec is what let fault 1 survive to a release in the first place.
 
 ### §S4 The envelope says what was posted
 
@@ -185,11 +203,14 @@ this CR alters the interim guard, so the guard's own tests stay exactly as they 
 - [ ] `gate-run`'s envelope states the stamped release, or states that none was stamped; and names
       WHICH gate it posted — `final` on a seal, and no gate at all on a hold.
 
-  **Narrowed 2026-09-10 at cycle 403.** The criterion used to say "`interim` vs `final`". `interim` is
-  unproducible in this CR: the interim POST is unreachable until CR-CRU-117 repairs the guard, so a
-  fixture asserting it could only pass by mocking the very call this CR must not touch. The field is
-  asserted with its two REACHABLE states, and CR-CRU-117 inherits the `interim` value along with the
-  guard that makes it happen.
+  **Narrowed 2026-09-10 at cycle 403, then CORRECTED at cycle 405.** The criterion used to say
+  "`interim` vs `final`", and the narrowing claimed `interim` was unproducible here. That was wrong:
+  it is unreachable against the real nine-row tool, but reachable in code for any shorter snapshot,
+  and VERIFY demonstrated it end to end. All three values are now the contract.
+- [ ] `postedGate` is `interim` when the poll loop posted an in-flight ladder and the run then held —
+      asserted on a SHORT (fewer than nine rows) in-flight snapshot paired with the bounded-hold
+      return, the exact shape VERIFY used to falsify the original claim. A field that says `none`
+      while a gate sits on the board is a machine-readable lie.
 - [ ] When the run is still in flight the envelope says so, and `ok` is false.
 
 **Integration**

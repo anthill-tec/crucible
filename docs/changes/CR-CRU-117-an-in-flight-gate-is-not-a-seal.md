@@ -96,11 +96,22 @@ with the defect again.
       represented rather than dropped.
 - [ ] Interim posts still obey the existing cadence: two snapshots within one cadence window produce
       one POST, asserted by counting POSTs.
+- [ ] `gate-run`'s envelope reports `postedGate: interim` when the poll loop posted an in-flight gate
+      and did not seal — asserted on the same nine-row-with-`pending` fixture the guard reversal uses.
+      Added 2026-09-10 from CR-CRU-115 cycle 405's VERIFY, which found the handoff had not landed: 115
+      narrowed the value out on the promise that this CR inherited it, and this CR's criteria did not
+      mention the envelope at all. 115 now asserts the SHORT-snapshot path itself; this criterion
+      covers the nine-row path the guard repair opens.
 
 **§S3 — fixtures**
 
 - [ ] At least one fixture per driven client is the real nine-row-with-`pending` shape, and the
       progressive 3/6/8-row fixtures no longer stand alone as the only in-flight shape any test sees.
+- [ ] Every captured fixture NAMES the tool version it was captured from. The nine-row shape in
+      CR-CRU-115's suites came from `no-mistakes` **v1.70.1** (2026-09-10; v1.72.0 was already
+      published). Recorded because the coupling is now load-bearing in two files and this CR adds
+      more: if the tool gains or loses a pipeline step, a nine-row assertion goes red for a
+      tool-version reason with no defect behind it, and a reader needs to know which is which.
 
 ## Estimated size
 
