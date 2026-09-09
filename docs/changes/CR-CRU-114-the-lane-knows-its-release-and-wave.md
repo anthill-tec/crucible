@@ -151,6 +151,12 @@ rather than inferring it from the CR that came back.
   pinned a state the project itself moves through.
 - [ ] `DRAINED`'s `help[]` names the move that opens the next wave and carries the next wave's LABEL
       as data, not prose, and exit code is 0 — `DRAINED` is an answer, never an error.
+- [ ] The announcement rides the envelope as `waveCompleted`, carrying the predecessor's LABEL —
+      field name ruled 2026-09-09 at cycle 400 from RED's fixtures. It is ABSENT, not empty and not
+      `null`, whenever there is nothing to announce, so a reader distinguishes "no crossing" from "a
+      crossing of an unnamed wave" by key presence alone.
+- [ ] The EARLIEST published wave announces no completed predecessor: there is no previous distinct
+      label, so the key is absent. A first wave has crossed nothing.
 - [ ] The predecessor is the previous distinct wave LABEL in the published order: asserted with a
       fixture whose labels do not sort into their published sequence, so a parse-based reading answers
       differently from the published-order reading and the test can tell them apart.
@@ -246,6 +252,12 @@ figure is re-recorded in the CR's final cycle, in the same commit as the last pr
   saying so, and `waveNumber`'s existing parse is the only interpreter.
 
 ## Non-goals
+
+- **The legacy stderr line does not carry the announcement** — ruled 2026-09-09 at cycle 400 from
+  GREEN's imprecision #1. `_next_legacy_line` is a pinned one-line compatibility surface whose shape
+  sibling suites already assert; the crossing is STRUCTURED data and rides the envelope as
+  `waveCompleted`. Growing the human line is a separate decision with its own consumers, and it is
+  deliberately not smuggled in under this CR.
 
 - **No wave-completion record.** Wave completion stays a derived ANSWER — no milestone type, no event,
   no verb. Ruled 2026-09-09.
