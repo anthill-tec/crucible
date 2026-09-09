@@ -274,6 +274,25 @@ export const cycleHints = {
 };
 
 /**
+ * CR-CRU-116 §S3 — the WAVE-scope refusals' help[], in the same shape and the
+ * same wording style `cycleHints` uses one container down: name the concrete
+ * move that would make the write legal, then the alternative. Parameterized by
+ * the wave and the cr the refusal names, both read off the QUEUE entry.
+ */
+export const waveHints = {
+  /** §S1 — another wave holds the open work; offer the plan-closing move. */
+  alreadyActive: (wave: string, cr: string): string[] => [
+    `close or abort ${cr}'s open plan first — wave ${wave} holds the open work, and one wave is active at a time`,
+    `or file this plan for a cr in wave ${wave}, the active wave`,
+  ],
+  /** §S2 — an earlier wave is still unfinished; land it or declare it dead. */
+  outOfOrder: (wave: string, cr: string): string[] => [
+    `land ${cr} first — waves open in ascending order, and wave ${wave} still holds it unfinished`,
+    `or declare ${cr} dead (lifecycle VOID | SUPERSEDED), then retry this plan`,
+  ],
+};
+
+/**
  * CR-CRU-052 §S1 — the DOUBLE gate on `DELETE /api/v2/projects/<key>`, the
  * most destructive route in the system. Both refusals are state-derived: they
  * name the project the caller actually aimed at (key + name) and the ONE

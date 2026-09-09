@@ -5,7 +5,15 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
+import {
+  authHints,
+  hints,
+  cycleHints,
+  identityHints,
+  projectDeleteHints,
+  roadmapHints,
+  waveHints,
+} from "./hints.ts";
 import {
   compareContainers,
   declaredTracks,
@@ -1410,6 +1418,21 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
         ? String(body.wave)
         : undefined;
   const track = typeof body.track === "string" ? body.track : undefined;
+  // CR-CRU-116 §S1/§S2/§S3 — the WAVE scope, asked BEFORE the write so a
+  // refusal leaves nothing behind: one wave holds open work, and waves open in
+  // ascending order. `already-active` before `out-of-order`, both read off the
+  // QUEUE entry (never `body.wave`, which is the caller's snapshot), answered
+  // in this route's existing 400 shape with the code the cycle scope declares.
+  const waveScope = store.waveScopeRefusal(pk.key, body.cr);
+  if (waveScope !== undefined) {
+    return fail(400, waveScope.error, {
+      code: waveScope.code,
+      help:
+        waveScope.code === "already-active"
+          ? waveHints.alreadyActive(waveScope.waveRef, waveScope.crRef)
+          : waveHints.outOfOrder(waveScope.waveRef, waveScope.crRef),
+    });
+  }
   const plan = store.filePlan(pk.key, {
     cr: body.cr,
     ...(title !== undefined ? { title } : {}),

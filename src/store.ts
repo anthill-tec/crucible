@@ -600,6 +600,37 @@ export interface PlanOpError {
   cycleRef?: number;
 }
 
+/**
+ * CR-CRU-116 §S1/§S2 — a WAVE-scope refusal: `PlanOpError`'s shape one
+ * container up, narrowed to the two codes `CycleTransitionError` already
+ * declares (:589-596). No third code string exists in this scope. `waveRef`
+ * and `crRef` carry what the refusal NAMES — both read off the queue entry,
+ * never off `plan.wave` — so the route builds its help[] without re-deriving
+ * anything.
+ */
+export interface WaveScopeError {
+  error: string;
+  code: "already-active" | "out-of-order";
+  waveRef: string;
+  crRef: string;
+}
+
+/** CR-CRU-116 §S1 — the two queue columns the wave question reads, plus the
+ *  declared-dead axis and the position that orders a blocker. */
+interface WaveScopeRow {
+  cr: string;
+  wave: string;
+  seq: number;
+  lifecycle_json: string | null;
+}
+
+/** CR-CRU-116 §S1 — the only plan facts `queueStatusOf` reads. */
+interface PlanStatusFacts {
+  planId: number;
+  status: string;
+  merge?: unknown;
+}
+
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
 export type TestRun = RunSchema;
 
@@ -3303,6 +3334,133 @@ export class Store {
   }
 
   /**
+   * CR-CRU-116 §S1/§S2 — the WAVE-scope refusals, the same pair
+   * `transitionCycle` answers one container down (:3238-3264) and in the SAME
+   * order: `already-active` before `out-of-order`. A wave is a container of
+   * crs exactly as a plan is a container of cycles, so opening work in one
+   * while another holds open work, or ahead of an unfinished earlier wave, is
+   * refused with the codes that scope already declares.
+   *
+   * Activeness is DERIVED, never stored: a wave is active while it holds a cr
+   * `queueStatusOf` reads as `IN_PROGRESS` — the ONE in-flight rule, shared
+   * verbatim with `deriveQueueStatus`, so `aborted` (which is not `open`)
+   * confers nothing. Every wave read here is the QUEUE's, never `plan.wave`:
+   * the two disagree in live data and a mislabelled plan must not be able to
+   * move the constraint.
+   *
+   * Two reads per call — the queue's rows and the project's plan rows — never
+   * a query per cr, because the wave question needs `wave` and `status` only
+   * (no cycles, no commit boundary).
+   */
+  waveScopeRefusal(projectKey: string, cr: string): WaveScopeError | undefined {
+    const rows = this.db
+      .query<WaveScopeRow, [string]>(
+        `SELECT cr, wave, seq, lifecycle_json FROM queue_entries WHERE project_key = ?`,
+      )
+      .all(projectKey);
+    const target = rows.find((row) => row.cr === cr);
+    // §S1 — OUTSIDE the constraint entirely: a cr the queue does not hold, and
+    // one whose `wave` is empty (the wire's way of declaring none). Neither is
+    // blocked, neither blocks, neither confers activeness on any wave.
+    if (target === undefined || target.wave === "") return undefined;
+    const targetWave = waveNumber(target.wave);
+    const statuses = this.queueStatuses(projectKey, rows);
+    // §S2 — the ONE ordering rule: `waveNumber`, which `waveSeqBase` and the
+    // queue's sort key already rest on. Position inside a wave breaks the tie.
+    const earlierThan = (a: WaveScopeRow, b: WaveScopeRow): boolean =>
+      waveNumber(a.wave) !== waveNumber(b.wave)
+        ? waveNumber(a.wave) < waveNumber(b.wave)
+        : a.seq < b.seq;
+    let active: WaveScopeRow | undefined;
+    let blocker: WaveScopeRow | undefined;
+    for (const row of rows) {
+      if (row.wave === "") continue;
+      const status = statuses.get(row.cr);
+      if (status === "IN_PROGRESS") {
+        if (
+          waveNumber(row.wave) !== targetWave &&
+          (active === undefined || earlierThan(row, active))
+        ) {
+          active = row;
+        }
+        continue;
+      }
+      // §S2 — UNFINISHED is neither landed nor declared dead, so a wave whose
+      // remainder is VOID/SUPERSEDED does not block its successor.
+      if (waveNumber(row.wave) >= targetWave) continue;
+      if (row.lifecycle_json !== null) continue;
+      if (status === "COMPLETED" || status === "COMPLETED_UNTRACKED") continue;
+      if (blocker === undefined || earlierThan(row, blocker)) blocker = row;
+    }
+    if (active !== undefined) {
+      return {
+        error:
+          `wave ${active.wave} is already active: ${active.cr} has an open plan — ` +
+          `only one wave holds open work at a time`,
+        code: "already-active",
+        waveRef: active.wave,
+        crRef: active.cr,
+      };
+    }
+    if (blocker !== undefined) {
+      return {
+        error:
+          `out-of-order wave: ${blocker.cr} in wave ${blocker.wave} is still unfinished, ` +
+          `so wave ${target.wave} does not open yet`,
+        code: "out-of-order",
+        waveRef: blocker.wave,
+        crRef: blocker.cr,
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * CR-CRU-116 §S1 — every queued cr's derived status from ONE plans read.
+   * `listQueue` derives per cr (a plans query each, cycles and commit
+   * boundary included) because it PUBLISHES plans; the wave question needs
+   * neither, and this runs on a write path, so the rows are grouped once and
+   * handed to the same `queueStatusOf` the read path uses. No second
+   * in-flight rule is written here.
+   */
+  private queueStatuses(
+    projectKey: string,
+    rows: readonly WaveScopeRow[],
+  ): Map<string, QueueStatus> {
+    const byCr = new Map<string, PlanStatusFacts[]>();
+    for (const row of this.db
+      .query<PlanRow, [string]>(
+        `SELECT plan_id, cr, status, merge_commit FROM plans
+         WHERE project_key = ? ORDER BY plan_id ASC`,
+      )
+      .all(projectKey)) {
+      const facts: PlanStatusFacts = {
+        planId: row.plan_id,
+        status: Store.planStatusOf(row.status),
+        ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
+      };
+      const held = byCr.get(row.cr);
+      if (held === undefined) byCr.set(row.cr, [facts]);
+      else held.push(facts);
+    }
+    const shipped = new Set<string>();
+    for (const release of this.listReleases(projectKey)) {
+      for (const shippedCr of release.crs ?? []) {
+        shipped.add(shippedCr);
+      }
+    }
+    const statuses = new Map<string, QueueStatus>();
+    for (const row of rows) {
+      if (statuses.has(row.cr)) continue;
+      statuses.set(
+        row.cr,
+        Store.queueStatusOf(row.cr, byCr.get(row.cr) ?? [], shipped).status,
+      );
+    }
+    return statuses;
+  }
+
+  /**
    * CR-CRU-024 §S3.2 — edit a cycle's label. Legal ONLY while the cycle is
    * `pending`: the active cycle is LOCKED and terminal cycles are immutable
    * HISTORY. Mirrors transitionCycle's row-lookup + guard structure; returns
@@ -4100,7 +4258,20 @@ export class Store {
     cr: string,
     shipped: ReadonlySet<string>,
   ): { status: QueueStatus; planId?: number } {
-    const plans = this.listPlans(projectKey, { cr });
+    return Store.queueStatusOf(cr, this.listPlans(projectKey, { cr }), shipped);
+  }
+
+  /**
+   * CR-CRU-116 §S1 — the derivation ABOVE over the plan facts alone, so the
+   * in-flight rule (`a plan of status open exists`) is written ONCE and read
+   * by both callers: `deriveQueueStatus` on the read path, per cr, and
+   * `queueStatuses` on the plans-write path, batched. Neither restates it.
+   */
+  private static queueStatusOf(
+    cr: string,
+    plans: readonly PlanStatusFacts[],
+    shipped: ReadonlySet<string>,
+  ): { status: QueueStatus; planId?: number } {
     if (plans.length === 0) {
       // No plan to link, and none is invented (AC5) — the key is omitted.
       return shipped.has(cr) ? { status: "COMPLETED_UNTRACKED" } : { status: "PENDING" };
@@ -4224,6 +4395,16 @@ export class Store {
     return active.length;
   }
 
+  /**
+   * CR-CRU-024 §S6 / CR-CRU-116 §S1 — the stored plan status, read the ONE
+   * way: `closed` and `aborted` verbatim, anything else `open`. `toPlan`
+   * publishes it and `queueStatuses` derives over it, so the two cannot
+   * disagree about what an aborted plan is.
+   */
+  private static planStatusOf(stored: string): Plan["status"] {
+    return stored === "closed" ? "closed" : stored === "aborted" ? "aborted" : "open";
+  }
+
   private toPlan(row: PlanRow): Plan {
     const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
       (cycle) => ({
@@ -4259,8 +4440,7 @@ export class Store {
       // status (including the new "aborted") to "open", which hid aborted plans
       // from the history lens and let the one-open-plan-per-cr rule mis-see
       // them as open. "open"/"closed" behaviour is unchanged.
-      status:
-        row.status === "closed" ? "closed" : row.status === "aborted" ? "aborted" : "open",
+      status: Store.planStatusOf(row.status),
       cycles,
       ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
