@@ -194,7 +194,7 @@ recording nothing, three times. Fail early, warn late.
 
 ## Version
 
-`0.1.3` — published on [PyPI](https://pypi.org/project/crucible-axi/) (`crucible-axi`) and
+`0.2.0` — published on [PyPI](https://pypi.org/project/crucible-axi/) (`crucible-axi`) and
 [npm](https://www.npmjs.com/package/@anthill-tec/crucible-server) (`@anthill-tec/crucible-server`).
 
 The authoritative value is the **git tag** and what those two registries serve; `package.json`

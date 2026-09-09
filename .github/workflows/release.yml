@@ -286,9 +286,6 @@ jobs:
     # tree burns the very version the real release wants, and it reports
     # `success` while doing it. It carries the same dependency list the two
     # registry publishes do — one graph, no second mechanism to disagree.
-    # (Deliberately no `<job-name>:` spelling in this prose: the CR-CRU-009
-    # suite locates a job by its NAME FOLLOWED BY A COLON, so a comment
-    # written that way is extracted as if it were the job.)
     needs: [build, test-bun, test-python, test-e2e]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

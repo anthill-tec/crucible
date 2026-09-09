@@ -386,8 +386,9 @@ type ReleaseWorkflow = {
     release?: { types?: string[] };
     workflow_dispatch?: unknown;
   };
-  jobs?: Record<string, { if?: string }>;
+  jobs?: Record<string, { if?: string; steps?: ReleaseStep[] }>;
 };
+type ReleaseStep = { name?: string; run?: string };
 
 function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
   const relPath = join(".github", "workflows", "release.yml");
@@ -397,20 +398,14 @@ function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
 }
 
 /**
- * Isolates one job's YAML block by its KEY — a line at exactly two spaces of
- * indentation ending in a colon — up to the next job key or EOF.
- *
- * Anchored deliberately. This read used to be `raw.match(/publish-npm:.../)`,
- * duplicated at six call sites, which matched the FIRST occurrence of that
- * text anywhere in the file — including inside a comment. Measured on the
- * 0.2.0 release (CI run 34305899303): a `[ALERT]` comment added to another
- * job mentioned "publish-npm:" in prose, that prose was extracted as if it
- * were the job, and six assertions failed while the workflow was correct.
- * A job is identified by its key, never by its name appearing somewhere.
+ * The shell bodies of one job's `run:` steps, located by the job's key in the
+ * parsed job graph and delivered as the YAML parser does (block scalars
+ * already dedented). Empty when the job or its steps do not exist.
  */
-function releaseJobBlock(raw: string, jobName: string): string {
-  const match = raw.match(new RegExp(`^ {2}${jobName}:[\\s\\S]*?(?=\\n {2}\\S|\\n$)`, "m"));
-  return match?.[0] ?? "";
+function releaseJobRunBodies(parsed: ReleaseWorkflow, jobName: string): string[] {
+  return (parsed.jobs?.[jobName]?.steps ?? []).flatMap((step) =>
+    typeof step.run === "string" ? [step.run] : [],
+  );
 }
 
 describe("§S2 release.yml trigger topology", () => {
@@ -469,26 +464,26 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   const BARE_TAG_REGEX_SOURCE = "^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$";
 
   test("publish-pypi guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
-    const { raw } = readReleaseWorkflow();
+    const { parsed } = readReleaseWorkflow();
 
-    // Isolate the publish-pypi job body so we don't accidentally match
+    // Isolate the publish-pypi job's own shell so we don't accidentally match
     // publish-npm's identical guard text.
-    const pypiJob = releaseJobBlock(raw, "publish-pypi");
-    expect(pypiJob.length).toBeGreaterThan(0);
+    const pypiShell = releaseJobRunBodies(parsed, "publish-pypi").join("\n");
+    expect(pypiShell.length).toBeGreaterThan(0);
 
-    expect(pypiJob).toContain(BARE_TAG_REGEX_SOURCE);
+    expect(pypiShell).toContain(BARE_TAG_REGEX_SOURCE);
     // NEGATIVE — the superseded v-prefixed pattern must be gone from this job.
-    expect(pypiJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(pypiShell).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
   test("publish-npm guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
-    const { raw } = readReleaseWorkflow();
+    const { parsed } = readReleaseWorkflow();
 
-    const npmJob = releaseJobBlock(raw, "publish-npm");
-    expect(npmJob.length).toBeGreaterThan(0);
+    const npmShell = releaseJobRunBodies(parsed, "publish-npm").join("\n");
+    expect(npmShell.length).toBeGreaterThan(0);
 
-    expect(npmJob).toContain(BARE_TAG_REGEX_SOURCE);
-    expect(npmJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(npmShell).toContain(BARE_TAG_REGEX_SOURCE);
+    expect(npmShell).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
   test("the guard regex extracted from publish-pypi accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
@@ -498,10 +493,10 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     // 'v' left in the anchor) is still caught behaviourally. Driven as data,
     // not read off the YAML: the CI guards have no coverage today and only
     // run on a real tag push.
-    const { raw } = readReleaseWorkflow();
-    const pypiJob = releaseJobBlock(raw, "publish-pypi");
+    const { parsed } = readReleaseWorkflow();
+    const pypiShell = releaseJobRunBodies(parsed, "publish-pypi").join("\n");
 
-    const guardMatch = pypiJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
+    const guardMatch = pypiShell.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
     expect(guardMatch).not.toBeNull();
     const extractedSource = guardMatch?.[1] ?? "";
 
@@ -516,10 +511,10 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   });
 
   test("the guard regex extracted from publish-npm accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
-    const { raw } = readReleaseWorkflow();
-    const npmJob = releaseJobBlock(raw, "publish-npm");
+    const { parsed } = readReleaseWorkflow();
+    const npmShell = releaseJobRunBodies(parsed, "publish-npm").join("\n");
 
-    const guardMatch = npmJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
+    const guardMatch = npmShell.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
     expect(guardMatch).not.toBeNull();
     const extractedSource = guardMatch?.[1] ?? "";
 
@@ -552,10 +547,11 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   // execution tests below ("§S2 publish-npm derives...") for the behavioural
   // half of this contract.
   test("publish-npm SETS (derives) package.json's version from the tag; the verify-and-fail comparison is gone, with no dead #v strip", () => {
-    const { raw } = readReleaseWorkflow();
-    const npmJob = releaseJobBlock(raw, "publish-npm");
+    const { parsed } = readReleaseWorkflow();
+    const npmRunBodies = releaseJobRunBodies(parsed, "publish-npm");
+    const npmShell = npmRunBodies.join("\n");
 
-    const runBody = extractNpmVersionRunBody(npmJob);
+    const runBody = extractNpmVersionRunBody(npmRunBodies);
     // POSITIVE — the derive step exists and matches the CR's own §S2
     // contract text verbatim (not merely "some npm version call").
     expect(runBody.length).toBeGreaterThan(0);
@@ -566,10 +562,10 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     // NEGATIVE — the old verify-and-fail comparison is gone, not merely
     // renamed around; and the dead #v strip (already swept in §S1) has not
     // resurfaced.
-    expect(npmJob).not.toMatch(/if\s*\[\s*"\$VERSION"\s*!=\s*"\$PKG_VERSION"\s*\]/);
-    expect(npmJob.toLowerCase()).not.toContain("!= release tag");
-    expect(npmJob).not.toContain('VERSION="${GITHUB_REF_NAME#v}"');
-    expect(npmJob).not.toMatch(/#v\}/);
+    expect(npmShell).not.toMatch(/if\s*\[\s*"\$VERSION"\s*!=\s*"\$PKG_VERSION"\s*\]/);
+    expect(npmShell.toLowerCase()).not.toContain("!= release tag");
+    expect(npmShell).not.toContain('VERSION="${GITHUB_REF_NAME#v}"');
+    expect(npmShell).not.toMatch(/#v\}/);
   });
 
   test("sweep: no #v strip or ^v tag-prefix pattern survives anywhere in release.yml", () => {
@@ -618,34 +614,12 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
 // ---------------------------------------------------------------------------
 
 /**
- * Strips the minimum common leading whitespace from every non-blank line, so
- * a YAML block-scalar body can be executed as a standalone shell script
- * regardless of its indentation depth in release.yml.
- */
-function dedent(text: string): string {
-  const lines = text.split("\n");
-  const indents = lines
-    .filter((l) => l.trim().length > 0)
-    .map((l) => l.match(/^ */)?.[0].length ?? 0);
-  const min = indents.length > 0 ? Math.min(...indents) : 0;
-  return lines
-    .map((l) => l.slice(min))
-    .join("\n")
-    .trimEnd();
-}
-
-/**
- * Extracts the dedented shell body of publish-npm's version-derive step (the
- * step whose run: block invokes `npm version`) from the job's raw YAML text.
+ * Picks the shell body of publish-npm's version-derive step (the step whose
+ * run: block invokes `npm version`) out of the job's parsed run bodies.
  * Returns "" if no such step exists yet (the pre-§S2 state on this branch).
  */
-function extractNpmVersionRunBody(npmJob: string): string {
-  const stepChunks = npmJob.split(/\n(?=      - )/);
-  const stepChunk = stepChunks.find((c) => /npm version/.test(c));
-  if (!stepChunk) return "";
-  const runMatch = stepChunk.match(/run:\s*\|\n([\s\S]*)/);
-  if (!runMatch) return "";
-  return dedent(runMatch[1]);
+function extractNpmVersionRunBody(runBodies: string[]): string {
+  return runBodies.find((body) => /npm version/.test(body)) ?? "";
 }
 
 /**
@@ -695,9 +669,8 @@ function runNpmVersionStep(
 
 describe("§S2 publish-npm derives package.json's version from the tag (driven as data)", () => {
   function getNpmVersionRunBody(): string {
-    const { raw } = readReleaseWorkflow();
-    const npmJob = releaseJobBlock(raw, "publish-npm");
-    return extractNpmVersionRunBody(npmJob);
+    const { parsed } = readReleaseWorkflow();
+    return extractNpmVersionRunBody(releaseJobRunBodies(parsed, "publish-npm"));
   }
 
   test("the published version equals the tag (fresh package.json version)", () => {
@@ -1033,47 +1006,48 @@ describe("§S0 the three test jobs carry NO event-restricting `if`", () => {
   });
 });
 
-describe("§S4 publish-pypi and publish-npm `needs:` all three test jobs", () => {
-  test("publish-pypi needs build + the bun/python/e2e test jobs", () => {
+// A publish is every job that emits something the outside world can see: the
+// GitHub Release (which is what fires the two registry publishes), PyPI, npm,
+// and the TestPyPI rehearsal. The three artifact-only jobs (build, pack-server,
+// dry-run-npm) publish nothing and are not gated.
+const PUBLISHING_JOBS = ["create-release", "publish-pypi", "publish-testpypi", "publish-npm"];
+
+describe("§S4 every publishing job `needs:` build + all three test jobs", () => {
+  for (const jobName of PUBLISHING_JOBS) {
+    test(`${jobName} needs build + the bun/python/e2e test jobs`, () => {
+      const jobs = parseReleaseWorkflowJobs062();
+      const bunJobName = findJobsRunning062(jobs, BUN_SUITE_CMD)[0]?.[0];
+      const pyJobName = findJobsRunning062(jobs, PY_SUITE_CMD)[0]?.[0];
+      const e2eJobName = findJobsRunning062(jobs, E2E_SUITE_CMD)[0]?.[0];
+
+      expect(bunJobName).toBeDefined();
+      expect(pyJobName).toBeDefined();
+      expect(e2eJobName).toBeDefined();
+
+      const job = jobs[jobName];
+      expect(job).toBeDefined();
+      const needs = normalizeNeeds062(job?.needs);
+
+      // POSITIVE — build must survive (§S4: extend the graph, not replace it),
+      // plus all three test jobs.
+      expect(needs).toContain("build");
+      expect(needs).toContain(bunJobName as string);
+      expect(needs).toContain(pyJobName as string);
+      expect(needs).toContain(e2eJobName as string);
+    });
+  }
+
+  test("the publishing jobs carry one identical needs list — one graph, no second mechanism", () => {
     const jobs = parseReleaseWorkflowJobs062();
-    const bunJobName = findJobsRunning062(jobs, BUN_SUITE_CMD)[0]?.[0];
-    const pyJobName = findJobsRunning062(jobs, PY_SUITE_CMD)[0]?.[0];
-    const e2eJobName = findJobsRunning062(jobs, E2E_SUITE_CMD)[0]?.[0];
+    const [reference, ...others] = PUBLISHING_JOBS.map((jobName) =>
+      [...normalizeNeeds062(jobs[jobName]?.needs)].sort(),
+    );
 
-    expect(bunJobName).toBeDefined();
-    expect(pyJobName).toBeDefined();
-    expect(e2eJobName).toBeDefined();
-
-    const publishPypi = jobs["publish-pypi"];
-    expect(publishPypi).toBeDefined();
-    const needs = normalizeNeeds062(publishPypi?.needs);
-
-    // POSITIVE — build must survive (§S4: extend the graph, not replace it),
-    // plus all three test jobs.
-    expect(needs).toContain("build");
-    expect(needs).toContain(bunJobName as string);
-    expect(needs).toContain(pyJobName as string);
-    expect(needs).toContain(e2eJobName as string);
-  });
-
-  test("publish-npm needs build + the bun/python/e2e test jobs", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const bunJobName = findJobsRunning062(jobs, BUN_SUITE_CMD)[0]?.[0];
-    const pyJobName = findJobsRunning062(jobs, PY_SUITE_CMD)[0]?.[0];
-    const e2eJobName = findJobsRunning062(jobs, E2E_SUITE_CMD)[0]?.[0];
-
-    expect(bunJobName).toBeDefined();
-    expect(pyJobName).toBeDefined();
-    expect(e2eJobName).toBeDefined();
-
-    const publishNpm = jobs["publish-npm"];
-    expect(publishNpm).toBeDefined();
-    const needs = normalizeNeeds062(publishNpm?.needs);
-
-    expect(needs).toContain("build");
-    expect(needs).toContain(bunJobName as string);
-    expect(needs).toContain(pyJobName as string);
-    expect(needs).toContain(e2eJobName as string);
+    expect(reference).toBeDefined();
+    expect(reference?.length).toBeGreaterThan(0);
+    for (const needs of others) {
+      expect(needs).toEqual(reference);
+    }
   });
 });
 
