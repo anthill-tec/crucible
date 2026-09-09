@@ -28,13 +28,24 @@
 # silently publishing nothing. Do not "optimise" CI minutes by scoping them;
 # reduce cost INSIDE the jobs (caching, sharding) instead.
 #
-# §S4 — the gate IS the dependency graph: EVERY publish job — publish-pypi,
-# publish-npm AND the publish-testpypi rehearsal — `needs:` all three test jobs
-# plus build. No second, parallel guard mechanism — two mechanisms can
+# §S4 — the gate IS the dependency graph. A PUBLISH MAY HAPPEN ONLY IF THE
+# TESTS PASS (user ruling, 2026-09-09), and "publish" means every job that
+# emits something the outside world can see. Audited job by job:
+#
+#   create-release    PUBLISHES a GitHub Release (and fires the two below) -> gated
+#   publish-pypi      PUBLISHES to PyPI                                    -> gated
+#   publish-npm       PUBLISHES to npm                                     -> gated
+#   publish-testpypi  PUBLISHES to TestPyPI (a rehearsal is still a publish,
+#                     and a TestPyPI version is single-use)                 -> gated
+#   build             uploads an internal workflow artifact only            -> not a publish
+#   pack-server       `npm pack --dry-run`, writes nothing anywhere         -> not a publish
+#   dry-run-npm       `npm publish --dry-run`, uploads nothing              -> not a publish
+#
+# All four gated jobs carry the SAME `needs: [build, test-bun, test-python,
+# test-e2e]`. No second, parallel guard mechanism — two mechanisms can
 # disagree, one graph cannot disagree with itself. An `if:` condition on the
 # event or the ref is NOT part of that gate: it selects which runs a job
-# belongs to, and says nothing about whether the code passes. A publish may
-# happen only if the tests pass (user ruling, 2026-09-09).
+# belongs to, and says nothing about whether the code passes.
 name: Release — publish crucible-axi (PyPI) + server (npm)
 
 on:
@@ -203,7 +214,15 @@ jobs:
           fi
 
   create-release:
-    needs: build
+    # 🚨 A GITHUB RELEASE IS A PUBLISH (user ruling, 2026-09-09). This job used
+    # to `needs: build` alone, which was the largest hole in the gate: it
+    # publishes a public GitHub Release from a master push with NO suite having
+    # run, and that Release is what fires `release: published` and therefore
+    # PyPI and npm. Gating the two registry jobs while leaving their trigger
+    # ungated gates nothing that matters — the release is already public by the
+    # time they refuse. Every publish is contingent on the tests passing, and
+    # this is a publish.
+    needs: [build, test-bun, test-python, test-e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
@@ -265,8 +284,11 @@ jobs:
     # gate: it says WHERE the run came from, never whether the code works.
     # A TestPyPI version is single-use, so a rehearsal that publishes on a red
     # tree burns the very version the real release wants, and it reports
-    # `success` while doing it. Same dependency list as publish-pypi and
-    # publish-npm: one graph, no second mechanism to disagree with it.
+    # `success` while doing it. It carries the same dependency list the two
+    # registry publishes do — one graph, no second mechanism to disagree.
+    # (Deliberately no `<job-name>:` spelling in this prose: the CR-CRU-009
+    # suite locates a job by its NAME FOLLOWED BY A COLON, so a comment
+    # written that way is extracted as if it were the job.)
     needs: [build, test-bun, test-python, test-e2e]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

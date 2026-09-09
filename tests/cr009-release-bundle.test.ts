@@ -396,6 +396,23 @@ function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
   return { raw, parsed };
 }
 
+/**
+ * Isolates one job's YAML block by its KEY — a line at exactly two spaces of
+ * indentation ending in a colon — up to the next job key or EOF.
+ *
+ * Anchored deliberately. This read used to be `raw.match(/publish-npm:.../)`,
+ * duplicated at six call sites, which matched the FIRST occurrence of that
+ * text anywhere in the file — including inside a comment. Measured on the
+ * 0.2.0 release (CI run 34305899303): a `[ALERT]` comment added to another
+ * job mentioned "publish-npm:" in prose, that prose was extracted as if it
+ * were the job, and six assertions failed while the workflow was correct.
+ * A job is identified by its key, never by its name appearing somewhere.
+ */
+function releaseJobBlock(raw: string, jobName: string): string {
+  const match = raw.match(new RegExp(`^ {2}${jobName}:[\\s\\S]*?(?=\\n {2}\\S|\\n$)`, "m"));
+  return match?.[0] ?? "";
+}
+
 describe("§S2 release.yml trigger topology", () => {
   test("on.push.branches includes both develop and master", () => {
     const { parsed } = readReleaseWorkflow();
@@ -456,9 +473,8 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
 
     // Isolate the publish-pypi job body so we don't accidentally match
     // publish-npm's identical guard text.
-    const pypiJobMatch = raw.match(/publish-pypi:[\s\S]*?(?=\n {2}\S|\n$)/);
-    expect(pypiJobMatch).not.toBeNull();
-    const pypiJob = pypiJobMatch?.[0] ?? "";
+    const pypiJob = releaseJobBlock(raw, "publish-pypi");
+    expect(pypiJob.length).toBeGreaterThan(0);
 
     expect(pypiJob).toContain(BARE_TAG_REGEX_SOURCE);
     // NEGATIVE — the superseded v-prefixed pattern must be gone from this job.
@@ -468,9 +484,8 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   test("publish-npm guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
 
-    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
-    expect(npmJobMatch).not.toBeNull();
-    const npmJob = npmJobMatch?.[0] ?? "";
+    const npmJob = releaseJobBlock(raw, "publish-npm");
+    expect(npmJob.length).toBeGreaterThan(0);
 
     expect(npmJob).toContain(BARE_TAG_REGEX_SOURCE);
     expect(npmJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
@@ -484,8 +499,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     // not read off the YAML: the CI guards have no coverage today and only
     // run on a real tag push.
     const { raw } = readReleaseWorkflow();
-    const pypiJobMatch = raw.match(/publish-pypi:[\s\S]*?(?=\n {2}\S|\n$)/);
-    const pypiJob = pypiJobMatch?.[0] ?? "";
+    const pypiJob = releaseJobBlock(raw, "publish-pypi");
 
     const guardMatch = pypiJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
     expect(guardMatch).not.toBeNull();
@@ -503,8 +517,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
 
   test("the guard regex extracted from publish-npm accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
     const { raw } = readReleaseWorkflow();
-    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
-    const npmJob = npmJobMatch?.[0] ?? "";
+    const npmJob = releaseJobBlock(raw, "publish-npm");
 
     const guardMatch = npmJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
     expect(guardMatch).not.toBeNull();
@@ -540,8 +553,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   // half of this contract.
   test("publish-npm SETS (derives) package.json's version from the tag; the verify-and-fail comparison is gone, with no dead #v strip", () => {
     const { raw } = readReleaseWorkflow();
-    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
-    const npmJob = npmJobMatch?.[0] ?? "";
+    const npmJob = releaseJobBlock(raw, "publish-npm");
 
     const runBody = extractNpmVersionRunBody(npmJob);
     // POSITIVE — the derive step exists and matches the CR's own §S2
@@ -684,8 +696,7 @@ function runNpmVersionStep(
 describe("§S2 publish-npm derives package.json's version from the tag (driven as data)", () => {
   function getNpmVersionRunBody(): string {
     const { raw } = readReleaseWorkflow();
-    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
-    const npmJob = npmJobMatch?.[0] ?? "";
+    const npmJob = releaseJobBlock(raw, "publish-npm");
     return extractNpmVersionRunBody(npmJob);
   }
 
