@@ -106,6 +106,18 @@ Activeness becomes a per-WAVE fact from the same derivation §S1 uses: the box w
 no marker at all — the `false` branch stops being unreachable, so it is now a state to assert rather
 than a comment to trust.
 
+**This SUPERSEDES CR-CRU-096 AC1's release-level reading**, and its sibling suite says so out loud:
+`tests/roadmap-wave-header.test.ts:482-483` asserts "a CR that is actually running is not what makes
+the wave active: with one `IN_PROGRESS` in wave 1, wave 2 — which has none — is still active", with
+the same premise at `:443-444`, `:498-499`, `:520-521`, and single-wave assumptions at `:571`,
+`:599`. That was correct while `active` was a release fact. It is the rule the user's
+single-active-wave requirement retires.
+
+Those assertions are **rewritten to the new contract, or deleted where their only subject was the
+superseded rule** — never re-pinned to whatever the implementation happens to produce. `:482-483` is
+a deletion: its subject IS the retired rule, and the replacement behaviour is asserted in this CR's
+own suite rather than by inverting a test whose point has gone.
+
 ## Acceptance criteria
 
 **§S1 — single active wave**
@@ -171,6 +183,11 @@ than a comment to trust.
       today, so one is added.
 - [ ] `data-active` on the non-active box is `"false"`, matching the attribute the renderer already
       publishes.
+- [ ] `tests/roadmap-wave-header.test.ts` passes with its release-level activeness assertions
+      REWRITTEN to the per-wave contract, and `:482-483` DELETED rather than inverted. A dated
+      supersession comment names CR-CRU-116 §S4 and the CR-CRU-096 AC1 reading it retires.
+- [ ] No assertion anywhere still reads activeness off `kind === "proposed"`: a check over `tests/`
+      reports zero surviving sites, and the number of sites checked is itself asserted.
 
 **Integration**
 
