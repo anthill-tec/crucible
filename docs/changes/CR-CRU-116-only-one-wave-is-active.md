@@ -56,6 +56,16 @@ Opening a plan for a CR whose wave is not the active wave is **refused** while a
 active, with `code: "already-active"` naming the wave that holds the open work. The existing
 per-plan single-active rule is untouched; this is its sibling one container up.
 
+**Precedence when both conditions hold: `already-active` wins.** A single write can trip both rules
+(the active wave is itself unfinished, and an earlier wave still has a pending CR).
+`transitionCycle` checks `already-active` before `out-of-order` (`src/store.ts:3238-3264`) and the
+wave scope mirrors that order rather than choosing its own.
+
+**A CR with no declared wave is outside this constraint entirely.** An entry whose `wave` is empty,
+and a CR the queue does not hold at all, are never blocked, never blocking, and never confer
+activeness on any wave. Membership is declared; a guard that refused an undeclared CR would be
+inventing the membership this project requires to be authored.
+
 ### §S2 Waves open in order
 
 Opening a plan for a CR in wave W is **refused** while an earlier wave still holds an unfinished CR,
@@ -63,15 +73,24 @@ with `code: "out-of-order"` naming that wave and the CR that blocks it. Unfinish
 meaning the DN fixes and this project already uses: neither landed nor declared dead, so a wave whose
 remainder is `VOID`/`SUPERSEDED` does not block its successor.
 
-Wave order is the queue's declared order of waves, taken from the same published data `next` reads —
-never re-derived from a `seq` value, which CR-CRU-095 AC6 settled for the reader and which holds here
-for the same reason.
+Wave order is `waveNumber(wave)` (`src/store.ts:450`) — the ONE ordering function the store already
+publishes, which `waveSeqBase` and the queue's own sort key both rest on, so a wave's seq block and
+its position cannot disagree about which lane it is. No second ordering rule is written, and no
+order is re-derived from a `seq` VALUE (CR-CRU-095 AC6).
+
+A digit-free label therefore numbers **0**, exactly as its seq block already does — `waveSeqBase`'s
+own comment states "a wave without an integer takes block 0". An **empty** `wave` is the wire's way
+of declaring none and is excluded by §S1 rather than ordered as wave 0.
 
 ### §S3 The refusal names the move that clears it
 
 Each refusal carries `help[]` stating what would make the write legal: for `already-active`, closing
 or aborting the open plan in the active wave; for `out-of-order`, the blocking CR and that it must
 land or be declared dead. A refusal that only says no is a refusal the caller cannot act on.
+
+**The status is `400`, stated as a number.** `handlePlanFile`'s only existing refusal is
+`fail(400, plan.error, { help: hints.duplicateOpenPlan })`, and that IS "the plans route's existing
+refusal shape". `409` is also 400-class and is NOT what this route answers.
 
 ### §S4 One wave carries the marker — and today the renderer gives it to all of them
 
@@ -102,6 +121,14 @@ than a comment to trust.
       active. Asserted with a fixture carrying exactly that disagreement.
 - [ ] Activeness is computed from the same derivation the queue publishes — a census asserts the
       guard has no second in-flight rule of its own beside `deriveQueueStatus`.
+- [ ] Both conditions at once (the active wave is unfinished AND an earlier wave holds a pending CR)
+      answers `already-active`, not `out-of-order` — the same precedence `transitionCycle` uses.
+- [ ] A plans POST for a CR the queue does not hold **succeeds** and changes no wave's activeness,
+      asserted with the wave constraint otherwise armed (another wave active).
+- [ ] A plans POST for a CR whose `wave` is empty **succeeds** while a numbered wave is active, and
+      that CR's open plan does not then make any wave active — asserted both ways.
+- [ ] A digit-free non-empty wave label orders as wave **0** via `waveNumber`, and the guard writes no
+      ordering rule of its own — asserted by driving a `wave: "alpha"` entry against a numbered wave.
 - [ ] With an open plan for a CR in wave 6, a plans POST for a **second CR in wave 6** SUCCEEDS —
       the constraint is one active WAVE, never one open plan.
 - [ ] With no open plan and no `IN_PROGRESS` CR anywhere, a plans POST for a CR in the earliest
@@ -127,8 +154,9 @@ than a comment to trust.
 
 - [ ] Both refusals carry a non-empty `help[]`; the `already-active` help names the plan-closing move
       and the `out-of-order` help names the blocking CR by id.
-- [ ] Neither refusal is a 500: both are `400`-class envelopes with `ok: false`, matching the plans
-      route's existing refusal shape.
+- [ ] Neither refusal is a 500, and both answer HTTP **`400`** exactly — not `409`, not any other
+      400-class code — with `ok: false` and a non-empty error sentence, matching
+      `handlePlanFile`'s existing `fail(400, …)` refusal.
 
 **§S4 — one marker**
 
