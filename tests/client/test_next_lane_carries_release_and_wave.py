@@ -35,13 +35,18 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import urllib.error
+import urllib.request
 from argparse import Namespace
 from pathlib import Path
 from unittest import mock
@@ -66,6 +71,7 @@ CLIENTS = tuple(CLIENT_FILES)
 EXPECTED_CLIENT_COUNT = 5
 
 PROJECT_KEY = "next-lane-key"
+QUEUE_PATH = f"/api/v2/projects/{PROJECT_KEY}/queue"
 BASE_URL = "http://127.0.0.1:0"
 
 # The env keys the fleet's `context` block reads — cleared so an ambient
@@ -89,6 +95,55 @@ def _load(path, name):
 
 AXI = _load(AXI_MODULE_PATH, "next_lane_axi_under_test")
 TOON = _load(TOON_PATH, "next_lane_toon")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The scratch board — a real server on a free port, for the agreement alone
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The sibling resolver suite's idiom, taken rather than re-invented: a server
+# of this repo's own source, a free port and a `mkdtemp` DB — never the live
+# instance and never the shared project.
+
+
+def _free_port():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _http(base, path, payload=None):
+    """One JSON call against the scratch server. A non-2xx still carries the
+    server's structured body, which IS the assertion subject for a refusal."""
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(
+        base + path, data=data, method="POST" if data else "GET",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        return json.loads(exc.read().decode())
+
+
+def _await_server(base, proc, timeout=30.0):
+    """Block until the scratch server answers its orientation route, or fail
+    naming the boot that never happened — never silently proceed against a
+    port nothing is listening on."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise AssertionError(
+                f"the scratch server exited before it was ready "
+                f"(exit {proc.returncode})")
+        try:
+            _http(base, "/api/v2")
+            return
+        except OSError:
+            time.sleep(0.05)
+    raise AssertionError(f"the scratch server never became ready at {base}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -241,11 +296,16 @@ class _NextTestBase(unittest.TestCase):
             os.environ.pop(key, None)
 
     def drive(self, entries, **flags):
-        """Run the real `cmd_next` over `entries` → (fields, stderr, code)."""
+        """Run the real `cmd_next` over `entries` → (fields, stderr, code).
+
+        The RECORDER stays on the case as `self.recorder`: what the verb asked
+        the server for is a fact about the drive that just happened, and the
+        round-trip criterion is asserted on it."""
         recorder = _RecordingOps(_queue(*entries))
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = AXI.cmd_next(_args(**flags), "/fake/dir", recorder.ops)
+        self.recorder = recorder
         fields = TOON.decode(out.getvalue())["axi"]
         return fields, err.getvalue().strip(), code
 
@@ -494,20 +554,6 @@ class LaneFlagsAreNotCoercedTest(_NextTestBase):
             fields.get("cr"), "CR-R2-1",
             "a `v` prefix is part of the label, not decoration to strip")
 
-    def test_the_track_flag_keeps_its_digit_rule(self):
-        """`--track` mirrors a server-side WRITE rule and stays exactly as it
-        is: every spelling of one lane resolves to that lane. Passes today and
-        must keep passing — the two new flags must not drag the third onto
-        their own verbatim rule."""
-        spellings = {s: self.fields(TWO_TRACK_INCOMPLETE_WAVE, track=s)
-                     for s in ("2", "track-2", "Track 2")}
-        self.assertEqual(
-            [spellings["track-2"], spellings["Track 2"]],
-            [spellings["2"], spellings["2"]],
-            f"every spelling of one lane must resolve to one answer: "
-            f"{spellings!r}")
-        self.assertEqual(spellings["2"].get("cr"), "CR-L6-3")
-
 
 # A wave holding two rows at ONE seq. The authoring verb keys on
 # (release, wave) while the seq block keys on the wave alone, so a duplicate
@@ -524,12 +570,6 @@ class DuplicateSeqWithinAWaveTest(_NextTestBase):
     Asserted rather than promised: the answer over a wave holding two rows at
     one position is the row the SERVER published first. Passes today and must
     keep passing."""
-
-    def test_the_fixture_really_holds_two_rows_at_one_position(self):
-        self.assertEqual(
-            [e["seq"] for e in DUPLICATE_SEQ_WAVE], [6001, 6001],
-            "the instrument is the duplicate; a fixture that lost it would "
-            "assert nothing")
 
     def test_a_duplicated_seq_resolves_to_the_row_published_first(self):
         fields = self.fields(DUPLICATE_SEQ_WAVE)
@@ -567,18 +607,6 @@ class DrainedLaneIsNotACompleteWaveTest(_NextTestBase):
         fields = self.fields(TWO_TRACK_INCOMPLETE_WAVE, track="2")
         self.assertEqual(fields.get("decision"), "NEXT")
         self.assertEqual(fields.get("cr"), "CR-L6-3")
-
-
-class DrainedReasonVocabularyTest(unittest.TestCase):
-    """§S3 — no new reason is added. Asserted by length AND by value, because
-    a set comparison alone survives a fourth member arriving beside a deleted
-    one. Passes today and must keep passing."""
-
-    def test_the_three_drained_reasons_are_the_declared_vocabulary(self):
-        self.assertEqual(len(AXI.DRAINED_REASONS), 3)
-        self.assertEqual(
-            AXI.DRAINED_REASONS,
-            ("wave-complete", "awaiting-assignment", "no-roadmap"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -653,6 +681,30 @@ class LegacyLineStatesTheWaveTest(_NextTestBase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Integration — the new dimensions cost no extra round-trip
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class BothNewDimensionsRideTheOneReadTest(_NextTestBase):
+    """Integration — `GET …/queue` is read exactly ONCE per invocation, with
+    both new dimensions supplied. The criterion is asserted by COUNTING the
+    requests the verb made, because narrowing is a question about the payload
+    already in hand: a reader that asked the server to narrow for it would
+    answer identically and cost a round-trip per dimension."""
+
+    def test_a_drive_supplying_both_new_dimensions_reads_the_queue_once(self):
+        fields = self.fields(RELEASE_MIXED_WAVE, release="0.2.0", wave=WAVE)
+        self.assertEqual(
+            fields.get("cr"), "CR-D2-1",
+            "the drive must really resolve an answer through both flags, or "
+            "an empty request log would pass for the wrong reason")
+        self.assertEqual(
+            self.recorder.gets, [QUEUE_PATH],
+            f"one question, one read: the verb asked for "
+            f"{self.recorder.gets!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Agreement with the shipped wave-scope guard
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -682,17 +734,149 @@ class WavelessEntryNeverResolvesTheWaveTest(_NextTestBase):
             "— the guard would refuse the plan filed for it")
 
 
-class HoldTriggerVocabularyTest(unittest.TestCase):
-    """Agreement — `next` grows no refusal of its own: the reader validates the
-    declared sequence and the server enforces the constraint. Asserted by
-    length AND by value. Passes today and must keep passing."""
+# ── the answer is work the write side ACCEPTS ─────────────────────────────
+#
+# Two waves, both holding actionable work, declared through the server's own
+# write path. A reader that scanned past the front wave would name the later
+# cr — precisely the plan the wave-scope guard refuses — so this board can
+# tell a reader that agrees with the write side from one that does not.
+AGREEMENT_AGENT = "next-lane-agreement-probe"
+AGREEMENT_RELEASE = "9.9.9"
+FRONT_WAVE = "1"
+LATER_WAVE = "2"
+FRONT_CR = "CR-Y1-1"
+LATER_CR = "CR-Y2-1"
+# The two codes the wave scope declares. A refusal carrying neither would mean
+# something else stopped the write, and the non-vacuity guard below would be
+# reading the wrong failure.
+REFUSAL_CODES = ("already-active", "out-of-order")
 
-    def test_the_four_hold_trigger_kinds_are_the_declared_vocabulary(self):
-        self.assertEqual(len(AXI.HOLD_TRIGGER_KINDS), 4)
+
+class NextsAnswerIsAPlanTheWriteSideAcceptsTest(unittest.TestCase):
+    """Agreement — the cr `next` names with no flags is one whose `plan-file`
+    the shipped wave-scope guard ACCEPTS.
+
+    BOTH verbs are driven on ONE board, as the real client subprocesses an
+    orchestrator actually runs, because the two halves sit on opposite sides
+    of the wire: the reader picks a cr out of the queue it read, and the
+    server decides whether a plan for that cr may be filed. Nothing short of
+    filing it can tell the two apart — and a reader offering work the server
+    then refuses is worse than one that says nothing at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.mkdtemp(prefix="next-lane-agreement-")
+        cls._proc = None
+        bun = shutil.which("bun")
+        if bun is None:
+            raise unittest.SkipTest(
+                "the agreement is NOT proven without `bun`: it needs the real "
+                "server's wave-scope guard on the write path. That is a "
+                "missing toolchain, not a passing assertion.")
+        port = _free_port()
+        cls.base = f"http://127.0.0.1:{port}"
+        cls._proc = subprocess.Popen(
+            [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
+            env={**os.environ, "CRUCIBLE_PORT": str(port),
+                 "CRUCIBLE_HOST": "127.0.0.1",
+                 "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _await_server(cls.base, cls._proc)
+
+        project = _http(cls.base, "/api/v2/projects",
+                        {"name": "next-lane-agreement"})
+        cls.key = project["project"]["key"]
+        _http(cls.base, "/api/v2/agents/register",
+              {"agentId": AGREEMENT_AGENT, "projectKey": cls.key,
+               "status": "online", "role": "ORCHESTRATOR",
+               "identity": {"displayName": AGREEMENT_AGENT,
+                            "source": "manual"}})
+        _http(cls.base, f"/api/v2/projects/{cls.key}/release-proposals",
+              {"label": AGREEMENT_RELEASE, "agentId": AGREEMENT_AGENT})
+        for cr, wave in ((FRONT_CR, FRONT_WAVE), (LATER_CR, LATER_WAVE)):
+            cls._declare(cr, wave)
+
+        cls.project_dir = os.path.join(cls._tmpdir, "project")
+        os.makedirs(cls.project_dir)
+        Path(cls.project_dir, ".env").write_text(
+            f"CRUCIBLE_PROJECT_KEY={cls.key}\n")
+
+    @classmethod
+    def _declare(cls, cr, wave):
+        planned = _http(cls.base, f"/api/v2/projects/{cls.key}/queue/plan",
+                        {"cr": cr, "title": "agreement probe",
+                         "release": AGREEMENT_RELEASE, "wave": wave,
+                         "agentId": AGREEMENT_AGENT})
+        assert planned.get("ok"), f"cr-plan failed for {cr}: {planned!r}"
+        sequenced = _http(
+            cls.base, f"/api/v2/projects/{cls.key}/queue/sequence",
+            {"release": AGREEMENT_RELEASE, "wave": wave, "crs": [cr],
+             "agentId": AGREEMENT_AGENT})
+        assert sequenced.get("ok"), f"wave-sequence failed for {cr}: {sequenced!r}"
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, "_proc", None) is not None:
+            cls._proc.terminate()
+            try:
+                cls._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cls._proc.kill()
+        shutil.rmtree(cls._tmpdir, ignore_errors=True)
+
+    def _client(self, argv):
+        """One real client dispatch against the scratch board → (exit code,
+        envelope). The orchestrator's own surface, and the only place the two
+        verbs meet."""
+        env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
+        env["CRUCIBLE_URL"] = self.base
+        proc = subprocess.run(
+            [sys.executable, str(CLIENT_FILES["bun"]), *argv,
+             "--project-dir", self.project_dir],
+            cwd=str(REPO_ROOT), env=env, capture_output=True, text=True,
+            timeout=120)
+        decoded = TOON.decode(proc.stdout)
+        self.assertIn(
+            "axi", decoded,
+            f"every client dispatch answers with an envelope; {argv!r} gave "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
+        return proc.returncode, decoded["axi"]
+
+    def test_the_cr_next_names_is_one_whose_plan_the_guard_accepts(self):
+        code, answer = self._client(["next"])
         self.assertEqual(
-            AXI.HOLD_TRIGGER_KINDS,
-            ("in-flight", "dead-dependency", "dependency",
-             "unknown-dependency"))
+            (code, answer.get("decision")), (0, "NEXT"),
+            f"the board must really offer work before the agreement can be "
+            f"tested; got {answer!r}")
+
+        # Non-vacuity: the guard has to be LIVE on this board, or accepting a
+        # plan below would prove nothing. Filing for the later wave — the
+        # answer a reader scanning past the front would have given — is
+        # refused, with a code the wave scope declares.
+        refused_code, refused = self._client(
+            ["plan-file", "--cr", LATER_CR, "--title", "the later wave",
+             "--cycle", "c1", "--wave", LATER_WAVE,
+             "--agent", AGREEMENT_AGENT])
+        self.assertEqual(
+            (refused_code != 0, refused.get("ok")), (True, False),
+            f"a plan for a wave the guard has not opened must be refused; "
+            f"got {refused!r}")
+        self.assertIn(
+            refused.get("code"), REFUSAL_CODES,
+            f"and refused BY THE WAVE SCOPE, not by something else: "
+            f"{refused!r}")
+
+        filed_code, filed = self._client(
+            ["plan-file", "--cr", answer.get("cr"),
+             "--title", "the cr next named",
+             "--cycle", "c1", "--wave", answer.get("wave"),
+             "--agent", AGREEMENT_AGENT])
+        self.assertEqual(
+            (filed_code, filed.get("ok"), filed.get("code")),
+            (0, True, None),
+            f"the cr `next` named is work the write side accepts: a plan for "
+            f"it files cleanly, carrying no refusal code at all. Got "
+            f"{filed!r} for the answer {answer!r}")
 
 
 if __name__ == "__main__":

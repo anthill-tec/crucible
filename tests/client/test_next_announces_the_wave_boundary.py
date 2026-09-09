@@ -203,6 +203,37 @@ WAVE_OF_CORPSES = (
     _entry("CR-Q7-1", 701, wave="07"),
 )
 
+# ── the front cr of the resolved wave is BLOCKED, and a later wave is not ──
+#
+# Wave 5 is complete, wave 6's FRONT cr waits on an unmerged dependency inside
+# its own wave, and wave 7 holds a cr that could be started this minute. The
+# answer must stay on the wave it resolved: the work waiting in wave 7 is work
+# the write-side scope guard refuses a plan for, so a reader that scanned on
+# for something startable would send an orchestrator at a wave the server has
+# not opened.
+BLOCKED_FRONT_OF_THE_RESOLVED_WAVE = BOUNDARY_JUST_CROSSED[:3] + (
+    _entry("CR-S6-1", 6001, depends_on=("CR-S6-2",)),
+    _entry("CR-S6-2", 6002),
+    _entry("CR-T7-1", 7001, wave="7"),
+)
+STARTABLE_LATER_WAVE = "7"
+
+# ── the announcement is scoped to the CONTAINER asked about ───────────────
+#
+# Wave 5 holds a landed cr declaring the release and an actionable cr
+# declaring none; wave 6 holds an actionable cr in the release. Asked about
+# the release, wave 5 is finished WITHIN it and wave 6 is the resolved wave;
+# asked about the board, wave 5 IS the resolved wave and nothing crossed at
+# all. One board, two containers, two answers that are each true of the
+# question that was put.
+IN_SCOPE_RELEASE = "0.2.0"
+RELEASE_SCOPED_CROSSING = (
+    _entry("CR-V5-1", 5001, status="COMPLETED", wave=PREDECESSOR_WAVE,
+           release=IN_SCOPE_RELEASE),
+    _entry("CR-V5-2", 5002, wave=PREDECESSOR_WAVE),
+    _entry("CR-W6-1", 6001, release=IN_SCOPE_RELEASE),
+)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # The `cmd_next` harness — the real ClientOps, the real emitter
@@ -416,12 +447,13 @@ class DrainedHelpCarriesTheNextWaveLabelTest(_NextTestBase):
     the caller has to fill in by reading the board itself."""
 
     def _steps_naming(self, entries, label, **flags):
-        fields = self.fields(entries, **flags)
+        fields, _stderr, code = self.drive(entries, **flags)
         self.assertEqual(
-            (fields.get("decision"), fields.get("reason")),
-            ("DRAINED", "wave-complete"),
-            f"the board must really drain before its help can be read: "
-            f"{fields!r}")
+            (fields.get("decision"), fields.get("reason"), code),
+            ("DRAINED", "wave-complete", 0),
+            f"the board must really drain before its help can be read — and a "
+            f"finished wave is an ANSWER, so the verb exits 0 rather than "
+            f"reporting the end of a wave as a failure: {fields!r}")
         return [step for step in fields["help"] if f"--wave {label}" in step]
 
     def test_a_zero_padded_next_wave_label_rides_the_help_verbatim(self):
@@ -463,6 +495,42 @@ class TheFirstWaveHasNoPredecessorTest(_NextTestBase):
             "however little of it has landed")
 
 
+class TheAnnouncementIsScopedToTheContainerAskedAboutTest(_NextTestBase):
+    """§S2, ruled at cycle 401 — the crossing is announced ABOUT THE CONTAINER
+    the caller asked about. A release-scoped question is answered about that
+    release and nothing else, so `--release` states that the predecessor
+    completed WITHIN it even while that same wave still holds an actionable
+    entry declaring no release: the narrowing §S1 already applies to
+    membership, and the standing non-goal that release-less work is invisible
+    to a release-scoped view. Asserted as a PAIR on ONE board, because the
+    unscoped reading would make the announcement report on work the caller
+    explicitly excluded."""
+
+    def test_a_release_scoped_answer_announces_the_crossing_within_that_release(self):
+        fields = self.fields(RELEASE_SCOPED_CROSSING, release=IN_SCOPE_RELEASE)
+        self.assertEqual(
+            {"decision": fields.get("decision"), "cr": fields.get("cr"),
+             "wave": fields.get("wave"), "release": fields.get("release"),
+             ANNOUNCEMENT: fields.get(ANNOUNCEMENT)},
+            {"decision": "NEXT", "cr": "CR-W6-1", "wave": RESOLVED_WAVE,
+             "release": IN_SCOPE_RELEASE, ANNOUNCEMENT: PREDECESSOR_WAVE},
+            "inside the release asked about, the predecessor holds nothing "
+            "actionable — and the envelope names that release beside the "
+            "statement, so the claim reads as the scoped one it is")
+
+    def test_the_same_board_unscoped_answers_the_release_less_row_and_announces_nothing(self):
+        fields = self.fields(RELEASE_SCOPED_CROSSING)
+        self.assertEqual(
+            (fields.get("decision"), fields.get("cr"), fields.get("wave")),
+            ("NEXT", "CR-V5-2", PREDECESSOR_WAVE),
+            "with no container declared, the actionable release-less row is "
+            "the answer and the wave holding it is the resolved one")
+        self.assertNotIn(
+            ANNOUNCEMENT, fields,
+            "that wave is plainly unfinished once nothing narrows the "
+            "question, so the unscoped answer announces no crossing at all")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # The boundary answers that already ship — the bound on this change
 # ═══════════════════════════════════════════════════════════════════════════
@@ -493,18 +561,62 @@ class AskingAboutACompleteWaveTest(_NextTestBase):
             ("DRAINED", "wave-complete", "06"))
 
 
+class ABlockedFrontCrHoldsItsOwnWaveTest(_NextTestBase):
+    """§S2 — a wave whose FRONT cr is `PENDING` behind an unmerged `dependsOn`
+    still answers `HOLD` on THAT cr, with the cause it is waiting on. The
+    reader states what the lane is stuck behind; it does not scan on into the
+    next wave for something startable, because that work is work the
+    write-side scope guard refuses a plan for."""
+
+    def test_the_later_wave_really_holds_startable_work(self):
+        """Non-vacuity first: with nothing actionable waiting in the later wave
+        the criterion below would pass against a reader that scans wherever it
+        likes. Asked about that wave directly, this board answers `NEXT`."""
+        fields = self.fields(BLOCKED_FRONT_OF_THE_RESOLVED_WAVE,
+                             wave=STARTABLE_LATER_WAVE)
+        self.assertEqual(
+            (fields.get("decision"), fields.get("cr")), ("NEXT", "CR-T7-1"))
+
+    def test_a_blocked_front_cr_holds_its_own_wave_rather_than_scanning_on(self):
+        fields = self.fields(BLOCKED_FRONT_OF_THE_RESOLVED_WAVE)
+        self.assertEqual(
+            {"decision": fields.get("decision"), "cr": fields.get("cr"),
+             "wave": fields.get("wave"),
+             "kind": (fields.get("trigger") or {}).get("kind")},
+            {"decision": "HOLD", "cr": "CR-S6-1", "wave": RESOLVED_WAVE,
+             "kind": "dependency"},
+            "the front cr of the resolved wave is blocked, so the answer "
+            "names THAT cr and the dependency it waits on — an answer naming "
+            "the startable cr of the next wave would offer work the server "
+            "has not opened")
+
+
 class EmptyDeclaredContainerTest(_NextTestBase):
     """§S2, ruled at cycle 399 — a declared container that selects NO row has
     completed nothing. It cannot be `no-roadmap` (the queue is not empty) and
     must not be `wave-complete`. Passes today and must keep passing: the
     announcement must not turn an empty container into a crossing."""
 
-    def test_a_container_selecting_no_row_is_awaiting_assignment(self):
-        answers = {
+    def _answers(self):
+        return {
             "--wave 99": self.fields(BOUNDARY_JUST_CROSSED, wave="99"),
             "--release 9.9.9": self.fields(BOUNDARY_JUST_CROSSED,
                                            release="9.9.9"),
         }
+
+    def test_an_empty_container_announces_no_crossing(self):
+        """The announcement must not turn an empty container into a crossing:
+        a container nothing declares has no first row to stand behind, so
+        there is no predecessor of it to have completed. Read by KEY, the way
+        every other absence in this file is read."""
+        self.assertEqual(
+            [flag for flag, f in self._answers().items() if ANNOUNCEMENT in f],
+            [],
+            "a container holding no work completed nothing, so nothing "
+            "crossed into it either")
+
+    def test_a_container_selecting_no_row_is_awaiting_assignment(self):
+        answers = self._answers()
         self.assertEqual(
             {flag: (f.get("decision"), f.get("reason"))
              for flag, f in answers.items()},

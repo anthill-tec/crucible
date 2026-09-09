@@ -1914,7 +1914,17 @@ def _boundary_announcement(scope, container, wave):
 
     A resolved wave nothing precedes announces nothing: "the predecessor
     completed" is a claim about a predecessor that EXISTS, and a container that
-    selects no row has no first row to stand behind."""
+    selects no row has no first row to stand behind.
+
+    THE STATEMENT IS SCOPED TO THE CONTAINER ASKED ABOUT, deliberately (ruled
+    at cycle 401). Both the predecessor and its completeness are read over
+    `scope` — the caller's release narrowing — so a release-scoped question is
+    answered about that release and NOTHING else: the answer announces that the
+    predecessor completed within it even while that wave still holds an
+    actionable entry declaring no release. That is the same narrowing
+    membership already gets, and the envelope names the release beside the
+    statement; the unscoped reading would report on work the caller explicitly
+    excluded."""
     predecessor = _previous_published_wave(scope, wave)
     if predecessor is None:
         return None

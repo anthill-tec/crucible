@@ -502,8 +502,9 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
     # CR-CRU-108 §S2/AC4 — `test_the_live_track_list_is_what_the_server_holds`
     # was deleted here: it called `queue_tracks(<entries>)` and pinned the
     # distinct-set computation this CR RETIRES. Its live-data claim survives
-    # behaviourally in `test_the_other_lane_is_reachable_by_its_own_spelling`
-    # below, which resolves the second stored lane by its own spelling.
+    # behaviourally in `test_the_answer_is_about_the_lane_asked_for_never_a_
+    # siblings` below, which asks for the second stored lane by its own
+    # spelling and gets an answer about THAT lane.
 
     def test_the_server_refuses_exactly_what_the_helper_refuses(self):
         """The other half of one rule: a value naming no lane is refused by
@@ -544,7 +545,7 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
             [a["cr"] for a in answers], [answers[0]["cr"]] * len(answers),
             f"every spelling must reach the same lane; got {answers!r}")
 
-    def test_the_other_lane_is_reachable_by_its_own_spelling(self):
+    def test_the_answer_is_about_the_lane_asked_for_never_a_siblings(self):
         """Multi-track, against real stored values: `--track 3` answers about
         track-3, never track-2.
 
