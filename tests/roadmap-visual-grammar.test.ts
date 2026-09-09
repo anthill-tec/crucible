@@ -466,6 +466,21 @@ const HEIGHT_QUEUE: QueueFixture[] = [
   ...scheduledMembers("CR-H-Q", "H2", 9, 400, [["CR-H-N01"]]),
 ];
 
+/** CR-CRU-116 §S4 — the ACTIVE board. The same two waves as `HEIGHT_QUEUE`
+ *  with ONE member mid-run: `CR-H-Q01`, in wave `H2`. That is what makes a
+ *  wave active now, so this is the only board on this page that can render the
+ *  `· active` marker at all — and because the runner sits in the SECOND wave,
+ *  the board states both sides of §S4 at once: `H2` marked, `H1` not.
+ *
+ *  It is a SEPARATE board rather than a runner added to `HEIGHT_QUEUE` because
+ *  a runner is ADDITIVE to the drawn rows (CR-CRU-096 AC11a — it extends the
+ *  trimmed five, never displaces one), so giving the height board a runner
+ *  would move every row count, box height and `+N more` remainder the ten
+ *  geometry tests around it measure. */
+const ACTIVE_QUEUE: QueueFixture[] = HEIGHT_QUEUE.map((entry) =>
+  entry.cr === "CR-H-Q01" ? ({ ...entry, status: "IN_PROGRESS" as QueueStatus }) : entry,
+);
+
 /** AC17's counterfactual: `H1`'s 29 members declaring NO wave, which AC18a
  *  draws untrimmed. Same members, same row markup, one trimmed and one not —
  *  so "shorter than it would be" is a subtraction of two measurements. */
@@ -869,12 +884,14 @@ let orderedFixtureUrl = "";
 let looseFixtureUrl = "";
 // CR-CRU-096 C5 — the boards, pages and sources the deferred readings need.
 let heightZones = "";
+let activeZones = "";
 let heightLooseZones = "";
 let shippedZones = "";
 let singleZones = "";
 let baselineZones = "";
 let surfaceFixtureUrl = "";
 let heightFixtureUrl = "";
+let activeFixtureUrl = "";
 let heightLooseFixtureUrl = "";
 let shippedFixtureUrl = "";
 let baselineFixtureUrl = "";
@@ -1131,6 +1148,7 @@ beforeAll(async () => {
   orderedZones = await captureZones({ releases: ORDERED_SHIPPED, proposals: [PROPOSALS[0]!] });
   looseZones = await captureZones({ queue: LOOSE_QUEUE });
   heightZones = await captureZones({ proposals: HEIGHT_PROPOSALS, queue: HEIGHT_QUEUE });
+  activeZones = await captureZones({ proposals: HEIGHT_PROPOSALS, queue: ACTIVE_QUEUE });
   heightLooseZones = await captureZones({
     proposals: HEIGHT_PROPOSALS,
     queue: HEIGHT_LOOSE_QUEUE,
@@ -1240,6 +1258,13 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      // CR-CRU-116 §S4 — the same two waves with ONE member mid-run, the only
+      // board here that renders the `· active` marker.
+      if (pathname === "/fixture-active") {
+        return new Response(fixtureDocument(activeZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       if (pathname === "/fixture-single") {
         return new Response(fixtureDocument(singleZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -1336,6 +1361,7 @@ beforeAll(async () => {
   looseFixtureUrl = `http://127.0.0.1:${server.port}/fixture-loose`;
   surfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-surface`;
   heightFixtureUrl = `http://127.0.0.1:${server.port}/fixture-height`;
+  activeFixtureUrl = `http://127.0.0.1:${server.port}/fixture-active`;
   heightLooseFixtureUrl = `http://127.0.0.1:${server.port}/fixture-height-loose`;
   shippedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-shipped`;
   baselineFixtureUrl = `http://127.0.0.1:${server.port}/fixture-baseline`;
@@ -3396,9 +3422,18 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
 // may win. Measured here, with the neutral token proved distinct first so the
 // comparison cannot pass on two names for one colour.
 
+// SUPERSEDED 2026-09-09 by CR-CRU-116 §S4. These readings ran on the
+// runner-less height board and expected BOTH of its wave boxes to be active,
+// because CR-CRU-096 AC1 made activeness a release fact. §S4 makes it the
+// wave's OWN work, so they move to `/fixture-active` — the same two waves with
+// `CR-H-Q01` mid-run in `H2` — and each channel is now measured in BOTH
+// directions on ONE render: the marked box against the ember, its sibling
+// against the neutral line. That second direction is what could not be
+// asserted at all before, since no rendered box could carry `false`.
+
 describe("CR-CRU-096 AC2/AC4 — the active wave's marker is a RENDERED border, and it never moves", () => {
-  test("an active wave renders the ember token as its border, not the neutral line", async () => {
-    await openWide(heightFixtureUrl);
+  test("the wave holding the running CR renders the ember token as its border, while the wave beside it renders the neutral line", async () => {
+    await openWide(activeFixtureUrl);
     const ember = await tokenColor("--ember", wide());
     const line = await tokenColor("--line", wide());
     expect(ember).not.toBe("");
@@ -3409,49 +3444,74 @@ describe("CR-CRU-096 AC2/AC4 — the active wave's marker is a RENDERED border, 
 
     const waves = await boxesOf('[data-testid="roadmap-wave"]');
     expect(waves.length).toBe(2);
-    const active = await readWide<string[]>(
+    const published = await readWide<{ wave: string | null; active: string | null }[]>(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]'))
-         .map((w) => w.getAttribute("data-active"))`,
+         .map((w) => ({ wave: w.getAttribute("data-wave"), active: w.getAttribute("data-active") }))`,
     );
-    expect(active).toEqual(["true", "true"]);
-    for (const box of waves) {
-      expect(
-        sameHue(box.borderTopColor, ember),
-        `an active wave renders a ${box.borderTopColor} border, not the ember ${ember}`,
-      ).toBe(true);
-      expect(box.borderTopStyle).toBe("solid");
-      // A border that RENDERS, not a declared one. Deliberately not pinned to
-      // the stylesheet's `1.5px`: Chromium resolves a border width to a whole
-      // number of device pixels, so at DPR 1 the declared 1.5px is USED as
-      // 1px. AC2 asks for "a word and a border" and names no width, so the
-      // rounding is a measurement to record, not a criterion to fail.
-      expect(
-        box.borderTopWidth,
-        `an active wave renders a ${box.borderTopWidth}px border`,
-      ).toBeGreaterThanOrEqual(1);
-      // AC2's own clause: a border and a word, NEVER motion.
-      expect(box.animationName).toBe("none");
-    }
+    // §S4 — the board's own premise, measured: ONE box is active, and it is
+    // the one whose wave holds the runner.
+    expect(published.map((box) => box.wave)).toEqual(["H1", "H2"]);
+    expect(published.map((box) => box.active)).toEqual(["false", "true"]);
+
+    const activeBox = waves[1]!;
+    const idleBox = waves[0]!;
+    expect(
+      sameHue(activeBox.borderTopColor, ember),
+      `the active wave renders a ${activeBox.borderTopColor} border, not the ember ${ember}`,
+    ).toBe(true);
+    expect(activeBox.borderTopStyle).toBe("solid");
+    // A border that RENDERS, not a declared one. Deliberately not pinned to
+    // the stylesheet's `1.5px`: Chromium resolves a border width to a whole
+    // number of device pixels, so at DPR 1 the declared 1.5px is USED as
+    // 1px. AC2 asks for "a word and a border" and names no width, so the
+    // rounding is a measurement to record, not a criterion to fail.
+    expect(
+      activeBox.borderTopWidth,
+      `the active wave renders a ${activeBox.borderTopWidth}px border`,
+    ).toBeGreaterThanOrEqual(1);
+    // The OTHER direction, and the one §S4 makes assertable: the wave with no
+    // work in flight wears the neutral line and not the ember, so the ember is
+    // provably the MARKER and not the box's ordinary edge.
+    expect(
+      sameHue(idleBox.borderTopColor, ember),
+      `the idle wave renders the ember ${ember} as its border, so the ember marks nothing`,
+    ).toBe(false);
+    expect(sameHue(idleBox.borderTopColor, line)).toBe(true);
+    // AC2's own clause: a border and a word, NEVER motion — on either box.
+    expect(activeBox.animationName).toBe("none");
+    expect(idleBox.animationName).toBe("none");
   });
 
-  test("…and the marker is also a WORD, in the same ember", async () => {
-    await openWide(heightFixtureUrl);
+  test("…and the marker is also a WORD, in the same ember, on that wave and no other", async () => {
+    await openWide(activeFixtureUrl);
     const ember = await tokenColor("--ember", wide());
     const dim = await tokenColor("--ink-dim", wide());
     expect(sameHue(ember, dim)).toBe(false);
     const labels = await boxesOf('[data-testid="roadmap-wave"] .app-flow-wave-label');
     expect(labels.length).toBe(2);
-    for (const label of labels) {
-      expect(label.text).toContain("· active");
-      expect(
-        sameHue(label.color, ember),
-        `the label renders ${label.color}, not the ember ${ember}`,
-      ).toBe(true);
-      expect(label.animationName).toBe("none");
-    }
+    const marked = labels.filter((label) => label.text.includes("· active"));
+    // COUNTED across both labels — the reading that catches "they both say it".
+    expect(marked.length).toBe(1);
+    expect(marked[0]!.text).toContain("Wave H2");
+    expect(
+      sameHue(marked[0]!.color, ember),
+      `the label renders ${marked[0]!.color}, not the ember ${ember}`,
+    ).toBe(true);
+    expect(marked[0]!.animationName).toBe("none");
+    // And the unmarked label is not merely missing the word: it is not painted
+    // in the marker's ink either, so neither channel claims it.
+    const plain = labels.filter((label) => !label.text.includes("· active"));
+    expect(plain.length).toBe(1);
+    expect(plain[0]!.text).toContain("Wave H1");
+    expect(sameHue(plain[0]!.color, ember)).toBe(false);
   });
 
-  test("an active wave with NO running CR renders NO animation anywhere in its subtree", async () => {
+  test("a wave holding nothing that runs renders NO animation anywhere in its subtree", async () => {
+    // §S4 renamed this from "an active wave with NO running CR", a board that
+    // can no longer exist: a wave is active BECAUSE something in it runs. The
+    // subject survives whole and is the runner-less height board's to state —
+    // motion is reserved for the running CR (CR-078 AC24), so a wave with none
+    // moves nothing at all.
     await openWide(heightFixtureUrl);
     const seen = await readWide<{
       statuses: string[];
@@ -3475,13 +3535,14 @@ describe("CR-CRU-096 AC2/AC4 — the active wave's marker is a RENDERED border, 
          };
        })()`,
     );
-    // The premise: this board's waves are ACTIVE and hold nothing running.
+    // The premise: this board's waves hold nothing running — which under §S4
+    // is also why neither of them is marked.
     expect(seen.statuses.length).toBe(10);
     expect(seen.statuses).not.toContain("IN_PROGRESS");
     expect(seen.elements).toBeGreaterThan(20);
     expect(
       seen.animated.map((e) => `${e.what}=${e.animationName}`),
-      "an active wave with nothing running animates something",
+      "a wave with nothing running animates something",
     ).toEqual([]);
   });
 
@@ -3504,7 +3565,7 @@ describe("CR-CRU-096 AC2/AC4 — the active wave's marker is a RENDERED border, 
   });
 
   test(
-    "an active wave's rendered face never CHANGES across frames",
+    "a wave holding nothing that runs renders a face that never CHANGES across frames",
     async () => {
       // The compositor's own clock, sampled: `animation-name: none` says no
       // animation is declared, and this says nothing actually moved. A
@@ -3517,6 +3578,15 @@ describe("CR-CRU-096 AC2/AC4 — the active wave's marker is a RENDERED border, 
       // runner can advance it. Deterministic time control cannot reach it, so
       // this is the "integration test exercising real timer behaviour against
       // the platform clock" case. The sleep is inside the page, not the runner.
+      //
+      // §S4 — the RUNNER-LESS board, and it has to be: the probe samples the
+      // box AND every descendant, so on the active board the running row's own
+      // pulse (CR-078 AC24, which is meant to move) would be counted as the
+      // wave's face changing. What is asserted is what the retired name
+      // conflated: a wave that holds nothing running renders nothing that
+      // moves. The marked box's own stillness is asserted where it can be read
+      // apart from its rows — `animationName === "none"` on the box and on the
+      // label, in the two `/fixture-active` tests above.
       await openWide(heightFixtureUrl);
       const sampled = await readWide<{ wave: string; faces: string[] }[]>(
         `(async () => {
@@ -3985,7 +4055,25 @@ describe("CR-CRU-096 AC25 — with colour removed, every row, roll-up, marker an
     for (const dep of read.deps) expect(dep).toMatch(/deps CR-H-[A-Z]\d\d/);
     // §S1/§S2/AC2/AC3 — the header's two facts survive as words and numerals.
     expect(read.counts).toEqual(["29", "10"]);
-    for (const label of read.labels) expect(label).toContain("· active");
+    // CR-CRU-116 §S4 — this board holds nothing running, so under the per-wave
+    // contract NO label carries the marker and there is nothing here for the
+    // greyscale reading to be about. The marker's own greyscale read moved to
+    // the test below, on the ACTIVE board; what is asserted here is that the
+    // labels still state their identity with colour gone.
+    expect(read.labels).toEqual(["Wave H1", "Wave H2"]);
+  });
+
+  test("the `· active` marker still reads with colour stripped — the WORD, on the one wave that carries it", async () => {
+    // CR-CRU-116 §S4 — AC25's marker clause, on the board that can render a
+    // marker at all. The strip removes ink, border, background and opacity, so
+    // the ember channel is gone and only the WORD can be left standing (§S8).
+    await openWide(activeFixtureUrl);
+    await wide().addStyleTag({ content: STRIP_COLOUR });
+    const labels = await readWide<string[]>(
+      `Array.from(document.querySelectorAll('[data-zone="2"] .app-flow-wave-label'))
+         .map((e) => (e.textContent || "").replace(/\\s+/g, " ").trim())`,
+    );
+    expect(labels).toEqual(["Wave H1", "Wave H2 · active"]);
   });
 
   test("BOTH gate words still read — `planned` in flight, `shipped` once tagged (AC23/AC23a)", async () => {
@@ -4457,8 +4545,20 @@ describe("CR-CRU-096 AC27 — zone 2 rendered against the live board matches the
     expect(live.headerParts.length).toBe(design!.headerParts.length);
     expect(live.headerSameLine).toBe(design!.headerSameLine);
     expect(live.headerLabelFirst).toBe(design!.headerLabelFirst);
-    expect(design!.headerParts[0]).toMatch(/· active$/i);
-    expect(live.headerParts[0]).toMatch(/· active$/i);
+    // SUPERSEDED 2026-09-09 by CR-CRU-116 §S4 — two assertions stood here,
+    // requiring the `· active` marker on the artifact's label AND on the live
+    // one. The artifact's first wave-box panel
+    // (`crucible-workflow-flowchart.html:175-184`) draws a MARKED wave whose
+    // five rows are all `cr pend`: a wave marked with nothing running, which is
+    // exactly the release-level reading §S4 retires. That state is now
+    // unreachable, and a live board that reaches the marker cannot match this
+    // panel's row count either — a runner is ADDITIVE to the trimmed five
+    // (CR-CRU-096 AC11a), so a marked live wave draws SIX rows against the
+    // artifact's five. The marker is asserted on its own board in
+    // tests/roadmap-wave-active-marker.test.ts and, rendered, in AC2/AC4's
+    // `/fixture-active` reads above; every other comparison in this test —
+    // the header's SHAPE, the roll-up, the row arrangement, the pointer, the
+    // single `next` and the gate word — is untouched.
     expect(design!.headerParts[1]).toMatch(/^\d+$/);
     expect(live.headerParts[1]).toMatch(/^\d+$/);
 

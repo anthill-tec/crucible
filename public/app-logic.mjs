@@ -1359,19 +1359,21 @@ export function focusedReleaseView(gate, releases, entries) {
     members = rows.filter((entry) => entry?.release === version);
   }
 
-  // CR-CRU-096 §S1/AC1 — each box carries whether its wave belongs to the
-  // focused, IN-FLIGHT release. That is this view's existing `kind` and
-  // nothing new: a proposal is in flight, a shipped tag is settled. It is a
-  // release fact, so it is decided here rather than re-derived from the
-  // entries' run state by the renderer.
-  // AC1a — the `false` branch of `active` is UNREACHABLE by construction, and
-  // stays only because the attribute is C1's published fact. `active` is
-  // `kind === "proposed"`, and the zone renders wave boxes at all only on the
-  // not-shipped branch (`public/app.js:3076-3082`), so every box that ever
-  // renders publishes `"true"`. A shipped or unfocused release publishes
-  // `false` by rendering NO WAVE BOX AT ALL: the ABSENCE of boxes is the
-  // observable, and no test can falsify the branch itself.
-  const active = kind === "proposed";
+  // CR-CRU-116 §S4 (2026-09-09) — each box carries whether ITS OWN WAVE is
+  // the wave with work in flight. This SUPERSEDES CR-CRU-096 §S1/AC1's
+  // release-level reading (`const active = kind === "proposed"`, copied into
+  // every box): a release holds SEVERAL waves, so one release fact marked all
+  // of them at once and the board drew `· active` on every box.
+  //
+  // The rule is the one §S1's wave guard uses, read off the `IN_PROGRESS`
+  // status the queue already publishes — this view writes no second in-flight
+  // rule of its own. The box whose wave holds a running member carries the
+  // marker; no other box does.
+  //
+  // The `false` branch is now REACHABLE and asserted rather than reasoned
+  // about: a focused release with nothing running carries NO marker on any
+  // box, and that is a state, not an error
+  // (tests/roadmap-wave-active-marker.test.ts).
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
@@ -1380,7 +1382,7 @@ export function focusedReleaseView(gate, releases, entries) {
     if (box === undefined) {
       box = {
         wave,
-        active,
+        active: false,
         entries: [],
         rows: [],
         hiddenCount: 0,
@@ -1392,6 +1394,9 @@ export function focusedReleaseView(gate, releases, entries) {
       waves.push(box);
     }
     box.entries.push(entry);
+    // §S4 — the wave's own activeness, decided on the pass that already walks
+    // every member, so it can never be a scan out of step with membership.
+    if (entry?.status === "IN_PROGRESS") box.active = true;
   }
 
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the

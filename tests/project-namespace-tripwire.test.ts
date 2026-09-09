@@ -1276,9 +1276,39 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // `clients/` 672 -> 687, CR-CRU-107 687 -> 691 and CR-CRU-111 694 -> 747. The
 // `develop` baselines are UNCHANGED at 512/378/601 and stay the floors — a
 // floor never moves for a re-pin.
+// UPDATED 2026-09-09 by CR-CRU-116 — the CR's own close-out step, planned
+// rather than escalated, landing in the same commit as its last prose change
+// because the cycle after this one is VERIFY and read-only. TWO trees move and
+// they move for DIFFERENT cycles of the one CR; `clients/` does not move at all
+// and re-measures at the recorded 785.
+//
+// `src/` HEAD moves 563 -> 573, +10 — §S1/§S2/§S3's wave-scope guard (cycle
+// 393). The three files the sections were scoped to, and no others:
+//   `src/store.ts`            257 -> 265  (+8)   the guard and its refusals
+//   `src/v2.ts`               189 -> 190  (+1)   the plans-POST wiring
+//   `src/hints.ts`             39 ->  40  (+1)   the help line
+//
+// `public/` HEAD moves 435 -> 436, +1 — §S4's per-wave `active` (cycle 394):
+//   `public/app-logic.mjs`     85 ->  86  (+1)
+//   `public/app.js`           225 -> 225  (+0)
+//   `public/app-logic.d.mts`   53 ->  53  (+0)
+// That +1 is the SUPERSESSION itself. `focusedReleaseView`'s retired comment
+// (`const active = kind === "proposed"`) cited CR-CRU-096 once; its replacement
+// cites CR-CRU-116 §S4 AND names the CR-CRU-096 AC1 reading it retires, so one
+// citation becomes two — the pin measures provenance, and provenance growing at
+// a direction change is the rule working. The renderer's `data-active` comment
+// and the `FocusedReleaseWave.active` JSDoc each SWAPPED CR-CRU-096 for
+// CR-CRU-116, which is why both files are flat. Every one of the six is prose
+// on a `//` or ` * ` line, none in a string.
+//
+// RECORDED BECAUSE IT COST SOMETHING: the `src/` half of this re-record was
+// due at the end of cycle 393 and was missed, because that cycle was verified
+// by running the two suites it edited and not this guard — which is a THIRD
+// file, and the only one that measures a tree rather than a behaviour. A cycle
+// that adds prose to a guarded tree runs this file before it is called done.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 563 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 573 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 436 },
   clients: { exts: [".py"], develop: 601, head: 785 },
 };
 

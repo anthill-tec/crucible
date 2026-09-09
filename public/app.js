@@ -3062,11 +3062,12 @@
               "data-testid": "roadmap-wave",
               "data-wave": box.wave,
               "data-cr-count": String(box.entries.length),
-              // CR-CRU-096 §S1/AC1 — "active" is a RELEASE fact, not a run
-              // fact: this wave belongs to the focused, in-flight release
-              // (`focusedReleaseView`'s `kind === "proposed"`, stamped on the
-              // box). A wave with 22 merged and nothing running is still the
-              // active release's wave. Motion stays reserved for the CR that
+              // CR-CRU-116 §S4 (2026-09-09) — "active" is a per-WAVE fact:
+              // this wave, not merely its release, is the one holding work in
+              // flight (`focusedReleaseView` stamps the box whose membership
+              // holds an `IN_PROGRESS` member, and only that box). A focused
+              // release with nothing running marks no wave at all, which is a
+              // state and not an error. Motion stays reserved for the CR that
               // is actually running (CR-078 AC24), so the second channel here
               // is the border only.
               "data-active": box.active === true ? "true" : "false",

@@ -1322,7 +1322,13 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect(box).toBeDefined();
         expect(box!.entries.map((member) => member.cr)).toEqual(["CR-Q99-M"]);
         expect(box!.rows.map((member) => member.cr)).toEqual(["CR-Q99-M"]);
-        expect(box!.active).toBe(true);
+        // SUPERSEDED 2026-09-09 by CR-CRU-116 §S4 — an `expect(box!.active)`
+        // assertion stood here. Its premise was CR-CRU-096 AC1's release-level
+        // reading, where every box of an in-flight release was active; §S4
+        // makes activeness the wave's own work (a member IN_PROGRESS), which
+        // this posted PENDING row is not. It is DELETED rather than re-pinned:
+        // this test's subject is CR-CRU-099 AC2 MEMBERSHIP, and the marker is
+        // asserted in tests/roadmap-wave-active-marker.test.ts.
         // NON-VACUITY — membership is filtered on `entry?.release === version`
         // (public/app-logic.mjs:1275), so the release-less row today's route
         // stores is a member of nothing: no wave box, no rows, no warning.

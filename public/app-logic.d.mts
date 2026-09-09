@@ -221,9 +221,9 @@ export interface ReleasePackage {
 
 /** CR-CRU-078 §S4 — one wave CONTAINER of the focused release. `wave` is
  *  `null` for members declaring none: a real group, drawn without chrome.
- *  CR-CRU-096 §S1 — `active` is whether the wave belongs to the focused,
- *  IN-FLIGHT release (the view's `kind === "proposed"`), never whether some
- *  member is mid-run. */
+ *  CR-CRU-116 §S4 — `active` is whether THIS WAVE holds the work in flight:
+ *  true for the box whose membership holds an `IN_PROGRESS` member, false for
+ *  every other box, including every box of a release with nothing running. */
 export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;
