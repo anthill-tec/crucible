@@ -118,6 +118,21 @@ superseded rule** — never re-pinned to whatever the implementation happens to 
 a deletion: its subject IS the retired rule, and the replacement behaviour is asserted in this CR's
 own suite rather than by inverting a test whose point has gone.
 
+**The retired premise reaches four suites, measured 2026-09-09.** Every case is the same sentence —
+a wave holding nothing `IN_PROGRESS` is expected to be active — and each is treated by whether its
+subject survives:
+
+| suite | sites | subject | treatment |
+|---|---|---|---|
+| `roadmap-wave-header` | `:443`, `:482`, `:498`, `:520`, `:571`, `:599` | the header's marker itself | `:482-483` DELETED; the rest rewritten |
+| `roadmap-track-lanes` (CR-CRU-085 AC8) | `:1034`, `:1041`, `:1049`, `:1058` | the track-count segment | ` · active` dropped from the expectations; the fixtures stay runner-less, because a track-count test is not about a marker |
+| `queue-registration` (CR-CRU-099 AC2) | `:1325` | membership (`view.members`, `box.entries`, `box.rows`) | the one `active` line DELETED, not re-asserted as `false` — a membership test carrying a marker assertion is how this drift spread |
+| `roadmap-visual-grammar` | `:3416`, `:3454`, AC25, AC27 | the artifact-vs-live comparison, and motion | AC27's fixture GAINS a runner so the live board reaches the ACTIVE state its panel depicts; `:3454` gets its own runner-less fixture, its premise reworded off "an active wave with NO running CR" |
+
+The design artifacts are **not edited**: they are tracked test fixtures and the approved design. Where
+a comparison against an artifact panel fails, the live board is driven into the state the panel
+depicts — the artifact is not adjusted to match the code.
+
 ## Acceptance criteria
 
 **§S1 — single active wave**
@@ -188,6 +203,12 @@ own suite rather than by inverting a test whose point has gone.
       supersession comment names CR-CRU-116 §S4 and the CR-CRU-096 AC1 reading it retires.
 - [ ] No assertion anywhere still reads activeness off `kind === "proposed"`: a check over `tests/`
       reports zero surviving sites, and the number of sites checked is itself asserted.
+- [ ] All four affected suites pass with the treatments in the table above: `roadmap-wave-header`,
+      `roadmap-track-lanes`, `queue-registration`, `roadmap-visual-grammar`. Every changed assertion's
+      new expectation is derived from this spec, not from an observed run.
+- [ ] `roadmap-visual-grammar` carries TWO fixtures where it carried one: an active-state fixture
+      holding a runner (AC27's artifact comparison, the ember-word marker, AC25's greyscale read) and
+      a runner-less one for "no motion without an `IN_PROGRESS` CR". No design artifact is edited.
 
 **Integration**
 
