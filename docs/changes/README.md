@@ -518,6 +518,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   being derived too. **CR-CRU-116 is the only wave-6 CR that touches `src/`**, which is what keeps
   CR-CRU-114's and CR-CRU-115's "empty `src`/`public` diff" ACs honest. CR-CRU-114 is the READ side
   of the same rule and now says so.
+- 🎨 **2026-09-09 — USER DECISION OWED: the workflow flowchart's first wave panel depicts a rule
+  CR-CRU-116 abolishes.** `.lavish/crucible-workflow-flowchart.html:175-184` draws a marked wave
+  (`Wave 5 · active`) holding five `cr pend` rows and NO runner — under §S4 a wave with nothing
+  `IN_PROGRESS` carries no marker. The panel is right about geometry and wrong only about the marker.
+  It could not be reconciled by changing the code: CR-CRU-096 AC11a makes a runner ADDITIVE
+  (`scheduled = actionable.slice(0,5)` plus every `IN_PROGRESS`), so a marked live board draws SIX
+  rows against AC27's `rowCount === 5` comparison — measured, not argued. CR-CRU-116 therefore deletes
+  AC27's two marker lines and leaves the artifact untouched, because refreshing an approved design
+  surface is the user's call. **Nothing is blocked by this**; it is a design-refresh item.
 - 🔧 **2026-09-09 — TASK, not a CR: `cr-close` and `cr-merged` assume a merge.** `--commit`'s help
   reads "Merge commit sha" and the closing milestone is typed `cr-merged`; under the mode above a CR
   lands as an ordinary commit. The data is already correct (any sha is recorded), only the wording

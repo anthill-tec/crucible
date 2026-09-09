@@ -127,11 +127,19 @@ subject survives:
 | `roadmap-wave-header` | `:443`, `:482`, `:498`, `:520`, `:571`, `:599` | the header's marker itself | `:482-483` DELETED; the rest rewritten |
 | `roadmap-track-lanes` (CR-CRU-085 AC8) | `:1034`, `:1041`, `:1049`, `:1058` | the track-count segment | ` · active` dropped from the expectations; the fixtures stay runner-less, because a track-count test is not about a marker |
 | `queue-registration` (CR-CRU-099 AC2) | `:1325` | membership (`view.members`, `box.entries`, `box.rows`) | the one `active` line DELETED, not re-asserted as `false` — a membership test carrying a marker assertion is how this drift spread |
-| `roadmap-visual-grammar` | `:3416`, `:3454`, AC25, AC27 | the artifact-vs-live comparison, and motion | AC27's fixture GAINS a runner so the live board reaches the ACTIVE state its panel depicts; `:3454` gets its own runner-less fixture, its premise reworded off "an active wave with NO running CR" |
+| `roadmap-visual-grammar` | `:3416`, AC25, the ember-word read | the marker's colour and wording | a NEW `/fixture-active` board carries a runner; both directions asserted (active box ember + ` · active`, sibling box neutral `--line`, no marker) — assertable for the first time |
+| `roadmap-visual-grammar` | `:3454` | motion is reserved for `IN_PROGRESS` | keeps the runner-less `fixture-height` board unchanged; only its premise is reworded off "an active wave with NO running CR", which states the retired rule in the test's own name |
+| `roadmap-visual-grammar` | AC27's two `/· active$/` lines | the retired marker inside a geometry comparison | DELETED with a dated §S4 note. Measured impossibility, not a preference: CR-CRU-096 AC11a makes a runner ADDITIVE (`scheduled = actionable.slice(0,5)`, then every `IN_PROGRESS` is appended), so a marked live board draws SIX rows against AC27's `rowCount === 5`. No fixture satisfies both. Every other comparison in that test survives untouched |
 
 The design artifacts are **not edited**: they are tracked test fixtures and the approved design. Where
 a comparison against an artifact panel fails, the live board is driven into the state the panel
 depicts — the artifact is not adjusted to match the code.
+
+**One panel can no longer be reached, and that is recorded rather than fixed here.** The artifact's
+first wave-box panel (`.lavish/crucible-workflow-flowchart.html:175-184`) draws a marked wave with
+five `cr pend` rows and no runner — the state this CR abolishes. It is not wrong about geometry, only
+about the marker, and refreshing an approved design surface is the USER's decision. This CR leaves it
+untouched and flags it; nothing here depends on it changing.
 
 ## Acceptance criteria
 
