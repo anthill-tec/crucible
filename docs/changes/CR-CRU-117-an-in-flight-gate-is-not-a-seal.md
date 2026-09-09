@@ -78,6 +78,12 @@ with the defect again.
 - [ ] A wave gated by a real seal is still gated — the narrowing changes no true positive.
 - [ ] An in-flight gate followed by a `failed` seal leaves the wave un-gated: the sequence that would
       have produced a permanent false gate is asserted end to end.
+- [ ] An in-flight gate carries **no** `version` — asserted by key absence on the interim POST body,
+      with the same run's SEAL carrying it. Ruled 2026-09-10 at CR-CRU-115 cycle 403: a version-stamped
+      gate is retention-protected (`LIVE_GATE`, `src/store.ts`), so stamping every interim snapshot
+      would leave a run's worth of unprunable gates behind for one release, and the seal restates the
+      release anyway. This criterion lives here because the interim POST is unreachable until this CR
+      repairs the guard.
 
 **§S2 — streaming**
 

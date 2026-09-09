@@ -55,6 +55,14 @@ This is what makes "a release is in flight" readable without a new record kind: 
 `version: X` with no release recorded for `X` is a release under way, and once `X` ships the server's
 existing transaction retires it.
 
+**Only a SEAL carries the release — ruled 2026-09-10 at cycle 403**, from RED's scope question. The
+interim POST inside `cmd_gate_run`'s poll loop is left unstamped. Two reasons, both structural: a
+version-stamped gate is retention-protected (`LIVE_GATE`, `src/store.ts`), so stamping every interim
+snapshot would leave a run's worth of unprunable gates behind for one release; and an in-flight gate
+restates its release at the seal anyway, so the stamp would carry no fact the seal does not. Today
+the interim POST is unreachable regardless (the guard CR-CRU-117 owns), so this ruling is asserted
+there, as one of that CR's criteria, rather than by a fixture here that cannot be built.
+
 ### §S2 — MOVED OUT OF THIS CR to CR-CRU-117 (gap analysis, 2026-09-10)
 
 Fault 1 is real and its diagnosis stands: the guard is `if in_flight and 0 < nsteps < 9` while the
