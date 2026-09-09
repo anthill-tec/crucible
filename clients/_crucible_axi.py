@@ -680,11 +680,20 @@ GATE_PASS_FAMILY = {
     "checks-passed": "checks-passed",
 }
 
-# §S4 — WHICH gate an exit posted, stated as a value. A seal is `final`; the
-# no-gate case reuses the envelope's own stated-absence word (ENVELOPE_TIER_NONE
-# — this exit did the thing zero times) rather than inventing a third
-# vocabulary. `interim` joins them when the in-flight POST's guard is repaired.
+# §S4 — WHICH gate an exit posted, stated as a value. A seal is `final`; a run
+# whose poll loop put an in-flight ladder on the board and then HELD is
+# `interim`; the no-gate case reuses the envelope's own stated-absence word
+# (ENVELOPE_TIER_NONE — this exit did the thing zero times) rather than
+# inventing a third vocabulary.
+#
+# `interim` was first thought unproducible until the in-flight POST's guard is
+# repaired. That was measured and found false: the guard withholds the post
+# only on a NINE-row ladder, so any shorter snapshot — the shape the fleet's
+# own fixtures produce — posts one and may then still hold. So the field
+# reports what the LOOP really did rather than what the sealing decision alone
+# can see: a `none` while a gate sits on the board is a machine-readable lie.
 GATE_POSTED_FINAL = "final"
+GATE_POSTED_INTERIM = "interim"
 
 # §S3 — the move a HELD caller is told to make, in the TOOL's own words:
 # `axi run --help` says an elapsed wait "is not a failed run: inspect with axi
@@ -5159,8 +5168,11 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
         return 1
 
     # Poll `axi status` while the run is in flight; post throttled INTERIM
-    # gates decoded from each (partial) snapshot.
+    # gates decoded from each (partial) snapshot. Whether the loop actually
+    # POSTED is remembered, because the envelope below states which gate this
+    # exit put on the board and the sealing decision cannot see the loop.
     last_post = None
+    posted_interim = False
     while proc.poll() is None:
         now = time.monotonic()
         if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
@@ -5178,6 +5190,7 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
                     if in_flight and 0 < nsteps < 9:
                         ops.post_gate(project_dir, agent_id, gate, context or None)
                         last_post = now
+                        posted_interim = True
         time.sleep(_GATE_POLL_TICK_S)
 
     out, _err = proc.communicate()
@@ -5214,21 +5227,29 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
         "rawOutcome": resolved or ENVELOPE_TIER_UNSTATED,
         "release": release if isinstance(release, str) and release
                    else ENVELOPE_TIER_UNSTATED,
-        "postedGate": GATE_POSTED_FINAL if outcome else ENVELOPE_TIER_NONE,
+        "postedGate": (GATE_POSTED_FINAL if outcome
+                       else GATE_POSTED_INTERIM if posted_interim
+                       else ENVELOPE_TIER_NONE),
         "inFlight": held,
     }
     envelope_context = ops.context(project_dir, agent_id=agent_id)
 
     if outcome is None:
-        # §S3 — the run reached no terminus, so a hold posts NOTHING. Not
+        # §S3 — the run reached no terminus, so this exit SEALS nothing. Not
         # merely nothing green: every gate carries an outcome, and both values
         # that would fit an unfinished ladder (`passed`, `checks-passed`) are
         # read as a verdict by the wave lens, so there is no shape in today's
         # vocabulary that says "still going" without claiming one. Silence on
         # the board is the honest state; a green gate over a run sitting at
-        # `awaiting_approval` is not. The report goes to the CALLER instead,
-        # naming the run's OWN error — the fact that answers "did this run
-        # terminate?", already in hand — and the move that resumes it.
+        # `awaiting_approval` is not. The poll loop above may ALREADY have put
+        # such a ladder there on a short snapshot — that false green is the
+        # follow-on change request's whole subject, and until it is repaired
+        # the envelope at least states the gate honestly rather than reporting
+        # a silence the board does not have.
+        #
+        # The report goes to the CALLER instead, naming the run's OWN error —
+        # the fact that answers "did this run terminate?", already in hand —
+        # and the move that resumes it.
         detail = final_decoded.get("error")
         said = ("the run is still in flight — `axi run` resolved no outcome"
                 if held else

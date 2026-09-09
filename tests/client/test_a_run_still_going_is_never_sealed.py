@@ -41,11 +41,19 @@ carrying the documented bounded-hold return — no `outcome` key, `review` at
 `awaiting_approval`, and the tool's own `error` string.
 
 SCOPE. The interim POST and its `if in_flight and 0 < nsteps < 9` guard belong
-to the follow-on change request and are untouched here: both fixtures carry the
-real NINE rows, so the guard never fires and nothing in this file depends on
-it. `interim` as an envelope value is likewise unproducible until that guard is
-repaired, so it is not asserted — the envelope's gate statement is pinned on
-its two reachable states, a seal and a hold.
+to the follow-on change request and are untouched here: the two captured
+nine-row fixtures never make it fire, so nothing in this file asserts anything
+about the guard itself.
+
+`interim` AS AN ENVELOPE VALUE IS REACHABLE, though this file first said it was
+not. That claim was measured and falsified: the guard withholds the post only
+on a NINE-row ladder, so a run whose `axi status` returns a SHORTER one posts
+an interim gate and can still hold afterwards — and such a run reported
+`postedGate: none` while its own gate sat on the board, which is the envelope
+stating a falsehood about the board. One drive below pairs a three-row
+in-flight poll with the same bounded-hold return to pin that third state, and
+asserts the gate really reached the wire so the field cannot be read as true
+vacuously.
 
 Invocation:
     python3 -m unittest tests.client.test_a_run_still_going_is_never_sealed
@@ -111,6 +119,9 @@ RELEASE_FIELD = "release"
 NOTHING_STAMPED = "unstated"
 POSTED_GATE_FIELD = "postedGate"
 FINAL_GATE = "final"
+# The third state: the poll loop put an in-flight ladder on the board and the
+# run then held, so the exit posted a gate WITHOUT sealing one.
+INTERIM_GATE = "interim"
 NO_GATE_POSTED = "none"
 IN_FLIGHT_FIELD = "inFlight"
 # The run's OWN outcome string, carried beside the mapped one so a reader sees
@@ -178,6 +189,33 @@ _HOLD_SNAPSHOT = (
     '    ci,pending,0,0\n'
     'error: ' + HOLD_ERROR + '\n'
 )
+
+
+# THE SHORT IN-FLIGHT LADDER — what `axi status` returns EARLY in a run, before
+# the ladder has grown to its full nine rows. Three rows is the shape the
+# fleet's own gate fixtures already drive (`test_bun_crucible_gates.py` and the
+# four per-client axi suites all poll a 3/6/8-row progression), so this is not
+# an invented shape: it is the one every sibling suite proves the interim POST
+# fires on. Its run is `running` and it carries no `outcome`, so it is in
+# flight; its three rows clear the guard's `0 < nsteps < 9`.
+_SHORT_IN_FLIGHT_SNAPSHOT = (
+    'run:\n'
+    '  id: "01M2270SJ5PQW4KBBBV3XCPMM5"\n'
+    '  branch: release/0.2.0\n'
+    '  status: running\n'
+    '  head: a5ad0134\n'
+    '  findings: 0\n'
+    '  steps[3]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,2\n'
+    '    rebase,completed,0,1410\n'
+    '    review,running,0,1222511\n'
+)
+
+# The outcome an INTERIM gate carries: no row has failed, and every gate must
+# name one of the server's four legal values, so the in-flight ladder goes to
+# the board as `checks-passed` — which is precisely why a hold that posted one
+# cannot honestly report that it posted nothing.
+INTERIM_OUTCOME = "checks-passed"
 
 
 def _resolved_as(outcome):
@@ -380,6 +418,31 @@ sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\
 sys.exit(1)
 '''
 
+# THE SPLIT FAKE — one behaviour for `axi status` and another for `axi run`,
+# which is the real tool's own division: `axi status` is a one-shot poll of a
+# run in progress, while `axi run` BLOCKS until the run resolves (or its
+# `--wait` elapses) and only then prints its final snapshot. The single-snapshot
+# fake above cannot express a run that looks one way while in flight and
+# another when it returns, and that difference is the whole third envelope
+# state. The `run` sleep is what makes the poll deterministic rather than a
+# race: the proxy's loop fires its first tick while the process is still alive,
+# and the 2 s cadence keeps it to exactly one post.
+_FAKE_SPLIT_NO_MISTAKES_BODY = '''
+import sys
+import time
+
+argv = sys.argv[1:]
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
+    sys.stdout.write({status_snap!r})
+    sys.exit(0)
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
+    time.sleep({run_seconds})
+    sys.stdout.write({run_snap!r})
+    sys.exit({exit_code})
+sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
+sys.exit(1)
+'''
+
 _Drive = namedtuple("_Drive", "code out err gates envelopes")
 
 
@@ -404,12 +467,17 @@ class _GateRunDriveTestBase(unittest.TestCase):
         self._saved_path = os.environ.get("PATH", "")
         self.fake_bin_dir = tempfile.mkdtemp(prefix="never-sealed-fake-bin-")
         fake = Path(self.fake_bin_dir) / "no-mistakes"
-        fake.write_text(
-            "#!" + sys.executable + "\n"
-            + _FAKE_NO_MISTAKES_BODY.format(snap=self.SNAPSHOT,
-                                            exit_code=self.TOOL_EXIT))
+        fake.write_text("#!" + sys.executable + "\n" + self.fake_tool_body())
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         os.environ["PATH"] = self.fake_bin_dir + os.pathsep + self._saved_path
+
+    def fake_tool_body(self):
+        """The proxied tool's script. One snapshot answers both `axi run` and
+        `axi status` here, which is the right fake for every drive whose run
+        looks the same in flight as it does on return; the in-flight drive
+        overrides this with a tool whose two subcommands differ."""
+        return _FAKE_NO_MISTAKES_BODY.format(snap=self.SNAPSHOT,
+                                             exit_code=self.TOOL_EXIT)
 
     def tearDown(self):
         os.environ["PATH"] = self._saved_path
@@ -544,6 +612,61 @@ class ABoundedHoldIsReportedNotSealedTest(_GateRunDriveTestBase):
             "a hold posts no gate, so the envelope names none — stated as a "
             "value, because a missing key is indistinguishable from a client "
             "too old to have the field; got " + repr(envelope["fields"]))
+
+
+class AHoldThatAlreadyPostedSaysWhichGateItPostedTest(_GateRunDriveTestBase):
+    """§S4 — the THIRD state of `postedGate`, and the one that had to be
+    measured into existence: the poll loop posts an in-flight ladder and the
+    run then HOLDS, so this exit put a gate on the board without sealing one.
+
+    It is reachable for exactly the reason the interim guard leaves open — the
+    guard withholds the post only on a NINE-row ladder, so an `axi status`
+    returning anything shorter posts one, which is the 3/6/8-row progression
+    the fleet's other gate suites already drive. An envelope answering `none`
+    here denies a `checks-passed` gate that is already on the board, and
+    `checks-passed` is one of the two values the wave lens reads as a verdict.
+
+    THE POST IS ASSERTED, NOT ONLY THE FIELD. Reading `interim` off an envelope
+    proves nothing by itself: a client that posted nothing and merely
+    mislabelled its own silence would satisfy it just as well. So the gate that
+    reached the wire is asserted first, and the field is then required to name
+    it."""
+
+    SNAPSHOT = _HOLD_SNAPSHOT
+    STATUS_SNAPSHOT = _SHORT_IN_FLIGHT_SNAPSHOT
+    # Long enough that the proxy's FIRST poll tick lands while `axi run` is
+    # still alive, short enough that the 2 s posting cadence never opens a
+    # second window: exactly one interim post, by construction rather than by
+    # a race the suite would lose on a loaded machine.
+    RUN_SECONDS = 1.0
+
+    def fake_tool_body(self):
+        return _FAKE_SPLIT_NO_MISTAKES_BODY.format(
+            status_snap=self.STATUS_SNAPSHOT, run_snap=self.SNAPSHOT,
+            run_seconds=self.RUN_SECONDS, exit_code=self.TOOL_EXIT)
+
+    def test_a_hold_that_posted_an_interim_ladder_names_that_gate_not_none(self):
+        drive = self.drive()
+        self.assertEqual(
+            self.sealed_outcomes(drive), [INTERIM_OUTCOME],
+            "premise: the short in-flight ladder must really have reached the "
+            "wire as ONE interim gate — the field asserted below is only worth "
+            "anything because a gate is sitting on the board; got "
+            + repr(drive.gates))
+        envelope = self.the_one_envelope(drive)
+        self.assertEqual(
+            envelope["fields"].get(POSTED_GATE_FIELD), INTERIM_GATE,
+            "the envelope names the gate this exit POSTED, and it posted an "
+            "interim one: `" + NO_GATE_POSTED + "` states that the exit did "
+            "the thing ZERO times, which is false while its `"
+            + INTERIM_OUTCOME + "` gate is on the board — a machine-readable "
+            "lie in a field an orchestrator branches on; got "
+            + repr(envelope["fields"]))
+        self.assertIs(
+            envelope["fields"].get(IN_FLIGHT_FIELD), True,
+            "and the run is still in flight all the same: posting an interim "
+            "ladder is not sealing one, so the hold is reported exactly as it "
+            "is on the nine-row path; got " + repr(envelope["fields"]))
 
 
 # ── §S3 — the two outcome families, which together kill the fallback ────────
