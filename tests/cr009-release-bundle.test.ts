@@ -896,9 +896,11 @@ describe("§S4 docs — RELEASING.md", () => {
 // WITHIN a single run, so a test job scoped to push/pull_request simply does
 // not exist in the release run — a publish job that `needs:` a SKIPPED job is
 // itself skipped, silently publishing nothing. Therefore the bun/python/e2e
-// test jobs below must carry NO event-restricting `if` at all, and the two
-// publish jobs must `needs:` them (extending the existing graph — §S4 — not a
-// second, parallel guard mechanism).
+// test jobs below must carry NO event-restricting `if` at all, and every
+// publishing job must `needs:` them (extending the existing graph — §S4 — not
+// a second, parallel guard mechanism). CR-062 gated publish-pypi and
+// publish-npm; the 0.2.0 ruling put create-release and publish-testpypi on the
+// same list — PUBLISHING_JOBS below is that set as data.
 //
 // Extends this file rather than starting a new one, following the pattern the
 // §S4 docs — RELEASING.md block above already set: this is the established
