@@ -243,7 +243,7 @@ Measured at that point: **both trees drift, as this step predicted.** `src` 563 
 
 | tree | file | citations | cycle |
 |---|---|---|---|
-| `src` | `store.ts` | 257 → 265 | 393 |
+| `src` | `store.ts` | 251 → 259 | 393 |
 | `src` | `v2.ts` | 189 → 190 | 393 |
 | `src` | `hints.ts` | 39 → 40 | 393 |
 | `public` | `app-logic.mjs` | 85 → 86 | 394 |
@@ -256,10 +256,21 @@ the pin by dropping that second citation is REFUSED: the pin measures provenance
 growing is the pin working. Both figures are re-recorded in cycle 394's commit with this
 decomposition, which is what makes a re-record auditable rather than a nudged constant.
 
-**A guarded tree's citation guard lives in a THIRD file.** `src` drifted in cycle 393 and the branch
-carried a red tripwire for two cycles, because that cycle was verified by running its own two test
-files. A cycle that adds prose to `src/`, `public/` or `clients/` is not done until
-`tests/project-namespace-tripwire.test.ts` itself has been run.
+Figures are the CLASSIFIER's (`extractCitableText`), never a raw whole-file grep — a raw count of
+`store.ts` reads `257 → 265`, which has the same delta and is the wrong unit for a guard that
+measures citable prose.
+
+**Two guards live in files this CR never opened, and both went red.** `PROSE_CITATIONS`
+(`tests/project-namespace-tripwire.test.ts`) counts citations per tree; `NextBlockCitationsTest`
+(`tests/client/test_cr092_next_decision_resolver.py:1613`) asserts each `path:line` citation in the
+client's `next` block still brackets the construct it names. Cycle 393 tripped both: it drifted the
+`src` count, and extracting `deriveQueueStatus` moved it from `src/store.ts:4098` to `:4256`, which
+staled the `LANDED_STATUSES` citation in `clients/_crucible_axi.py`.
+
+So the blast-radius question has two halves, and this CR only asked the first: how many citations a
+tree gains, AND which files pin LINE NUMBERS INTO the files being edited. A cycle that inserts into
+`src/` is not done until both guards have been run — and one of them lives in the PYTHON suite, which
+no bun-side run reaches.
 
 **This is the only CR of wave 6 that touches `src/`.** CR-CRU-114 and CR-CRU-115 each assert an empty
 `git diff --stat -- src public` at close; this one owns the server change, so those ACs stay honest.
