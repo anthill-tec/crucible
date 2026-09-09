@@ -102,6 +102,16 @@ with the defect again.
       narrowed the value out on the promise that this CR inherited it, and this CR's criteria did not
       mention the envelope at all. 115 now asserts the SHORT-snapshot path itself; this criterion
       covers the nine-row path the guard repair opens.
+- [ ] **The HUMAN channel says it too.** On the interim-then-hold path the stderr/legacy report tells
+      the caller an in-flight gate is already on the board. Today it says `NOT SEALED`, names the run's
+      own error and the reattach move — all true, and all leaving the impression the board is silent,
+      because only the machine-readable `postedGate` corrects it. Raised by CR-CRU-115 cycle 406's FIX
+      and deliberately not fixed there: no finding authorised changing the hold's caller-facing text,
+      and this CR rewrites that path anyway.
+- [ ] The envelope's `outcome` field is unambiguous on that path. It currently reads `none` (its ruled
+      contract is the SEALING outcome, and nothing was sealed) while a gate sits on the board — not
+      false, but a reader who takes `none` to mean "nothing about this run reached the board" is relying
+      on a second field to correct them. Same finding, same source.
 
 **§S3 — fixtures**
 
