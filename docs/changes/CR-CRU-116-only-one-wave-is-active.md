@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 6 (0.2.0)
 - **Depends on**: 091, 104
-- **Status**: PENDING (0.2.0)
+- **Status**: COMPLETED (shipped 2026-09-09 on release/0.2.0)
 - **Design reference**: `docs/research/DN-crucible-wave-track-release.md` — "The definition (final)"
   (a wave is a container of CRs and a synchronisation device for orchestrators) and the drift
   section's **D1**
