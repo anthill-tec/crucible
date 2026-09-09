@@ -50,9 +50,30 @@ container of CRs; a track is how they are ordered and scheduled.
 
 ### §S2 `next` announces a wave boundary instead of walking through it
 
-The lane's wave is resolved as the wave of the first entry, in declared `seq` order, that is not
-finished — where finished means the DN's own wording, **landed or declared dead**. An explicit
-`--wave` overrides that resolution. Every entry finished ⇒ the last wave in the queue.
+**Only one wave is active at any time** (user requirement 2026-09-09). CR-CRU-116 makes Crucible
+refuse the alternative on the write path; this CR is the READ side of the same rule, and it may
+therefore resolve exactly one wave and answer for that wave alone.
+
+The lane's wave is resolved as the wave of the first **actionable** entry **in the order the server
+published** — never re-derived from the `seq` value, which is CR-CRU-095 AC6's shipped rule and
+CR-CRU-091 AC18's prohibition. An explicit `--wave` overrides that resolution. No actionable entry
+anywhere ⇒ the last wave in the published order. The resolver names ONE wave on every answer and
+never merges two, so a project whose data violates the single-active rule reads as its earliest
+unfinished wave rather than as an ambiguous union.
+
+**A boundary is announced, and the announcement expires by itself.** A wave is complete when every
+one of its entries is landed or declared dead. When the resolved wave's predecessor is complete AND
+the resolved wave holds no landed entry yet, the crossing has just happened, and the answer says so
+alongside its decision — one read, one decision, plus the fact that read already proves. It stops
+being said the moment the new wave's first CR lands, so it cannot become permanent noise, and it
+needs no state on either side.
+
+**This is what makes `wave-complete` reachable.** Resolving the wave from the first actionable entry
+alone would skip a finished wave entirely — measured on this board 2026-09-09: wave 5's 46 entries
+are all landed except `CR-CRU-113` and `CR-CRU-082`, both `VOID`, so wave 5 is complete, and the
+first actionable entry in published order is `CR-CRU-114` in wave 6. A rule that only ever names the
+wave of the next actionable CR would answer `NEXT` and never mention that wave 5 closed — the exact
+silent crossing this CR exists to end.
 
 Within that wave the three answers are unchanged: `NEXT` names the front actionable CR, `HOLD` names
 the front CR and its cause, `DRAINED` names its reason. What changes is that the reader **stops at
@@ -88,14 +109,28 @@ rather than inferring it from the CR that came back.
       for `--track 1`, `--track 2` and no track.
 - [ ] `--wave 6` with a queue holding waves 5, 6 and 7 answers only about wave 6; `--release 0.2.0`
       narrows to the waves declared in that release and excludes an entry whose `release` is unset.
+      This case is LIVE, not hypothetical: wave 6 currently holds two entries declared into 0.2.0 and
+      four whose `release` is unset (measured 2026-09-09).
+- [ ] Neither flag is coerced: `--wave` and `--release` are matched verbatim against the entry's own
+      `wave` / `release` strings — no integer parse, no label normalisation — mirroring
+      `declareMembership`'s "nothing is COERCED on the way in". `--track` keeps its existing
+      `canonical_track` digit rule, which is a mirror of a server-side write rule and stays.
+- [ ] No assertion depends on `seq` being unique within a wave: the live board holds `CR-CRU-114` and
+      `CR-CRU-098` both at `6001` (the authoring verb keys on `(release, wave)` while the seq block
+      keys on `wave` alone), so a fixture that assumed uniqueness would pass for the wrong reason.
 
 **§S2 — the boundary is an answer**
 
-- [ ] With every wave-5 entry `COMPLETED` and wave-6 entries `PENDING`, `next` (no flags) returns
-      `decision: DRAINED`, `reason: wave-complete`, and names wave **5** — not `NEXT` on a wave-6 CR.
-      This is the exact shape measured on 2026-09-09 and is a REVERSAL of today's answer.
-- [ ] That answer's `help[]` names the move that opens the next wave and includes the next wave's
-      number as data, not prose ("6"), and exit code is 0 — `DRAINED` is an answer, never an error.
+- [ ] `next --wave 5` against a wave whose every entry is landed or dead returns `decision: DRAINED`,
+      `reason: wave-complete`, naming wave **5** — deterministic, and the only way to ask the
+      question directly. Today the same call cannot be made at all.
+- [ ] `next` with no flags, against the live shape (wave 5 complete, wave 6 holding actionable CRs and
+      no landed entry) returns `NEXT` on wave 6's front CR **and states that wave 5 completed**. Today
+      it returns `NEXT` and says nothing — this is the reversal.
+- [ ] That announcement EXPIRES: with one wave-6 entry `COMPLETED`, the same call returns `NEXT`
+      without the completed-wave statement. Asserted both ways in one fixture pair.
+- [ ] `DRAINED`'s `help[]` names the move that opens the next wave and carries the next wave's number
+      as data, not prose ("6"), and exit code is 0 — `DRAINED` is an answer, never an error.
 - [ ] A wave holding one `VOID` and one `SUPERSEDED` CR and no `PENDING` CR answers
       `wave-complete` — dead CRs are finished for this predicate.
 - [ ] A wave whose front CR is `PENDING` with an unmerged `dependsOn` still answers `HOLD` on THAT
@@ -130,6 +165,11 @@ rather than inferring it from the CR that came back.
 One cycle. `clients/_crucible_axi.py` (`resolve_next`, `_drained_answer`, `_drained_help`,
 `add_next_verb`, `_next_legacy_line`) plus the five `cmd_next` wrappers; tests under `tests/client/`.
 No server change: `git diff --stat -- src public` is empty at close.
+
+**Close-out step, planned once rather than escalated per cycle:** this CR adds prose to
+`clients/_crucible_axi.py`, and `PROSE_CITATIONS.clients.head` in
+`tests/project-namespace-tripwire.test.ts` is pinned at **785** (measured 2026-09-09). The head
+figure is re-recorded in the CR's final cycle, in the same commit as the last prose change.
 
 ## Risk
 

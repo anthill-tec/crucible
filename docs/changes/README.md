@@ -121,6 +121,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | COMPLETED (0.2.0) | 047, 111 | 5 (0.2.0) |
 | [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | PENDING (0.2.0) | 091, 092 | 6 (0.2.0) |
 | [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | PENDING (0.2.0) | 013, 073 | 6 (0.2.0) |
+| [CR-CRU-116](CR-CRU-116-only-one-wave-is-active.md) | only one wave is active, and Crucible refuses the alternative | feature | PENDING (0.2.0) | 091, 104 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -506,6 +507,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `git flow feature start/finish`**: commits land directly on `release/0.2.0`, which merges to master
   AND develop at `finish`. The cycle machinery never touches git, so nothing in Crucible changes for
   this mode.
+- 🌊 **2026-09-09 — USER REQUIREMENT: only ONE wave is active at any time, and Crucible PLACES that
+  constraint.** Not a convention orchestrators are trusted to keep — a refusal the server issues.
+  Filed as **CR-CRU-116**, which lifts the rule that already exists one container down:
+  `transitionCycle` refuses a second active sibling (`code: "already-active"`,
+  `src/store.ts:3241-3249`) and refuses activating ahead of a seq-earlier pending sibling
+  (`code: "out-of-order"`, `:3255-3263`). The wave-scope refusals reuse both codes verbatim rather
+  than mint new vocabulary. Activeness stays DERIVED — a wave is active while it holds an open plan
+  or an `IN_PROGRESS` CR; no wave record, no `wave-activate` verb, consistent with wave completion
+  being derived too. **CR-CRU-116 is the only wave-6 CR that touches `src/`**, which is what keeps
+  CR-CRU-114's and CR-CRU-115's "empty `src`/`public` diff" ACs honest. CR-CRU-114 is the READ side
+  of the same rule and now says so.
 - 🔧 **2026-09-09 — TASK, not a CR: `cr-close` and `cr-merged` assume a merge.** `--commit`'s help
   reads "Merge commit sha" and the closing milestone is typed `cr-merged`; under the mode above a CR
   lands as an ordinary commit. The data is already correct (any sha is recorded), only the wording
