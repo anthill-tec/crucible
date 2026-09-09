@@ -28,9 +28,13 @@
 # silently publishing nothing. Do not "optimise" CI minutes by scoping them;
 # reduce cost INSIDE the jobs (caching, sharding) instead.
 #
-# §S4 — the gate IS the dependency graph: publish-pypi/publish-npm `needs:` all
-# three test jobs plus build. No second, parallel guard mechanism — two
-# mechanisms can disagree, one graph cannot disagree with itself.
+# §S4 — the gate IS the dependency graph: EVERY publish job — publish-pypi,
+# publish-npm AND the publish-testpypi rehearsal — `needs:` all three test jobs
+# plus build. No second, parallel guard mechanism — two mechanisms can
+# disagree, one graph cannot disagree with itself. An `if:` condition on the
+# event or the ref is NOT part of that gate: it selects which runs a job
+# belongs to, and says nothing about whether the code passes. A publish may
+# happen only if the tests pass (user ruling, 2026-09-09).
 name: Release — publish crucible-axi (PyPI) + server (npm)
 
 on:
@@ -69,7 +73,19 @@ jobs:
   test-bun:
     runs-on: ubuntu-latest
     steps:
+      # CR-CRU-096 AC26 (measured on the 0.2.0 release, run 34304398429) — the
+      # roadmap-visual-grammar suite renders a PRE-CR BASELINE to prove zones 1
+      # and 3 are untouched, and it reads that baseline with
+      # `git show 63f07f5b…:public/app-logic.mjs` against a PINNED historical
+      # commit (pinned deliberately: a derived `merge-base` inverted the moment
+      # the CR merged). actions/checkout defaults to fetch-depth: 1, so that
+      # object is absent in CI, the read throws, and all seven baseline
+      # assertions fail — taking CR-CRU-110's order-independence guard with
+      # them, since its child `bun test` includes this very file. The commit is
+      # reachable from origin/develop, so history is all that was missing.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # a pinned pre-CR baseline is read with `git show`
       - uses: oven-sh/setup-bun@v2
       # CR-CRU-063 §S1 — uv, not just bun. tests/clients-bun-crucible.test.ts:83
       # spawns the client fleet as ["uv", "run", SCRIPT_PATH, …] (PEP 723,
@@ -241,7 +257,17 @@ jobs:
         # no password / no token — trusted publishing; attestations default-on
 
   publish-testpypi:
-    needs: build
+    # 🚨 THE GATE APPLIES TO EVERY PUBLISH, REHEARSAL INCLUDED (user ruling,
+    # 2026-09-09, found on the 0.2.0 release). This job used to `needs: build`
+    # alone, so a dispatched rehearsal uploaded to TestPyPI while the suites
+    # were still running — and three times on 0.2.0 it uploaded on a tree whose
+    # `test-bun` job then FAILED. An `if:` on the event or the branch is not a
+    # gate: it says WHERE the run came from, never whether the code works.
+    # A TestPyPI version is single-use, so a rehearsal that publishes on a red
+    # tree burns the very version the real release wants, and it reports
+    # `success` while doing it. Same dependency list as publish-pypi and
+    # publish-npm: one graph, no second mechanism to disagree with it.
+    needs: [build, test-bun, test-python, test-e2e]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: testpypi
