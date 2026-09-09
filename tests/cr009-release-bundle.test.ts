@@ -1008,9 +1008,11 @@ describe("§S0 the three test jobs carry NO event-restricting `if`", () => {
 
 // A publish is every job that emits something the outside world can see: the
 // GitHub Release (which is what fires the two registry publishes), PyPI, npm,
-// and the TestPyPI rehearsal. The three artifact-only jobs (build, pack-server,
-// dry-run-npm) publish nothing and are not gated.
+// and the TestPyPI rehearsal. The artifact-only jobs publish nothing and are
+// not gated. release.yml's header carries the job-by-job audit; the two lists
+// below are that audit as data.
 const PUBLISHING_JOBS = ["create-release", "publish-pypi", "publish-testpypi", "publish-npm"];
+const ARTIFACT_ONLY_JOBS = ["build", "pack-server", "dry-run-npm"];
 
 describe("§S4 every publishing job `needs:` build + all three test jobs", () => {
   for (const jobName of PUBLISHING_JOBS) {
@@ -1048,6 +1050,18 @@ describe("§S4 every publishing job `needs:` build + all three test jobs", () =>
     for (const needs of others) {
       expect(needs).toEqual(reference);
     }
+  });
+
+  test("every job is classified — a publish, one of the three suites, or an audited artifact-only job; a new job must be placed in the audit", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const suiteJobs = [BUN_SUITE_CMD, PY_SUITE_CMD, E2E_SUITE_CMD].flatMap((cmd) => {
+      const name = findJobsRunning062(jobs, cmd)[0]?.[0];
+      return name === undefined ? [] : [name];
+    });
+    expect(suiteJobs.length).toBe(3);
+
+    const classified = [...PUBLISHING_JOBS, ...suiteJobs, ...ARTIFACT_ONLY_JOBS].sort();
+    expect(Object.keys(jobs).sort()).toEqual(classified);
   });
 });
 

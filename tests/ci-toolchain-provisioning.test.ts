@@ -132,6 +132,26 @@ function installsDevExtra(step: WorkflowStep): boolean {
   );
 }
 
+function isCheckout(step: WorkflowStep): boolean {
+  return typeof step.uses === "string" && /^actions\/checkout(?:@|$)/.test(step.uses.trim());
+}
+
+// `with:` inputs reach an action as strings, so `0` and `"0"` are one input.
+function checksOutFullHistory(step: WorkflowStep): boolean {
+  return isCheckout(step) && String(step.with?.["fetch-depth"]) === "0";
+}
+
+// `playwright install [--with-deps] <browser…>` — the browser must be named
+// among the arguments; `playwright install-deps` installs no browser at all.
+function installsPlaywrightBrowser(step: WorkflowStep, browser: string): boolean {
+  const run = step.run;
+  if (typeof run !== "string") return false;
+  const browserRe = new RegExp(`(?:^|\\s)${browser}(?:$|\\s)`);
+  return [...run.matchAll(/\bplaywright\s+install(?=\s|$)([^\n]*)/g)].some((m) =>
+    browserRe.test(m[1] ?? ""),
+  );
+}
+
 describe("CR-CRU-063 §S1 — uv is provisioned on the jobs that drive the client fleet", () => {
   test("test-bun provisions uv — guards the 98 `Executable not found in $PATH: \"uv\"` failures (run 31677479804)", () => {
     const { parsed } = readReleaseWorkflow();
@@ -257,6 +277,50 @@ describe("CR-CRU-063 AC9 / CR-CRU-062 §S0 — no test job is event-scoped", () 
         "run, so an event-scoped test job does not exist in the release run, and " +
         "a publish that `needs:` a SKIPPED job is itself skipped — the release " +
         "silently publishes nothing.",
+    ).toEqual([]);
+  });
+});
+
+describe("0.2.0 release (CR-CRU-112 §S1 / CR-CRU-096 AC26) — test-bun owns the toolchain and history of every tier it collects", () => {
+  test("test-bun installs the Chromium browser — `bun test` collects the Chromium integration tier (run 34303803078)", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-bun");
+
+    const provisioning = steps.filter((step) => installsPlaywrightBrowser(step, "chromium"));
+    expect(
+      provisioning.length,
+      "release.yml job 'test-bun' has no step installing the Chromium browser " +
+        "(expected a `playwright install … chromium` `run:`, the same command " +
+        "test-e2e uses). `bun test` collects the WHOLE suite, Chromium " +
+        "integration tier included; without a browser every test in that tier " +
+        "dies with `launch: Executable doesn't exist at …/ms-playwright/" +
+        "chromium_headless_shell-…` and CR-CRU-110's order-independence guard " +
+        "fails with them (run 34303803078). The job that RUNS a tier owns that " +
+        "tier's toolchain.\n" +
+        `test-bun steps:\n${stepInventory(steps)}`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("test-bun checks out full history — a pinned pre-CR baseline is read with `git show` (run 34304398429)", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-bun");
+
+    const checkouts = steps.filter(isCheckout);
+    expect(
+      checkouts.length,
+      `release.yml job 'test-bun' has no actions/checkout step.\ntest-bun steps:\n${stepInventory(steps)}`,
+    ).toBeGreaterThan(0);
+
+    const shallow = checkouts.filter((step) => !checksOutFullHistory(step)).map(describeStep);
+    expect(
+      shallow,
+      "release.yml job 'test-bun' checks out at actions/checkout's default " +
+        "fetch-depth of 1. tests/roadmap-visual-grammar.test.ts reads a PINNED " +
+        "pre-CR baseline with `git show <commit>:public/app-logic.mjs`; on a " +
+        "shallow clone that object is absent, the read throws, and every " +
+        "baseline assertion fails (run 34304398429). Expected `with: " +
+        "fetch-depth: 0` on the checkout.\n" +
+        `test-bun steps:\n${stepInventory(steps)}`,
     ).toEqual([]);
   });
 });
