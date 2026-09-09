@@ -2,7 +2,7 @@
 // alternative. C1 RED.
 //
 // The rule this CR lifts already ships one container down. `transitionCycle`
-// (src/store.ts:3238-3264) refuses a second active sibling with
+// (src/store.ts:3269-3295) refuses a second active sibling with
 // `code: "already-active"` and refuses activating ahead of a seq-earlier
 // pending sibling with `code: "out-of-order"`; `CycleTransitionError`
 // (src/store.ts:589-596) already names both codes. A WAVE is the same kind of
@@ -10,24 +10,41 @@
 // plans POST — the write that opens work — and asserts no third code string
 // is invented for the wave scope.
 //
-// ── WHAT IS BROKEN TODAY (read 2026-09-09) ────────────────────────────────
+// ── RE-PINNED 2026-09-09 (CR-CRU-116 close-out) ───────────────────────────
 //
-// `handlePlanFile` (src/v2.ts:1367-1436), which `handlePlansRoute` dispatches
-// at :2918-2928, validates `cr`, `cycles`, `title`, `orchestrator`, `wave` and
-// `track` and then calls `store.filePlan` — it never reads the queue and asks
-// nothing about waves. So every refusal asserted below currently answers
-// `201 {ok:true}`, which is exactly the RED signal: the guard does not exist.
+// Every `src/` range in this header was written against the PRE-guard tree
+// and re-read at HEAD before it was rewritten. All four shifts are OURS:
+// §S1/§S2/§S3 inserted 31 lines at src/store.ts:603 and 8 at the top of
+// src/v2.ts, and §S1 lifted the in-flight rule into `Store.queueStatusOf`
+// ABOVE `deriveQueueStatus`.
+//   `transitionCycle`'s refusals   store.ts:3238-3264 -> :3269-3295
+//   `deriveQueueStatus`            store.ts:4098-4111 -> :4256-4262
+//   `handlePlanFile`               v2.ts:1367-1436    -> :1375-1460
+//   its dispatch in `handlePlansRoute`  v2.ts:2918-2928 -> :2941-2951
+// The CR that moves a file re-pins what cites it — in the files it authored
+// as well as in the one file a guard happens to watch. The snapshot below is
+// dated because it describes the tree at RED; its ranges now name the SAME
+// constructs at their HEAD positions, where the guard this CR added lives.
+//
+// ── WHAT WAS BROKEN AT RED (read 2026-09-09, before §S2's guard) ──────────
+//
+// `handlePlanFile` (src/v2.ts:1375-1460), which `handlePlansRoute` dispatches
+// at :2941-2951, validates `cr`, `cycles`, `title`, `orchestrator`, `wave` and
+// `track` and then calls `store.filePlan` — it never read the queue and asked
+// nothing about waves. So every refusal asserted below answered
+// `201 {ok:true}`, which is exactly the RED signal: the guard did not exist.
 //
 // ── THE ONE SOURCE OF ACTIVENESS ──────────────────────────────────────────
 //
 // A wave is ACTIVE while it holds a CR the queue derives as `IN_PROGRESS`.
-// That derivation is `deriveQueueStatus` (src/store.ts:4098-4111):
-// `plans.find((plan) => plan.status === "open")`. `plan.status` has THREE
-// values — `open`, `closed`, `aborted` — and only `open` confers activeness,
-// which is why the aborted-plan fixture below is a fixture and not a
-// footnote: the live board carries 6 aborted plans across waves 4 and 5 and
-// 0 open ones, so a rule keyed on "a plan that is not closed" would mark both
-// of those waves active forever.
+// That derivation is `deriveQueueStatus` (src/store.ts:4256-4262), which
+// since §S1 delegates to `Store.queueStatusOf` (:4270-4292) where the rule is
+// spelled once: `plans.find((plan) => plan.status === "open")` (:4279).
+// `plan.status` has THREE values — `open`, `closed`, `aborted` — and only
+// `open` confers activeness, which is why the aborted-plan fixture below is a
+// fixture and not a footnote: the live board carries 6 aborted plans across
+// waves 4 and 5 and 0 open ones, so a rule keyed on "a plan that is not
+// closed" would mark both of those waves active forever.
 //
 // The guard reads the wave from the QUEUE ENTRY, never from `plan.wave`. The
 // two disagree in live data (plan 95 carries `wave: 6` while the queue
@@ -431,7 +448,8 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
         // (c) BOTH conditions at once — a cr inserted into an EARLIER wave
         // after wave 6's work opened. §S1's precedence is asserted on this
         // very fixture below: `already-active` wins, the order
-        // `transitionCycle` uses (src/store.ts:3238-3264).
+        // `transitionCycle` uses (src/store.ts:3269-3295; re-pinned
+        // 2026-09-09 from :3238-3264, the header records why).
         const both = await seed("cru116-census-both");
         await queue(both, [
           { cr: SIX_OPEN, wave: "6", dependsOn: [] },

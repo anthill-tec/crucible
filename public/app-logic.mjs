@@ -1401,7 +1401,9 @@ export function focusedReleaseView(gate, releases, entries) {
     // not this module's: "a CR with no declared wave is outside this
     // constraint entirely — never blocked, never blocking, and never confers
     // activeness on any wave". The store says the same thing in one line
-    // (`if (row.wave === "") continue;`, src/store.ts:3374), and a view that
+    // (`if (row.wave === "") continue;`, src/store.ts:3377 — re-pinned
+    // 2026-09-09 from :3374, the `let active` declaration three lines above
+    // it, miscited on arrival rather than staled later), and a view that
     // flipped the flag anyway would publish `active: true` on a container the
     // server holds outside the rule — a release whose only runner declares no
     // wave would report an active wave that does not exist. The two halves of
