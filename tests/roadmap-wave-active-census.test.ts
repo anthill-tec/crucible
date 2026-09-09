@@ -6,16 +6,37 @@
 // so a release holding two waves marked both. The replacement is a per-WAVE
 // derivation, and the danger of a retirement like this one is not the code —
 // which changed in one place — but the ASSERTIONS that pinned the old rule
-// across four suites. A rewritten suite that passes proves the suite agrees
-// with the code; it does not prove that no OTHER file still states the retired
-// premise. Only a census over the whole of `tests/` can say that.
+// across four suites.
 //
-// The AC this file discharges, verbatim: "No assertion anywhere still reads
-// activeness off `kind === \"proposed\"`: a check over `tests/` reports zero
-// surviving sites, and the number of sites checked is itself asserted." Both
-// halves are load-bearing. The second exists because a walker that silently
+// WHAT THIS FILE PROVES, AND WHAT IT DOES NOT. It proves that no file under
+// `tests/` reintroduces the retired LITERAL `kind === "proposed"` as an
+// activeness reading. It does NOT prove that no file still states the retired
+// PREMISE, and no census over `tests/` could: not one of the six retired
+// assertion sites in §S4's supersession table contained that literal at all —
+// the deleted `roadmap-wave-header:482-483` was
+// `expect(activeAttr("1")).toBe("true")` — so re-adding any of them verbatim
+// leaves this file fully green. The retired premise is discharged by the four
+// repaired suites asserting the new contract directly; this file is the
+// tripwire against the LITERAL returning, and it is scoped to that.
+//
+// The AC this file discharges, verbatim: "No file under `tests/` reintroduces
+// the retired LITERAL `kind === \"proposed\"` as an activeness reading: a
+// census reports zero surviving sites, pins the three legitimate release-gate
+// reads by file and count, and asserts both the number of sites examined and
+// the number of files walked, so a collapsed walker fails loudly." Every
+// clause is load-bearing. The counts exist because a walker that silently
 // returns nothing reports zero surviving sites too, and the difference between
 // "nothing left" and "nothing looked at" is the whole value of the check.
+//
+// WHERE THE TEETH ARE: in the PINNED COUNTS, not in the statement classifier.
+// `SITES_PINNED` and `RELEASE_KIND_READS` are what fail when the literal comes
+// back. The classifier below only decides how an occurrence is CLASSIFIED, and
+// it is beatable: a violation spelled across two statements (`const isProposed
+// = release.kind === "proposed"; … expect(box.active).toBe(isProposed);`) or
+// inside a multi-line arrow body (`releases.map((r) => { return r.kind ===
+// "proposed"; })`) carries no `/activ/i` in its OWN statement, so the
+// zero-surviving-sites assertion stays green and only the count pins catch it.
+// Read the counts as the guard and the classifier as triage, not the reverse.
 //
 // WHAT IS NOT A VIOLATION, stated precisely rather than left to the reader.
 // The release strip legitimately GROUPS releases by kind — a shipped leg and a
@@ -27,8 +48,8 @@
 // order to say it is retired — and prose that narrates a retirement is the
 // opposite of an assertion that depends on it.
 //
-// The discriminator is the STATEMENT the occurrence sits in, not the file it
-// sits in: a read of the release kind whose own statement also names
+// The classifier's discriminator is the STATEMENT an occurrence sits in, not
+// the file it sits in: a read of the release kind whose own statement names
 // activeness is reading activeness off the kind, whatever it is called. It is
 // deliberately generous — any spelling of the stem (`active`, `isActive`,
 // `data-active`, `activeness`) trips it — because the two error directions are
@@ -150,11 +171,14 @@ describe("§S4 — activeness is never read off the release kind", () => {
     expect(counted).toEqual(RELEASE_KIND_READS);
   });
 
-  test("the prose occurrences are supersession notes, and they are not assertions", () => {
+  test("three of the six surviving occurrences are prose, not live code", () => {
     const prose = census().sites.filter((site) => site.prose);
 
+    // The complement of RELEASE_KIND_READS' three: with both pinned, a live
+    // occurrence re-spelled as prose (or the reverse) moves one of the two.
+    // Nothing is asserted here about `statement`, which `census` assigns `""`
+    // by construction for exactly these sites — that assertion cannot fail.
     expect(prose.length).toBe(SITES_PINNED - 3);
-    expect(prose.every((site) => site.statement === "")).toBe(true);
   });
 
   test("this file's own self-exclusion hides nothing but the pattern's declaration", () => {
