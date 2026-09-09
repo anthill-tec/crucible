@@ -409,8 +409,13 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         handle = boot();
         const key = await createProject("queue-derived-status");
 
+        // CR-CRU-116 §S2 — all three share ONE wave on purpose. This test's
+        // subject is `deriveQueueStatus`'s three statuses, and filing a plan
+        // in a LATER wave while an earlier one still holds a PENDING cr is now
+        // the out-of-order refusal, so a single-wave board is the only legal
+        // shape for a fixture whose subject is the derivation.
         const posted = await postQueue(key, [
-          { cr: "CR-Q-1", title: "roadmap", wave: 5, dependsOn: ["CR-Q-2"] },
+          { cr: "CR-Q-1", title: "roadmap", wave: 4, dependsOn: ["CR-Q-2"] },
           { cr: "CR-Q-2", title: "join key", wave: 4, dependsOn: [] },
           { cr: "CR-Q-3", title: "milestones", wave: 4, dependsOn: [] },
         ]);
