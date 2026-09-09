@@ -1019,10 +1019,13 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _post_gate(project_dir, agent_id, gate, context=None):
-    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+def _post_gate(project_dir, agent_id, gate, context=None, release=None):
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
+    `release` is the label of the release the gate gates; it rides on to the
+    builder untouched and reaches the wire as the event's top-level
+    `version`."""
     return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
-                            context)
+                            context, release)
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
@@ -1378,6 +1381,7 @@ def main():
                           "git-flow project that merges directly has no PR for it "
                           "to watch — without --skip the gate blocks until "
                           "ci_timeout.")
+    _axi().add_gate_release_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
     grp = sub.add_parser("gate-report", parents=[common],
@@ -1388,6 +1392,7 @@ def main():
     grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields untruncated (§S11).")
+    _axi().add_gate_release_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
     ms = sub.add_parser("milestone", parents=[common],

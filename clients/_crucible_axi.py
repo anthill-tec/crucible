@@ -587,6 +587,16 @@ GATE_CYCLE_HELP = (
     "`register --cycle`. An agent that ALREADY registered bound needs no "
     "--cycle here: the gated run leaves its registration and binding intact.")
 
+# The ONE `--release` help text for the GATE verbs, so all five clients
+# document the flag identically. OPTIONAL, because a gate on a feature branch
+# gates no release.
+GATE_RELEASE_HELP = (
+    "Label of the release this gate gates (e.g. 0.2.0), posted VERBATIM as "
+    "the event's top-level `version` — the client never invents, normalises "
+    "or derives it from a branch name. OMIT IT unless the gate really gates a "
+    "release: a gate naming one is exempt from pruning until that release "
+    "records, and is retired the moment it does.")
+
 
 def gate_identity_skipped_line(agent_id, confirmed=True):
     """The stderr line a gated run prints INSTEAD of the cleanup, so an
@@ -4924,12 +4934,24 @@ def close_gate_identity(project_dir, identity, ops, remove_fn=None):
           file=sys.stderr)
 
 
-def post_gate(project_key, agent_id, gate, post_fn, context=None):
+def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
     """POST a gate event. `context` is OMITTED entirely when falsy — never a
-    fabricated empty dict."""
+    fabricated empty dict.
+
+    `release` is the label of the release this gate gates, and rides as the
+    event's own top-level `version` — a SIBLING of `gate`, the server's
+    first-class field, never a key inside the gate object. It travels
+    VERBATIM: nothing here normalises a pre-release suffix, strips a prefix or
+    derives a label from a branch name. It follows `context`'s absent-key rule
+    for the same reason the server does: `version` is taken only when it is a
+    non-empty string, and a gate carrying one is retention-protected until its
+    release records, so an empty or null value would either be dropped
+    silently or make every gate look release-bound and unprunable."""
     payload = {"projectKey": project_key, "agentId": agent_id, "gate": gate}
     if context:
         payload["context"] = context
+    if isinstance(release, str) and release:
+        payload["version"] = release
     return post_fn("/api/v2/gates", payload)
 
 
@@ -4981,6 +5003,14 @@ def add_gate_cycle_arg(p):
     p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
 
 
+def add_gate_release_arg(p):
+    """Declare `--release` on a GATE verb (gate-run/gate-report): the label of
+    the release this gate gates, posted as the event's top-level `version`.
+    One helper for the whole fleet, so all five clients spell the flag and its
+    help identically."""
+    p.add_argument("--release", help=GATE_RELEASE_HELP)
+
+
 def cmd_gate_report(args, project_dir, ops):
     """§S8 — report a single already-run gate (flags path). Emits the §S1
     envelope plus the interactive line on stderr, and ALWAYS raises the
@@ -5004,7 +5034,8 @@ def cmd_gate_report(args, project_dir, ops):
     gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
     if args.commit:
         gate["push"] = {"commit": args.commit}
-    resp = ops.post_gate(project_dir, agent_id, gate, fleet_context() or None)
+    resp = ops.post_gate(project_dir, agent_id, gate, fleet_context() or None,
+                         getattr(args, "release", None))
     ok = resp.get("ok", False)
     legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -5095,8 +5126,13 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
               file=sys.stderr)
         return 1
 
+    # Only the SEAL carries the release: a version-stamped gate is retention-
+    # protected until its release records, so stamping every interim snapshot
+    # of the poll loop above would leave a run's worth of unprunable gates
+    # behind for one release — and the seal restates the release anyway.
     final_gate, _ = gate_from_axi(final_decoded, intent, final=True)
-    resp = ops.post_gate(project_dir, agent_id, final_gate, context or None)
+    resp = ops.post_gate(project_dir, agent_id, final_gate, context or None,
+                         getattr(args, "release", None))
     ok = resp.get("ok", False)
     overall = bool(ok and proc.returncode == 0)
     legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
