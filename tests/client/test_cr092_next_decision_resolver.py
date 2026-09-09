@@ -1629,7 +1629,14 @@ class NextBlockCitationsTest(unittest.TestCase):
         # `stack` key on its ingest and its gate's composition over the
         # declared suites all sit ABOVE this block, drifting it
         # 1526-1542 -> 1552-1568. Same rule, same guard, seventh time.
-        ("_next_start_help", "clients/python-crucible.py", 1552, 1568,
+        # Re-pinned 2026-09-10 (CR-CRU-115 cycle 407): cycle 403 added
+        # `--release` to BOTH gate subparsers, and the three lines it put in
+        # `pre-merge-gate`'s block sit ABOVE this one, drifting it
+        # 1552-1568 -> 1555-1571 (measured at both ends, not inferred from the
+        # shift). Same rule, same guard, eighth time — and the first time the
+        # drift reached a merge gate, because CR-CRU-115 never dispatched this
+        # suite; the gate caught what the dispatch list missed.
+        ("_next_start_help", "clients/python-crucible.py", 1555, 1571,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 
