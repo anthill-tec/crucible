@@ -387,13 +387,10 @@ class ARealVerdictStillSealsTest(_SealingTestBase):
             "keyed on failure would most easily lose: a cancelled run has no "
             "failed step, so the green inference would have called it passed")
 
-    def test_the_seal_still_carries_the_snapshots_head_as_its_push_commit(self):
-        gate = self.seal(_resolved_as("passed"))
-        self.assertEqual(
-            gate.get("push"), {"commit": SNAPSHOT_HEAD},
-            "the sealing gate names the commit it gated, taken from the "
-            "snapshot's own `head` — the link between a gate and the code it "
-            "passed judgement on; got " + repr(gate.get("push")))
+    # The seal's `push` commit is NOT re-asserted here: the wire-seam test
+    # below drives the same fact one seam further out, where the gate that
+    # really reached the server is read, and a builder that dropped `push`
+    # fails it identically. Two seams, one fact, and no ruling asks for both.
 
 
 # ════════════════════════════════════════════════════════════════════════════
