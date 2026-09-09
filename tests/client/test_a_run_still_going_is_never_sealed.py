@@ -108,7 +108,7 @@ REATTACH_MOVE = "axi status"
 # its presence. Field spelling follows the envelope's own camelCase idiom
 # (`cycleId`).
 RELEASE_FIELD = "release"
-NOTHING_STAMPED = "none"
+NOTHING_STAMPED = "unstated"
 POSTED_GATE_FIELD = "postedGate"
 FINAL_GATE = "final"
 NO_GATE_POSTED = "none"

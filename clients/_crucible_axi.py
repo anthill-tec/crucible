@@ -658,6 +658,40 @@ HELP_STEPS = {
 # otherwise).
 GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
 
+# §S3 — the PASS FAMILY: every resolved `axi run` outcome this fleet reads as a
+# pass, each NAMED beside the legal gate outcome it seals as.
+#
+# The sealing path used to take the run's outcome only when it was already one
+# of the four legal values and otherwise fall back to "failed if any step
+# failed, else passed". That fallback is structurally biased green: `pending`,
+# `running`, `fixing` and `awaiting_approval` are none of them `failed`, so a
+# run still going sealed `passed`. This table replaces the green half of it.
+#
+# `passed-with-skips` is what a real release run resolves today, and it is in
+# NO vocabulary the fleet has — not the server's `GATE_OUTCOMES` (which 400s
+# anything outside them), not the renderer's gating rule. It seals `passed` by
+# an explicit decision recorded HERE, and the skips it names are not lost: the
+# `pr,skipped`/`ci,skipped` rows already travel in `steps[]`, and the envelope
+# carries the raw string beside the mapped one. An outcome this table does not
+# name is never inferred green from the mere absence of a failure.
+GATE_PASS_FAMILY = {
+    "passed": "passed",
+    "passed-with-skips": "passed",
+    "checks-passed": "checks-passed",
+}
+
+# §S4 — WHICH gate an exit posted, stated as a value. A seal is `final`; the
+# no-gate case reuses the envelope's own stated-absence word (ENVELOPE_TIER_NONE
+# — this exit did the thing zero times) rather than inventing a third
+# vocabulary. `interim` joins them when the in-flight POST's guard is repaired.
+GATE_POSTED_FINAL = "final"
+
+# §S3 — the move a HELD caller is told to make, in the TOOL's own words:
+# `axi run --help` says an elapsed wait "is not a failed run: inspect with axi
+# status and reattach". A hold that names no next move strands its caller, and
+# naming a command the tool does not have would strand it further.
+AXI_REATTACH_HELP = "inspect with `axi status` and reattach"
+
 # §S8 — gate-run is the AXI streaming standard; gate-report is discouraged.
 # EVERY gate-report invocation emits this warning (envelope warnings[] + stderr)
 # regardless of the POST outcome (the discouragement is a property of using
@@ -1297,12 +1331,42 @@ def map_axi_step_status(status):
     }.get(status, status or "passed")
 
 
+def sealed_outcome(raw, any_failed):
+    """§S3 — resolve a SEALING gate's outcome, or None when the run reached no
+    terminus this client understands.
+
+    Two termini, and nothing else counts as one. A FAILED step is a resolved
+    fact in its own right, so it seals `failed` whether or not the snapshot
+    carries a top-level outcome — the defect being fixed is the green bias, not
+    verdicts derived from steps. Otherwise the verdict is the run's OWN
+    resolved outcome, mapped through the named `GATE_PASS_FAMILY` or taken
+    verbatim when it is already one the server accepts.
+
+    Everything left over answers None: no outcome at all (a bounded `--wait`
+    elapsed while the run was still going), or an outcome in no family the
+    fleet knows. A value nobody understands must not become green, and the
+    absence of a failure is not a verdict."""
+    if isinstance(raw, str) and raw:
+        mapped = GATE_PASS_FAMILY.get(raw)
+        if mapped:
+            return mapped
+        if raw in GATE_OUTCOMES:
+            return raw
+    return "failed" if any_failed else None
+
+
 def gate_from_axi(decoded, intent, final):
     """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
 
     An in-flight snapshot (`final=False`) synthesises a valid interim outcome
-    from its steps; the sealing snapshot (`final=True`) takes the run's own
-    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
+    from its steps; the sealing snapshot (`final=True`) resolves the run's own
+    terminus through `sealed_outcome`. Returns (gate_dict, step_count).
+
+    §S3 — a sealing gate whose run reached NO terminus carries no `outcome` key
+    at all: there is no honest value to put there, and its absence is the one
+    fact the caller branches on before posting. Returning a gate rather than
+    raising keeps the step ladder (the evidence of WHERE the run stopped)
+    available to a caller that must report the hold."""
     run = decoded.get("run") if isinstance(decoded, dict) else None
     run = run or {}
     axi_steps = run.get("steps") or []
@@ -1314,11 +1378,13 @@ def gate_from_axi(decoded, intent, final):
             any_failed = True
         steps.append({"name": s.get("step"), "status": map_axi_step_status(st)})
     if final:
-        raw = decoded.get("outcome")
-        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
+        outcome = sealed_outcome(decoded.get("outcome"), any_failed)
     else:
         outcome = "failed" if any_failed else "checks-passed"
-    gate = {"intent": intent, "outcome": outcome, "steps": steps}
+    gate = {"intent": intent}
+    if outcome:
+        gate["outcome"] = outcome
+    gate["steps"] = steps
     head = run.get("head")
     if final and head:
         gate["push"] = {"commit": head}
@@ -5131,15 +5197,63 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     # of the poll loop above would leave a run's worth of unprunable gates
     # behind for one release — and the seal restates the release anyway.
     final_gate, _ = gate_from_axi(final_decoded, intent, final=True)
+    outcome = final_gate.get("outcome")
+
+    # §S4 — the envelope STATES what was posted, always as a value and never as
+    # an absent key: a reader cannot tell a missing field from a client too old
+    # to have one. `unstated` and `none` are the fleet's own distinction and are
+    # not interchangeable — `unstated` means nothing was ASSERTED (no
+    # `--release` was given; the run named no outcome), `none` means this exit
+    # did the thing ZERO times (no gate reached the wire).
+    raw = final_decoded.get("outcome")
+    resolved = raw if isinstance(raw, str) and raw else None
+    release = getattr(args, "release", None)
+    held = outcome is None and resolved is None
+    result_fields = {
+        "outcome": outcome or ENVELOPE_TIER_NONE,
+        "rawOutcome": resolved or ENVELOPE_TIER_UNSTATED,
+        "release": release if isinstance(release, str) and release
+                   else ENVELOPE_TIER_UNSTATED,
+        "postedGate": GATE_POSTED_FINAL if outcome else ENVELOPE_TIER_NONE,
+        "inFlight": held,
+    }
+    envelope_context = ops.context(project_dir, agent_id=agent_id)
+
+    if outcome is None:
+        # §S3 — the run reached no terminus, so a hold posts NOTHING. Not
+        # merely nothing green: every gate carries an outcome, and both values
+        # that would fit an unfinished ladder (`passed`, `checks-passed`) are
+        # read as a verdict by the wave lens, so there is no shape in today's
+        # vocabulary that says "still going" without claiming one. Silence on
+        # the board is the honest state; a green gate over a run sitting at
+        # `awaiting_approval` is not. The report goes to the CALLER instead,
+        # naming the run's OWN error — the fact that answers "did this run
+        # terminate?", already in hand — and the move that resumes it.
+        detail = final_decoded.get("error")
+        said = ("the run is still in flight — `axi run` resolved no outcome"
+                if held else
+                f"the run resolved {resolved!r}, which is in no pass family "
+                f"this client knows, so it is not sealed")
+        print(f"gate-run: NOT SEALED: {said}", file=sys.stderr)
+        if detail:
+            print(f"gate-run: the run said: {detail}", file=sys.stderr)
+        if held:
+            print(f"gate-run: {AXI_REATTACH_HELP}", file=sys.stderr)
+        legacy = (f"gate-run: ok=False sealed=nothing exit={proc.returncode} "
+                  f"— {said}"
+                  + (f"; the run said: {detail}" if detail else "")
+                  + (f"; {AXI_REATTACH_HELP}" if held else ""))
+        ops.emit("gate-run", False, result_fields, envelope_context, [], legacy)
+        return 1
+
     resp = ops.post_gate(project_dir, agent_id, final_gate, context or None,
-                         getattr(args, "release", None))
+                         release)
     ok = resp.get("ok", False)
     overall = bool(ok and proc.returncode == 0)
-    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
+    legacy = (f"gate-run: ok={ok} outcome={outcome} "
               f"exit={proc.returncode}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    ops.emit("gate-run", overall, {"outcome": final_gate.get("outcome")},
-             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    ops.emit("gate-run", overall, result_fields, envelope_context, [], legacy)
     return 0 if overall else 1
 
 
