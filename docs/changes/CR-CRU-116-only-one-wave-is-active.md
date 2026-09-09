@@ -209,8 +209,19 @@ untouched and flags it; nothing here depends on it changing.
 - [ ] `tests/roadmap-wave-header.test.ts` passes with its release-level activeness assertions
       REWRITTEN to the per-wave contract, and `:482-483` DELETED rather than inverted. A dated
       supersession comment names CR-CRU-116 §S4 and the CR-CRU-096 AC1 reading it retires.
-- [ ] No assertion anywhere still reads activeness off `kind === "proposed"`: a check over `tests/`
-      reports zero surviving sites, and the number of sites checked is itself asserted.
+- [ ] No file under `tests/` reintroduces the retired LITERAL `kind === "proposed"` as an activeness
+      reading: a census reports zero surviving sites, pins the three legitimate release-gate reads by
+      file and count, and asserts both the number of sites examined and the number of files walked, so
+      a collapsed walker fails loudly.
+
+  **Corrected 2026-09-09 after cycle 397 measured the original wording's reach.** This AC first said
+  "no assertion anywhere still reads activeness off `kind === \"proposed\"`", which is not what any
+  census over `tests/` can establish: not one of the six retired assertion sites in the supersession
+  table above contains that literal — the deleted `:482-483` was
+  `expect(activeAttr("1")).toBe("true")` — so re-adding a retired assertion verbatim would leave a
+  literal census fully green. The retired PREMISE is discharged by the four repaired suites asserting
+  the new contract directly; the census is a tripwire against the literal returning, and it is scoped
+  to what it can prove.
 - [ ] All four affected suites pass with the treatments in the table above: `roadmap-wave-header`,
       `roadmap-track-lanes`, `queue-registration`, `roadmap-visual-grammar`. Every changed assertion's
       new expectation is derived from this spec, not from an observed run.

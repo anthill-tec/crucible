@@ -533,6 +533,26 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   assumes a merge, and per the CR-vs-task test a help string plus a definition has no design surface.
   Fix the help text and define `cr-merged` as "the CR landed on its target branch" — minting a second
   milestone type for the same event would be the parallel mechanism this project keeps refusing.
+- 📎 **2026-09-09 — CANDIDATE CR (measured, and it caused a red gate): `path:line` citations drift
+  silently everywhere except one guarded block.** CR-CRU-116 shifted `src/v2.ts` by +8 from line 8,
+  `src/store.ts` by +31 from `:603` and a further +127 from `:3336`, and `src/hints.ts` by +19 from
+  `:276`. Cycle 397 compared every `store.ts:N` / `hints.ts:N` / `v2.ts:N` / `app-logic.mjs:N` /
+  `app.js:N` citation in `clients/`, `tests/`, `src/`, `public/` and `docs/` against the CR's base and
+  HEAD: **267 cited ranges now hold different content than they did at base.** Three were spot-checked
+  as demonstrably accurate at base and wrong now — `src/store.ts:1911` (`tier: meta?.tier ?? "unit"`,
+  cited four times from `tests/client/`) is now `:1942`; `src/v2.ts:711`; `src/v2.ts:2053` (cited from
+  `public/app-logic.mjs:1327`). Only `clients/_crucible_axi.py`'s `next` block is guarded, by
+  `NextBlockCitationsTest`, which is why the gate went red on exactly that one and nowhere else.
+  Follow-up: generalise that guard repo-wide, or DECIDE and document that only the `next` block is
+  pinned. The status quo is a convention enforced in one file out of hundreds.
+- 🧪 **2026-09-09 — CANDIDATE CR: two concurrent python client runs merge into one ingest.**
+  `test-reports/` is a single shared dir and `_regression_run` wipes only at ITS own start, so a run
+  overlapping another absorbs both XML sets. Measured in cycle 397: an ingest reported **3276 pass / 2
+  pending — exactly 2×** the suite, because `test-reports/` held two complete 449-file sets from one
+  invocation 68 s apart (the orchestrator's `pre-merge-gate` running beside the agent's own run). Both
+  sets were 0-failure so no green was false, but every board figure from an overlapping run is
+  inflated. Fix: a per-invocation reports subdir (PID or uuid suffix). **Orchestrator rule until then:
+  never run the gate concurrently with an agent's ingesting run.**
 - ⚠️ **2026-09-09 — CANDIDATE CR: no verb can re-wave a release-less CR, and the bulk route would
   wipe membership.** `cr-plan` and `wave-sequence` both REQUIRE `--release`, so the four CRs re-waved
   to 7 above cannot be re-waved on the board while their release is undeclared. The only other path is
