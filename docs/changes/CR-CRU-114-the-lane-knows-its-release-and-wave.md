@@ -68,6 +68,18 @@ alongside its decision — one read, one decision, plus the fact that read alrea
 being said the moment the new wave's first CR lands, so it cannot become permanent noise, and it
 needs no state on either side.
 
+**The PREDECESSOR is the previous distinct wave label in the PUBLISHED order** — ruled 2026-09-09 at
+cycle 399, after GREEN found the rule unstated. Waves are strings on the wire, so the reader takes
+the nearest distinct `wave` value appearing before the resolved wave's first row and never parses,
+sorts or arithmetics its way there. Consequences, all of them deliberate: `06` and `6` are DIFFERENT
+waves (the verbatim rule makes them reachable as such), a non-numeric label needs no special case,
+and `DRAINED`'s `help[]` carries the next wave's **LABEL** as data, not a parsed number.
+
+This is deliberately NOT CR-CRU-116's `waveNumber` ordering, and the split is by side rather than by
+accident: the write guard compares two candidate waves to decide permission and already had one
+ordering function, while the reader walks a sequence the server published and may not re-derive an
+order of its own (CR-CRU-095 AC6). Each side uses the rule its own question needs.
+
 **This is what makes `wave-complete` reachable.** Resolving the wave from the first actionable entry
 alone would skip a finished wave entirely — measured on this board 2026-09-09: wave 5's 46 entries
 are all landed except `CR-CRU-113` and `CR-CRU-082`, both `VOID`, so wave 5 is complete, and the
@@ -137,8 +149,15 @@ rather than inferring it from the CR that came back.
   announcement state was demonstrable live. CR-CRU-116 then landed IN wave 6 (`CR-CRU-116 COMPLETED`,
   seq 6001), which makes the live board the EXPIRED case. Naming the live board in an AC would have
   pinned a state the project itself moves through.
-- [ ] `DRAINED`'s `help[]` names the move that opens the next wave and carries the next wave's number
-      as data, not prose ("6"), and exit code is 0 — `DRAINED` is an answer, never an error.
+- [ ] `DRAINED`'s `help[]` names the move that opens the next wave and carries the next wave's LABEL
+      as data, not prose, and exit code is 0 — `DRAINED` is an answer, never an error.
+- [ ] The predecessor is the previous distinct wave LABEL in the published order: asserted with a
+      fixture whose labels do not sort into their published sequence, so a parse-based reading answers
+      differently from the published-order reading and the test can tell them apart.
+- [ ] A declared container that selects NO row — `--release` or `--wave` naming something nothing
+      declares — answers `DRAINED / awaiting-assignment`. It cannot be `no-roadmap` (the queue is not
+      empty) and must not be `wave-complete` (an empty container has completed nothing). Ruled at
+      cycle 399 from GREEN's E3.
 - [ ] A wave holding one `VOID` and one `SUPERSEDED` CR and no `PENDING` CR answers
       `wave-complete` — dead CRs are finished for this predicate.
 - [ ] A wave whose front CR is `PENDING` with an unmerged `dependsOn` still answers `HOLD` on THAT
@@ -180,9 +199,16 @@ requirement that could not exist when this spec was written.
 
 **Integration**
 
-- [ ] After this CR, `cmd_next` in each of the five clients passes the resolved release and wave into
-      `resolve_next` — a grep for the new parameters returns ≥1 non-test caller per client, and VERIFY
-      runs that grep itself.
+- [ ] Every one of the five clients ACCEPTS both flags on its own `next` surface, proven by driving
+      each client's real `next --help` as a subprocess — not by grepping client source for parameter
+      names.
+
+  **Rescoped 2026-09-09, cycle 399.** The original wording ("a grep for the new parameters returns ≥1
+  non-test caller per client") is unsatisfiable without breaking a shipped guard: CR-CRU-092's AST
+  assertion requires each client's `cmd_next` to be EXACTLY ONE statement delegating to
+  `_axi().cmd_next(...)`. The clients forward the whole `Namespace`, so both dimensions do reach
+  `resolve_next` from all five, and no client file spells them — by design. The driven `--help`
+  surface is the honest per-client proof, and the caller count stays asserted there.
 - [ ] `GET …/queue` is still read exactly once per invocation: the assertion counts requests, so the
       new dimensions cost no extra round-trip.
 
@@ -202,6 +228,17 @@ figure is re-recorded in the CR's final cycle, in the same commit as the last pr
 - **This reverses an answer.** Any test that pins today's silent crossing (a `NEXT` on the following
   wave while the current one is drained) states the defect as the contract and must be replaced by the
   §S2 shape, not re-pinned around it.
+
+  **Two such tests were found and repaired in cycle 399**, both in
+  `tests/client/test_cr092_next_decision_resolver.py`, each keeping its own subject:
+  `test_the_other_lane_is_reachable_by_its_own_spelling` asked for `--track 3` and asserted `NEXT` on
+  a CR sitting in a LATER wave — the silent crossing itself, and work whose `plan-file` CR-CRU-116
+  now refuses. It answers `DRAINED / awaiting-assignment` while still asserting `track == "track-3"`,
+  so the claim under test (the answer is about the lane asked for, never a sibling's) is proven by the
+  envelope rather than by the offered CR. `test_..._positive_half`'s `track` assertion moved to a
+  two-lane fixture, because `track` rides an answer only where more than one lane is declared — one
+  declared lane is no lane to choose between, and echoing a stored value would name a container the
+  answer never resolved. Both carry the direction change in their own docstrings.
 - The wave-resolution rule reads `seq`. An entry without one is already a declared roadmap defect
   surfaced as the `missing-seq` warning; this CR must keep surfacing it rather than filling a position
   of its own.
