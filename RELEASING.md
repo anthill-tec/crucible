@@ -44,9 +44,9 @@ released version.
 The push to `master` is what starts CI:
 
 ```
-push master  ->  create-release  ->  GitHub Release (published)
-                                        |-> publish-pypi   (crucible-axi   -> PyPI)
-                                        `-> publish-npm    (@anthill-tec/crucible-server -> npm)
+push master  ->  build + the three suites  ->  create-release  ->  GitHub Release (published)
+                                                                      |-> publish-pypi   (crucible-axi   -> PyPI)
+                                                                      `-> publish-npm    (@anthill-tec/crucible-server -> npm)
 ```
 
 The rest of this document explains each step and why it is shaped that way.

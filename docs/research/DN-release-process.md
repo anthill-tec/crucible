@@ -23,7 +23,7 @@ Everything below was verified against the repo, not recalled.
 | Capability | Where | State |
 |---|---|---|
 | Release driver with preflight guards | `scripts/release.sh` (`set-version` · `checkpoint` · `finish` · `status`) | present; `set-version` is housekeeping only since CR-CRU-061 §S2 (see 5.1) |
-| CI publish chain | `.github/workflows/release.yml` — `build` → `create-release` → `publish-pypi` ∥ `publish-npm`, plus `publish-testpypi` and `dry-run-npm` on dispatch | present |
+| CI publish chain | `.github/workflows/release.yml` — `build` + the three suites → `create-release` → `publish-pypi` ∥ `publish-npm`, plus `publish-testpypi` (same gate) and `dry-run-npm` on dispatch | present |
 | Operational manual | `RELEASING.md` | present, comprehensive |
 | Composite lockstep | runtime pin: `crucible_axi.__version__` selects `@anthill-tec/crucible-server@<that version>`; `CRUCIBLE_SERVER_VERSION` is the only escape hatch | present, **10 tests** in `tests/client/test_crucible_axi_version_pin.py` |
 | no-mistakes → Crucible | `bun-crucible.py gate-run --intent … --agent … [--skip …]` (`--skip` shipped in CR-CRU-061 §S5, all five clients) proxies `axi run` and posts throttled interim snapshots then a final sealed gate event (CR-CRU-013) | present; `no-mistakes` is on PATH at `~/.local/bin/no-mistakes` |
@@ -266,9 +266,9 @@ Preflight guards → `git flow release finish` → tag `0.1.0` (**bare SemVer, n
 ### Step 8 — CI PUBLISHES (no human step)
 
 ```
-push master → create-release → GitHub Release (published)
-                                  ├─ publish-pypi  → crucible-axi → PyPI
-                                  └─ publish-npm   → @anthill-tec/crucible-server → npm
+push master → build + the three suites → create-release → GitHub Release (published)
+                                                             ├─ publish-pypi  → crucible-axi → PyPI
+                                                             └─ publish-npm   → @anthill-tec/crucible-server → npm
 ```
 
 No human step. **Watch both jobs to completion.**
