@@ -149,8 +149,14 @@ this CR alters the interim guard, so the guard's own tests stay exactly as they 
 
 **§S4 — the envelope**
 
-- [ ] `gate-run`'s envelope states the stamped release, or states that none was stamped; and states
-      `interim` vs `final` for the gate it posted.
+- [ ] `gate-run`'s envelope states the stamped release, or states that none was stamped; and names
+      WHICH gate it posted — `final` on a seal, and no gate at all on a hold.
+
+  **Narrowed 2026-09-10 at cycle 403.** The criterion used to say "`interim` vs `final`". `interim` is
+  unproducible in this CR: the interim POST is unreachable until CR-CRU-117 repairs the guard, so a
+  fixture asserting it could only pass by mocking the very call this CR must not touch. The field is
+  asserted with its two REACHABLE states, and CR-CRU-117 inherits the `interim` value along with the
+  guard that makes it happen.
 - [ ] When the run is still in flight the envelope says so, and `ok` is false.
 
 **Integration**
