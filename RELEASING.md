@@ -332,8 +332,9 @@ underlying commands.
 
 If a publish job is skipped, check the suites first: every publishing job `needs:` `build`,
 `test-bun`, `test-python` and `test-e2e`, so one red suite skips the whole publish chain (and
-a red rehearsal uploads nothing to TestPyPI). Otherwise it is a guard: a prefixed or malformed
-tag, a tag on a commit that is not an ancestor of `origin/master`, or a missing `NPM_TOKEN`.
+a red rehearsal uploads nothing to TestPyPI). A publish job that runs but fails has hit a
+guard: a prefixed or malformed tag, or a tag on a commit that is not an ancestor of
+`origin/master`.
 
 ---
 
