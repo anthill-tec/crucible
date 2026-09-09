@@ -233,10 +233,18 @@ Two cycles — one for the refusals, one for the marker. `src/store.ts` (the wav
 `public/app-logic.mjs` (§S4's per-wave `active`) and the `public/app.js` render site that reads
 `box.active`; tests in `tests/` and `tests/client/`.
 
-**Close-out step, planned once rather than escalated per cycle:** this CR adds prose to both guarded
-trees, and `PROSE_CITATIONS` pins `src` head at **563** and `public` head at **435**
-(`tests/project-namespace-tripwire.test.ts`, measured 2026-09-09). Both head figures are re-recorded
-in the final cycle, in the same commit as the last prose change.
+**Close-out step, planned once rather than escalated per cycle:** `PROSE_CITATIONS`
+(`tests/project-namespace-tripwire.test.ts`) pins `src` head **563**, `public` head **435**,
+`clients` head **785**. The head figure is re-recorded in the LAST prose-changing cycle, in the same
+commit as that prose — cycle 394, since cycle 395 is read-only VERIFY.
+
+Measured at that point: only **`public` moves, 435 → 436**. `src` re-measures at 563 and `clients`
+at 785, unchanged — so the prediction that the server work would drift `src` was wrong, and the one
+moving citation is `public/app-logic.mjs` 85 → 86, where the retired `kind === "proposed"` comment
+cited one CR and its replacement cites CR-CRU-116 §S4 **and** names the CR-CRU-096 AC1 reading it
+supersedes. Holding the pin by dropping that second citation is REFUSED: the pin measures provenance,
+so provenance growing is the pin working. The re-record carries the per-file decomposition, so it is
+auditable rather than a nudged constant.
 
 **This is the only CR of wave 6 that touches `src/`.** CR-CRU-114 and CR-CRU-115 each assert an empty
 `git diff --stat -- src public` at close; this one owns the server change, so those ACs stay honest.
