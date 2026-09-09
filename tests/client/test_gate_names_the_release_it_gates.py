@@ -251,7 +251,11 @@ class FleetGateReleaseFlagSurfaceTest(unittest.TestCase):
             f"that cannot name its release can never be retired by one; "
             f"missing from: {missing!r}")
 
-        self.assertEqual(len(CLIENT_FILES), EXPECTED_CLIENT_COUNT)
+        # The count is asserted on the surfaces DRIVEN, not on the declaring
+        # dict: `len(CLIENT_FILES)` compares two constants of this same file
+        # and can only disagree with the line below after someone has already
+        # broken it — the driven count catches that case and answers the
+        # criterion ("the count of clients driven is itself asserted") too.
         self.assertEqual(
             len(surfaces), EXPECTED_CLIENT_COUNT,
             f"the count of clients driven is itself asserted: drove "
