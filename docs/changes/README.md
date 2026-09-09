@@ -492,6 +492,32 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Notes
 
+- 🔬 **2026-09-10 — CITATION CENSUS of `clients/`, measured at CR-CRU-115 cycle 407, and it upgrades
+  the recorded candidate CR from an estimate to a count.** `clients/` carries **11** `path:line`
+  citations over 8 distinct targets: **6 accurate, 5 STALE**. The stale set is `mvn-crucible.py:641`
+  replicated across arduino/bun/python/rust (ONE defect, four sites — the line now holds
+  `status = "fail"`) plus `PRD-crucible-v2.md:291`, which points into the cycle-kinds sentence while
+  its prose names LANE/track (the Tracks ruling is at `:293`, and its sibling `DN-model-b-language.md:53`
+  IS correct, which is how the pair reads plausible).
+  **Guard coverage is accidental, not designed: 4 guarded, 7 unguarded.** `NextBlockCitationsTest`
+  (`tests/client/test_cr092_next_decision_resolver.py`) is the ONLY thing in the repo that validates a
+  line number, and its scope is `cmd_next`'s block alone — it exists there only because CR-CRU-092
+  built it there. `docs-retired-mirror-references` checks file EXISTENCE under `tests/` only; the
+  tripwire COUNTS prose citations per tree (`clients` head 789) and validates none of them. So the one
+  citation the release gate caught is the one that happens to live inside `cmd_next`; the other five
+  are equally stale and **no run in this repo will ever go red on them**.
+  **The candidate CR now has a second half**: generalising the head/tail bracketing table over all of
+  `clients/` is cheap (the extractor and the idiom both exist) and would catch this class before a gate
+  does. Recorded, not done — a four-client citation sweep in front of a release gate is how a one-line
+  fix becomes a second red run.
+- ⚠️ **2026-09-10 — ORCHESTRATOR RULE: a cycle's dispatch list must include every guard the cycle's
+  edits can move, not every guard in the CR's own blast radius.** CR-CRU-115 cycle 403 shifted all five
+  client files; `test_cr092_next_decision_resolver.py` holds the only line-number guard in the repo and
+  sat in CR-CRU-114's blast radius, so it entered no CR-CRU-115 dispatch list. GREEN, VERIFY and FIX
+  each ran every suite they were given, all green — and `pre-merge-gate` was the first run to reach the
+  guard (3934/1). Fourth citation-guard incident of the day; the second where the guard that would have
+  caught it lived in a file the orchestrator did not name.
+
 - 🔬 **2026-09-10 — CR-CRU-115 gap analysis: §S2 SPLIT OUT to CR-CRU-117, three ACs rescoped.**
   Measured, not reasoned. (1) Repairing the interim guard client-only would **permanently false-gate
   waves**: the interim outcome is `checks-passed`, and `workflowLens` (`public/app-logic.mjs`) flips a
