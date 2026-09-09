@@ -6,7 +6,7 @@
 #   - build           : sdist/wheel for crucible-axi (hatchling/hatch-vcs) — always
 #   - create-release  : tag→GitHub-Release bridge on master (idempotent)
 #   - publish-pypi    : real PyPI via Trusted Publishing (OIDC), release-gated
-#   - publish-testpypi: Test-PyPI dry-run on workflow_dispatch (safe validation)
+#   - publish-testpypi: Test-PyPI upload on workflow_dispatch (a rehearsal, suite-gated)
 #   - publish-npm     : the bun/node server to npm (--provenance), release-gated
 #
 # §S6: PyPI is validated against Test PyPI FIRST (workflow_dispatch), then the
@@ -54,7 +54,7 @@ on:
   pull_request:                   # packaging breakage surfaces on PRs, not on release day
   release:
     types: [published]
-  workflow_dispatch:        # REHEARSAL ONLY — Test-PyPI dry-run / npm dry-run
+  workflow_dispatch:        # REHEARSAL ONLY — Test-PyPI upload / npm dry-run
 
 permissions:
   contents: read

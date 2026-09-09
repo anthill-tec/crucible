@@ -259,10 +259,13 @@ This runs `gh workflow run release.yml --ref <current branch>` — a `workflow_d
 which is **rehearsal-only**: it triggers `publish-testpypi` and `dry-run-npm` (an
 `npm pack --dry-run` that shows the exact tarball file list) and nothing else.
 `create-release`, `publish-pypi` and `publish-npm` are all gated off for a dispatch, so a
-checkpoint can never publish to production.
+checkpoint can never publish to production. A rehearsal is still a publish, though, so
+`publish-testpypi` `needs:` `build` plus the three suite jobs (`test-bun`, `test-python`,
+`test-e2e`): on a red tree it is skipped and uploads nothing.
 
-Repeat it as often as you like. Each checkpoint uploads a fresh dev build, so you see the
-real sdist/wheel, the real metadata, and the real install path before committing to a tag.
+Repeat it as often as you like. Each green checkpoint uploads a fresh dev build, so you see
+the real sdist/wheel, the real metadata, and the real install path before committing to a
+tag.
 
 **Why an untagged branch is uploadable.** PyPI and TestPyPI both reject PEP 440 local
 versions (anything with a `+` segment), and hatch-vcs's default `local_scheme` produces
@@ -322,13 +325,15 @@ underlying commands.
 
 **4. Approve the release in CI.** The push to `master` drives:
 
-1. `create-release` — gated on `github.event_name == 'push' && github.ref == 'refs/heads/master'`. It looks for a `[0-9]+.[0-9]+.[0-9]+` tag at `HEAD` and creates the GitHub Release for it (idempotent — a re-run on an existing Release is a no-op). Using `RELEASE_PAT` here is what makes the next step happen at all.
+1. `create-release` — runs only on `github.event_name == 'push' && github.ref == 'refs/heads/master'`, and `needs:` `build` plus the three suite jobs (`test-bun`, `test-python`, `test-e2e`), the same list every publishing job carries, so a red suite skips it and nothing below fires. It looks for a `[0-9]+.[0-9]+.[0-9]+` tag at `HEAD` and creates the GitHub Release for it (idempotent — a re-run on an existing Release is a no-op). Using `RELEASE_PAT` here is what makes the next step happen at all.
 2. `release: published` fires, triggering the two publish jobs.
 3. `publish-pypi` — pauses on the `pypi` environment for its required reviewer, re-verifies the tag ref and the `origin/master` ancestry, then uploads to PyPI via OIDC.
 4. `publish-npm` — same guards, then **sets** `package.json`'s version from the tag (`npm version --no-git-tag-version --allow-same-version "$VERSION"`, workspace-only, never committed back) and publishes the server package. There is no version to disagree about, so there is no version check.
 
-If a publish job is skipped, it is almost always a guard: a prefixed or malformed tag, a
-tag on a commit that is not an ancestor of `origin/master`, or a missing `NPM_TOKEN`.
+If a publish job is skipped, check the suites first: every publishing job `needs:` `build`,
+`test-bun`, `test-python` and `test-e2e`, so one red suite skips the whole publish chain (and
+a red rehearsal uploads nothing to TestPyPI). Otherwise it is a guard: a prefixed or malformed
+tag, a tag on a commit that is not an ancestor of `origin/master`, or a missing `NPM_TOKEN`.
 
 ---
 

@@ -386,9 +386,8 @@ type ReleaseWorkflow = {
     release?: { types?: string[] };
     workflow_dispatch?: unknown;
   };
-  jobs?: Record<string, { if?: string; steps?: ReleaseStep[] }>;
+  jobs?: Record<string, { if?: string }>;
 };
-type ReleaseStep = { name?: string; run?: string };
 
 function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
   const relPath = join(".github", "workflows", "release.yml");
@@ -402,8 +401,8 @@ function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
  * parsed job graph and delivered as the YAML parser does (block scalars
  * already dedented). Empty when the job or its steps do not exist.
  */
-function releaseJobRunBodies(parsed: ReleaseWorkflow, jobName: string): string[] {
-  return (parsed.jobs?.[jobName]?.steps ?? []).flatMap((step) =>
+function releaseJobRunBodies(jobs: Record<string, WorkflowJob062>, jobName: string): string[] {
+  return (jobs[jobName]?.steps ?? []).flatMap((step) =>
     typeof step.run === "string" ? [step.run] : [],
   );
 }
@@ -464,11 +463,9 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   const BARE_TAG_REGEX_SOURCE = "^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$";
 
   test("publish-pypi guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
-    const { parsed } = readReleaseWorkflow();
-
     // Isolate the publish-pypi job's own shell so we don't accidentally match
     // publish-npm's identical guard text.
-    const pypiShell = releaseJobRunBodies(parsed, "publish-pypi").join("\n");
+    const pypiShell = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-pypi").join("\n");
     expect(pypiShell.length).toBeGreaterThan(0);
 
     expect(pypiShell).toContain(BARE_TAG_REGEX_SOURCE);
@@ -477,9 +474,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   });
 
   test("publish-npm guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
-    const { parsed } = readReleaseWorkflow();
-
-    const npmShell = releaseJobRunBodies(parsed, "publish-npm").join("\n");
+    const npmShell = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-npm").join("\n");
     expect(npmShell.length).toBeGreaterThan(0);
 
     expect(npmShell).toContain(BARE_TAG_REGEX_SOURCE);
@@ -493,8 +488,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     // 'v' left in the anchor) is still caught behaviourally. Driven as data,
     // not read off the YAML: the CI guards have no coverage today and only
     // run on a real tag push.
-    const { parsed } = readReleaseWorkflow();
-    const pypiShell = releaseJobRunBodies(parsed, "publish-pypi").join("\n");
+    const pypiShell = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-pypi").join("\n");
 
     const guardMatch = pypiShell.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
     expect(guardMatch).not.toBeNull();
@@ -511,8 +505,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   });
 
   test("the guard regex extracted from publish-npm accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
-    const { parsed } = readReleaseWorkflow();
-    const npmShell = releaseJobRunBodies(parsed, "publish-npm").join("\n");
+    const npmShell = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-npm").join("\n");
 
     const guardMatch = npmShell.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
     expect(guardMatch).not.toBeNull();
@@ -547,8 +540,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
   // execution tests below ("§S2 publish-npm derives...") for the behavioural
   // half of this contract.
   test("publish-npm SETS (derives) package.json's version from the tag; the verify-and-fail comparison is gone, with no dead #v strip", () => {
-    const { parsed } = readReleaseWorkflow();
-    const npmRunBodies = releaseJobRunBodies(parsed, "publish-npm");
+    const npmRunBodies = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-npm");
     const npmShell = npmRunBodies.join("\n");
 
     const runBody = extractNpmVersionRunBody(npmRunBodies);
@@ -669,8 +661,7 @@ function runNpmVersionStep(
 
 describe("§S2 publish-npm derives package.json's version from the tag (driven as data)", () => {
   function getNpmVersionRunBody(): string {
-    const { parsed } = readReleaseWorkflow();
-    return extractNpmVersionRunBody(releaseJobRunBodies(parsed, "publish-npm"));
+    return extractNpmVersionRunBody(releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-npm"));
   }
 
   test("the published version equals the tag (fresh package.json version)", () => {

@@ -198,8 +198,9 @@ suite, and CI runs all three on every event — push, pull request **and** the `
 
 None of the three carries an event-restricting `if`, and that is load-bearing: `needs:` only orders
 jobs within a single workflow run, so a test job scoped to push would simply not exist in the
-release run. Because they always exist, `publish-pypi` and `publish-npm` can and do `needs:` all
-three — so a failed suite **blocks a publish by construction**, not by discipline. There is no
+release run. Because they always exist, every publishing job (`create-release`, `publish-pypi`,
+`publish-testpypi` and `publish-npm`) carries one identical `needs:` list, `build` plus all three,
+so a failed suite **blocks a publish by construction**, not by discipline. There is no
 second, parallel guard; the dependency graph is the whole mechanism. `pack-server` runs on the same
 unconditional cadence, so an npm packaging break surfaces on push rather than at publish time.
 
