@@ -116,6 +116,10 @@ guard with its fixtures.
 - Turning the stream on multiplies gate events per run. Retention interacts with CR-CRU-073's live-gate
   rule, which exempts a gate carrying `version` from pruning: an in-flight gate must not become
   permanently retained by carrying a release stamp it will restate at the seal.
+- **`cmd_gate_run`'s cognitive complexity is 53** (measured 2026-09-10, up from 34 when CR-CRU-115
+  added the hold branch). The extraction belongs HERE, not there: every candidate helper boundary
+  falls inside the poll loop this CR rewrites, so splitting it under CR-CRU-115 would have churned
+  code this CR then re-shapes. Whoever implements §S2 owns the decomposition.
 
 ## Non-goals
 
