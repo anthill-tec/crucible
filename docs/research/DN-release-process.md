@@ -55,7 +55,7 @@ shape it will be cut in is now **bare `0.1.0`**.
 |---|---|---|
 | S1 | **PyPI + TestPyPI pending Trusted Publishers** | Publishing is OIDC — there are no API tokens in this repo by design. A PyPI *account* is not the same as a *pending Trusted Publisher*, which is registered per project + workflow + environment. `RELEASING.md` §"PyPI and TestPyPI" has the exact field values. |
 | S2 | **npm org `@anthill-tec` does not exist** | User-confirmed. Blocks `publish-npm`. |
-| S3 | **`NPM_TOKEN` not set** | ⚠ `publish-npm` *detects the absent token and skips with a notice* — a release would report success having published **PyPI only**, violating the lockstep rule *"do not publish one artifact alone."* **Resolution (user): fix the setup, not the symptom** — the org + token land in Setup step 1.4, so the skip is unreachable on a release. No CI guard is added. |
+| S3 | **`NPM_TOKEN` not set** | ⚠ `publish-npm` *detects the absent token and skips with a notice* — a release would report success having published **PyPI only**, violating the lockstep rule *"do not publish one artifact alone."* **Resolution (user): fix the setup, not the symptom** — the org + token land in Setup step 1.4, so the skip is unreachable on a release. No CI guard is added. *Retired 2026-08-19: the token path and its skip no longer exist (§4).* |
 | S4 | GitHub Environments (`pypi`, `testpypi`) + `RELEASE_PAT` | Status unverified. `RELEASING.md` documents both. |
 | S5 | Repo is **PRIVATE** | **Resolved: goes PUBLIC at release** (user, 2026-08-03) — CI does not run otherwise. `npm publish --provenance` then works for free. |
 
@@ -246,9 +246,10 @@ scripts/release.sh checkpoint        # dispatches release.yml → TestPyPI + npm
 Exercises the **identical CI path** — same workflow, same jobs, same OIDC — against TestPyPI and
 `npm publish --dry-run`. Repeat until clean.
 
-**Gate:** TestPyPI upload succeeds **and** the npm dry-run succeeds. 🚨 If `NPM_TOKEN` is still
-absent, `publish-npm` will *skip rather than fail* — treat a skip as a **failed gate**, not a pass
-(§4).
+**Gate:** TestPyPI upload succeeds **and** the npm dry-run succeeds. 🚨 Treat a skipped
+`publish-testpypi` as a **failed gate**, not a pass: it carries the same `needs:` list as every
+publishing job (Step 4), so a red suite skips it and uploads nothing. The `NPM_TOKEN` skip this
+gate once warned about is retired (§4).
 
 ### Step 7 — FINISH — ⚠ THE POINT OF NO RETURN
 
@@ -291,16 +292,18 @@ enumerating `--role`, `--source`, STATUS-CONTRACT 2.0.0 and the bundle version t
 `RELEASING.md` states the rule: *"do not publish one artifact alone. If a publish job fails after
 the other succeeded, fix forward with a new patch release."*
 
-But `publish-npm` currently **detects a missing `NPM_TOKEN` and skips with a notice**, explicitly
-saying *"PyPI is unaffected."* That is a sensible degradation for a repo that isn't ready to publish
-npm — and a **release-day trap**, because the run goes green having shipped half the pair. A
-`crucible-axi 0.1.0` on PyPI that pins `@anthill-tec/crucible-server@0.1.0` is **broken on install**
-if that npm version does not exist.
+**History (measured 2026-08-03; retired 2026-08-19).** `publish-npm` then **detected a missing
+`NPM_TOKEN` and skipped with a notice**, explicitly saying *"PyPI is unaffected"* — a sensible
+degradation for a repo not yet ready to publish npm, and a **release-day trap**, because the run
+went green having shipped half the pair: a `crucible-axi 0.1.0` on PyPI that pins
+`@anthill-tec/crucible-server@0.1.0` is **broken on install** if that npm version does not exist.
+The user's resolution was *"GET THE tags right in the first case"*: no CI guard; complete the npm
+org and token in Setup step 1.4 so the skip branch could never be reached on a release.
 
-**RESOLVED 2026-08-03 (user).** *"GET THE tags right in the first case."* No CI guard is added.
-The npm org and `NPM_TOKEN` are completed in **Phase 0 (steps 0.4)** so the skip branch can never
-be reached on a release. Guarding a broken setup is the wrong fix; having the setup right is the
-fix. The skip stays as-is for ordinary branch pushes, which is what it was written for.
+**Today** that skip branch does not exist. `publish-npm` publishes token-free via the OIDC trusted
+publisher (`RELEASING.md` §"`NPM_TOKEN`" records the flip; `release.yml`'s `publish-npm` job is the
+authority), so a skipped publish job now means a red suite — the Step 4 gate — never a missing
+secret.
 
 ## 5. Decisions — CLOSED
 
