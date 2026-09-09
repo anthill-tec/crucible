@@ -1546,7 +1546,14 @@ class NextBlockCitationsTest(unittest.TestCase):
         # between this commit and §S2's cutover, which moves the block's
         # citation to match. Split across two commits because the client file
         # is held by the cutover; the split is deliberate, not a defect.
-        ("LANDED_STATUSES", "src/store.ts", 4098, 4098,
+        # Re-pinned 2026-09-09 (CR-CRU-116 §S1), 4098 -> 4256. This drift IS
+        # ours and it is the ordinary case: §S1 extracted the ONE in-flight
+        # rule into `Store.queueStatusOf` and put `waveScopeRefusal` and
+        # `queueStatuses` ABOVE `deriveQueueStatus`, moving it down by exactly
+        # that much. The CR that shifted the file re-pins it — and this guard
+        # is the only thing in the repo that caught it, because it lives in
+        # the PYTHON suite that no bun-side run reaches.
+        ("LANDED_STATUSES", "src/store.ts", 4256, 4256,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-07 (CR-CRU-094 C4), 345-348 -> 349-352. This drift
         # IS ours, and it is the ordinary case the rule above describes:

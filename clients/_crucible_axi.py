@@ -1513,7 +1513,7 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:4098). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:4256). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
@@ -2915,7 +2915,7 @@ def server_failure_help(resp):
 
     `http_request` flattens an HTTP error to `"HTTP <code>: <body>"`, so the
     structured refusal — including the state-derived `help[]` `roadmapHints`
-    builds (`src/hints.ts:339`) — survives only as text. Lifting it is what
+    builds (`src/hints.ts:358`) — survives only as text. Lifting it is what
     keeps §S9's division honest: AC6's "a `help[]` entry
     `release-propose --label 9.9.9`" is the SERVER's own derivation, and a
     client re-deriving it would be a second decision-maker for the same rule.
