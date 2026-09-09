@@ -109,8 +109,9 @@ rather than inferring it from the CR that came back.
       for `--track 1`, `--track 2` and no track.
 - [ ] `--wave 6` with a queue holding waves 5, 6 and 7 answers only about wave 6; `--release 0.2.0`
       narrows to the waves declared in that release and excludes an entry whose `release` is unset.
-      This case is LIVE, not hypothetical: wave 6 currently holds two entries declared into 0.2.0 and
-      four whose `release` is unset (measured 2026-09-09).
+      This case is LIVE, not hypothetical: wave 6 currently holds THREE entries declared into 0.2.0
+      (`114`, `115`, `116`) and four whose `release` is unset (`015`, `018`, `022`, `098`) — measured
+      2026-09-09, after 116 shipped.
 - [ ] Neither flag is coerced: `--wave` and `--release` are matched verbatim against the entry's own
       `wave` / `release` strings — no integer parse, no label normalisation — mirroring
       `declareMembership`'s "nothing is COERCED on the way in". `--track` keeps its existing
@@ -124,11 +125,18 @@ rather than inferring it from the CR that came back.
 - [ ] `next --wave 5` against a wave whose every entry is landed or dead returns `decision: DRAINED`,
       `reason: wave-complete`, naming wave **5** — deterministic, and the only way to ask the
       question directly. Today the same call cannot be made at all.
-- [ ] `next` with no flags, against the live shape (wave 5 complete, wave 6 holding actionable CRs and
-      no landed entry) returns `NEXT` on wave 6's front CR **and states that wave 5 completed**. Today
-      it returns `NEXT` and says nothing — this is the reversal.
-- [ ] That announcement EXPIRES: with one wave-6 entry `COMPLETED`, the same call returns `NEXT`
-      without the completed-wave statement. Asserted both ways in one fixture pair.
+- [ ] `next` with no flags, on a FIXTURE where the predecessor wave is complete and the resolved wave
+      holds actionable CRs and no landed entry, returns `NEXT` on that wave's front CR **and states
+      that the predecessor completed**. Today it returns `NEXT` and says nothing — this is the
+      reversal.
+- [ ] That announcement EXPIRES: with one entry of the resolved wave `COMPLETED`, the same call
+      returns `NEXT` without the completed-wave statement. Asserted both ways in one fixture pair.
+
+  **Both states are FIXTURES, not the live board — and that is a correction, measured 2026-09-09
+  after CR-CRU-116 shipped.** This CR was written when wave 6 held only `PENDING` entries, so the
+  announcement state was demonstrable live. CR-CRU-116 then landed IN wave 6 (`CR-CRU-116 COMPLETED`,
+  seq 6001), which makes the live board the EXPIRED case. Naming the live board in an AC would have
+  pinned a state the project itself moves through.
 - [ ] `DRAINED`'s `help[]` names the move that opens the next wave and carries the next wave's number
       as data, not prose ("6"), and exit code is 0 — `DRAINED` is an answer, never an error.
 - [ ] A wave holding one `VOID` and one `SUPERSEDED` CR and no `PENDING` CR answers
@@ -151,6 +159,24 @@ rather than inferring it from the CR that came back.
 - [ ] Every `next` answer — `NEXT`, `HOLD`, `DRAINED` — carries the resolved `wave`; carries
       `release` when one was in scope; carries `track` only when the project declares more than one.
 - [ ] The one-line legacy summary (`_next_legacy_line`) states the wave for all three decisions.
+
+**Agreement with CR-CRU-116's shipped constraint**
+
+CR-CRU-116 now REFUSES a `plan-file` whose CR sits outside the permitted wave. A reader that offers
+work the server will refuse is worse than one that says nothing, so the two must agree — a
+requirement that could not exist when this spec was written.
+
+- [ ] The CR that `next` (no flags) names is one whose `plan-file` CR-CRU-116 ACCEPTS: asserted by
+      driving BOTH on one board — take the answer, file a plan for exactly that CR, and require a
+      non-refusal. A `next` answer that trips `already-active` or `out-of-order` is a failure of THIS
+      CR, not of the guard.
+- [ ] An entry whose `wave` is empty never resolves the lane's wave, mirroring the guard's own
+      `if (row.wave === "") continue;` (`src/store.ts:3377`). Asserted with a wave-less entry sitting
+      first in the published order.
+- [ ] `--wave <n>` naming a wave CR-CRU-116 would not permit still answers about THAT wave — the
+      reader validates the declared sequence and the server enforces the constraint; `next` does not
+      grow a refusal of its own. No new `HOLD` trigger kind is added: `HOLD_TRIGGER_KINDS` still has
+      exactly its four members, asserted by length and by value.
 
 **Integration**
 
