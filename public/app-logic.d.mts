@@ -223,7 +223,10 @@ export interface ReleasePackage {
  *  `null` for members declaring none: a real group, drawn without chrome.
  *  CR-CRU-116 §S4 — `active` is whether THIS WAVE holds the work in flight:
  *  true for the box whose membership holds an `IN_PROGRESS` member, false for
- *  every other box, including every box of a release with nothing running. */
+ *  every other box, including every box of a release with nothing running.
+ *  The `wave: null` LOOSE group is always `false`, whatever it holds: §S1
+ *  places a CR with no declared wave outside the constraint entirely, so that
+ *  box is not a wave and can hold no wave's work in flight. */
 export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;

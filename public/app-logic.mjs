@@ -1396,7 +1396,17 @@ export function focusedReleaseView(gate, releases, entries) {
     box.entries.push(entry);
     // §S4 — the wave's own activeness, decided on the pass that already walks
     // every member, so it can never be a scan out of step with membership.
-    if (entry?.status === "IN_PROGRESS") box.active = true;
+    //
+    // The `wave: null` LOOSE group is EXCLUDED, and the exclusion is §S1's,
+    // not this module's: "a CR with no declared wave is outside this
+    // constraint entirely — never blocked, never blocking, and never confers
+    // activeness on any wave". The store says the same thing in one line
+    // (`if (row.wave === "") continue;`, src/store.ts:3374), and a view that
+    // flipped the flag anyway would publish `active: true` on a container the
+    // server holds outside the rule — a release whose only runner declares no
+    // wave would report an active wave that does not exist. The two halves of
+    // one fact must not disagree.
+    if (wave !== null && entry?.status === "IN_PROGRESS") box.active = true;
   }
 
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the

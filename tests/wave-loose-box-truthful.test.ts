@@ -72,6 +72,7 @@ interface StripGateLike {
 
 interface WaveBoxLike {
   wave: string | null;
+  active: boolean;
   entries: QueueFixture[];
   rows: QueueFixture[];
   hiddenCount: number;
@@ -225,6 +226,57 @@ describe("CR-CRU-096 AC9/AC10/AC11a — the TRIMMED path is byte-for-byte what i
     const box = boxOf(withVoid, "1");
     expect(ids(box.rows)).not.toContain("CR-W-V");
     expect(box.entries.map((member) => member.cr)).toContain("CR-W-V");
+  });
+});
+
+describe("CR-CRU-116 §S1 — the loose box is not a wave, so it holds no wave's work in flight", () => {
+  // §S1 places a CR with no declared wave OUTSIDE the single-active-wave
+  // constraint entirely: "never blocked, never blocking, and never confers
+  // activeness on any wave". The store spends one line on it
+  // (`if (row.wave === "") continue;`, src/store.ts:3374).
+  //
+  // The view module is the OTHER half of that one fact, and the two halves
+  // must agree. §S4 made `active` a per-box fact by flipping it for any box
+  // holding an `IN_PROGRESS` member — which included the `wave: null` group,
+  // so a release whose only runner declared no wave published `active: true`
+  // on a container the server holds outside the rule. The board would then
+  // report an active wave that does not exist, and `FocusedReleaseWave.active`
+  // documents itself as "whether THIS WAVE holds the work in flight".
+  //
+  // Asserted on the published field rather than on the render because the
+  // loose group draws no header (AC18a) and therefore no marker: the DOM
+  // cannot tell a `false` box from a box that had nowhere to show `true`.
+  test("a RUNNING loose member confers no activeness on the loose box", () => {
+    // MIXED_LOOSE's CR-L-R1 is IN_PROGRESS and declares no wave — the exact
+    // shape that flipped the flag.
+    expect(MIXED_LOOSE.filter((member) => member.status === "IN_PROGRESS").map((m) => m.cr))
+      .toEqual(["CR-L-R1"]);
+    expect(boxOf(MIXED_LOOSE, null).active).toBe(false);
+  });
+
+  test("a numbered wave still takes the flag from its own runner, in the same view", () => {
+    // Both directions in ONE render, so the carve-out cannot be mistaken for
+    // activeness having stopped working: the wave box answers `true` from its
+    // runner while the loose box beside it answers `false` from its own.
+    const board = [
+      entry("CR-W-RUN", "1", "IN_PROGRESS", 10),
+      entry("CR-W-P1", "1", "PENDING", 20),
+      ...MIXED_LOOSE.map((member) => ({ ...member, seq: (member.seq ?? 0) + 1000 })),
+    ];
+    const view = Logic.focusedReleaseView(PROPOSED, [], board);
+    expect(view.waves.map((box) => box.wave)).toEqual(["1", null]);
+    expect(view.waves.filter((box) => box.active).map((box) => box.wave)).toEqual(["1"]);
+  });
+
+  test("a release whose ONLY runner declares no wave marks no box at all", () => {
+    // The state §S1 makes possible and §S4's marker must not misreport: work
+    // is in flight, and no WAVE holds it.
+    const board = [
+      entry("CR-W-P1", "1", "PENDING", 10),
+      ...MIXED_LOOSE.map((member) => ({ ...member, seq: (member.seq ?? 0) + 1000 })),
+    ];
+    const view = Logic.focusedReleaseView(PROPOSED, [], board);
+    expect(view.waves.some((box) => box.active)).toBe(false);
   });
 });
 
