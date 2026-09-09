@@ -429,8 +429,9 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
         const refusedOrder = await postPlan(ordered, SEVEN_NEXT);
 
         // (c) BOTH conditions at once — a cr inserted into an EARLIER wave
-        // after wave 6's work opened. Which code wins is deliberately not
-        // pinned here; that a THIRD one cannot appear is.
+        // after wave 6's work opened. §S1's precedence is asserted on this
+        // very fixture below: `already-active` wins, the order
+        // `transitionCycle` uses (src/store.ts:3238-3264).
         const both = await seed("cru116-census-both");
         await queue(both, [
           { cr: SIX_OPEN, wave: "6", dependsOn: [] },
@@ -444,6 +445,12 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
         ]);
         expect(entry(await queueEntries(both), FIVE_LATE).status).toBe("PENDING");
         const refusedBoth = await postPlan(both, SEVEN_NEXT);
+
+        // §S1 PRECEDENCE — both rules are tripped by this one write, and the
+        // wave scope answers the SAME one `transitionCycle` answers first.
+        // Without this line the two codes are interchangeable here and the
+        // spec's ordering rule has no instrument at all.
+        expect(refusedBoth.body.code).toBe("already-active");
 
         for (const refused of [refusedActive, refusedOrder, refusedBoth]) {
           expect(refused.status).toBe(400);
