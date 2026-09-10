@@ -299,6 +299,13 @@ def _load_module(path, name):
     return module
 
 
+# The shared module the client delegates to, loaded once. Used ONLY to state a
+# fixture premise in the cadence drive below — `axi_ladder_identity` is the
+# throttle's own definition of "a different ladder", so asserting the two
+# fixtures differ BY IT is stronger than asserting their text differs.
+_AXI = _load_module(AXI_MODULE_PATH, "axi_under_test_streams_its_ladder")
+
+
 def _run_main(module, argv):
     """Drive the REAL argparse dispatch of a client's `main()`. Only SystemExit
     is caught, so an argparse refusal arrives as a non-zero exit while any
@@ -749,6 +756,83 @@ class ALadderThatAdvancesIsPostedAgainTest(_GateRunStreamTestBase):
             "`test` running — not a re-post of the first: streaming a stale "
             "snapshot twice would satisfy a bare count while telling the board "
             "nothing new; got " + repr(drive.posts))
+
+
+class TwoLaddersInsideOneCadenceWindowPostOnceTest(_GateRunStreamTestBase):
+    """§S2's CADENCE, discharged NON-VACUOUSLY.
+
+    Every other drive in this file holds ONE ladder for its whole length, so
+    the LADDER throttle alone accounts for each of their POST counts: delete
+    the `(now - last_poll) >= _GATE_POLL_CADENCE_S` guard entirely and not one
+    of them goes red. This drive separates the two throttles. The run is
+    SHORTER than a single 2 s cadence window and its ladder ADVANCES inside
+    that window, so the ladder check has nothing left to withhold and the
+    cadence is the only thing that can: with it, the tool is asked once and one
+    gate reaches the board; without it, the loop wakes on its 0.4 s tick, sees
+    a ladder it has not posted, and posts a second time.
+
+    THE POLL COUNT IS ASSERTED FOR ITS OWN SAKE, because it pins the repair the
+    cadence needed. The poll clock used to be stamped only when a gate was
+    POSTED (`last_post`), so a run that posted nothing left it `None` and
+    `axi status` was spawned on every 0.4 s tick for the whole run — five
+    subprocesses a second against a live pipeline. Stamping it on every POLL is
+    what makes the window mean anything, and a drive shorter than one window
+    may therefore ask the tool exactly once.
+
+    Neither constant is read here: the criterion is the observable POST and
+    poll counts of a real drive, and reading `_GATE_POLL_CADENCE_S` back would
+    make this test agree with whatever the code happens to say."""
+
+    STATUS_SNAPSHOT = _LIVE_IN_FLIGHT_SNAPSHOT
+    RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
+    # 1.5 s against a 2 s cadence: the whole drive is ONE window, with half a
+    # second of margin so a slow machine cannot open a second one.
+    RUN_SECONDS = 1.5
+    # ...and the ladder moves 0.4 s in — the same `review` completes / `test`
+    # starts transition the sibling drives across five seconds, here well
+    # inside the single window.
+    ADVANCE_AFTER = 0.4
+
+    def fake_tool_body(self):
+        return _FAKE_ADVANCING_BODY.format(
+            early_snap=_LIVE_IN_FLIGHT_SNAPSHOT,
+            late_snap=_ADVANCED_IN_FLIGHT_SNAPSHOT,
+            advance_after=self.ADVANCE_AFTER,
+            run_snap=self.RUN_SNAPSHOT,
+            run_seconds=self.RUN_SECONDS,
+            exit_code=self.TOOL_EXIT)
+
+    def test_two_different_ladders_inside_one_cadence_window_post_one_gate(self):
+        early = _AXI._decode_axi_snapshot(_LIVE_IN_FLIGHT_SNAPSHOT)
+        late = _AXI._decode_axi_snapshot(_ADVANCED_IN_FLIGHT_SNAPSHOT)
+        self.assertNotEqual(
+            _AXI.axi_ladder_identity(early), _AXI.axi_ladder_identity(late),
+            "premise: the two snapshots this drive serves must be DIFFERENT "
+            "ladders by the THROTTLE'S OWN definition — otherwise the ladder "
+            "check would account for the single POST below and the cadence "
+            "would once again be pinned by nothing; got "
+            + repr(_AXI.axi_ladder_identity(early)))
+
+        drive = self.drive()
+        self.assert_the_loop_polled(drive)
+        self.assertEqual(
+            len(self.interim_posts(drive)), 1,
+            "the board gets ONE gate for this window even though the ladder "
+            "advanced inside it: the second ladder is real and different, so "
+            "nothing but the cadence can withhold it, and the next window "
+            "would have carried it had the run lasted that long. Two posts is "
+            "the cadence gone; zero is the stream withheld altogether; got "
+            + repr(len(self.interim_posts(drive))) + " interim post(s): "
+            + repr(drive.posts))
+        self.assertEqual(
+            drive.polls, 1,
+            "and a drive shorter than ONE cadence window asks the tool exactly "
+            "once: the loop wakes on its own short tick, but only the cadence "
+            "decides when a wake becomes a poll. More polls than this is the "
+            "per-tick spawning a poll clock stamped on POSTS rather than on "
+            "POLLS produced for every run that had nothing to post; got "
+            + repr(drive.polls) + " poll(s) across a "
+            + repr(self.RUN_SECONDS) + "s run, exit " + repr(drive.code))
 
 
 if __name__ == "__main__":
