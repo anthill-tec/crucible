@@ -203,8 +203,9 @@ class AStatusTheSnapshotNeverGaveIsNotGreenTest(unittest.TestCase):
             _AXI.map_axi_step_status(""), "passed",
             "an EMPTY status is the tool saying nothing about the step, and "
             "`status or \"passed\"` turns that silence into a green row on a "
-            "gate a human reads as evidence — the same green bias CR-CRU-115 "
-            "removed from `sealed_outcome` one level up")
+            "gate a human reads as evidence — the same green bias that was "
+            "already removed from `sealed_outcome` one level up (this "
+            "module's docstring names the cycle that removed it)")
 
     def test_a_missing_step_status_does_not_map_to_passed(self):
         self.assertNotEqual(
