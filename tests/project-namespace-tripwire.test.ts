@@ -1325,10 +1325,74 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // All four are prose on a `#` or docstring line, none in a string. `src/` and
 // `public/` are untouched by this commit and re-measure at 573 and 436. The
 // `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-10 by CR-CRU-117 — the CR's own close-out step, planned
+// rather than escalated, and TAKEN ONCE at the very end of the cycle: the
+// figure moved twice while the cycle ran (a mid-cycle VERIFY pass measured
+// 802/438, the FIX round 800/442), so a pin taken any earlier would have been
+// re-recorded twice for one CR. TWO trees move; `src/` does not move at all
+// and re-measures at the recorded 573 — §S1 is a frontend read and §S2 a
+// client one, and neither section touches the server.
+//
+// `public/` HEAD moves 436 -> 442, +6 — §S1's in-flight mark, at every place
+// the frontend reads a gate:
+//   `public/app.js`           225 -> 230  (+5)
+//   `public/app-logic.mjs`     86 ->  87  (+1)
+//   `public/app-logic.d.mts`   53 ->  53  (+0)
+// The five in `app.js` are one per reader — `gateOutcomeClass` (the mark
+// itself), `gateCardText` (why the `pushed` clause is dropped when a run is
+// still going), `GateCardRow` (the home compact one-liner), `gateBodyContent`
+// (the drill-in banner making the same claim in bigger type) and
+// `scopedGateEvents` (an in-flight gate is a snapshot, not a verdict). The one
+// in `app-logic.mjs` is `workflowLens`'s guard, and it is on BOTH sides of
+// that seam deliberately: the lens and the renderers must read the mark the
+// same way or the drill-in disagrees with the row that opened it.
+//
+// `clients/` HEAD moves 789 -> 800, +11 — and this is the first entry in this
+// note's history whose two halves move in OPPOSITE directions:
+//   `clients/_crucible_axi.py`     155 -> 168  (+13)
+//   `clients/bun-crucible.py`      144 -> 142   (-2)
+// The +13 is §S1/§S2's honest ladder, declared ONCE in the shared module the
+// five stack clients delegate to, which is why none of them moves:
+//   `GATE_STEP_STATUS_UNKNOWN`     +1   what a ladder says about a row the
+//                                       snapshot reported nothing for
+//   `GATE_POSTED_INTERIM`          +1   why `interim` is now the ORDINARY
+//                                       state of a long run
+//   `GATE_ALREADY_ON_BOARD`        +1   what the HUMAN channel says once a
+//                                       poll has already posted a ladder
+//   `map_axi_step_status`          +1   the three cases, middle one the point
+//   `gate_from_axi`                +1   `inFlight` lives INSIDE the gate
+//   `_RESOLVED_AXI_STEP_STATES`    +1   which step states are resolved
+//   `axi_snapshot_in_flight`       +2   the question, and CR-CRU-115 §S3's
+//                                       consequence cited by name
+//   `axi_ladder_identity`          +1   what makes two polls the SAME ladder
+//   `stream_axi_ladder`            +1   the poll loop itself
+//   `gate_run_result_fields`       +1   `outcome` as the SEALING verdict
+//   `unsealed_run_report`          +1   an exit that sealed nothing
+//   `cmd_gate_run`                 +1   labelled by the loop, never sealed here
+// The -2 is a DELETION and not a re-word: `bun-crucible.py` carried its own
+// green-biased gate builder that no caller reached, and removing it took that
+// block's two citations with it (`CR-CRU-013 §S1`'s outcome vocabulary and
+// `CR-CRU-008`'s narrator default). Provenance leaving with the code it
+// documented is the rule working, not a leak — which is exactly why the
+// equality pin and the `develop` FLOOR are two different numbers: the head is
+// re-recorded DOWN on that file while the floor stays at 601 and still holds.
+// All 19 added citations are prose on a `//`, `#` or docstring line and none
+// is in a string — AC3a's live-code checker ("no CR literal sits at a
+// live-code position in any client") passes over this same working tree in
+// this same run, so both halves are measured together.
+//
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show 142afbc:<path>` — the commit before the CR's first
+// production change, not `develop`, because the 573/436/789 being replaced is
+// CR-CRU-116's close-out figure — file by file; the +6 and the +11 decompose
+// exactly into the per-file deltas above and every other `src/`, `public/`
+// and `clients/` file re-measures at its pre-CR count. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors — a floor never
+// moves for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 573 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 436 },
-  clients: { exts: [".py"], develop: 601, head: 789 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 442 },
+  clients: { exts: [".py"], develop: 601, head: 800 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
