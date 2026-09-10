@@ -538,6 +538,21 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `pending` cycles should warn at all (that is still filing), and whether the warning should also fire
   on the `active`-cycle case (an extension mid-cycle is the most suspect of the three). Fleet surface is
   one line per client — `add_cr_depends_verb`-style registrar parity, per CR-CRU-075.
+- 🆕 **CR CANDIDATE (user-deferred 2026-09-10) — the citation guard's diagnostic exemption is
+  TypeScript-only.** `CR-CRU-109 §S3/AC10` ruled that *an `expect()` message is a diagnostic, not an
+  assertion*, and exempted it — but the checker recognises only TypeScript's `expect(actual, message)`
+  shape. Python's `unittest` puts its message in the THIRD POSITIONAL argument
+  (`assertNotEqual(a, b, msg)`), which `assertedLiterals` reads as asserted content. So the identical
+  sentence is legal in a `.ts` file and a violation in a `.py` file — measured at CR-CRU-117 cycle 412,
+  where `tests/client/test_a_step_status_nobody_gave_is_not_green.py` tripped the AC7 residue ceiling
+  for naming `CR-CRU-115` in a failure message explaining the bias under test. **User ruling: fix the
+  instance now (reword the message), defer the class.** The class fix teaches the checker the
+  `unittest` message convention for `assertEqual`/`assertNotEqual`/`assertTrue`/`assertIn` and friends
+  (note `assertTrue(x, msg)` is the SECOND argument, so the rule is per-method, not a fixed position) —
+  and it must NOT simply exempt every third argument, since `assertAlmostEqual(a, b, places)` and
+  `subTest` kwargs occupy the same slot. Pairs naturally with the existing **citation-guard
+  generalisation** candidate. Precedent for the self-test: the guard already proves its own exemptions
+  on a planted `SYNTHETIC_TRIPWIRE_FIXTURE` rather than on real files.
 
 - 🗑️ **2026-09-10 — USER RULING: the Lavish storyboard no longer tracks CRs, and the close-out
   storyboard-parity step is RETIRED.** `.lavish/crucible-v2-design.html`'s `section#execution` — the
