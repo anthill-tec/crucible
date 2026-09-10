@@ -493,6 +493,29 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Notes
 
+- ✅ **2026-09-10 — THREE USER RULINGS, taken on the `crucible-release-membership` review surface**
+  (artifact deleted afterwards, per the surface-not-a-record rule):
+  **D1 — the flowchart's design refresh waits until after 0.2.0 ships.** CR-CRU-117 rewrites the same
+  in-flight-gate story, so both frames get refreshed in one pass rather than twice. What WAS applied
+  now is the queued non-design work: 10 `overlapping-text` layout findings at 961px (cause: both CR
+  tables sit in `.scroll` boxes clipped to 190px/148px, so at compact widths the last rows fell
+  outside the clip — fixed by not clipping below 1000px, leaving the grammar untouched) and §10's
+  API-status rewrite, where `release-propose`, `cr-plan`, `cr-depends`, `wave-sequence`,
+  `cr-supersede`/`cr-void` and `next` were all still marked **`new`** while every one of them has
+  shipped.
+  **D2 — CR-CRU-022's burn-down scope source is per-CR DECLARATION WRITES**, not `queue_snapshots`.
+  Amended in that CR and in DN D4 fallout §2: each declaring write is a scope event with an author, so
+  a burn-down step is a fact somebody declared rather than a diff between two unsigned snapshots — and
+  strictly finer, because a snapshot pair cannot say WHICH change moved the line. Its AC now FAILS an
+  implementation that reintroduces snapshot-diffing.
+  **D3 — next action: gap-analyse CR-CRU-117 and dispatch.**
+- 🔌 **2026-09-10 — the flowchart session had NO POLLER since bootstrap**, so feedback queued there on
+  2026-09-09 sat undelivered for a day: the 10 layout findings and "update §10 to reflect the API
+  design changes". Same class of failure as the storyboard's "Remove this queue!", which was also
+  waiting in a completed job. **Orchestrator rule: every OPEN Lavish session needs its own live poller,
+  and a poll that returns feedback must be re-armed immediately** — an artifact nobody polls is a
+  review surface with the wire cut.
+
 - 🗑️ **2026-09-10 — USER RULING: the Lavish storyboard no longer tracks CRs, and the close-out
   storyboard-parity step is RETIRED.** `.lavish/crucible-v2-design.html`'s `section#execution` — the
   "CR queue & status" table, 71 KB carrying all 115 CR rows — predated the Crucible implementation and

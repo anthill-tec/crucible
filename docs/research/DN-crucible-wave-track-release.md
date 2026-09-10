@@ -339,11 +339,15 @@ Registering a CR is therefore three calls, and every failure mode the bulk door 
 unreachable through them. Deprecation lands as a WARNING first (CR-CRU-118); REMOVAL plus a
 file-driven sync that issues those per-CR calls is 0.3.0 work.
 
-**2. CR-CRU-022's burn-down scope source must be re-based.** Its §S3 and AC2 derive scope-change
-snapshots from `POST /queue` being called twice (`queue_snapshots` + a `scope-change` step). If the
-bulk route retires, that source retires with it. Per-CR declaration writes are the better source
-anyway — finer-grained, and each carries an author — but the re-base is a DESIGN change to a spec that
-is already written, so it is recorded here rather than discovered inside that CR's gap analysis.
+**2. CR-CRU-022's burn-down scope source is RE-BASED onto per-CR declaration writes** — user-ruled
+2026-09-10. Its §S3 and AC2 derived scope-change snapshots from `POST /queue` being called twice
+(`queue_snapshots` + a `scope-change` step); the bulk route's retirement takes that source with it.
+
+The ruled source is the DECLARATION itself: each `cr-plan` / `wave-sequence` / `cr-depends` /
+`cr-supersede` / `cr-void` write is a scope event with an author, so a burn-down step becomes a fact
+somebody declared rather than a diff between two snapshots nobody signed. It is also strictly finer:
+a snapshot pair cannot say WHICH of five changes moved the line, and a declaration always can.
+CR-CRU-022's spec is amended accordingly; the amendment is dated in that CR.
 
 **3. Historical membership is a DERIVATION, not a plan — and today no door accepts it.** Measured on
 this tree: `declareMembership` validates a declared label against `liveProposalLabels` alone and
