@@ -1900,6 +1900,17 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
  * accepted here (`src/hints.ts`'s cycle help names re-posting the queue as
  * the remedy, so this door is the documented escape hatch) and refused by
  * `cr-plan`/`wave-sequence`, pending a user ruling.
+ *
+ * CR-CRU-118 §S3 — and the door is DEPRECATED. It is transitional and will be
+ * REMOVED, so it says so itself: every answer it gives carries the
+ * `deprecated-route` `QueueWarning` (`DEPRECATED_ROUTE_NOTICE`) — on the
+ * SUCCESS path beside `defaulted-seq`/`inherited-release-less`, on its own
+ * refusals through the local `refuse` helper, and on the refusals shared
+ * helpers built, through `deprecateRefusal`. The notice names the three verbs
+ * that replace it: `cr-plan` (membership), `cr-depends` (dependencies) and
+ * `wave-sequence` (order). DEPRECATED IS NOT REMOVED — this route still
+ * writes and today's whole table still bootstraps through it — but nothing
+ * new should be built on it.
  */
 async function handleQueuePost(store: Store, key: string, req: Request): Promise<Response> {
   // CR-CRU-118 §S3 — EVERY answer this door gives says that the door is
