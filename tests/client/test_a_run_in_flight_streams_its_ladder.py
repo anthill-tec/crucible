@@ -186,9 +186,11 @@ _RESOLVED_SNAPSHOT = (
 )
 
 # THE SHORT LADDER, kept for ONE job: isolating the ladder-change throttle from
-# the guard. Three rows already clear today's `0 < nsteps < 9`, so a drive that
-# holds this ladder still posts on every cadence window TODAY — which makes the
-# repeat-POST count the only thing its test can be failing on.
+# the guard. Three rows already cleared the row-count guard `0 < nsteps < 9`
+# this suite was written against, so a drive holding this ladder posted on
+# EVERY cadence window before CR-CRU-117 landed — which left the repeat-POST
+# count as the only thing its test could have been failing on, and still leaves
+# the ladder throttle as the only thing it can fail on now.
 _SHORT_IN_FLIGHT_SNAPSHOT = (
     'run:\n'
     '  id: "01M2270SJ5PQW4KBBBV3XCPMM5"\n'
@@ -464,8 +466,8 @@ class ANineRowLadderStillRunningReachesTheBoardTest(_GateRunStreamTestBase):
     """§S2's reversal, driven whole. `axi status` returns the shape a live run
     really emits — nine rows, `review` running, six `pending`, no `outcome` —
     and `axi run` then returns its bounded hold, so this drive posts an interim
-    gate and seals nothing. Today it posts NOTHING: the row count alone closes
-    the guard."""
+    gate and seals nothing. Before CR-CRU-117 it posted NOTHING: the row count
+    alone closed the guard."""
 
     STATUS_SNAPSHOT = _LIVE_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
@@ -694,11 +696,14 @@ class ALadderHeldAcrossCadenceWindowsIsPostedOnceTest(_GateRunStreamTestBase):
 class AnUnchangedShortLadderIsNotRepostedEveryWindowTest(_GateRunStreamTestBase):
     """The ladder-change throttle, ISOLATED from the guard.
 
-    A three-row ladder already clears today's `0 < nsteps < 9`, so this drive
-    posts on EVERY cadence window on today's tree — which makes the repeat POSTs
-    the only thing this test can fail on. Read beside the nine-row twin above,
-    the pair separates the two defects: that one fails at zero posts (the guard
-    never fires), this one fails at three (nothing dedups)."""
+    A three-row ladder already cleared the row-count guard `0 < nsteps < 9`, so
+    this drive posted on EVERY cadence window on the tree this suite was
+    written against — which left the repeat POSTs as the only thing it could
+    fail on. Read beside the nine-row twin above, the pair separated the two
+    defects: that one failed at zero posts (the guard never fired), this one at
+    three (nothing dedupped). CR-CRU-117 repaired both, and the isolation is
+    why this drive still earns its place: it is the one test in the file whose
+    POST count no guard repair can explain."""
 
     STATUS_SNAPSHOT = _SHORT_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
