@@ -516,6 +516,29 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   and a poll that returns feedback must be re-armed immediately** — an artifact nobody polls is a
   review surface with the wire cut.
 
+- 🚧 **2026-09-10 — USER RULING: a plan's cycle SET is authorized as a whole; never add to it unasked.**
+  Violated during CR-CRU-117: plan 124 was filed and authorized with four cycles, and the orchestrator
+  then added **412** (close VERIFY findings) and **413** (re-record the citation heads) on its own
+  authority. 413 was skipped and folded into close-out, where it always belonged — re-recording a
+  guard's head figure is orchestrator bookkeeping, not a unit of dispatched RED→GREEN work. The rule:
+  if VERIFY returns CHANGES-NEEDED and the fixes need a cycle, **ASK first**, naming what the cycle
+  would carry. A CR's cycle count is a thing the user approved, not a thing the orchestrator grows.
+  Note the estimate/plan mismatch this exposed: the spec's "Estimated size" counts IMPLEMENTATION
+  cycles only, while a filed plan carries verify and fix too — CR-114 ran 4 cycles, CR-115 5, CR-116 6,
+  against three-cycle estimates. The estimate is not wrong so much as measuring a different thing.
+- 🆕 **CR CANDIDATE (user-raised 2026-09-10) — `cycle-add` should WARN when it grows an authorized plan.**
+  Derived directly from the ruling above: the practice is unsafe, so the tool should say so rather than
+  relying on orchestrator discipline. Today `cycle-add` appends silently — `cmd_cycle_add` POSTs
+  `{label, agentId}` and emits an envelope with `warnings: []`, so nothing distinguishes "this plan's
+  cycles were just filed" from "this plan was authorized and is now being extended mid-flight". The
+  shape to design: a fifth `QueueWarning`-style code (the four today are `out-of-order`,
+  `cross-wave-backwards`, `defaulted-seq`, `unsequenced-members`) on the cycles POST when the target
+  plan already has cycles in a terminal state (`done`/`skipped`) — i.e. the plan is demonstrably
+  in-flight rather than being filed. Open questions for the design note: whether an OPEN plan with only
+  `pending` cycles should warn at all (that is still filing), and whether the warning should also fire
+  on the `active`-cycle case (an extension mid-cycle is the most suspect of the three). Fleet surface is
+  one line per client — `add_cr_depends_verb`-style registrar parity, per CR-CRU-075.
+
 - 🗑️ **2026-09-10 — USER RULING: the Lavish storyboard no longer tracks CRs, and the close-out
   storyboard-parity step is RETIRED.** `.lavish/crucible-v2-design.html`'s `section#execution` — the
   "CR queue & status" table, 71 KB carrying all 115 CR rows — predated the Crucible implementation and
