@@ -258,7 +258,7 @@ class QueueFileDeprecationReachesEveryClientTest(unittest.TestCase):
         file pass while covering four stacks."""
         self.assertEqual(
             len(CLIENT_FILES), 5,
-            f"the fleet is FIVE clients (CR-CRU-075 §S2's census constant); "
+            f"the fleet is FIVE clients (the census constant); "
             f"got {sorted(CLIENT_FILES)!r}")
         self.assertEqual(
             sorted(self.drives), sorted(CLIENT_FILES),
