@@ -35,6 +35,15 @@ while that CR appeared on no roadmap surface.
    target in epoch seconds — the same unit as `releasedAt`, distinguished as "when it was aimed for"
    vs "when it shipped" — and `recordReleaseProposal(…, { label, targetAt? })` accepts its absence.
    The live `0.2.0` proposal carried none until this CR's own gap analysis set one.
+4. **The per-CR door is already shut, so the mandate is narrower than it first looked.**
+   `handleCrPlan` answers `400 RELEASE_REQUIRED` and `handleWaveSequence` requires `release` too;
+   client-side the shared registrar's `--release` help states the ask-don't-guess behaviour. Only the
+   BULK writer accepts absence — which is exactly where both incidents came from.
+5. **One flag surface per verb, fleet-wide, by construction.** `add_roadmap_verbs`,
+   `add_queue_file_verb`, `add_next_verb`, `add_cr_depends_verb` and `add_tier_verbs` each build their
+   subparsers ONCE in `clients/_crucible_axi.py`, injecting only `funcs` / `parents` / `add_args` per
+   client. So every surface change here is one line reaching five clients, and the fleet obligation is
+   a parity CENSUS (CR-CRU-075's pattern) rather than five edits.
 
 **Surfaces:** `declareMembership`, `handleQueuePost`, `handleCrPlan`, `defaultedSeqWarnings` and the
 `QueueWarning` code union in `src/v2.ts`; `recordReleaseProposal` in `src/store.ts`;
@@ -43,15 +52,47 @@ while that CR appeared on no roadmap surface.
 
 ## Scope
 
-### §S1 A live CR without a release is refused
+### §S1 The per-CR door is ALREADY closed — this CR keeps it closed and closes the others
 
-`cr-plan` and the per-CR declaration path refuse a CR whose release is absent, by field name, with
-the proposals route in `help[]` — the shape `declareMembership` already uses for a release nobody
-proposed. Refused BEFORE any write: nothing is stored, nothing half-declared.
+**Rescoped 2026-09-10 after measurement, and the correction is worth stating plainly: most of what
+this section originally demanded is already shipped.** `handleCrPlan` refuses an absent release
+server-side (`400`, `RELEASE_REQUIRED`), `handleWaveSequence` requires one too, and client-side the
+shared registrar declares `--release` as *"Undeclared → the client lists the live proposals and exits
+2"* — CR-CRU-091 §S6's ask-don't-guess rung. So a CR declared through the per-CR verbs has never been
+able to arrive membership-less.
+
+What this CR therefore does with §S1 is **assert that as a regression** rather than build it: both
+halves (the server refusal and the client's ask) must still hold afterwards, because §S3a is about to
+widen the set of acceptable labels and a widening is exactly how a requiredness rule gets lost.
+
+The mandate's actual teeth land where the hole measurably is:
+
+- the **bulk door** (§S2), the only writer that accepts a release-less entry;
+- a **board-level invariant** — no LIVE queue entry lacks a release — asserted as a census, so the
+  rule is checked against the whole board and not only at the moment of writing;
+- the **historical door** (§S3a), without which the invariant is unreachable for 62 landed rows.
 
 A CR born mid-release names the release already in flight (D4's second half). The rule is "name a
 release", never "name it before the branch was cut" — this project's own 0.2.0 grew a whole second
 wave on its release branch.
+
+### §S1a One flag surface, five clients — by construction, not by five edits
+
+Every verb this CR touches is registered ONCE in `clients/_crucible_axi.py` and reaches the fleet
+through three injected per-client pieces (`funcs`, `parents`, `add_args`):
+
+| verb | registrar | what changes here |
+|---|---|---|
+| `release-propose` | `add_roadmap_verbs` | `--target` becomes required — ONE line |
+| `cr-plan` | `add_roadmap_verbs` | unchanged (already requires `--release`) |
+| `wave-sequence` | `add_roadmap_verbs` | unchanged (already `required=True`) |
+| `queue-file` | `add_queue_file_verb` | gains the deprecation warning — ONE site |
+
+So the fleet-wide obligation is a PARITY GUARD, not five parallel edits: the ACs drive every client's
+real `--help` as a subprocess and assert the client count itself, which is CR-CRU-075's own census
+pattern. A change that forked one client's surface would fail those, and a change that reached only
+the shared module without the census would pass silently — which is the failure mode CR-CRU-075
+exists to prevent ("one verb was an envelope on one stack and argparse's `invalid choice` on four").
 
 ### §S2 The bulk route refuses what it would INVENT, and warns about what it inherits
 
@@ -109,12 +150,20 @@ release, `--target` for a missing date). No refusal is a bare 400.
 
 ## Acceptance criteria
 
-**§S1 — membership is mandatory**
+**§S1 — membership is mandatory (regression + the board invariant)**
 
-- [ ] `cr-plan` with no `--release` is refused; the store wrote nothing (asserted by re-reading the
-      queue, not by trusting the response).
+- [ ] `cr-plan` with no `--release` is still refused server-side; the store wrote nothing (asserted by
+      re-reading the queue, not by trusting the response). Already true — asserted so §S3a's widening
+      cannot lose it.
+- [ ] The client still ASKS rather than guesses when `--release` is omitted: it lists the live
+      proposals and exits 2 (CR-CRU-091 §S6), unchanged in all five clients.
 - [ ] The refusal's `help[]` names the `release-proposals` route, matching the existing
       no-such-proposal refusal's shape.
+- [ ] **Board invariant, asserted as a census**: no LIVE (non-landed, non-dead) queue entry lacks a
+      release. Measured against the live board, so the rule is checked over the whole set rather than
+      only at the write. Today this census FAILS with exactly five names
+      (`015`, `018`, `022`, `098`, `082`) — it is the migration's own progress meter, and it passes
+      when the data step completes.
 - [ ] A CR declared into the release currently IN FLIGHT succeeds — the mid-release-birth case, driven
       on a board whose proposal is live and whose branch is cut. This is the mode 0.2.0 itself ran in.
 - [ ] A CR declared into a label with no live proposal and no recorded release is still refused with
@@ -173,7 +222,11 @@ release, `--target` for a missing date). No refusal is a bare 400.
 **Integration**
 
 - [ ] All five clients expose `--target` on `release-propose` and refuse its absence, asserted per
-      client.
+      client, with the client count itself asserted (5) — the parity guard, since the change itself is
+      one line in `add_roadmap_verbs`.
+- [ ] The four verbs' flag surfaces are IDENTICAL across the five clients, driven from each client's
+      real `--help`: `release-propose`, `cr-plan`, `wave-sequence`, `queue-file`. A fork in any one of
+      them fails, which is what makes the single-registrar design a fact rather than an intention.
 - [ ] The five LIVE release-less entries are unaffected by this CR's code: their migration into
       `0.3.0` is a DATA step, scheduled after 0.2.0 ships (user-ruled 2026-09-10), and no AC here
       performs it.
