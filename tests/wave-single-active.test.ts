@@ -2,7 +2,7 @@
 // alternative. C1 RED.
 //
 // The rule this CR lifts already ships one container down. `transitionCycle`
-// (src/store.ts:3269-3295) refuses a second active sibling with
+// (src/store.ts:3280-3306) refuses a second active sibling with
 // `code: "already-active"` and refuses activating ahead of a seq-earlier
 // pending sibling with `code: "out-of-order"`; `CycleTransitionError`
 // (src/store.ts:589-596) already names both codes. A WAVE is the same kind of
@@ -26,6 +26,18 @@
 // dated because it describes the tree at RED; its ranges now name the SAME
 // constructs at their HEAD positions, where the guard this CR added lives.
 //
+// ── RE-PINNED AGAIN 2026-09-10 (CR-CRU-118 §S4b) ──────────────────────────
+//
+// CR-CRU-118 §S4a inserted 11 comment lines above `recordReleaseProposal`
+// (src/store.ts:2218-2228), shifting every range BELOW it in that file by +11.
+// Re-read at HEAD; the constructs themselves did not move:
+//   `transitionCycle`'s refusals   store.ts:3269-3295 -> :3280-3306
+//   `deriveQueueStatus`            store.ts:4256-4262 -> :4267-4273
+//   `Store.queueStatusOf`          store.ts:4270-4292 -> :4281-4303
+// The `src/v2.ts` ranges above sit outside that hunk and are left as they
+// stand. Same rule as the block above: the CR that moves a file re-pins what
+// cites it, in the files it authored as well as in the one a guard watches.
+//
 // ── WHAT WAS BROKEN AT RED (read 2026-09-09, before §S2's guard) ──────────
 //
 // `handlePlanFile` (src/v2.ts:1375-1460), which `handlePlansRoute` dispatches
@@ -37,9 +49,9 @@
 // ── THE ONE SOURCE OF ACTIVENESS ──────────────────────────────────────────
 //
 // A wave is ACTIVE while it holds a CR the queue derives as `IN_PROGRESS`.
-// That derivation is `deriveQueueStatus` (src/store.ts:4256-4262), which
-// since §S1 delegates to `Store.queueStatusOf` (:4270-4292) where the rule is
-// spelled once: `plans.find((plan) => plan.status === "open")` (:4279).
+// That derivation is `deriveQueueStatus` (src/store.ts:4267-4273), which
+// since §S1 delegates to `Store.queueStatusOf` (:4281-4303) where the rule is
+// spelled once: `plans.find((plan) => plan.status === "open")` (:4290).
 // `plan.status` has THREE values — `open`, `closed`, `aborted` — and only
 // `open` confers activeness, which is why the aborted-plan fixture below is a
 // fixture and not a footnote: the live board carries 6 aborted plans across
@@ -453,8 +465,9 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
         // (c) BOTH conditions at once — a cr inserted into an EARLIER wave
         // after wave 6's work opened. §S1's precedence is asserted on this
         // very fixture below: `already-active` wins, the order
-        // `transitionCycle` uses (src/store.ts:3269-3295; re-pinned
-        // 2026-09-09 from :3238-3264, the header records why).
+        // `transitionCycle` uses (src/store.ts:3280-3306; re-pinned
+        // 2026-09-10 from :3269-3295 and 2026-09-09 from :3238-3264, the
+        // header records why).
         const both = await seed("cru116-census-both");
         await queue(both, [
           { cr: SIX_OPEN, wave: "6", dependsOn: [] },

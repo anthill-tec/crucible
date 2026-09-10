@@ -434,8 +434,12 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
               {"agentId": cls.AGENT, "projectKey": cls.key, "status": "online",
                "role": "ORCHESTRATOR",
                "identity": {"displayName": cls.AGENT, "source": "manual"}})
+        # CR-CRU-118 §S4 -- the route refuses a proposal naming no target
+        # date. Nothing here is about the date; the fixture needs the release
+        # to be a plannable target at all, so it declares one plausible date.
         _http(cls.base, f"/api/v2/projects/{cls.key}/release-proposals",
-              {"label": cls.RELEASE, "agentId": cls.AGENT})
+              {"label": cls.RELEASE, "agentId": cls.AGENT,
+               "targetAt": 1788220800})  # 2026-09-01T00:00:00Z
 
         # One cr per spelling, each in its OWN wave, so every declaration is a
         # complete `wave-sequence` call over the whole wave (§S4) rather than a
@@ -1581,7 +1585,10 @@ class NextBlockCitationsTest(unittest.TestCase):
         # that much. The CR that shifted the file re-pins it — and this guard
         # is the only thing in the repo that caught it, because it lives in
         # the PYTHON suite that no bun-side run reaches.
-        ("LANDED_STATUSES", "src/store.ts", 4256, 4256,
+        # Re-pinned 2026-09-10 (CR-CRU-118 §S4b), 4256 -> 4267: §S4a added 11
+        # comment lines above `deriveQueueStatus` in src/store.ts. The drift
+        # IS ours, and this guard is the only thing in the repo that saw it.
+        ("LANDED_STATUSES", "src/store.ts", 4267, 4267,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-07 (CR-CRU-094 C4), 345-348 -> 349-352. This drift
         # IS ours, and it is the ordinary case the rule above describes:

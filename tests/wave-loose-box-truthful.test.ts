@@ -233,9 +233,11 @@ describe("CR-CRU-116 §S1 — the loose box is not a wave, so it holds no wave's
   // §S1 places a CR with no declared wave OUTSIDE the single-active-wave
   // constraint entirely: "never blocked, never blocking, and never confers
   // activeness on any wave". The store spends one line on it
-  // (`if (row.wave === "") continue;`, src/store.ts:3377 — re-pinned
-  // 2026-09-09 from :3374, which is the `let active` declaration three lines
-  // above it; the range was miscited on arrival, not staled by a later edit).
+  // (`if (row.wave === "") continue;`, src/store.ts:3388 — re-pinned
+  // 2026-09-10 from :3377 (CR-CRU-118 §S4a added 11 comment lines above it),
+  // and before that 2026-09-09 from :3374, which is the `let active`
+  // declaration three lines above it; that range was miscited on arrival,
+  // not staled by a later edit).
   //
   // The view module is the OTHER half of that one fact, and the two halves
   // must agree. §S4 made `active` a per-box fact by flipping it for any box

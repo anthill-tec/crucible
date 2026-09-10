@@ -1646,7 +1646,9 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:4256). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:4267 — re-pinned 2026-09-10 from :4256,
+# shifted by the 11 comment lines CR-CRU-118 §S4a added above it). Anything
+# else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
