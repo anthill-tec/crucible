@@ -461,8 +461,17 @@ describe("CR-CRU-118 — every live CR names a release", () => {
     return key;
   }
 
+  /** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+   *  Nothing in this suite is ABOUT that date; the fixtures need a live
+   *  proposal to exist, so one plausible target serves all of them. */
+  const FIXTURE_TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+
   async function propose(key: string, label: string): Promise<void> {
-    const res = await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label });
+    const res = await post(`/api/v2/projects/${key}/release-proposals`, {
+      agentId: ORCH,
+      label,
+      targetAt: FIXTURE_TARGET_AT,
+    });
     expect(res.status).toBe(200);
   }
 

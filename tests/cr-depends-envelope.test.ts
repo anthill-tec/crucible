@@ -69,6 +69,10 @@ interface AnyBody {
 const ORCH = "orchestrator-1";
 const RELEASE = "9.9.0";
 const WAVE = "5";
+/** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+ *  Nothing in this suite is ABOUT that date; the fixtures need a live
+ *  proposal to exist, so one plausible target serves all of them. */
+const TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
 
 // Three rows planned in this order, so A sits BEFORE B and B before C in the
 // wave. A dependency that points FORWARD (A on B) is the out-of-order finding;
@@ -142,7 +146,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
 
   /** The three rows through the approved API, in A, B, C order, no deps. */
   async function planThreeRows(key: string): Promise<void> {
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     for (const cr of [A, B, C]) {
@@ -263,7 +267,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
     // release they target: the door no longer INVENTS membership for a cr the
     // board has never held. The ring still arrives through the migration door,
     // which is the only property this fixture needs from it.
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     const seeded = await post(`/api/v2/projects/${key}/queue`, {
@@ -286,7 +290,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
   test("AC7 — a `dependsOn` riding a cr-plan body is IGNORED: not stored on a new row, not written over a declared set on a re-plan", async () => {
     boot();
     const key = await seed("ac7-plan");
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     for (const cr of [B, C]) expect((await plan(key, cr)).status).toBe(200);
@@ -352,7 +356,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
       // thing left unknown is the dependency TARGET, and the door still
       // accepts and flags it.
       expect(
-        (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE }))
+        (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT }))
           .status,
       ).toBe(200);
       const posted = await post(`/api/v2/projects/${key}/queue`, {

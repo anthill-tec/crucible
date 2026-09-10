@@ -50,7 +50,17 @@ Step(
   async ({ request, world }, label: string) => {
     const res = await request.post(
       `/api/v2/projects/${world.projectKey as string}/release-proposals`,
-      { data: { label, agentId: world.orchestratorId as string } },
+      {
+        data: {
+          label,
+          agentId: world.orchestratorId as string,
+          // CR-CRU-118 §S4 — the route refuses a proposal that names no
+          // target date. No scenario here draws or asserts the date, so the
+          // step declares one plausible target rather than putting it in the
+          // Gherkin phrase.
+          targetAt: 1_788_220_800, // 2026-09-01T00:00:00Z
+        },
+      },
     );
     expect(res.ok()).toBe(true);
   },

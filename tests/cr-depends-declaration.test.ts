@@ -77,6 +77,10 @@ const RED_AGENT = "red-1";
 const ROLELESS = "legacy-pre-cr044";
 const RELEASE = "9.9.0";
 const WAVE = "5";
+/** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+ *  Nothing in this suite is ABOUT that date; the fixtures need a live
+ *  proposal to exist, so one plausible target serves all of them. */
+const TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
 
 // The three rows every cycle case is built from, plus the two ids the board
 // never holds: a dependency TARGET that was never planned (AC5, accepted and
@@ -194,7 +198,7 @@ describe("CR-CRU-106 §S1/§S2/§S2a — cr-depends: the verb, its gates and its
    *  `cr-plan`, never the migration door, so nothing here depends on the bulk
    *  post to exist. Every row starts with NO dependencies. */
   async function planThreeRows(key: string): Promise<void> {
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     for (const cr of [A, B, C]) {
@@ -357,7 +361,7 @@ describe("CR-CRU-106 §S1/§S2/§S2a — cr-depends: the verb, its gates and its
     // is what every live row owes, stated rather than left for the route to
     // fabricate.
     expect(
-      (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE }))
+      (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT }))
         .status,
     ).toBe(200);
     const seeded = await post(`/api/v2/projects/${key}/queue`, {

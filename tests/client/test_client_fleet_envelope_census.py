@@ -400,6 +400,7 @@ _DEST_DEFAULTS = {
     "type": "custom",
     "label": "detector-cycle",
     "cycle_id": "1",
+    "target": "2026-09-01",
 }
 
 

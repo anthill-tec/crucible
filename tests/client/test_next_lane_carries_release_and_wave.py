@@ -791,8 +791,12 @@ class NextsAnswerIsAPlanTheWriteSideAcceptsTest(unittest.TestCase):
                "status": "online", "role": "ORCHESTRATOR",
                "identity": {"displayName": AGREEMENT_AGENT,
                             "source": "manual"}})
+        # CR-CRU-118 §S4 -- the route refuses a proposal naming no target
+        # date. Nothing here is about the date; the fixture needs the release
+        # to be a plannable target at all, so it declares one plausible date.
         _http(cls.base, f"/api/v2/projects/{cls.key}/release-proposals",
-              {"label": AGREEMENT_RELEASE, "agentId": AGREEMENT_AGENT})
+              {"label": AGREEMENT_RELEASE, "agentId": AGREEMENT_AGENT,
+               "targetAt": 1788220800})  # 2026-09-01T00:00:00Z
         for cr, wave in ((FRONT_CR, FRONT_WAVE), (LATER_CR, LATER_WAVE)):
             cls._declare(cr, wave)
 

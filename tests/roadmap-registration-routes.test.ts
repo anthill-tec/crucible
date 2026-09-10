@@ -247,17 +247,21 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     return `/api/v2/projects/${key}/queue/${cr}/${verb}`;
   }
 
+  /** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at,
+   *  so the route refuses one that names none. The fixtures below whose
+   *  subject is something else (the role gate, the queue routes, ordering,
+   *  idempotence of a DIFFERENT verb) need a live proposal to exist, not a
+   *  particular date, so the helper supplies one plausible date for all of
+   *  them; the tests whose subject IS the target pass their own. */
+  const FIXTURE_TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+
   async function propose(
     key: string,
     label: string,
-    targetAt?: number,
+    targetAt: number = FIXTURE_TARGET_AT,
     agentId: string = ORCH,
   ): Promise<{ status: number; body: AnyBody }> {
-    return post(proposalsPath(key), {
-      agentId,
-      label,
-      ...(targetAt !== undefined ? { targetAt } : {}),
-    });
+    return post(proposalsPath(key), { agentId, label, targetAt });
   }
 
   async function plan(
@@ -348,12 +352,15 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
 
     test(
       "GET …/release-proposals lists LIVE proposals ASCENDING by version, with the " +
-        "waves already planned against each",
+        "waves already planned against each and the target each one declared",
       async () => {
         boot();
         const key = await seed("s8-proposal-read");
-        await propose(key, "0.3.0");
-        await propose(key, "0.2.1");
+        // Two DIFFERENT targets, deliberately in the opposite order to the
+        // version sort, so a listing that paired a row with a neighbour's
+        // date could not pass.
+        await propose(key, "0.3.0", 1_790_812_800); // 2026-10-01
+        await propose(key, "0.2.1", 1_788_220_800); // 2026-09-01
         await plan(key, "CR-CRU-070", "0.2.1", 4, "an earlier wave");
         await plan(key, "CR-CRU-071", "0.2.1", 5, "a later wave");
 
@@ -361,8 +368,14 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         expect(read.body.proposals!.map((p) => p.label)).toEqual(["0.2.1", "0.3.0"]);
         expect(read.body.proposals![0]!.waves).toEqual(["4", "5"]);
         expect(read.body.proposals![1]!.waves).toEqual([]);
-        // A proposal carrying no target declares none — never a fabricated 0.
-        expect("targetAt" in read.body.proposals![1]!).toBe(false);
+        // CR-CRU-118 §S4 — every proposal declares the date it aims at, and
+        // the listing carries each row's OWN target, re-sorted with it. (This
+        // replaces the assertion that a target-LESS proposal reported no
+        // `targetAt`: §S4 makes such a proposal unwritable, so that subject
+        // no longer exists on this route.)
+        expect(read.body.proposals!.map((p) => p.targetAt)).toEqual([
+          1_788_220_800, 1_790_812_800,
+        ]);
       },
     );
 
@@ -530,7 +543,14 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     /** The five §S8 write routes, each with a valid body minus the caller. */
     function routes(key: string): Array<{ name: string; path: string; body: Record<string, unknown> }> {
       return [
-        { name: "release-propose", path: proposalsPath(key), body: { label: "0.9.9" } },
+        {
+          name: "release-propose",
+          path: proposalsPath(key),
+          // CR-CRU-118 §S4 — "a VALID body" now includes the target, so the
+          // ORCHESTRATOR row of this table reaches 200 and the three refusal
+          // rows still refuse on the ROLE, which is checked first.
+          body: { label: "0.9.9", targetAt: FIXTURE_TARGET_AT },
+        },
         {
           name: "cr-plan",
           path: planPath(key),

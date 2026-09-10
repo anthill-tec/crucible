@@ -401,6 +401,10 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     const res = await postJson(`/api/v2/projects/${key}/release-proposals`, {
       agentId: ORCH,
       label,
+      // CR-CRU-118 §S4 — a proposal declares the date it is aiming at. Same
+      // reading as the release above: a fixture gains a PRECONDITION, and
+      // no assertion here was ever about the date.
+      targetAt: 1_788_220_800, // 2026-09-01T00:00:00Z
     });
     expect(res.status).toBe(200);
   }

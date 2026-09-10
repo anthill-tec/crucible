@@ -609,6 +609,11 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
 
   const ORCH = "orchestrator-1";
 
+  /** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+   *  Nothing in this suite is ABOUT that date; the fixtures need a live
+   *  proposal to exist, so one plausible target serves all of them. */
+  const TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+
   /**
    * CR-CRU-118 §S2 — rows the board ALREADY HOLDS, written through the store
    * exactly as this suite's AC8 no-re-derivation fixture already does
@@ -742,6 +747,7 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
         agentId: ORCH,
         label: "0.2.0",
+        targetAt: TARGET_AT,
       });
       expect(proposed.status).toBe(200);
 
@@ -784,6 +790,7 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
         agentId: ORCH,
         label: "0.2.0",
+        targetAt: TARGET_AT,
       });
       expect(proposed.status).toBe(200);
 
@@ -920,6 +927,7 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
           const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
             agentId: ORCH,
             label,
+            targetAt: TARGET_AT,
           });
           expect(proposed.status).toBe(200);
         }
