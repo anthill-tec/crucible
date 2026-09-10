@@ -5,7 +5,9 @@ Feature: CR-CRU-014 §S3 — the execution roadmap tab: a queued CR's row and it
   COMPLETED_UNTRACKED when no plan is evidence of work (none filed, or all
   abandoned) but some release's crs names the CR, and PENDING otherwise. This
   scenario drives the REAL server through the same routes a
-  wrapped client uses (POST …/queue, POST …/plans, PATCH …/plans/<id>) and
+  wrapped client uses (POST …/release-proposals and POST …/queue/plan to put
+  the CR on the board — CR-CRU-118 §S2 retired the release-less bulk post this
+  scenario used to register through — then POST …/plans, PATCH …/plans/<id>) and
   asserts the SPA's own DOM row flip in place over SSE — never a fixture
   stubbed into the page.
 
