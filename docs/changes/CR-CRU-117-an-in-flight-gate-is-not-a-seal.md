@@ -148,3 +148,86 @@ guard with its fixtures.
 - No retroactive relabelling of gates already on any board.
 - Not the outcome-vocabulary question: whether `passed-with-skips` becomes a first-class outcome is a
   separate candidate CR, recorded in the queue notes.
+
+## Gap analysis — 2026-09-10 (orchestrator-run, findings RECORDED not applied)
+
+Verdict **SPEC_UPDATE_NEEDED**. Nine findings; **no acceptance criterion below has been changed**,
+because two of them are design decisions this spec already defers to the design note and both were
+still awaiting the user's ruling when the run ended. Recorded verbatim so the next run resumes from
+measurement rather than re-deriving it. Baseline was NOT completed: `tsc --noEmit` exit 0, the bun
+suite was aborted mid-run by an emergency shutdown, so **no pass/fail count exists for this CR yet
+and the branch must not be cut until one is measured.**
+
+| # | Dim | Finding | Fix | Blocking |
+|---|---|---|---|---|
+| 1 | 7+3 | Streaming at the unchanged 2s cadence ⇒ ~1350 gate events per 45-min run; Non-goals forbid touching the cadence | ruling | yes |
+| 2 | 3 | A SECOND reader treats a gate as a verdict; no AC names it | SPEC_UPDATE | yes |
+| 3 | 2 | §S1's AC2 is vacuously satisfiable today — it passes with no code change | SPEC_UPDATE | yes |
+| 4 | 2 | §S3's nine-row AC is already satisfied by an existing fixture | SPEC_UPDATE | yes |
+| 5 | 4 | CR-CRU-017's run lifecycle already models "still going" — reinvention unevaluated | ruling | no |
+| 6 | 2 | §S1's three candidate shapes are presented as equal-cost; they are not | SPEC_UPDATE | no |
+| 7 | 3 | CR-CRU-115's green bias survives one function above the one it fixed | SPEC_UPDATE | no |
+| 8 | 5 | The DN's false-green gate is rendering on the live board right now | ruling | no |
+| 9 | 2 | Six stale `path:line` citations in the DN's D3 | docs | no |
+
+**DRIFT-1 — the volume this CR never computes.** `_GATE_POLL_CADENCE_S = 2.0`, the spec's own
+evidence is a 45-minute pipeline, and Non-goals say "No change to the poll cadence": 45×60/2 =
+**~1350 interim POSTs per run**, each a nine-step ladder, against **1842 events total** on the board
+(measured 2026-09-10). Every one also becomes a `GateCardRow` in the timeline feed. Recommendation
+put to the user, unanswered: **post on ladder CHANGE, not on cadence** — the ladder transitions at
+most nine times, so ≤9 posts carry the same information and the cadence Non-goal survives verbatim
+(the 2s poll is untouched; only the POST predicate changes).
+
+**DRIFT-2 — the reader no AC names.** §S1's prose says "every reader that treats a gate as a verdict
+— starting with `workflowLens`'s wave gating", and only that one reaches an AC. The second is
+`boundaryGate` in `public/app.js`: it reduces the scoped gates to **max timestamp with no outcome
+filter**, and `WorkflowPrimary` mounts that event's outcome banner and step ladder as the Workflow
+tab's primary zone. An interim gate is by construction the newest, so streaming puts a mid-run
+ladder on that surface. Fix: name BOTH readers in ACs (the multi-implementation rule — make the
+reader count itself the assertion).
+
+**DRIFT-3 — AC2 passes today, unchanged.** `context.wave` is set ONLY from `$WORKFLOW_WAVE` by
+`fleet_context`, and `resolveIngestAttach` stamps **`cycleId` only** — the server never adds a wave.
+`$WORKFLOW_WAVE` occurs nowhere outside tests, is unset in the orchestrator's own shell, and the
+live board's single gate carries no wave. So "an in-flight gate's label is absent from
+`gatedWaveLabels`" is true for the WRONG reason. Fix: the fixture must carry `context.wave`, plus
+the anti-vacuity twin — the same gate WITHOUT the in-flight mark must appear in the gated set, so
+the exclusion is attributable to the mark.
+
+**DRIFT-4 — the nine-row fixture already exists.** All four per-client axi suites drive
+`steps[1,3,6,8,9]`; the nine-row one is `_INTERIM_SNAPSHOT_FINAL`, `status: completed` — a SEALING
+snapshot. Fix: the AC must demand nine rows driven as NON-TERMINAL (`status: running`, no `outcome`,
+≥1 `pending`). Note also `_FINAL_SNAPSHOT` is `steps[1]`: the fixture fiction runs both ways.
+
+**DRIFT-5/6 — the shape decision, costed.** `recordGateEvent(gate: unknown)` stores the gate object
+VERBATIM and `handleGates` validates only `intent`, `outcome` and steps-is-an-array. So: a field
+inside `gate` costs **no server change** and touches 2 readers; a top-level field beside `version`
+costs a v2.ts carry plus a store field; a new `outcome` member costs both `GATE_OUTCOMES` sets,
+every enumerating reader and five clients' fixtures. Separately, CR-CRU-017's run lifecycle already
+means "unsettled" (`visibleOpenRuns` → `RunningCard`), but `resolveRunClose` closes on ANY ingest
+carrying a `runId`, so a stream would need carry-without-close on a seam three routes share.
+Recommendation: the in-gate field, with the lifecycle evaluation RECORDED — the DN's own rule is
+that a second mechanism for an already-assigned job is a defect, so declining it needs a reason on
+paper.
+
+**DRIFT-7 — the same green bias, one function up.** `map_axi_step_status` ends
+`.get(status, status or "passed")`: an unknown or empty step status becomes **`passed`**. CR-CRU-115
+killed this exact bias in `sealed_outcome`, immediately below it. §S2 covers `pending` and says
+nothing about unrecognised or absent.
+
+**DRIFT-8 — a live artifact with no owner.** `evt-1788925414091-197` is the false green D3 cites:
+`outcome: passed`, `steps: []`, no `version`, no `context.wave`. With 105 plans and **0 open**,
+`boundaryGate` returns it, so the Workflow tab renders it as the release boundary gate. This CR's
+Non-goals correctly refuse retroactive relabelling, which leaves it ownerless — a data action, not
+code. Awaiting the user's ruling: retire the event, or leave it and let §S1's work make it harmless.
+
+**DRIFT-9 + inverse blast radius.** D3 cites `_crucible_axi.py:4801`, `:1315`, `:1306-1310`,
+`:4811-4819`, `:4647` and `src/store.ts:2013-2016`; after CR-CRU-115 the real loci are
+`cmd_gate_run`'s guard, `map_axi_step_status`, `sealed_outcome`, `post_gate` and `LIVE_GATE` — six
+stale citations, to be re-recorded as SYMBOLS. And this CR's own edits to `clients/`, `public/` and
+possibly `src/` will move the `PROSE_CITATIONS` heads (clients 789, public 436, src 573), so the
+tripwire suite plus the python line-number guard need ONE re-record planned as a close-out step,
+not per-cycle escalations.
+
+**Size:** the spec estimates two cycles; with the second reader, the mapper bias and the fixture
+rework this reads as **three**.
