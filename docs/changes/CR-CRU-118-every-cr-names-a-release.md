@@ -102,10 +102,23 @@ exists to prevent ("one verb was an envelope on one stack and argparse's `invali
 ### §S2 The bulk route refuses what it would INVENT, and warns about what it inherits
 
 The bulk queue POST is the bootstrap: it re-posts the whole table, including rows whose release is
-legitimately still unassigned until a migration runs. So it splits by what the write actually does:
+legitimately still unassigned until a migration runs. So it splits by what the write actually does,
+in three ways rather than two:
 
 - an entry the route **inserts** with no release is **refused** — that is a new CR arriving
   membership-less, exactly the `CR-CRU-117` case;
+- **UNLESS a recorded release's own `crs` set already names it**, in which case it is accepted and
+  warned about like any inherited row. Added 2026-09-10 by user ruling, on a measurement taken at
+  cycle 415: without this rung, posting the real 115-row table to an EMPTY board answers
+  `400 … entry at index 0 (CR-CRU-001)` and writes nothing, because on an empty board every entry is
+  an insert — including the 62 landed 0.1.x rows, which cannot name a release since none was being
+  tracked when they shipped. §S2's own "a bootstrap of today's file must still succeed" was therefore
+  true only of a POPULATED board, and a wiped-board restore — a thing that has actually happened here,
+  on 2026-08-29 — was refused 67 times, one row per attempt.
+  The rung is deliberately the SAME derivation §S3a defines (a recorded release already claims the
+  CR), not a second mechanism and not an emptiness test: what makes these rows acceptable is that
+  settled history names them, which is a property of the row rather than of the board's size. It
+  cannot admit a genuinely new CR, because a shipped release cannot claim one.
 - an entry that **already exists** with no release keeps `replaceQueue`'s carry-forward and raises a
   **warning naming those crs** — a migration list that shrinks to zero, not a wall.
 
@@ -188,8 +201,8 @@ release, `--target` for a missing date). No refusal is a bare 400.
 
 **§S2 — the bulk route**
 
-- [ ] A bulk post containing a CR the board does NOT hold, with no release, is refused by CR id and
-      index; `listQueue` is unchanged afterwards.
+- [ ] A bulk post containing a CR the board does NOT hold, with no release, AND which no recorded
+      release's `crs` names, is refused by CR id and index; `listQueue` is unchanged afterwards.
 - [ ] A bulk post whose release-less entries all ALREADY exist writes, and returns a warning whose
       `crs[]` names exactly those entries — asserted against the live shape: **five** today
       (`015`, `018`, `022`, `098`, `082`). Five here and FOUR in §S1's census is deliberate, not a
@@ -200,6 +213,22 @@ release, `--target` for a missing date). No refusal is a bare 400.
       unchanged by length and by value.
 - [ ] The 62 landed 0.1.0-era rows produce the warning, never a refusal, and are not rewritten — a
       bootstrap of today's file must still succeed.
+- [ ] **A wiped-board restore succeeds.** Posting the project's real table to an EMPTY board writes
+      every row and refuses none: each of the 62 landed rows is admitted by the derivation rung (a
+      recorded release's `crs` names it) rather than by any test of the board's size. Asserted as the
+      restore path, because a wiped board has actually happened here (2026-08-29) and before this rung
+      the same post answered `400 … index 0 (CR-CRU-001)` with nothing written.
+- [ ] The rung admits history and nothing else: a CR that NO recorded release names is still refused
+      on an empty board, so "the board is empty" is never itself a licence. Asserted on the same
+      empty board as the criterion above, which is what makes the pair meaningful.
+- [ ] The derivation is the SAME check §S3a defines, not a parallel one — asserted by driving both
+      doors against a release record whose `crs` is then narrowed, and requiring both to change their
+      answer together. Two independent copies of this rule would drift, and the drift would be silent.
+- [ ] **Refusal precedence is pinned**: the membership check runs before `replaceQueue`, so it now
+      precedes the wave-overflow refusal that throws from inside the writer, and a post that is both
+      membership-less and overflowing answers the membership refusal. Both write nothing, so the
+      ordering is benign — it is asserted because nothing asserted it before and it was discovered by
+      an implementer rather than stated by this spec.
 
 **§S3 — the deprecation notice**
 
