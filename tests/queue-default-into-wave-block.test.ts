@@ -678,6 +678,37 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
     return post(`/api/v2/projects/${key}/queue`, { agentId: ORCH, entries });
   }
 
+  /**
+   * CR-CRU-118 §S2 — the rows the board ALREADY HOLDS, written through the
+   * store. The bulk route now refuses to INSERT a cr that names no release,
+   * and every fixture in this suite posts release-less rows to measure SEQ —
+   * the wave block, the overflow arithmetic, carry-forward. Holding them says
+   * what they are (history the board carries) and leaves every seq this suite
+   * asserts untouched: `replaceQueue` is the same writer the route delegates
+   * to, so a held row's position is the one the route would have assigned.
+   */
+  function hold(key: string, entries: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      entries.map((entry) => ({
+        cr: String(entry.cr),
+        wave: String(entry.wave),
+        dependsOn: Array.isArray(entry.dependsOn) ? entry.dependsOn.map(String) : [],
+        ...(typeof entry.seq === "number" ? { seq: entry.seq } : {}),
+      })),
+    );
+  }
+
+  /** The bootstrap as it now runs: the table is HELD, then re-posted through
+   *  the route — which is the only shape a release-less table reaches it in. */
+  async function rebulk(
+    key: string,
+    entries: Array<Record<string, unknown>>,
+  ): Promise<{ status: number; body: AnyBody }> {
+    hold(key, entries);
+    return bulk(key, entries);
+  }
+
   async function seqs(key: string): Promise<Map<string, number>> {
     const res = await get(`/api/v2/projects/${key}/queue`);
     expect(res.status).toBe(200);
@@ -736,7 +767,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const key = await seed("s2-interaction-guard");
       const rows = liveBoardRows();
 
-      const imported = await bulk(key, table(rows));
+      const imported = await rebulk(key, table(rows));
 
       expect(imported.status).toBe(200);
       expect(imported.body.ok).toBe(true);
@@ -754,7 +785,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const key = await seed("ac12-multi-wave");
       const rows = multiWaveBoard();
 
-      const imported = await bulk(key, table(rows));
+      const imported = await rebulk(key, table(rows));
 
       expect(imported.status).toBe(200);
       expect(imported.body.ok).toBe(true);
@@ -779,7 +810,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const rows = liveBoardRows();
       expect(rows).toHaveLength(94);
 
-      const imported = await bulk(key, table(rows));
+      const imported = await rebulk(key, table(rows));
 
       expect(imported.status).toBe(200);
       expect(imported.body.ok).toBe(true);
@@ -805,7 +836,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
 
       // A pre-§S3 board: wave 6 holds positional values (declared here to
       // stand in for what an earlier import wrote), wave 5 is then authored.
-      const bootstrapped = await bulk(key, [
+      const bootstrapped = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },
         { cr: "CR-W6-A", wave: 6, dependsOn: [], seq: 62 },
@@ -847,9 +878,21 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       boot();
       const key = await seed("ac12b-legacy-beside-block");
 
+      // CR-CRU-118 §S2 — the board is HELD, `CR-NEW` included: the route no
+      // longer INSERTS a release-less cr, so the row whose seq this fixture
+      // measures arrives by MOVING WAVE instead. A row whose wave changed holds
+      // no valid position in the new one and is re-slotted into its block
+      // (`replaceQueue`'s AC12g rule) — the same defaulting, reached the only
+      // way a release-less row can now reach it.
+      hold(key, [
+        { cr: "CR-W6-A", wave: 6, dependsOn: [], seq: 62 },
+        { cr: "CR-W6-B", wave: 6, dependsOn: [], seq: 64 },
+        { cr: "CR-NEW", wave: 7, dependsOn: [] },
+      ]);
       const bootstrapped = await bulk(key, [
         { cr: "CR-W6-A", wave: 6, dependsOn: [], seq: 62 },
         { cr: "CR-W6-B", wave: 6, dependsOn: [], seq: 64 },
+        { cr: "CR-NEW", wave: 7, dependsOn: [] },
       ]);
       expect(bootstrapped.status).toBe(200);
 
@@ -883,6 +926,19 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const key = await seed("ac12c-overflow");
       const rows = wave5Rows;
 
+      // CR-CRU-118 §S2 — every row is HELD first, the thousandth in wave 6, so
+      // the post MOVES it into the full wave 5 rather than inserting it. Held
+      // is the only shape a release-less row now reaches this route in, and the
+      // arithmetic under test is untouched: a re-slotted row takes the next
+      // free slot in its new wave, which here is the one outside the block.
+      // The container stays release-LESS (`-/5`), which an invented membership
+      // would have quietly changed.
+      hold(key, [
+        ...rows(WAVE_SEQ_STRIDE - 1),
+        { cr: `CR-W5-${String(WAVE_SEQ_STRIDE).padStart(4, "0")}`, wave: 6, dependsOn: [] },
+      ]);
+      const held = (await get(`/api/v2/projects/${key}/queue`)).body.entries!;
+
       // The thousandth member would take wave 6's base: refused BY NAME, as
       // wave-sequence refuses it (src/v2.ts:2245-2248), in ONE wording that
       // states the seq that would leave the block (AC12h) and ONE help[] (AC12i).
@@ -897,9 +953,12 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       );
       expect(refused.body.error).toBe(overflowMessage("5", waveSeqBase("5") + WAVE_SEQ_STRIDE));
       expect(refused.body.help).toEqual(overflowHelp("-/5", waveSeqBase("5") + WAVE_SEQ_STRIDE));
+      // NOTHING WRITTEN — asserted against the board the refusal met, byte for
+      // byte, which is the same claim the empty-board version made before the
+      // rows had to be held.
       const untouched = await get(`/api/v2/projects/${key}/queue`);
       expect(untouched.status).toBe(200);
-      expect(untouched.body.entries).toEqual([]);
+      expect(JSON.stringify(untouched.body.entries)).toBe(JSON.stringify(held));
 
       // One fewer fills the block exactly: the last row sits at base + 999,
       // still strictly inside (5000, 6000).
@@ -923,6 +982,15 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       boot();
       const key = await seed("ac12h-early-trip");
 
+      // CR-CRU-118 §S2 — held first, `CR-NEW` in wave 6, so the post MOVES it
+      // into wave 5 and it is re-slotted there: the seq-less row whose default
+      // trips the arithmetic, reached without inserting a release-less cr.
+      hold(key, [
+        { cr: "CR-NEAR-END", wave: 5, dependsOn: [], seq: 5999 },
+        { cr: "CR-NEW", wave: 6, dependsOn: [] },
+      ]);
+      const held = (await get(`/api/v2/projects/${key}/queue`)).body.entries!;
+
       const refused = await bulk(key, [
         { cr: "CR-NEAR-END", wave: 5, dependsOn: [], seq: 5999 },
         { cr: "CR-NEW", wave: 5, dependsOn: [] },
@@ -934,7 +1002,9 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       expect(refused.body.error).not.toContain("would hold");
       expect(refused.body.error).not.toContain("2 crs");
       expect(refused.body.help).toEqual(overflowHelp("-/5", 6000));
-      expect((await get(`/api/v2/projects/${key}/queue`)).body.entries).toEqual([]);
+      expect(JSON.stringify((await get(`/api/v2/projects/${key}/queue`)).body.entries)).toBe(
+        JSON.stringify(held),
+      );
 
       const accepted = await bulk(key, [
         { cr: "CR-NEAR-END", wave: 5, dependsOn: [], seq: 5998 },
@@ -955,7 +1025,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
 
       // Wave 5 is full (999 in-block rows); CR-MOVER sits in wave 6, planned
       // into 0.2.0 so that its container is the one wave-sequence names.
-      const filled = await bulk(key, [...wave5Rows(WAVE_SEQ_STRIDE - 1), { cr: "CR-MOVER", wave: 6, dependsOn: [] }]);
+      const filled = await rebulk(key, [...wave5Rows(WAVE_SEQ_STRIDE - 1), { cr: "CR-MOVER", wave: 6, dependsOn: [] }]);
       expect(filled.status).toBe(200);
       expect((await plan(key, "CR-MOVER", "0.2.0", 6, "about to move")).status).toBe(200);
       const before = await seqs(key);
@@ -995,7 +1065,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const key = await seed("ac12i-wave-sequence-pin");
       await propose(key, "0.2.0");
       const rows = wave5Rows(WAVE_SEQ_STRIDE - 1);
-      expect((await bulk(key, rows)).status).toBe(200);
+      expect((await rebulk(key, rows)).status).toBe(200);
       const crs = rows.map((row) => row.cr as string);
       // 999 cr-plans; each keeps its wave (and so its held seq), so order is
       // immaterial and they go out together.
@@ -1029,7 +1099,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const key = await seed("ac14-idempotent");
       const rows = liveBoardRows();
 
-      const first = await bulk(key, table(rows));
+      const first = await rebulk(key, table(rows));
       const second = await bulk(key, table(rows));
 
       expect(first.status).toBe(200);
@@ -1053,7 +1123,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       await propose(key, "0.1.0");
       await propose(key, "0.2.0");
 
-      const imported = await bulk(key, [
+      const imported = await rebulk(key, [
         { cr: "CR-OLD", wave: 4, dependsOn: [] },
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },

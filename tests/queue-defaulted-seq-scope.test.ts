@@ -520,6 +520,42 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
     return post(`/api/v2/projects/${key}/queue`, { agentId: ORCH, entries });
   }
 
+  /**
+   * CR-CRU-118 §S2 — the rows the board ALREADY HOLDS. The bulk route refuses
+   * to INSERT a cr that names no release, and this suite's release-less rows
+   * are the pre-§S3 board it measures the SEQ SCOPE against — history, not new
+   * work. `replaceQueue` is the writer the route itself delegates to, so a
+   * held row's position is the one the route would have given it.
+   */
+  function hold(key: string, entries: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      entries.map((entry) => ({
+        cr: String(entry.cr),
+        wave: String(entry.wave),
+        dependsOn: Array.isArray(entry.dependsOn) ? entry.dependsOn.map(String) : [],
+        ...(typeof entry.seq === "number" ? { seq: entry.seq } : {}),
+      })),
+    );
+  }
+
+  /** Held, then re-posted: the only shape a release-less table now reaches the
+   *  route in, and the shape the live board's own bootstrap has. */
+  async function rebulk(
+    key: string,
+    entries: Array<Record<string, unknown>>,
+  ): Promise<{ status: number; body: AnyBody }> {
+    hold(key, entries);
+    return bulk(key, entries);
+  }
+
+  /** The seq axis's silence, which is what every `warnings` assertion in this
+   *  suite is about: CR-CRU-118 §S2's inherited-membership list rides the same
+   *  envelope and is a different finding. */
+  function defaultedSeqWarnings(body: AnyBody): unknown[] {
+    return (body.warnings ?? []).filter((warning) => warning.code === "defaulted-seq");
+  }
+
   async function seqs(key: string): Promise<Map<string, number>> {
     const res = await get(`/api/v2/projects/${key}/queue`);
     expect(res.status).toBe(200);
@@ -537,13 +573,13 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
 
       // The bulk bootstrap: no release; wave 5 defaults into its block
       // (CR-CRU-095 §S3), CR-C holds a legacy positional seq.
-      const seeded = await bulk(key, [
+      const seeded = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },
         { cr: "CR-C", wave: 6, dependsOn: [], seq: 2 },
       ]);
       expect(seeded.status).toBe(200);
-      expect(seeded.body.warnings).toEqual([]);
+      expect(defaultedSeqWarnings(seeded.body)).toEqual([]);
 
       expect((await plan(key, "CR-A", "0.2.0", 5, "a")).status).toBe(200);
       expect((await plan(key, "CR-B", "0.2.0", 5, "b")).status).toBe(200);
@@ -583,9 +619,9 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       ];
       expect(table).toHaveLength(94);
 
-      const bootstrapped = await bulk(key, table);
+      const bootstrapped = await rebulk(key, table);
       expect(bootstrapped.status).toBe(200);
-      expect(bootstrapped.body.warnings).toEqual([]);
+      expect(defaultedSeqWarnings(bootstrapped.body)).toEqual([]);
 
       for (const cr of board.authored) {
         expect((await plan(key, cr, "0.2.0", 5, `title ${cr}`)).status).toBe(200);
@@ -619,7 +655,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       boot();
       const key = await seed("ac10-both-authored");
       await propose(key, "0.2.0");
-      const seeded = await bulk(key, [
+      const seeded = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },
         { cr: "CR-C", wave: 6, dependsOn: [] },
@@ -698,12 +734,17 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
     async () => {
       boot();
       const key = await seed("ac11-bulk");
-      const seeded = await bulk(key, [
+      // CR-CRU-118 §S2 — `CR-NEW` is HELD in another wave, because the route no
+      // longer inserts a release-less cr. Moving it into wave 5 re-slots it
+      // (`replaceQueue`'s AC12g rule), so the row is still DEFAULTED beside the
+      // authored pair — which is the mixture this AC is about.
+      const seeded = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
         { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
+        { cr: "CR-NEW", wave: 6, dependsOn: [] },
       ]);
       expect(seeded.status).toBe(200);
-      expect(seeded.body.warnings).toEqual([]);
+      expect(defaultedSeqWarnings(seeded.body)).toEqual([]);
 
       const added = await bulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
@@ -727,7 +768,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       boot();
       const key = await seed("ac11-cr-plan");
       await propose(key, "0.2.0");
-      const seeded = await bulk(key, [
+      const seeded = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
         { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
       ]);
@@ -757,9 +798,14 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       // A pre-§S3 board: wave 5 holds legacy positional values (declared here
       // to stand in for what an earlier import wrote), then planned into
       // 0.2.0 — cr-plan keeps a held seq, so the wave stays on that scale.
-      const seeded = await bulk(key, [
+      // CR-CRU-118 §S2 — the release-less row is HELD in wave 6 rather than
+      // inserted, and the re-post MOVES it into wave 5: still release-less,
+      // still defaulted into wave 5's block, which is the pair of facts this
+      // AC measures.
+      const seeded = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
         { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
+        { cr: "CR-NEW", wave: 6, dependsOn: [] },
       ]);
       expect(seeded.status).toBe(200);
       expect((await plan(key, "CR-A", "0.2.0", 5, "a")).status).toBe(200);
@@ -804,7 +850,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
         wave: 5,
         dependsOn: [],
       }));
-      expect((await bulk(key, rows)).status).toBe(200);
+      expect((await rebulk(key, rows)).status).toBe(200);
 
       const refused = await plan(key, "CR-W5-1000", "0.2.0", 5, "the thousandth member");
 
@@ -836,7 +882,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       boot();
       const key = await seed("ac11a-retitle");
       await propose(key, "0.2.0");
-      const seeded = await bulk(key, [
+      const seeded = await rebulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },
         { cr: "CR-C", wave: 6, dependsOn: [], seq: 2 },

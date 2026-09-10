@@ -218,6 +218,25 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     return post(queuePath(key), agentId === undefined ? { entries } : { agentId, entries });
   }
 
+  /**
+   * CR-CRU-118 §S2 — a row the board ALREADY HOLDS. The bulk route refuses to
+   * INSERT a cr that names no release, so the release-less rows this suite
+   * uses as the board a refusal must leave untouched are HELD rather than
+   * posted. They are given no release they do not have: what they stand for is
+   * exactly a row the mandate has not reached yet.
+   */
+  function hold(key: string, rows: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      rows.map((row) => ({
+        cr: String(row.cr),
+        ...(row.title !== undefined ? { title: String(row.title) } : {}),
+        wave: String(row.wave),
+        dependsOn: Array.isArray(row.dependsOn) ? row.dependsOn.map(String) : [],
+      })),
+    );
+  }
+
   async function entries(key: string): Promise<QueueEntryWire[]> {
     const res = await get(queuePath(key));
     expect(res.status).toBe(200);
@@ -241,9 +260,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         // The queue a refusal must leave EXACTLY as it stands: this route is a
         // FULL REPLACE, so a refusal that ran the write is visible here as a
         // lost row (CR-CRU-099 AC4a's technique).
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
 
         const res = await bulk(key, [
           { cr: "CR-104-HELD", wave: "5", dependsOn: [] },
@@ -337,6 +354,14 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
       async () => {
         boot();
         const key = await seed("cru104-ac13-open");
+        // CR-CRU-118 §S2 — the rows are HELD, then re-posted anonymously: the
+        // gate this AC is about keys on the DECLARATION, and the membership
+        // rule that now refuses an unheld release-less cr refuses it for every
+        // caller alike, so holding them keeps the two rules apart.
+        hold(key, [
+          { cr: "CR-104-QF1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-104-QF2", title: "another row", wave: "6", dependsOn: ["CR-104-QF1"] },
+        ]);
         const res = await bulk(
           key,
           [
@@ -539,9 +564,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     {
       name: "AC1/AC3 — a release nobody proposed: REFUSED by both, nothing written",
       board: async (key) => {
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
       },
       declaration: { cr: "CR-104-NEW", release: "0.9.0", wave: "5", title: "into thin air" },
       expected: {
@@ -564,9 +587,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         "wrong with the declaration is its type",
       board: async (key) => {
         await propose(key, "2");
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
       },
       declaration: { cr: "CR-104-NEW", release: 2, wave: "5", title: "a coerced label" },
       expected: {
@@ -586,9 +607,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         "hold: `cr-plan` refuses the empty string by type, and the migration door used to carry it " +
         "as far as the live-proposal gate and answer 404 `release  has no live proposal`",
       board: async (key) => {
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
       },
       declaration: { cr: "CR-104-NEW", release: "", wave: "5", title: "no label at all" },
       expected: {

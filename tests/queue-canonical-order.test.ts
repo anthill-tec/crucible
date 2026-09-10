@@ -609,6 +609,30 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
 
   const ORCH = "orchestrator-1";
 
+  /**
+   * CR-CRU-118 §S2 — rows the board ALREADY HOLDS, written through the store
+   * exactly as this suite's AC8 no-re-derivation fixture already does
+   * ("declarations ride the store directly … this test is about the READ, not
+   * the verb"). The bulk route now refuses to INSERT a cr naming no release,
+   * and every fixture here seeds release-less rows to measure something else
+   * entirely — ordering, a comparator, a cross-wave verdict. Seeding says what
+   * those rows are: history the board already carries. None is given a release
+   * it does not have.
+   */
+  function seedRows(key: string, rows: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      rows.map((row) => ({
+        cr: String(row.cr),
+        ...(row.title !== undefined ? { title: String(row.title) } : {}),
+        wave: String(row.wave),
+        dependsOn: Array.isArray(row.dependsOn) ? row.dependsOn.map(String) : [],
+        ...(typeof row.seq === "number" ? { seq: row.seq } : {}),
+        ...(typeof row.release === "string" ? { release: row.release } : {}),
+      })),
+    );
+  }
+
   /** A project and the one caller the roadmap verbs' role gate accepts. */
   async function seed(name: string): Promise<string> {
     const created = await post("/api/v2/projects", { name });
@@ -633,12 +657,17 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
 
       // Both rows are undeclared — one container axis left, the wave number —
       // so a seq-only read inverts them.
+      // CR-CRU-118 §S2 — held first, then re-posted: the POST's own reply is
+      // half of what this AC measures, so the route still runs; what it no
+      // longer does is INSERT a release-less cr.
+      const rows = [
+        { cr: "CR-WIRE-W6", wave: 6, dependsOn: [], seq: 62 },
+        { cr: "CR-WIRE-W5", wave: 5, dependsOn: [], seq: 5001 },
+      ];
+      seedRows(key, rows);
       const posted = await post(`/api/v2/projects/${key}/queue`, {
         agentId: ORCH,
-        entries: [
-          { cr: "CR-WIRE-W6", wave: 6, dependsOn: [], seq: 62 },
-          { cr: "CR-WIRE-W5", wave: 5, dependsOn: [], seq: 5001 },
-        ],
+        entries: rows,
       });
       expect(posted.status).toBe(200);
       // The write's own reply is a READER too (src/v2.ts:1870).
@@ -702,16 +731,14 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       // on 2026-09-02 (the real edges were CR-014 -> CR-011 and CR-068 ->
       // CR-066). The rule is id-independent, so the rows are synthetic
       // (CR-CRU-097 §S5/AC4); the measurement stays in this comment.
-      const seeded = await post(`/api/v2/projects/${key}/queue`, {
-        agentId: ORCH,
-        entries: [
-          { cr: "CR-SHIPPED-W4-A", wave: 4, dependsOn: [], seq: 12 },
-          { cr: "CR-SHIPPED-W4-B", wave: 4, dependsOn: [], seq: 60 },
-          { cr: "CR-DEPENDANT-A", wave: 5, dependsOn: ["CR-SHIPPED-W4-A"], seq: 5001 },
-          { cr: "CR-DEPENDANT-B", wave: 5, dependsOn: ["CR-SHIPPED-W4-B"], seq: 5003 },
-        ],
-      });
-      expect(seeded.status).toBe(200);
+      // CR-CRU-118 §S2 — the board as history left it (see `seedRows`): these
+      // four are the PRECONDITION, and the verb under test is `cr-plan` below.
+      seedRows(key, [
+        { cr: "CR-SHIPPED-W4-A", wave: 4, dependsOn: [], seq: 12 },
+        { cr: "CR-SHIPPED-W4-B", wave: 4, dependsOn: [], seq: 60 },
+        { cr: "CR-DEPENDANT-A", wave: 5, dependsOn: ["CR-SHIPPED-W4-A"], seq: 5001 },
+        { cr: "CR-DEPENDANT-B", wave: 5, dependsOn: ["CR-SHIPPED-W4-B"], seq: 5003 },
+      ]);
       const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
         agentId: ORCH,
         label: "0.2.0",
@@ -749,14 +776,11 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       boot();
       const key = await seed("ac1c-deferred-backwards");
 
-      const seeded = await post(`/api/v2/projects/${key}/queue`, {
-        agentId: ORCH,
-        entries: [
-          { cr: "CR-DEFERRED-W6", wave: 6, dependsOn: [], seq: 62 },
-          { cr: "CR-DECLARED-W5", wave: 5, dependsOn: ["CR-DEFERRED-W6"], seq: 5023 },
-        ],
-      });
-      expect(seeded.status).toBe(200);
+      // CR-CRU-118 §S2 — the precondition rows are held, not inserted.
+      seedRows(key, [
+        { cr: "CR-DEFERRED-W6", wave: 6, dependsOn: [], seq: 62 },
+        { cr: "CR-DECLARED-W5", wave: 5, dependsOn: ["CR-DEFERRED-W6"], seq: 5023 },
+      ]);
       const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
         agentId: ORCH,
         label: "0.2.0",
@@ -882,8 +906,9 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
               { cr: DEPENDANT, wave: probe.dependant.wave, dependsOn: [DEPENDENCY] },
               { cr: DEPENDENCY, wave: probe.dependency.wave, dependsOn: [] },
             ];
-        const seeded = await post(`/api/v2/projects/${key}/queue`, { agentId: ORCH, entries: rows });
-        expect(seeded.status).toBe(200);
+        // CR-CRU-118 §S2 — held, not inserted: the probe's subject is the
+        // COMPARATOR, and these rows are the position it compares from.
+        seedRows(key, rows);
 
         // The labels this probe must propose: both, unless they are one.
         const labels =

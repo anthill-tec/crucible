@@ -2053,6 +2053,45 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       ...(lifecycle !== undefined ? { lifecycle } : {}),
     });
   }
+  // CR-CRU-118 §S2 — the membership split, and it runs on the WHOLE batch
+  // before a single row is written: this route is a full replace, so a
+  // refusal raised half way through a write would leave a board nobody
+  // authored. What the write would INVENT is refused; what it INHERITS is
+  // warned about.
+  //
+  // The board AS HELD, read once — the same snapshot `replaceQueue`'s
+  // carry-forward reads, so "the release this write will store" is decided
+  // here exactly as it is decided there (`entry.release ?? snapshot.release`).
+  // Nothing below re-implements the carry-forward; it only ASKS what the
+  // carry-forward will leave.
+  const held = new Map(store.listQueue(key).map((entry) => [entry.cr, entry]));
+  const inheritedReleaseLess: string[] = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
+    if (entry.release !== undefined) continue;
+    const snapshot = held.get(entry.cr);
+    if (snapshot === undefined) {
+      // INVENTED: a cr the board has never seen, arriving with no membership
+      // — the CR-CRU-117 incident, and the only thing this route refuses that
+      // it used to accept. Refused by field, cr AND index (this route's own
+      // shape), carrying the ONE requiredness sentence rather than a third
+      // wording of it, and the help[] §S5 requires.
+      return fail(
+        400,
+        `entry at index ${index} (${entry.cr}): ${RELEASE_REQUIRED}`,
+        { help: roadmapHints.missingRelease },
+      );
+    }
+    // INHERITED. A row the carry-forward will hand its held release back to
+    // is not release-less at all, and LANDED work is history whose provenance
+    // lives on a release record's own `crs` set (§S3a) — neither belongs on a
+    // migration list. Everything else does, INCLUDING a disposed row: a VOID
+    // cr carries no release either, which is why this set is larger than
+    // §S1's live census and must not be reconciled with it.
+    if (snapshot.release !== undefined) continue;
+    if (snapshot.status === "COMPLETED" || snapshot.status === "COMPLETED_UNTRACKED") continue;
+    inheritedReleaseLess.push(entry.cr);
+  }
   // CR-CRU-095 §S3/AC12c, AC12i — a post whose defaults would leave a wave's
   // block is refused in `wave-sequence`'s own envelope (message AND help[]);
   // the store wrote nothing.
@@ -2076,8 +2115,13 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     unknownDependencies,
     // CR-CRU-091 §S2/AC23 — warn-and-write: the post landed, and the crs whose
     // position this write invented are named rather than left to read as
-    // authored ones.
-    warnings: defaultedSeqWarnings(defaultedSeq),
+    // authored ones. CR-CRU-118 §S2 adds the membership half of the same rung,
+    // ADDITIVELY: a post can invent a position and inherit a release-less row
+    // in the same call, so both findings arrive.
+    warnings: [
+      ...defaultedSeqWarnings(defaultedSeq),
+      ...inheritedReleaseLessWarnings(inheritedReleaseLess),
+    ],
   });
 }
 
@@ -2091,7 +2135,12 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
  * the same facts machine-readably.
  */
 interface QueueWarning {
-  code: "out-of-order" | "cross-wave-backwards" | "defaulted-seq" | "unsequenced-members";
+  code:
+    | "out-of-order"
+    | "cross-wave-backwards"
+    | "defaulted-seq"
+    | "unsequenced-members"
+    | "inherited-release-less";
   message: string;
   crs?: string[];
   containers?: string[];
@@ -2107,6 +2156,28 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
         `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave or release carries ` +
         `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
         `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
+      crs,
+    },
+  ];
+}
+
+/**
+ * CR-CRU-118 §S2 — the warn half of the bulk route's split: the crs the write
+ * INHERITED release-less. Shaped like `defaultedSeq` because it is the same
+ * rung — the post LANDED, and the rows it could not give a membership are
+ * named rather than left to read as authored ones. `crs` is the migration
+ * list, and it shrinks to zero as those crs are planned into a release; the
+ * `message` is the ready-to-print line, so no client parses prose (§S9).
+ */
+function inheritedReleaseLessWarnings(crs: string[]): QueueWarning[] {
+  if (crs.length === 0) return [];
+  return [
+    {
+      code: "inherited-release-less",
+      message:
+        `${crs.join(", ")} were kept as they stand and still name no release — this post inherited ` +
+        `them release-less and invented nothing, but every live CR names the release it targets; ` +
+        `run cr-plan --cr <cr> --release <v> --wave <n> --title <brief> for each to empty this list`,
       crs,
     },
   ];
@@ -2457,6 +2528,18 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // The REQUIREDNESS is this verb's own — its whole declaration is a release
   // — and the sentence is the one the gate answers for a declared value that
   // carries no label, so the two doors cannot fork it.
+  //
+  // CR-CRU-118 §S1/§S5 — ABSENCE carries the move that fixes it. The two
+  // branches answer ONE sentence and differ only in `help[]`, deliberately: a
+  // field that was never sent is answered with the route that lists the live
+  // proposals (the sibling refusal one field lower names the same route), while
+  // a value that WAS declared and carries no label is a SHAPE complaint whose
+  // remedy is the caller's own input — and whose help-less envelope is pinned
+  // as parity with the bulk door's identical refusal
+  // (tests/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
+  if (body.release === undefined || body.release === null) {
+    return fail(400, RELEASE_REQUIRED, { help: roadmapHints.missingRelease });
+  }
   if (typeof body.release !== "string" || body.release.length === 0) {
     return fail(400, RELEASE_REQUIRED);
   }

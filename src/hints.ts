@@ -368,6 +368,21 @@ export const roadmapHints = {
     "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
     "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
   ],
+  /**
+   * CR-CRU-118 §S1/§S5 — a declaration carrying NO release at all, at either
+   * door: `cr-plan` (the field is absent) and the bulk post (an entry the
+   * write would INSERT with none). The sibling one field lower
+   * (`unproposedRelease`) answers a label nobody PROPOSED; this one answers an
+   * ABSENT label, so it interpolates none and shares that refusal's
+   * `release-proposals` line VERBATIM — one question, one route named. §S5
+   * forbids a bare 400: the move that fixes absence is naming a live
+   * proposal, or proposing the container that is missing.
+   */
+  missingRelease: [
+    `GET /api/v2/projects/<key>/release-proposals — the live proposals a CR can be planned into`,
+    `cr-plan --cr <cr> --release <v> --wave <n> --title <brief> — every CR names the release it targets`,
+    `release-propose --label <v> — propose the super container first when none of the live ones is the target`,
+  ],
   /** §S8/AC6 — a cr-plan or wave-sequence naming a release nobody proposed. */
   unproposedRelease: (label: string): string[] => [
     `release-propose --label ${label} — the super container must exist before a CR can target it`,

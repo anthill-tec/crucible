@@ -336,6 +336,43 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     return postJson(queuePath(key), { agentId: ORCH, entries });
   }
 
+  /**
+   * CR-CRU-118 §S2 — the board AS HISTORY LEFT IT: rows written straight to
+   * the store, so they are ALREADY HELD when the route runs. The bulk post now
+   * REFUSES to insert a cr that names no release, and the fixtures below whose
+   * subject is status derivation, full replace, ordering, seq or tracks need
+   * release-less rows ON the board rather than membership in a release. Seeding
+   * them is what they honestly are — inherited rows the post carries forward,
+   * which is exactly the state the live board is in for its own release-less
+   * entries. No fixture is given a filler release to silence the refusal: one
+   * that never meant to name a release still does not name one.
+   */
+  function seedQueue(key: string, entries: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      entries.map((entry) => ({
+        cr: String(entry.cr),
+        ...(entry.title !== undefined ? { title: String(entry.title) } : {}),
+        wave: String(entry.wave),
+        dependsOn: Array.isArray(entry.dependsOn) ? entry.dependsOn.map(String) : [],
+        ...(entry.size !== undefined ? { size: String(entry.size) } : {}),
+        ...(typeof entry.seq === "number" ? { seq: entry.seq } : {}),
+      })),
+    );
+  }
+
+  /** The release-less table as the route meets it after CR-CRU-118: already
+   *  held, then re-posted. The POST is still the thing under test — it is the
+   *  INSERT of an unheld release-less cr that the CR closed, never the
+   *  re-post. */
+  async function bootstrapQueue(
+    key: string,
+    entries: Array<Record<string, unknown>>,
+  ): Promise<Response> {
+    seedQueue(key, entries);
+    return postQueue(key, entries);
+  }
+
   /** CR-CRU-104 AC1/AC12 — a DECLARED release must hold a LIVE PROPOSAL, on
    *  this route exactly as on `cr-plan` (CR-CRU-091 §S8). Every fixture below
    *  that declares one therefore proposes the label first: a fixture gaining a
@@ -414,7 +451,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // in a LATER wave while an earlier one still holds a PENDING cr is now
         // the out-of-order refusal, so a single-wave board is the only legal
         // shape for a fixture whose subject is the derivation.
-        const posted = await postQueue(key, [
+        const posted = await bootstrapQueue(key, [
           { cr: "CR-Q-1", title: "roadmap", wave: 4, dependsOn: ["CR-Q-2"] },
           { cr: "CR-Q-2", title: "join key", wave: 4, dependsOn: [] },
           { cr: "CR-Q-3", title: "milestones", wave: 4, dependsOn: [] },
@@ -468,7 +505,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect(
           [200, 202].includes(
             (
-              await postQueue(key, [
+              await bootstrapQueue(key, [
                 { cr: "CR-Q-1", title: "release bundle", wave: 3, dependsOn: ["CR-Q-2", "CR-Q-3"], size: "L" },
               ])
             ).status,
@@ -500,7 +537,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
           { cr: "CR-Q-3", wave: 2, dependsOn: ["CR-Q-2"] },
         ];
-        expect([200, 202]).toContain((await postQueue(key, set)).status);
+        expect([200, 202]).toContain((await bootstrapQueue(key, set)).status);
         expect([200, 202]).toContain((await postQueue(key, set)).status);
 
         const q = await getQueue(key);
@@ -520,7 +557,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect(
           [200, 202].includes(
             (
-              await postQueue(key, [
+              await bootstrapQueue(key, [
                 { cr: "CR-Q-1", wave: 1, dependsOn: [] },
                 { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
                 { cr: "CR-Q-3", wave: 2, dependsOn: ["CR-Q-2"] },
@@ -557,7 +594,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         handle = boot();
         const key = await createProject("queue-unknown-depends");
 
-        const res = await postQueue(key, [
+        const res = await bootstrapQueue(key, [
           { cr: "CR-Q-1", wave: 1, dependsOn: ["CR-Q-ABSENT"] },
           { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
         ]);
@@ -629,7 +666,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect(
           [200, 202].includes(
-            (await postQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
+            (await bootstrapQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
           ),
         ).toBe(true);
         expect((await getQueue(key)).entries.length).toBe(1);
@@ -662,7 +699,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect(
           [200, 202].includes(
-            (await postQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
+            (await bootstrapQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
           ),
         ).toBe(true);
 
@@ -689,7 +726,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect(
           [200, 202].includes(
-            (await postQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
+            (await bootstrapQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
           ),
         ).toBe(true);
         expect((await getQueue(key)).entries.length).toBe(1);
@@ -867,7 +904,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           [200, 202],
         ).toContain(
           (
-            await postQueue(key, [
+            await bootstrapQueue(key, [
               { cr: SHIPPED_CR, title: "pre-tracking work", wave: 1, dependsOn: [] },
               { cr: UNSTARTED_CR, title: "not started", wave: 1, dependsOn: [] },
             ])
@@ -909,7 +946,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect([200, 202]).toContain(
           (
-            await postQueue(key, [
+            await bootstrapQueue(key, [
               { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
               { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
               { cr: "CR-Q-UNSTARTED-2", wave: 2, dependsOn: [] },
@@ -944,7 +981,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-083-plan-outranks-release");
 
         expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
         );
         await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
 
@@ -982,7 +1019,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-083-no-synthetic-rows");
 
         expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
         );
         await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
 
@@ -1013,7 +1050,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           { cr: TRACKED_CR, title: "tracked", wave: 2, dependsOn: [SHIPPED_CR] },
           { cr: UNSTARTED_CR, title: "not started", wave: 3, dependsOn: [] },
         ];
-        expect([200, 202]).toContain((await postQueue(key, set)).status);
+        expect([200, 202]).toContain((await bootstrapQueue(key, set)).status);
 
         // One of each: shipped-without-tracking, tracked through merge, unstarted.
         await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
@@ -1045,7 +1082,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         // Registered ONCE — the queue is never posted again in this walk.
         expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
         );
 
         {
@@ -1090,7 +1127,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
           { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
         ];
-        expect([200, 202]).toContain((await postQueue(key, set)).status);
+        expect([200, 202]).toContain((await bootstrapQueue(key, set)).status);
 
         const tracked = await filePlan(key, TRACKED_CR);
         await closePlanWithMerge(key, tracked.planId, tracked.cycleId, "deadbee021");
@@ -1147,7 +1184,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect([200, 202]).toContain(
           (
-            await postQueue(key, [
+            await bootstrapQueue(key, [
               { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
               { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
             ])
@@ -1194,7 +1231,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-083-abandoned-plan-unshipped");
 
         expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: UNSTARTED_CR, wave: 1, dependsOn: [] }])).status,
+          (await bootstrapQueue(key, [{ cr: UNSTARTED_CR, wave: 1, dependsOn: [] }])).status,
         );
         // A release EXISTS but names a different cr — so PENDING below is a
         // membership decision, not "no releases were ever recorded".
@@ -1223,7 +1260,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-083-abandoned-plan-no-planid");
 
         expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
         );
         await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
 
@@ -1400,7 +1437,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // is a full replace, so a refusal that ran the write would be visible
         // here as a lost row.
         expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: "CR-Q99-HELD", wave: "5", dependsOn: [] }])).status,
+          (await bootstrapQueue(key, [{ cr: "CR-Q99-HELD", wave: "5", dependsOn: [] }])).status,
         );
         const res = await postQueue(key, [
           { cr: "CR-Q99-HELD", wave: "5", dependsOn: [] },
@@ -1454,6 +1491,12 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         }
         // NON-VACUITY — a lifecycle that IS one lands, so the refusals above
         // are a shape verdict and not a blanket rejection of the field.
+        // CR-CRU-118 §S2 — the row is HELD first: the refusals above need an
+        // empty board to prove nothing was written, and a declaration is not
+        // an insert, so the cr this post disposes of is one the board already
+        // holds. Its lifecycle still arrives through the ROUTE, which is what
+        // this assertion is about.
+        seedQueue(key, [{ cr: "CR-Q99-LC", wave: "5", dependsOn: [] }]);
         const ok = await postQueue(key, [
           {
             cr: "CR-Q99-LC",
@@ -1472,20 +1515,38 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     );
 
     test(
-      "AC6 regression — `release` is NOT mandatory: a post without it still lands and still stores a " +
-        "release-LESS row (the key ABSENT, never a fabricated default), and a fresh import still " +
-        "warns about nothing",
+      "AC6 regression — a release-LESS row is still STORED as one: a post whose rows the board " +
+        "already holds lands, the release key stays ABSENT rather than fabricated, and the only " +
+        "finding it raises is CR-CRU-118's inherited list — no seq was defaulted",
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-optional");
+        // CR-CRU-118 §S2 — this AC's storage half is untouched and is what it
+        // measures: an undeclared release is a FACT, stored as an absent key.
+        // Its arrival half moved, and the fixture follows the contract rather
+        // than the other way round — the route no longer INSERTS a cr that
+        // names no release, so these two are held first and the post inherits
+        // them, which is the only shape a release-less row now reaches it in.
+        seedQueue(key, [
+          { cr: "CR-Q99-N1", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-N2", wave: "5", dependsOn: [] },
+        ]);
         const res = await postQueue(key, [
           { cr: "CR-Q99-N1", wave: "5", dependsOn: [] },
           { cr: "CR-Q99-N2", wave: "5", dependsOn: [] },
         ]);
         expect([200, 202]).toContain(res.status);
         const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
-        // CR-CRU-095 AC12b — "a fresh import raises no warning at all".
-        expect(body.warnings ?? []).toEqual([]);
+        // CR-CRU-095 AC12b — "a fresh import raises no warning at all", which
+        // is a claim about DEFAULTED SEQ and stays exactly true: nothing here
+        // was given a position nobody authored.
+        expect((body.warnings ?? []).filter((w) => w.code === "defaulted-seq")).toEqual([]);
+        // And CR-CRU-118 §S2's inherited list names both, because both still
+        // carry no release — warn-and-write, never a refusal.
+        expect((body.warnings ?? []).find((w) => w.code === "inherited-release-less")?.crs).toEqual([
+          "CR-Q99-N1",
+          "CR-Q99-N2",
+        ]);
         const entries = (await getQueue(key)).entries;
         for (const cr of ["CR-Q99-N1", "CR-Q99-N2"]) {
           // ABSENT, not null: an undeclared release is a fact
@@ -1511,9 +1572,16 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // A HELD positional seq: `10` is outside wave 5's block (5001–5999,
         // `inWaveBlock`), and an explicit seq rides the bulk post
         // (CR-CRU-091 §S2).
-        expect([200, 202]).toContain(
-          (await postQueue(key, [{ cr: "CR-Q99-P", wave: "5", dependsOn: [], seq: 10 }])).status,
-        );
+        // CR-CRU-118 §S2 — both rows are HELD before the post, because the
+        // route no longer inserts a release-less cr. `CR-Q99-D` is held in
+        // ANOTHER wave, so the post still DEFAULTS its seq: a row whose wave
+        // moved has no valid position in the new one and is re-slotted into
+        // its block (`replaceQueue`'s AC12g rule), which is the same defaulting
+        // this fixture always measured.
+        seedQueue(key, [
+          { cr: "CR-Q99-P", wave: "5", dependsOn: [], seq: 10 },
+          { cr: "CR-Q99-D", wave: "6", dependsOn: [] },
+        ]);
         const res = await postQueue(key, [
           { cr: "CR-Q99-P", wave: "5", dependsOn: [] },
           { cr: "CR-Q99-D", wave: "5", dependsOn: [] },
@@ -1709,6 +1777,10 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         handle = boot();
         const key = await createProject("queue-099-release-axis-null");
         await propose(key, RELEASE);
+        // CR-CRU-118 §S2 — the release-less row is HELD before the post, the
+        // only shape one now reaches this route in. Its seq, its wave and its
+        // release-lessness — everything this fixture measures — are identical.
+        seedQueue(key, [{ cr: "CR-Q99-NW", wave: "6", dependsOn: [], seq: 2 }]);
         expect([200, 202]).toContain(
           (
             await postQueue(key, [
@@ -1725,7 +1797,15 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         ]);
         expect([200, 202]).toContain(res.status);
         const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
-        expect(body.warnings ?? []).toEqual([]);
+        // THE SILENCE THIS FIXTURE IS ABOUT is the release axis naming nobody.
+        // CR-CRU-118 §S2's inherited list is a different finding on the same
+        // fact — the row carries no release — so it is asserted rather than
+        // folded in: the seq axis stays silent, and the membership list names
+        // exactly the one row that has no membership.
+        expect((body.warnings ?? []).filter((w) => w.code === "defaulted-seq")).toEqual([]);
+        expect((body.warnings ?? []).find((w) => w.code === "inherited-release-less")?.crs).toEqual([
+          "CR-Q99-NW",
+        ]);
         const entries = (await getQueue(key)).entries;
         // The positional row is still there, still out of block, still
         // release-less — the silence is the NULL semantics, not a missing row.
@@ -1838,7 +1918,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         handle = boot();
         const key = await createProject("queue-099-gate-non-orchestrator");
         const red = await registerRed(key);
-        expect([200, 202]).toContain((await postQueue(key, [HELD])).status);
+        expect([200, 202]).toContain((await bootstrapQueue(key, [HELD])).status);
 
         for (const declaration of DECLARED) {
           const res = await postAs(key, red, [declaration.entry]);
@@ -1856,6 +1936,11 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         // THE GATE IS ON THE DECLARATION, NOT ON THE CALLER: the same
         // non-orchestrator, the same route, one field fewer — accepted.
+        // CR-CRU-118 §S2 — the second row is held first, so what this asserts
+        // stays the AUTHORIZATION verdict rather than the membership one: an
+        // undeclared release is refused for being an INSERT, by every caller
+        // alike, and that is a different gate from the one under test here.
+        seedQueue(key, [HELD, { cr: "CR-Q99-OPEN", wave: "5", dependsOn: [] }]);
         expect([200, 202]).toContain(
           (await postAs(key, red, [HELD, { cr: "CR-Q99-OPEN", wave: "5", dependsOn: [] }])).status,
         );
@@ -1869,7 +1954,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-gate-anonymous");
-        expect([200, 202]).toContain((await postQueue(key, [HELD])).status);
+        expect([200, 202]).toContain((await bootstrapQueue(key, [HELD])).status);
 
         for (const declaration of DECLARED) {
           const res = await postAs(key, undefined, [declaration.entry]);
@@ -1894,6 +1979,15 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-099-gate-bootstrap");
         // The shape `cmd_queue_file` sends, verbatim — `parse_queue_table`'s
         // four keys and nothing else, no `agentId`.
+        // CR-CRU-118 §S2 — the two rows are already held, which is what the
+        // live board's own release-less table is: this is the RE-post that
+        // bootstrap actually performs, and it must still be accepted from an
+        // anonymous caller. Inserting a release-less cr is refused for every
+        // caller now, which is a membership rule and not this AC's gate.
+        seedQueue(key, [
+          { cr: "CR-Q99-QF1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-QF2", title: "another row", wave: "6", dependsOn: ["CR-Q99-QF1"] },
+        ]);
         const res = await postAs(key, undefined, [
           { cr: "CR-Q99-QF1", title: "queue file row", wave: "5", dependsOn: [] },
           { cr: "CR-Q99-QF2", title: "another row", wave: "6", dependsOn: ["CR-Q99-QF1"] },
@@ -1980,7 +2074,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect([200, 202]).toContain(
           (
-            await postQueue(key, [
+            await bootstrapQueue(key, [
               { cr: "CR-Q108-T1", title: "no lane", wave: "5", dependsOn: [] },
               { cr: "CR-Q108-T2", title: "no lane either", wave: "6", dependsOn: [] },
             ])
