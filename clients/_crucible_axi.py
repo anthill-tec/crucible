@@ -5216,9 +5216,13 @@ def axi_snapshot_in_flight(decoded):
     the tool saying THIS invocation stopped observing the run (the documented
     bounded-`--wait` return is exactly that shape), so its ladder is a
     last-known state and not a live one. CR-CRU-115 §S3 pins the consequence —
-    a bounded hold posts no gate at all — and the caller reports it instead."""
-    if not isinstance(decoded, dict):
-        return False
+    a bounded hold posts no gate at all — and the caller reports it instead.
+
+    Takes a DECODED snapshot, never a maybe-snapshot: `poll_axi_snapshot`
+    answers a dict or None and `stream_axi_ladder` drops the None before asking,
+    so a type guard here would be a branch no run can reach — and one that
+    would answer "not in flight" for a caller whose real problem is that it
+    never decoded."""
     if decoded.get("outcome") or decoded.get("error"):
         return False
     run = decoded.get("run") or {}
