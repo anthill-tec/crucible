@@ -262,12 +262,69 @@ of D3 that event can never be retired by the release it belongs to. `pending` an
 `error` key the snapshot DOES carry is ignored — so "was this a real terminus?" is answerable from
 data already in hand.
 
+### D4 — every live CR names a release, and every release names its target date
+
+**User-ruled 2026-09-10**, after the user caught `CR-CRU-117` sitting on the board scheduled but
+undrawable. This one DOES touch the locked definition — additively, and only the parts already
+declared there.
+
+**The inconsistency.** `declareMembership` enforces every rule about a release a CR DOES name: the
+label's shape, and that it corresponds to a live proposal or a recorded release ("so a migration
+could store membership in a release nobody proposed"). It has nothing to say about naming NONE.
+Absence bypasses the only gate there is. Because roadmap zone 2 is release-scoped, the result is a
+CR the scheduler offers and the roadmap cannot draw — measured live, not hypothesised.
+
+The escape hatch was deliberate: there was no release after 0.2.0 to name. That is now a data
+problem with a data answer (propose the next release), not a reason to keep membership optional.
+
+**The two rules.**
+
+1. **A live CR's release is REQUIRED.** Declaring a CR without one is refused, not warned. Landed
+   history is exempt — its provenance already lives on the release record's `crs` set, and
+   retroactive repair of shipped records is a standing non-goal.
+2. **A release proposal's TARGET DATE is required.** `targetAt` exists (CR-CRU-091 §S1, epoch
+   seconds, deliberately the same unit as `releasedAt` — "when it was aimed for" vs "when it
+   shipped") and is optional today. Making it mandatory is what turns a release from a label into a
+   commitment with a burn-down axis.
+
+**Why the existing mechanism is already the right one.** A proposal revision RETIRES its predecessor
+and inserts a new row rather than editing in place, because — in the store's own words — an in-place
+edit "would destroy the fact that the target MOVED, precisely the signal a slipping plan needs to
+leave behind". So slippage is auditable by construction, and burn-down needs no new record kind.
+
+**Burn-down and velocity analytics are NOT part of this decision** (user-stated 2026-09-10). What is
+being fixed is the integrity rule; the analytics that consume `targetAt` come later and are cheap
+precisely because the substrate already keeps its history.
+
+### A CR can be BORN mid-release — user-stated, 2026-09-10
+
+Recorded because the mandate must not assume otherwise. The typical Model-B flow pre-defines specs in
+a design phase, but this project dogfoods itself, so release-specific features are discovered *while
+the release runs*: 0.2.0 grew an entire second wave — CR-CRU-114, 115, 116, 117 — designed and
+implemented **on the release branch**, in response to real-time discovery during the ceremony.
+
+Consequences the rules must respect:
+
+- Membership is declarable **at birth into the release already in flight**, which the live-proposal
+  mechanism supports today: 0.2.0's proposal is live, so a CR discovered on its branch can name it.
+- A mandate that required a CR to exist before its release was cut would forbid exactly the mode
+  this project runs in. The rule is "name a release", never "name it before the branch".
+- In Crucible a release is a MILESTONE (definition §3). In Model-B it is also a distinct release
+  PROCESS with its own task set. D3 already routes the in-flight half to the gate; D4 routes the
+  membership half to the proposal. Neither adds a record kind.
+
 ### What this drift section decides
 
-- **Nothing about the locked definition.** Wave stays temporal and abstract; release stays a
+- **Nothing about the locked definition** in D1–D3. Wave stays temporal and abstract; release stays a
   concrete activity set terminating in a published package; no release boundary is derived from
   wave structure.
 - **A wave is a container of CRs; a track is scheduling.** Wave completion is derived from
   membership alone, required in every project, and never recorded as an event (D1, user-ruled).
 - **The release's in-flight visibility is a gate-identity problem, not a new record kind** (D3).
+- **D4 DOES extend the definition, additively**: membership in a release is mandatory for live work,
+  and a release proposal must declare its target date. Both use mechanisms already shipped
+  (`declareMembership`'s gate, CR-CRU-091's `targetAt`); neither adds a record kind, a route, or a
+  migration of shipped history. Burn-down analytics are explicitly out.
+- **A CR may be born mid-release** and named into the release already in flight — the mode this
+  project actually runs in, and the reason the rule is "name a release", not "name it first".
 - **No open questions remain in this section.** CRs may be derived from it directly.
