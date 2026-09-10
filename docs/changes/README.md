@@ -122,8 +122,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-116](CR-CRU-116-only-one-wave-is-active.md) | only one wave is active, and Crucible refuses the alternative | feature | COMPLETED (0.2.0) | 091, 104 | 6 (0.2.0) |
 | [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | COMPLETED (0.2.0) | 091, 092, 116 | 6 (0.2.0) |
 | [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | COMPLETED (0.2.0) | 013, 073 | 6 (0.2.0) |
-| [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | PENDING (0.2.0) | 013, 115 | 6 (0.2.0) |
-| [CR-CRU-118](CR-CRU-118-every-cr-names-a-release.md) | every live CR names a release, and every release names its target date | feature | PENDING (0.2.0) | 091, 099, 104 | 6 (0.2.0) |
+| [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | COMPLETED (0.2.0) | 013, 115 | 6 (0.2.0) |
+| [CR-CRU-118](CR-CRU-118-every-cr-names-a-release.md) | every live CR names a release, and every release names its target date | feature | COMPLETED (0.2.0) | 091, 099, 104 | 6 (0.2.0) |
+| [CR-CRU-119](CR-CRU-119-a-replan-keeps-the-position-it-did-not-author.md) | a re-plan keeps the position it did not author | bugfix | PENDING (0.2.0) | 091, 095, 118 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
