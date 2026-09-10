@@ -2065,6 +2065,9 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   // Nothing below re-implements the carry-forward; it only ASKS what the
   // carry-forward will leave.
   const held = new Map(store.listQueue(key).map((entry) => [entry.cr, entry]));
+  // …and SETTLED HISTORY, read once on the same terms (the derivation is one
+  // scan of the milestone table, never one per entry).
+  const claimingRelease = recordedReleaseClaiming(store, key);
   const inheritedReleaseLess: string[] = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
@@ -2076,11 +2079,27 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // it used to accept. Refused by field, cr AND index (this route's own
       // shape), carrying the ONE requiredness sentence rather than a third
       // wording of it, and the help[] §S5 requires.
-      return fail(
-        400,
-        `entry at index ${index} (${entry.cr}): ${RELEASE_REQUIRED}`,
-        { help: roadmapHints.missingRelease },
-      );
+      //
+      // UNLESS a recorded release's own `crs` set already NAMES it (user
+      // ruling, 2026-09-10): then the write is not inventing membership, it is
+      // carrying a row settled history already accounts for. On an EMPTY board
+      // every entry is an insert, so without this rung a wiped-board restore —
+      // which has actually happened here, 2026-08-29 — was refused at its
+      // first landed row, one row per attempt. The question asked is a
+      // property of the ROW and never of the board's size, so clearing the
+      // board buys nothing: a shipped release cannot claim a CR that did not
+      // exist when it shipped.
+      if (claimingRelease(entry.cr) === undefined) {
+        return fail(
+          400,
+          `entry at index ${index} (${entry.cr}): ${RELEASE_REQUIRED}`,
+          { help: roadmapHints.missingRelease },
+        );
+      }
+      // Admitted — and named, because it IS a release-less row this write
+      // carried, which is exactly what the warning below reports.
+      inheritedReleaseLess.push(entry.cr);
+      continue;
     }
     // INHERITED. A row the carry-forward will hand its held release back to
     // is not release-less at all, and LANDED work is history whose provenance
@@ -2341,6 +2360,41 @@ function liveProposalLabels(store: Store, key: string): ReadonlySet<string> {
       .listReleaseProposals(key)
       .flatMap((proposal) => (proposal.label !== undefined ? [proposal.label] : [])),
   );
+}
+
+/**
+ * CR-CRU-118 §S2 — THE derivation, and the ONE place it is written: does
+ * settled history already claim this cr? It answers with the RECORDED release
+ * whose own `crs` set names it, or `undefined` when none does.
+ *
+ * A derivation from settled fact, and self-checking: it cannot admit a
+ * genuinely new CR, because a shipped release cannot claim one, and it cannot
+ * add scope to a closed release, because the release must already name the cr
+ * itself. It is emphatically NOT a test of whether the board is empty — that
+ * would be a licence ("clear the board, then post anything"); what makes a row
+ * admissible is a property of the ROW.
+ *
+ * Two doors read it. The bulk post's insert rung (§S2) asks it for the 62
+ * landed 0.1.x rows a wiped-board restore carries, which name no release
+ * because none was tracked when they shipped; `cr-plan --release 0.1.0` (§S3a)
+ * asks it for the same rows when their history is given back to them. Two
+ * independent copies of this rule would drift, and the drift would be silent.
+ *
+ * Resolved ONCE per request and returned as a lookup, the `liveProposalLabels`
+ * precedent: `listReleases` re-queries and re-JSON-parses the whole milestone
+ * table, and the bulk route asks per entry — a 115-row restore must not scan
+ * settled history 115 times. A release recorded without a label still CLAIMS,
+ * so it answers in the wording `handleCrLifecycle` already uses for one.
+ */
+function recordedReleaseClaiming(store: Store, key: string): (cr: string) => string | undefined {
+  const claiming = new Map<string, string>();
+  for (const release of store.listReleases(key)) {
+    const label = release.label ?? "an unlabelled release";
+    for (const cr of release.crs ?? []) {
+      if (!claiming.has(cr)) claiming.set(cr, label);
+    }
+  }
+  return (cr) => claiming.get(cr);
 }
 
 /**

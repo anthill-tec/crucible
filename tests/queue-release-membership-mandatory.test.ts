@@ -78,6 +78,11 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+// `waveSeqBase`/`WAVE_SEQ_STRIDE` are the store's OWN wave-block arithmetic
+// (§S3), consumed rather than re-derived — the precedent
+// tests/queue-default-into-wave-block.test.ts sets. The precedence test below
+// needs the exact seq that would LEAVE a wave's block.
+import { WAVE_SEQ_STRIDE, waveSeqBase } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
 import type { QueueLifecycle } from "../src/types.ts";
 
@@ -358,6 +363,31 @@ function bootstrapTable(rows: Row[]): Array<Record<string, unknown>> {
   return rows.map((row) => ({ cr: row.cr, title: row.title, wave: row.wave, dependsOn: [] }));
 }
 
+/**
+ * What a RESTORE posts, and it is deliberately NOT `bootstrapTable`: a restore
+ * rebuilds a wiped board from what the board HELD, so a row that carried a
+ * release carries it here too. The bootstrap shape is the other door — it
+ * drops the table's release qualifier by design (§S3) — and the tests above
+ * drive that one against a POPULATED board, where the carry-forward supplies
+ * what the post omits. On an EMPTY board nothing carries anything forward, so
+ * the two doors part company and the derivation rung is the only thing left
+ * standing between settled history and a refusal.
+ */
+function restoreTable(rows: Row[]): Array<Record<string, unknown>> {
+  return rows.map((row) => ({
+    cr: row.cr,
+    title: row.title,
+    wave: row.wave,
+    dependsOn: [],
+    ...(row.release !== undefined ? { release: row.release } : {}),
+  }));
+}
+
+/** The commit that IDENTIFIES the shipped release in the narrowing test: a
+ *  release is (type, label, commit), and the ONE correction path through its
+ *  immutability (CR-CRU-081 §S3) matches on that identity. */
+const SHIPPED_COMMIT = "0f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f";
+
 describe("CR-CRU-118 — every live CR names a release", () => {
   let handle: ServerHandle | undefined;
   const scratchDirs: string[] = [];
@@ -447,7 +477,7 @@ describe("CR-CRU-118 — every live CR names a release", () => {
 
   /** Record the SHIPPED release, naming the landed rows in its own `crs` set —
    *  which is what makes them read COMPLETED_UNTRACKED. */
-  async function ship(key: string, label: string, crs: string[]): Promise<void> {
+  async function ship(key: string, label: string, crs: string[], commit?: string): Promise<void> {
     await propose(key, label);
     const shipped = await post("/api/v2/milestones", {
       projectKey: key,
@@ -455,8 +485,39 @@ describe("CR-CRU-118 — every live CR names a release", () => {
       type: "release",
       label,
       crs,
+      ...(commit !== undefined ? { commit } : {}),
     });
     expect([200, 201]).toContain(shipped.status);
+  }
+
+  /**
+   * NARROW a recorded release's own `crs` set — the ONE correction path
+   * through a release's immutability (CR-CRU-081 §S3 `repairProvenance`,
+   * asked for explicitly, in the call). The held record keeps its identity and
+   * only the provenance it re-derived is written over, so this is settled
+   * history genuinely changing its mind about what it shipped, not a second
+   * release with the same label. What it dropped travels back on `shrink`
+   * (CR-CRU-086 §S3), which is what proves the narrowing HAPPENED rather than
+   * replaying as a no-op.
+   */
+  async function narrowRelease(
+    key: string,
+    label: string,
+    commit: string,
+    crs: string[],
+  ): Promise<string[]> {
+    const repaired = await post("/api/v2/milestones", {
+      projectKey: key,
+      agentId: ORCH,
+      type: "release",
+      label,
+      commit,
+      crs,
+      repairProvenance: true,
+    });
+    expect([200, 201]).toContain(repaired.status);
+    const shrink = repaired.body.shrink as { removed?: string[] } | undefined;
+    return shrink?.removed ?? [];
   }
 
   // ══ §S1 — the per-CR door, pinned as a regression ════════════════════════
@@ -866,6 +927,284 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         );
         expect(landedAfter).toHaveLength(62);
         expect(JSON.stringify(landedAfter)).toBe(JSON.stringify(landedBefore));
+      },
+    );
+
+    // ── the derivation rung: settled history, never the board's size ───────
+    //
+    // Added 2026-09-10 by user ruling, on a measurement taken at cycle 415:
+    // without this rung, posting the project's real 115-row table to an EMPTY
+    // board answered `400 … entry at index 0 (CR-CRU-001)` and wrote nothing,
+    // because on an empty board EVERY entry is an insert — including the 62
+    // landed 0.1.x rows, which cannot name a release since none was being
+    // tracked when they shipped. A wiped board has actually happened here
+    // (2026-08-29).
+    //
+    // The rung is the SAME derivation §S3a defines — a recorded release's own
+    // `crs` set already names the CR — and deliberately NOT a test of whether
+    // the board is empty: an emptiness test would be a licence ("clear the
+    // board, then post anything"), while this one is a property of the ROW and
+    // cannot admit a genuinely new CR, because a shipped release cannot claim
+    // one. The pair of tests below is what says that out loud, and both halves
+    // meet the same empty board on purpose.
+
+    test(
+      "a wiped-board restore SUCCEEDS: the whole table posted to an EMPTY board writes every " +
+        "row and refuses none, the 62 landed rows admitted because settled history names them",
+      async () => {
+        boot();
+        const key = await seed("cru118-s2-wiped-restore");
+        const landed = landedHistory();
+        const table = [...landed, ...ACTIVE];
+        // THE 2026-08-29 STATE: the queue is gone, and settled history is all
+        // that is left of it — the SHIPPED release record, whose own `crs` set
+        // names the 62 landed rows.
+        await ship(key, SHIPPED, landed.map((row) => row.cr));
+        await propose(key, IN_FLIGHT);
+        expect(
+          await entries(key),
+          "the restore fixture must meet an EMPTY board — every entry an INSERT, which is what " +
+            "parts this case from the bootstrap above, where the carry-forward supplies a " +
+            "held release",
+        ).toHaveLength(0);
+
+        const restored = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: restoreTable(table),
+        });
+
+        expect(
+          restored.body.ok,
+          `the restore of ${table.length} rows onto a wiped board answered ` +
+            `${restored.status}: ${restored.body.error ?? "(no error)"}`,
+        ).toBe(true);
+        expect([200, 202]).toContain(restored.status);
+        expect(restored.body.error).toBeUndefined();
+
+        // EVERY ROW WRITTEN, read back from the store rather than trusted off
+        // the response.
+        const after = await entries(key);
+        expect(after).toHaveLength(table.length);
+        expect(after.map((entry) => entry.cr).sort()).toEqual(
+          table.map((row) => row.cr).sort(),
+        );
+        // The 62 came back AS HISTORY: release-less on the row, their
+        // membership still derivable from the record that names them, which is
+        // also what makes them read COMPLETED_UNTRACKED.
+        const landedAfterRestore = after.filter((entry) => entry.cr.startsWith("CR-118-L"));
+        expect(landedAfterRestore).toHaveLength(62);
+        for (const entry of landedAfterRestore) {
+          expect(releaseLess(entry)).toBe(true);
+          expect(entry.status).toBe("COMPLETED_UNTRACKED");
+        }
+        // ADMITTED BY THE DERIVATION, and REPORTED as what they are: rows this
+        // write carried release-less. The warning is the observable proof they
+        // came through the rung rather than through a hole in it — and this is
+        // the one shape in which that list legitimately exceeds the five the
+        // populated-board criterion pins, because on an empty board the write
+        // carries the history too.
+        const union = queueWarningCodeUnion();
+        const raised = (restored.body.warnings ?? []).filter(
+          (warning) => warning.code === union[union.length - 1]!,
+        );
+        expect(raised).toHaveLength(1);
+        const named = raised[0]!.crs ?? [];
+        expect([...named].sort()).toEqual(landed.map((row) => row.cr).sort());
+        // NEGATIVE — the rows that DECLARED a release are not release-less and
+        // are not on a migration list.
+        for (const row of ACTIVE) expect(named).not.toContain(row.cr);
+      },
+    );
+
+    test(
+      "the rung admits HISTORY and nothing else: on the SAME empty board a cr no recorded " +
+        "release names is still refused — an empty board is never itself a licence",
+      async () => {
+        boot();
+        const key = await seed("cru118-s2-empty-is-no-licence");
+        const landed = landedHistory();
+        const table = [...landed, ...ACTIVE];
+        // Byte for byte the fixture the criterion above restores onto, which
+        // is what makes this pair mean anything: same board, same post, one
+        // row's worth of difference in what settled history claims.
+        await ship(key, SHIPPED, landed.map((row) => row.cr));
+        await propose(key, IN_FLIGHT);
+        expect(await entries(key)).toHaveLength(0);
+
+        const refused = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: [
+            ...restoreTable(table),
+            { cr: "CR-118-GHOST", title: "a CR arriving unauthored", wave: "6", dependsOn: [] },
+          ],
+        });
+
+        expect(
+          refused.status,
+          `an unclaimed release-less row inside a ${table.length}-row restore answered ` +
+            `${refused.status}: ${refused.body.error ?? "(no error)"}`,
+        ).toBe(400);
+        expect(refused.body.ok).toBe(false);
+        expect(refused.body.error).toContain(`index ${table.length}`);
+        expect(refused.body.error).toContain("CR-118-GHOST");
+        expect(refused.body.error).toContain(RELEASE_REQUIRED);
+        expect(refused.body.help ?? []).toContain(RELEASE_PROPOSALS_ROUTE_HELP);
+        // NOTHING WRITTEN — and on an empty board that is visible as the board
+        // STAYING empty: the 62 rows the derivation would have admitted did
+        // not land either, because this route is all or nothing.
+        expect(await entries(key)).toHaveLength(0);
+
+        // THE MEASURED RESIDUE, on the same board and the same terms: a row
+        // that is release-less on the board itself and that no release record
+        // names is refused exactly as the ghost is — it is not "old" in any
+        // sense the derivation can read. On the live board that set is the
+        // FIVE §S2's inherited warning reports, and this is what a restore
+        // carrying them costs until they are planned into a release.
+        const debt = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: [...restoreTable(table), ...bootstrapTable([INHERITED[0]!])],
+        });
+        expect(debt.status).toBe(400);
+        expect(debt.body.error).toContain(INHERITED[0]!.cr);
+        expect(debt.body.error).toContain(RELEASE_REQUIRED);
+        expect(await entries(key)).toHaveLength(0);
+      },
+    );
+
+    test(
+      "the derivation is the SAME settled-history check §S3a will use: NARROWING the release " +
+        "record's own crs changes the rung's answer, for that cr and no other",
+      async () => {
+        boot();
+        const key = await seed("cru118-s2-narrowed-record");
+        const landed = landedHistory();
+        const dropped = landed[0]!;
+        const table = [...landed, ...ACTIVE];
+        // Recorded WITH a commit: a release is identified by (type, label,
+        // commit), and the correction path this test drives matches on that.
+        await ship(key, SHIPPED, landed.map((row) => row.cr), SHIPPED_COMMIT);
+        await propose(key, IN_FLIGHT);
+
+        // WIDE — the record names all 62, so the insert is admitted.
+        const admitted = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: restoreTable(table),
+        });
+        expect([200, 202]).toContain(admitted.status);
+        expect((await entries(key)).map((entry) => entry.cr)).toContain(dropped.cr);
+
+        // Back to the wiped board, through the STORE. The rung decides
+        // INSERTS, so the second half must meet the same empty board the first
+        // half did; re-posting onto the written board would meet
+        // `replaceQueue`'s carry-forward instead and would prove nothing about
+        // the derivation.
+        seedHistory(key, []);
+        expect(await entries(key)).toHaveLength(0);
+
+        // NARROW settled history itself — the record stops naming that one cr.
+        const removed = await narrowRelease(
+          key,
+          SHIPPED,
+          SHIPPED_COMMIT,
+          landed.slice(1).map((row) => row.cr),
+        );
+        expect(
+          removed,
+          "the repair must actually SHRINK the record — a replay that changed nothing would " +
+            "leave this test asserting the wide answer twice",
+        ).toEqual([dropped.cr]);
+
+        const refused = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: restoreTable(table),
+        });
+        expect(
+          refused.status,
+          `after the record dropped ${dropped.cr}, the identical restore answered ` +
+            `${refused.status}: ${refused.body.error ?? "(no error)"} — the rung and the ` +
+            `record it reads must move together`,
+        ).toBe(400);
+        expect(refused.body.error).toContain("index 0");
+        expect(refused.body.error).toContain(dropped.cr);
+        expect(refused.body.error).toContain(RELEASE_REQUIRED);
+        expect(await entries(key)).toHaveLength(0);
+
+        // …and ONLY for the cr the record dropped: the other 61 answer exactly
+        // as they did before, so what moved is the derivation's INPUT and not
+        // the rule reading it.
+        const withoutDropped = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: restoreTable([...landed.slice(1), ...ACTIVE]),
+        });
+        expect([200, 202]).toContain(withoutDropped.status);
+        expect(await entries(key)).toHaveLength(table.length - 1);
+      },
+    );
+
+    test(
+      "refusal PRECEDENCE: a post that is both membership-less and wave-overflowing answers the " +
+        "MEMBERSHIP refusal, and neither refusal writes anything",
+      async () => {
+        boot();
+        const key = await seed("cru118-s2-precedence");
+        await propose(key, IN_FLIGHT);
+        seedHistory(key, ACTIVE);
+        const before = await entries(key);
+
+        // The overflow, built the AC12h way (CR-CRU-095 §S3): a DECLARED seq at
+        // the top of wave 5's block, plus one seq-less row in the same wave,
+        // whose next free slot would be the first seq OUTSIDE it.
+        const top = waveSeqBase("5") + WAVE_SEQ_STRIDE - 1;
+        const filler = {
+          cr: "CR-118-FILL",
+          title: "the last slot in wave 5's block",
+          wave: "5",
+          dependsOn: [],
+          seq: top,
+          release: IN_FLIGHT,
+        };
+        const overflowing = {
+          cr: "CR-118-GHOST",
+          title: "one row past the end of the block",
+          wave: "5",
+          dependsOn: [],
+        };
+
+        // CONTROL — the same post with the offending row's membership
+        // DECLARED: the store throws from inside `replaceQueue` and the route
+        // answers the overflow. Without this, the precedence assertion below
+        // could pass on a post that never overflowed at all.
+        const overflowed = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: [filler, { ...overflowing, release: IN_FLIGHT }],
+        });
+        expect(overflowed.status).toBe(400);
+        expect(overflowed.body.error).toContain(`would reach seq ${top + 1}`);
+        expect(overflowed.body.error).toContain("nothing was written");
+
+        // THE PAIR: the identical post, membership-less on the identical row.
+        const refused = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: [filler, overflowing],
+        });
+        expect(refused.status).toBe(400);
+        expect(
+          refused.body.error,
+          `a post that is BOTH membership-less and overflowing answered ${refused.body.error}`,
+        ).toContain(RELEASE_REQUIRED);
+        expect(refused.body.error).toContain("CR-118-GHOST");
+        expect(refused.body.error).toContain("index 1");
+        // …and NOT the overflow. That is the ordering being pinned: the
+        // membership split runs on the WHOLE batch before `replaceQueue` is
+        // called at all, so it now precedes a refusal that used to be the only
+        // one this post could earn.
+        expect(refused.body.error).not.toContain("outside its block");
+        expect(refused.body.help ?? []).toContain(RELEASE_PROPOSALS_ROUTE_HELP);
+
+        // BOTH WROTE NOTHING, which is what makes the ordering benign — and it
+        // is asserted rather than assumed, because an ordering between two
+        // refusals only matters if one of them could have written.
+        expect(JSON.stringify(await entries(key))).toBe(JSON.stringify(before));
       },
     );
   });
