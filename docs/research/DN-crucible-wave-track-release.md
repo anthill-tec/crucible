@@ -262,6 +262,20 @@ of D3 that event can never be retired by the release it belongs to. `pending` an
 `error` key the snapshot DOES carry is ignored — so "was this a real terminus?" is answerable from
 data already in hand.
 
+**CR-CRU-117's in-flight mark — SETTLED 2026-09-10, before any RED.** The mark rides **inside the
+`gate` object itself** (a new key on the gate body the client already builds), not a top-level field
+beside `version` and not a fourth member of the outcome vocabulary. Costed at CR-117's gap analysis:
+`Store.recordGateEvent(gate: unknown, …)` stores the gate object **verbatim** and `handleGates`
+validates only `intent`, `outcome` and steps-is-an-array — so an in-gate field reaches both readers
+(`workflowLens`, `boundaryGate`) with **zero server change**, while a top-level field costs a
+`src/v2.ts` carry plus a `src/store.ts` field, and a new outcome member costs both `GATE_OUTCOMES`
+sets, every enumerating reader, and five clients' fixtures. CR-CRU-017's run lifecycle
+(`visibleOpenRuns` → `RunningCard`) already means "still going" for a DIFFERENT surface, but
+`resolveRunClose` ends a run on ANY ingest carrying a `runId`, so reusing it would need
+carry-without-close on a seam three routes share — a second mechanism for a job D3 already assigns
+to the gate, which this DN's own rule treats as a defect. Declined for that reason, not evaluated
+further.
+
 ### D4 — every live CR names a release, and every release names its target date
 
 **User-ruled 2026-09-10**, after the user caught `CR-CRU-117` sitting on the board scheduled but
