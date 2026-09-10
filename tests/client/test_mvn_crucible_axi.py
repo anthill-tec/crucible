@@ -165,6 +165,12 @@ _INTERIM_SNAPSHOT_3 = (
     '    push,completed,0,40\n'
     '    pr,skipped,0,10\n'
 )
+# TOOL VERSION: `no-mistakes` v1.70.1 — the NINE-row ladder below (and its step
+# names) is that version's pipeline, 2026-09-10; v1.72.0 was already published.
+# This nine-row fixture is a SEALING snapshot: `status: completed` with a
+# resolved outcome. The genuinely NON-TERMINAL nine-row shape a run really has
+# while it is in flight is `_LIVE_NINE_ROW_IN_FLIGHT_SNAPSHOT` at the foot of
+# this file (CR-CRU-117 §S3).
 _INTERIM_SNAPSHOT_FINAL = (
     'run:\n'
     '  id: "gate-axi-mvn-interim-001"\n'
@@ -1787,6 +1793,133 @@ class MvnCruciblePlanFileCycleFlagTest(_BaseMvnAxiTest):
             "[crucible] ERROR:", err,
             f"AC6: the bare sys.exit string is REPLACED by the envelope, not "
             f"printed beside it; got stderr={err!r}")
+
+
+# ── CR-CRU-117 §S3 — the REAL in-flight shape, driven as NON-TERMINAL ──────
+#
+# TOOL VERSION: `no-mistakes` v1.70.1 (captured 2026-09-10; v1.72.0 was already
+# published). The nine rows and their step NAMES are that version's pipeline —
+# recorded because the coupling is load-bearing: if the tool gains or loses a
+# step, a nine-row assertion goes red for a TOOL-VERSION reason with no defect
+# behind it, and a reader has to be able to tell which is which.
+#
+# WHY THIS FIXTURE EXISTS. The progressive 3/6/8-row snapshots above are a
+# shape the tool never produces, and `_INTERIM_SNAPSHOT_FINAL` — the only
+# nine-row fixture this suite had — is `status: completed` with a resolved
+# outcome, i.e. a SEALING snapshot. So nothing here ever drove the shape a run
+# REALLY has while in flight: nine rows, `status: running`, NO top-level
+# `outcome`, unrun steps carrying `pending`. That gap is how `cmd_gate_run`'s
+# `0 < nsteps < 9` guard reached a release while posting no interim gate for
+# any real run.
+_LIVE_LADDER_RELAY_MARKER = "mvn-gate-axi-live-ladder-marker-808"
+_LIVE_NINE_ROW_IN_FLIGHT_SNAPSHOT = (
+    'run:\n'
+    '  id: "gate-axi-mvn-live-001"\n'
+    f'  branch: {_LIVE_LADDER_RELAY_MARKER}\n'
+    '  status: running\n'
+    '  head: caf0808\n'
+    '  findings: 0\n'
+    '  steps[9]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,100\n'
+    '    rebase,completed,0,50\n'
+    '    review,running,0,412006\n'
+    '    test,pending,0,0\n'
+    '    document,pending,0,0\n'
+    '    lint,pending,0,0\n'
+    '    push,pending,0,0\n'
+    '    pr,pending,0,0\n'
+    '    ci,pending,0,0\n'
+)
+
+# That ladder as the GATE must carry it: every name present, every status
+# mapped, `pending` REPRESENTED rather than dropped or inferred green.
+_LIVE_LADDER_MAPPED_STATUSES = ["passed", "passed", "running", "pending",
+                                "pending", "pending", "pending", "pending",
+                                "pending"]
+
+# `axi status` answers with the live ladder while `axi run` blocks, then the run
+# resolves and prints its SEALING snapshot — the real tool's own division.
+_FAKE_NO_MISTAKES_LIVE_LADDER_BODY = '''
+import sys
+import time
+
+argv = sys.argv[1:]
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
+    sys.stdout.write({live!r})
+    sys.exit(0)
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
+    time.sleep(1.0)
+    sys.stdout.write({sealed!r})
+    sys.exit(0)
+sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
+sys.exit(1)
+'''.format(live=_LIVE_NINE_ROW_IN_FLIGHT_SNAPSHOT, sealed=_INTERIM_SNAPSHOT_FINAL)
+
+
+class MvnCrucibleLiveInFlightLadderTest(_BaseMvnAxiTest):
+    """CR-CRU-117 §S2/§S3 — this client streams the ladder of a run that is
+    still going, driven on the shape the tool really emits.
+
+    The interim gate is asserted by its CONTENT rather than by its position:
+    the seal is the only gate carrying the commit it gated, so `push` separates
+    them however the loop happens to order its posts."""
+
+    def test_gate_run_streams_the_live_nine_row_ladder_before_it_seals(self):
+        saved_path = os.environ.get("PATH", "")
+        fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-mvn-live-")
+        fake_path = os.path.join(fake_bin_dir, "no-mistakes")
+        with open(fake_path, "w") as f:
+            f.write(f"#!{sys.executable}\n")
+            f.write(_FAKE_NO_MISTAKES_LIVE_LADDER_BODY)
+        st = os.stat(fake_path)
+        os.chmod(fake_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        os.environ["PATH"] = fake_bin_dir + os.pathsep + saved_path
+
+        calls = []
+
+        def fake_post(path, payload):
+            calls.append((path, dict(payload) if isinstance(payload, dict) else payload))
+            return {"ok": True}
+
+        try:
+            with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True):
+                code, out, _err = _run_main(self.module, [
+                    "gate-run", "--intent", "stream the live ladder",
+                    "--agent", "test-agent", "--project-dir", self.tmpdir,
+                ])
+        finally:
+            os.environ["PATH"] = saved_path
+            shutil.rmtree(fake_bin_dir, ignore_errors=True)
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        gates = [p for path, p in calls if path == "/api/v2/gates"]
+        interim = [p for p in gates if "push" not in p.get("gate", {})]
+        seals = [p for p in gates if "push" in p.get("gate", {})]
+
+        self.assertEqual(
+            len(interim), 1,
+            "a nine-row ladder with `pending` rows and no top-level `outcome` "
+            "is a run STILL GOING, so exactly one interim gate reaches the "
+            "board for it: the guard tests terminality, not the row count the "
+            "tool always emits (no-mistakes v1.70.1); got " + repr(gates))
+        self.assertEqual(
+            [s.get("status") for s in interim[0].get("gate", {}).get("steps", [])],
+            _LIVE_LADDER_MAPPED_STATUSES,
+            "the interim gate carries ALL NINE steps with their mapped "
+            "statuses — `pending` represented, not dropped and not inferred "
+            "green; got " + repr(interim[0]))
+        self.assertIs(
+            interim[0].get("gate", {}).get("inFlight"), True,
+            "and it is MARKED in flight inside the gate object, so the board's "
+            "readers can tell a snapshot from a verdict; got " + repr(interim[0]))
+
+        self.assertEqual(
+            [(p.get("gate", {}).get("outcome"), p.get("gate", {}).get("inFlight"))
+             for p in seals],
+            [("passed", None)],
+            "and the run still SEALS exactly once, unmarked: a marked seal "
+            "would be ignored by the very readers the mark exists for; got "
+            + repr(gates))
 
 
 if __name__ == "__main__":
