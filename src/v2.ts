@@ -1902,16 +1902,22 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
  * `cr-plan`/`wave-sequence`, pending a user ruling.
  */
 async function handleQueuePost(store: Store, key: string, req: Request): Promise<Response> {
+  // CR-CRU-118 §S3 — EVERY answer this door gives says that the door is
+  // deprecated, so its own refusals are built through one local helper rather
+  // than ten hand-spread `warnings` fields. `fail`'s signature exactly, so the
+  // wordings and help[] below are untouched by the notice riding beside them.
+  const refuse = (status: number, error: string, extra?: Record<string, unknown>): Response =>
+    fail(status, error, { ...extra, warnings: DEPRECATED_ROUTE_NOTICE });
   if (!UUID_RE.test(key)) {
-    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+    return refuse(400, "projectKey must be a UUID", { help: hints.unknownProject });
   }
   if (store.getProject(key) === null) {
-    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+    return refuse(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
   const body = (await readBody(req)) ?? {};
   const rawEntries = body.entries;
   if (!Array.isArray(rawEntries)) {
-    return fail(400, "queue body must carry an `entries` array");
+    return refuse(400, "queue body must carry an `entries` array");
   }
   // §S3/AC9 — "declares" means exactly what the forwarding spreads below
   // treat as declared: a value that is neither absent nor null. A post whose
@@ -1930,7 +1936,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   });
   if (declaresMembership) {
     const caller = requireOrchestrator(store, key, body);
-    if ("fail" in caller) return caller.fail;
+    if ("fail" in caller) return deprecateRefusal(caller.fail);
   }
   // CR-CRU-104 §S1 — the live proposals every DECLARED release below is
   // measured against, read ONCE: a hundred-row migration must not re-scan the
@@ -1939,23 +1945,31 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   const proposed = declaresMembership
     ? liveProposalLabels(store, key)
     : new Set<string>();
+  // …and SETTLED HISTORY, read once on the same terms: the derivation is one
+  // scan of the milestone table, never one per entry. BOTH rungs this route
+  // owns ask it — the membership gate below (CR-CRU-118 §S3a: a declared label
+  // naming the RECORDED release that shipped this cr) and the insert rung
+  // further down (§S2: a release-less row settled history already accounts
+  // for) — so it is resolved here, above them both, and there is exactly one
+  // of it.
+  const claimingRelease = recordedReleaseClaiming(store, key);
   const entries: QueueEntryInput[] = [];
   for (let index = 0; index < rawEntries.length; index++) {
     const raw: unknown = rawEntries[index];
     if (raw === null || typeof raw !== "object") {
-      return fail(400, `entry at index ${index} is not an object`);
+      return refuse(400, `entry at index ${index} is not an object`);
     }
     // Narrowed to a plain object at the JSON boundary; each field is validated
     // individually below before use.
     const fields = raw as Record<string, unknown>;
     if (typeof fields.cr !== "string" || fields.cr.length === 0) {
-      return fail(400, `entry at index ${index} is missing required field \`cr\``);
+      return refuse(400, `entry at index ${index} is missing required field \`cr\``);
     }
     if (fields.wave === undefined || fields.wave === null) {
-      return fail(400, `entry at index ${index} is missing required field \`wave\``);
+      return refuse(400, `entry at index ${index} is missing required field \`wave\``);
     }
     if (fields.dependsOn !== undefined && !Array.isArray(fields.dependsOn)) {
-      return fail(400, `entry at index ${index} has a non-array \`dependsOn\``);
+      return refuse(400, `entry at index ${index} has a non-array \`dependsOn\``);
     }
     const dependsOn = Array.isArray(fields.dependsOn)
       ? fields.dependsOn.map((dep) => String(dep))
@@ -1966,7 +1980,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     // non-integer is refused by name and index rather than rounded into a
     // position nobody chose.
     if (fields.seq !== undefined && fields.seq !== null && !Number.isInteger(fields.seq)) {
-      return fail(400, `entry at index ${index} has a non-integer \`seq\``);
+      return refuse(400, `entry at index ${index} has a non-integer \`seq\``);
     }
     // CR-CRU-104 §S1 — the membership this entry DECLARES, AS RECEIVED, put
     // through the ONE membership decision `cr-plan` and `wave-sequence` also
@@ -1986,10 +2000,11 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     // what may be stored — the declared label, and the NORMALISED lane.
     const membership = declareMembership(
       proposed,
-      { release: fields.release, track: fields.track },
+      { release: fields.release, track: fields.track, cr: fields.cr },
       index,
+      claimingRelease,
     );
-    if ("fail" in membership) return membership.fail;
+    if ("fail" in membership) return deprecateRefusal(membership.fail);
     const release = membership.release;
     const track = membership.track;
     // §S1 — `lifecycle` is the one declared field that is a STRUCTURE, so its
@@ -2012,7 +2027,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     let lifecycle: QueueLifecycle | undefined;
     if (fields.lifecycle !== undefined && fields.lifecycle !== null) {
       if ((state !== "SUPERSEDED" && state !== "VOID") || typeof at !== "number") {
-        return fail(
+        return refuse(
           400,
           `entry at index ${index} has a \`lifecycle\` that is not one: a lifecycle carries ` +
             `{state: "SUPERSEDED" | "VOID", by?, reason?, at: epoch ms}`,
@@ -2065,9 +2080,8 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   // Nothing below re-implements the carry-forward; it only ASKS what the
   // carry-forward will leave.
   const held = new Map(store.listQueue(key).map((entry) => [entry.cr, entry]));
-  // …and SETTLED HISTORY, read once on the same terms (the derivation is one
-  // scan of the milestone table, never one per entry).
-  const claimingRelease = recordedReleaseClaiming(store, key);
+  // Settled history is `claimingRelease`, resolved once above the entry loop
+  // because the membership gate reads the very same derivation (§S3a).
   const inheritedReleaseLess: string[] = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
@@ -2090,7 +2104,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // board buys nothing: a shipped release cannot claim a CR that did not
       // exist when it shipped.
       if (claimingRelease(entry.cr) === undefined) {
-        return fail(
+        return refuse(
           400,
           `entry at index ${index} (${entry.cr}): ${RELEASE_REQUIRED}`,
           { help: roadmapHints.missingRelease },
@@ -2118,7 +2132,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   try {
     report = store.replaceQueue(key, entries);
   } catch (error) {
-    if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+    if (error instanceof QueueWaveOverflowError) return deprecateRefusal(waveOverflow(error));
     throw error;
   }
   const { defaultedSeq } = report;
@@ -2137,7 +2151,11 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     // authored ones. CR-CRU-118 §S2 adds the membership half of the same rung,
     // ADDITIVELY: a post can invent a position and inherit a release-less row
     // in the same call, so both findings arrive.
+    // CR-CRU-118 §S3 — the route-level notice leads, because it is a finding
+    // about the DOOR rather than about any row this call carried, and the
+    // per-row findings follow it unchanged.
     warnings: [
+      ...DEPRECATED_ROUTE_NOTICE,
       ...defaultedSeqWarnings(defaultedSeq),
       ...inheritedReleaseLessWarnings(inheritedReleaseLess),
     ],
@@ -2159,10 +2177,16 @@ interface QueueWarning {
     | "cross-wave-backwards"
     | "defaulted-seq"
     | "unsequenced-members"
-    | "inherited-release-less";
+    | "inherited-release-less"
+    | "deprecated-route";
   message: string;
   crs?: string[];
   containers?: string[];
+  /** CR-CRU-118 §S3 — the machine half of the deprecation notice: the per-CR
+   *  verbs that replace the door that raised it, beside `crs`/`containers` and
+   *  for the same reason. A client that had to regex an English sentence for
+   *  them would be deciding something (§S9). */
+  verbs?: string[];
 }
 
 /** §S2/AC23 — the warn-and-write rung, shared by the queue post and cr-plan. */
@@ -2200,6 +2224,60 @@ function inheritedReleaseLessWarnings(crs: string[]): QueueWarning[] {
       crs,
     },
   ];
+}
+
+/**
+ * CR-CRU-118 §S3 — the per-CR verbs that replace the bulk door, in the CR's
+ * own order. `queue-file` is a TRANSITIONAL door being retired (DN D4's
+ * fallout §1): it posts the whole README table, drops the release qualifier
+ * that table prints, and is the route both measured membership incidents
+ * arrived through. Rather than teach it to parse membership — which would make
+ * a corpse comfortable instead of forcing its replacement to exist — the route
+ * SAYS what it is.
+ */
+const QUEUE_ROUTE_REPLACEMENT_VERBS = ["cr-plan", "cr-depends", "wave-sequence"];
+
+/**
+ * §S3 — the notice itself, raised on EVERY answer the bulk door gives.
+ *
+ * CONSTANT, so it is built once and shared: it carries no per-call fact, and
+ * a fresh object per request would allocate for nothing.
+ *
+ * ADDITIVE and never a replacement — it rides BESIDE `defaulted-seq` and
+ * `inherited-release-less` on the same call, because a notice that displaced
+ * another finding would HIDE it, which is strictly worse than no notice. On a
+ * SUCCEEDING call as well as a refused one: a warning only the failure path
+ * emits is invisible exactly when the route is being used as intended. And
+ * DEPRECATED IS NOT REMOVED — the route still writes, and today's whole table
+ * still bootstraps.
+ *
+ * `message` is the ready-to-print line the five clients render; `verbs` is the
+ * same fact machine-readably, so no client parses prose to find it (§S9).
+ */
+const DEPRECATED_ROUTE_NOTICE: readonly QueueWarning[] = [
+  {
+    code: "deprecated-route",
+    message:
+      `the bulk queue post is DEPRECATED and will be removed: declare membership per CR with ` +
+      `${QUEUE_ROUTE_REPLACEMENT_VERBS[0]}, dependencies with ${QUEUE_ROUTE_REPLACEMENT_VERBS[1]}, ` +
+      `and order with ${QUEUE_ROUTE_REPLACEMENT_VERBS[2]}`,
+    verbs: QUEUE_ROUTE_REPLACEMENT_VERBS,
+  },
+];
+
+/**
+ * §S3 — the notice riding a refusal a SHARED helper built: the membership
+ * gate's 400/404, the wave-overflow envelope, the caller-auth seam's 409. By
+ * the time this route sees those they are already Responses, and inventing a
+ * second wording of each refusal here is exactly what CR-CRU-104 §S1 forbids —
+ * so the finding is merged into the answer instead, ahead of whatever that
+ * answer already raised. Refusals only: the success path builds its own
+ * `warnings` array and pays no round trip.
+ */
+async function deprecateRefusal(res: Response): Promise<Response> {
+  const body = (await res.json()) as Record<string, unknown>;
+  const raised = Array.isArray(body.warnings) ? (body.warnings as QueueWarning[]) : [];
+  return json({ ...body, warnings: [...DEPRECATED_ROUTE_NOTICE, ...raised] }, res.status);
 }
 
 /** §S5 — a cr's container, as the warnings name it: `release/wave`. */
@@ -2335,6 +2413,11 @@ function unknownDependencies(entries: QueueEntry[], touched: Set<string>): strin
 interface MembershipDeclaration {
   release?: unknown;
   track?: unknown;
+  /** CR-CRU-118 §S3a — the cr whose SETTLED HISTORY may admit a label holding
+   *  no live proposal. A declaration that names no cr (`wave-sequence` carries
+   *  a whole ordered list, not one row) reaches only the live-proposal door,
+   *  which is exactly today's rule. */
+  cr?: string;
 }
 
 /**
@@ -2425,6 +2508,7 @@ function declareMembership(
   proposed: ReadonlySet<string>,
   declared: MembershipDeclaration,
   at?: number,
+  claimingRelease?: (cr: string) => string | undefined,
 ): { release: string | undefined; track: string | undefined } | { fail: Response } {
   // CR-CRU-104 §S1 — the SHAPE of a declaration, refused before its meaning
   // is judged: you cannot ask whether a label holds a live proposal, or which
@@ -2476,12 +2560,32 @@ function declareMembership(
     track = normalized;
   }
   if (release !== undefined && !proposed.has(release)) {
-    const sentence = `release ${release} has no live proposal — it is not a plannable target`;
-    return {
-      fail: fail(404, at === undefined ? sentence : `entry at index ${at}: ${sentence}`, {
-        help: roadmapHints.unproposedRelease(release),
-      }),
-    };
+    // CR-CRU-118 §S3a — the SECOND door, and the only one this CR opens: a
+    // label naming a RECORDED release is accepted where that release's own
+    // `crs` set already names the cr. A derivation from settled fact, so it
+    // cannot add scope to a closed release (the release must already claim the
+    // cr) and cannot admit a genuinely new one (a shipped release claims none).
+    //
+    // ORDER IS THE RULE. A LIVE proposal wins above and asks for no `crs`
+    // membership at all — an in-flight release has shipped nothing yet — and a
+    // recorded release admits only what IT claims, so being historical buys a
+    // cr no label but its own. Anything else keeps CR-CRU-091 §S8's refusal
+    // VERBATIM, message and help alike: this CR adds a door and widens none.
+    //
+    // ONE derivation, read through `recordedReleaseClaiming` — the same lookup
+    // §S2's bulk-insert rung asks. A second copy of this rule would drift, and
+    // the drift would be silent: a restore admitting a row the backfill
+    // refused, or the reverse.
+    const claimedBy =
+      declared.cr === undefined ? undefined : claimingRelease?.(declared.cr);
+    if (claimedBy !== release) {
+      const sentence = `release ${release} has no live proposal — it is not a plannable target`;
+      return {
+        fail: fail(404, at === undefined ? sentence : `entry at index ${at}: ${sentence}`, {
+          help: roadmapHints.unproposedRelease(release),
+        }),
+      };
+    }
   }
   return { release, track };
 }
@@ -2606,9 +2710,18 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // CR-CRU-104 §S1 — the ONE membership rule, the same decision the migration
   // door passes through. `cr-plan` declares no track, so `release` is its
   // whole declaration.
-  const membership = declareMembership(liveProposalLabels(store, pk.key), {
-    release: body.release,
-  });
+  //
+  // CR-CRU-118 §S3a — and the cr it declares for, because a label holding no
+  // live proposal is still admissible where the RECORDED release that shipped
+  // that cr already names it. The derivation is handed in rather than re-asked
+  // inside the gate, the `liveProposalLabels` precedent: one scan of settled
+  // history per request, and the same one §S2's insert rung reads.
+  const membership = declareMembership(
+    liveProposalLabels(store, pk.key),
+    { release: body.release, cr: body.cr },
+    undefined,
+    recordedReleaseClaiming(store, pk.key),
+  );
   if ("fail" in membership) return membership.fail;
   // §S5 — the cycle refusal runs BEFORE the write. THIS verb edits no
   // `dependsOn`, so the stored graph already is the graph the write leaves

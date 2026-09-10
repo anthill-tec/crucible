@@ -115,6 +115,29 @@ function unproposedHelp(release: string): string[] {
  *  in its own field+index shape rather than a third wording of it. */
 const RELEASE_REQUIRED = "`release` is required — the release this cr targets";
 
+/** CR-CRU-118 §S3 — the notice the BULK door raises on every call, announcing
+ *  that it is deprecated in favour of the per-CR verbs. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a call raised BESIDE §S3's standing deprecation notice.
+ *
+ * The notice is a property of the DOOR — this route is being retired — and not
+ * of the membership declaration this suite compares. `cr-plan` is not being
+ * retired and raises no such finding, so a parity table that demanded it do so
+ * would be asserting a falsehood about what parity means here: §S1's claim is
+ * that one membership RULE is reached from both entry points, never that the
+ * two doors are the same door. It is therefore excluded from the comparison
+ * rather than expected of both. Do NOT "restore" it.
+ *
+ * EXCLUDED, never filtered FOR: every remaining assertion keeps its
+ * exhaustiveness, so an unexpected finding arriving from either door still
+ * parts the two answers or fails an empty-set pin.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
+
 /** CR-CRU-099 §S1/AC4a — the lane rule's tail, shared verbatim by the bulk
  *  post's indexed refusal, `wave-sequence`'s field refusal and
  *  `replaceQueue`'s own guard. The PREFIXES differ (§S1: each route keeps its
@@ -340,7 +363,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
           { cr: "CR-104-B", title: "second", wave: "5", dependsOn: [], release: "0.2.0" },
         ]);
         expect([200, 202]).toContain(res.status);
-        expect(res.body.warnings ?? []).toEqual([]);
+        expect(besideTheDeprecationNotice(res.body.warnings)).toEqual([]);
         const board = await entries(key);
         expect(board.map((e) => e.release)).toEqual(["0.2.0", "0.2.0"]);
         expect(board.map((e) => e.seq)).toEqual([5001, 5002]);
@@ -484,7 +507,11 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
       // wording, two shapes (§S1).
       meaning: res.body.error?.replace(/^entry at index \d+: /, ""),
       help: res.body.help,
-      warnings: (res.body.warnings ?? [])
+      // §S3's deprecation notice is dropped before the comparison: it is a
+      // finding about the DOOR, not about the declaration, and only one of
+      // these two doors is being retired. Everything else a route raised is
+      // still compared in full.
+      warnings: besideTheDeprecationNotice(res.body.warnings)
         .map((w) => `${w.code}|${w.message}|${(w.crs ?? []).join(",")}`)
         .sort(),
       // Compared as the BOOLEAN FACT, not as the field: `cr-plan` publishes

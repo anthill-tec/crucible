@@ -85,6 +85,22 @@ function defaultedSeqMessage(crs: string[]): string {
   );
 }
 
+/** CR-CRU-118 §S3 — the route-level notice the BULK queue post raises on every
+ *  call. `cr-plan` raises no such thing, so only the bulk assertions below
+ *  exclude it. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a bulk post raised BESIDE §S3's standing deprecation notice.
+ *
+ * The notice is EXCLUDED rather than the finding under test being filtered
+ * FOR: `toEqual([])` on the remainder still says "and nothing else happened",
+ * which is the claim this fixture was making before §S3 landed.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
+
 function expectDefaultedSeqWarning(warnings: WarningWire[] | undefined, crs: string[]): void {
   expect(warnings).toBeDefined();
   const warning = warnings!.find((w) => w.code === "defaulted-seq");
@@ -680,7 +696,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
         { cr: "CR-D", wave: 6, dependsOn: [] },
       ]);
       expect(reposted.status).toBe(200);
-      expect(reposted.body.warnings).toEqual([]);
+      expect(besideTheDeprecationNotice(reposted.body.warnings)).toEqual([]);
       expect([...(await seqs(key)).values()].sort((a, b) => a - b)).toEqual([
         5001, 5002, 6001, 6002,
       ]);

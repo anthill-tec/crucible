@@ -111,6 +111,22 @@ const ORCH = "orchestrator-1";
 const RED_AGENT = "red-1";
 const ROLELESS = "legacy-pre-cr044";
 
+/** CR-CRU-118 §S3 — the route-level notice the BULK queue post raises on EVERY
+ *  call, announcing that the door is deprecated in favour of the per-CR verbs.
+ *  The five routes this suite is about raise no such thing. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a call raised BESIDE §S3's standing deprecation notice.
+ *
+ * EXCLUDED, never filtered FOR: `toEqual([])` on the remainder still says "and
+ * nothing else happened", which is what the assertion claimed before §S3
+ * landed and what catches an unexpected finding nobody is watching for.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
+
 /** The store's private `Database`, reached the way tests/agent-lifecycle.test.ts
  *  and tests/v2-projects-activity.test.ts already reach it, to plant a column
  *  value NO write path can produce. See the CR-CRU-108 block at the foot of
@@ -1561,6 +1577,9 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     );
 
     test("a post where NO entry carries an explicit seq emits NO such warning", async () => {
+      // The BULK door raises CR-CRU-118 §S3's standing deprecation notice on
+      // every call; it is excluded below rather than the seq finding being
+      // filtered FOR, so "and nothing else happened" keeps its full strength.
       boot();
       const key = await seed("ac23-quiet");
       const posted = await post(queuePath(key), {
@@ -1571,7 +1590,7 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         ],
       });
       expect(posted.status).toBe(200);
-      expect(posted.body.warnings).toEqual([]);
+      expect(besideTheDeprecationNotice(posted.body.warnings)).toEqual([]);
     });
 
     test(

@@ -142,6 +142,24 @@ function defaultedSeqMessage(crs: string[]): string {
   );
 }
 
+/** CR-CRU-118 §S3 — the route-level notice the bulk queue post raises on EVERY
+ *  call. It is a finding about the DOOR, not about any row a post carried. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a bulk post raised BESIDE §S3's standing deprecation notice.
+ *
+ * The notice is EXCLUDED rather than the finding under test being filtered
+ * FOR: `toEqual([])` on the remainder still says "and nothing else happened",
+ * which is the claim these fixtures were making before §S3 landed and the one
+ * that catches an unexpected code arriving from somewhere nobody is watching.
+ * Filtering to the code a test is about would pass while a stray finding
+ * sailed through.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
+
 function expectDefaultedSeqWarning(warnings: WarningWire[] | undefined, crs: string[]): void {
   expect(warnings).toBeDefined();
   const warning = warnings!.find((w) => w.code === "defaulted-seq");
@@ -1634,7 +1652,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // IN SCALE ⇒ SILENT. A mixture is a DIFFERENCE OF SCALE, never "this
         // write chose the value" (CR-CRU-095 §S2, ruled 2026-09-02), and every
         // compared row here sits inside wave 5's own block.
-        expect(body.warnings ?? []).toEqual([]);
+        expect(besideTheDeprecationNotice(body.warnings)).toEqual([]);
       },
     );
 
@@ -1762,7 +1780,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // A mixture is a DIFFERENCE OF SCALE, never "this write chose the
         // value" (CR-CRU-095 §S2, ruled 2026-09-02) — so a row defaulted
         // in-block beside in-block siblings warns about nothing.
-        expect(body.warnings ?? []).toEqual([]);
+        expect(besideTheDeprecationNotice(body.warnings)).toEqual([]);
         const entries = (await getQueue(key)).entries;
         expect(findEntry(entries, "CR-Q99-SN").seq).toBe(5002);
         expect(findEntry(entries, "CR-Q99-SN").release).toBe(RELEASE);

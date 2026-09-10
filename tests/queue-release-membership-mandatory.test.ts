@@ -174,6 +174,15 @@ const SHIPPED_QUEUE_WARNING_CODES = [
   "unsequenced-members",
 ] as const;
 
+/** §S2's own finding, NAMED. This suite used to read it off the union as
+ *  `union[union.length - 1]` — "the last member declared" — which was true of
+ *  a union this CR was still growing and stopped being true the moment §S3
+ *  added `deprecated-route` after it, silently re-pointing every assertion
+ *  below at the wrong code. Named explicitly: a rename of the code now fails
+ *  the union assertion that pins it by value, which is where a rename SHOULD
+ *  be caught, rather than quietly measuring a different finding. */
+const INHERITED_CODE = "inherited-release-less";
+
 /**
  * The `QueueWarning.code` union, read off `src/v2.ts` itself.
  *
@@ -804,10 +813,8 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         expect([200, 202]).toContain(posted.status);
         expect(posted.body.ok).toBe(true);
 
-        const union = queueWarningCodeUnion();
-        const inheritedCode = union[union.length - 1]!;
         const raised = (posted.body.warnings ?? []).filter(
-          (warning) => warning.code === inheritedCode,
+          (warning) => warning.code === INHERITED_CODE,
         );
         expect(
           raised,
@@ -845,16 +852,22 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         seedHistory(key, [...INHERITED, ...ACTIVE]);
 
         const union = queueWarningCodeUnion();
-        // BY LENGTH — a fifth code, and only a fifth.
+        // BY VALUE, in order, THROUGH THE FIFTH — a rename or a reorder of the
+        // shipped four fails here rather than silently reaching five rendering
+        // clients, and the fifth member is pinned as the CODE ITSELF rather
+        // than by counting to it.
+        //
+        // The total length is deliberately NOT pinned here any more: §S3 of
+        // this same CR adds a sixth member (`deprecated-route`), so a count in
+        // this section would assert a fact belonging to that one and break
+        // again on the next addition. The union is pinned WHOLE, at exactly
+        // six and with the first five by value, in
+        // tests/queue-file-deprecation.test.ts — so nothing may join the
+        // vocabulary unasserted.
         expect(
-          union,
+          union.slice(0, SHIPPED_QUEUE_WARNING_CODES.length + 1),
           `src/v2.ts declares the QueueWarning codes as ${JSON.stringify(union)}`,
-        ).toHaveLength(SHIPPED_QUEUE_WARNING_CODES.length + 1);
-        // BY VALUE, in order — a rename or a reorder of the shipped four fails
-        // here rather than silently reaching five rendering clients.
-        expect(union.slice(0, SHIPPED_QUEUE_WARNING_CODES.length)).toEqual([
-          ...SHIPPED_QUEUE_WARNING_CODES,
-        ]);
+        ).toEqual([...SHIPPED_QUEUE_WARNING_CODES, INHERITED_CODE]);
         expect(new Set(union).size).toBe(union.length);
 
         // And the fifth member is the code the route actually EMITS — a union
@@ -869,7 +882,7 @@ describe("CR-CRU-118 — every live CR names a release", () => {
           codes,
           `the inherited post raised ${JSON.stringify(codes)} against a declared union of ` +
             `${JSON.stringify(union)}`,
-        ).toContain(union[union.length - 1]!);
+        ).toContain(INHERITED_CODE);
       },
     );
 
@@ -907,9 +920,8 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         expect(posted.body.ok).toBe(true);
         expect(posted.body.error).toBeUndefined();
 
-        const union = queueWarningCodeUnion();
         const raised = (posted.body.warnings ?? []).filter(
-          (warning) => warning.code === union[union.length - 1]!,
+          (warning) => warning.code === INHERITED_CODE,
         );
         expect(raised).toHaveLength(1);
         // The migration list is the FIVE non-landed rows. The 62 are excluded
@@ -1003,9 +1015,8 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         // the one shape in which that list legitimately exceeds the five the
         // populated-board criterion pins, because on an empty board the write
         // carries the history too.
-        const union = queueWarningCodeUnion();
         const raised = (restored.body.warnings ?? []).filter(
-          (warning) => warning.code === union[union.length - 1]!,
+          (warning) => warning.code === INHERITED_CODE,
         );
         expect(raised).toHaveLength(1);
         const named = raised[0]!.crs ?? [];

@@ -3215,10 +3215,17 @@ def cmd_queue_file(args, project_dir, ops):
           + (f" unknownDependencies={unknown}" if unknown else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
           file=sys.stderr)
+    # CR-CRU-118 §S3 — the findings the route raised are RENDERED, never
+    # dropped. This argument was hard-coded `[]`, so every warning the queue
+    # route answered with died here in all five clients at once: §S2's
+    # inherited-release-less migration list, and the deprecation notice that
+    # names the per-CR verbs replacing this very door. The five roadmap verbs
+    # already forward theirs `resp.get("warnings") or []`; this is the same
+    # line, in the one shared module, so no client decides anything (§S9).
     ops.emit("queue-file", bool(ok),
              {"entries": entries, "unknownDependencies": unknown,
               "help": ["status"]},
-             ops.context(project_dir), [], None)
+             ops.context(project_dir), resp.get("warnings") or [], None)
     return 0 if ok else 1
 
 
