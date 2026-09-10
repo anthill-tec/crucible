@@ -686,12 +686,11 @@ GATE_PASS_FAMILY = {
 # (ENVELOPE_TIER_NONE — this exit did the thing zero times) rather than
 # inventing a third vocabulary.
 #
-# `interim` was first thought unproducible until the in-flight POST's guard is
-# repaired. That was measured and found false: the guard withholds the post
-# only on a NINE-row ladder, so any shorter snapshot — the shape the fleet's
-# own fixtures produce — posts one and may then still hold. So the field
-# reports what the LOOP really did rather than what the sealing decision alone
-# can see: a `none` while a gate sits on the board is a machine-readable lie.
+# `interim` is the ORDINARY state of a long run since CR-CRU-117 §S2 repaired
+# the in-flight guard: every real snapshot is nine rows, so before that repair
+# only a short ladder ever posted one. The field reports what the LOOP really
+# did rather than what the sealing decision alone can see: a `none` while a
+# gate sits on the board is a machine-readable lie.
 GATE_POSTED_FINAL = "final"
 GATE_POSTED_INTERIM = "interim"
 
@@ -700,6 +699,14 @@ GATE_POSTED_INTERIM = "interim"
 # status and reattach". A hold that names no next move strands its caller, and
 # naming a command the tool does not have would strand it further.
 AXI_REATTACH_HELP = "inspect with `axi status` and reattach"
+
+# CR-CRU-117 §S2 — what the HUMAN channel says when the poll loop already put
+# an in-flight ladder on the board and the run then held. `NOT SEALED` alone is
+# true and still leaves the impression the board is silent, with only the
+# machine-readable `postedGate` to correct it — and a caller reading stderr is
+# exactly the reader that never sees that field.
+GATE_ALREADY_ON_BOARD = ("an interim gate is already on the board — this exit "
+                         "posted no seal over it")
 
 # §S8 — gate-run is the AXI streaming standard; gate-report is discouraged.
 # EVERY gate-report invocation emits this warning (envelope warnings[] + stderr)
@@ -1371,6 +1378,15 @@ def gate_from_axi(decoded, intent, final):
     from its steps; the sealing snapshot (`final=True`) resolves the run's own
     terminus through `sealed_outcome`. Returns (gate_dict, step_count).
 
+    CR-CRU-117 §S1 — an in-flight gate carries `inFlight: true` INSIDE the gate
+    object, and a seal carries no such key at all. Every gate must name one of
+    the server's four outcomes, so an unfinished ladder necessarily reaches the
+    board as `checks-passed` — a value BOTH readers (`workflowLens`'s gated
+    waves, `boundaryGate`'s primary zone) treat as a verdict. The mark is what
+    they exclude on, and it is explicit data on the event rather than a
+    heuristic like "fewer than nine steps" or "has no push.commit", both of
+    which this very defect proved unreliable.
+
     §S3 — a sealing gate whose run reached NO terminus carries no `outcome` key
     at all: there is no honest value to put there, and its absence is the one
     fact the caller branches on before posting. Returning a gate rather than
@@ -1394,6 +1410,8 @@ def gate_from_axi(decoded, intent, final):
     if outcome:
         gate["outcome"] = outcome
     gate["steps"] = steps
+    if not final:
+        gate["inFlight"] = True
     head = run.get("head")
     if final and head:
         gate["push"] = {"commit": head}
@@ -5129,6 +5147,176 @@ def cmd_gate_report(args, project_dir, ops):
 _GATE_POLL_CADENCE_S = 2.0
 _GATE_POLL_TICK_S = 0.4
 
+# CR-CRU-117 §S2 — the axi step states that are RESOLVED: the row is finished
+# and will not change again. Every other state a row can be in — `pending`,
+# `running`, `fixing`, and each awaiting-a-decision state the tool has or
+# grows — means the run is still going. Stated as the RESOLVED set rather than
+# its complement so a state this fleet has never seen counts as still-going:
+# withholding the stream is the failure mode that hid this defect for a
+# release, and an in-flight gate is marked as one anyway.
+_RESOLVED_AXI_STEP_STATES = frozenset(("completed", "skipped", "failed"))
+
+# The RUN-level states that are a terminus. A run reporting one has stopped,
+# whatever its ladder still says.
+_TERMINAL_AXI_RUN_STATES = frozenset(("completed", "failed", "cancelled"))
+
+
+def axi_snapshot_in_flight(decoded):
+    """CR-CRU-117 §S2 — is this decoded snapshot a run STILL GOING?
+
+    TERMINALITY, never the row count. The guard this replaces demanded a
+    PARTIAL ladder (`0 < nsteps < 9`), and `axi status` ALWAYS emits all nine
+    rows with the unrun ones `pending`, so it was false for every real snapshot
+    and no client ever streamed an interim gate for a real run.
+
+    A snapshot is in flight when it has resolved NOTHING — no top-level
+    `outcome`, no top-level `error`, no terminal run status — and it still has
+    a ladder to stream. Two independent things then say the run is going, and
+    either is enough: the RUN's own non-terminal status, or a ROW that has not
+    resolved. The row test alone would drop a snapshot whose listed rows have
+    all finished while the next has yet to appear; the run test alone would
+    trust a status field over the ladder beneath it.
+
+    An EMPTY ladder is not streamed: there is nothing to put in the gate's
+    `steps[]`, which is the only half of the `0 < nsteps < 9` guard that was
+    ever right.
+
+    A snapshot carrying a top-level `error` is NOT in flight, and that is the
+    same terminality test rather than an exception to it: the `error` line is
+    the tool saying THIS invocation stopped observing the run (the documented
+    bounded-`--wait` return is exactly that shape), so its ladder is a
+    last-known state and not a live one. CR-CRU-115 §S3 pins the consequence —
+    a bounded hold posts no gate at all — and the caller reports it instead."""
+    if not isinstance(decoded, dict):
+        return False
+    if decoded.get("outcome") or decoded.get("error"):
+        return False
+    run = decoded.get("run") or {}
+    status = str(run.get("status") or "")
+    if status in _TERMINAL_AXI_RUN_STATES:
+        return False
+    steps = run.get("steps") or []
+    if not steps:
+        return False
+    return bool(status) or any(
+        str(s.get("status")) not in _RESOLVED_AXI_STEP_STATES for s in steps)
+
+
+def axi_ladder_identity(decoded):
+    """CR-CRU-117 §S2 — what makes a polled ladder the SAME one already posted:
+    the step names, their statuses, and whether the snapshot carries a
+    top-level `outcome` key at all.
+
+    The throttle the cadence alone cannot be. Ruled 2026-09-10: at a 2 s
+    cadence a 45-minute pipeline would post ~1350 gate events, against 1842 on
+    this whole board, while the ladder itself transitions at most nine times
+    per run. Durations and finding counts are deliberately NOT part of the
+    identity — they move on every tick, which would defeat the dedup while
+    telling a reader nothing it did not already have."""
+    run = (decoded.get("run") or {}) if isinstance(decoded, dict) else {}
+    return (tuple((s.get("step"), s.get("status"))
+                  for s in (run.get("steps") or [])),
+            isinstance(decoded, dict) and "outcome" in decoded)
+
+
+def poll_axi_snapshot(no_mistakes_path):
+    """One `axi status` poll, decoded — or None when the tool answered with
+    nothing usable. An unparseable or empty snapshot is a normal state of a run
+    still being written, so it is a SKIPPED tick and never an error."""
+    status = subprocess.run([no_mistakes_path, "axi", "status"],
+                            capture_output=True, text=True)
+    snap = (status.stdout or "").strip()
+    decoded = _decode_axi_snapshot(snap) if snap else None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
+                      context, ops):
+    """§S8/CR-CRU-117 §S2 — poll `axi status` while `proc` is alive and POST one
+    INTERIM gate per DISTINCT ladder. Returns True when at least one interim
+    gate reached the board: the fact the envelope states and the sealing
+    decision below cannot see for itself.
+
+    TWO throttles, both required and neither sufficient. The CADENCE decides
+    how often the tool is asked — untouched, per this CR's Non-goals, and the
+    poll clock ticks on every poll rather than on every POST so a run holding
+    one ladder is not interrogated five times a second. The LADDER then decides
+    whether the answer is worth putting on the board.
+
+    The interim POST carries NO release: a version-stamped gate is
+    retention-protected (`LIVE_GATE`, `src/store.ts`), so stamping every
+    snapshot would leave a run's worth of unprunable gates behind for one
+    release — and the seal restates the release anyway."""
+    last_poll = None
+    last_ladder = None
+    posted_interim = False
+    while proc.poll() is None:
+        now = time.monotonic()
+        if last_poll is None or (now - last_poll) >= _GATE_POLL_CADENCE_S:
+            last_poll = now
+            decoded = poll_axi_snapshot(no_mistakes_path)
+            if decoded is not None and axi_snapshot_in_flight(decoded):
+                ladder = axi_ladder_identity(decoded)
+                if ladder != last_ladder:
+                    gate, _ = gate_from_axi(decoded, intent, final=False)
+                    ops.post_gate(project_dir, agent_id, gate, context or None)
+                    last_ladder = ladder
+                    posted_interim = True
+        time.sleep(_GATE_POLL_TICK_S)
+    return posted_interim
+
+
+def gate_run_result_fields(outcome, resolved, release, posted_interim, held):
+    """§S4 — the envelope's statement of what this exit put on the board, always
+    as a value and never as an absent key: a reader cannot tell a missing field
+    from a client too old to have one. `unstated` and `none` are the fleet's own
+    distinction and are not interchangeable — `unstated` means nothing was
+    ASSERTED (no `--release` was given; the run named no outcome), `none` means
+    this exit did the thing ZERO times (no gate reached the wire).
+
+    CR-CRU-117 §S2 — `outcome` is therefore the SEALING verdict when there is
+    one and otherwise names what DID reach the board, which is the same word
+    `postedGate` uses. `none` beside a gate sitting on the board would be a
+    reader's only evidence pointing the wrong way, correctable solely by a
+    second field."""
+    posted = (GATE_POSTED_FINAL if outcome
+              else GATE_POSTED_INTERIM if posted_interim
+              else ENVELOPE_TIER_NONE)
+    return {
+        "outcome": outcome or posted,
+        "rawOutcome": resolved or ENVELOPE_TIER_UNSTATED,
+        "release": release if isinstance(release, str) and release
+                   else ENVELOPE_TIER_UNSTATED,
+        "postedGate": posted,
+        "inFlight": held,
+    }
+
+
+def unsealed_run_report(exit_code, resolved, detail, held, posted_interim):
+    """§S3/CR-CRU-117 §S2 — the caller-facing report for an exit that SEALED
+    nothing: the stderr lines and the legacy one-liner, built from ONE list of
+    facts so the two channels cannot drift apart.
+
+    The facts, in order: what was not sealed and why; that an in-flight gate is
+    already on the board, when the poll loop put one there; the run's OWN error,
+    which is what answers "did this run terminate?" and is already in hand; and
+    the move that resumes a held run."""
+    said = ("the run is still in flight — `axi run` resolved no outcome"
+            if held else
+            f"the run resolved {resolved!r}, which is in no pass family "
+            f"this client knows, so it is not sealed")
+    rest = []
+    if posted_interim:
+        rest.append(GATE_ALREADY_ON_BOARD)
+    if detail:
+        rest.append(f"the run said: {detail}")
+    if held:
+        rest.append(AXI_REATTACH_HELP)
+    lines = [f"gate-run: NOT SEALED: {said}"] + [f"gate-run: {r}" for r in rest]
+    legacy = (f"gate-run: ok=False sealed=nothing exit={exit_code} — "
+              + "; ".join([said] + rest))
+    return lines, legacy
+
 
 def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     """§S8 — axi PROXY wrapper: launch `no-mistakes axi run`, poll `axi status`
@@ -5167,31 +5355,13 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
               file=sys.stderr)
         return 1
 
-    # Poll `axi status` while the run is in flight; post throttled INTERIM
-    # gates decoded from each (partial) snapshot. Whether the loop actually
-    # POSTED is remembered, because the envelope below states which gate this
-    # exit put on the board and the sealing decision cannot see the loop.
-    last_post = None
-    posted_interim = False
-    while proc.poll() is None:
-        now = time.monotonic()
-        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
-            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
-            snap = (status.stdout or "").strip()
-            if snap:
-                decoded = _decode_axi_snapshot(snap)
-                if isinstance(decoded, dict):
-                    run = decoded.get("run") or {}
-                    in_flight = (str(run.get("status")) != "completed"
-                                 and "outcome" not in decoded)
-                    gate, nsteps = gate_from_axi(decoded, intent, final=False)
-                    # Post only a genuine PARTIAL ladder (never a resolved /
-                    # full 9-step snapshot masquerading as interim).
-                    if in_flight and 0 < nsteps < 9:
-                        ops.post_gate(project_dir, agent_id, gate, context or None)
-                        last_post = now
-                        posted_interim = True
-        time.sleep(_GATE_POLL_TICK_S)
+    # Stream the ladder while the run is in flight (`stream_axi_ladder` owns
+    # the cadence, the terminality guard and the ladder dedup). Whether it
+    # actually POSTED is remembered here, because the envelope below states
+    # which gate this exit put on the board and the sealing decision cannot see
+    # the loop.
+    posted_interim = stream_axi_ladder(proc, nm, intent, project_dir, agent_id,
+                                       context, ops)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout.
@@ -5212,58 +5382,30 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     final_gate, _ = gate_from_axi(final_decoded, intent, final=True)
     outcome = final_gate.get("outcome")
 
-    # §S4 — the envelope STATES what was posted, always as a value and never as
-    # an absent key: a reader cannot tell a missing field from a client too old
-    # to have one. `unstated` and `none` are the fleet's own distinction and are
-    # not interchangeable — `unstated` means nothing was ASSERTED (no
-    # `--release` was given; the run named no outcome), `none` means this exit
-    # did the thing ZERO times (no gate reached the wire).
     raw = final_decoded.get("outcome")
     resolved = raw if isinstance(raw, str) and raw else None
     release = getattr(args, "release", None)
     held = outcome is None and resolved is None
-    result_fields = {
-        "outcome": outcome or ENVELOPE_TIER_NONE,
-        "rawOutcome": resolved or ENVELOPE_TIER_UNSTATED,
-        "release": release if isinstance(release, str) and release
-                   else ENVELOPE_TIER_UNSTATED,
-        "postedGate": (GATE_POSTED_FINAL if outcome
-                       else GATE_POSTED_INTERIM if posted_interim
-                       else ENVELOPE_TIER_NONE),
-        "inFlight": held,
-    }
+    result_fields = gate_run_result_fields(outcome, resolved, release,
+                                           posted_interim, held)
     envelope_context = ops.context(project_dir, agent_id=agent_id)
 
     if outcome is None:
         # §S3 — the run reached no terminus, so this exit SEALS nothing. Not
         # merely nothing green: every gate carries an outcome, and both values
         # that would fit an unfinished ladder (`passed`, `checks-passed`) are
-        # read as a verdict by the wave lens, so there is no shape in today's
-        # vocabulary that says "still going" without claiming one. Silence on
-        # the board is the honest state; a green gate over a run sitting at
-        # `awaiting_approval` is not. The poll loop above may ALREADY have put
-        # such a ladder there on a short snapshot — that false green is the
-        # follow-on change request's whole subject, and until it is repaired
-        # the envelope at least states the gate honestly rather than reporting
-        # a silence the board does not have.
+        # read as a verdict by the wave lens. A `awaiting_approval` ladder
+        # therefore reaches the board only as an in-flight-MARKED gate from the
+        # loop above (CR-CRU-117 §S1), never as a seal from here.
         #
-        # The report goes to the CALLER instead, naming the run's OWN error —
-        # the fact that answers "did this run terminate?", already in hand —
-        # and the move that resumes it.
-        detail = final_decoded.get("error")
-        said = ("the run is still in flight — `axi run` resolved no outcome"
-                if held else
-                f"the run resolved {resolved!r}, which is in no pass family "
-                f"this client knows, so it is not sealed")
-        print(f"gate-run: NOT SEALED: {said}", file=sys.stderr)
-        if detail:
-            print(f"gate-run: the run said: {detail}", file=sys.stderr)
-        if held:
-            print(f"gate-run: {AXI_REATTACH_HELP}", file=sys.stderr)
-        legacy = (f"gate-run: ok=False sealed=nothing exit={proc.returncode} "
-                  f"— {said}"
-                  + (f"; the run said: {detail}" if detail else "")
-                  + (f"; {AXI_REATTACH_HELP}" if held else ""))
+        # The report goes to the CALLER instead, naming what the loop already
+        # put on the board, the run's OWN error — the fact that answers "did
+        # this run terminate?", already in hand — and the move that resumes it.
+        lines, legacy = unsealed_run_report(proc.returncode, resolved,
+                                            final_decoded.get("error"),
+                                            held, posted_interim)
+        for line in lines:
+            print(line, file=sys.stderr)
         ops.emit("gate-run", False, result_fields, envelope_context, [], legacy)
         return 1
 
