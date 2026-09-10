@@ -313,6 +313,57 @@ Consequences the rules must respect:
   PROCESS with its own task set. D3 already routes the in-flight half to the gate; D4 routes the
   membership half to the proposal. Neither adds a record kind.
 
+### D4's fallout — the transitional door closes, and history needs a different one
+
+All user-ruled 2026-09-10, in the same conversation as D4.
+
+**1. The bulk queue route is TRANSITIONAL and is deprecated.** `queue-file` → `POST …/queue` exists
+because this project is simultaneously Crucible's source and its first user: the board had to be
+bootstrapped from a Markdown table that predated every roadmap verb. That migration is over, and the
+route's cost is now measured in incidents — TWO, both data loss: `CR-CRU-117` reached the board with
+no release and no authored seq (2026-09-10), and `CR-CRU-082`'s VOID disposition was destroyed when
+the board was repopulated through it (2026-08-29, recorded in that entry's own lifecycle reason).
+
+The replacement is not new — **it shipped in CR-CRU-091 §S8 and CR-CRU-106 §S1**: five per-CR routes,
+each passing the membership gate, each carrying an author, none able to erase a field it did not send.
+
+| verb | route | declares |
+|---|---|---|
+| `cr-plan` | `POST …/queue/plan` | one CR's release + wave |
+| `cr-depends` | `POST …/queue/depends` | one CR's whole dependency set |
+| `wave-sequence` | `POST …/queue/sequence` | one wave's authored order |
+| `cr-supersede` / `cr-void` | `POST …/queue/<cr>/supersede\|void` | lifecycle disposition |
+| `release-propose` | `POST …/release-proposals` | the release and its target date |
+
+Registering a CR is therefore three calls, and every failure mode the bulk door produced is
+unreachable through them. Deprecation lands as a WARNING first (CR-CRU-118); REMOVAL plus a
+file-driven sync that issues those per-CR calls is 0.3.0 work.
+
+**2. CR-CRU-022's burn-down scope source must be re-based.** Its §S3 and AC2 derive scope-change
+snapshots from `POST /queue` being called twice (`queue_snapshots` + a `scope-change` step). If the
+bulk route retires, that source retires with it. Per-CR declaration writes are the better source
+anyway — finer-grained, and each carries an author — but the re-base is a DESIGN change to a spec that
+is already written, so it is recorded here rather than discovered inside that CR's gap analysis.
+
+**3. Historical membership is a DERIVATION, not a plan — and today no door accepts it.** Measured on
+this tree: `declareMembership` validates a declared label against `liveProposalLabels` alone and
+answers `404 release X has no live proposal — it is not a plannable target`. A shipped release's
+proposal is consumed by its own insert (`stampProposalRetired`), which that gate's own comment calls
+"settled history". So `cr-plan --release 0.1.0` is refused BY DESIGN, and the bulk door shares the
+gate — there is no gated way to state that a landed CR belonged to a shipped release.
+
+The rule that opens it without opening anything else: **a declared label naming a RECORDED release is
+accepted only where that release's own `crs` set already names the CR.** That is a derivation from
+settled fact with a built-in self-check — it cannot add new scope to a closed release, because the
+release itself has to already claim the CR. Measured: all **62** landed release-less rows are named
+by a recorded release (`0.1.0` → 60, `0.1.2` → 1, `0.1.3` → 1; `0.1.1` names none, and no row needs
+it). Zero not derivable.
+
+**4. The 62 are BACK-FILLED, not exempted** (user-ruled, reversing this DN's first draft). The release
+record stays the single source of truth and the queue row inherits what it already says, so the
+mandate ends with zero exceptions and 0.1.x history becomes drawable. The backfill is a data step that
+runs once rule 3 ships.
+
 ### What this drift section decides
 
 - **Nothing about the locked definition** in D1–D3. Wave stays temporal and abstract; release stays a

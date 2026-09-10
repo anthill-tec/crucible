@@ -493,6 +493,35 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Notes
 
+- 🚪 **2026-09-10 — USER RULINGS: `queue-file` is DEPRECATED, the 62 landed rows are BACK-FILLED, and
+  CR-CRU-118 is rescoped.** Recorded as DN `D4's fallout` (`DN-crucible-wave-track-release.md`).
+  (1) The bulk queue door is transitional — it exists because this project is Crucible's source AND
+  its first user — and its replacement shipped long ago in CR-CRU-091 §S8 + CR-CRU-106: `cr-plan`
+  (`POST …/queue/plan`), `cr-depends` (`…/queue/depends`), `wave-sequence` (`…/queue/sequence`),
+  `cr-supersede`/`cr-void` (`…/queue/<cr>/…`), `release-propose` (`…/release-proposals`). Registering
+  a CR is three gated calls; every failure mode the bulk door produced is unreachable through them.
+  Deprecation WARNS in CR-CRU-118; removal + a file-driven sync is 0.3.0.
+  (2) CR-CRU-118 §S3 no longer teaches the bulk parser to carry membership — building comfort into a
+  retiring door — and gains **§S3a**, the historical-membership derivation.
+  (3) **A measured blocker**: `declareMembership` accepts only labels with a LIVE proposal
+  (`v2.ts` — `404 release X has no live proposal`), and a shipped release's proposal is consumed by
+  its own insert, so `cr-plan --release 0.1.0` is refused BY DESIGN. The 62-row backfill therefore
+  cannot run until §S3a ships: a label naming a RECORDED release is accepted only where that
+  release's own `crs` already names the CR — derivation with a self-check, unable to add scope to a
+  closed release. Coverage measured: 62/62 derivable (`0.1.0` → 60, `0.1.2` → 1, `0.1.3` → 1).
+  (4) **CR-CRU-022's burn-down scope source must be re-based**: its §S3/AC2 derive `queue_snapshots`
+  from `POST /queue` being called twice, which retires with the route. Recorded as design work for
+  that CR rather than left to its gap analysis.
+  (5) CR-CRU-075 exists SOLELY to give the fleet parity on `queue-file`; its per-client tests assert
+  every client must expose it, so they invert at removal, not at deprecation.
+- 📅 **2026-09-10 — 0.2.0's target date declared: 2026-09-12** (`targetAt: 1789171200`), estimated
+  from measured close-out velocity — 44 CRs over 2026-08-20→09-10 = **2.0/day** calendar (the last 8
+  days run 3.9/day, deliberately not used: today's three CRs each cost 4-6 cycles). Remaining scope
+  was 117 + 118 plus the ceremony. **0.3.0 is proposed at ~2026-10-03** on the same basis (4 known
+  CRs — 015/018/022/098 — all larger surfaces, plus the burn-down and citation-sweep CRs and expected
+  mid-release discovery ≈ 8-10 CRs), and is NOT yet recorded: the user ruled it is declared after
+  0.2.0 ships.
+
 - 🔬 **2026-09-10 — CITATION CENSUS of `clients/`, measured at CR-CRU-115 cycle 407, and it upgrades
   the recorded candidate CR from an estimate to a count.** `clients/` carries **11** `path:line`
   citations over 8 distinct targets: **6 accurate, 5 STALE**. The stale set is `mvn-crucible.py:641`

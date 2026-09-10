@@ -67,14 +67,33 @@ The warning is a fifth `QueueWarning` code, structured like `defaulted-seq` (a `
 clients to print and `crs[]` for a machine), because §S9 says a client renders findings and decides
 nothing.
 
-### §S3 The bulk route carries the membership the table declares
+### §S3 The bulk route announces that it is deprecated
 
-`parse_queue_table` reads the release qualifier already printed in the Status and Wave cells and
-sends it. The parser stops dropping data the file states, which is the actual cause of §S2's refusal
-case ever arising, and closes the second half of the `queue-file` defect class.
+**Rescoped 2026-09-10, user-agreed.** This section used to teach `parse_queue_table` to carry the
+release qualifier the table prints. It is dropped: `queue-file` is a TRANSITIONAL door being retired
+(DN D4's fallout §1), and building membership parsing into it would make a corpse comfortable rather
+than force its replacement to exist. §S2's refusal already stops another `CR-CRU-117`.
 
-Nothing is inferred: a cell with no qualifier sends no release, and the §S2 rung decides what happens
-next.
+Instead the route says what it is: every call raises a deprecation warning naming the per-CR verbs
+that replace it — `cr-plan`, `cr-depends`, `wave-sequence` — in the same structured shape as every
+other finding, so five clients render it and none of them decides anything.
+
+Removal, plus a file-driven sync that issues those per-CR calls, is 0.3.0 work and not this CR's.
+
+### §S3a Historical membership is a derivation, not a plan
+
+Measured: `declareMembership` accepts only labels holding a LIVE proposal, so a landed CR cannot be
+told which SHIPPED release it belonged to — `cr-plan --release 0.1.0` answers `404 … no live
+proposal`, by design, because a shipped release's proposal is consumed by its own insert.
+
+Without a second door the mandate cannot close: 62 landed rows carry no release and no gated verb can
+give them one. The door, narrow by construction: **a declared label naming a RECORDED release is
+accepted only where that release's own `crs` set already names the CR.** A derivation from settled
+fact, self-checking — it cannot add scope to a closed release, because the release must already claim
+the CR itself.
+
+Measured coverage: all 62 are named by a recorded release (`0.1.0` → 60, `0.1.2` → 1, `0.1.3` → 1).
+Zero not derivable. The backfill itself is a DATA step that runs once this ships.
 
 ### §S4 A release proposal declares its target date
 
@@ -113,15 +132,30 @@ release, `--target` for a missing date). No refusal is a bare 400.
 - [ ] The 62 landed 0.1.0-era rows produce the warning, never a refusal, and are not rewritten — a
       bootstrap of today's file must still succeed.
 
-**§S3 — the parser carries membership**
+**§S3 — the deprecation notice**
 
-- [ ] A table row reading `COMPLETED (0.2.0)` / `6 (0.2.0)` sends `release: "0.2.0"`; a row with no
-      qualifier sends no `release` key at all (absence by key, not empty string).
-- [ ] Round trip: posting the project's own `docs/changes/README.md` preserves every release
-      assignment on the board — asserted by comparing the full `{cr: release}` map before and after,
-      which is the regression the `CR-CRU-117` incident actually needs.
-- [ ] A qualifier the table states is sent VERBATIM — no normalisation, no `v` stripping — mirroring
-      `declareMembership`'s "nothing is COERCED on the way in".
+- [ ] Every `queue-file` call raises a deprecation warning, on a SUCCEEDING call as well as a failing
+      one — a warning only the failure path emits would be invisible exactly when the route is being
+      used as intended.
+- [ ] The warning names the three replacement verbs by name, machine-readably, and is structured like
+      every other finding (`code`, `message`) rather than prose a client must parse.
+- [ ] It reaches all five clients, asserted per client, with the client count itself asserted (5).
+- [ ] The route still WORKS: deprecated is not removed, and a bootstrap of today's file still
+      succeeds (with §S2's warning for the inherited release-less rows).
+
+**§S3a — historical membership**
+
+- [ ] `cr-plan --release 0.1.0` for a CR the `0.1.0` release record NAMES in its `crs` succeeds, and
+      the queue row comes back carrying that release.
+- [ ] The same call for a CR the record does NOT name is refused — the derivation's self-check, and
+      the assertion that this door cannot add scope to a shipped release.
+- [ ] A label that is neither a live proposal nor a recorded release keeps today's exact refusal
+      (`no live proposal — it is not a plannable target`): this CR adds a door, it widens no existing
+      one.
+- [ ] A live proposal still takes precedence unchanged — an in-flight release is planned into exactly
+      as it is today, with no `crs` membership required (it has shipped nothing yet).
+- [ ] All 62 landed release-less rows are derivable: asserted as a census against the live board, so
+      the migration's precondition is a measured fact rather than an assumption.
 
 **§S4 — the target date**
 
@@ -143,11 +177,13 @@ release, `--target` for a missing date). No refusal is a bare 400.
 - [ ] The five LIVE release-less entries are unaffected by this CR's code: their migration into
       `0.3.0` is a DATA step, scheduled after 0.2.0 ships (user-ruled 2026-09-10), and no AC here
       performs it.
+- [ ] The 62 landed rows' backfill is likewise a DATA step, run through `cr-plan` once §S3a ships —
+      not an AC, and never a direct database edit.
 
 ## Estimated size
 
-Two cycles. §S1+§S2 (the refusal rungs and the fifth warning code) then §S3+§S4 (the parser and the
-mandatory target across the fleet).
+Three cycles. §S1+§S2 (the refusal rungs and the fifth warning code), §S3+§S3a (the deprecation notice
+and the historical-membership door), §S4 (the mandatory target across the fleet).
 
 ## Risk
 
@@ -165,7 +201,18 @@ mandatory target across the fleet).
 ## Non-goals
 
 - **No burn-down, velocity or forecast computation** (user-stated 2026-09-10). This CR makes the axis
-  exist and keeps its history honest; reading it is later work.
+  exist and keeps its history honest; reading it is later work — and it is already SPECIFIED:
+  CR-CRU-022 §S4 consumes the declared target and computes
+  `scheduleHealth: ahead|at-risk|behind`, having already retired a competing `queue-file`-owned
+  per-wave `targetDate` "before it was built, because two target-date mechanisms on one board would
+  have to be reconciled and one of them would be wrong". This CR feeds that spec; it does not
+  anticipate it.
+- **No removal of `queue-file`**, and no file-driven replacement sync: deprecation warns here,
+  removal plus the sync is 0.3.0 work (DN D4 fallout §1). CR-CRU-075's fleet-parity tests — which
+  assert every client MUST expose the verb — invert at removal, not here.
+- **No re-base of CR-CRU-022's scope source.** Its burn-down currently derives snapshots from
+  `POST /queue` being called twice; the bulk route's retirement takes that with it, and the re-base
+  is recorded in the DN as design work for that CR, not smuggled in here.
 - **No retroactive repair** of the 62 landed rows, and no migration of the five live ones — that is a
   dated data step after 0.2.0 ships.
 - No new record kind, no new route, no schema change: `declareMembership`, `targetAt` and
