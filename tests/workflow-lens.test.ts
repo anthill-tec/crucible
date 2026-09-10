@@ -46,6 +46,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
+import type { LensRunLike } from "../public/app-logic.mjs";
 import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -1094,7 +1095,15 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
   function waveLabel(wave: string, events: LensGateEventFixture[]): string {
     const result = AppLogic.workflowLens({
       plans: [closedPlanForWave(wave)],
-      events,
+      // `LensRunLike` requires `failed`, a test COUNT — the shape of an
+      // INGEST run. A gate event carries no counts at all; its verdict is
+      // `gate.outcome`, which is why the fixture above declares none and why
+      // widening it with a `failed: 0` would put a lie about the wire shape
+      // into the fixture this suite reasons from. Loosening `LensRunLike`
+      // instead would weaken the type for every other caller of the lens, so
+      // the mismatch is absorbed HERE, at the one boundary that has it — the
+      // same move `result.waves` makes on the line below.
+      events: events as unknown as LensRunLike[],
     });
     const waves = result.waves as Array<{ wave: string; state: { label: string } }>;
     const node = waves.find((w) => w.wave === wave);
