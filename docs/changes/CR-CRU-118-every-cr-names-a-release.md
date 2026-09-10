@@ -22,15 +22,20 @@ while that CR appeared on no roadmap surface.
 **Three measured facts this CR is built on:**
 
 1. **67 queue entries carry no release**: 62 landed 0.1.0-era rows (history — their provenance lives
-   on the release record's own `crs` set) and **5 live ones** — `015`, `018`, `022`, `098` in wave 7,
-   plus `082`, VOID.
+   on the release record's own `crs` set) and **5 release-less non-landed ones** — `015`, `018`,
+   `022`, `098` in wave 7, plus `082`. Of those five only FOUR are live: `082` is VOID by
+   disposition, re-recorded 2026-09-10. Note the two fields do not agree and a census must read both
+   — `082` reads `status: PENDING` with `lifecycle.state: VOID`, because the derived status answers
+   from plans and knows nothing of a disposition.
 2. **The bulk queue route cannot carry membership.** `parse_queue_table` returns
    `{cr, title, wave, dependsOn}` and never reads the release qualifier the table itself prints
    (`PENDING (0.2.0)`, `6 (0.2.0)`). So a bootstrap re-post of the queue file publishes a wave and
-   drops the release — which is how `CR-CRU-117` reached the board unauthored. This is the SECOND
-   recorded loss from that route: `082`'s own stored lifecycle reason reads "disposition was lost when
-   the board was cleared and repopulated via queue-file on 2026-08-29, which imports rows but not
-   lifecycle dispositions".
+   drops the release — which is how `CR-CRU-117` reached the board unauthored. It also drops
+   lifecycle dispositions, and `082` is the THIRD recorded instance: lost when the board was cleared
+   and repopulated 2026-08-29, re-recorded via `cr-void` 2026-09-02, and lost again 2026-09-10 to a
+   single-row `queue-file` run by the orchestrator itself. A route that destroys a disposition three
+   times, silently, while the README's status column disagrees with the board, is the case for §S3's
+   deprecation stated as measurement rather than preference.
 3. **`targetAt` already exists and is optional.** CR-CRU-091 §S1 gave a `release-proposal` a declared
    target in epoch seconds — the same unit as `releasedAt`, distinguished as "when it was aimed for"
    vs "when it shipped" — and `recordReleaseProposal(…, { label, targetAt? })` accepts its absence.
@@ -159,11 +164,23 @@ release, `--target` for a missing date). No refusal is a bare 400.
       proposals and exits 2 (CR-CRU-091 §S6), unchanged in all five clients.
 - [ ] The refusal's `help[]` names the `release-proposals` route, matching the existing
       no-such-proposal refusal's shape.
-- [ ] **Board invariant, asserted as a census**: no LIVE (non-landed, non-dead) queue entry lacks a
-      release. Measured against the live board, so the rule is checked over the whole set rather than
-      only at the write. Today this census FAILS with exactly five names
-      (`015`, `018`, `022`, `098`, `082`) — it is the migration's own progress meter, and it passes
-      when the data step completes.
+- [ ] **Board invariant, asserted as a census with a NAMED, SHRINKING allowlist**: no live queue entry
+      lacks a release EXCEPT the four the allowlist names. "Live" is computed from BOTH fields, not
+      one: a queue entry carries a derived `status` AND an independent `lifecycle.state`, and they can
+      disagree — `CR-CRU-082` reads `status: PENDING` while its lifecycle is `VOID` (measured
+      2026-09-10), because `deriveQueueStatus` answers from plans and knows nothing of a disposition.
+      A census keyed on `status` alone would therefore count a voided CR as live. Live means `status`
+      is neither `COMPLETED` nor `COMPLETED_UNTRACKED`, AND `lifecycle.state` is neither `VOID` nor
+      `SUPERSEDED`.
+      The allowlist is `015`, `018`, `022`, `098` — FOUR, not five: `082`'s VOID disposition was
+      re-recorded 2026-09-10 (user-ruled), which removes it from the live set by disposition rather
+      than by migration.
+      The allowlist may only SHRINK: the census fails if a name leaves it un-migrated, and fails if a
+      FIFTH release-less live entry appears. That is the invariant with teeth — "no NEW
+      membership-less CR" — and unlike an absolute census it PASSES on arrival, which it must, because
+      the migration of those four is deferred to 0.3.0 by the Integration criteria below. An absolute
+      census would have been red at close-out and red until 0.3.0. Same pattern as
+      `PRE_CR_ASSERTION_RESIDUE`.
 - [ ] A CR declared into the release currently IN FLIGHT succeeds — the mid-release-birth case, driven
       on a board whose proposal is live and whose branch is cut. This is the mode 0.2.0 itself ran in.
 - [ ] A CR declared into a label with no live proposal and no recorded release is still refused with
@@ -174,8 +191,11 @@ release, `--target` for a missing date). No refusal is a bare 400.
 - [ ] A bulk post containing a CR the board does NOT hold, with no release, is refused by CR id and
       index; `listQueue` is unchanged afterwards.
 - [ ] A bulk post whose release-less entries all ALREADY exist writes, and returns a warning whose
-      `crs[]` names exactly those entries — asserted against the live shape: five today
-      (`015`, `018`, `022`, `098`, `082`).
+      `crs[]` names exactly those entries — asserted against the live shape: **five** today
+      (`015`, `018`, `022`, `098`, `082`). Five here and FOUR in §S1's census is deliberate, not a
+      discrepancy to reconcile: this warning reports what the route INHERITED, and a VOID CR still
+      carries no release, so `082` belongs in it; the census reports what is still LIVE, and `082`
+      is disposed of. An implementer who makes these two numbers agree has broken one of them.
 - [ ] The warning's `code` is the fifth member of the union, and the union's OTHER four are asserted
       unchanged by length and by value.
 - [ ] The 62 landed 0.1.0-era rows produce the warning, never a refusal, and are not rewritten — a
@@ -191,6 +211,10 @@ release, `--target` for a missing date). No refusal is a bare 400.
 - [ ] It reaches all five clients, asserted per client, with the client count itself asserted (5).
 - [ ] The route still WORKS: deprecated is not removed, and a bootstrap of today's file still
       succeeds (with §S2's warning for the inherited release-less rows).
+- [ ] The deprecation warning is ADDITIVE, never a replacement: it co-occurs with §S2's fifth code on
+      the same call, and every existing `queue-file` finding still arrives. Asserted because 21 test
+      files reference this route (measured 2026-09-10) and any that pin `warnings[]` by exact set or
+      by length will break on arrival — those fixtures are this CR's to update, not a later CR's.
 
 **§S3a — historical membership**
 
@@ -212,6 +236,16 @@ release, `--target` for a missing date). No refusal is a bare 400.
       client, with the client count itself asserted (5).
 - [ ] The route refuses a proposal with no `targetAt` even when a client is bypassed — the rule lives
       server-side, not only in the flag surface.
+- [ ] **The existing callers are migrated in this CR, and the migration is the bulk of §S4.** Measured
+      2026-09-10: SEVEN bun suites create release proposals and contain no `targetAt` anywhere —
+      `queue-registration`, `queue-canonical-order`, `queue-membership-one-rule`,
+      `queue-default-into-wave-block`, `queue-defaulted-seq-scope`, `cr-depends-declaration`,
+      `cr-depends-envelope` — plus 24 `release-propose` call sites across three python client suites
+      (`test_cr091_roadmap_verbs`, `test_cr054_fleet_inventory`, `test_client_fleet_envelope_census`).
+      Making the ROUTE refuse absence breaks every one of them, and they are core queue suites. The
+      flag change is one line in `add_roadmap_verbs`; this is the real cost, absorbed here by user
+      ruling 2026-09-10 rather than staged. Every migrated fixture declares a target because its
+      subject needs one — none is given a filler value to silence a refusal.
 - [ ] An ISO date and an epoch-seconds value both land the same stored integer.
 - [ ] A revision with a NEW target retires the predecessor and inserts a new row: the retired row is
       still readable by id, and `listReleaseProposals` returns exactly one live proposal for the label.
@@ -227,16 +261,21 @@ release, `--target` for a missing date). No refusal is a bare 400.
 - [ ] The four verbs' flag surfaces are IDENTICAL across the five clients, driven from each client's
       real `--help`: `release-propose`, `cr-plan`, `wave-sequence`, `queue-file`. A fork in any one of
       them fails, which is what makes the single-registrar design a fact rather than an intention.
-- [ ] The five LIVE release-less entries are unaffected by this CR's code: their migration into
-      `0.3.0` is a DATA step, scheduled after 0.2.0 ships (user-ruled 2026-09-10), and no AC here
-      performs it.
+- [ ] The FOUR live release-less entries (`015`, `018`, `022`, `098`) are unaffected by this CR's
+      code: their migration into `0.3.0` is a DATA step, scheduled after 0.2.0 ships (user-ruled
+      2026-09-10), and no AC here performs it. They are the census allowlist above, and the two
+      criteria must name the same four — an absolute invariant plus a deferred migration is a
+      contradiction, which is what the original pair of criteria contained.
 - [ ] The 62 landed rows' backfill is likewise a DATA step, run through `cr-plan` once §S3a ships —
       not an AC, and never a direct database edit.
 
 ## Estimated size
 
-Three cycles. §S1+§S2 (the refusal rungs and the fifth warning code), §S3+§S3a (the deprecation notice
-and the historical-membership door), §S4 (the mandatory target across the fleet).
+Four cycles, revised at gap analysis 2026-09-10 from three. §S1+§S2 (the refusal rungs, the fifth
+warning code and the census), §S3+§S3a (the deprecation notice and the historical-membership door),
+§S4a (the mandatory target: the flag, the route, and `recordReleaseProposal`'s signature), §S4b (the
+caller migration — seven bun suites and 24 client call sites, measured; absorbed into this CR by user
+ruling rather than staged, and large enough that folding it into §S4a would hide it).
 
 ## Risk
 
