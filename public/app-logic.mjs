@@ -791,11 +791,18 @@ export function workflowLens({ plans, events }) {
   // CR-CRU-013 §S6 — wave labels a qualifying no-mistakes gate has sealed:
   // a `passed` OR `checks-passed` gate event flips the wave to `gated`;
   // `failed`/`cancelled` do NOT. Inferred from events only (zero wave API).
+  // CR-CRU-117 §S1 — a gate posted while its run is still going is NOT a
+  // verdict: `gate.inFlight === true` is the explicit mark (settled in
+  // DN-crucible-wave-track-release.md D3) and excludes the event whatever
+  // its outcome, step count or `push` block says. Never a heuristic — both
+  // "nine rows" and "has a push" are properties this defect proved
+  // unreliable. An UNMARKED gate is a seal (old events carry no mark).
   const gatedWaveLabels = new Set(
     (events ?? [])
       .filter(
         (e) =>
           e.kind === "gate" &&
+          e.gate?.inFlight !== true &&
           (e.gate?.outcome === "passed" || e.gate?.outcome === "checks-passed"),
       )
       .map((e) => e.context?.wave)

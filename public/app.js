@@ -4286,11 +4286,16 @@
     // scoped plan closed — no CR active — AND a gate event exists). The
     // boundary gate is the LATEST scoped gate (latest wins). Returns null
     // when the live plan should own the zone (so no gate element mounts).
+    // CR-CRU-117 §S1 — a gate marked `gate.inFlight === true` is a snapshot
+    // of a run still going, not a verdict, so it is never a candidate for
+    // the boundary: it is dropped before "latest wins" and the zone falls
+    // back to the newest real verdict, or to the live plan when there is
+    // none. Unmarked gates (every pre-CR-117 event) are seals, unchanged.
     const boundaryGate = () => {
       const plans = scopedPlans();
       if (plans.length === 0) return null;
       if (plans.some((p) => p.status === "open")) return null; // a CR is active
-      const gates = scopedGateEvents();
+      const gates = scopedGateEvents().filter((e) => e.gate?.inFlight !== true);
       if (gates.length === 0) return null;
       return gates.reduce(
         (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
