@@ -122,7 +122,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-116](CR-CRU-116-only-one-wave-is-active.md) | only one wave is active, and Crucible refuses the alternative | feature | COMPLETED (0.2.0) | 091, 104 | 6 (0.2.0) |
 | [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | COMPLETED (0.2.0) | 091, 092, 116 | 6 (0.2.0) |
 | [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | COMPLETED (0.2.0) | 013, 073 | 6 (0.2.0) |
-| [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | PENDING | 013, 115 | 6 |
+| [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | PENDING (0.2.0) | 013, 115 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -536,10 +536,23 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   permanently live gate. (5) The fleet's existing interim fixtures (3/6/8 growing rows across four
   client suites) encode a shape the real tool never emits — that agreement between fixture and guard
   is why the fault reached a release.
-- ❓ **2026-09-10 — USER DECISION OWED: CR-CRU-117's release membership.** Filed with `release`
-  undeclared. It repairs a fault measured during 0.2.0's own release ceremony, but unlike CR-115 it
-  touches `public/` (and possibly `src/`), so it is not a client-only patch. 0.2.0 or post-0.2.0 is
-  the user's call.
+- ✅ **2026-09-10 — USER RULING: CR-CRU-117 is 0.2.0, wave 6.** Declared `cr-plan --release 0.2.0
+  --wave 6`, dependencies authored through `cr-depends`, and wave 6's order re-authored as
+  `116, 114, 115, 117` (seq 6001-6004). Wave 6 now holds FOUR CRs, all in 0.2.0, and 0.2.0's declared
+  scope is no longer complete: 117 is the remaining work.
+- ⚠️ **2026-09-10 — CR-CRU-117 was on the board WITHOUT ever being AUTHORED, and it took the user to
+  catch it.** Its `wave: 6` / `seq: 6004` arrived from the destructive `queue-file` bulk POST the
+  orchestrator ran by reflex to publish one row — which sends only `{cr, title, wave, dependsOn}`. So
+  the entry existed, `next` offered it, and it carried NO `release`, was absent from wave 6's declared
+  sequence, and — because zone 2 is release-scoped — **rendered nowhere on the roadmap**. The board
+  answering `NEXT` on a CR the roadmap cannot draw is exactly the blind spot the CR-CRU-116 review
+  named as Q2. Rule reaffirmed: publish ONE row with `cr-plan` + `cr-depends` + `wave-sequence`, never
+  with `queue-file`.
+- ℹ️ **2026-09-10 — that same accidental `queue-file` run also CLOSED a recorded divergence.** The
+  board had held `015/018/022/098` at wave 6 while this file had already re-waved them to 7; the bulk
+  POST published the file's rows, so the board now reads wave **7** for all four, matching the table.
+  Recorded because it was luck, not intent — the same run dropped `CR-CRU-113`'s VOID row, which was
+  absent from the file.
 - 🌊 **2026-09-09 — WAVE 6 IS 0.2.0's SECOND WAVE; the release-machinery CRs land on the release
   branch without the feature ceremony (user rulings).** Three decisions, taken on the Lavish
   proposal `.lavish/crucible-in-release-waves.html`, after the 0.2.0 release ceremony exposed the
