@@ -44,10 +44,14 @@
 //
 // A sixth `QueueWarning` code arriving on EVERY call breaks any fixture that
 // pins `warnings[]` by exact set, by length, or POSITIONALLY. Measured
-// 2026-09-10 and reported to GREEN rather than migrated here: the sibling
-// tests/queue-release-membership-mandatory.test.ts pins the union at FIVE and
-// reads §S2's finding as `union[union.length - 1]`, and both idioms move when
-// this lands.
+// 2026-09-10 and reported to GREEN rather than migrated here — and both of
+// the idioms in that report have SINCE MOVED, so read the current pins, not
+// that snapshot: the sibling tests/queue-release-membership-mandatory.test.ts
+// no longer reads §S2's finding as `union[union.length - 1]`, it NAMES the
+// code as `INHERITED_CODE` and records why at its :177-181; and the
+// whole-union pin — length six, the shipped five unchanged by value and in
+// order — lives in THIS file now, in its final test ("the deprecation code
+// joins the QueueWarning union as a SIXTH member…").
 //
 // Every fixture board is synthetic and in-memory — an OS-assigned port, an
 // mkdtempSync scratch db, ids in this suite's own `CR-118D-*` shape. The live
