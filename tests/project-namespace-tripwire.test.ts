@@ -1398,10 +1398,59 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // and `clients/` file re-measures at its pre-CR count. The `develop`
 // baselines are UNCHANGED at 512/378/601 and stay the floors — a floor never
 // moves for a re-pin.
+// UPDATED 2026-09-10 by CR-CRU-118 — its close-out step, taken ONCE at the end
+// and MEASURED rather than transcribed. That distinction cost something: the
+// orchestrator carried 591/801/442 through four cycles' dispatch briefs, its
+// own VERIFY measured 594/802/443, and the true close-out figure is 595 —
+// because the last FIX added a citation to `handleQueuePost`'s header AFTER
+// VERIFY read the tree. A pin transcribed from any of those three readings
+// leaves this guard red for a NEW reason and reads as a fresh regression, so
+// the rule this entry adds to the note is: re-record from a measurement taken
+// after the final prose change, never from a figure carried in a brief.
+// ALL THREE trees move — the first entry in this note's history where none is
+// flat, because the CR reaches the server, the renderer and the client fleet.
+//
+// `src/` HEAD moves 573 -> 595, +22:
+//   `src/v2.ts`               190 -> 209  (+19)  the two doors and the notice
+//   `src/hints.ts`             40 ->  42   (+2)  `missingRelease`, `missingTarget`
+//   `src/store.ts`            259 -> 260   (+1)  `recordReleaseProposal`'s
+//                                               requiredness is the METHOD's,
+//                                               not the record kind's
+// The 19 in `v2.ts` are the CR's whole surface: §S2's three-way split (refuse
+// an insert, admit what settled history claims, warn about what is inherited),
+// `recordedReleaseClaiming` as the ONE derivation §S3a's door reuses,
+// `inherited-release-less` and `deprecated-route` as the fifth and sixth
+// `QueueWarning` codes, the absent-`targetAt` refusal ordered ahead of the
+// store's convergence check, and the route header that now says the door is
+// deprecated.
+//
+// `public/` HEAD moves 442 -> 443, +1 — `public/app-logic.mjs` 87 -> 88, a
+// citation re-pin, not new prose: §S4a inserted 11 comment lines into
+// `src/store.ts` and shifted every line number below them, so a `store.ts:NNNN`
+// reference here named the wrong construct.
+//
+// `clients/` HEAD moves 800 -> 802, +2 — all `_crucible_axi.py`: `--target`
+// becoming required, and the same `store.ts` line-shift re-pin.
+//
+// RECORDED BECAUSE IT COST SOMETHING, and it is not the count. `NextBlockCitationsTest`
+// is the ONLY line-number guard in this repo and it watches one block of
+// `_crucible_axi.py`, so §S4a's 11 inserted lines broke exactly one citation
+// LOUDLY and an unknown number SILENTLY. The sweep that followed found six
+// more stale `src/store.ts:NNNN` references drifting by 300-460 lines, none
+// caused by this CR — e.g. `tests/queue-registration.test.ts:1328` cites
+// `:3599` for an expression now at `:3897`. Those are left alone (CR-CRU-078:
+// repair citations only on touch) and recorded so a fifth incident does not
+// rediscover them. The generalisation this note cannot fix: a line-number
+// citation has no guard outside that single block, and adding prose above a
+// symbol invalidates every one of them.
+//
+// Measured with THIS file's own classifier over the working tree against
+// `git show 56067e0:<path>` — the commit before the CR's first change. The
+// `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 573 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 442 },
-  clients: { exts: [".py"], develop: 601, head: 800 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 595 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 443 },
+  clients: { exts: [".py"], develop: 601, head: 802 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
