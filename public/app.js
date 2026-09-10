@@ -1141,6 +1141,23 @@
       return "pass";
     };
 
+    // CR-CRU-117 §S1 — the mark, read here exactly as `workflowLens` and
+    // `boundaryGate` read it: `gate.inFlight === true`, a key INSIDE the gate
+    // object (settled 2026-09-10, DN-crucible-wave-track-release D3).
+    //
+    // The cards are the THIRD reader, and the only one that shows a gate to a
+    // human rather than deriving a verdict from it, so it LABELS instead of
+    // excluding: the feed is history, and dropping a real event from it would
+    // be the worse lie. An in-flight snapshot must carry `checks-passed` (the
+    // server's vocabulary has no word for "in progress"), so without the
+    // qualification below the card reads — and, via `gateOutcomeClass`, paints
+    // — as the green seal that never happened.
+    const gateInFlight = (g) => g?.inFlight === true;
+    const gateInFlightClause = (g) => (gateInFlight(g) ? " · in flight" : "");
+    // The class stem an in-flight gate takes INSTEAD of pass/fail/cancel: it is
+    // not a verdict, so it may not borrow a verdict's colour.
+    const gateClassStem = (g) => (gateInFlight(g) ? "inflight" : gateOutcomeClass(g?.outcome));
+
     // §S2 exact seal text: 🛡 Wave <n> gate · no-mistakes <outcome> · <N>
     // steps · <fixed> findings fixed · pushed <shortcommit>. `<fixed>` is the
     // SUM of every submitted step's findings.fixed (the only "fixed" figure
@@ -1149,7 +1166,12 @@
       const g = e.gate ?? {};
       const steps = g.steps ?? [];
       const fixed = steps.reduce((n, s) => n + (s.findings?.fixed ?? 0), 0);
-      return `🛡 Wave ${e.context?.wave ?? ""} gate · no-mistakes ${g.outcome} · ${steps.length} steps · ${fixed} findings fixed · pushed ${shortCommit(g.push?.commit)}`;
+      // CR-CRU-117 §S1 — the `pushed` clause is dropped when there is no
+      // commit to name (every in-flight gate): `pushed ` with nothing after it
+      // claims a push that has not happened. A seal always carries one, so its
+      // text is unchanged.
+      const commit = shortCommit(g.push?.commit);
+      return `🛡 Wave ${e.context?.wave ?? ""} gate · no-mistakes ${g.outcome}${gateInFlightClause(g)} · ${steps.length} steps · ${fixed} findings fixed${commit ? ` · pushed ${commit}` : ""}`;
     };
 
     // §S2 — full-width gate seal (workspace). The trailing ⊙ Detail badge is
@@ -1158,7 +1180,7 @@
       div(
         {
           "data-testid": "gate-card",
-          class: `app-transition-marker app-gate-card app-gate-${gateOutcomeClass(e.gate?.outcome)}`,
+          class: `app-transition-marker app-gate-card app-gate-${gateClassStem(e.gate)}`,
         },
         // §S2 — the exact seal text is isolated in its own child so the
         // whole-card textContent (which also carries the ⊙ Detail badge) never
@@ -1177,15 +1199,23 @@
         ),
       );
 
-    // §S4b/§S4c — home compact gate one-liner (distinct testid).
+    // §S4b/§S4c — home compact gate one-liner (distinct testid). CR-CRU-117
+    // §S1 — same mark, same suppression as the full card: home shows the row,
+    // qualified, and never a dangling ` · ` where a commit would be.
+    const gateCompactText = (e) => {
+      const g = e.gate ?? {};
+      const commit = shortCommit(g.push?.commit);
+      return `🛡 no-mistakes ${g.outcome}${gateInFlightClause(g)}${commit ? ` · ${commit}` : ""}`;
+    };
+
     const GateCardCompact = (e) =>
       div(
         {
           "data-testid": "gate-card-compact",
-          class: `app-gate-compact app-gate-${gateOutcomeClass(e.gate?.outcome)}`,
+          class: `app-gate-compact app-gate-${gateClassStem(e.gate)}`,
           onclick: () => openDrillin(e.id),
         },
-        `🛡 no-mistakes ${e.gate?.outcome} · ${shortCommit(e.gate?.push?.commit)}`,
+        gateCompactText(e),
       );
 
     // §S4b — slim workspace milestone row: ◇ glyph · type · label · CR badge
@@ -4239,9 +4269,12 @@
         div(
           {
             "data-testid": "gate-outcome-banner",
-            class: `app-pill app-gate-banner app-gate-${gateOutcomeClass(g.outcome)}`,
+            class: `app-pill app-gate-banner app-gate-${gateClassStem(g)}`,
           },
-          `no-mistakes ${g.outcome}`,
+          // CR-CRU-117 §S1 — the drill-in banner is the same claim in bigger
+          // type, so it carries the same qualification: an in-flight ladder is
+          // shown as one, never as the verdict its `checks-passed` would read.
+          `no-mistakes ${g.outcome}${gateInFlightClause(g)}`,
         ),
         steps.map((s) =>
           div(
