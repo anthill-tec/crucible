@@ -267,6 +267,15 @@ const EXEMPT_CONSTANTS: Record<string, { file: string; reason: string }> = {
       "in it, fed to the checkers as a pure function so the tripwire can be proven to fire " +
       "without editing a real file. The planted namespaces name no project that exists.",
   },
+  RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10: {
+    file: join("tests", "queue-release-membership-mandatory.test.ts"),
+    reason:
+      "AC5's dated snapshot, in the shrinking-ceiling form PRE_CR_ASSERTION_RESIDUE uses — " +
+      "CR-CRU-118 §S1's board invariant names the live queue entries that still carry no " +
+      "release, measured 2026-09-10, plus the one excluded by its VOID disposition rather " +
+      "than by migration. The census is a claim about THIS project's board, so the ids are " +
+      "the subject and cannot be synthesised; every other row that suite drives is synthetic.",
+  },
 };
 
 function exemptConstantSpans(relPath: string, text: string): Span[] {
