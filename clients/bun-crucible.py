@@ -1660,16 +1660,6 @@ def cmd_queue_file(args):
 # `cr-close`    now also emits a `type:"cr-merged"` milestone on a successful
 #               close (withheld on a failed close). §S4c / AC 141.
 
-# Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
-# snapshot has no resolved outcome of its own, so gate-run synthesises one from
-# the current step set — it must still be a member of this set (server 400s
-# otherwise).
-GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
-
-# §S2b cadence — the ONLY concrete throttle constant this codebase defines
-# (CR-CRU-008 `_Narrator` default). gate-run reuses it for its interim-poll
-# cadence so at most one interim gate posts per >=2-second window.
-
 _TOON_MOD = None
 
 
@@ -1837,44 +1827,6 @@ def _fleet_context(cr=None):
     if role:
         ctx["track"] = role
     return ctx
-
-
-def _map_axi_step_status(status):
-    """Map a no-mistakes axi step status onto a gate step status."""
-    return {
-        "completed": "passed",
-        "skipped": "skipped",
-        "failed": "failed",
-        "running": "running",
-    }.get(status, status or "passed")
-
-
-def _gate_from_axi(decoded, intent, final):
-    """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
-
-    An in-flight snapshot (`final=False`) synthesises a valid interim outcome
-    from its steps; the sealing snapshot (`final=True`) takes the run's own
-    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
-    run = decoded.get("run") if isinstance(decoded, dict) else None
-    run = run or {}
-    axi_steps = run.get("steps") or []
-    steps = []
-    any_failed = False
-    for s in axi_steps:
-        st = s.get("status")
-        if st == "failed":
-            any_failed = True
-        steps.append({"name": s.get("step"), "status": _map_axi_step_status(st)})
-    if final:
-        raw = decoded.get("outcome")
-        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
-    else:
-        outcome = "failed" if any_failed else "checks-passed"
-    gate = {"intent": intent, "outcome": outcome, "steps": steps}
-    head = run.get("head")
-    if final and head:
-        gate["push"] = {"commit": head}
-    return gate, len(steps)
 
 
 def _post_gate(project_dir, agent_id, gate, context=None, release=None):
