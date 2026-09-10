@@ -953,3 +953,316 @@ describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header supp
     }
   });
 });
+
+// ── CR-CRU-117 §S1 — an in-flight gate is not a verdict ──────────────────
+// Spec: docs/changes/CR-CRU-117-an-in-flight-gate-is-not-a-seal.md, the
+// "§S1 — an in-flight gate is not a verdict" acceptance criteria. The mark's
+// SHAPE was settled 2026-09-10, before any RED, in
+// docs/research/DN-crucible-wave-track-release.md (drift section D3): it
+// rides as a key INSIDE the `gate` object the client already builds
+// (`gate.inFlight`), NOT as a top-level field beside `version` and NOT as a
+// fifth outcome-vocabulary member — because `Store.recordGateEvent(gate:
+// unknown, …)` (src/store.ts ~L2049) stores the gate object VERBATIM and
+// `handleGates` (src/v2.ts ~L1179) validates only `intent`, `outcome` and
+// steps-is-an-array, so an in-gate key reaches both readers with zero
+// server change.
+//
+// Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
+//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs ~L794) is
+//     built from EVERY `kind:"gate"` event whose `gate.outcome` is `passed`
+//     or `checks-passed`, keyed by `context.wave`. It reads nothing else off
+//     the gate — no in-flight mark exists anywhere in the codebase yet — so
+//     an interim `checks-passed` ladder gates its wave about two seconds
+//     into a run, and the Set is never subtracted from (~L977 is its only
+//     consumer, turning membership into `{ label: "gated" }`).
+// Every assertion below pinning an in-flight gate as NON-gating is therefore
+// genuine RED. The true-positive bounds beside them hold against current
+// production and are asserted anyway — they are the anti-vacuity twins the
+// criteria explicitly demand, and they are placed FIRST so the assertion
+// that actually throws is the new pin (same convention as the §S6
+// outcome-vocabulary test in tests/workflow-gate-widget.test.ts).
+//
+// The nine-row ladder below is the REAL shape, captured from `no-mistakes`
+// v1.70.1 on this machine 2026-09-10 — the same capture
+// tests/client/test_a_run_still_going_is_never_sealed.py drives. The tool
+// version is NAMED because the coupling is load-bearing (§S3's second
+// criterion): if the tool gains or loses a pipeline step, a nine-row
+// assertion goes red for a tool-version reason with no defect behind it.
+describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowLens)", () => {
+  // The mark's key, named once. Assertions below test it BY KEY
+  // (`hasOwnProperty`), never by inference from step count or `push`.
+  const IN_FLIGHT_KEY = "inFlight";
+  // The label a wave carries when nothing has sealed it: all lanes closed,
+  // no later wave open, no qualifying gate (public/app-logic.mjs ~L979).
+  const UNGATED_LABEL = "lanes complete · awaiting review";
+  // `no-mistakes` v1.70.1's pipeline, in order — the nine rows `axi status`
+  // always emits, unrun ones included.
+  const NINE_STEP_NAMES = [
+    "intent",
+    "rebase",
+    "review",
+    "test",
+    "document",
+    "lint",
+    "push",
+    "pr",
+    "ci",
+  ];
+
+  interface LensGateStep {
+    name: string;
+    status: string;
+  }
+  interface LensGateEventFixture {
+    id: string;
+    projectKey: string;
+    agentId: string;
+    kind: "gate";
+    codec: "no-mistakes";
+    timestamp: number;
+    version?: string;
+    context: { wave: string };
+    gate: {
+      intent: string;
+      outcome: "checks-passed" | "passed" | "failed" | "cancelled";
+      steps: LensGateStep[];
+      push?: { commit: string; remote: string };
+      inFlight?: boolean;
+    };
+  }
+
+  // Mid-run: two steps done, `review` still running, the remaining six
+  // `pending` — nine rows, exactly what the tool emits while a run is going.
+  function inFlightLadder(): LensGateStep[] {
+    return NINE_STEP_NAMES.map((name, i) => ({
+      name,
+      status: i < 2 ? "passed" : i === 2 ? "running" : "pending",
+    }));
+  }
+  function sealedLadder(): LensGateStep[] {
+    return NINE_STEP_NAMES.map((name) => ({ name, status: "passed" }));
+  }
+
+  function gateEvent(o: {
+    id: string;
+    wave: string;
+    timestamp: number;
+    outcome: LensGateEventFixture["gate"]["outcome"];
+    steps: LensGateStep[];
+    inFlight?: boolean;
+    push?: { commit: string; remote: string };
+    version?: string;
+  }): LensGateEventFixture {
+    return {
+      id: o.id,
+      projectKey: "cru117-lens",
+      agentId: "orchestrator-mainline",
+      kind: "gate",
+      codec: "no-mistakes",
+      timestamp: o.timestamp,
+      // The CLIENT stamps the wave; the server never does. A wave-less
+      // fixture would prove nothing about this exclusion, because the label
+      // would be missing from the gated set for an unrelated reason.
+      context: { wave: o.wave },
+      ...(o.version !== undefined ? { version: o.version } : {}),
+      gate: {
+        intent: `wave ${o.wave} no-mistakes gate`,
+        outcome: o.outcome,
+        steps: o.steps,
+        ...(o.push !== undefined ? { push: o.push } : {}),
+        ...(o.inFlight !== undefined ? { [IN_FLIGHT_KEY]: o.inFlight } : {}),
+      },
+    };
+  }
+
+  function closedPlanForWave(wave: string) {
+    const planId = 117_000 + Number(wave);
+    return {
+      planId,
+      cr: `CR-117-W${wave}`,
+      status: "closed" as const,
+      wave,
+      merge: { commit: "a5ad013" },
+      cycles: [{ id: planId * 10, label: "c1", status: "done" as const }],
+    };
+  }
+
+  // `gatedWaveLabels` is module-internal; its ONLY observable form is the
+  // wave-boundary label the lens publishes, so membership is read here as
+  // `state.label === "gated"`. One wave per call — a second declared wave
+  // would trip the (unrelated) superseded detection at ~L961.
+  function waveLabel(wave: string, events: LensGateEventFixture[]): string {
+    const result = AppLogic.workflowLens({
+      plans: [closedPlanForWave(wave)],
+      events,
+    });
+    const waves = result.waves as Array<{ wave: string; state: { label: string } }>;
+    const node = waves.find((w) => w.wave === wave);
+    expect(node).toBeDefined();
+    return node!.state.label;
+  }
+
+  // AC1 — the mark is EXPLICIT DATA on the event, asserted by key; the
+  // exclusion must not be a heuristic, because both candidate heuristics are
+  // ones this defect already proved unreliable (the tool always emits nine
+  // rows, and `push` is absent from plenty of legitimate seals).
+  test("the exclusion keys on the in-flight MARK, never on a heuristic: a nine-row marked ladder that even carries a `push` block does NOT gate its wave, while an unmarked two-row seal with no `push` does", () => {
+    const marked = gateEvent({
+      id: "evt-117-marked-nine-row",
+      wave: "6",
+      timestamp: 1_757_500_000_000,
+      outcome: "checks-passed",
+      steps: inFlightLadder(),
+      inFlight: true,
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+    });
+
+    // The mark is present BY KEY on the gate object the client posts.
+    expect(Object.prototype.hasOwnProperty.call(marked.gate, IN_FLIGHT_KEY)).toBe(true);
+    expect(marked.gate.inFlight).toBe(true);
+    // Both heuristics say "sealed" about this event: nine rows, and a push.
+    expect(marked.gate.steps.length).toBe(9);
+    expect(marked.gate.push).toBeDefined();
+    // It must still not gate — only the mark decides.
+    expect(waveLabel("6", [marked])).toBe(UNGATED_LABEL);
+
+    // The converse bound: a REAL seal that both heuristics would misread as
+    // interim — two rows, no `push` — still gates.
+    const shortSeal = gateEvent({
+      id: "evt-117-seal-two-row",
+      wave: "6",
+      timestamp: 1_757_500_600_000,
+      outcome: "passed",
+      steps: [
+        { name: "intent", status: "passed" },
+        { name: "review", status: "passed" },
+      ],
+    });
+    expect(Object.prototype.hasOwnProperty.call(shortSeal.gate, IN_FLIGHT_KEY)).toBe(false);
+    expect(shortSeal.gate.push).toBeUndefined();
+    expect(waveLabel("6", [shortSeal])).toBe("gated");
+  });
+
+  // AC2 — the twin, on ONE wave label: the seal is what gates it, and the
+  // in-flight gate contributes nothing in either direction.
+  test("two gates on the SAME `context.wave` — one in-flight, one sealed `passed`: the wave is gated by the seal alone and stays gated with both on the board, but is NOT gated when only the in-flight gate is posted", () => {
+    const inFlight = gateEvent({
+      id: "evt-117-twin-inflight",
+      wave: "6",
+      timestamp: 1_757_501_000_000,
+      outcome: "checks-passed",
+      steps: inFlightLadder(),
+      inFlight: true,
+    });
+    const seal = gateEvent({
+      id: "evt-117-twin-seal",
+      wave: "6",
+      timestamp: 1_757_502_400_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+    });
+
+    // Same wave, stamped explicitly on BOTH — the mark is the only
+    // difference between them.
+    expect(inFlight.context.wave).toBe("6");
+    expect(seal.context.wave).toBe(inFlight.context.wave);
+
+    // Anti-vacuity twin: the seal alone gates the label.
+    expect(waveLabel("6", [seal])).toBe("gated");
+    // Both on the board: still gated — the seal did it, the interim neither
+    // caused nor undid it.
+    expect(waveLabel("6", [inFlight, seal])).toBe("gated");
+    // The pin: the in-flight gate alone leaves the wave un-gated.
+    expect(waveLabel("6", [inFlight])).toBe(UNGATED_LABEL);
+  });
+
+  // AC3 — the narrowing loses no true positive. Old gate events carry no
+  // mark and must keep reading exactly as they do today (Risk section:
+  // "they are seals, correctly").
+  test("a wave gated by a REAL seal is still gated: unmarked `passed` and `checks-passed` gates both gate it, while the IDENTICAL `checks-passed` nine-row ladder carrying the mark does not", () => {
+    const passedSeal = gateEvent({
+      id: "evt-117-truepos-passed",
+      wave: "6",
+      timestamp: 1_757_503_000_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+    });
+    expect(waveLabel("6", [passedSeal])).toBe("gated");
+
+    // A legacy pre-CR-117 gate: `checks-passed`, no mark at all — a seal.
+    const checksPassedSeal = gateEvent({
+      id: "evt-117-truepos-checks",
+      wave: "6",
+      timestamp: 1_757_503_100_000,
+      outcome: "checks-passed",
+      steps: sealedLadder(),
+    });
+    expect(
+      Object.prototype.hasOwnProperty.call(checksPassedSeal.gate, IN_FLIGHT_KEY),
+    ).toBe(false);
+    expect(waveLabel("6", [checksPassedSeal])).toBe("gated");
+
+    // The discriminator: same outcome, same nine-row ladder, mark added.
+    const markedTwin = gateEvent({
+      id: "evt-117-truepos-marked-twin",
+      wave: "6",
+      timestamp: 1_757_503_200_000,
+      outcome: "checks-passed",
+      steps: sealedLadder(),
+      inFlight: true,
+    });
+    expect(waveLabel("6", [markedTwin])).toBe(UNGATED_LABEL);
+  });
+
+  // AC6 — an in-flight gate carries NO `version`. A version-stamped gate is
+  // retention-protected (`LIVE_GATE`, src/store.ts ~L2969, keyed on
+  // `json_extract(payload,'$.version') IS NOT NULL`), so stamping every
+  // interim snapshot would leave a run's worth of unprunable gates behind
+  // for one release — and the seal restates the release anyway.
+  test("an in-flight gate carries no `version` key at all while the same run's SEAL carries it — and version-absence is NOT the mark: an unmarked, version-less seal still gates, the version-less in-flight gate does not", () => {
+    const interim = gateEvent({
+      id: "evt-117-version-interim",
+      wave: "6",
+      timestamp: 1_757_504_000_000,
+      outcome: "checks-passed",
+      steps: inFlightLadder(),
+      inFlight: true,
+    });
+    const seal = gateEvent({
+      id: "evt-117-version-seal",
+      wave: "6",
+      timestamp: 1_757_505_400_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+      version: "0.2.0",
+    });
+
+    // Key ABSENCE, not null and not empty — `version` is a top-level sibling
+    // of `gate` (src/v2.ts ~L1216), so neither place may carry one.
+    expect(Object.prototype.hasOwnProperty.call(interim, "version")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(interim.gate, "version")).toBe(false);
+    // The same run's seal DOES state it.
+    expect(Object.prototype.hasOwnProperty.call(seal, "version")).toBe(true);
+    expect(seal.version).toBe("0.2.0");
+
+    // Bound: version-absence is not what makes a gate interim — a seal that
+    // stamps no release still gates its wave.
+    const versionlessSeal = gateEvent({
+      id: "evt-117-version-less-seal",
+      wave: "6",
+      timestamp: 1_757_505_500_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+    });
+    expect(Object.prototype.hasOwnProperty.call(versionlessSeal, "version")).toBe(false);
+    expect(waveLabel("6", [versionlessSeal])).toBe("gated");
+
+    // The pin: the version-less INTERIM gate does not gate...
+    expect(waveLabel("6", [interim])).toBe(UNGATED_LABEL);
+    // ...and its run's own seal, arriving after it, does.
+    expect(waveLabel("6", [interim, seal])).toBe("gated");
+  });
+});

@@ -131,6 +131,12 @@ interface GatePayloadFixture {
   fixes?: GateFixFixture[];
   push?: { commit: string; remote: string };
   pr?: string;
+  // CR-CRU-117 §S1 — the in-flight mark, settled 2026-09-10 in
+  // docs/research/DN-crucible-wave-track-release.md D3: a key INSIDE the
+  // gate object the client already builds. Optional and absent by default,
+  // so every fixture above this line keeps reading exactly as it did (old
+  // gate events carry no mark and ARE seals — the CR's own Risk rule).
+  inFlight?: boolean;
 }
 interface GateEventFixture {
   id: string;
@@ -565,5 +571,186 @@ describe("§S6 History lens — wave state gains `gated` (a passed/checks-passed
       "checks-passed",
     );
     expect(checksPassedHeader).toContain("gated");
+  });
+});
+
+// ── CR-CRU-117 §S1 — an in-flight gate is not a verdict (the DOM half) ───
+// Spec: docs/changes/CR-CRU-117-an-in-flight-gate-is-not-a-seal.md, §S1's
+// `boundaryGate` criterion and its end-to-end false-permanent-gate
+// criterion. Shape settled 2026-09-10 (DN-crucible-wave-track-release.md
+// D3) BEFORE any RED: the mark is a key inside the `gate` object
+// (`gate.inFlight`), so it reaches both readers with zero server change.
+//
+// Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
+//   - `boundaryGate` (public/app.js ~L4289) is the SECOND reader that treats
+//     a gate as a verdict: given a routed project whose scoped plans are all
+//     closed, it reduces the scoped `kind:"gate"` events to the LATEST by
+//     timestamp and hands it to `GateWidget`, which mounts the outcome
+//     banner + step ladder as the Workflow tab's primary zone
+//     (`WorkflowPrimary`, ~L4313). It inspects only `timestamp` — nothing
+//     about the gate's body — so an interim ladder posted two seconds into a
+//     run becomes the boundary today.
+//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs ~L794) admits
+//     any `passed`/`checks-passed` gate and is never subtracted from, so an
+//     interim gate followed by a FAILED seal leaves the wave header reading
+//     `gated` permanently — the exact sequence this CR exists to stop.
+// Both pins below are therefore genuine RED. Each is preceded by its
+// anti-vacuity twin (the identical board with an UNMARKED gate), which holds
+// against current production, so the assertion that actually throws is the
+// new one.
+describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-flight gate", () => {
+  // `no-mistakes` v1.70.1's nine-row ladder mid-run (captured 2026-09-10;
+  // named because a tool version change would redden this for no defect).
+  function nineRowInFlightLadder(): GateStepFixture[] {
+    return [
+      { name: "intent", status: "passed" },
+      { name: "rebase", status: "passed" },
+      { name: "review", status: "running" },
+      { name: "test", status: "pending" },
+      { name: "document", status: "pending" },
+      { name: "lint", status: "pending" },
+      { name: "push", status: "pending" },
+      { name: "pr", status: "pending" },
+      { name: "ci", status: "pending" },
+    ];
+  }
+
+  function closedWave6Plan(key: string, planId: number): PlanFixture {
+    return {
+      planId,
+      cr: `CR-117-${planId}`,
+      projectKey: key,
+      status: "closed",
+      wave: "6",
+      merge: { commit: "a5ad013" },
+      cycles: [{ id: planId * 10, label: "C1", status: "done" }],
+    };
+  }
+
+  // A board at the boundary: every scoped plan closed (so `boundaryGate`'s
+  // own preconditions hold — no open plan, plans present), carrying exactly
+  // the gates given.
+  async function mountBoundary(key: string, gates: GateEventFixture[]): Promise<void> {
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: `CR-117 ${key}` })],
+      events: gates,
+      plans: [closedWave6Plan(key, 6001)],
+    });
+    await openWorkflowTab();
+  }
+
+  function wave6HeaderText(): string {
+    const group = document.querySelector<HTMLElement>(
+      '[data-testid="wave-group"][data-wave="6"]',
+    );
+    expect(group).not.toBeNull();
+    return textOf(group!.querySelector('[data-testid="wave-header"]'));
+  }
+
+  // AC4 — the second reader. An in-flight gate is not a verdict, so it is
+  // not a boundary: the primary zone falls back to `WorkflowActive` and
+  // nothing gate-shaped mounts for it.
+  test("with the newest scoped gate in flight and no open plan, the Workflow primary zone mounts NO gate widget for it — the identical UNMARKED gate does mount one", async () => {
+    // Anti-vacuity twin FIRST: same board, same ladder, no mark — today's
+    // (correct) behaviour, which this narrowing must not disturb.
+    const unmarked = gateEvent({
+      id: "evt-117-boundary-unmarked",
+      projectKey: "wf-117-boundary-unmarked",
+      timestamp: 1_757_506_000_000,
+      context: { wave: "6" },
+      gate: {
+        intent: "wave 6 no-mistakes gate",
+        outcome: "checks-passed",
+        steps: nineRowInFlightLadder(),
+      },
+    });
+    await mountBoundary("wf-117-boundary-unmarked", [unmarked]);
+    const sealPane = document.querySelector<HTMLElement>('[data-testid="gate-pane"]');
+    expect(sealPane).not.toBeNull();
+    expect(textOf(sealPane!.querySelector('[data-testid="gate-outcome-banner"]'))).toContain(
+      "checks-passed",
+    );
+
+    // The pin: the SAME event carrying the in-flight mark is not a boundary.
+    const inFlight = gateEvent({
+      id: "evt-117-boundary-inflight",
+      projectKey: "wf-117-boundary-inflight",
+      timestamp: 1_757_506_100_000,
+      context: { wave: "6" },
+      gate: {
+        intent: "wave 6 no-mistakes gate (in flight)",
+        outcome: "checks-passed",
+        steps: nineRowInFlightLadder(),
+        inFlight: true,
+      },
+    });
+    expect(Object.prototype.hasOwnProperty.call(inFlight.gate, "inFlight")).toBe(true);
+    await mountBoundary("wf-117-boundary-inflight", [inFlight]);
+
+    // No gate widget, and nothing gate-shaped anywhere in the Workflow
+    // tab's primary zone. Counted rather than `toBeNull()`-ed: bun prints
+    // the whole matched element on a null-assertion failure, and a happy-dom
+    // node serialises to ~1100 lines, which buries every other failure in
+    // the same run log.
+    expect(document.querySelectorAll('[data-testid="gate-pane"]').length).toBe(0);
+    const cols = document.querySelector<HTMLElement>(".app-workflow-cols");
+    expect(cols).not.toBeNull();
+    expect(cols!.querySelectorAll('[data-testid="gate-outcome-banner"]').length).toBe(0);
+    expect(cols!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(0);
+
+    // The zone falls back to `WorkflowActive`, which owns it while nothing
+    // has sealed — its no-open-plan filler is what renders instead.
+    const body = document.querySelector('[data-testid="workspace-body"]');
+    expect((body?.textContent ?? "").toLowerCase()).toContain("no open plan");
+  });
+
+  // AC5 — the false-permanent-gate sequence, end to end: an in-flight gate
+  // posted mid-run, then the run FAILS and seals `failed`. A `failed` gate
+  // is not subtractive, so if the interim ever entered the gated set the
+  // wave would read `gated` forever off a run that never passed.
+  test("an in-flight gate followed by a `failed` seal leaves the wave UN-gated — while the same in-flight gate followed by a `passed` seal does gate it", async () => {
+    const interimFor = (key: string): GateEventFixture =>
+      gateEvent({
+        id: `evt-117-seq-interim-${key}`,
+        projectKey: key,
+        timestamp: 1_757_507_000_000,
+        context: { wave: "6" },
+        gate: {
+          intent: "wave 6 no-mistakes gate (in flight)",
+          outcome: "checks-passed",
+          steps: nineRowInFlightLadder(),
+          inFlight: true,
+        },
+      });
+    const sealFor = (
+      key: string,
+      outcome: GatePayloadFixture["outcome"],
+    ): GateEventFixture =>
+      gateEvent({
+        id: `evt-117-seq-seal-${key}`,
+        projectKey: key,
+        timestamp: 1_757_508_400_000,
+        context: { wave: "6" },
+        gate: {
+          intent: "wave 6 no-mistakes gate",
+          outcome,
+          steps: defaultGateSteps(),
+        },
+      });
+
+    // Anti-vacuity twin FIRST: interim then a REAL `passed` seal — the wave
+    // IS gated, by the seal.
+    const passedKey = "wf-117-seq-passed";
+    await mountBoundary(passedKey, [interimFor(passedKey), sealFor(passedKey, "passed")]);
+    expect(wave6HeaderText()).toContain("gated");
+
+    // The pin: interim then a `failed` seal — nothing on this board is a
+    // verdict of `passed`, so the wave must be un-gated.
+    const failedKey = "wf-117-seq-failed";
+    await mountBoundary(failedKey, [interimFor(failedKey), sealFor(failedKey, "failed")]);
+    const header = wave6HeaderText();
+    expect(header).not.toContain("gated");
+    expect(header).toContain("lanes complete · awaiting review");
   });
 });
