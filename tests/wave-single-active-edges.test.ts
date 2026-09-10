@@ -31,6 +31,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import type { QueueEntryInput } from "../src/store.ts";
 // §S2 — the ONE ordering function the store publishes. Imported rather than
 // restated: the digit-free case below asserts the ORDER it answers, so a
 // second ordering rule written anywhere would have to disagree with this
@@ -137,15 +138,20 @@ describe("CR-CRU-116 §S1/§S2 — the guard's edges: outside the constraint, an
     return key;
   }
 
-  /** The bulk queue post is a FULL REPLACE, so every call names the WHOLE
-   *  board this test intends. */
-  async function queue(
-    key: string,
-    entries: Array<Record<string, unknown>>,
-  ): Promise<QueueEntryWire[]> {
-    const res = await send("POST", `/api/v2/projects/${key}/queue`, { agentId: ORCH, entries });
-    expect(res.status).toBe(200);
-    return res.body.entries!;
+  /**
+   * The board this test intends, written as a FULL REPLACE — so every call
+   * still names the WHOLE board — through `replaceQueue`, the writer the bulk
+   * route itself delegates to, so full-replace, carry-forward and derived
+   * status are all unchanged.
+   *
+   * CR-CRU-118 §S2 — the bulk ROUTE now refuses to invent a release for a cr
+   * the board has never held, and every row here is deliberately release-less:
+   * this suite's subject is the plan-filing guard's EDGES, never membership.
+   * The writer moved; the board did not.
+   */
+  async function queue(key: string, entries: QueueEntryInput[]): Promise<QueueEntryWire[]> {
+    handle!.store.replaceQueue(key, entries);
+    return queueEntries(key);
   }
 
   async function queueEntries(key: string): Promise<QueueEntryWire[]> {

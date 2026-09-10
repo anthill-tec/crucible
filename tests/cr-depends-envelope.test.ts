@@ -258,16 +258,22 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
     const key = await seed("s2b-shared");
     // Only the migration door can seed a board that already holds a ring
     // (CR-CRU-104's open ruling), which is what a re-plan then trips over.
-    const seeded = await post(`/api/v2/projects/${key}/queue`, {
-      entries: [
-        { cr: A, title: "a", wave: WAVE, dependsOn: [B] },
-        { cr: B, title: "b", wave: WAVE, dependsOn: [A] },
-      ],
-    });
-    expect(seeded.status).toBe(200);
+    //
+    // CR-CRU-118 §S2 — the proposal is recorded FIRST and the rows declare the
+    // release they target: the door no longer INVENTS membership for a cr the
+    // board has never held. The ring still arrives through the migration door,
+    // which is the only property this fixture needs from it.
     expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
       200,
     );
+    const seeded = await post(`/api/v2/projects/${key}/queue`, {
+      agentId: ORCH,
+      entries: [
+        { cr: A, title: "a", wave: WAVE, dependsOn: [B], release: RELEASE },
+        { cr: B, title: "b", wave: WAVE, dependsOn: [A], release: RELEASE },
+      ],
+    });
+    expect(seeded.status).toBe(200);
 
     const refused = await plan(key, A);
     expect(refused.status).toBe(409);
@@ -340,10 +346,20 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
       // declared RELEASE must be a live proposal on `cr-plan`. Both halves are
       // measured here, on one board, so the difference is a fact and never a
       // silently inherited one.
+      // CR-CRU-118 §S2 — both rows declare the release they target, against a
+      // proposal recorded first. That SHARPENS the contrast this test draws
+      // rather than blunting it: the release axis is satisfied, so the only
+      // thing left unknown is the dependency TARGET, and the door still
+      // accepts and flags it.
+      expect(
+        (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE }))
+          .status,
+      ).toBe(200);
       const posted = await post(`/api/v2/projects/${key}/queue`, {
+        agentId: ORCH,
         entries: [
-          { cr: A, title: "a", wave: WAVE, dependsOn: [UNKNOWN_TARGET] },
-          { cr: B, title: "b", wave: WAVE, dependsOn: [] },
+          { cr: A, title: "a", wave: WAVE, dependsOn: [UNKNOWN_TARGET], release: RELEASE },
+          { cr: B, title: "b", wave: WAVE, dependsOn: [], release: RELEASE },
         ],
       });
       expect(posted.status).toBe(200);

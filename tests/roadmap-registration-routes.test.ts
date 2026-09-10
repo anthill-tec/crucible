@@ -1217,9 +1217,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac10-out-of-order");
         await propose(key, "0.2.0");
+        // CR-CRU-118 §S2 — the seeded rows DECLARE the release they target: the
+        // migration door no longer invents membership for a cr the board has
+        // never held. The subject is unchanged — only the bulk door can author
+        // a `dependsOn`, which is why the graph still rides it.
         await seedGraph(key, [
-          { cr: "CR-A", wave: 5, dependsOn: [] },
-          { cr: "CR-B", wave: 5, dependsOn: ["CR-A"] },
+          { cr: "CR-A", wave: 5, dependsOn: [], release: "0.2.0" },
+          { cr: "CR-B", wave: 5, dependsOn: ["CR-A"], release: "0.2.0" },
         ]);
         await plan(key, "CR-A", "0.2.0", 5, "the dependency");
         await plan(key, "CR-B", "0.2.0", 5, "the dependant");
@@ -1245,9 +1249,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac10-cross-wave");
         await propose(key, "0.2.0");
+        // CR-CRU-118 §S2 — as above: the graph still arrives through the only
+        // door that can author one, and its rows now name the release every
+        // live row owes. Both containers below are still 0.2.0/4 and 0.2.0/5,
+        // which is the whole subject.
         await seedGraph(key, [
-          { cr: "CR-EARLY", wave: 4, dependsOn: ["CR-LATE"] },
-          { cr: "CR-LATE", wave: 5, dependsOn: [] },
+          { cr: "CR-EARLY", wave: 4, dependsOn: ["CR-LATE"], release: "0.2.0" },
+          { cr: "CR-LATE", wave: 5, dependsOn: [], release: "0.2.0" },
         ]);
         await plan(key, "CR-LATE", "0.2.0", 5, "the later one");
 
@@ -1313,13 +1321,16 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac15");
         await propose(key, "0.2.0");
+        // CR-CRU-118 §S2 — the dependency graph this fixture is about rides
+        // the migration door, and its rows declare the release they target
+        // rather than leaving the write to invent one.
         const res = await post(queuePath(key), {
           agentId: ORCH,
           entries: [
-            { cr: "CR-X", wave: 5, dependsOn: [] },
-            { cr: "CR-C", wave: 5, dependsOn: ["CR-X"] },
-            { cr: "CR-D", wave: 5, dependsOn: ["CR-X"] },
-            { cr: "CR-E", wave: 5, dependsOn: [] },
+            { cr: "CR-X", wave: 5, dependsOn: [], release: "0.2.0" },
+            { cr: "CR-C", wave: 5, dependsOn: ["CR-X"], release: "0.2.0" },
+            { cr: "CR-D", wave: 5, dependsOn: ["CR-X"], release: "0.2.0" },
+            { cr: "CR-E", wave: 5, dependsOn: [], release: "0.2.0" },
           ],
         });
         expect(res.status).toBe(200);
@@ -1542,24 +1553,30 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
       async () => {
         boot();
         const key = await seed("ac23");
-        const seeded = await post(queuePath(key), {
-          agentId: ORCH,
-          entries: [
-            { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
-            { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
-            { cr: "CR-C", wave: 5, dependsOn: [], seq: 30 },
-          ],
-        });
-        expect(seeded.status).toBe(200);
-        expect(seeded.body.entries!.map((e) => e.seq)).toEqual([10, 20, 30]);
+        await propose(key, "0.2.0");
+        // The board AS IT ALREADY STANDS — the legacy positional seqs this
+        // fixture is about — written through the STORE (CR-CRU-118 §S2: the
+        // bulk door now refuses to INVENT membership, and these three rows are
+        // history rather than the subject). Their release-lessness is
+        // deliberate and preserved: the mixture the warning reports below is
+        // the WAVE axis, exactly as it was.
+        handle!.store.replaceQueue(key, [
+          { cr: "CR-A", wave: "5", dependsOn: [], seq: 10 },
+          { cr: "CR-B", wave: "5", dependsOn: [], seq: 20 },
+          { cr: "CR-C", wave: "5", dependsOn: [], seq: 30 },
+        ]);
+        expect((await queueEntries(key)).map((e) => e.seq)).toEqual([10, 20, 30]);
 
+        // …and the ROW THIS WRITE INVENTS a position for declares the release
+        // it targets, because it is a live cr the board has never held. The
+        // three held rows carry theirs forward untouched.
         const added = await post(queuePath(key), {
           agentId: ORCH,
           entries: [
             { cr: "CR-A", wave: 5, dependsOn: [] },
             { cr: "CR-B", wave: 5, dependsOn: [] },
             { cr: "CR-C", wave: 5, dependsOn: [] },
-            { cr: "CR-NEW", wave: 5, dependsOn: [] },
+            { cr: "CR-NEW", wave: 5, dependsOn: [], release: "0.2.0" },
           ],
         });
         expect(added.status).toBe(200);
@@ -1582,11 +1599,16 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
       // filtered FOR, so "and nothing else happened" keeps its full strength.
       boot();
       const key = await seed("ac23-quiet");
+      await propose(key, "0.2.0");
+      // CR-CRU-118 §S2 — two crs the board has never held, so they declare the
+      // release they target. Nothing else moves: neither carries a seq, so
+      // both land in wave 5's own block and the seq axis stays silent, which
+      // is the whole subject.
       const posted = await post(queuePath(key), {
         agentId: ORCH,
         entries: [
-          { cr: "CR-A", wave: 5, dependsOn: [] },
-          { cr: "CR-B", wave: 5, dependsOn: [] },
+          { cr: "CR-A", wave: 5, dependsOn: [], release: "0.2.0" },
+          { cr: "CR-B", wave: 5, dependsOn: [], release: "0.2.0" },
         ],
       });
       expect(posted.status).toBe(200);
@@ -1600,16 +1622,17 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac23-cr-plan");
         await propose(key, "0.2.0");
-        // The only way into the mixed-scale case: an explicitly authored seq
-        // riding the bulk post, outside wave 5's own block.
-        const seeded = await post(queuePath(key), {
-          agentId: ORCH,
-          entries: [
-            { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
-            { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
-          ],
-        });
-        expect(seeded.status).toBe(200);
+        // The mixed-scale case: sibling rows HOLDING an explicitly authored
+        // seq outside wave 5's own block. Written through the STORE, which is
+        // where the board they represent came from — CR-CRU-118 §S2 stopped the
+        // bulk door inventing membership for a cr it has never held, and these
+        // two are the fixture's history, not its subject. Release-less exactly
+        // as before, so the axis the warning fires on has not moved.
+        handle!.store.replaceQueue(key, [
+          { cr: "CR-A", wave: "5", dependsOn: [], seq: 10 },
+          { cr: "CR-B", wave: "5", dependsOn: [], seq: 20 },
+        ]);
+        expect((await queueEntries(key)).map((e) => e.seq)).toEqual([10, 20]);
 
         const added = await plan(key, "CR-NEW", "0.2.0", 5, "unauthored position");
         expect(added.status).toBe(200);

@@ -429,10 +429,18 @@ describe("the release ceremony records WHEN a release shipped and WHAT it shippe
     });
     expect(reg.status).toBe(200);
 
-    const queue = await postJson(base, `/api/v2/projects/${key}/queue`, {
-      entries: QUEUED_CRS.map((cr) => ({ cr, title: `${cr} work`, wave: "1" })),
-    });
-    expect(queue.status).toBe(200);
+    // The REGISTERED QUEUE, written through the STORE. It is the right-hand
+    // side of §S4's intersection and nothing more — this suite is about what a
+    // release RECORDS, never about how a row reached the board — so
+    // CR-CRU-118 §S2's membership rung (the bulk route refuses to INVENT a
+    // release for a cr the board has never held) is not a rule this fixture
+    // should be restating. Giving these rows a release instead would put a
+    // membership label on the very crs whose provenance the ceremony derives.
+    handle!.store.replaceQueue(
+      key,
+      QUEUED_CRS.map((cr) => ({ cr, title: `${cr} work`, wave: "1", dependsOn: [] })),
+    );
+    expect([...(await queuedCrs(base, key))].sort()).toEqual([...QUEUED_CRS].sort());
 
     // CR-CRU-081 §S1 — the CR→merge-sha record ancestry reads. One CLOSED plan
     // per CR the fixture merged, carrying that merge's REAL sha, exactly as
@@ -1124,14 +1132,20 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
     });
     expect(reg.status).toBe(200);
 
-    const queue = await postJson(base, `/api/v2/projects/${key}/queue`, {
-      entries: [...ANCESTRY_QUEUED_CRS, ...extraQueued].map((cr) => ({
+    // The registered queue, through the STORE — see `seedProject` above for
+    // why this suite seeds rather than posts (CR-CRU-118 §S2).
+    handle!.store.replaceQueue(
+      key,
+      [...ANCESTRY_QUEUED_CRS, ...extraQueued].map((cr) => ({
         cr,
         title: `${cr} work`,
         wave: "1",
+        dependsOn: [],
       })),
-    });
-    expect(queue.status).toBe(200);
+    );
+    expect([...(await queuedCrs(base, key))].sort()).toEqual(
+      [...ANCESTRY_QUEUED_CRS, ...extraQueued].sort(),
+    );
 
     for (const [cr, commit] of mergeShas) await seedClosedPlan(base, key, cr, commit);
     await seedClosedPlan(base, key, UNPLACEABLE_CR, null);
@@ -1622,10 +1636,13 @@ describe("an already-recorded release can be REPAIRED, and only on purpose (CR-C
     });
     expect(reg.status).toBe(200);
 
-    const queue = await postJson(base, `/api/v2/projects/${key}/queue`, {
-      entries: ANCESTRY_QUEUED_CRS.map((cr) => ({ cr, title: `${cr} work`, wave: "1" })),
-    });
-    expect(queue.status).toBe(200);
+    // The registered queue, through the STORE — see `seedProject` in the
+    // CR-CRU-080 block for why (CR-CRU-118 §S2).
+    handle!.store.replaceQueue(
+      key,
+      ANCESTRY_QUEUED_CRS.map((cr) => ({ cr, title: `${cr} work`, wave: "1", dependsOn: [] })),
+    );
+    expect([...(await queuedCrs(base, key))].sort()).toEqual([...ANCESTRY_QUEUED_CRS].sort());
 
     for (const [cr, commit] of mergeShas) {
       if (withoutPlan.includes(cr)) continue;
@@ -2475,10 +2492,18 @@ describe("a repair that cannot compute REFUSES loudly and never shrinks in silen
     expect(reg.status).toBe(200);
 
     if (queue !== "unregistered") {
-      const posted = await postJson(base, `/api/v2/projects/${key}/queue`, {
-        entries: queue === "empty" ? [] : queued.map((cr) => ({ cr, title: `${cr} work`, wave: "1" })),
-      });
-      expect(posted.status).toBe(200);
+      // Through the STORE — see `seedProject` in the CR-CRU-080 block for why
+      // (CR-CRU-118 §S2). The three queue SHAPES this helper builds are the
+      // whole point of it, and each is written exactly as before.
+      handle!.store.replaceQueue(
+        key,
+        queue === "empty"
+          ? []
+          : queued.map((cr) => ({ cr, title: `${cr} work`, wave: "1", dependsOn: [] })),
+      );
+      expect([...(await queuedCrs(base, key))].sort()).toEqual(
+        queue === "empty" ? [] : [...queued].sort(),
+      );
     }
 
     for (const [cr, commit] of mergeShas) await seedClosedPlan(base, key, cr, commit);

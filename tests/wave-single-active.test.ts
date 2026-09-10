@@ -58,6 +58,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import type { QueueEntryInput } from "../src/store.ts";
 
 // ── wire shapes this suite PINS ───────────────────────────────────────────
 
@@ -182,18 +183,22 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
     return key;
   }
 
-  /** The bulk queue post is a FULL REPLACE, so every call names the WHOLE
-   *  board this test intends. */
-  async function queue(
-    key: string,
-    entries: Array<Record<string, unknown>>,
-  ): Promise<QueueEntryWire[]> {
-    const res = await send("POST", `/api/v2/projects/${key}/queue`, {
-      agentId: ORCH,
-      entries,
-    });
-    expect(res.status).toBe(200);
-    return res.body.entries!;
+  /**
+   * The board this test intends, written as a FULL REPLACE — so every call
+   * still names the WHOLE board — through `replaceQueue`, which is the very
+   * writer the bulk route delegates to. The semantics this suite depends on
+   * (full replace, carry-forward, derived status) are therefore unchanged.
+   *
+   * CR-CRU-118 §S2 — the bulk ROUTE now refuses to invent a release for a cr
+   * the board has never held, and every row this suite builds is deliberately
+   * release-less: the subject is the plan-filing guard (which wave is active,
+   * and in what order), and membership plays no part in it. Declaring a
+   * release here would be a label the assertions never read. The WRITER moved;
+   * the board did not.
+   */
+  async function queue(key: string, entries: QueueEntryInput[]): Promise<QueueEntryWire[]> {
+    handle!.store.replaceQueue(key, entries);
+    return queueEntries(key);
   }
 
   async function queueEntries(key: string): Promise<QueueEntryWire[]> {
