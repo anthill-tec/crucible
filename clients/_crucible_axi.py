@@ -680,6 +680,25 @@ GATE_PASS_FAMILY = {
     "checks-passed": "checks-passed",
 }
 
+# CR-CRU-117 §S2 — what a step ladder says about a row the snapshot reported
+# NOTHING for: an empty status cell, or a tabular header with no `status`
+# column at all (`s.get("status")` is then None for every row). The mapper used
+# to answer `passed` there, manufacturing a green step — and a nine-row
+# status-free snapshot became a fully green ladder — which is the same green
+# bias `GATE_PASS_FAMILY` removed one level up, surviving one level down.
+#
+# The word is TRUE (nothing was reported), it is in neither the mapped step
+# vocabulary (`passed`/`skipped`/`failed`/`running`) nor `GATE_OUTCOMES`, so it
+# can be mistaken neither for a status the tool gave nor for a verdict on the
+# run; and it survives the wire — `handleGates` validates intent/outcome/steps-
+# is-an-array and not step statuses, and the board renders a step status as its
+# own text, so a reader sees the word rather than a blank cell.
+#
+# It applies ONLY to silence. A status the tool NAMED but this fleet does not
+# recognise stays verbatim (cycle 409's shipped ladder criterion: `pending` is
+# represented, not dropped), so this sentinel never swallows information.
+GATE_STEP_STATUS_UNKNOWN = "unknown"
+
 # §S4 — WHICH gate an exit posted, stated as a value. A seal is `final`; a run
 # whose poll loop put an in-flight ladder on the board and then HELD is
 # `interim`; the no-gate case reuses the envelope's own stated-absence word
@@ -1338,13 +1357,24 @@ def parse_steps_flag(steps_raw):
 
 
 def map_axi_step_status(status):
-    """Map a no-mistakes axi step status onto a gate step status."""
+    """Map a no-mistakes axi step status onto a gate step status.
+
+    CR-CRU-117 §S2 — three cases, and the middle one is the whole point. A
+    status the table NAMES maps to its gate equivalent. A status the tool
+    stated but this table does not name (`pending` above all, plus
+    `awaiting_approval`/`fixing`) is INFORMATION and survives verbatim. A
+    status the snapshot never stated at all — empty, blank, or absent because
+    the tabular header carried no `status` column — is SILENCE, and is
+    reported as `GATE_STEP_STATUS_UNKNOWN` rather than manufactured into a
+    verdict. `completed` is the only input that earns `passed`."""
+    if not isinstance(status, str) or not status.strip():
+        return GATE_STEP_STATUS_UNKNOWN
     return {
         "completed": "passed",
         "skipped": "skipped",
         "failed": "failed",
         "running": "running",
-    }.get(status, status or "passed")
+    }.get(status, status)
 
 
 def sealed_outcome(raw, any_failed):
