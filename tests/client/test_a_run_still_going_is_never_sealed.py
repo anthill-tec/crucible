@@ -40,15 +40,18 @@ and the top-level `outcome`). The hold fixture is that same captured ladder
 carrying the documented bounded-hold return — no `outcome` key, `review` at
 `awaiting_approval`, and the tool's own `error` string.
 
-SCOPE. The interim POST and its `if in_flight and 0 < nsteps < 9` guard belong
-to the follow-on change request and are untouched here: the two captured
-nine-row fixtures never make it fire, so nothing in this file asserts anything
-about the guard itself.
+SCOPE. The interim POST's own guard belonged to the follow-on change request —
+CR-CRU-117, since landed — which replaced the row-count test
+(`if in_flight and 0 < nsteps < 9`) with `axi_snapshot_in_flight`'s terminality
+test. This file asserted nothing about the shape of that guard then and still
+does not: both of its captured nine-row fixtures are TERMINAL — one carries a
+resolved `outcome`, the other the tool's own `error` — so neither made the old
+guard fire and neither makes the new one fire.
 
 `interim` AS AN ENVELOPE VALUE IS REACHABLE, though this file first said it was
-not. That claim was measured and falsified: the guard withholds the post only
-on a NINE-row ladder, so a run whose `axi status` returns a SHORTER one posts
-an interim gate and can still hold afterwards — and such a run reported
+not. That claim was measured and falsified: the guard withheld the post only
+on a NINE-row ladder, so a run whose `axi status` returned a SHORTER one posted
+an interim gate and could still hold afterwards — and such a run reported
 `postedGate: none` while its own gate sat on the board, which is the envelope
 stating a falsehood about the board. One drive below pairs a three-row
 in-flight poll with the same bounded-hold return to pin that third state, and
@@ -197,7 +200,10 @@ _HOLD_SNAPSHOT = (
 # four per-client axi suites all poll a 3/6/8-row progression), so this is not
 # an invented shape: it is the one every sibling suite proves the interim POST
 # fires on. Its run is `running` and it carries no `outcome`, so it is in
-# flight; its three rows clear the guard's `0 < nsteps < 9`.
+# flight. Its three rows cleared the row-count guard `0 < nsteps < 9` this file
+# was written against, and they still reach the board after CR-CRU-117 replaced
+# that guard with a terminality test — no `outcome`, no `error`, a `running`
+# run and a `running` row all say the same thing about this snapshot.
 _SHORT_IN_FLIGHT_SNAPSHOT = (
     'run:\n'
     '  id: "01M2270SJ5PQW4KBBBV3XCPMM5"\n'
