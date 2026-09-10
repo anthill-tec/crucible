@@ -383,6 +383,20 @@ export const roadmapHints = {
     `cr-plan --cr <cr> --release <v> --wave <n> --title <brief> — every CR names the release it targets`,
     `release-propose --label <v> — propose the super container first when none of the live ones is the target`,
   ],
+  /**
+   * CR-CRU-118 §S4/§S5 — a `release-propose` carrying NO `targetAt` at all.
+   * Distinct from the SHAPE complaint a malformed value earns ("epoch
+   * SECONDS"): absence and nonsense are different findings needing different
+   * next moves, so the caller who typed nothing is handed the runnable call
+   * with the flag in it rather than a unit lecture about a value it never
+   * sent. Published here like every other roadmap refusal so five clients
+   * render one wording instead of the route inventing a second inline.
+   */
+  missingTarget: [
+    `release-propose --label <v> --target <YYYY-MM-DD> — the date this release is aiming at, in epoch SECONDS on the wire as \`targetAt\``,
+    `--target also takes an ISO-8601 date or datetime; the client reads it to the same integer, and a revision retires its predecessor rather than editing it`,
+    `GET /api/v2/projects/<key>/release-proposals — the live proposals and the targets they already declared`,
+  ],
   /** §S8/AC6 — a cr-plan or wave-sequence naming a release nobody proposed. */
   unproposedRelease: (label: string): string[] => [
     `release-propose --label ${label} — the super container must exist before a CR can target it`,

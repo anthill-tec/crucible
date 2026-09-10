@@ -2215,11 +2215,22 @@ export class Store {
    * Converged (§S7) when a live proposal with the same `label` AND the same
    * `targetAt` is already held: nothing is written and the held event is
    * returned, so a re-run of a whole generation script mutates nothing (AC12).
+   *
+   * CR-CRU-118 §S4 — `targetAt` is REQUIRED here, not optional: every release
+   * proposal declares the date it aims at. The requiredness is the METHOD's,
+   * deliberately — `recordMilestoneEvent(…, "release-proposal", …)` still
+   * writes the record KIND without one, because §S4 mandates this door rather
+   * than the row shape, and widening it to the kind would refuse callers no
+   * criterion named. It is also what makes the convergence comparison below
+   * honest: with absence impossible, `live.targetAt === meta.targetAt` only
+   * ever weighs two numbers, where an omitted target used to compare against
+   * a held one, MISS convergence, and take the revision branch — retiring a
+   * declared date on behalf of a call that mentioned no date.
    */
   recordReleaseProposal(
     projectKey: string,
     agentId: string,
-    meta: { label: string; targetAt?: number; context?: RunContext },
+    meta: { label: string; targetAt: number; context?: RunContext },
   ): { event: RunEvent; changed: boolean } {
     const live = this.listReleaseProposals(projectKey).find((p) => p.label === meta.label);
     if (live !== undefined && live.targetAt === meta.targetAt) {
@@ -2235,7 +2246,7 @@ export class Store {
       timestamp: Date.now(),
       type: "release-proposal",
       label: meta.label,
-      ...(meta.targetAt !== undefined ? { targetAt: meta.targetAt } : {}),
+      targetAt: meta.targetAt,
       ...(meta.context !== undefined ? { context: meta.context } : {}),
     };
     if (live === undefined) {

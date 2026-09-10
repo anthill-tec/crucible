@@ -2647,16 +2647,38 @@ async function handleReleasePropose(store: Store, key: string, req: Request): Pr
   // §S1 — `targetAt` is epoch SECONDS, the unit `releasedAt` uses. Refused
   // rather than dropped when malformed: a declared target that silently
   // vanished would read back as "no target was ever declared".
-  let targetAt: number | undefined;
-  if (body.targetAt !== undefined && body.targetAt !== null) {
-    if (typeof body.targetAt !== "number" || !Number.isFinite(body.targetAt) || body.targetAt <= 0) {
-      return fail(400, "`targetAt` must be a positive number of epoch SECONDS");
-    }
-    targetAt = body.targetAt;
+  //
+  // CR-CRU-118 §S4 — and ABSENCE is refused too, HERE, at the door: the rule
+  // lives server-side rather than only in the five clients' argparse, because
+  // a rule that lives only in a flag is one any other caller walks past.
+  //
+  // THE ORDER MATTERS, AND THIS IS THE ORDER. Absence is decided before
+  // `recordReleaseProposal` is reached — therefore before its convergence
+  // check `live.targetAt === meta.targetAt` is ever consulted. A re-proposal
+  // that DROPS the target would otherwise compare a held number against
+  // `undefined`, MISS convergence, fall through to the revision branch, and
+  // retire the live row in favour of one carrying no target at all: a
+  // declared date destroyed by a call that mentioned no date. Refused at the
+  // door, the held target survives untouched, and downstream the comparison
+  // only ever weighs two numbers.
+  //
+  // The two findings keep SEPARATE sentences: a caller who typed nothing and
+  // a caller who typed "yesterday" need different next moves, so absence is
+  // not collapsed into the shape complaint below.
+  if (body.targetAt === undefined || body.targetAt === null) {
+    return fail(
+      400,
+      "`targetAt` is required — the date this release is aiming at, in epoch SECONDS",
+      { help: roadmapHints.missingTarget },
+    );
   }
+  if (typeof body.targetAt !== "number" || !Number.isFinite(body.targetAt) || body.targetAt <= 0) {
+    return fail(400, "`targetAt` must be a positive number of epoch SECONDS");
+  }
+  const targetAt: number = body.targetAt;
   const { event, changed } = store.recordReleaseProposal(pk.key, caller.agentId, {
     label: body.label,
-    ...(targetAt !== undefined ? { targetAt } : {}),
+    targetAt,
     ...eventContext(body),
   });
   return json({

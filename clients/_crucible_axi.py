@@ -3936,10 +3936,11 @@ def add_roadmap_verbs(sub, funcs, *, parents=(), add_args=()):
              "(§S1/§S3). ORCHESTRATOR only.")
     rp.add_argument("--label", required=True,
                     help="The version this release proposes to ship, e.g. 0.4.0.")
-    rp.add_argument("--target",
+    rp.add_argument("--target", required=True,
                     help="Declared target date (ISO-8601 date/datetime, or "
-                         "epoch SECONDS). Optional and revisable; a revision "
-                         "retires its predecessor rather than editing it.")
+                         "epoch SECONDS). Required (§S4) and revisable; a "
+                         "revision retires its predecessor rather than "
+                         "editing it.")
     add_roadmap_projection_args(rp)
     _common(rp)
     rp.set_defaults(func=funcs["release-propose"])
