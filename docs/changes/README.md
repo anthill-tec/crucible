@@ -493,6 +493,28 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Notes
 
+- 🗑️ **2026-09-10 — USER RULING: the Lavish storyboard no longer tracks CRs, and the close-out
+  storyboard-parity step is RETIRED.** `.lavish/crucible-v2-design.html`'s `section#execution` — the
+  "CR queue & status" table, 71 KB carrying all 115 CR rows — predated the Crucible implementation and
+  has been DELETED from the artifact on the user's instruction (queued as annotation *"Remove this
+  queue!"* against that section). The trackers are this file and the BOARD; a third copy in a design
+  artifact was a copy to keep in sync for no reader. The storyboard keeps only what it is for: the
+  decided design, frame by frame (23 CR ids survive as design-lineage citations in prose, which is
+  provenance, not tracking).
+  **Consequences for the orchestrator's close-out**: no more storyboard row-sync, no more set-diff
+  parity check between the storyboard and this table. The artifact is still opened at bootstrap for
+  DESIGN review, and the flowchart still owes its CR-CRU-116 refresh. Also fixed while in there: an
+  unclosed `<section id="storyboard">` (pre-existing; browsers auto-closed it) and seven dead
+  `#execution` CSS rules.
+- 🗑️ **2026-09-10 — USER RULING: `.lavish/crucible-in-release-waves.html` is DELETED.** It was the
+  design exercise that captured the release-related features, and it is SUPERSEDED by the DNs those
+  exercises produced (`DN-crucible-wave-track-release.md` D1-D4, `DN-crucible-roadmap-view.md`). Its
+  session was ended and the file removed. Earlier notes in this file cite it as the surface a ruling
+  was taken on — those citations stand as history; the rulings themselves live in the DN, which is why
+  the artifact was disposable. **Standing pattern, now explicit: a Lavish artifact is a REVIEW
+  SURFACE, not a record.** Once its decisions are recorded in a DN, spec or this queue, the artifact
+  is deleted rather than maintained.
+
 - 🚪 **2026-09-10 — USER RULINGS: `queue-file` is DEPRECATED, the 62 landed rows are BACK-FILLED, and
   CR-CRU-118 is rescoped.** Recorded as DN `D4's fallout` (`DN-crucible-wave-track-release.md`).
   (1) The bulk queue door is transitional — it exists because this project is Crucible's source AND
