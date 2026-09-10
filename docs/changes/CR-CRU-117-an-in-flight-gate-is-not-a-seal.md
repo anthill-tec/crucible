@@ -59,6 +59,11 @@ A snapshot is non-terminal when it carries no resolved `outcome` and at least on
 minutes posts interim gates throughout it, and the nine-row shape `axi status` always emits is no
 longer read as "already resolved".
 
+Posting is throttled by **ladder change**, not merely by the poll cadence: a POST fires only when the
+step ladder differs from the last one posted, so a run sitting at the same step across many ticks
+produces no repeat traffic. Ruled 2026-09-10 — the ladder has at most nine transitions per run, and
+the poll cadence itself stays exactly as it is (Non-goals).
+
 ### §S3 The fixtures drive the real shape
 
 The four per-client axi suites and bun's gates suite drive progressive snapshots of 3, 6 and 8 rows —
@@ -100,6 +105,11 @@ with the defect again.
       posted for it.
 - [ ] The interim gate's `steps[]` carries all nine names with their mapped statuses, so `pending` is
       represented rather than dropped.
+- [ ] Two consecutive polled snapshots with an IDENTICAL step ladder (same names, same statuses, same
+      outcome-key presence) produce **at most one** interim POST between them, even when both fall in
+      separate cadence windows: asserted with a run held at one step across several ticks, counting
+      POSTs. This is the volume control that makes streaming safe on a long-running pipeline — the
+      poll cadence itself stays untouched.
 - [ ] Interim posts still obey the existing cadence: two snapshots within one cadence window produce
       one POST, asserted by counting POSTs.
 - [ ] `gate-run`'s envelope reports `postedGate: interim` when the poll loop posted an in-flight gate
@@ -158,6 +168,9 @@ and the step-status mapper's own residual green-biased fallback.
 ## Non-goals
 
 - No change to the poll cadence, to `no-mistakes` itself, or to which pipeline steps a project skips.
-- No retroactive relabelling of gates already on any board.
+- No retroactive relabelling of gates already on any board — including the one false-green gate live
+  on this project's board today, from the mid-run failure this CR's own Context describes. Ruled
+  2026-09-10: it is left for a genuine post-CR-117 gate to supersede it as the newest scoped gate,
+  not corrected as a data action.
 - Not the outcome-vocabulary question: whether `passed-with-skips` becomes a first-class outcome is a
   separate candidate CR, recorded in the queue notes.
