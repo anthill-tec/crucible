@@ -101,7 +101,7 @@ const IN_BLOCK_SEQ = 5019;
 
 /**
  * §S1/AC1 — TODAY'S SENTENCE, verbatim from src/v2.ts's
- * `defaultedSeqWarnings`. For the INVENTED cause it was always correct, so
+ * `seqScaleWarnings`. For the INVENTED cause it was always correct, so
  * this CR must not touch it. Pinned as a literal here rather than imported:
  * an import would track whatever GREEN writes and assert nothing.
  */

@@ -473,7 +473,7 @@ class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
 
     The pattern is the project's own: `canonical_track`
     (`clients/_crucible_axi.py:1434`) mirrors `normalizeTrack`
-    (`src/store.ts:349-352`) and is "held to one rule by assertion (AC18), not
+    (`src/store.ts:362-365`) and is "held to one rule by assertion (AC18), not
     by comment". This is that assertion for the tier vocabulary.
 
     The mirror is DERIVED, never named: any collection literal in the shared

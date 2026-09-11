@@ -1447,8 +1447,14 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // Measured with THIS file's own classifier over the working tree against
 // `git show 56067e0:<path>` — the commit before the CR's first change. The
 // `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
+//
+// CR-CRU-119 moved `src` 595 → 600 (measured at close-out, not transcribed
+// from a mid-cycle note, per this project's established citation-drift
+// discipline): five new citations — src/store.ts:318, :3915, :4093 and
+// src/v2.ts:2200, :2212 — naming the CR that reconciled the defaulted-seq
+// message split. `public` and `clients` are unchanged.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 595 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 600 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 443 },
   clients: { exts: [".py"], develop: 601, head: 802 },
 };

@@ -5,7 +5,7 @@
 // and the non-integer wave, at the two boundaries that hold the default:
 // `Store.replaceQueue` (the writer) and the bulk queue route that fronts it.
 // §S1 (`listQueue` / `compareQueueOrder`, C1) and §S2 (`upsertQueueEntry` /
-// `defaultedSeqWarnings`, C2) are consumed here as guards and never re-pinned.
+// `seqScaleWarnings`, C2) are consumed here as guards and never re-pinned.
 //
 // ── What is broken today ───────────────────────────────────────────────────
 //

@@ -123,6 +123,7 @@ function expectDefaultedSeqWarning(warnings: WarningWire[] | undefined, crs: str
   expect(warning).toBeDefined();
   expect(warning!.crs).toEqual(crs);
   expect(warning!.message).toBe(defaultedSeqMessage(crs));
+  expect(warning!.seqCause).toBe("invented");
   for (const cr of crs) expect(warning!.message).toContain(cr);
   expect(warning!.message).toContain("wave-sequence");
 }
@@ -607,7 +608,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
   /** The seq axis's silence, which is what every `warnings` assertion in this
    *  suite is about: CR-CRU-118 §S2's inherited-membership list rides the same
    *  envelope and is a different finding. */
-  function defaultedSeqWarnings(body: AnyBody): unknown[] {
+  function seqFindings(body: AnyBody): unknown[] {
     return (body.warnings ?? []).filter((warning) => warning.code === "defaulted-seq");
   }
 
@@ -634,7 +635,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
         { cr: "CR-C", wave: 6, dependsOn: [], seq: 2 },
       ]);
       expect(seeded.status).toBe(200);
-      expect(defaultedSeqWarnings(seeded.body)).toEqual([]);
+      expect(seqFindings(seeded.body)).toEqual([]);
 
       expect((await plan(key, "CR-A", "0.2.0", 5, "a")).status).toBe(200);
       expect((await plan(key, "CR-B", "0.2.0", 5, "b")).status).toBe(200);
@@ -679,7 +680,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
 
       const bootstrapped = await rebulk(key, table);
       expect(bootstrapped.status).toBe(200);
-      expect(defaultedSeqWarnings(bootstrapped.body)).toEqual([]);
+      expect(seqFindings(bootstrapped.body)).toEqual([]);
 
       for (const cr of board.authored) {
         expect((await plan(key, cr, "0.2.0", 5, `title ${cr}`)).status).toBe(200);
@@ -802,7 +803,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
         { cr: "CR-NEW", wave: 6, dependsOn: [] },
       ]);
       expect(seeded.status).toBe(200);
-      expect(defaultedSeqWarnings(seeded.body)).toEqual([]);
+      expect(seqFindings(seeded.body)).toEqual([]);
 
       const added = await bulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },

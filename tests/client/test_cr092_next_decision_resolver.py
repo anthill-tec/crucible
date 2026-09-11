@@ -23,11 +23,11 @@ THE API THIS RED PINS, and why each piece exists:
         normalise its `--track`. Without this the fleet would answer `2`
         differently on the read path (`next`) and the write path
         (`wave-sequence`), which is the exact inconsistency the fleet standard
-        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:349-352).
+        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:362-365).
 
     queue_tracks(queue) -> [str]
         §S3, as CR-CRU-108 §S2 leaves it: the tracks the queue READ published
-        (`declaredTracks`, src/store.ts:380), NOT a set the client derives.
+        (`declaredTracks`, src/store.ts:393), NOT a set the client derives.
         `len > 1` is still the whole definition of "multi-track", and the
         values are still echoed as stored rather than re-spelled — the rule
         simply has one home now, on the server that owns the normalisation.
@@ -369,7 +369,7 @@ class CanonicalTrackTest(_NextTestBase):
                 self.assertIsNone(
                     AXI.canonical_track(spelling),
                     f"{spelling!r} names no lane; `normalizeTrack` returns null "
-                    f"for it (src/store.ts:349-352) so the helper must too, "
+                    f"for it (src/store.ts:362-365) so the helper must too, "
                     f"rather than inventing a track")
 
     def test_no_value_at_all_is_refused_rather_than_defaulted(self):
@@ -1585,18 +1585,18 @@ class NextBlockCitationsTest(unittest.TestCase):
         # that much. The CR that shifted the file re-pins it — and this guard
         # is the only thing in the repo that caught it, because it lives in
         # the PYTHON suite that no bun-side run reaches.
-        # Re-pinned 2026-09-10 (CR-CRU-118 §S4b), 4256 -> 4267: §S4a added 11
-        # comment lines above `deriveQueueStatus` in src/store.ts. The drift
-        # IS ours, and this guard is the only thing in the repo that saw it.
-        ("LANDED_STATUSES", "src/store.ts", 4267, 4267,
+        # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 4267 -> 4294: the seq-cause
+        # split added citation lines above `deriveQueueStatus` in
+        # src/store.ts. The drift IS ours, and this guard is the only thing
+        # in the repo that caught it, because it lives in the PYTHON suite
+        # that no bun-side run reaches.
+        ("LANDED_STATUSES", "src/store.ts", 4294, 4294,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
-        # Re-pinned 2026-09-07 (CR-CRU-094 C4), 345-348 -> 349-352. This drift
-        # IS ours, and it is the ordinary case the rule above describes:
-        # §S1/§S2 (cycles 358/359) added the `EventRow.cycle_id` field, the
-        # appended migration body and `recordLifecycleEvent`'s note to
-        # `src/store.ts` ABOVE `normalizeTrack`, moving it down four lines.
-        # The CR that shifted the file re-pins it.
-        ("canonical_track", "src/store.ts", 349, 352,
+        # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
+        # QueueSeqReport/preservedSeq additions and the seq-cause split
+        # inserted comment and code lines above `normalizeTrack` in
+        # src/store.ts. The CR that shifted the file re-pins it.
+        ("canonical_track", "src/store.ts", 362, 365,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is
