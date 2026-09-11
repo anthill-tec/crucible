@@ -314,6 +314,19 @@ export interface QueueEntryInput {
  */
 export interface QueueSeqReport {
   defaultedSeq: string[];
+  /**
+   * CR-CRU-119 §S1 — the SUBSET of `defaultedSeq` whose position this write did
+   * NOT invent: the entry kept the seq it already held (`upsertQueueEntry`'s
+   * `moved ? nextFreeSlot(…) : held!.seq` took the second branch) and only that
+   * held value's SCALE collides with a sibling. `defaultedSeq` keeps naming
+   * every cr the finding is about — the trigger set is untouched (§S2) — and
+   * this list says which of them the word "defaulted" would be false about, so
+   * the route can build the two causes' sentences and the machine-readable
+   * discriminator beside them. Always empty from `replaceQueue`: that writer
+   * names a row ONLY when neither a declared nor a held-in-wave seq existed, so
+   * every cr it reports is one whose position it chose.
+   */
+  preservedSeq: string[];
 }
 
 /** CR-CRU-091 §S3/§S8 — one `cr-plan` upsert: the declaration, nothing else. */
@@ -3899,7 +3912,11 @@ export class Store {
             lifecycle,
           );
       });
-      return { defaultedSeq };
+      // CR-CRU-119 §S1 — `preservedSeq` is empty by construction here: this
+      // writer names a row only when it had NEITHER a declared nor a
+      // held-in-wave seq, so every cr it reports is one whose position it
+      // chose. A held value that survives the post is never named at all.
+      return { defaultedSeq, preservedSeq: [] };
     });
     const report = replace();
     this.emit("events", projectKey);
@@ -4010,7 +4027,7 @@ export class Store {
       held.wave === input.wave &&
       held.title === input.title
     ) {
-      return { changed: false, defaultedSeq: [] };
+      return { changed: false, defaultedSeq: [], preservedSeq: [] };
     }
     const moved = held === null || held.wave !== input.wave;
     const seq = moved
@@ -4073,7 +4090,17 @@ export class Store {
         )
         .all(projectKey, input.cr, input.wave, input.release)
         .some((row) => inWaveBlock(row.seq, row.wave) !== scale);
-    return { changed: true, defaultedSeq: mixed ? [input.cr] : [] };
+    // CR-CRU-119 §S1 — the trigger is one boolean, but it fires on TWO facts,
+    // and only one of them is a defaulting. `moved` is the write that CHOSE
+    // this position; `!scale` alone is a position the row already HELD, handed
+    // back by the seq resolution above untouched. Which of the two happened is
+    // read off `moved` here rather than re-derived downstream, because the
+    // route sees neither the held row nor the resolved seq.
+    return {
+      changed: true,
+      defaultedSeq: mixed ? [input.cr] : [],
+      preservedSeq: mixed && !moved ? [input.cr] : [],
+    };
   }
 
   /**

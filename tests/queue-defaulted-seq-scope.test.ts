@@ -101,12 +101,42 @@ function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): Warnin
   return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
 }
 
+/**
+ * CR-CRU-119 §S1 — the SECOND cause's wording. The trigger below fires on two
+ * facts, and for the one where the entry KEPT the position it already held
+ * nothing was defaulted; that half of this suite's drives now reads this
+ * sentence instead, and the finding carries `seqCause` so a client tells the
+ * causes apart without parsing either one.
+ */
+function preservedSeqMessage(crs: string[]): string {
+  return (
+    `${crs.join(", ")} kept the seq it already holds, and that position sits on a ` +
+    `DIFFERENT SCALE from a sibling in the same wave or release — this write chose nothing, ` +
+    `and the two scales interleave in an order nobody authored; run ` +
+    `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`
+  );
+}
+
 function expectDefaultedSeqWarning(warnings: WarningWire[] | undefined, crs: string[]): void {
   expect(warnings).toBeDefined();
   const warning = warnings!.find((w) => w.code === "defaulted-seq");
   expect(warning).toBeDefined();
   expect(warning!.crs).toEqual(crs);
   expect(warning!.message).toBe(defaultedSeqMessage(crs));
+  for (const cr of crs) expect(warning!.message).toContain(cr);
+  expect(warning!.message).toContain("wave-sequence");
+}
+
+/** CR-CRU-119 §S1 — the same finding, on the cause where the write PRESERVED
+ *  the position: same code, same crs, the truthful sentence, and the machine
+ *  discriminator beside it. */
+function expectPreservedSeqWarning(warnings: WarningWire[] | undefined, crs: string[]): void {
+  expect(warnings).toBeDefined();
+  const warning = warnings!.find((w) => w.code === "defaulted-seq");
+  expect(warning).toBeDefined();
+  expect(warning!.crs).toEqual(crs);
+  expect(warning!.message).toBe(preservedSeqMessage(crs));
+  expect(warning!.seqCause).toBe("preserved");
   for (const cr of crs) expect(warning!.message).toContain(cr);
   expect(warning!.message).toContain("wave-sequence");
 }
@@ -619,7 +649,10 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       expect(planned.status).toBe(200);
       expect(planned.body.ok).toBe(true);
       expect(planned.body.converged).toBe(false);
-      expectDefaultedSeqWarning(planned.body.warnings, ["CR-C"]);
+      // CR-CRU-119 §S1 — CR-C is re-planned at the wave it already sits in, so
+      // its held positional 2 comes through untouched: the finding is the
+      // PRESERVED cause, and saying a seq was defaulted here would be false.
+      expectPreservedSeqWarning(planned.body.warnings, ["CR-C"]);
       // Warn-and-write: refused nothing.
       expect(planned.body.entry!.release).toBe("0.2.0");
       expect(planned.body.entry!.wave).toBe("6");
@@ -916,8 +949,9 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       expect((await plan(key, "CR-A", "0.2.0", 5, "a")).status).toBe(200);
       expect((await plan(key, "CR-B", "0.2.0", 5, "b")).status).toBe(200);
       expect((await sequence(key, "0.2.0", 5, ["CR-A", "CR-B"])).status).toBe(200);
-      // AC9 — C's own write into the release names C.
-      expectDefaultedSeqWarning((await plan(key, "CR-C", "0.2.0", 6, "c")).body.warnings, ["CR-C"]);
+      // AC9 — C's own write into the release names C. CR-CRU-119 §S1: C stays
+      // in wave 6, so the position is PRESERVED and the finding says so.
+      expectPreservedSeqWarning((await plan(key, "CR-C", "0.2.0", 6, "c")).body.warnings, ["CR-C"]);
 
       const retitledA = await plan(key, "CR-A", "0.2.0", 5, "a, retitled");
 
@@ -932,7 +966,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       expect(retitledC.status).toBe(200);
       expect(retitledC.body.converged).toBe(false);
       expect(retitledC.body.entry!.seq).toBe(2);
-      expectDefaultedSeqWarning(retitledC.body.warnings, ["CR-C"]);
+      expectPreservedSeqWarning(retitledC.body.warnings, ["CR-C"]);
     },
   );
 });

@@ -2146,7 +2146,6 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     if (error instanceof QueueWaveOverflowError) return deprecateRefusal(waveOverflow(error));
     throw error;
   }
-  const { defaultedSeq } = report;
   const known = new Set(entries.map((entry) => entry.cr));
   const unknownDependencies = [
     ...new Set(
@@ -2167,7 +2166,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     // per-row findings follow it unchanged.
     warnings: [
       ...DEPRECATED_ROUTE_NOTICE,
-      ...defaultedSeqWarnings(defaultedSeq),
+      ...seqScaleWarnings(report),
       ...inheritedReleaseLessWarnings(inheritedReleaseLess),
     ],
   });
@@ -2198,21 +2197,62 @@ interface QueueWarning {
    *  for the same reason. A client that had to regex an English sentence for
    *  them would be deciding something (§S9). */
   verbs?: string[];
+  /** CR-CRU-119 §S1 — the machine half of the seq finding's CAUSE, on
+   *  `defaulted-seq` alone: `invented` is a position this write chose (a new
+   *  entry, or one whose wave moved), `preserved` is one the entry already held
+   *  whose scale collides with a sibling's. The two read identically on `crs`,
+   *  so without this field a client would have to regex the prose to tell a
+   *  defaulting from a collision — deciding something (§S9). */
+  seqCause?: "invented" | "preserved";
 }
 
-/** §S2/AC23 — the warn-and-write rung, shared by the queue post and cr-plan. */
-function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
-  if (crs.length === 0) return [];
-  return [
-    {
+/**
+ * §S2/AC23 — the warn-and-write rung, shared by the queue post and cr-plan.
+ *
+ * CR-CRU-119 §S1 — ONE trigger, TWO causes, and the single sentence this used
+ * to build was FALSE for one of them. A cr whose position the write INVENTED
+ * (a new entry, or one whose wave moved) keeps that sentence to the byte,
+ * because for that cause it was always correct. A cr that KEPT the position it
+ * already held gets one that says what actually happened: nothing was
+ * defaulted, and the held value's scale collides with a sibling's. `seqCause`
+ * carries the same split machine-readably (§S9 — the fleet renders findings
+ * and decides nothing, so telling the causes apart may not require parsing
+ * prose), and the `code` stays ONE: the cause is a property OF this finding,
+ * not a second finding, and the published vocabulary five clients render does
+ * not grow a member for it.
+ *
+ * The trigger set is untouched (§S2): every cr the store names still earns a
+ * finding, in the same call, naming the same crs.
+ */
+function seqScaleWarnings({ defaultedSeq, preservedSeq }: QueueSeqReport): QueueWarning[] {
+  const held = new Set(preservedSeq);
+  const invented = defaultedSeq.filter((cr) => !held.has(cr));
+  const preserved = defaultedSeq.filter((cr) => held.has(cr));
+  const warnings: QueueWarning[] = [];
+  if (invented.length > 0) {
+    warnings.push({
       code: "defaulted-seq",
       message:
-        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave or release carries ` +
+        `seq was defaulted for ${invented.join(", ")} while a sibling in the same wave or release carries ` +
         `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
         `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
-      crs,
-    },
-  ];
+      crs: invented,
+      seqCause: "invented",
+    });
+  }
+  if (preserved.length > 0) {
+    warnings.push({
+      code: "defaulted-seq",
+      message:
+        `${preserved.join(", ")} kept the seq it already holds, and that position sits on a ` +
+        `DIFFERENT SCALE from a sibling in the same wave or release — this write chose nothing, ` +
+        `and the two scales interleave in an order nobody authored; run ` +
+        `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
+      crs: preserved,
+      seqCause: "preserved",
+    });
+  }
+  return warnings;
 }
 
 /**
@@ -2500,7 +2540,7 @@ function recordedReleaseClaiming(store: Store, key: string): (cr: string) => str
  * (CR-CRU-091 §S2/AC17, CR-CRU-099 §S1/AC4a). The slot/scale rules that
  * decide `seq` and whether a `defaulted-seq` warning is earned are the other
  * half, and are already one rule reached from both writers — `nextFreeSlot` /
- * `inWaveBlock` in the store, rendered by `defaultedSeqWarnings` here.
+ * `inWaveBlock` in the store, rendered by `seqScaleWarnings` here.
  *
  * Reached from EVERY route that declares membership: the bulk `POST …/queue`
  * (the MIGRATION door, per entry), `cr-plan` and `wave-sequence`. Until this
@@ -2777,7 +2817,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
     if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
     throw error;
   }
-  const { changed, defaultedSeq } = report;
+  const { changed } = report;
   const entries = store.listQueue(pk.key);
   const touched = new Set([body.cr]);
   return json({
@@ -2786,7 +2826,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
     entry: entries.find((entry) => entry.cr === body.cr),
     // §S7 — a converged call emits no warning it did not earn.
     warnings: changed
-      ? [...dependencyWarnings(entries, touched), ...defaultedSeqWarnings(defaultedSeq)]
+      ? [...dependencyWarnings(entries, touched), ...seqScaleWarnings(report)]
       : [],
     unknownDependencies: unknownDependencies(entries, touched),
   });
