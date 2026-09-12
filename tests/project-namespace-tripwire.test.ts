@@ -476,9 +476,9 @@ function collectHelpSurfaces(): HelpSurface[] {
 
 // THE RESIDUE THIS CR DOES NOT TOUCH — pinned, enumerated, dated, never
 // implied. Measured 2026-09-03 by this file's own checker: 220 real-namespace
-// literals sit in assertions across these 41 files. Not one is in
+// literals sit in assertions across 41 of the files listed below. Not one is in
 // CR-CRU-097's scope — §S3 named three files (all now at zero) and AC7a four
-// more (carved out above); these 41 are a pre-existing instance of the SAME
+// more (carved out above); those 41 are a pre-existing instance of the SAME
 // class, found by building the tripwire. Churning 41 unrelated files from
 // inside a tripwire CR is exactly the scope creep §S5 refused, so they are
 // recorded here instead of edited, and reported as a finding.
@@ -487,6 +487,12 @@ function collectHelpSurfaces(): HelpSurface[] {
 // grow, and a file absent from this table must be at ZERO. That is the
 // forward guarantee — a new test asserting on a real project's CR id fails
 // here, in the file that introduced it, on the day it is written.
+//
+// ONE file has been ADDED since that measurement, and exactly one: CR-CRU-124's
+// on 2026-09-12, dated and reasoned at its own line below. The guarantee above
+// is what produced it — the guard failed on the day that file was written — so
+// the entry records the reading taken then and nothing else, and the ceiling it
+// sets may only shrink.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
   [join("tests", "ci-toolchain-provisioning.test.ts")]: 1,
@@ -515,6 +521,32 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "client", "test_crucible_axi_shared.py")]: 3,
   [join("tests", "client", "test_crucible_axi_stages.py")]: 8,
   [join("tests", "client", "test_crucible_axi_wheel_packaging.py")]: 1,
+  // ADDED 2026-09-12 by CR-CRU-124 — the FIRST entry this table has taken
+  // since it was measured on 2026-09-03 (41 files then, 42 now), and it is
+  // taken deliberately rather than by rewriting the RED contract it records.
+  // Seven literals, MEASURED by this file's own checker on the day the file
+  // was written, in two roles:
+  //   • FOUR are the assertion's SUBJECT. §S2/AC3 pins the cr-ABSENT ambiguity
+  //     wording VERBATIM — the one path this CR must leave untouched — so the
+  //     two-plan fixture board (:410, :411) and the expected sentence it must
+  //     produce (:418, :419) name the same two real crs. Synthesising them
+  //     would pin a sentence the client never emits, i.e. weaken the only
+  //     regression that proves the old wording survived. This is the case AC5
+  //     and the dated snapshots above exist for, and NOT the CR-CRU-118 /
+  //     CR-CRU-122 case, where the literal was decoration inside an `expect`
+  //     MESSAGE and was reworded away; no literal in this file sits in a
+  //     message.
+  //   • THREE are fixture SETUP that the span walk deliberately over-reports.
+  //     `self.assertEqual(message.count("(plan "), ...)` at :375/:376 opens a
+  //     bracket INSIDE a string literal, so that assertion's span never closes
+  //     and runs to end-of-file, swallowing the mock board at :674 and the
+  //     contradicting `--cr` fixture at :716/:723. No assertion reads any of
+  //     the three. That is the walk's documented fail-loud direction — an
+  //     over-report in the file that wrote the message, never a silent hole —
+  //     so it is recorded here rather than papered over by editing a fixture
+  //     the CR's own RED authored. The ceiling shrinks to 4 the day the walk
+  //     is taught to skip string literals, and a ceiling may always shrink.
+  [join("tests", "client", "test_cycle_add_targets_the_plan_it_means.py")]: 7,
   [join("tests", "client", "test_mvn_crucible_axi.py")]: 10,
   [join("tests", "client", "test_python_crucible_axi.py")]: 9,
   [join("tests", "client", "test_queue_file_verb.py")]: 23,
@@ -1483,10 +1515,28 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // in public/styles.css (:1102), the `@keyframes app-spin` rule that spins it.
 // `src` and `clients` are untouched by this CR and re-measured unchanged at
 // 605 and 805; all three `develop` floors stay where they are.
+//
+// UPDATED 2026-09-12 by CR-CRU-124 — moved `clients` 805 -> 814, measured at
+// close-out by running this guard against the working tree, never transcribed
+// from the VERIFY report that first reported the drift. All nine new citations
+// sit in the ONE shared module §S1-§S4 changed, clients/_crucible_axi.py, and
+// eight of them name this CR: `resolve_single_plan`'s §S1 narrowing rule
+// (:256), the §S3 table of verbs that own a `--plan` escape (:379), the §S2
+// ambiguity message that names only the candidates it MEANS (:410), the
+// §S3/§S4 help text for the two targeting flags (:646), the `--plan` target's
+// own docstring (:2486) and the §S3/§S4 notes on how it and `--kind` reach the
+// wire (:2536, :2539), and the one fleet registrar that declares both flags
+// (:5273). The ninth names CR-CRU-030 (:266): it is the line in the same §S1
+// docstring recording WHY the cr-ABSENT wording that CR pinned is left exactly
+// as it stands — the pin the orchestrator's ruling preserved, written where
+// the next reader of the narrowing rule will meet it. The five clients each
+// changed ONE line and none of those lines is prose. `src` and `public` are
+// untouched by this CR and re-measured unchanged at 605 and 469; all three
+// `develop` floors stay where they are.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 605 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 469 },
-  clients: { exts: [".py"], develop: 601, head: 805 },
+  clients: { exts: [".py"], develop: 601, head: 814 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
