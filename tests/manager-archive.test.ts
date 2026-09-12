@@ -42,6 +42,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { gateFetch } from "./helpers/fetch-gate";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -493,5 +494,167 @@ describe("Projects manager — unarchive action (§S1b AC)", () => {
     const fold = archivedFold();
     expect(fold).not.toBeNull();
     expect((fold!.textContent ?? "").trim()).toBe("archived (1)");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-122 §S4 — project archive/unarchive gets the spinner AND a
+// double-submit guard.
+//
+// Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md §S4.
+// `postProjectLifecycle` (public/app.js:1544-1556) is one of the six audited
+// backend-delay sites, and today the row sits completely inert during the
+// POST — no feedback at all, and nothing stops a second "confirm archive" /
+// "unarchive" click from firing a second in-flight request.
+//
+// Contract for GREEN: a local `van.state(false)` pending flag set before the
+// fetch and reset in a `finally`; while true the TRIGGERING control renders
+// the shared `Spinner()` (`data-testid="spinner"`, class `app-spinner`) and
+// is DISABLED. Disabling it is what closes the gap — a disabled button
+// dispatches no click at all — and the `finally` is what stops a failed POST
+// from leaving a permanently spinning, permanently dead control.
+//
+// The in-flight window is held open by tests/helpers/fetch-gate.ts, wrapped
+// around this file's own mock after mount: `gate.fired` counts requests
+// ATTEMPTED (the honest double-submit counter), `archiveCalls` still counts
+// the ones that actually reached the mock server.
+//
+// RED phase (cycle 430): no `Spinner`, no `app-spinner`, no pending flag and
+// no `disabled` exists anywhere in public/app.js — every test below fails.
+// The first one fails even earlier than the spinner assert, and that is the
+// point: `manager-archive-confirm`'s onclick resets `managerArchivePending`
+// BEFORE it starts the POST, so today the triggering control is unmounted
+// while its own request is still in flight. Keeping it mounted, disabled and
+// spinning until the POST settles is exactly what this AC asks for.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function spinnersIn(root: ParentNode = document): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-testid="spinner"]'));
+}
+
+const isArchivePost = (url: string, method: string): boolean =>
+  method === "POST" && /\/api\/v2\/projects\/[^/]+\/archive$/.test(url);
+const isUnarchivePost = (url: string, method: string): boolean =>
+  method === "POST" && /\/api\/v2\/projects\/[^/]+\/unarchive$/.test(url);
+
+describe("CR-CRU-122 §S4 — archive/unarchive: spinner, disabled control, no double submit", () => {
+  test("confirming archive spins and disables the confirm control until the POST settles, and a second click fires no second request", async () => {
+    const key = "cr122-archive-slow";
+    await mountApp({ pathname: "/manage", projects: [project({ key, name: "Slow Archive Co" })] });
+    const gate = gateFetch(isArchivePost);
+
+    archiveTrigger(key).click();
+    await settle();
+    const confirmEl = archiveConfirm(key);
+    expect(confirmEl).not.toBeNull();
+    confirmEl!.click();
+    await settle();
+
+    // In flight: one request fired, none delivered yet.
+    expect(gate.fired).toBe(1);
+    expect(gate.held).toHaveLength(1);
+    expect(archiveCalls).toHaveLength(0);
+
+    // The triggering control is still there, disabled, wearing the spinner.
+    const during = archiveConfirm(key);
+    expect(during).not.toBeNull();
+    expect((during as HTMLButtonElement).disabled).toBe(true);
+    expect(spinnersIn(managerRow(key))).toHaveLength(1);
+    expect(spinnersIn(managerRow(key))[0]!.classList.contains("app-spinner")).toBe(true);
+
+    // The double-submit gap, closed: clicking again does nothing at all.
+    during!.click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(archiveCalls).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+
+    expect(archiveCalls).toHaveLength(1);
+    expect(archiveCalls[0]!.url).toContain(`/api/v2/projects/${key}/archive`);
+    expect(spinnersIn()).toHaveLength(0);
+    expect(findManagerRow(key)).toBeNull();
+    gate.restore();
+  });
+
+  test("unarchive spins and disables its own control until the POST settles, and a second click fires no second request", async () => {
+    const key = "cr122-unarchive-slow";
+    await mountApp({
+      pathname: "/manage",
+      projects: [],
+      archivedProjects: [project({ key, name: "Slow Unarchive Co" })],
+    });
+    archivedFold()!.click();
+    await settle();
+    const gate = gateFetch(isUnarchivePost);
+
+    const trigger = archivedRow(key)!.querySelector(
+      '[data-testid="manager-unarchive"]',
+    ) as HTMLElement | null;
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await settle();
+
+    expect(gate.fired).toBe(1);
+    expect(unarchiveCalls).toHaveLength(0);
+
+    const during = archivedRow(key)!.querySelector(
+      '[data-testid="manager-unarchive"]',
+    ) as HTMLButtonElement | null;
+    expect(during).not.toBeNull();
+    expect(during!.disabled).toBe(true);
+    expect(spinnersIn(archivedRow(key)!)).toHaveLength(1);
+    expect(spinnersIn(archivedRow(key)!)[0]!.classList.contains("app-spinner")).toBe(true);
+
+    during!.click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(unarchiveCalls).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+
+    expect(unarchiveCalls).toHaveLength(1);
+    expect(unarchiveCalls[0]!.url).toContain(`/api/v2/projects/${key}/unarchive`);
+    expect(spinnersIn()).toHaveLength(0);
+    expect(findManagerRow(key)).not.toBeNull();
+    gate.restore();
+  });
+
+  test("a FAILED archive POST leaves nothing stuck — the spinner clears and the same action can be run again", async () => {
+    const key = "cr122-archive-failed";
+    await mountApp({ pathname: "/manage", projects: [project({ key, name: "Failing Archive Co" })] });
+    const gate = gateFetch(isArchivePost);
+
+    archiveTrigger(key).click();
+    await settle();
+    archiveConfirm(key)!.click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(spinnersIn(managerRow(key))).toHaveLength(1);
+
+    gate.rejectAll(new Error("archive POST exploded"));
+    await settle();
+
+    // Nothing spinning, nothing archived, the row still here.
+    expect(spinnersIn()).toHaveLength(0);
+    expect(archiveCalls).toHaveLength(0);
+    expect(findManagerRow(key)).not.toBeNull();
+
+    // …and the control is not permanently dead: the whole action runs again.
+    gate.passThrough();
+    archiveTrigger(key).click();
+    await settle();
+    const retry = archiveConfirm(key);
+    expect(retry).not.toBeNull();
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    retry!.click();
+    await settle();
+
+    expect(gate.fired).toBe(2);
+    expect(archiveCalls).toHaveLength(1);
+    expect(findManagerRow(key)).toBeNull();
+    gate.restore();
   });
 });

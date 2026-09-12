@@ -69,6 +69,8 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { gateFetch } from "./helpers/fetch-gate";
+import { balancedEnd, jsLiveCode, jsUncommented } from "./helpers/source-scan";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -2018,5 +2020,383 @@ describe("F4½ anatomy — status-chips row above the heat-strip (Density presen
     await settle();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     expect(overlay.querySelector('[data-testid="density-status-chips"]')).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-122 — a loading delay deserves a spinner (§S1, §S2, §S3)
+//
+// Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md
+//
+// RED phase (cycle 430): NOTHING below exists on the branch. `grep` over
+// public/ finds no `Spinner`, no `app-spinner`, no `app-spin`, no
+// `data-testid="spinner"` — the only loading feedback in the whole app is the
+// bare text "loading run detail…" (public/app.js:5462), and the suite
+// lazy-load has none at all. Every test in this section is expected to FAIL.
+//
+// Contract this section defines for GREEN:
+//   `Spinner()` — ONE component, ONE CSS rule. Renders a single element with
+//     `data-testid="spinner"` and class `app-spinner`; `public/styles.css`
+//     declares `@keyframes app-spin` and drives it from an `.app-spinner`
+//     rule (the `app-run-pulse` convention at styles.css:1096, a semantic
+//     class plus its own keyframes — followed, not reused: a pulse means
+//     "this is happening live", a spinner means "wait, this is loading").
+//   §S2 — `RunDetailBody`'s loading branch renders it while the initial
+//     `?depth=suites` fetch is in flight, and the suite tree replaces it.
+//   §S3 — a per-suite loading flag renders it on that suite's OWN row while
+//     that suite's `?suite=<name>` fetch is in flight, for BOTH trigger
+//     paths (the row toggle and `SynthHeatCell`'s click, which call the same
+//     `loadSuite`), independently per suite, and clears in a `finally`.
+//
+// The in-flight window is held open by tests/helpers/fetch-gate.ts wrapped
+// around this file's own mock AFTER mount — the mock still serves every
+// request and still records `fetchLog`; the gate only decides when.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const STYLES_CSS_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+const CR122_PROJECT_KEY = "proj-cr122-spinner";
+
+/** Fixture factory for this section — one project, one test event, the given
+ *  suite tree; `tier` picks the presentation (regression/e2e ⇒ Density, which
+ *  is the only presentation that renders the `SynthHeatCell` trigger path). */
+function cr122Mount(eventId: string, tier: string, tree: SuiteFixture[]): MountOpts {
+  const now = Date.now();
+  const leaves = tree.flatMap((suite) => suite.children);
+  const failed = leaves.filter((leaf) => leaf.status === "fail").length;
+  const pending = leaves.filter((leaf) => leaf.status === "pending").length;
+  const passed = leaves.length - failed - pending;
+  const summary = { total: leaves.length, passed, failed, pending, duration_ms: 100 };
+  return {
+    pathname: "/",
+    projects: [
+      {
+        key: CR122_PROJECT_KEY,
+        name: "CR122 Spinner",
+        type: "backend",
+        agentsOnline: 0,
+        agentsTotal: 0,
+        active: true,
+        lastActivity: now,
+      },
+    ],
+    events: [
+      {
+        id: eventId,
+        projectKey: CR122_PROJECT_KEY,
+        agentId: "cr122-agent",
+        kind: "test",
+        tier,
+        codec: "junit",
+        timestamp: now,
+        total: summary.total,
+        passed,
+        failed,
+        pending,
+        duration_ms: 100,
+        hasCoverage: false,
+      },
+    ],
+    eventDetails: {
+      [eventId]: {
+        id: eventId,
+        projectKey: CR122_PROJECT_KEY,
+        agentId: "cr122-agent",
+        kind: "test",
+        tier,
+        codec: "junit",
+        timestamp: now,
+        summary,
+        tree,
+      },
+    },
+  };
+}
+
+const SPIN_ALPHA: SuiteFixture = {
+  name: "SpinSuiteAlpha",
+  status: "pass",
+  children: [
+    { name: "alphaOne", status: "pass", duration_ms: 3 },
+    { name: "alphaTwo", status: "pass", duration_ms: 4 },
+  ],
+};
+const SPIN_BETA: SuiteFixture = {
+  name: "SpinSuiteBeta",
+  status: "pass",
+  children: [{ name: "betaOne", status: "pass", duration_ms: 5 }],
+};
+
+function cr122Overlay(): HTMLElement {
+  const el = document.querySelector('[data-testid="run-overlay"]') as HTMLElement | null;
+  if (el === null) throw new Error("run-overlay not found");
+  return el;
+}
+
+function cr122Spinners(root: ParentNode = document): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-testid="spinner"]'));
+}
+
+function cr122SuiteRows(): HTMLElement[] {
+  return Array.from(cr122Overlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]'));
+}
+
+function cr122SuiteRow(name: string): HTMLElement {
+  const row = cr122SuiteRows().find((el) => (el.textContent ?? "").includes(name));
+  if (row === undefined) throw new Error(`suite-row not found for suite ${name}`);
+  return row;
+}
+
+async function cr122OpenRun(eventId: string, tier: string, tree: SuiteFixture[]): Promise<void> {
+  await mountApp(cr122Mount(eventId, tier, tree));
+  const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+  if (card === null) throw new Error("event-card not found");
+  card.click();
+  await settle();
+}
+
+/** Every rule in `css` whose selector list contains a selector starting with
+ *  `prefix`, returned as its declaration body. Comments are stripped first and
+ *  `@keyframes` bodies dropped whole (their `0%`/`50%` stops are not
+ *  selectors) — the same reading tests/roadmap-wave-header.test.ts takes of
+ *  this stylesheet. */
+function cssRuleBodies(css: string, prefix: string): string[] {
+  const decommented = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = decommented.replace(/@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+  const out: string[] = [];
+  for (const match of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = (match[1] ?? "").split(",").map((s) => s.trim());
+    if (selectors.some((s) => s === prefix || s.startsWith(`${prefix}:`) || s.startsWith(`${prefix}::`) || s.startsWith(`${prefix} `))) {
+      out.push(match[2] ?? "");
+    }
+  }
+  return out;
+}
+
+describe("CR-CRU-122 §S1 — one shared Spinner component and its CSS", () => {
+  test("the spinner is ONE element carrying data-testid=\"spinner\" and class app-spinner", async () => {
+    const eventId = "evt-cr122-s1-shape";
+    await mountApp(cr122Mount(eventId, "unit", [SPIN_ALPHA]));
+    const gate = gateFetch((url) => url.includes("depth=suites"));
+    (document.querySelector('[data-testid="event-card"]') as HTMLElement).click();
+    await settle();
+
+    const nodes = cr122Spinners();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]!.classList.contains("app-spinner")).toBe(true);
+    // ONE node — not a cluster of per-dot children each claiming the testid.
+    expect(nodes[0]!.querySelectorAll('[data-testid="spinner"]')).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+    gate.restore();
+  });
+
+  test("public/styles.css declares @keyframes app-spin and an .app-spinner rule drives it", () => {
+    expect(/@keyframes\s+app-spin\s*\{/.test(STYLES_CSS_SRC)).toBe(true);
+
+    const bodies = cssRuleBodies(STYLES_CSS_SRC, ".app-spinner");
+    expect(bodies.length).toBeGreaterThan(0);
+    const driving = bodies.filter((body) =>
+      /\banimation(?:-name)?\s*:[^;]*\bapp-spin\b/.test(body),
+    );
+    expect(driving).toHaveLength(1);
+  });
+
+  test("public/app.js defines Spinner exactly ONCE and emits the spinner testid from exactly one place", () => {
+    const live = jsLiveCode(APP_JS_SRC);
+    const definitions = [...live.matchAll(/\b(?:const|let|var|function)\s+Spinner\b/g)];
+    expect(definitions).toHaveLength(1);
+
+    // The single-source pin: a per-site reimplementation would have to emit
+    // the testid a second time, whatever it called its own function.
+    const emissions = [...jsUncommented(APP_JS_SRC).matchAll(/["']data-testid["']\s*:\s*["']spinner["']/g)];
+    expect(emissions).toHaveLength(1);
+
+    // …and the one definition is CALLED at the six §S2-§S4 sites (run detail,
+    // the shared suite row, archive-confirm, unarchive, save, add). Which DOM
+    // each call lands in is asserted behaviourally — here and in
+    // tests/manager-archive.test.ts / manager-edit-params.test.ts /
+    // projects-manager.test.ts.
+    const calls = [...live.matchAll(/\bSpinner\s*\(/g)];
+    expect(calls.length).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe("CR-CRU-122 §S2 — run detail's initial load gets the spinner", () => {
+  test("the drill-in shows the spinner while its ?depth=suites fetch is in flight, and the suite tree replaces it on resolve", async () => {
+    const eventId = "evt-cr122-s2-initial";
+    await mountApp(cr122Mount(eventId, "unit", [SPIN_ALPHA, SPIN_BETA]));
+    const gate = gateFetch((url) => url.includes("depth=suites"));
+
+    (document.querySelector('[data-testid="event-card"]') as HTMLElement).click();
+    await settle();
+
+    expect(gate.held).toHaveLength(1);
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(1);
+    expect(cr122SuiteRows()).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(0);
+    expect(cr122SuiteRows()).toHaveLength(2);
+    expect(cr122Overlay().textContent ?? "").not.toContain("loading run detail");
+    gate.restore();
+  });
+});
+
+describe("CR-CRU-122 §S3 — suite lazy-load gets the spinner, from either trigger path", () => {
+  test("expanding a collapsed suite renders the spinner on THAT suite's row until its ?suite= fetch resolves, then its leaves replace it", async () => {
+    const eventId = "evt-cr122-s3-toggle";
+    await cr122OpenRun(eventId, "unit", [SPIN_ALPHA, SPIN_BETA]);
+    const gate = gateFetch((url) => url.includes("suite="));
+
+    cr122SuiteRow("SpinSuiteAlpha").click();
+    await settle();
+
+    expect(gate.held).toHaveLength(1);
+    expect(cr122Spinners(cr122SuiteRow("SpinSuiteAlpha"))).toHaveLength(1);
+    // …and nowhere else: the untouched suite's row stays bare.
+    expect(cr122Spinners(cr122SuiteRow("SpinSuiteBeta"))).toHaveLength(0);
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(1);
+    expect(cr122Overlay().querySelectorAll('[data-testid="leaf-row"]')).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(0);
+    expect(cr122Overlay().querySelectorAll('[data-testid="leaf-row"]')).toHaveLength(2);
+    gate.restore();
+  });
+
+  test("a SynthHeatCell click puts the IDENTICAL spinner on the IDENTICAL row as the suite-row toggle", async () => {
+    // Density (regression tier) is the only presentation that renders the
+    // heat strip, so both paths are driven there — the same fixture, two
+    // separate mounts, one descriptor compared.
+    interface SpinnerAt {
+      testid: string;
+      className: string;
+      rowIndex: number;
+      rowText: boolean;
+    }
+    const describeSpinner = (): SpinnerAt => {
+      const nodes = cr122Spinners(cr122Overlay());
+      expect(nodes).toHaveLength(1);
+      const host = nodes[0]!.closest('[data-testid="suite-row"]') as HTMLElement | null;
+      expect(host).not.toBeNull();
+      return {
+        testid: nodes[0]!.getAttribute("data-testid") ?? "",
+        className: nodes[0]!.className,
+        rowIndex: cr122SuiteRows().indexOf(host!),
+        rowText: (host!.textContent ?? "").includes("SpinSuiteAlpha"),
+      };
+    };
+
+    await cr122OpenRun("evt-cr122-s3-path-toggle", "regression", [SPIN_ALPHA, SPIN_BETA]);
+    const toggleGate = gateFetch((url) => url.includes("suite="));
+    cr122SuiteRow("SpinSuiteAlpha").click();
+    await settle();
+    const viaToggle = describeSpinner();
+    toggleGate.resolveAll();
+    await settle();
+    toggleGate.restore();
+
+    await cr122OpenRun("evt-cr122-s3-path-heat", "regression", [SPIN_ALPHA, SPIN_BETA]);
+    const heatGate = gateFetch((url) => url.includes("suite="));
+    const cell = cr122Overlay().querySelector(
+      '[data-testid="heat-cell"][title="SpinSuiteAlpha"]',
+    ) as HTMLElement | null;
+    expect(cell).not.toBeNull();
+    cell!.click();
+    await settle();
+    const viaHeatCell = describeSpinner();
+    heatGate.resolveAll();
+    await settle();
+    heatGate.restore();
+
+    expect(viaHeatCell).toEqual(viaToggle);
+    expect(viaToggle.rowIndex).toBe(0);
+    expect(viaToggle.rowText).toBe(true);
+  });
+
+  test("a FAILED suite fetch clears the per-suite spinner and still surfaces loadSuite's error", async () => {
+    const eventId = "evt-cr122-s3-failed";
+    await cr122OpenRun(eventId, "unit", [SPIN_ALPHA, SPIN_BETA]);
+    const gate = gateFetch((url) => url.includes("suite="));
+
+    cr122SuiteRow("SpinSuiteAlpha").click();
+    await settle();
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(1);
+
+    gate.rejectAll(new Error("suite fetch exploded"));
+    await settle();
+
+    // No stuck spinner anywhere in the document…
+    expect(cr122Spinners()).toHaveLength(0);
+    // …and the behaviour loadSuite's catch has today is untouched.
+    expect(cr122Overlay().textContent ?? "").toContain('suite "SpinSuiteAlpha" failed to load');
+    gate.restore();
+  });
+
+  test("loadSuite clears the flag it set in a FINALLY, not on the success path only", () => {
+    // The DOM cannot tell these apart on its own: loadSuite's catch sets
+    // `loadError`, and RunDetailBody's body binding replaces the WHOLE tree
+    // (spinner included) with the error line — so a happy-path-only reset
+    // would leave the flag stuck true and look identical on screen. The AC
+    // asks for the mechanism as a regression pin, so the mechanism is what is
+    // read: whatever state loadSuite sets before its `try` must be assigned
+    // again inside its `finally`.
+    const live = jsLiveCode(APP_JS_SRC);
+    const at = live.indexOf("async function loadSuite");
+    expect(at).toBeGreaterThan(-1);
+    const bodyStart = live.indexOf("{", live.indexOf(")", at));
+    const body = live.slice(bodyStart, balancedEnd(live, bodyStart));
+
+    const tryAt = body.indexOf("try");
+    expect(tryAt).toBeGreaterThan(-1);
+    const flags = [...body.slice(0, tryAt).matchAll(/\b([A-Za-z_$][\w$]*)\s*\.val\s*=/g)].map(
+      (m) => m[1]!,
+    );
+    expect(flags.length).toBeGreaterThan(0);
+
+    const finallyAt = body.indexOf("finally");
+    expect(finallyAt).toBeGreaterThan(-1);
+    const finallyStart = body.indexOf("{", finallyAt);
+    const finallyBody = body.slice(finallyStart, balancedEnd(body, finallyStart));
+    expect(flags.some((flag) => finallyBody.includes(flag))).toBe(true);
+  });
+
+  test("two suites loading concurrently show INDEPENDENT spinners — resolving one does not clear the other", async () => {
+    const eventId = "evt-cr122-s3-concurrent";
+    await cr122OpenRun(eventId, "unit", [SPIN_ALPHA, SPIN_BETA]);
+    const gate = gateFetch((url) => url.includes("suite="));
+
+    cr122SuiteRow("SpinSuiteAlpha").click();
+    await settle();
+    cr122SuiteRow("SpinSuiteBeta").click();
+    await settle();
+
+    expect(gate.fired).toBe(2);
+    expect(gate.held).toHaveLength(2);
+    expect(cr122Spinners(cr122SuiteRow("SpinSuiteAlpha"))).toHaveLength(1);
+    expect(cr122Spinners(cr122SuiteRow("SpinSuiteBeta"))).toHaveLength(1);
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(2);
+
+    gate.resolveWhere((url) => url.includes("suite=SpinSuiteAlpha"));
+    await settle();
+
+    expect(cr122Spinners(cr122SuiteRow("SpinSuiteAlpha"))).toHaveLength(0);
+    expect(cr122Spinners(cr122SuiteRow("SpinSuiteBeta"))).toHaveLength(1);
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(1);
+    // Alpha really did land while Beta is still waiting — exactly its own two
+    // leaves, not Beta's.
+    expect(cr122Overlay().querySelectorAll('[data-testid="leaf-row"]')).toHaveLength(2);
+
+    gate.resolveAll();
+    await settle();
+    expect(cr122Spinners(cr122Overlay())).toHaveLength(0);
+    expect(cr122Overlay().querySelectorAll('[data-testid="leaf-row"]')).toHaveLength(3);
+    gate.restore();
   });
 });

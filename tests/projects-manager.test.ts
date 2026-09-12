@@ -72,6 +72,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { gateFetch } from "./helpers/fetch-gate";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -678,5 +679,130 @@ describe("Projects manager — edit-in-place (AC6)", () => {
       (input) => input.value === key,
     );
     expect(boundInputs).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-122 §S4 — the add-project form gets the spinner AND a double-submit
+// guard.
+//
+// Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md §S4.
+// `submit` (public/app.js:1865-1876) is one of the six audited backend-delay
+// sites: today the form sits inert for the whole POST, and nothing stops a
+// second "add" click from firing a second in-flight POST — which is how a
+// project gets created twice.
+//
+// Contract for GREEN: a local `van.state(false)` pending flag set before the
+// POST and reset in a `finally`; while true the add control renders the
+// shared `Spinner()` (`data-testid="spinner"`, class `app-spinner`) and is
+// DISABLED — a disabled button dispatches no click — and the `finally` is
+// what stops a failed POST from leaving the form permanently dead.
+//
+// The in-flight window is held open by tests/helpers/fetch-gate.ts wrapped
+// around this file's own mock after mount: `gate.fired` counts POSTs
+// ATTEMPTED, `postCalls` counts the ones that reached the mock server.
+//
+// RED phase (cycle 430): nothing in public/app.js spins, disables, or guards
+// — every test below fails.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function spinnersIn(root: ParentNode = document): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-testid="spinner"]'));
+}
+
+const isProjectPost = (url: string, method: string): boolean =>
+  method === "POST" && /\/api\/v2\/projects$/.test(url);
+
+function addForm(): HTMLElement {
+  const el = document.querySelector('[data-testid="manager-add-form"]') as HTMLElement | null;
+  if (el === null) throw new Error("manager-add-form not found");
+  return el;
+}
+
+function addSubmit(): HTMLButtonElement {
+  const el = addForm().querySelector('[data-testid="manager-add-submit"]') as HTMLButtonElement | null;
+  if (el === null) throw new Error("manager-add-submit not found");
+  return el;
+}
+
+function fillAddForm(name: string): void {
+  const nameInput = addForm().querySelector(
+    '[data-testid="manager-add-name"]',
+  ) as HTMLInputElement | null;
+  const sutRootInput = addForm().querySelector(
+    '[data-testid="manager-add-sutroot"]',
+  ) as HTMLInputElement | null;
+  if (nameInput === null || sutRootInput === null) throw new Error("add-form fields not found");
+  nameInput.value = name;
+  nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+  sutRootInput.value = `/tmp/${name}`;
+  sutRootInput.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+describe("CR-CRU-122 §S4 — add project: spinner, disabled control, no double submit", () => {
+  test("adding spins and disables the add control until the POST settles, and a second click fires no second POST", async () => {
+    await mountApp({ pathname: "/manage", projects: [] });
+    fillAddForm("cr122-add-slow");
+    const gate = gateFetch(isProjectPost);
+
+    addSubmit().click();
+    await settle();
+
+    expect(gate.fired).toBe(1);
+    expect(gate.held).toHaveLength(1);
+    expect(postCalls).toHaveLength(0);
+
+    expect(addSubmit().disabled).toBe(true);
+    expect(spinnersIn(addForm())).toHaveLength(1);
+    expect(spinnersIn(addForm())[0]!.classList.contains("app-spinner")).toBe(true);
+
+    addSubmit().click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(postCalls).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+
+    expect(postCalls).toHaveLength(1);
+    expect(postCalls[0]!.body).toEqual({
+      name: "cr122-add-slow",
+      type: "backend",
+      sutRoot: "/tmp/cr122-add-slow",
+    });
+    expect(spinnersIn()).toHaveLength(0);
+    expect(addSubmit().disabled).toBe(false);
+    gate.restore();
+  });
+
+  test("a FAILED POST leaves nothing stuck — the spinner clears, the add control re-enables and adding works again", async () => {
+    await mountApp({ pathname: "/manage", projects: [] });
+    fillAddForm("cr122-add-failed");
+    const gate = gateFetch(isProjectPost);
+
+    addSubmit().click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(spinnersIn(addForm())).toHaveLength(1);
+
+    gate.rejectAll(new Error("POST exploded"));
+    await settle();
+
+    expect(spinnersIn()).toHaveLength(0);
+    expect(addSubmit().disabled).toBe(false);
+    expect(postCalls).toHaveLength(0);
+
+    gate.passThrough();
+    addSubmit().click();
+    await settle();
+
+    expect(gate.fired).toBe(2);
+    expect(postCalls).toHaveLength(1);
+    expect(postCalls[0]!.body).toEqual({
+      name: "cr122-add-failed",
+      type: "backend",
+      sutRoot: "/tmp/cr122-add-failed",
+    });
+    gate.restore();
   });
 });

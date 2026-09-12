@@ -43,6 +43,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { gateFetch } from "./helpers/fetch-gate";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -484,5 +485,125 @@ describe("Projects manager — edit-in-place liveness + retention negative bound
       (input) => input.value === key,
     );
     expect(boundInputs).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-122 §S4 — the project-settings edit form gets the spinner AND a
+// double-submit guard.
+//
+// Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md §S4.
+// `save` (public/app.js:1636-1672) is one of the six audited backend-delay
+// sites: today the form sits inert for the whole PATCH, and nothing stops a
+// second "save" click from firing a second in-flight PATCH.
+//
+// Contract for GREEN: a local `van.state(false)` pending flag set before the
+// PATCH and reset in a `finally`; while true the save control renders the
+// shared `Spinner()` (`data-testid="spinner"`, class `app-spinner`) and is
+// DISABLED — a disabled button dispatches no click, which is what closes the
+// gap — and the `finally` is what stops a failed PATCH from leaving the form
+// permanently spinning and unsaveable.
+//
+// The in-flight window is held open by tests/helpers/fetch-gate.ts wrapped
+// around this file's own mock after mount: `gate.fired` counts PATCHes
+// ATTEMPTED, `patchCalls` counts the ones that reached the mock server.
+//
+// RED phase (cycle 430): nothing in public/app.js spins, disables, or guards
+// — every test below fails.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function spinnersIn(root: ParentNode = document): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-testid="spinner"]'));
+}
+
+const isProjectPatch = (url: string, method: string): boolean =>
+  method === "PATCH" && /\/api\/v2\/projects\/[^/?]+$/.test(url);
+
+/** The edit form, open — reopening it first when a previous save closed it. */
+async function ensureEditOpen(
+  key: string,
+): Promise<{ retention: HTMLInputElement; save: HTMLButtonElement }> {
+  const open = managerRow(key).querySelector(
+    '[data-testid="manager-edit-save"]',
+  ) as HTMLButtonElement | null;
+  if (open !== null) {
+    const retention = managerRow(key).querySelector(
+      '[data-testid="manager-edit-retention"]',
+    ) as HTMLInputElement | null;
+    expect(retention).not.toBeNull();
+    return { retention: retention!, save: open };
+  }
+  const opened = await openEdit(key);
+  return { retention: opened.retention, save: opened.save as HTMLButtonElement };
+}
+
+describe("CR-CRU-122 §S4 — project-settings save: spinner, disabled control, no double submit", () => {
+  test("saving spins and disables the save control until the PATCH settles, and a second click fires no second PATCH", async () => {
+    const key = "cr122-save-slow";
+    await mountApp({ pathname: "/manage", projects: [project({ key, name: "Slow Save Co" })] });
+    const { retention, save } = await openEdit(key);
+    setValue(retention, "250");
+    const gate = gateFetch(isProjectPatch);
+
+    save.click();
+    await settle();
+
+    expect(gate.fired).toBe(1);
+    expect(gate.held).toHaveLength(1);
+    expect(patchCalls).toHaveLength(0);
+
+    const during = managerRow(key).querySelector(
+      '[data-testid="manager-edit-save"]',
+    ) as HTMLButtonElement | null;
+    expect(during).not.toBeNull();
+    expect(during!.disabled).toBe(true);
+    expect(spinnersIn(managerRow(key))).toHaveLength(1);
+    expect(spinnersIn(managerRow(key))[0]!.classList.contains("app-spinner")).toBe(true);
+
+    during!.click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(patchCalls).toHaveLength(0);
+
+    gate.resolveAll();
+    await settle();
+
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]!.body).toEqual({ retention: 250 });
+    expect(spinnersIn()).toHaveLength(0);
+    // The shipped post-save behaviour is unchanged: the form closes.
+    expect(managerRow(key).querySelector('[data-testid="manager-edit-save"]')).toBeNull();
+    gate.restore();
+  });
+
+  test("a FAILED PATCH leaves nothing stuck — the spinner clears and the same edit can be saved again", async () => {
+    const key = "cr122-save-failed";
+    await mountApp({ pathname: "/manage", projects: [project({ key, name: "Failing Save Co" })] });
+    const first = await openEdit(key);
+    setValue(first.retention, "250");
+    const gate = gateFetch(isProjectPatch);
+
+    first.save.click();
+    await settle();
+    expect(gate.fired).toBe(1);
+    expect(spinnersIn(managerRow(key))).toHaveLength(1);
+
+    gate.rejectAll(new Error("PATCH exploded"));
+    await settle();
+
+    expect(spinnersIn()).toHaveLength(0);
+    expect(patchCalls).toHaveLength(0);
+
+    gate.passThrough();
+    const retry = await ensureEditOpen(key);
+    expect(retry.save.disabled).toBe(false);
+    setValue(retry.retention, "250");
+    retry.save.click();
+    await settle();
+
+    expect(gate.fired).toBe(2);
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]!.body).toEqual({ retention: 250 });
+    gate.restore();
   });
 });
