@@ -73,9 +73,18 @@ routes' fields: `planId`, `cr`, `status`, `cycles`, `wave`, `track` (plan-file's
 
 ### §S2 The client fleet gains `--release` on `plan-file`
 
-All five stack clients' `plan-file` subcommand accepts an optional `--release`, added via the ONE
-shared registrar line in `clients/_crucible_axi.py` (the same architecture CR-CRU-118 §S5 used for its
-own fleet-wide flag additions — one line reaching five clients).
+**Corrected 2026-09-12 (RED, cycle 424) — the CR-CRU-118 §S5 precedent does not apply as written.**
+Unlike the gate/roadmap verbs, `plan-file` has NO existing shared registrar: all five clients
+hand-roll their own `sub.add_parser("plan-file", …)` and flag declarations
+(`arduino-crucible.py:1271`, `bun-crucible.py:2188`, `mvn-crucible.py:2176`,
+`python-crucible.py:1555`, `rust-crucible.py:2795`). Adding `--release` therefore requires
+**creating** one new shared declaration function in `clients/_crucible_axi.py` (matching the
+fleet's own `add_gate_release_arg`/`add_next_verb`/`add_roadmap_verbs` idiom) and moving all five
+clients' `plan-file` flag declarations through it — a bounded refactor of the existing hand-rolled
+parsers, not a one-line addition to something that already exists. The AC is written as a PROPERTY
+(zero per-client declarations; every client's `plan-file` parser handed to the one shared function)
+precisely so it does not depend on this correction's exact shape.
+
 
 ### §S3 `cr-plan` is unaffected
 
