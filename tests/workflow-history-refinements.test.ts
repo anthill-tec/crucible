@@ -105,7 +105,11 @@ interface PlanFixture {
   planId: number | string;
   cr: string;
   projectKey: string;
-  status: "open" | "closed";
+  // CR-CRU-125 — `aborted` is a real `Plan.status` (src/types.ts:346, added by
+  // CR-CRU-024 §S6: a declared workflow the user discarded, after which the cr
+  // may re-file). This fixture widens to it because CR-CRU-125's subject IS
+  // the aborted-beside-open shape; every pre-existing fixture is unaffected.
+  status: "open" | "closed" | "aborted";
   wave?: string;
   track?: string;
   cycles: CycleFixture[];
@@ -877,5 +881,231 @@ describe("§S2.3 active-cycle drill-down parity — RULED (a): always-inline run
     // Still visible after the close — always-inline, not a state that needs
     // "preserving" via a toggle anymore.
     expect(cycleRowAfter.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(1);
+  });
+});
+
+// ── CR-CRU-125 — a CR that is LIVE is not narrated by History (DOM) ───────
+//
+// Spec: docs/changes/CR-CRU-125-history-narrates-a-cr-that-is-still-live.md,
+// §S1's DOM criterion (AC8, CORRECTED by the 2026-09-13 gap analysis,
+// DRIFT-1) and §S2's two ghost-header criteria.
+//
+// CR-CRU-020 §S1.3 (pinned above) excludes an OPEN plan's own CR group from
+// History. CR-CRU-125 extends the rule from the plan RECORD to the CR: a CR
+// holding an `aborted` plan BESIDE an `open` one — the sanctioned
+// abort + re-`plan-file` recovery path, first reached live on 2026-09-12 by
+// CR-CRU-122 (plans 129 + 131) — currently renders in BOTH panels, and its
+// History entry misreports the live CR as `0/2 cycles` ✗ ⊘.
+//
+// DRIFT-1's correction is load-bearing for the assertions below:
+// `LensCrGroup` (public/app.js:4611-4621) is the ONLY producer of
+// `[data-testid="cr-group"]` and is reached solely through `WorkflowHistory`
+// (:4739-4751); `WorkflowActive` (:4384-4425) renders open plans straight
+// from `scopedPlans()` and identifies its CR through `crRootProps` →
+// `[data-testid="workflow-cr-root"][data-cr]` (:4378-4382). So the count
+// inside History is ZERO and the Active panel's marker is the CR ROOT — never
+// a `cr-group`, which the Active panel does not emit at all.
+describe("CR-CRU-125 §S1/§S2 — a live CR renders in Active only, never in History (DOM)", () => {
+  const LIVE_CR = "CR-DOM-LIVE";
+
+  // CR-CRU-122's exact live shape, parameterised by wave and cr so the §S2
+  // wave cases can build several live CRs from the same builder.
+  function abortedAttempt(key: string, cr: string, wave: string, planId: number): PlanFixture {
+    return {
+      planId,
+      cr,
+      projectKey: key,
+      status: "aborted",
+      wave,
+      cycles: [
+        { id: planId * 10 + 1, label: "c1 red-green", status: "failed" },
+        { id: planId * 10 + 2, label: "c2 verify", status: "skipped" },
+      ],
+    };
+  }
+  function liveAttempt(key: string, cr: string, wave: string, planId: number): PlanFixture {
+    return {
+      planId,
+      cr,
+      projectKey: key,
+      status: "open",
+      wave,
+      cycles: [
+        { id: planId * 10 + 1, label: "c1 red-green", status: "done" },
+        { id: planId * 10 + 2, label: "c2 verify", status: "active" },
+      ],
+    };
+  }
+  function sealedPlan(key: string, cr: string, wave: string, planId: number): PlanFixture {
+    return {
+      planId,
+      cr,
+      projectKey: key,
+      status: "closed",
+      wave,
+      closedAt: 1_757_000_000_000 + planId,
+      merge: { commit: `seal${planId}` },
+      cycles: [{ id: planId * 10 + 1, label: "c1 red-green", status: "done" }],
+    };
+  }
+
+  // §S1 AC8 (corrected) — the DOM criterion itself.
+  test("CR-CRU-125 §S1 AC8 — with the two-plan fixture mounted (aborted plan 129 + open plan 131 for one CR), `[data-testid=\"cr-group\"][data-cr]` for that CR appears ZERO times inside workflow-history, while the Active panel still renders it as exactly ONE `[data-testid=\"workflow-cr-root\"][data-cr]`", async () => {
+    const key = "cru125-dom-both-panels";
+    const plans = [
+      abortedAttempt(key, LIVE_CR, "6", 129),
+      liveAttempt(key, LIVE_CR, "6", 131),
+      sealedPlan(key, "CR-DOM-SEALED", "6", 128),
+    ];
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Live CR Project" })],
+      events: [],
+      plans,
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    // THE PIN — zero History groups for the live CR.
+    expect(
+      hist.querySelectorAll(`[data-testid="cr-group"][data-cr="${LIVE_CR}"]`).length,
+    ).toBe(0);
+    // ...and the live CR still renders exactly once in Active.
+    const roots = active().querySelectorAll<HTMLElement>(
+      `[data-testid="workflow-cr-root"][data-cr="${LIVE_CR}"]`,
+    );
+    expect(roots.length).toBe(1);
+
+    // BOUND — History is not emptied: the sealed CR beside it keeps exactly
+    // its own group, so the wave still renders one group in total.
+    const groups = Array.from(hist.querySelectorAll<HTMLElement>('[data-testid="cr-group"]'));
+    expect(groups.map((g) => g.getAttribute("data-cr"))).toEqual(["CR-DOM-SEALED"]);
+    expect(groups[0]!.getAttribute("data-status")).toBe("closed");
+
+    // The misreport itself: the aborted attempt's `0/2 cycles` rollup line is
+    // nowhere in History (CR-CRU-021 §S6 #6/#9 renders it in the group's
+    // always-visible toggle row).
+    expect(hist.textContent ?? "").not.toContain("0/2 cycles");
+    // ...and the Active panel emits no `cr-group` at all (DRIFT-1's reason).
+    expect(active().querySelectorAll('[data-testid="cr-group"]').length).toBe(0);
+  });
+
+  // §S1 AC2 — the fix must not make a live CR vanish from BOTH panels; the
+  // Active view keeps reading off the OPEN plan, cycles and header unchanged.
+  test("CR-CRU-125 §S1 AC2 — given the same aborted+open fixture, the Active panel renders the CR from its OPEN plan unchanged: one header, one CR root, and the OPEN plan's two cycle rows (the aborted attempt's cycles never appear)", async () => {
+    const key = "cru125-dom-active-intact";
+    const aborted = abortedAttempt(key, LIVE_CR, "6", 129);
+    const open = liveAttempt(key, LIVE_CR, "6", 131);
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Active Intact Project" })],
+      events: [],
+      plans: [aborted, open],
+    });
+    await openWorkflowTab();
+
+    const act = active();
+    expect(
+      act.querySelectorAll(`[data-testid="workflow-cr-root"][data-cr="${LIVE_CR}"]`).length,
+    ).toBe(1);
+
+    const headers = Array.from(
+      act.querySelectorAll<HTMLElement>('[data-testid="workflow-active-header"]'),
+    );
+    expect(headers.length).toBe(1);
+    expect(headers[0]!.textContent ?? "").toBe(`Active workflow — ${LIVE_CR} · wave 6`);
+
+    // The OPEN plan's cycles, in its own order — and ONLY those: the aborted
+    // plan (1291/1292) contributes no row to the Active panel.
+    const cycleRows = Array.from(act.querySelectorAll<HTMLElement>('[data-testid="cycle-row"]'));
+    expect(cycleRows.map((r) => r.getAttribute("data-cycle-id"))).toEqual(["1311", "1312"]);
+    expect(cycleRows.map((r) => r.getAttribute("data-status"))).toEqual(["done", "active"]);
+    expect(act.querySelector('[data-testid="cycle-row"][data-status="skipped"]')).toBeNull();
+    expect(act.textContent ?? "").not.toContain("no open plan");
+  });
+
+  // §S2 AC1 — the ghost-header pin (CR-CRU-021 §S6 cycle 13 gap 2 must still
+  // hold once §S1 removes MORE nodes than before).
+  test("CR-CRU-125 §S2 AC1 — a wave whose every CR is live (each holding an aborted plan beside an open one) renders NO wave-group and no `History — Wave 7` header, while a neighbouring wave with a genuinely closed CR still renders", async () => {
+    const key = "cru125-dom-ghost-wave";
+    const plans = [
+      abortedAttempt(key, "CR-DOM-W7-A", "7", 210),
+      liveAttempt(key, "CR-DOM-W7-A", "7", 211),
+      abortedAttempt(key, "CR-DOM-W7-B", "7", 212),
+      liveAttempt(key, "CR-DOM-W7-B", "7", 213),
+      sealedPlan(key, "CR-DOM-W6-SEALED", "6", 214),
+    ];
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Ghost Wave Project" })],
+      events: [],
+      plans,
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    // THE PIN — no group, no header band for the all-live wave. Asserted as
+    // a COUNT rather than `toBeNull()` so a failure prints `1` instead of
+    // serialising the whole ghost `HTMLDivElement` into the run log.
+    expect(hist.querySelectorAll('[data-testid="wave-group"][data-wave="7"]').length).toBe(0);
+    expect(hist.textContent ?? "").not.toContain("History — Wave 7");
+
+    // BOUND — the wave holding real closed material still renders, exactly
+    // one group, header intact: the suppression is targeted, not a blackout.
+    const waveGroups = Array.from(hist.querySelectorAll<HTMLElement>('[data-testid="wave-group"]'));
+    expect(waveGroups.map((g) => g.getAttribute("data-wave"))).toEqual(["6"]);
+    expect(
+      waveGroups[0]!.querySelector('[data-testid="wave-header"]')!.textContent ?? "",
+    ).toContain("History — Wave 6");
+    const groups = Array.from(waveGroups[0]!.querySelectorAll<HTMLElement>('[data-testid="cr-group"]'));
+    expect(groups.map((g) => g.getAttribute("data-cr"))).toEqual(["CR-DOM-W6-SEALED"]);
+
+    // Both live CRs are still shown as running — in Active, once each.
+    const act = active();
+    expect(act.querySelectorAll('[data-testid="workflow-cr-root"]').length).toBe(2);
+  });
+
+  // §S2 AC2 — the anti-over-reach twin: a wave keeps its header and its
+  // genuinely closed material when only SOME of its CRs are live.
+  test("CR-CRU-125 §S2 AC2 — a wave holding one live CR (aborted beside open) AND one genuinely closed CR still renders its `History — Wave 8` header and exactly the closed CR's node", async () => {
+    const key = "cru125-dom-mixed-wave";
+    const plans = [
+      abortedAttempt(key, "CR-DOM-W8-LIVE", "8", 220),
+      liveAttempt(key, "CR-DOM-W8-LIVE", "8", 221),
+      sealedPlan(key, "CR-DOM-W8-SEALED", "8", 222),
+    ];
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Mixed Wave Project" })],
+      events: [],
+      plans,
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    const wave8 = hist.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="8"]');
+    expect(wave8).not.toBeNull();
+    expect(wave8!.querySelector('[data-testid="wave-header"]')!.textContent ?? "").toContain(
+      "History — Wave 8",
+    );
+
+    // EXACTLY the closed CR's node — the live CR's aborted attempt is not
+    // beside it, and the closed one was not swept away with it.
+    const groups = Array.from(wave8!.querySelectorAll<HTMLElement>('[data-testid="cr-group"]'));
+    expect(groups.map((g) => g.getAttribute("data-cr"))).toEqual(["CR-DOM-W8-SEALED"]);
+    expect(groups[0]!.getAttribute("data-status")).toBe("closed");
+    expect(groups[0]!.querySelector('[data-testid="cr-merge-commit"]')!.textContent ?? "").toContain(
+      "seal222",
+    );
+
+    // ...and the live CR of the same wave is still running in Active.
+    expect(
+      active().querySelectorAll('[data-testid="workflow-cr-root"][data-cr="CR-DOM-W8-LIVE"]')
+        .length,
+    ).toBe(1);
   });
 });
