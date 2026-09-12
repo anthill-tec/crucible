@@ -297,11 +297,25 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // without this file being touched. Enumerated 2026-09-03 by scanning every
 // assertion in tests/; each entry was read at its use site to confirm the
 // ids are authored by the test that consumes them.
+//
+// TWO entries added 2026-09-12 by CR-CRU-126 (`CR-BACKFILL`, `CR-BOUND`), each
+// read at its use site like every entry above, and added because the guard
+// FAILED on the day the two test files were written — the deny-by-default rule
+// working, not a hole being widened. `CR-BACKFILL` also spells the fixture
+// BRANCH of the §S1b suite, `feature/CR-BACKFILL-1`, which replaced a
+// `feature/CR-CRU-096`: the spec quotes that branch because it is our own live
+// board's plan-99 reading, the observation the CR was filed over, and the
+// fixture merely mirrored it — so the fixture was free to differ, and now
+// does. Neither new file takes a `PRE_CR_ASSERTION_RESIDUE` entry, which is
+// the point: the ceiling is for literals an assertion is ABOUT, and both of
+// these were decoration.
 const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-AAA": "test_crucible_axi_shared.py — two-agent warning fixture",
   "CR-AUTH": "cycle/plan fixtures for an authored-but-unplanned CR",
   "CR-AUTHORED": "§S5's synthetic wave-block rows (AC4's remedy)",
+  "CR-BACKFILL": "§S1b's NULL-column store, its plan and its fixture branch",
   "CR-BBB": "test_crucible_axi_shared.py — the second agent of the pair",
+  "CR-BOUND": "§S1's commit-boundary output-contract fixture",
   "CR-DEAD": "next-resolver fixture for a CR that no longer exists",
   "CR-DECLARED": "§S5's synthetic declaration-order rows (AC4's remedy)",
   "CR-DEFERRED": "§S5's synthetic wave-6 rows (AC4's remedy)",
@@ -1551,14 +1565,59 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // outlived it — the first and third re-stated from the two lines the deleted
 // shortcut took with it), and CR-CRU-122 / CR-CRU-025 in the keyframes block
 // (the two existing motion signals the new one is deliberately NOT). `src` and
-// `clients` are untouched by this CR and re-measured unchanged at 605 and 814;
-// all three `develop` floors stay where they are. The CR's other edits are all
-// under `tests/`, which is not one of the three trees this table counts, so
-// they move no head.
+// `clients` are untouched by this CR and re-measured unchanged at 605 and 814
+// — both were true at THAT close-out and are superseded by the entry below,
+// which is the CR that moved them; all three `develop` floors stay where they
+// are. The CR's other edits are all under `tests/`, which is not one of the
+// three trees this table counts, so they move no head.
+//
+// UPDATED 2026-09-12 by CR-CRU-126 — moved `src` 605 -> 614 and `clients`
+// 814 -> 815, both measured at close-out by running this guard's OWN
+// machinery (`listFiles` + `extractCitableText` + CR_LITERAL) over the
+// working tree, never transcribed from the VERIFY report that first reported
+// the drift. Stated because it was CHECKED and not assumed: this re-record's
+// own three readings — 614 / 476 / 815 — agree with that report's exactly.
+// TWO trees move, because the CR's prose lands in TWO of them: §S1/§S1b
+// rewrite the plan read in `src/store.ts`, and §S3's read-timeout note lands
+// in `clients/_crucible_axi.py`.
+//
+// `src` +9 is ONE file, src/store.ts 265 -> 274. Six of the nine name this
+// CR: the projected event row a boundary is derived from (:648), §S1b's
+// backfill of the column CR-CRU-094 added and left NULL (:1202), and §S1's
+// four seams on the read path — the status-facts narrowing that replaced a
+// per-queue-row `listPlans` (:4416), the `PlanRow` -> `PlanStatusFacts`
+// mapping for one cr (:4426) and for one row (:4441), and the indexed
+// per-cycle seek that replaced the project-wide `SELECT *` scan (:4647). The
+// other three are the lineage those same new blocks cite, which is why they
+// are prose and not decoration: CR-CRU-094 twice (:1202 and :4660 — the CR
+// that added `events.cycle_id`, and the insert-seam derivation the new
+// membership test rests on) and CR-CRU-116 once (:4426, the status-facts
+// shape §S1 narrowed to).
+//
+// A SEVENTH CR-CRU-126 literal was added to src/store.ts and is deliberately
+// NOT among the nine: `-- CR-CRU-126 §S1` at :1538 is a SQL comment INSIDE
+// the schema template literal, which to a `.ts` file's classifier is a
+// string, i.e. a live-code position. The arithmetic is +10 authored, +9
+// counted, and it is written down here so the next reader does not
+// re-discover the gap as a defect.
+//
+// `clients` +1 is ONE file, clients/_crucible_axi.py 182 -> 183: §S3's note
+// on the READ-phase timeout (:127), the one a slow board actually produces,
+// which `urlopen` raises as a bare `TimeoutError` and not as a `URLError`.
+// The five stack clients delegate and none of them moves.
+//
+// `public` is untouched by this CR and re-measured unchanged at 476. The CR's
+// remaining edits are under `tests/`, `scripts/` and `docs/`, and CONFIRMED
+// rather than assumed: `PROSE_CITATIONS` below has exactly the keys `src`,
+// `public` and `clients`, and `listFiles` walks only those, so none of those
+// three directories is counted — which is why this very re-record, whose
+// commit touches one file under `tests/`, moves no head. All three `develop`
+// floors are UNCHANGED at 512/378/601 and stay the floors — a floor never
+// moves for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 605 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 614 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 476 },
-  clients: { exts: [".py"], develop: 601, head: 814 },
+  clients: { exts: [".py"], develop: 601, head: 815 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

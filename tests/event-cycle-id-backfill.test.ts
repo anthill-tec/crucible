@@ -221,11 +221,11 @@ function seedClosedMergedPlan(dbPath: string): { key: string; cr: string } {
 
     setSystemTime(t0 + 1_000);
     store.recordTestEvent(key, "fixture-agent", testRun(), {
-      context: { cycleId, git: { branch: "feature/CR-CRU-096", commit: "d2b0e82" } },
+      context: { cycleId, git: { branch: "feature/CR-BACKFILL-1", commit: "d2b0e82" } },
     });
     setSystemTime(t0 + 2_000);
     store.recordTestEvent(key, "fixture-agent", testRun(), {
-      context: { cycleId, git: { branch: "feature/CR-CRU-096", commit: "61d118f" } },
+      context: { cycleId, git: { branch: "feature/CR-BACKFILL-1", commit: "61d118f" } },
     });
 
     setSystemTime(t0 + 3_000);
@@ -259,7 +259,7 @@ const HISTORY: SeedRow[] = [
     id: "evt-history-linked-a",
     context: JSON.stringify({
       cycleId: 41,
-      git: { branch: "feature/CR-CRU-096", commit: "d2b0e82" },
+      git: { branch: "feature/CR-BACKFILL-1", commit: "d2b0e82" },
     }),
     cycleId: null,
   },
@@ -267,7 +267,7 @@ const HISTORY: SeedRow[] = [
     id: "evt-history-linked-b",
     context: JSON.stringify({
       cycleId: 41,
-      git: { branch: "feature/CR-CRU-096", commit: "61d118f" },
+      git: { branch: "feature/CR-BACKFILL-1", commit: "61d118f" },
     }),
     cycleId: null,
   },
@@ -331,7 +331,7 @@ describe("CR-CRU-126 §S1b — a NULL cycle_id column still derives the right bo
     closeStore(reference);
     expect(before).toEqual({
       mergeCommit: "abc1234",
-      branch: "feature/CR-CRU-096",
+      branch: "feature/CR-BACKFILL-1",
       firstRunCommit: "d2b0e82",
       lastRunCommit: "61d118f",
       closedAt: t0 + 4_000,
@@ -384,7 +384,7 @@ describe("CR-CRU-126 §S1b — the backfill migration", () => {
     // The blob is the source, never the casualty: nothing is moved out of it.
     expect(JSON.parse(rowById(rows, "evt-history-linked-a").context!)).toEqual({
       cycleId: 41,
-      git: { branch: "feature/CR-CRU-096", commit: "d2b0e82" },
+      git: { branch: "feature/CR-BACKFILL-1", commit: "d2b0e82" },
     });
   });
 
