@@ -1160,6 +1160,11 @@ function makePreCycleIdStore(dir: string): string {
       .query<{ name: string }, []>(`PRAGMA table_info(events)`)
       .all()
       .map((c) => c.name);
+    // CR-CRU-126 §S1 added `idx_events_project_cycle` over `cycle_id`, and
+    // SQLite refuses to drop a column an index still references. The index is
+    // part of the CURRENT schema this fixture is walking BACK from, so it goes
+    // first; the base pass recreates it on the next open.
+    db.exec(`DROP INDEX IF EXISTS idx_events_project_cycle`);
     if (cols.includes("cycle_id")) db.exec(`ALTER TABLE events DROP COLUMN cycle_id`);
     db.exec(`PRAGMA user_version = ${PRE_CYCLE_ID_VERSION}`);
   } finally {
@@ -1172,18 +1177,27 @@ function makePreCycleIdStore(dir: string): string {
  * The step that must exist for `events` to gain `cycle_id`, named by the
  * MISSING CONTRACT rather than by an index-out-of-bounds TypeError — the same
  * discipline the seam accessors above follow.
+ *
+ * Located by its DESCRIPTION, the way every later body in this repo is
+ * (`tests/gate-retirement.test.ts`, `tests/roadmap-registration-store.test.ts`).
+ * An INDEX would be self-fulfilling: `from`/`to` are DERIVED from the position,
+ * so `chain[8]` returns a body whose `from`/`to` is 8 -> 9 no matter WHICH body
+ * sits there — the "appended at 8 -> 9" claim could never fail again. The
+ * description is the only locator that still bites, and it is what makes
+ * "exactly ONE such body" assertable at all.
  */
 function appendedCycleIdStep(): MigrationStep {
   const chain = migrationChain();
-  const step = chain[PRE_CYCLE_ID_VERSION];
-  if (step === undefined) {
+  const owned = chain.filter((step) => /CR-094/.test(step.description ?? ""));
+  if (owned.length !== 1) {
     throw new Error(
-      `CR-CRU-094 §S1/AC2: MIGRATIONS holds ${chain.length} step(s) — the ` +
-        `${PRE_CYCLE_ID_VERSION} -> ${PRE_CYCLE_ID_VERSION + 1} body that adds ` +
-        `events.cycle_id has not been appended`,
+      `CR-CRU-094 §S1/AC2: expected exactly ONE body declaring CR-094's events.cycle_id column ` +
+        `in the ${chain.length}-step chain (its description must name CR-094), found ` +
+        `${owned.length} — the ${PRE_CYCLE_ID_VERSION} -> ${PRE_CYCLE_ID_VERSION + 1} body has ` +
+        `been removed, duplicated or rewritten in place instead of appended`,
     );
   }
-  return step;
+  return owned[0]!;
 }
 
 /** A step's own "already done?" probe, run against a store FILE. */
@@ -1245,7 +1259,12 @@ describe("CR-CRU-094 §S1/AC2 — events.cycle_id is an APPENDED body: additive,
     Store.open(dbPath);
 
     expect(columnsOf(dbPath, "events")).toContain("cycle_id");
-    expect(userVersion(dbPath)).toBe(PRE_CYCLE_ID_VERSION + 1);
+    // Migrated to the END of the chain, whatever this build's end is: the
+    // literal 9 here was the same expired global as the two removed below —
+    // opening a version-8 store runs EVERY body after 8, not only CR-094's
+    // (CR-CRU-126 §S1b's backfill is the first to prove it).
+    expect(userVersion(dbPath)).toBe(schemaVersion());
+    expect(userVersion(dbPath)).toBeGreaterThan(PRE_CYCLE_ID_VERSION);
     // EVERY counted table, not just `events`: a retrofit that rebuilds a table
     // (the CREATE-copy-DROP shape an ALTER-averse migration reaches for) shows
     // up here as a lost row somewhere, which is the whole point of comparing
@@ -1290,16 +1309,30 @@ describe("CR-CRU-094 §S1/AC2 — events.cycle_id is an APPENDED body: additive,
     expect(siblings(freshDir, PRE_UPGRADE_RE)).toEqual([]);
   });
 
-  test("AC2 — SCHEMA_VERSION is 9 and MIGRATION_BODIES gained exactly ONE entry, appended", () => {
-    // Falsifiable numbers on purpose. §S1 measured eight bodies on
-    // 2026-09-07, so this CR's is #9 and the version goes 8 -> 9. An edit that
-    // reaches the number by hand-editing the DERIVED constant, or by rewriting
-    // an existing body instead of appending one, fails here — which the
-    // generic chain pin above cannot detect, because a chain of any length is
-    // contiguous and any last step ends at its own length.
-    expect(schemaVersion()).toBe(PRE_CYCLE_ID_VERSION + 1);
-    expect(migrationChain().length).toBe(PRE_CYCLE_ID_VERSION + 1);
-    // APPENDED, not inserted: the body that WAS last is still last-but-one.
-    expect(migrationChain()[PRE_CYCLE_ID_VERSION - 1]!.description).toContain("queue_entries");
+  test("AC2 — MIGRATION_BODIES gained exactly ONE entry for cycle_id, appended at 8 -> 9", () => {
+    // Falsifiable position, on purpose. §S1 measured eight bodies on
+    // 2026-09-07, so this CR's is #9 and the version it earns goes 8 -> 9. An
+    // edit that rewrites an existing body instead of appending one, moves this
+    // body elsewhere in the chain, or lands a second one beside it fails here —
+    // which the generic chain pin above cannot detect, because a chain of any
+    // length is contiguous and any last step ends at its own length.
+    //
+    // The chain's LENGTH and SCHEMA_VERSION are deliberately NOT asserted here
+    // (ruled 2026-09-12). `schemaVersion() === 9` and `migrationChain().length
+    // === 9` were never claims about CR-094: they described the world on the
+    // day it landed, and the next CR to append a body was always going to
+    // falsify them — CR-CRU-126 §S1b's cycle_id backfill is that CR. A pin that
+    // outlived its CR is removed, not re-pinned to 10, which would only defer
+    // the identical break to the body after it. What CR-094 actually claims —
+    // ONE body, at 8 -> 9, appended AFTER the body that was last — is asserted
+    // in full below, and `appendedCycleIdStep` finds it by DESCRIPTION so that
+    // every one of those three words can still fail.
+    const step = appendedCycleIdStep();
+    expect({ from: step.from, to: step.to }).toEqual({
+      from: PRE_CYCLE_ID_VERSION,
+      to: PRE_CYCLE_ID_VERSION + 1,
+    });
+    // APPENDED, not inserted: the body that WAS last is still directly before it.
+    expect(migrationChain()[step.from - 1]!.description).toContain("queue_entries");
   });
 });

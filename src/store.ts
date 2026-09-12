@@ -1192,6 +1192,49 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return columnsOf(db, "events").has("cycle_id");
     },
   },
+  {
+    description:
+      "events: CR-126 §S1b cycle_id backfill — history's binding, derived from context.cycleId",
+    apply(db) {
+      if (!tableExists(db, "events")) return;
+      const eventCols = columnsOf(db, "events");
+      if (!eventCols.has("cycle_id") || !eventCols.has("context")) return;
+      // CR-CRU-126 §S1b — CR-CRU-094 added the column and left history NULL, so
+      // §S1's indexed `cycle_id` filter silently drops those rows out of their
+      // own plan's commit boundary. This is not fabrication: it is the rule
+      // `insertEvent` already applies (`context?.cycleId ?? cycleId ?? null`),
+      // applied retroactively to the rows that predate it.
+      //
+      // An UPDATE, never an insert/delete/rebuild, so every table's count and
+      // every event id is identical before and after. IDEMPOTENT by the
+      // `cycle_id IS NULL` predicate alone: a row a previous pass bound is no
+      // longer NULL, so a re-run cannot re-derive it (the CR-073 step above
+      // backfills on exactly this shape).
+      //
+      // NO CAST, on purpose. `json_extract` preserves the JSON type, so a
+      // non-numeric `cycleId` comes back as TEXT, and SQLite's INTEGER affinity
+      // converts text only when it is a well-formed integer literal — anything
+      // else is stored as it stands. `CAST(... AS INTEGER)` would instead turn
+      // such a row into cycle 0 and hand it to whichever plan owns cycle 0.
+      db.exec(
+        `UPDATE events SET cycle_id = json_extract(context, '$.cycleId') WHERE cycle_id IS NULL`,
+      );
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      const cols = columnsOf(db, "events");
+      if (!cols.has("cycle_id") || !cols.has("context")) return false;
+      // The data half, as CR-073's step does it: no row may still be owed a
+      // binding its own blob already carries.
+      const owed = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM events
+            WHERE cycle_id IS NULL AND json_extract(context, '$.cycleId') IS NOT NULL`,
+        )
+        .get()!.n;
+      return owed === 0;
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
