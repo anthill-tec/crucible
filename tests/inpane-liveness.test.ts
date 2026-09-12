@@ -1157,4 +1157,55 @@ describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Proj
     const activity = activityClassFrom(streaming, idle);
     expect(classTokens(streaming)).toContain(activity);
   });
+
+  test("AC8 — an open run belonging to ANOTHER project never animates a row in THIS project's pane, even though both projects hold an agent with the SAME agentId", async () => {
+    const projectKeyA = "proj-stream-scope-a";
+    const projectKeyB = "proj-stream-scope-b";
+    // `vidushi` is the orchestrator id in EVERY project on this board, so the
+    // id collision this predicate has to survive is the real one and not a
+    // contrived fixture.
+    const fixtures = {
+      pathname: `/p/${projectKeyA}`,
+      projects: [
+        project({ key: projectKeyA, name: "Scoped Project A", agentsTotal: 2 }),
+        project({ key: projectKeyB, name: "Other Project B", agentsTotal: 1 }),
+      ],
+      agents: [
+        agent({ agentId: "vidushi", projectKey: projectKeyA, message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey: projectKeyA, message: "working" }),
+        // The same id registered in the OTHER project. `visibleAgents()` keeps
+        // it off this pane, which is precisely why only the RUN's own
+        // projectKey can tell the two `vidushi`s apart.
+        agent({ agentId: "vidushi", projectKey: projectKeyB, message: "working" }),
+      ],
+      events: [],
+      eventDetails: {},
+    };
+
+    // NON-VACUITY PRELUDE, asserted first: the identical fixture with the run
+    // in THIS project DOES animate the row. Without it, a predicate that
+    // animates nothing at all would satisfy AC8 for free.
+    await mountApp({
+      ...fixtures,
+      openRuns: [
+        openRun({ runId: "run-vidushi-scope", projectKey: projectKeyA, agentId: "vidushi" }),
+      ],
+    });
+    const activity = activityClassFrom(rowFor("vidushi"), rowFor("bravo-agent"));
+    expect(classTokens(rowFor("vidushi"))).toContain(activity);
+
+    // AC8 — the ONLY difference is the run's projectKey.
+    await mountApp({
+      ...fixtures,
+      openRuns: [
+        openRun({ runId: "run-vidushi-scope", projectKey: projectKeyB, agentId: "vidushi" }),
+      ],
+    });
+    const rows = agentRows();
+    // Counted, and with the rows proven on screen: "nothing animates" is a
+    // fact about these two rows, not about an empty pane.
+    expect(rows.length).toBe(2);
+    expect(classTokens(rowFor("vidushi"))).not.toContain(activity);
+    expect(rows.filter((r) => classTokens(r).includes(activity)).length).toBe(0);
+  });
 });

@@ -1046,9 +1046,19 @@
     // signal, gated on liveness — `sweepOpenRuns` settles stale open runs on
     // read, so a run CAN still name a dead agent in the window before the
     // next sweep, and a tombstone has nothing in flight (AC6).
+    //
+    // AC8 — the join is scoped to the CURRENT project as well as the agent,
+    // the same `run.projectKey === state.route.projectKey` term
+    // `runningRunsFor()` already carries. Agent ids are REUSED across projects
+    // on this board (`vidushi` orchestrates all three), so an agentId-only
+    // join would light this pane's row for another project's run — the exact
+    // dishonest signal this CR exists to remove.
     function isStreamingAgent(agent) {
       if (agent.liveness === "tombstoned") return false;
-      return state.openRuns.some((run) => run.agentId === agent.agentId);
+      return state.openRuns.some(
+        (run) =>
+          run.projectKey === state.route.projectKey && run.agentId === agent.agentId,
+      );
     }
 
     // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
