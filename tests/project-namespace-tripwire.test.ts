@@ -1531,11 +1531,33 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // as it stands — the pin the orchestrator's ruling preserved, written where
 // the next reader of the narrowing rule will meet it. The five clients each
 // changed ONE line and none of those lines is prose. `src` and `public` are
-// untouched by this CR and re-measured unchanged at 605 and 469; all three
-// `develop` floors stay where they are.
+// untouched by this CR and re-measured unchanged at 605 and 469 — the 469 was
+// true at THAT close-out and is superseded by the entry below, which is the
+// CR that moved it; all three `develop` floors stay where they are.
+//
+// UPDATED 2026-09-12 by CR-CRU-123 — moved `public` 469 -> 476, measured at
+// close-out by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL) over the working tree, never transcribed
+// from the VERIFY report that first reported the drift. The +7 is two files:
+// public/app.js 255 -> 259 (six citations added, two carried off by a deleted
+// block) and public/styles.css 73 -> 76. Four of the nine additions name this
+// CR: §S1's streaming join at both ends (app.js:637, the reactive binding that
+// reads it, and app.js:1043, the predicate itself), §S2's narration standing
+// where the retired 🗺 shortcut stood (app.js:2541), and §S1's
+// `app-agent-streaming` keyframes block (styles.css:1756). The other five are
+// the lineage those same new blocks cite, which is why they are prose and not
+// decoration: CR-CRU-014 / CR-CRU-076 / CR-CRU-079 in the §S2 narration (the
+// door's origin, the tab that displaced it, the pathname contract that
+// outlived it — the first and third re-stated from the two lines the deleted
+// shortcut took with it), and CR-CRU-122 / CR-CRU-025 in the keyframes block
+// (the two existing motion signals the new one is deliberately NOT). `src` and
+// `clients` are untouched by this CR and re-measured unchanged at 605 and 814;
+// all three `develop` floors stay where they are. The CR's other edits are all
+// under `tests/`, which is not one of the three trees this table counts, so
+// they move no head.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 605 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 469 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 476 },
   clients: { exts: [".py"], develop: 601, head: 814 },
 };
 

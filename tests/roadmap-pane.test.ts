@@ -1052,8 +1052,13 @@ describe("CR-CRU-123 §S2 — the Project pane's retired 🗺 shortcut renders n
       ...listFiles("tests", [".ts", ".mts"]),
     ];
     // Non-vacuity: a walker that silently returned nothing would report the
-    // cleanest census in the repo. Measured 2026-09-12: 12 files under
-    // `public/` and 100+ `.ts` files under `tests/`.
+    // cleanest census in the repo. Re-measured 2026-09-12 with the extension
+    // lists above: 10 files under `public/` and 192 under `tests/`, 202 in all.
+    // (This comment first said 12 for `public/`, a figure no measure of the
+    // tree yields and one this CR never moved — corrected in the same CR,
+    // which is what §S3 is about. The floor stays at 40: it is a walker alarm,
+    // not a census pin, and must not need re-recording every time a file is
+    // added.)
     expect(scanned.length).toBeGreaterThanOrEqual(40);
 
     const hits: string[] = [];
