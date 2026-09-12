@@ -1657,9 +1657,9 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:4294 — re-pinned 2026-09-12 from :4267,
-# shifted by the citation/code lines CR-CRU-119 GREEN added above it).
-# Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:4349 — re-pinned 2026-09-12 from :4294,
+# shifted by the 55 lines CR-CRU-121 GREEN added above it when it composed
+# cr-plan's queue write into `plan-file`). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
@@ -1779,7 +1779,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1555-1571`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1555-1572`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')

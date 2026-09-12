@@ -1458,10 +1458,22 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // citations in public/app.js naming the CR that extended the anchor-fetch
 // and reveal mechanism to active cycles. `src` and `clients` re-measured
 // unchanged.
+//
+// UPDATED 2026-09-12 by CR-CRU-121 — moved `src` 600 → 605 and `clients`
+// 802 → 805, both measured at close-out by running this guard, never
+// transcribed from the VERIFY report. The five new `src` citations name the
+// CR that made filing a plan register its release: src/v2.ts:1424, :1480,
+// :1518 (the optional `release`, the one-transaction composition, and the
+// union response) and src/store.ts:1228, :3213 (the throwing inner refusal
+// and the composed write). The three new `clients` citations are all
+// _crucible_axi.py:601, :2775, :5152 — the shared `--release` help text, the
+// body field it rides on, and the fleet's one declaration site. `public` is
+// untouched by this CR and re-measured unchanged at 454; all three `develop`
+// floors stay where they are.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 600 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 605 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 454 },
-  clients: { exts: [".py"], develop: 601, head: 802 },
+  clients: { exts: [".py"], develop: 601, head: 805 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

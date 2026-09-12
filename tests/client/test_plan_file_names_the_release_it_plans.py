@@ -221,8 +221,9 @@ class PlanFileDeclaresTheReleaseFlagInEveryClientTest(unittest.TestCase):
         self.assertEqual(
             missing, [],
             f"an orchestrator on ANY stack must be able to name the release it "
-            f"is opening a cycle plan for — that is the failure CR-CRU-121 was "
-            f"born from; `{VERB}` declares no {RELEASE_FLAG} in: {missing!r}")
+            f"is opening a cycle plan for — a plan filed for a cr that sits on "
+            f"no roadmap is the failure this flag exists to prevent; `{VERB}` "
+            f"declares no {RELEASE_FLAG} in: {missing!r}")
 
         self.assertEqual(
             len(self.surfaces), EXPECTED_CLIENT_COUNT,
@@ -515,8 +516,9 @@ class TodaysPlanFileBodySurvivesTest(_PlanFileWireTestBase):
              "cycles": [{"label": "red-green"}], "title": "the wire under test",
              "wave": "6", "orchestrator": self.AGENT},
             f"the release-less body is composed exactly as it is today — the "
-            f"backward-compatibility constraint CR-CRU-121 makes explicit; got "
-            f"{payload!r}")
+            f"backward-compatibility constraint this change makes explicit: a "
+            f"client that names no release must send the body it always sent; "
+            f"got {payload!r}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

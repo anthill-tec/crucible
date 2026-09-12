@@ -1590,7 +1590,14 @@ class NextBlockCitationsTest(unittest.TestCase):
         # src/store.ts. The drift IS ours, and this guard is the only thing
         # in the repo that caught it, because it lives in the PYTHON suite
         # that no bun-side run reaches.
-        ("LANDED_STATUSES", "src/store.ts", 4294, 4294,
+        # Re-pinned 2026-09-12 (CR-CRU-121 GREEN), 4294 -> 4349: composing
+        # cr-plan's queue write into `plan-file` added 55 lines ABOVE
+        # `deriveQueueStatus` in src/store.ts, moving it down by exactly that
+        # much. The drift IS ours and it is the ordinary case: the CR that
+        # shifted the file re-pins it — and this guard is once again the only
+        # thing in the repo that caught it, because it lives in the PYTHON
+        # suite that no bun-side run reaches.
+        ("LANDED_STATUSES", "src/store.ts", 4349, 4349,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split
@@ -1643,7 +1650,14 @@ class NextBlockCitationsTest(unittest.TestCase):
         # shift). Same rule, same guard, eighth time — and the first time the
         # drift reached a merge gate, because CR-CRU-115 never dispatched this
         # suite; the gate caught what the dispatch list missed.
-        ("_next_start_help", "clients/python-crucible.py", 1555, 1571,
+        # Re-pinned 2026-09-12 (CR-CRU-121 GREEN): the shared
+        # `add_plan_file_release_arg(pf)` delegation — the one line that gives
+        # `plan-file` the release argument it composes cr-plan's queue write
+        # from — was declared INSIDE this very block, moving its tail one line
+        # down, 1555-1571 -> 1555-1572 (measured at both ends, not inferred
+        # from the shift; the head is unchanged). The narrowest possible
+        # drift, ninth time — the CR that shifted the construct re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1555, 1572,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

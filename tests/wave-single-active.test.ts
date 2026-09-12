@@ -38,6 +38,21 @@
 // stand. Same rule as the block above: the CR that moves a file re-pins what
 // cites it, in the files it authored as well as in the one a guard watches.
 //
+// ── RE-PINNED AGAIN 2026-09-12 (CR-CRU-121, on touch) ─────────────────────
+//
+// Two CRs had shifted `src/store.ts` above `deriveQueueStatus` since the note
+// above without re-pinning HERE (this file carries no line-number guard, so
+// nothing caught it): CR-CRU-119's seq-cause split, then CR-CRU-121's 55-line
+// composed plan-file/queue write. Re-read at HEAD and measured at both ends;
+// the constructs themselves did not move:
+//   `deriveQueueStatus`            store.ts:4267-4273 -> :4349-4355
+//   `Store.queueStatusOf`          store.ts:4281-4303 -> :4363-4385
+//   the in-flight rule line        store.ts:4290      -> :4372
+// Only the LIVE citations below are re-pinned. The `src/v2.ts` ranges in the
+// dated RED snapshot that follows are a historical record of the tree at RED,
+// not live navigation, and are left as they stand — the same call CR-CRU-118
+// made above.
+//
 // ── WHAT WAS BROKEN AT RED (read 2026-09-09, before §S2's guard) ──────────
 //
 // `handlePlanFile` (src/v2.ts:1375-1460), which `handlePlansRoute` dispatches
@@ -49,9 +64,9 @@
 // ── THE ONE SOURCE OF ACTIVENESS ──────────────────────────────────────────
 //
 // A wave is ACTIVE while it holds a CR the queue derives as `IN_PROGRESS`.
-// That derivation is `deriveQueueStatus` (src/store.ts:4267-4273), which
-// since §S1 delegates to `Store.queueStatusOf` (:4281-4303) where the rule is
-// spelled once: `plans.find((plan) => plan.status === "open")` (:4290).
+// That derivation is `deriveQueueStatus` (src/store.ts:4349-4355), which
+// since §S1 delegates to `Store.queueStatusOf` (:4363-4385) where the rule is
+// spelled once: `plans.find((plan) => plan.status === "open")` (:4372).
 // `plan.status` has THREE values — `open`, `closed`, `aborted` — and only
 // `open` confers activeness, which is why the aborted-plan fixture below is a
 // fixture and not a footnote: the live board carries 6 aborted plans across
