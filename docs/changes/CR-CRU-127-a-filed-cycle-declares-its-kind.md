@@ -203,17 +203,42 @@ forward guidance would trade one context loss for another.
 - [ ] `plan-file --cycles "a,b"` (the legacy form) is REFUSED client-side under the mandate, with a
       non-empty `help[]` handing back the `--cycle` + `--cycle-kind` form, `ok:false`, non-zero
       exit, and zero POSTs (§S4a). Asserted on the POST recorder, not just the exit code.
-- [ ] `--cycles` remains accepted by every OTHER verb that takes it, if any — the closure is scoped
-      to `plan-file`'s filing path and is not a fleet-wide retirement of the flag.
+- [ ] **Refusal ORDER is a contract** (pinned by RED 2026-09-13, finding F4 — three existing tests
+      pass argv that could trip more than one refusal, so the order is asserted rather than left to
+      chance):
+      1. BOTH `--cycle` and `--cycles` present → the existing `cycle-flags-conflict` refusal fires
+         FIRST, preserving CR-CRU-107/AC4 whose error must name BOTH flags. A §S4a check placed
+         first would name only `--cycles` and silently retire that contract.
+      2. `--cycles` present alone → the §S4a refusal, whose error names `--cycles` (which is why the
+         existing empty-`--cycles` test still passes).
+      3. A blank/whitespace `--cycle` occurrence → `cycle-list-empty` BEFORE any kind check: a call
+         naming no cycle has nothing for a kind to pair with.
+- [ ] The three refusals this CR adds are told apart by DISTINCT codes, and each error names its own
+      flag or counts — asserted by distinctness, NOT against invented literals (RED finding F5: the
+      spec names no code strings, so pinning three literals would be RED dictating GREEN's
+      vocabulary rather than pinning observable behaviour).
+- [ ] The `--cycles` closure is SCOPED, asserted as a census: `--cycles` is declared exactly once per
+      client and only on `plan-file` (MEASURED by RED 2026-09-13 — arduino `:1281`, bun `:2196`,
+      mvn `:2184`, python `:1563`, rust `:2803`), and its DECLARATION survives the closure.
+      **Corrected from "remains accepted by every OTHER verb that takes it, if any" (RED finding F2):
+      that wording was VACUOUS** — no other verb takes the flag, so it asserted nothing. The census
+      also guards a real failure mode the original wording missed: refusing `--cycles` by DELETING
+      its argparse declaration would replace the structured AXI refusal with argparse's bare usage
+      error, which is a §S6 violation dressed as a fix.
 - [ ] **`cycle-add` is UNCHANGED**: with no `--kind` its body still omits the field entirely and the
       server still applies `red-green`. CR-CRU-124 §S4/AC3's full-body equality assertion passes
       byte-unchanged — the regression pin proving the shared parser was not made stricter.
 
 **§S5**
-- [ ] Every caller that files a plan through a CLIENT declares kinds; the migrated caller count is
-      asserted, and the figure is MEASURED in this CR's gap analysis rather than estimated. Route
-      POSTs are NOT migrated — the narrowed ruling leaves them valid, which is what removes ~110 of
-      the originally measured ~174 sites.
+- [ ] The FLEET half of the migration is asserted mechanically: five clients, five delegation lines,
+      exactly one shared registrar, and the client count itself. **The CALLER half is enforced at
+      RUNTIME, not counted (corrected per RED finding F3):** an un-migrated caller now FAILS, which
+      is a stronger guarantee than a census — and a static count is not soundly assertable here,
+      because the negative tests deliberately pass an unpaired `--cycle` and a bare `--cycles`, so
+      any allowlist would be broken by the very tests that prove the mandate. The measured figure the
+      original AC asked for lives in this CR's gap analysis (≈64 sites). Route POSTs are NOT
+      migrated — the narrowed ruling leaves them valid, removing ~110 of the originally measured
+      ~174 sites.
 - [ ] `bun test` and the python client suites are green with no test weakened to accommodate the
       mandate.
 
@@ -226,9 +251,15 @@ forward guidance would trade one context loss for another.
       `_assert_structured_refusal` shape, not a new one.
 - [ ] Both refusals emit the TOON-AXI envelope on STDOUT with a non-zero exit and no traceback
       (`_assert_structured_failure`).
-- [ ] REGRESSION: a successful `plan-file` still suggests the literal `cycle-activate <id>` in its
-      `help[]` — `test_plan_file_help_suggests_the_cycle_activate_placeholder_template` passes
-      byte-unchanged.
+- [ ] REGRESSION: a SUCCESSFUL `plan-file` still suggests the literal `cycle-activate <id>` in its
+      `help[]` — `test_plan_file_help_suggests_the_cycle_activate_placeholder_template`'s
+      **ASSERTION passes unchanged; its INVOCATION migrates with every other caller.**
+      **Corrected from "passes byte-unchanged" (RED finding F1 — a self-contradiction between two
+      ACs both added 2026-09-13):** that test files with `--cycles "a,b"` and asserts exit 0, which
+      is exactly the form §S4a now refuses, so the two ACs could not both hold. Resolved by §S5's
+      own standing rule — an inverting invocation is REWRITTEN, never re-pinned — which preserves
+      the criterion's substance (a successful filing still hands back its next step) while letting
+      the driving argv migrate like every other caller's.
 - [ ] `tests/client/test_bun_crucible_axi_conventions.py` is green, with its per-verb `help[]`
       coverage extended to the new refusals rather than left asserting only the old surface.
 - [ ] **The two suggested-invocation templates are updated to the mandated form** (gap analysis
