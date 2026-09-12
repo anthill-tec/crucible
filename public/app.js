@@ -536,6 +536,16 @@
         () => `density: ${densityMode.val}`,
       );
 
+    // CR-CRU-122 §S1 — the ONE loading spinner in the app: a single element,
+    // spun by the `app-spin` keyframes in styles.css, rendered inline wherever
+    // a user-initiated wait on the backend is in flight (run detail's first
+    // fetch, a suite's lazy-load, and the three project-manager actions).
+    // It FOLLOWS `app-run-pulse`'s convention — a semantic class plus its own
+    // keyframes — without reusing it: a pulse says "this is happening live",
+    // a spinner says "wait, this is loading". Defined once and called at every
+    // site; a per-site copy would be a second source of the same signal.
+    const Spinner = () => span({ "data-testid": "spinner", class: "app-spinner" });
+
     // Shared app logo — the workspace top bar renders the SAME element/class/
     // text as home (§S5 fidelity #6).
     const Logo = () =>
@@ -1541,7 +1551,14 @@
     // then refetch BOTH slices: the core refetch updates the home projects
     // row live (same contract the SSE projects frame drives), and the
     // archived refetch keeps the fold count/rows tracking the move.
-    async function postProjectLifecycle(key, action) {
+    //
+    // CR-CRU-122 §S4 — `pending` is the CALLER'S flag (one per row, created
+    // beside the row's other states) rather than a shared one: two rows may
+    // be mid-POST at once and neither may spin the other. It is raised here
+    // and lowered in the `finally`, so a POST that never arrives leaves no
+    // permanently spinning, permanently disabled control behind.
+    async function postProjectLifecycle(key, action, pending) {
+      pending.val = true;
       try {
         await fetch(`/api/v2/projects/${encodeURIComponent(key)}/${action}`, {
           method: "POST",
@@ -1550,6 +1567,8 @@
         });
       } catch {
         // Reachability is the watchdog's concern; keep stale data visible.
+      } finally {
+        pending.val = false;
       }
       refetch();
       refetchArchived();
@@ -1560,7 +1579,7 @@
     // confirm; only that second click POSTs), parameters line beneath
     // (sutRoot · liveness · retention · immutable key as TEXT, never bound
     // to an input).
-    const ManagerRowView = (project, startEdit) =>
+    const ManagerRowView = (project, startEdit, archivePending) =>
       div(
         div(
           { class: "app-manager-row-head" },
@@ -1584,11 +1603,23 @@
                   {
                     "data-testid": "manager-archive-confirm",
                     class: "app-chip app-manager-archive-confirm",
-                    onclick: () => {
+                    // CR-CRU-122 §S4 — disabled for the whole POST: a
+                    // disabled button dispatches no click at all, which is
+                    // what closes the double-submit gap this CR's audit found.
+                    disabled: archivePending,
+                    onclick: async () => {
+                      // The confirm used to be dismissed HERE, before the POST
+                      // was even sent, which unmounted the very control that
+                      // must show the wait. The dismissal MOVED into the
+                      // settle path (CR-CRU-122's implementation note): the
+                      // control stays mounted, disabled and spinning until the
+                      // POST completes — failure included, since
+                      // postProjectLifecycle swallows it and returns.
+                      await postProjectLifecycle(project.key, "archive", archivePending);
                       managerArchivePending.val = null;
-                      postProjectLifecycle(project.key, "archive");
                     },
                   },
+                  () => (archivePending.val ? Spinner() : ""),
                   "confirm archive",
                 )
               : "",
@@ -1633,6 +1664,8 @@
         const n = Number(s);
         return Number.isFinite(n) ? n : undefined;
       };
+      // CR-CRU-122 §S4 — the PATCH, in flight.
+      const savePending = van.state(false);
       const save = async () => {
         const body = {};
         if (name.val !== (project.name ?? "")) body.name = name.val;
@@ -1657,6 +1690,7 @@
           body.allowRunDeletion = allowDeletion.val;
         }
         if (Object.keys(body).length > 0) {
+          savePending.val = true;
           try {
             await fetch(`/api/v2/projects/${encodeURIComponent(project.key)}`, {
               method: "PATCH",
@@ -1665,8 +1699,15 @@
             });
           } catch {
             // Reachability is the watchdog's concern; keep stale data visible.
+          } finally {
+            savePending.val = false;
           }
         }
+        // CR-CRU-122 §S4 — the form closes in the SETTLE path, never before
+        // it: `editing` is lowered only once the PATCH above has come back
+        // (or failed), so the save control the user pressed stays mounted,
+        // disabled and spinning for the whole wait instead of vanishing with
+        // its own request still on the wire.
         editing.val = false;
         refetch();
       };
@@ -1756,7 +1797,17 @@
             onchange: (e) => (allowDeletion.val = e.target.checked),
           }),
         ),
-        button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
+        button(
+          {
+            "data-testid": "manager-edit-save",
+            class: "app-chip on",
+            // CR-CRU-122 §S4 — no second PATCH while the first is in flight.
+            disabled: savePending,
+            onclick: save,
+          },
+          () => (savePending.val ? Spinner() : ""),
+          "save",
+        ),
         button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
           { class: "app-card-meta app-manager-params" },
@@ -1767,6 +1818,12 @@
 
     const ManagerProjectRow = (project) => {
       const editing = van.state(false);
+      // CR-CRU-122 §S4 — this row's archive POST, in flight. Created HERE,
+      // beside `editing` and outside the swapping binding below, for the same
+      // reason the edit-field states are: a state created inside that binding
+      // is rebuilt whenever the binding re-runs, and a pending flag that
+      // resets itself mid-request is no guard at all.
+      const archivePending = van.state(false);
       // Edit-field states live HERE — outside the swapping binding below —
       // so input ticks never rebuild the form (see ManagerRowEdit's note).
       // startEdit re-seeds them from the project on every ✎ edit click, so
@@ -1805,15 +1862,19 @@
           class: "app-manager-row",
         },
         () =>
-          editing.val ? ManagerRowEdit(project, editing, edit) : ManagerRowView(project, startEdit),
+          editing.val
+            ? ManagerRowEdit(project, editing, edit)
+            : ManagerRowView(project, startEdit, archivePending),
       );
     };
 
     // "archived (N)" fold row — the project's name + type + the unarchive
     // action (POST …/unarchive, then the same refetch pair brings the home
     // badge back live).
-    const ManagerArchivedRow = (project) =>
-      div(
+    const ManagerArchivedRow = (project) => {
+      // CR-CRU-122 §S4 — this archived row's own unarchive POST, in flight.
+      const unarchivePending = van.state(false);
+      return div(
         {
           "data-testid": "manager-archived-row",
           "data-project-key": project.key,
@@ -1827,12 +1888,15 @@
             {
               "data-testid": "manager-unarchive",
               class: "app-chip",
-              onclick: () => postProjectLifecycle(project.key, "unarchive"),
+              disabled: unarchivePending,
+              onclick: () => postProjectLifecycle(project.key, "unarchive", unarchivePending),
             },
+            () => (unarchivePending.val ? Spinner() : ""),
             "unarchive",
           ),
         ),
       );
+    };
 
     // The fold itself: header text EXACTLY `archived (N)`, ABSENT at N=0
     // (never "archived (0)"), collapsed by default; rows render only while
@@ -1862,7 +1926,13 @@
       const name = van.state("");
       const type = van.state("backend");
       const sutRoot = van.state("");
+      // CR-CRU-122 §S4 — the POST, in flight: while it is, the add control
+      // spins and refuses a second click (a doubled add is how the same
+      // project gets created twice), and the `finally` guarantees the form
+      // comes back to life even when the POST never arrives.
+      const submitPending = van.state(false);
       const submit = async () => {
+        submitPending.val = true;
         try {
           await fetch("/api/v2/projects", {
             method: "POST",
@@ -1871,6 +1941,8 @@
           });
         } catch {
           // Reachability is the watchdog's concern; keep stale data visible.
+        } finally {
+          submitPending.val = false;
         }
         refetch();
       };
@@ -1892,7 +1964,16 @@
           placeholder: "sutRoot",
           oninput: (e) => (sutRoot.val = e.target.value),
         }),
-        button({ "data-testid": "manager-add-submit", class: "app-chip on", onclick: submit }, "add"),
+        button(
+          {
+            "data-testid": "manager-add-submit",
+            class: "app-chip on",
+            disabled: submitPending,
+            onclick: submit,
+          },
+          () => (submitPending.val ? Spinner() : ""),
+          "add",
+        ),
       );
     };
 
@@ -4791,6 +4872,12 @@
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
       const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
+      // CR-CRU-122 §S3 — suiteName -> true while THAT suite's ?suite= fetch is
+      // in flight. It mirrors suiteLeaves' shape on purpose: one flag covers
+      // BOTH trigger paths (the suite row's own toggle and SynthHeatCell's
+      // click call the same loadSuite), and keying by suite keeps concurrent
+      // loads independent — one suite arriving never clears another's spinner.
+      const suiteLoading = van.state({});
       const focusedLeaf = van.state(null); // "suite::leaf" — failure focus
       const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
       const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
@@ -4831,6 +4918,10 @@
       // §S4.5 — a suite's leaves arrive only via ?suite=<name>.
       async function loadSuite(name) {
         if (suiteLeaves.val[name] !== undefined) return;
+        // CR-CRU-122 §S3 — raised before the fetch, lowered in the `finally`
+        // below: a flag cleared only on the success path would leave a
+        // permanently spinning row behind every failed load.
+        suiteLoading.val = { ...suiteLoading.val, [name]: true };
         try {
           const res = await fetch(
             `/api/v2/events/${encodeURIComponent(eventId)}?suite=${encodeURIComponent(name)}`,
@@ -4840,6 +4931,8 @@
           suiteLeaves.val = { ...suiteLeaves.val, [name]: match?.children ?? [] };
         } catch (err) {
           loadError.val = `suite "${name}" failed to load — ${String(err)}`;
+        } finally {
+          suiteLoading.val = { ...suiteLoading.val, [name]: false };
         }
       }
 
@@ -5316,6 +5409,9 @@
                 ),
                 span({ class: "app-suite-name" }, suite.name),
                 SuiteCountSpans(counts, foldedAllPass),
+                // CR-CRU-122 §S3 — this suite's own lazy-load, on this suite's
+                // own row, whichever path started it.
+                () => (suiteLoading.val[suite.name] === true ? Spinner() : ""),
               ),
               expanded ? SuiteLeafList(suite.name, leaves, presentation) : null,
             );
@@ -5459,7 +5555,10 @@
           return div({ class: "app-empty" }, loadError.val);
         const d = detail.val;
         if (d === null)
-          return div({ class: "app-empty" }, "loading run detail…");
+          // CR-CRU-122 §S2 — the ?depth=suites fetch is still in flight: the
+          // words stay, the spinner joins them (plain text alone read as a
+          // stalled surface, not as work in progress).
+          return div({ class: "app-empty" }, Spinner(), " loading run detail…");
         if (d.kind === "gate") return GateBody(d);
         if (d.kind === "compile") return CompileBody(d);
         return d.status === "aborted"

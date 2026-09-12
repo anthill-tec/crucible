@@ -1099,6 +1099,27 @@ body {
   50% { border-color: rgba(251, 146, 60, 0.9); }
 }
 
+/* CR-CRU-122 §S1 — the shared loading spinner: a small ring whose one lit arc
+   circles while a user-initiated backend wait is in flight. It follows the
+   `app-run-pulse` convention above (a semantic class driving its own
+   keyframes, no asset and no dependency) rather than reusing it — a pulse
+   says "this is happening live", a spinner says "wait, this is loading". Sized
+   to sit inline beside a chip's label without moving the row. */
+.app-spinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--ember);
+  border-radius: 50%;
+  animation: app-spin 0.7s linear infinite;
+}
+@keyframes app-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Aborted: struck through and greyed — legible as "this run does not count"
    without reading a word of it. Clickable (its drill-in carries the reason),
    so the pointer cursor `.app-evt` already sets is correct here. */
