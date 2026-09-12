@@ -1597,7 +1597,16 @@ class NextBlockCitationsTest(unittest.TestCase):
         # shifted the file re-pins it — and this guard is once again the only
         # thing in the repo that caught it, because it lives in the PYTHON
         # suite that no bun-side run reaches.
-        ("LANDED_STATUSES", "src/store.ts", 4349, 4349,
+        # Re-pinned 2026-09-12 (CR-CRU-126 FIX), 4349 -> 4411: this CR inserted
+        # in TWO places ABOVE `deriveQueueStatus` in src/store.ts — the
+        # `idx_events_project_cycle` declaration inside `createBaseTables` and
+        # the appended `MIGRATIONS` backfill body — moving it down 62 lines.
+        # The drift IS ours and it is the ordinary case: the CR that shifted
+        # the file re-pins it, and the CR's own gap analysis (DRIFT-9)
+        # predicted exactly this row. The new number was LOCATED at HEAD, not
+        # computed from the old one plus a delta. The three sibling entries
+        # were re-measured at both ends in the same pass and none had moved.
+        ("LANDED_STATUSES", "src/store.ts", 4411, 4411,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split
