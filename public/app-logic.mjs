@@ -925,13 +925,24 @@ export function workflowLens({ plans, events }) {
   // Wave labels holding ANY declared plan (open or closed) — the superseded
   // check below must see them even after §S1.3 strips open CR nodes.
   const declaredWaveLabels = new Set((plans ?? []).map((p) => p.wave ?? ""));
+  // CR-CRU-125 §S1 — History is keyed on the CR, not on the plan RECORD: a cr
+  // holding an `aborted` plan beside an `open` one (the sanctioned abort +
+  // re-file recovery path) is LIVE, and the Active view already narrates it.
+  // Derived GLOBALLY off the raw `plans` like `declaredWaveLabels` above,
+  // because a re-filed plan takes its wave from the caller and need not share
+  // the abandoned attempt's wave. Keyed on `cr` so it reaches INFERRED nodes
+  // (`:898-918`) too: they carry no `status` at all, so the plan-record filter
+  // below can never exclude them.
+  const liveCrs = new Set(
+    (plans ?? []).filter((p) => p.status === "open").map((p) => p.cr),
+  );
   for (const wave of orderedWaves) {
     const declared = wave.crs.filter((c) => c.source === "declared");
     // CR-CRU-020 §S1.3 — the history lens is closed-plans-only: an OPEN
     // plan's CR node renders solely in the ACTIVE view. The wave itself
     // keeps rendering — its boundary state below still reads ALL declared
     // plans (open ones included), so state inference is unaffected.
-    wave.crs = wave.crs.filter((c) => c.status !== "open");
+    wave.crs = wave.crs.filter((c) => c.status !== "open" && !liveCrs.has(c.cr));
     // CR-CRU-020 §S1.1 — CR groups newest-first within the wave: closed
     // plans by closedAt descending; nodes without a closedAt (inferred, or
     // closed before the field existed) keep filing order (stable sort).

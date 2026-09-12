@@ -46,7 +46,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
-import type { LensPlanLike, LensRunLike } from "../public/app-logic.mjs";
+import type { LensRunLike } from "../public/app-logic.mjs";
 import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -1294,11 +1294,11 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
 // (`:898-918`), so a status-keyed filter can never reach them.
 //
 // Typing note: `Plan.status` has included `"aborted"` since CR-CRU-024 §S6
-// (src/types.ts:346), but the lens's published declaration still narrows it to
-// `"open" | "closed"` (public/app-logic.d.mts:415, and `LensCrNode.status` at
-// :458). The fixtures below are therefore cast at the CALL boundary — the
-// same absorption this file already makes for `LensRunLike` in the CR-CRU-117
-// block above — rather than a test widening a production declaration.
+// (src/types.ts:346), and CR-CRU-125 widened the lens's published declaration
+// to match it (public/app-logic.d.mts:415, and `LensCrNode.status` at :458),
+// so the plan fixtures below pass unconverted. The remaining `events` cast is
+// the `LensRunLike` absorption this file already makes in the CR-CRU-117
+// block above.
 describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowLens)", () => {
   interface AbortAwareCycleFixture {
     id: number;
@@ -1338,7 +1338,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
     events: EventFixture[] = [],
   ): LensWaveRead[] {
     const result = AppLogic.workflowLens({
-      plans: plans as unknown as LensPlanLike[],
+      plans,
       events: events as unknown as LensRunLike[],
     });
     return result.waves as unknown as LensWaveRead[];

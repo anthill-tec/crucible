@@ -412,7 +412,7 @@ export interface LensPlanLike {
   // linkage semantics.
   projectKey?: string;
   cr: string;
-  status: "open" | "closed";
+  status: "open" | "closed" | "aborted";
   wave?: string;
   track?: string;
   cycles: LensPlanCycleLike[];
@@ -455,7 +455,7 @@ export interface LensCycleNode<E extends LensRunLike> {
 export interface LensCrNode<E extends LensRunLike> {
   cr: string;
   source: "declared" | "inferred";
-  status?: "open" | "closed";
+  status?: "open" | "closed" | "aborted";
   track?: string;
   merge?: { commit: string };
   // CR-CRU-020 §S1.1 — passthrough of Plan.closedAt (declared nodes only).
