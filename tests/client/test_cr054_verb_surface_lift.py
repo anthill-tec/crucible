@@ -472,7 +472,23 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 self.assertFalse(ok_arg)
 
     def test_cycle_add_moves_out_of_every_client_and_still_works(self):
-        marker = "planId']}/cycles\","
+        # Re-pinned 2026-09-12 (CR-CRU-124 C1 FIX), "planId']}/cycles\"," ->
+        # "}/cycles\",": CR-CRU-124 §S3 gave `cycle-add` a `--plan <id>` that
+        # names the target plan DIRECTLY, so the plan id no longer necessarily
+        # comes from a resolved plan dict — `clients/_crucible_axi.py:2564`
+        # now posts to f"…/{plan_id}/cycles" where it once posted to
+        # f"…/{plan['planId']}/cycles". The production change is CORRECT and is
+        # the CR's entire point; only this guard's text marker went stale, so
+        # the CR that shifted the file re-pins it.
+        # The re-pinned marker still discriminates, and both halves stay
+        # load-bearing: `}/cycles\",` demands an f-string interpolation closing
+        # immediately before the path segment AND the path string ending with a
+        # further argument — that is the cycle-append POST call itself and
+        # nothing else. It is absent from every delegating stub (which carries
+        # no URL literal at all), from the docstring prose
+        # (`…/plans/<planId>/cycles`, no brace, no quote), and from
+        # `_cycle_transition`'s PATCH path (`}/cycles/{cycle_id}\"`).
+        marker = "}/cycles\","
         offenders = _clients_with_marker_in_function("cmd_cycle_add", marker)
         self.assertEqual(
             offenders, [],
