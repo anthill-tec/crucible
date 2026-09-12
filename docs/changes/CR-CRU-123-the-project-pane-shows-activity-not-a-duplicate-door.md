@@ -55,6 +55,14 @@ language), with its own `@keyframes` rule and its own semantic class.
 The existing static `busy` dot (`app.js:641`) is untouched: `status === "busy"` is a coarser
 liveness fact and keeps its own rendering. This section adds a signal; it removes none.
 
+**The lifecycle this rides on, verified in source 2026-09-12 (asked: does Crucible get a run-finished event, or only test counts?).** There IS a definitive end-of-run signal, and there are NO mid-run counts — so the animation needs no arithmetic over completed-vs-total:
+
+- `POST /api/v2/runs/start` (`src/v2.ts:901`) opens the run and stores NO event — its own comment: *"a start is not an end"*. The open run is persisted in SQLite, so it survives a restart.
+- Every ingest route takes an OPTIONAL `runId`; `resolveRunClose` (`src/v2.ts:939-981`) validates it and the SERVER's clock closes it, then `store.endRun(...)` fires AFTER the event write (`src/v2.ts:1020-1024`) — deliberately after, *"so a failed ingest leaves the run OPEN (and sweepable) rather than lost"*.
+- What the UI observes is therefore the run LEAVING `listOpenRuns` in the SAME response that carries the new event (CR-CRU-017 §S3: one response carries both, so the two can never disagree).
+- Ingest is a single POST of a COMPLETE report (JUnit XML, or a parsed summary+tree). The open-run record carries `runId`/`agentId`/`startedAt`/`context`/`meta` and no progress counts at all, so there is nothing partial to compare against a total.
+- A hung or dead run cannot animate forever: `sweepOpenRuns` (`src/store.ts:2536`) settles stale open runs into aborted events and runs BEFORE every events and agents read (`src/v2.ts:697`, `:3473`). A stuck animation is therefore structurally impossible, not merely unlikely.
+
 ### §S2 The duplicate roadmap chip is removed from the Project pane
 
 Delete the `roadmap-chip` button (`app.js:2425-2432`) and its CSS class if the class has no other
