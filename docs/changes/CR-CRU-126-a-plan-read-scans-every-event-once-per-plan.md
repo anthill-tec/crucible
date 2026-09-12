@@ -156,6 +156,17 @@ carries it today. No consumer, in-repo or external, sees any difference except s
 cleaner than one query per plan, either satisfies the ACs — what is forbidden is a scan whose cost
 grows with the event table.
 
+**Batching by `IN (…)` is MEASURED to be wrong on this store (GREEN, 2026-09-12).** GREEN probed
+both shapes. With `ANALYZE` statistics the `IN` form does plan to the new index; **without** them —
+and this store runs no `ANALYZE` — it falls back to
+`SEARCH events USING INDEX idx_events_project_timestamp (project_key=?)`, i.e. the full project scan
+this CR exists to remove, because the sort-free ordering outbids a multi-seek the planner has no
+statistics for. That is §S1's own warning surviving the composite index. The shipped form is
+therefore **one equality seek per cycle**, which plans to `idx_events_project_cycle`
+unconditionally; a multi-cycle plan's per-cycle results are merged back into one `(timestamp, rowid)`
+order in JS before the walk, so `firstRunCommit`/`lastRunCommit` stay the earliest/latest across the
+whole plan.
+
 ### §S1a `toPlan` is not a pure read — do not cache it
 
 `toPlan` calls `deriveAndCheckpointActiveMs` for every ACTIVE cycle, which performs an
@@ -170,6 +181,50 @@ make the read skippable. AC pinned below (gap analysis DRIFT-5).
 This also names a dogfooding hazard: a load harness hammering `/plans` while a cycle is active is
 **not** read-only — it drives real checkpoint writes. Harnesses run with no cycle active, or state
 the added writes.
+
+### §S1b The historical `cycle_id` column is backfilled
+
+**Found by GREEN 2026-09-12 on a `.backup` replica; ruled by the user the same day.** §S1 filters on
+`events.cycle_id`, and that column is **NULL for 712 of 1306 context-bearing events** — CR-CRU-094
+§S1 added it with *"history left NULL"* and never backfilled. So the column filter is NOT
+output-equal on real data: of 124 closed-and-merged plans, **13 lose `branch`, `firstRunCommit` and
+`lastRunCommit` entirely**, degrading to the no-git shape (`mergeCommit` + `closedAt` survive).
+
+The 13, enumerated: `CR-SAN-045` (plan 13), `CR-MDB-016` (45), `CR-CRU-091` (94), `CR-CRU-092` (95),
+`CR-CRU-096` (99), `CR-CRU-099` (101), `CR-CRU-100` (102), `CR-CRU-101` (103), `CR-CRU-102` (104),
+`CR-CRU-103` (105), `CR-CRU-104` (106), `CR-CRU-106` (107), `CR-CRU-079` (110). Concretely, plan 99
+(`CR-CRU-096`) today reports `branch: feature/CR-CRU-096`, `firstRunCommit: d2b0e82c…`,
+`lastRunCommit: 61d118fb…`; under a bare column filter it reports none of the three.
+
+**Why the ACs could not catch it, and this is the important part.** Every row a test fixture inserts
+goes through `insertEvent`, which sets the column — so all 11 derivation tests pass either way. The
+five output-equality ACs that §S1's Risk section calls "the whole risk" are structurally blind to
+this case. The orchestrator's gap analysis confirmed the column EXISTS and is WRITTEN AT INSERT and
+never asked what historical rows contain: a values-not-types miss, the exact failure Dimension 3
+names.
+
+**The fix: one appended migration step.**
+
+```sql
+UPDATE events SET cycle_id = json_extract(context, '$.cycleId') WHERE cycle_id IS NULL
+```
+
+This is not fabrication — it is the rule `insertEvent` already applies
+(`event.context?.cycleId ?? event.cycleId ?? null`), applied retroactively to rows that predate it.
+It restores byte-identical output AND keeps the indexed seek.
+
+**Costs, accepted knowingly:** `SCHEMA_VERSION` is derived from `MIGRATIONS.length`, so appending a
+step bumps it and the pre-CR-126 binary will REFUSE to open this store (`StoreVersionTooNewError`) —
+a deliberate one-way door. CR-CRU-071 writes a pre-upgrade backup before the first migrating write,
+so the live board is protected by machinery that already exists.
+
+**The NULL set is FROZEN, not a leak — measured, not assumed.** `src/store.ts` has exactly ONE
+`INSERT INTO events` (`insertEvent`), reached by all nine recording paths, and it binds the column
+unconditionally. The replica confirms it behaviourally: the last context-bearing row with a NULL
+column is 2026-09-07 06:19 UTC, the first with a non-NULL column is 07:23 UTC — a clean cutover at
+CR-CRU-094's deploy, 535 rows since carrying both, zero overlap. That is what disqualified the
+alternative of a permanent `cycle_id IS NULL` branch in the read path: it would pay forever for a
+finite 712-row historical defect that can never grow.
 
 ### §S2 The cost is pinned by a TIMED test
 
@@ -270,6 +325,18 @@ timeout surfaces as the fleet's standard `ok:false` envelope naming the conditio
 - [ ] An ACTIVE cycle read through `listPlans` still checkpoints `active_ms_accumulated` at the
       ≤60 s cadence — CR-CRU-023 §S3(a)'s contract, asserted as a regression, so a memoising
       "optimisation" fails the suite instead of silently losing timer state.
+
+**§S1b**
+- [ ] A store whose events carry `context.cycleId` but a NULL `cycle_id` COLUMN derives the SAME
+      boundary as one whose column is set — the fixture MUST write NULL-column rows directly, since
+      `insertEvent` cannot produce them, which is why no existing test can see this.
+- [ ] After the migration, zero context-bearing rows with a `context.cycleId` are left with a NULL
+      `cycle_id` column.
+- [ ] The migration is IDEMPOTENT: running the chain twice changes nothing the second time.
+- [ ] A row whose `context` carries NO `cycleId` is left NULL — the backfill derives, it never
+      invents.
+- [ ] The event COUNT is unchanged by the migration: it is an UPDATE, never an insert or a delete
+      (the dogfood migration test asserts counts).
 
 **§S2**
 - [ ] The timed pin runs in-process against a `:memory:` store with no server and no concurrent
