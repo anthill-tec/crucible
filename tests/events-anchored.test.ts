@@ -394,3 +394,89 @@ describe("CR-CRU-094 §S1/AC3 — Store.listEventsForCycle still matches on the 
     expect(body.events.every((e) => e.context?.cycleId === a)).toBe(true);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// CR-CRU-120 §S5 — the anchored route carries NO cycle-status filter, and the
+// client fix that widens the `→ Runs` affordance to ACTIVE cycles depends on
+// that being true. `handleEventsList`'s cycleId branch (src/v2.ts:3407-3419)
+// and `Store#listEventsForCycle`/`findCyclePlanEntry` have never had one, so
+// this is a REGRESSION PIN, not a RED signal: it PASSES on arrival and exists
+// so a future narrowing to terminal cycles fails here before it fails a user.
+//
+// The AC requires ONE shared shape check driven through BOTH statuses, so the
+// assertion lives in `expectAnchoredShape` below and the test calls it twice —
+// a `done` cycle and an `active` one, both activated by the REAL
+// `cycle-activate` transition, never by a hand-written fixture status.
+interface AnchoredShapeExpectation {
+  key: string;
+  cycleId: number;
+  label: string;
+  status: "active" | "done";
+  runId: string;
+}
+
+async function expectAnchoredShape(
+  handle: ServerHandle,
+  expected: AnchoredShapeExpectation,
+): Promise<void> {
+  const { status, body } = await getAnchoredEvents(handle, expected.key, expected.cycleId);
+
+  expect(status).toBe(200);
+  expect(body.ok).toBe(true);
+  // EXACTLY this cycle's linked run — bounded, so a status-blind widening
+  // (every row of the project) fails as loudly as a narrowing would.
+  expect(body.events.map((e) => e.id)).toEqual([expected.runId]);
+  expect(body.events.every((e) => e.context?.cycleId === expected.cycleId)).toBe(true);
+  // …and the cycle's own PlanCycle descriptor, identically shaped for both
+  // statuses: an active cycle resolves exactly as a done one does.
+  expect(body.cycle).toBeDefined();
+  expect(body.cycle!.id).toBe(expected.cycleId);
+  expect(body.cycle!.label).toBe(expected.label);
+  expect(body.cycle!.status).toBe(expected.status);
+  expect(typeof body.cycle!.activatedAt).toBe("number");
+  // The ONE honest difference between the two statuses: a cycle that has not
+  // closed carries no `doneAt`. Asserted in both directions so the shared
+  // check cannot pass by ignoring the field.
+  if (expected.status === "done") {
+    expect(typeof body.cycle!.doneAt).toBe("number");
+  } else {
+    expect(body.cycle!.doneAt).toBeUndefined();
+  }
+}
+
+describe("CR-CRU-120 §S5 — the anchored route answers an ACTIVE cycle exactly as it answers a DONE one", () => {
+  test("one shared shape check, two statuses: ?project=<k>&cycleId=<id> returns the cycle's linked runs and its PlanCycle for a DONE cycle and for an ACTIVE one alike — no status filter anywhere on the route", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+    const { planId, a, b } = await filePlanAB(handle, key, "CR-120-ACTIVE-ANCHOR");
+
+    // Cycle A: activated, one linked run ingested, then closed — the DONE arm.
+    await transition(handle, key, planId, a, "active");
+    await registerAgent(handle, key, "agent-done-arm");
+    const doneRun = await postParsedRun(handle, key, "agent-done-arm", { cycleId: a });
+    expect(doneRun.status).toBe(200);
+    await transition(handle, key, planId, a, "done");
+
+    // Cycle B: activated and LEFT OPEN, one linked run ingested — the ACTIVE
+    // arm, i.e. the exact situation the user reported as unreachable.
+    await transition(handle, key, planId, b, "active");
+    await registerAgent(handle, key, "agent-active-arm");
+    const activeRun = await postParsedRun(handle, key, "agent-active-arm", { cycleId: b });
+    expect(activeRun.status).toBe(200);
+
+    await expectAnchoredShape(handle, {
+      key,
+      cycleId: a,
+      label: "A",
+      status: "done",
+      runId: doneRun.id,
+    });
+    await expectAnchoredShape(handle, {
+      key,
+      cycleId: b,
+      label: "B",
+      status: "active",
+      runId: activeRun.id,
+    });
+  });
+});
