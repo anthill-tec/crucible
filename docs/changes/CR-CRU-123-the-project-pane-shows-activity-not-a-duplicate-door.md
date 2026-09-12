@@ -88,10 +88,18 @@ form (§4.11, *"final form — round 6, 2026-07-15"*: liveness dot, display name
 last-seen), so the signal rides an EXISTING slot or the row's own box. A fifth child would satisfy
 every other criterion here and silently break that lock, which is why AC7 below pins it.
 
-**Where the `@keyframes` goes:** APPEND it after the stylesheet's last cited line
-(`public/styles.css:1372`). Eleven informal `styles.css:<line>` citations live in the test tree,
-seven of them at ≥1096; inserting beside the existing animation family would shift them, and
-appending past them shifts none. Free mitigation, so it is not optional.
+**Where the `@keyframes` goes:** APPEND it past every cited line in the stylesheet. Eleven informal
+`styles.css:<line>` citations live in the test tree, all at ≤1372 and seven at ≥1096; inserting
+beside the existing animation family would shift them, and appending past them shifts none. Free
+mitigation, so it is not optional.
+
+**Corrected 2026-09-12 (GREEN decision point 1a).** This instruction originally said "after
+`public/styles.css:1372`". Line 1372 sits INSIDE the CR-CRU-103 provenance comment above
+`.app-flow-terminal`, so a literal insert at 1373 would have split a comment block. GREEN read the
+instruction as its stated rationale, appended at end-of-file instead, and flagged the reinterpretation
+rather than making it silently — the better call, and the wording is fixed here to match. Landed at
+`app-stream-flow` :1776 / `.app-agent-streaming` :1780; the three pre-existing `@keyframes` measured
+still at :1007, :1096, :1119.
 
 The existing static `busy` dot (the `app-dot` span in `AgentRow`) is untouched: `status === "busy"`
 is a coarser
@@ -146,6 +154,18 @@ fixes on discovery.
 - [ ] **AC7 — the row gains no new child element.** The streaming agent's `[data-testid="agent-row"]`
       has the same child-element count as a non-streaming one; the signal is carried by a class on
       an existing node or on the row itself. Pins the PRD's locked sub-row final form.
+- [ ] **AC8 — the predicate is scoped to the CURRENT project.** An open run belonging to ANOTHER
+      project never animates a row in this project's pane, even when both projects hold an agent
+      with the SAME `agentId`.
+      **Ruled 2026-09-12 (GREEN decision point 2).** GREEN implemented §S1 exactly as worded —
+      `agentId` match plus the liveness gate, no project term — and named the omission instead of
+      quietly adding it. The project term goes in, for three reasons: this repo REUSES agent ids
+      across projects (`vidushi` is the orchestrator id in every one of the three projects on this
+      board), so the collision is realistic rather than theoretical; the sibling predicate
+      `runningRunsFor(cycleId)` already filters `run.projectKey === state.route.projectKey`, so the
+      project term is the house pattern and its absence is the deviation; and a signal that lights
+      the wrong project's row is a DISHONEST signal, which is the defect this whole CR exists to
+      remove. Cost is one comparison.
 
 **§S2**
 - [ ] `[data-testid="roadmap-chip"]` renders nowhere in the workspace Project pane.
@@ -156,14 +176,19 @@ fixes on discovery.
       the SAME pathname/pushState contract through the tab-strip door — re-pointed, not deleted, and
       their assertions not weakened.
 - [ ] A grep for `roadmap-chip` and `app-roadmap-chip` returns hits only in shipped CR docs and this
-      CR's own spec (the historical record), never in `public/`, `tests/`, **or `e2e/`**.
-      **Ruled 2026-09-12 (RED escalation 3):** RED implemented this census over `public/` and
-      `tests/` exactly as originally worded and asked whether to widen it. Widened to `e2e/`
-      deliberately: the chip is a DOM door, an e2e step clicking it is invisible to
-      `pre-merge-gate` (which excludes `test:e2e` fleet-wide), and that is precisely how CR-CRU-118
-      shipped a break the gate could not see. `scripts/` stays out — it is not a UI surface. Both
-      trees are clean today, so widening costs nothing now and catches the case that would
-      otherwise hide.
+      CR's own spec (the historical record), never in `public/` or `tests/` — **which includes the
+      e2e tree, since it lives at `tests/e2e/`.**
+      **Ruled 2026-09-12 (RED escalation 3), then CORRECTED the same day (GREEN decision point 1).**
+      The ruling widened this census to "`e2e/`" as a third tree. There is no top-level `e2e/`
+      directory in this repo — the orchestrator's own census had used `path: "tests"` and printed
+      paths relative to it (`e2e/steps/workspace.steps.ts`), which the orchestrator misread as a
+      separate tree. GREEN measured the truth before editing anything: `listFiles("tests", …)`
+      recurses, so the census ALREADY walks 192 files under `tests/`, 24 of them under `tests/e2e/`,
+      including all 17 `*.steps.ts` files and specifically the two this CR names. Adding
+      `listFiles("e2e", …)` would have thrown ENOENT; adding `listFiles("tests/e2e", …)` would
+      double-scan. So the intent was already satisfied and GREEN correctly made NO edit —
+      `tests/roadmap-pane.test.ts` stays byte-identical to RED's `1219eda`. The wording is fixed
+      here so the next reader does not go looking for a tree that does not exist.
 
 **§S3**
 - [ ] The corrected comment names every `@keyframes` `public/styles.css` declares as of this CR, and
@@ -195,10 +220,10 @@ one cycle: §S3 is a sentence, and §S2 is net-negative code.
 - **Re-record `PROSE_CITATIONS.public.head`** in `tests/project-namespace-tripwire.test.ts`. It is
   **469** at the branch cut; §S1–§S3's prose naming CR-CRU-123 will raise it. Measured at close-out,
   never transcribed from a mid-cycle note.
-- **Run `test:e2e` manually and state its result in the merge note.** `e2e/steps/workspace.steps.ts`
-  and `e2e/steps/cards.steps.ts` read `agent-row`, and `test:e2e` is excluded from `pre-merge-gate`
-  fleet-wide (DN open question 5) — so a green gate says nothing about them. CR-CRU-118 shipped an
-  e2e break the gate could not see; this is that lesson applied in advance.
+- **Run `test:e2e` manually and state its result in the merge note.** `tests/e2e/steps/workspace.steps.ts`
+  and `tests/e2e/steps/cards.steps.ts` read `agent-row`, and `test:e2e` is excluded from
+  `pre-merge-gate` fleet-wide (DN open question 5) — so a green gate says nothing about them.
+  CR-CRU-118 shipped an e2e break the gate could not see; this is that lesson applied in advance.
 - **Do NOT re-pin the 53 informal `public/app.js:<line>` citations** that §S1's insertion shifts.
   Measured: 73 such citations across 33 test files, 53 of them below `AgentRow`'s line. They are
   informal comments, not machine-checked pins, and CR-CRU-120's VERIFY already found 14 of them
