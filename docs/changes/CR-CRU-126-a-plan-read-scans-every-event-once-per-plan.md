@@ -122,6 +122,28 @@ The derivation stops being a per-plan table scan. Three changes, ordered by MEAS
    existing style. This is what makes change 2 a seek rather than a scan, and what earns CR-CRU-011
    §S0's phrase *"one indexed query."*
 
+**The index must be COMPOSITE, and the reason is measured (RED, 2026-09-12).** A bare
+`(project_key, cycle_id)` index is not enough: RED's first probe proved nothing because
+`EXPLAIN QUERY PLAN` showed SQLite choosing `idx_events_project_timestamp` over the new index, since
+`ORDER BY timestamp ASC` makes the timestamp index **sort-free** and therefore cheaper in the
+planner's estimation. RED had to force `INDEXED BY` to get a real comparison.
+
+So adding a bare `(project_key, cycle_id)` index does **not** guarantee the planner uses it while
+the derivation keeps its `ORDER BY timestamp`. GREEN has two defensible options and must state
+which it took and why:
+
+1. **`(project_key, cycle_id, timestamp)`** — the index then serves the filter AND the ordering, so
+   it is both a seek and sort-free, and the planner should prefer it on its own merits.
+2. Keep the two-column index and **drop the SQL `ORDER BY`**, sorting the handful of surviving rows
+   in JS. Cheap once the filter is indexed, but it moves a correctness-critical ordering out of the
+   query — and `firstRunCommit`/`lastRunCommit` depend on it, so §S1's ordering AC becomes the only
+   guard.
+
+Option 1 is the orchestrator's recommendation: it keeps the ordering where the ACs can see it. Note
+that the §S1 index AC as written CANNOT catch this class of mistake — RED flagged that its probe
+asserts a lookup with no `ORDER BY`, which is exactly why ruling 1 requires GREEN to quote its
+production query and its own `EXPLAIN` output as evidence.
+
 `ORDER BY timestamp ASC, rowid ASC` is load-bearing — it is what makes `firstRunCommit`/
 `lastRunCommit` the earliest and latest — and is preserved exactly.
 
@@ -178,6 +200,26 @@ SHAPE:
 RED's, derived on this box against a post-fix expectation of ~3-5 ms. If they ever need widening,
 widen the CEILING and not the scaling delta: the delta is the assertion that carries the CR, and a
 ceiling is a smoke alarm.
+
+**Calibration CONFIRMED by measurement, 2026-09-12 (RED, fixture hardened to `633ae28`).** The
+blobs were sized from the live board's own per-column distribution rather than a flat average —
+`tree` on 93.75% of rows at 22,961 B, `payload` on 91.67% at 9,866 B, `coverage` on 1% (it is three
+fixed axes and cannot be large) — giving **30,625 B/row against production's measured 30,600**. The
+pin's pre-fix figure moved **133 ms → 1896.3 ms**, the same order as the live `/plans` at 2567.9 ms;
+it had been understating the defect ~14×.
+
+The calibration was NOT widened, because the measurement showed 50 ms now falls BETWEEN the only two
+outcomes that can ship:
+
+| query shape (50 plans, 2000 events) | at 2000 | ceiling 50 ms | delta 30 ms |
+|---|---|---|---|
+| today — unbounded scan + `SELECT *` | 1896.8 ms | FAIL | FAIL |
+| indexed + cycle-filtered, **keeps `SELECT *`** | **57.6 ms** | **FAIL** | **FAIL** (52.5) |
+| indexed + cycle-filtered + two columns | 13.6 ms | pass (3.7×) | pass (2.4×) |
+
+So the pin discriminates the RIGHT fix from the almost-right one. Without blobs both candidate
+shapes finish in single-digit ms and neither bound can separate them — which is precisely why the
+hardening was required rather than accepted as a stated limit.
 
 ### §S2a The end-to-end curve is reproducible
 
