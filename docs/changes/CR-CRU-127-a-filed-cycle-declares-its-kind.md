@@ -42,7 +42,7 @@ is declared up front.
 | surface | state |
 |---|---|
 | `handlePlanFile` (`src/v2.ts:1378`) | iterates `body.cycles` through **`parseCycleInput`** (`:1389-1394`) — the SAME parser `handleCycleAppend` uses (`:1551`). The server already accepts a per-cycle `kind` |
-| `cmd_plan_file` (`clients/_crucible_axi.py:2869`) | hard-codes `"cycles": [{"label": label} for label in labels]` (`:2884`) — the kind is not merely unset, it is unexpressible |
+| `cmd_plan_file` (`clients/_crucible_axi.py:2869`) | hard-codes `"cycles": [{"label": label} for label in labels]` (`:2904` — the spec first cited `:2884`, corrected by gap analysis) — the kind is not merely unset, it is unexpressible |
 | `--cycle` declaration | **hand-rolled in all five clients**: arduino `:1279`, bun `:2194`, mvn `:2182`, python `:1561`, rust `:2801`. No shared registrar, exactly the state `plan-file --release` was in before CR-CRU-121 |
 
 ## Scope
@@ -198,13 +198,32 @@ forward guidance would trade one context loss for another.
       byte-unchanged.
 - [ ] `tests/client/test_bun_crucible_axi_conventions.py` is green, with its per-verb `help[]`
       coverage extended to the new refusals rather than left asserting only the old surface.
+- [ ] **The two suggested-invocation templates are updated to the mandated form** (gap analysis
+      DRIFT-1, BLOCKING as the spec stood). Both must teach an invocation that the new mandate
+      ACCEPTS, and both are asserted:
+      1. `CYCLE_FLAG_TEMPLATE` (`clients/_crucible_axi.py:1241-1242`), consumed by three refusal
+         `help[]` lists (`:1250`, `:2848`, `:2876`);
+      2. `_next_start_help`'s own hand-built step string (`:1855-1856`) — the `next` verb's
+         state-derived help, which is the literal command an orchestrator copies to START a CR.
+      Both are updated, not one: the template exists TWICE (a shared constant and a hand-built
+      duplicate), so repairing either alone is the half-migration this CR's §S5 exists to prevent.
+      MEASURED as safe for the existing pins: `_REPEATABLE_OCCURRENCE`
+      (`tests/client/test_plan_file_cycle_flag_help.py:116`) is `/--cycle(?![-\w])/`, which excludes
+      `--cycle-kind` by construction, and `_REPEATABLE_WITH_LABEL` (`:118`) requires only
+      `--cycle "<…>"` — so an ADDITIVE template change keeps AC7/AC8 green rather than needing them
+      rewritten.
 
 ## Estimated size
 
-M — one or two cycles. §S1–§S4 are a shared registrar, a pairing rule, two refusals and one
-regression pin; §S5's size is entirely the caller count, which the gap analysis must measure before
-the plan is filed (CR-CRU-118's equivalent migration touched 184 call sites across 15 suites, and
-that figure was wrong twice before it was measured properly).
+M — **two cycles** (corrected by gap analysis 2026-09-13 from "one or two", on measurement).
+§S1–§S4 are a shared registrar, a pairing rule, two refusals and one regression pin — one cycle.
+§S5's migration is its own cycle: the caller count is now MEASURED at **≈174 sites** — 110 route
+POSTs across 30 files, 59 `plan-file` argv invocations across 16 python files (22 carrying
+`--cycle`), 5 client delegations, 5 e2e step files behind one harness helper, and the 2 suggested-
+invocation templates. The spec's yardstick (CR-CRU-118's 184 call sites across 15 suites, a figure
+that was wrong twice before it was measured properly) held up — but migration only PARTLY funnels
+through helpers: `tests/plans.test.ts` has a `planFile` helper and still carries 46 inline
+`cycles: [` bodies, so most sites are individual edits.
 
 ## Risk
 
@@ -228,3 +247,85 @@ that figure was wrong twice before it was measured properly).
   safe, by requiring the vocabulary to be discoverable in `--help` instead.
 - The bundled Model-B `crucible-report-<stack>` skills, whose `plan-file` guidance will need the new
   flag — that delivery is the standing RELEASE-time obligation already recorded in this register.
+
+## Gap analysis (orchestrator, 2026-09-13)
+
+Performed by the orchestrator. Not delegated.
+
+### Step 0 — MEASURED baseline
+
+On `08628c7` (`release/0.2.0`), both stacks through their clients, serially:
+
+| stack | passed | failed | pending | total | files |
+|---|---|---|---|---|---|
+| TypeScript | 2365 | 0 | 0 | 2365 | 169 |
+| Python | 1788 | 0 | 1 | 1789 | 86 |
+| **combined** | **4153** | **0** | **1** | **4154** | **255** |
+
+`tsc --noEmit` exit 0; both gate exits 0.
+
+**The first attempt exited NON-ZERO with that identical green suite, and the cause is worth
+recording (DRIFT-5).** The gate's own ingest was refused with
+`409 bound cycle 440 is in closed plan CR-CRU-125 — ingest refused, run NOT stored`: the
+orchestrator was still registered BOUND to cycle 440, which `cr-close` had just sealed inside a
+closed plan. The server is right — *"a stale binding never spills into another cycle"* — but the
+consequence is that **every** ingest fails until the binding is cleared, and a plain
+`register --agent … --role ORCHESTRATOR` does NOT clear it (CR-CRU-056 rebinds only on an EXPLICIT
+`--cycle`, so omitting the flag preserves the stale value; measured: `boundCycleId` still `440`
+after re-registering). Only `unregister` followed by `register` cleared it (`boundCycleId: None`).
+A/B on the same tree: exit 1 while bound, exit 0 after clearing, counts identical. **Operational
+rule:** clear the binding immediately after `cr-close`, before any further run.
+
+### §S5's caller census — MEASURED, as the spec's AC demands
+
+| surface | measured | breaks under the mandate? |
+|---|---|---|
+| Route POSTs to `…/plans` carrying `cycles[]` | **110 sites across 30 files** | **YES** — §S4's route refusal |
+| — heaviest: `plans.test.ts` 40, `registered-caller-auth.test.ts` 16, `cycle-activation-guards.test.ts` 8, `cycle-insert-before.test.ts` 7, `plan-abort.test.ts` 5 | | |
+| `plan-file` argv invocations in `tests/client/*.py` | **59 across 16 files**, of which **22 pass `--cycle`** | YES — the client-side mandate |
+| `store.filePlan(…)` direct callers | **3 across 3 files** | **NO** — §S4 places the refusal in `handlePlanFile`, not the store |
+| Client `--cycle` declarations | **5** (arduino `:1279`, bun `:2194`, mvn `:2182`, python `:1561`, rust `:2801`) | each gains one delegation line |
+| e2e step files carrying cycles | **5**, funnelling through `tests/e2e/steps/harness.ts`'s single `filePlan` | YES, but via one helper |
+| Suggested-invocation templates | **2** (see the new §S6 AC) | YES — they would teach a refused command |
+
+**Total ≈ 174 call sites.** The spec cited CR-CRU-118's 184 as its yardstick and was therefore NOT
+an underestimate — a rare case of an estimate surviving measurement. But **the size line is
+optimistic**: migration only partly funnels through helpers. `tests/plans.test.ts` HAS a `planFile`
+helper and still carries 46 inline `cycles: [` bodies; `cycle-activation-guards.test.ts` funnels
+through `filePlanAB`; most other sites are individual edits. Size should read **M — two cycles, with
+§S5's migration as its own cycle**, not "one or two".
+
+### Findings
+
+| # | Dim | Finding | Fix scope | Blocking? |
+|---|---|---|---|---|
+| DRIFT-1 | 3 / rule 14 | Both suggested-invocation templates would teach a command the mandate refuses, and NO AC covered them. `CYCLE_FLAG_TEMPLATE` (`_crucible_axi.py:1241-1242`) feeds three refusal `help[]` lists; `_next_start_help` (`:1855-1856`) is the literal command an orchestrator copies to start a CR — it is what this board handed the orchestrator for CR-CRU-127 itself. §S6 covered the new flag's help and the `cycle-activate` regression only. | SPEC_UPDATE | **Yes** — new §S6 AC added above |
+| DRIFT-2 | 7 | §S5's caller count was unmeasured (its own AC required measuring it here). Now measured at ≈174 sites; the size line needs to say two cycles. | SPEC_UPDATE | **Yes** — sizing |
+| DRIFT-3 | 7 | **Cost concentration, surfaced not cut.** §S4's ROUTE half drives ~110 of the ~174 sites; the CLIENT half costs 22 and alone discharges the CR's stated problem ("a cycle filed through `plan-file` cannot say what kind it is"). The route half's only current non-fleet callers ARE the tests — the SPA never POSTs a plan (`WorkflowActive` reads `scopedPlans()`; verified no POST in `public/app.js`). **It stays:** the user RULED the mandate holds "at the route, so the mandate holds for any caller and not merely for the fleet". Recorded as a price, not a proposal. | none (user ruling) | No |
+| DRIFT-4 | 2 | `cmd_plan_file`'s body line is at `_crucible_axi.py:2904`, not `:2884`. Every `src/v2.ts` citation VERIFIED ACCURATE: `:1337` CYCLE_KINDS, `:1368-1369` the `red-green` default, `:1378` handlePlanFile, `:1389` the cycles check, `:1551` the shared parser inside handleCycleAppend. | SPEC_UPDATE | No — corrected above |
+| DRIFT-5 | — | A stale cycle binding blocks EVERY ingest and survives an unbound re-register; only `unregister` + `register` clears it. Cost this analysis one full 10-minute gate re-run. | operational note | No |
+| DRIFT-6 | 2 | **Positive result:** the existing help-surface guards are robust to the new flag BY CONSTRUCTION. `_REPEATABLE_OCCURRENCE` is `/--cycle(?![-\w])/`, which excludes `--cycle-kind` as well as `--cycles`; `_REPEATABLE_WITH_LABEL` needs only `--cycle "<…>"`. So AC7/AC8 stay green under an additive template change and need no rewrite — worth knowing before RED is tempted to retarget them. | none | No |
+
+Dimension 3 (bounded surface): **N/A** — no stated pixel/row budget is touched; a kind glyph is one
+character in an existing slot. Dimension 5 (design-lineage): the load-bearing lineage call is already
+IN the spec and verified correct — `parseCycleInput` (`src/v2.ts:1359`) really is shared with
+`handleCycleAppend` (`:1534`, parser call at `:1551`), so §S4's insistence that the refusal live in
+`handlePlanFile` is right, and its own AC pins the `cycle-add` side. Dimension 6 (public-symbol
+removal): **N/A** — nothing is removed; legacy `--cycles` stays.
+
+### Verdict
+
+**SPEC_UPDATE_NEEDED → now READY.** DRIFT-1's missing AC is added, DRIFT-4's citation corrected, and
+§S5's figure measured. The one open judgement is DRIFT-3, which is the user's ruling to keep or
+narrow — the analysis states the price rather than deciding it.
+
+### Close-out steps (planned ONCE, not per cycle)
+
+- **Re-measure the citation heads at close-out.** This CR edits `clients/` heavily (shared registrar
+  + five delegations + templates), so the `clients` head (815 at CR-CRU-125's close) will move by
+  however many CR literals the provenance comments add. MEASURE with the guard's own machinery;
+  never transcribe. `src` moves only if `handlePlanFile` gains a comment naming the CR.
+- **Run `test:e2e` by hand.** `tests/e2e/steps/harness.ts` files plans through the route, so the
+  mandate reaches it, and `pre-merge-gate` does not collect e2e (DN open question 5).
+- **Clear the orchestrator's cycle binding after `cr-close`** (DRIFT-5) — `unregister` + `register`,
+  before any further ingest.
