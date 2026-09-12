@@ -751,7 +751,7 @@ describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly 
 // The SAME machinery CR-CRU-032 proved above, widened to the one cycle status
 // it was never asked to cover. Nothing new is invented: §S2 widens which
 // cycles are OFFERED the `→ Runs` affordance, §S1 makes the active cycle's own
-// boundary row (`cycle-span-open`, public/app.js:1064 — emitted by
+// boundary row (`cycle-span-open`, public/app.js:1069 — emitted by
 // `timelineRows` for `cycle.status === "active"` exactly as `declared-marker`
 // is for `done`) queryable by cycle id, §S3 teaches the reveal to accept that
 // second boundary kind, and §S4 stops the "cycle resolves server-side but has
@@ -759,7 +759,10 @@ describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly 
 // §S2 turns from rare into routine, since a cycle that just activated has zero
 // runs by construction.
 //
-// RED against today's production (read, not assumed, 2026-09-12):
+// RED against today's production (read, not assumed, 2026-09-12) — line
+// numbers below are AS OF `3758d75~1` (this cycle's RED baseline); GREEN's
+// insertions shifted every one of them, and this block is a historical
+// record, not live navigation:
 //   - `CycleSpanOpenRow` (app.js:1064-1068) renders NO `data-cycle-id`.
 //   - `CycleToRunsBadge` renders only where `cycleIsCompleted(cycle)`
 //     (app.js:4134-4135) holds — app.js:4185 (`CycleRow`, the Active-workflow
@@ -812,7 +815,7 @@ describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly 
 //     inferred `done` cycle already reaches the same dead pill under CR-CRU-025),
 //     but §S2 doubles the surface it shows on. Worth a GREEN decision.
 
-// The CR-CRU-032 §S3 pruned sentence, verbatim (public/app.js:2033) — §S4's
+// The CR-CRU-032 §S3 pruned sentence, verbatim (public/app.js:2045) — §S4's
 // second AC is a regression pin on this exact wording.
 const PRUNED_FEEDBACK_TEXT =
   "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.";
@@ -879,13 +882,13 @@ function anchorFeedbackText(): string | null {
 // `workflowLens` (public/app-logic.mjs:930-933, CR-CRU-020 §S1.3) filters
 // `c.status !== "open"` — "the history lens is closed-plans-only: an OPEN
 // plan's CR node renders solely in the ACTIVE view" — while the Active panel
-// renders ONLY open plans (public/app.js:4218). So an open plan reaches the
+// renders ONLY open plans (public/app.js:4269). So an open plan reaches the
 // first call site and never the second, and a closed plan the reverse. The
 // two call sites are therefore driven here by the same cycles under the two
 // plan statuses that can actually reach them: the ACTIVE panel with the plan
 // OPEN, and History with the plan CLOSED (a plan closed while one of its
 // cycles is still `active` — the case `LensCycleRow`'s own `expandable`
-// predicate, public/app.js:4375, already contemplates). Confirm with GREEN;
+// predicate, public/app.js:4427, already contemplates). Confirm with GREEN;
 // this substitution is the only reading under which BOTH surfaces can be
 // asserted at all, and it does not weaken the AC: both `CycleToRunsBadge`
 // call sites are still driven, each through the surface that reaches it.

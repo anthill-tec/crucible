@@ -1452,10 +1452,15 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // from a mid-cycle note, per this project's established citation-drift
 // discipline): five new citations — src/store.ts:318, :3915, :4093 and
 // src/v2.ts:2200, :2212 — naming the CR that reconciled the defaulted-seq
-// message split. `public` and `clients` are unchanged.
+// message split. `clients` is unchanged.
+//
+// UPDATED 2026-09-12 by CR-CRU-120 — moved `public` 443 → 454: eleven new
+// citations in public/app.js naming the CR that extended the anchor-fetch
+// and reveal mechanism to active cycles. `src` and `clients` re-measured
+// unchanged.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 600 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 443 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 454 },
   clients: { exts: [".py"], develop: 601, head: 802 },
 };
 
