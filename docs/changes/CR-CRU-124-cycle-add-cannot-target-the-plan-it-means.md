@@ -85,7 +85,9 @@ candidates is still `"ambiguous"`.
 `open_only` — the same order `cmd_cr_close` already uses — and when `cr` was supplied the message
 stops telling the caller to pass `--cr` and instead names the `--plan` escape from §S3.
 
-**Ruled 2026-09-12 (RED escalation E1).** §S1's rule is worded as applying once the `cr` filter leaves more than one candidate, which left open what happens when NO `--cr` was passed (the filter is then a no-op). The preference **fires regardless of whether `--cr` was supplied**: the rule is "exactly one open candidate among several wins", and a caller on a real board — 121 plans, exactly one open — should reach that open plan with no flags at all, which is what `test_single_open_plan_resolves_without_cr_and_posts_label` has always been reaching for. Two open candidates remain ambiguous with or without `--cr`.
+**Ruled 2026-09-12, and CORRECTED the same day (RED escalation E1).** §S1's rule is worded as applying once the `cr` filter leaves more than one candidate, which left open what happens when NO `--cr` was passed (the filter is then a no-op). The ruling is that the open-plan preference fires **only when `--cr` was supplied**. With no `--cr`, two or more candidates keep refusing exactly as they do today.
+
+The first ruling said the opposite — that the preference fires either way — and it was wrong: `tests/client/test_bun_crucible_cycle_add.py:273` has pinned the no-`cr` path since CR-CRU-030, over the board `[closed, open]`, with the assertion message *"ambiguous (2 plans, no --cr) must be non-zero, not a guess"*. That is a deliberate safety contract for THIS verb — refuse rather than target a plan the caller never named — and a convenience win is not a reason to retire it. The cost is accepted knowingly: a caller on a 121-plan board with exactly one open plan must pass `--cr` (or, after §S3, `--plan`), and `cycle-add` stays deliberately stricter than `cr-close`, which does resolve the lone open plan flagless. GREEN caught the collision before committing; the first ruling had been made without grepping the no-`cr` path for existing pins.
 
 ### §S3 `--plan <id>` targets a plan directly
 
