@@ -74,6 +74,29 @@ spinner (beside or in place of its label — implementation's choice, consistent
 is disabled, closing the double-submit gap this audit also found (nothing today stops a second
 "confirm archive"/"save"/"add" click from firing a second in-flight request).
 
+### Implementation note (2026-09-12, RED, cycle 430)
+
+§S4's "the triggering control renders the spinner and is disabled until the fetch settles" is
+unsatisfiable for two of the three actions as they stand, because each dismisses its own control
+BEFORE its request returns:
+
+- `manager-archive-confirm`'s onclick sets `managerArchivePending.val = null` first
+  (`public/app.js:1588`), so the confirm control unmounts while the POST is still in flight.
+- `save` sets `editing.val = false` before the PATCH settles (`public/app.js:1670`).
+
+Both resets therefore MOVE into the settle path: the confirm control and the edit form stay mounted
+— disabled and spinning — until their request completes. This is a real, intended behaviour change
+beyond adding an animation (the UI stops dismissing optimistically), and it is what makes the
+double-submit guard bite at all: a control that has already unmounted cannot refuse a second click.
+VERIFY should read it as in-scope, not as scope creep.
+
+Two further RED decisions, recorded so they are not re-litigated: §S3's `finally` requirement is
+pinned STRUCTURALLY (whatever state `loadSuite` sets before its `try` must be re-assigned inside its
+`finally`) because the DOM cannot distinguish a stuck flag from a correct reset — `loadSuite`'s
+`catch` replaces the whole subtree with its error line either way; and the `disabled` assertion is
+on the real `HTMLButtonElement.disabled` property, not `aria-disabled` or a class, because only a
+genuinely disabled control suppresses the second click.
+
 ## Acceptance criteria
 
 **§S1**
