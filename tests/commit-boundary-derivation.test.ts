@@ -23,7 +23,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.ts";
-import type { Plan, RunSchema } from "../src/types.ts";
+import type { Plan, RunSchema, SuiteNode, TestLeaf } from "../src/types.ts";
 
 // A fixed instant, so every stamped value (closedAt, event timestamps) is an
 // exact number the assertions can name rather than a shape check.
@@ -33,12 +33,24 @@ const t0 = 1_700_000_000_000;
 const checkpointCadence = 60_000;
 
 /**
- * §S2's ceiling: an ABSOLUTE bound an order of magnitude above the expected
- * post-fix figure. One indexed query per plan over a 2000-row event table is
- * low single-digit milliseconds (the same fixture with OPEN plans — i.e. zero
- * derivations — reads in 0.3 ms, measured 2026-09-12), so 50 ms fires on a
- * regression rather than on a loaded box. The unbounded per-plan scan this CR
- * removes costs 133 ms on the same fixture, so the ceiling bites today.
+ * §S2's ceiling: an ABSOLUTE bound above the expected post-fix figure. HELD at
+ * 50 ms after the fixture was re-sized to the board's real rows (see
+ * `wideTree`/`wideRaw` below) — and the re-measurement is what justifies it.
+ *
+ * Measured 2026-09-12 on the blob-laden fixture (50 plans, 30,625 B/row) by
+ * timing, per `/plans`-equivalent request, each query shape a fix could ship:
+ *
+ *   what the fix does                            | @200 ev  | @2000 ev  |
+ *   ---------------------------------------------|----------|-----------|
+ *   today: unbounded per-plan scan, `SELECT *`    | 192.7 ms | 1896.8 ms |
+ *   indexed + cycle-filtered, but KEEPS SELECT *  |   5.1 ms |   57.6 ms |
+ *   indexed + cycle-filtered, two columns (§S1)   |   1.3 ms |   13.6 ms |
+ *
+ * So 50 ms is not arbitrary: it falls between the only two outcomes that can
+ * ship. §S1's fix clears it with ~3.7x of headroom, while a fix that adds the
+ * index and the WHERE clause and still selects the wide columns FAILS it. That
+ * discrimination is the entire reason the fixture carries blobs; without them
+ * both shapes finish in single-digit ms and the ceiling cannot tell them apart.
  */
 const ceilingMillis = 50;
 
@@ -46,8 +58,15 @@ const ceilingMillis = 50;
  * §S2's SCALING bound, which is the real subject: ten times the events must not
  * cost ten times the time. Stated as an absolute delta rather than a ratio on
  * purpose — post-fix both figures are small enough that a ratio is noise, while
- * a delta stays meaningful at every scale. Measured today: 17 ms against 200
- * events, 133 ms against 2000 — a delta of 116 ms.
+ * a delta stays meaningful at every scale.
+ *
+ * HELD at 30 ms, for the reason the same measurement gives: against the
+ * blob-laden fixture today's code moves 192.7 -> 1896.8 ms (delta 1704 ms), a
+ * fix that keeps `SELECT *` moves 5.1 -> 57.6 ms (delta 52.5 ms — still FAILS,
+ * so this bound catches it independently of the ceiling), and §S1's fix moves
+ * 1.3 -> 13.6 ms (delta 12.3 ms, ~2.4x inside the bound). Per the CR's ruling 5
+ * the CEILING widens before this delta ever does: the delta is the assertion
+ * that carries the CR, and a ceiling is a smoke alarm.
  */
 const scalingToleranceMillis = 30;
 
@@ -267,14 +286,88 @@ interface CostFixture {
 }
 
 /**
+ * The WIDE COLUMNS `SELECT *` marshals, sized from the live board.
+ *
+ * DRIFT-4 measured the marshalling of `tree`/`coverage`/`compile`/`payload` —
+ * not the row COUNT — as the dominant cost: 37.0 MB per scan, ~3.87 GB per
+ * `/plans` request, to produce a 104.6 KB response. `deriveCommitBoundary`
+ * reads every column of every row and parses only `context`, so the blobs are
+ * pure waste that the row count alone cannot express. A fixture of small events
+ * therefore lets a fix that adds the index and the WHERE clause but KEEPS
+ * `SELECT *` pass this pin while production stays slow — which is exactly the
+ * hole these blobs close (§S2, ruled 2026-09-12 on RED escalation 4).
+ *
+ * The sizes are NOT invented. Read from a read-only `.backup` replica of
+ * `data/crucible.db` on 2026-09-12, over its 1301 context-bearing events:
+ *
+ *   column   | rows carrying it | mean bytes | total
+ *   ---------|------------------|------------|----------
+ *   tree     | 1216 (93.5%)     |     23,016 |  27.99 MB
+ *   payload  | 1188 (91.3%)     |      9,888 |  11.75 MB
+ *   coverage |   12  (0.9%)     |        109 |   1.3 KB
+ *   context  | 1301  (100%)     |         30 |  39.4 KB
+ *   ALL WIDE | —                |     30,600 |  39.79 MB
+ *
+ * The shares and sizes below reproduce that shape rather than a flat average:
+ * the built fixture measures 30,625 B per row against the board's 30,600, and
+ * 61.3 MB across 2000 events. `coverage` is deliberately TINY because the
+ * board's is — `Coverage` is three fixed axes, so it cannot be large — and the
+ * bulk lives in `tree` and in `payload`, where captured `raw` output rides.
+ */
+const wideTree: SuiteNode[] = Array.from({ length: 8 }, (_unused, suite) => ({
+  name: `suite ${suite} — store/commit boundary`,
+  status: "pass" as const,
+  // 27 cases x 8 suites lands the serialised column on 22,961 B, against the
+  // board's 23,016 B mean tree.
+  children: Array.from({ length: 27 }, (_leaf, index): TestLeaf => ({
+    name: `case ${suite}.${index} — resolves the recorded boundary for a closed plan`,
+    status: "pass",
+    duration_ms: 4,
+  })),
+}));
+
+/**
+ * ~9.9 KB of captured runner output. This rides the `payload` column (CR-CRU-038
+ * §S2b threads `raw` into the generic payload blob), landing it on 9,866 B
+ * against the board's 9,888 B mean.
+ */
+const wideRaw = "[bun test] tests/store.test.ts: ok — derivation path exercised\n".repeat(154);
+
+/**
+ * One fixture event, carrying the wide columns on the board's share of rows.
+ * Keyed off the row index rather than randomised, so the fixture — and every
+ * timing taken against it — is deterministic.
+ */
+function costRun(index: number): RunSchema {
+  return {
+    summary: { total: 216, passed: 216, failed: 0, pending: 0, duration_ms: 12 },
+    // 15 rows in 16 carry a tree (board: 93.5%).
+    tree: index % 16 === 0 ? [] : wideTree,
+    // 1 row in 100 carries coverage (board: 0.9%). `recordTestEvent` DISCARDS
+    // coverage from a failing run (§S4), so the summary above must stay at
+    // failed: 0 or this column would never reach the table at all.
+    ...(index % 100 === 0
+      ? { coverage: { lines: { total: 216, covered: 194, percent: 89.8 } } }
+      : {}),
+    // 11 rows in 12 carry raw output -> the `payload` column (board: 91.3%).
+    ...(index % 12 === 0 ? {} : { raw: wideRaw }),
+  };
+}
+
+/**
  * §S2's fixture: `planCount` plans that are CLOSED-WITH-MERGE and `eventCount`
- * context-bearing events spread across their cycles.
+ * context-bearing events spread across their cycles, each row carrying the
+ * board-shaped wide columns above.
  *
  * The plans MUST end closed-with-merge (§S2, DRIFT-7): `deriveCommitBoundary`
  * returns immediately unless status is `closed`, `merge` is present and
  * `closedAt` is present, so a fixture of OPEN plans times ZERO derivations and
- * would pass on today's code — a born-vacuous pin. Measured on this fixture
- * 2026-09-12: closed 17 ms / 133 ms at 200 / 2000 events, open 0.3 ms at both.
+ * would pass on today's code — a born-vacuous pin.
+ *
+ * Measured on this fixture 2026-09-12, closed: 192.7 ms at 200 events and
+ * 1896.8 ms at 2000. That 1.9 s is the point of the blobs — it is the same
+ * order as the 2567.9 ms the live `/plans` actually costs, where the previous
+ * small-event fixture reported 133 ms and so under-stated the defect ~14x.
  */
 function closedMergedFixture(planCount: number, eventCount: number, withQueue = false): CostFixture {
   const store = new Store(":memory:");
@@ -287,7 +380,7 @@ function closedMergedFixture(planCount: number, eventCount: number, withQueue = 
   }
   for (let index = 0; index < eventCount; index += 1) {
     const target = cycles[index % cycles.length]!;
-    store.recordTestEvent(key, "fixture-agent", testRun(), {
+    store.recordTestEvent(key, "fixture-agent", costRun(index), {
       context: { cycleId: target.cycleId, git: { branch: "feat/x", commit: `c${index}` } },
     });
   }
@@ -341,7 +434,13 @@ describe("the derivation's cost (CR-CRU-126 §S2 — in-process, :memory:, no se
     });
 
     expect(large).toBeLessThanOrEqual(small + scalingToleranceMillis);
-  });
+    // Generous, because it is a HANG guard and not a measurement: the blobs put
+    // the pre-fix run at ~1.9 s per read and this test takes four of them at
+    // each size, which overruns bun's 5 s default. A default-timeout kill would
+    // report a timeout instead of the figures, hiding the very number the CR is
+    // about. The assertions above are what bound the time; this only stops a
+    // genuinely wedged run from hanging the suite.
+  }, 120_000);
 
   test("listPlans over 50 closed-and-merged plans and 2000 context-bearing events completes within the ceiling", () => {
     const fixture = closedMergedFixture(50, 2_000);
@@ -352,7 +451,7 @@ describe("the derivation's cost (CR-CRU-126 §S2 — in-process, :memory:, no se
         fixture.store.listPlans(fixture.key);
       }),
     ).toBeLessThanOrEqual(ceilingMillis);
-  });
+  }, 120_000);
 
   test("the queue read costs no more against 2000 context-bearing events than against 200 — deriveQueueStatus stops paying for the boundary", () => {
     const atM = closedMergedFixture(50, 200, true);
@@ -372,7 +471,7 @@ describe("the derivation's cost (CR-CRU-126 §S2 — in-process, :memory:, no se
 
     expect(large).toBeLessThanOrEqual(small + scalingToleranceMillis);
     expect(large).toBeLessThanOrEqual(ceilingMillis);
-  });
+  }, 120_000);
 });
 
 describe("the boundary lookup is one INDEXED query (CR-CRU-126 §S1)", () => {
