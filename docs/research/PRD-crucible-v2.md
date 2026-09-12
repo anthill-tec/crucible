@@ -352,11 +352,20 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   IN_PROGRESS = open plan, COMPLETED = closed + merge) ships in **0.2.0**
   (CR-CRU-014, schema designed now — storyboard F14); binding forward-compat on
   0.1.0: `plans.cr` is the verbatim stable join key, the queue table is purely
-  additive. **Placement (user-locked 2026-07-16, supersedes the round-25
-  slide-over):** the Roadmap is a **first-class workspace tab** — order
-  `Workflow · Runs · Coverage · Compile · Roadmap · BDD` (post-CR-021 order;
-  Roadmap added by CR-014); `/p/<key>/roadmap` deep-links to the tab; the
-  Project pane keeps a 🗺 chip shortcut; the empty state carries the
+  additive. **Placement (user-locked 2026-07-16; tab ORDER corrected to match
+  CR-CRU-076, and the Project-pane chip RETIRED by user ruling 2026-09-12 —
+  supersedes the round-25 slide-over):** the Roadmap is a **first-class workspace
+  tab** — order `Roadmap · Workflow · Runs · Coverage · Compile · BDD` (Roadmap was
+  added by CR-CRU-014 into the post-CR-021 order and made the FIRST tab by
+  CR-CRU-076; the round-21–22 enumeration earlier in this section predates the
+  Roadmap tab and is left as the historical lock it is);
+  `/p/<key>/roadmap` deep-links to the tab; **the Project pane carries NO roadmap
+  chip.** The 2026-07-16 lock gave it a 🗺 shortcut as a second door to the same
+  route; once CR-CRU-076 made Roadmap the leftmost tab, a second door two inches
+  away stopped earning its space and the user retired it (ruling 2026-09-12, *"it
+  is not useful"*; implemented by CR-CRU-123 §S2, which re-points CR-CRU-079's
+  pathname/pushState assertions at the surviving tab-strip door rather than
+  deleting them). The empty state carries the
   queue-registration imperative (the roadmap is required by Model-B tracking). **Analytics (user-locked 2026-07-16):** the
   progress/velocity/estimation model is a full design contract —
   [DN-crucible-analytics.md](DN-crucible-analytics.md) (two-clock model,
