@@ -217,7 +217,17 @@ keyed globally off `plans` and applies to both node kinds, and it carries eight 
 - **Re-record the `public` `PROSE_CITATIONS` head** in `tests/project-namespace-tripwire.test.ts`:
   `476 → 477` for §S1's provenance comment in `public/app-logic.mjs`. MEASURE it at close-out with
   the guard's own machinery rather than transcribing this figure — a second citation in the same
-  commit would make it 478 and the measurement is what catches that.
+  commit would make it 478 and the measurement is what catches that. Note `.mts` IS in the `public`
+  ext list (`:1620`), which is why the `public/app-logic.d.mts` declaration widening was left
+  uncommented: it keeps the arithmetic at exactly +1.
+
+  **This ONE re-record clears TWO regression failures** (VERIFY finding, 2026-09-13). The second is
+  not a separate defect: `tests/help-surface-order-independence.test.ts:190` spawns a child
+  `bun test` over `HELP_FILE`, and `HELP_FILE` **is** `tests/project-namespace-tripwire.test.ts`
+  (`:65-66`), so its `failed: []` assertion cascades off the head mismatch. Recorded here because a
+  close-out that expected one failure would have mis-triaged the cascade as an unplanned defect.
+  `help-surface-order-independence.test.ts` itself is correct and fires for the right reason —
+  it is NOT to be touched.
 - **Do NOT re-pin the 54 informal `app-logic.mjs:<line>` citations.** None is machine-checked and
   most are historical CR prose; re-pinning 14 shifted informal references is disproportionate, the
   same ruling CR-CRU-126 recorded for `store.ts`.
@@ -226,3 +236,35 @@ keyed globally off `plans` and applies to both node kinds, and it carries eight 
   speak for this CR's own blast radius. Use the project's designed path — plain `test:e2e`, then
   `bun-crucible.py auto-ingest` (the `e2e` verb injects a `--reporter-outfile` flag Playwright
   rejects; recorded 2026-09-12 as a separate client defect).
+
+
+## Verification evidence (2026-09-13)
+
+Full regression `run-149b33f2-1bd1-41dc-8fb0-538426a8d5c8`: **2363 pass / 2 fail / 2365 total across
+169 files**, `tsc --noEmit` exit 0, coverage lines 81.9% / funcs 84.0%. 2365 = the measured baseline
+2354 + RED's 11, exactly. Both failures are the citation-head item and its cascade, above.
+
+**The regression pins were proven by MUTATION, not asserted.** Each mutation ran in a scratch
+`/tmp` git worktree (removed and pruned; the main tree was never touched), against the 14
+lens-touching suites whose unmutated control is 181 pass / 0 fail:
+
+| mutation of `public/app-logic.mjs` | went red | verdict |
+|---|---|---|
+| `!liveCrs.has(c.cr)` alone, dropping `c.status !== "open"` | nothing | **equivalent mutant, NOT a gap** — see below |
+| `liveCrs` built from `status !== "closed"` (an aborted plan treated as live) | AC5, AC3 | caught |
+| `liveCrs` computed per-wave instead of globally | AC1-globality, and ONLY it | caught surgically |
+| drop every inferred node rather than only live ones | AC7 | caught |
+| the `closedAt` sort REMOVED | AC3 | caught — the ORDER clause is real |
+| the `closedAt` sort REVERSED | AC3 | caught |
+
+No mutation escaped the criterion that owns it. The single uncaught mutation is provably
+unobservable rather than uncovered: declared nodes are built `{cr: plan.cr, status: plan.status}`
+(`:858-861`) and the live set is every open plan's `cr` (`:934-936`), so `status === "open"` implies
+`cr` is in that set. No fixture can separate the two clauses. The clause is retained because §S1
+mandates it and as defence-in-depth, and the provenance comment now says so — so that a later
+reader neither over-trusts it nor deletes it as dead.
+
+**Declined suggestion.** VERIFY noted the pure-lens fixtures stem on `CR-CRU-LENS-*` while the
+sibling DOM block uses `CR-DOM-*`. Not actioned: `CR_LITERAL` requires trailing digits so neither
+form matches the namespace guard, no guard is violated, and renaming just-committed fixture ids
+would be churn for zero behavioural gain.
