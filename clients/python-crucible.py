@@ -1612,6 +1612,7 @@ def main():
                               "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _axi().add_cycle_add_target_args(cad)
     _add_workflow_agent_arg(cad)
     _add_project_dir_arg(cad)
     cad.set_defaults(func=cmd_cycle_add)

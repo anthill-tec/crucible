@@ -253,6 +253,17 @@ def resolve_single_plan(plans, cr=None, open_only=False):
       (cycle-add, mirroring plan-backfill — the SERVER is the authority on a
       closed plan's rejection, never a client-side pre-filter).
     - `cr` filters the candidates to that CR (the disambiguator).
+    - CR-CRU-124 §S1 — applied only once the `cr` filter above leaves MORE
+      than one candidate: when exactly ONE of them is `status:"open"`, that
+      open plan is the target. A CR whose earlier plan was aborted and re-filed
+      (abort + re-`plan-file` is the sanctioned recovery path) carries one live
+      plan beside settled history, not two targets. ZERO open candidates
+      changes nothing — a lone terminal plan is still handed to the server,
+      which owns its rejection — and two open candidates is a real ambiguity
+      that stays one. A caller who named NO cr is untouched: with no CR to
+      scope them, several plans are several targets (the contract
+      `test_ambiguous_multiple_plans_without_cr_returns_nonzero_without_posting`
+      has pinned since CR-CRU-030).
 
     Returns `(plan, reason)`: exactly one is non-None. `reason` is None on a
     unique match, else `"none"` (zero candidates) or `"ambiguous"` (>1, no
@@ -266,6 +277,10 @@ def resolve_single_plan(plans, cr=None, open_only=False):
     if len(candidates) == 0:
         return None, "none"
     if len(candidates) > 1:
+        if cr:
+            live = [p for p in candidates if p.get("status") == "open"]
+            if len(live) == 1:
+                return live[0], None
         return None, "ambiguous"
     return candidates[0], None
 
@@ -361,6 +376,13 @@ def emit_plans_fetch_failure(verb, exc, project_dir, ops, result_fields, cr=None
     return 1
 
 
+# CR-CRU-124 §S3 — the verbs that own a `--plan <id>` escape, so an ambiguity
+# message offers one only where it exists. `checkpoint`/`abort` deliberately
+# did NOT get the flag (the CR's non-goal): they already restrict to open
+# plans, and the server keeps at most one open plan per cr.
+PLAN_ESCAPE_VERBS = frozenset({"cycle-add"})
+
+
 def resolve_plan_or_emit(verb, cr, result_fields, open_only,
                          get_fn, path, emit_fn, context_fn):
     """The shared prelude for the plan-targeting write verbs (`cycle-add` /
@@ -385,11 +407,23 @@ def resolve_plan_or_emit(verb, cr, result_fields, open_only,
             legacy = (f"[crucible] ERROR: no {scope} to {verb}"
                       + (f" for cr={cr}" if cr else ""))
         else:
+            # CR-CRU-124 §S2 — the candidates named are the candidates MEANT:
+            # filter by `cr` as well as `open_only` (the order `cmd_cr_close`
+            # already uses). Enumerating every plan on the board and then
+            # demanding the flag the caller already passed is the defect.
             candidates = [p for p in plans
                           if (not open_only or p.get("status") == "open")]
+            if cr:
+                candidates = [p for p in candidates if p.get("cr") == cr]
             names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            if not cr:
+                pick = f"Pass --cr to pick one of: {names}"
+            elif verb in PLAN_ESCAPE_VERBS:
+                pick = f"Name the plan with --plan <id>: {names}"
+            else:
+                pick = f"the candidates are: {names}"
             legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
-                      f"Pass --cr to pick one of: {names}")
+                      f"{pick}")
         emit_fn(verb, False, result_fields, context_fn(), [], legacy)
         return None, 1
     return plan, None
@@ -607,6 +641,23 @@ PLAN_FILE_RELEASE_HELP = (
     "normalises it. Given, the CR is REGISTERED in the queue by the same "
     "call (cr-plan's write, and --wave and --title become required); omitted, "
     "the plan is filed and nothing is claimed on the roadmap.")
+
+
+# CR-CRU-124 §S3/§S4 — the ONE help text for each `cycle-add` targeting flag,
+# so all five clients document them identically. Both are OPTIONAL: the verb's
+# existing resolution and the server's own kind default are unchanged for a
+# caller who names neither.
+CYCLE_ADD_PLAN_HELP = (
+    "Plan id to append the cycle to. Given alone, the plan board is NOT read "
+    "and no resolution happens (the route carries the plan id in its own "
+    "path) — the escape when a cr carries more than one plan, e.g. an aborted "
+    "sibling beside the live one. Given with a cr, a plan belonging to a "
+    "different cr is refused before anything is posted.")
+
+CYCLE_ADD_KIND_HELP = (
+    "Kind of cycle being appended: red-green, verify or fix (the route's own "
+    "vocabulary). Omitted, no kind rides the body at all and the server's own "
+    "default (red-green) applies — the client never invents one.")
 
 
 def gate_identity_skipped_line(agent_id, confirmed=True):
@@ -2431,31 +2482,92 @@ def cmd_abort(args, project_dir, ops):
     return 0 if ok else 1
 
 
+def resolve_named_plan_or_emit(plan_id, cr, result_fields, project_dir, ops):
+    """CR-CRU-124 §S3 — the target of a `cycle-add --plan <id>`.
+
+    `--plan` ALONE resolves to ITSELF: the route carries the plan id in its own
+    path, so there is nothing to resolve and the plan board is NOT read at all
+    — which is the whole point, since reading it is what put the verb at the
+    mercy of an ambiguity it could not escape. With a `--cr` beside it the
+    board IS read once, because a `--plan` whose cr contradicts the `--cr`
+    given cannot be detected any other way; that contradiction is refused HERE,
+    before any POST, as appending a cycle to the wrong plan is unrecoverable
+    history.
+
+    Returns `(plan_id, cr)` for a usable target, or None with the ok:false
+    envelope already emitted."""
+    plan_id = str(plan_id)
+    if not cr:
+        return plan_id, None
+    resp = ops.get(ops.plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        ops.emit("cycle-add", False, result_fields,
+                 ops.context(project_dir, cr=cr), [], legacy)
+        return None
+    named = [p for p in resp.get("plans", [])
+             if str(p.get("planId")) == plan_id]
+    if not named:
+        legacy = (f"[crucible] ERROR: no plan {plan_id} on this board — "
+                  f"--plan names a plan that does not exist")
+        ops.emit("cycle-add", False, result_fields,
+                 ops.context(project_dir, cr=cr), [], legacy)
+        return None
+    named_cr = named[0].get("cr")
+    if named_cr != cr:
+        legacy = (f"[crucible] ERROR: plan {plan_id} belongs to cr={named_cr}, "
+                  f"not {cr} — --plan and --cr name different targets, so "
+                  f"nothing was appended")
+        ops.emit("cycle-add", False, result_fields,
+                 ops.context(project_dir, cr=cr), [], legacy)
+        return None
+    return plan_id, named_cr
+
+
 def cmd_cycle_add(args, project_dir, ops):
     """§S4 — append a cycle to a plan. Resolve the target plan exactly like
     plan-backfill (ALL plans, optional --cr), POST …/plans/<planId>/cycles with
-    ONLY the label, and let the SERVER reject a CLOSED/absent plan — never a
+    the label, and let the SERVER reject a CLOSED/absent plan — never a
     client-side pre-filter. The assigned numeric id stays machine-readable.
 
     CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
+    FIRST so the hard stop precedes any request.
+
+    CR-CRU-124 §S3 — `--plan <id>` names the target directly, skipping the
+    plans GET and all resolution (see `resolve_named_plan_or_emit`).
+
+    CR-CRU-124 §S4 — `--kind` rides the body when given. Omitted, the field is
+    left OUT of the body entirely so the server's own default (`red-green`,
+    `parseCycleInput`) applies: the client never invents a kind, and the body
+    an existing caller sends is unchanged."""
     agent_id = ops.agent_id(args)
+    named_plan = getattr(args, "plan", None)
+    kind = getattr(args, "kind", None)
     # §S15 — the next step after appending a cycle is to activate it; help[]
     # rides both the resolve-failure envelope and the success envelope.
     result_fields = {"label": args.label, "help": HELP_STEPS["cycle-add"]}
-    plan, rc = ops.resolve_plan("cycle-add", project_dir, args.cr,
-                                result_fields, open_only=False)
-    if plan is None:
-        return rc
-    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan['planId']}/cycles",
-                    {"label": args.label, "agentId": agent_id})
+    if named_plan:
+        target = resolve_named_plan_or_emit(named_plan, args.cr, result_fields,
+                                            project_dir, ops)
+        if target is None:
+            return 1
+        plan_id, cr_label = target
+    else:
+        plan, rc = ops.resolve_plan("cycle-add", project_dir, args.cr,
+                                    result_fields, open_only=False)
+        if plan is None:
+            return rc
+        plan_id, cr_label = plan["planId"], plan.get("cr")
+    body = {"label": args.label, "agentId": agent_id}
+    if kind:
+        body["kind"] = kind
+    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan_id}/cycles", body)
     ok = resp.get("ok", False)
-    cr_label = plan.get("cr")
-    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
+    legacy = (f"cycle-add: ok={ok} plan={plan_id} cr={cr_label} "
               f"label={args.label} id={resp.get('id')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     ops.emit("cycle-add", bool(ok),
-             {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
+             {"plan": plan_id, "id": resp.get("id"), "label": args.label,
               "help": HELP_STEPS["cycle-add"]},
              ops.context(project_dir, cr=cr_label), [], legacy)
     return 0 if ok else 1
@@ -5155,6 +5267,18 @@ def add_plan_file_release_arg(p):
     clients hand-rolled would word itself five ways, and the route reads its
     PRESENCE (a plan filed without it makes no roadmap claim)."""
     p.add_argument("--release", help=PLAN_FILE_RELEASE_HELP)
+
+
+def add_cycle_add_target_args(p):
+    """CR-CRU-124 §S3/§S4 — declare `--plan` and `--kind` on `cycle-add`: the
+    plan the cycle is appended to, and the kind of work that cycle is.
+
+    The ONE declaration site for the whole fleet, created because `cycle-add`
+    had none: all five clients hand-rolled their own subparser, exactly the
+    situation `plan-file` was in before `add_plan_file_release_arg`. Five
+    independent declarations would word themselves five ways and drift."""
+    p.add_argument("--plan", help=CYCLE_ADD_PLAN_HELP)
+    p.add_argument("--kind", help=CYCLE_ADD_KIND_HELP)
 
 
 def add_gate_cycle_arg(p):
