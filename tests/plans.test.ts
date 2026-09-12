@@ -1142,4 +1142,413 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       expect(afterBody.events.length).toBe(baselineCount);
     });
   });
+
+  // ── CR-CRU-121 §S1 — filing a plan registers its release ─────────────────
+  //
+  // docs/changes/CR-CRU-121-filing-a-plan-should-register-its-release.md:
+  // `plan-file` gains an OPTIONAL `release`. Given one, `wave` and `title`
+  // become required and the route performs the SAME queue write `cr-plan`
+  // performs — `declareMembership`, then `refuseDependencyCycle`, then the
+  // existing `waveScopeRefusal` (CR-CRU-116, unchanged position) — with the
+  // queue upsert and the plan file landing in ONE transaction, so a refusal
+  // from EITHER half leaves NEITHER behind. `release` ABSENT is byte-identical
+  // to today: no queue read beyond the wave scope, no queue write, no new
+  // response keys.
+  //
+  // Every refusal below is asserted as PARITY with `cr-plan`'s own answer for
+  // the identical input, driven live on the same board rather than compared to
+  // a copied string. The criteria say "the exact shape `cr-plan` returns", and
+  // a literal pinned here would go on agreeing with itself after `cr-plan`'s
+  // own wording moved — which is the divergence this CR exists to prevent. The
+  // one sentence each refusal MUST read is asserted alongside, so a parity
+  // that converged on the WRONG answer (both routes 500ing, say) still fails.
+  describe("CR-CRU-121 §S1 — plan-file composes cr-plan's queue write", () => {
+    /** CR-CRU-118 §S4 — a release proposal declares the date it aims at.
+     *  Nothing here is ABOUT that date; the fixtures need a live proposal to
+     *  exist at all, so one plausible target serves all of them. */
+    const FIXTURE_TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+    const RELEASE = "0.2.0";
+    /** A label no proposal and no recorded release holds. */
+    const UNPROPOSED = "9.9.9";
+
+    type Wire = Record<string, unknown>;
+
+    async function propose(key: string, label: string): Promise<void> {
+      const res = await postJson(`/api/v2/projects/${key}/release-proposals`, {
+        label,
+        targetAt: FIXTURE_TARGET_AT,
+      });
+      expect(res.status).toBe(200);
+    }
+
+    /** The queue as the BOARD holds it — every criterion below reads the row
+     *  back through this route rather than trusting a POST's own echo. */
+    async function queueEntries(key: string): Promise<Wire[]> {
+      const res = await getJson(`/api/v2/projects/${key}/queue`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; entries: Wire[] };
+      return body.entries;
+    }
+
+    async function planFile(key: string, body: Wire): Promise<{ status: number; body: Wire }> {
+      const res = await postJson(plansPath(key), body);
+      return { status: res.status, body: (await res.json()) as Wire };
+    }
+
+    /** `cr-plan` itself — the verb whose answers plan-file must reproduce. */
+    async function crPlan(key: string, body: Wire): Promise<{ status: number; body: Wire }> {
+      const res = await postJson(`/api/v2/projects/${key}/queue/plan`, body);
+      return { status: res.status, body: (await res.json()) as Wire };
+    }
+
+    async function plansFor(key: string, cr: string): Promise<PlanRecord[]> {
+      const res = await getJson(plansPath(key, `?cr=${encodeURIComponent(cr)}`));
+      const body = (await res.json()) as PlansListResponse;
+      return body.plans.filter((plan) => plan.cr === cr);
+    }
+
+    /** The comparable part of a refusal: the status, the sentence, and the
+     *  `help[]` that makes it actionable. */
+    function refusalShape(answer: { status: number; body: Wire }): Wire {
+      return { status: answer.status, error: answer.body.error, help: answer.body.help };
+    }
+
+    test(
+      "AC1 a plan filed with release + wave + title registers the cr in the QUEUE — read back off " +
+        "GET …/queue carrying the posted release, wave and title, linked to the plan just filed",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const filed = await planFile(key, {
+          cr: "CR-121-REG",
+          title: "filing a plan registers its release",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(filed.status).toBe(201);
+        expect(filed.body.cr).toBe("CR-121-REG");
+        expect(filed.body.status).toBe("open");
+        expect((filed.body.cycles as CyclePayload[]).map((c) => c.label)).toEqual(["red-green"]);
+
+        const entries = await queueEntries(key);
+        // BOUND: one CR was declared, so exactly one row exists — a route that
+        // registered the cr twice, or registered a neighbour too, fails here
+        // rather than passing a find().
+        expect(entries.length).toBe(1);
+        const entry = entries[0]!;
+        expect(entry.cr).toBe("CR-121-REG");
+        expect(entry.release).toBe(RELEASE);
+        expect(entry.wave).toBe("6");
+        expect(entry.title).toBe("filing a plan registers its release");
+        // The row is THIS plan's cr, not a second registration that merely
+        // looks like it: the queue's derived link names the plan just filed,
+        // and its derived status is the in-flight one an open plan confers.
+        expect(entry.planId).toBe(filed.body.planId as number);
+        expect(entry.status).toBe("IN_PROGRESS");
+      },
+    );
+
+    test(
+      "AC2 the same call answers with `converged` and `entry` beside the plan fields, in cr-plan's " +
+        "own shape — the entry IS the queue row the board now holds",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const filed = await planFile(key, {
+          cr: "CR-121-UNION",
+          title: "the union of both routes' fields",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+        expect(filed.status).toBe(201);
+
+        // `converged` is cr-plan's word for "this call wrote nothing new"
+        // (§S7): a first registration CHANGED the board, so it is false.
+        expect(filed.body.converged).toBe(false);
+        const [entry] = await queueEntries(key);
+        expect(filed.body.entry).toEqual(entry);
+
+        // BOUND — the plan half of the response is untouched by the addition.
+        expect(typeof filed.body.planId).toBe("number");
+        expect(filed.body.cr).toBe("CR-121-UNION");
+        expect(filed.body.status).toBe("open");
+        expect(filed.body.wave).toBe("6");
+        expect((filed.body.cycles as CyclePayload[])[0]!.status).toBe("pending");
+      },
+    );
+
+    test(
+      "AC3 `release` present and `wave` absent: refused 400 in the sentence cr-plan answers for the " +
+        "same absence, and NEITHER the queue NOR the plan is written",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const refused = await planFile(key, {
+          cr: "CR-121-NOWAVE",
+          title: "a release without a wave is not a roadmap declaration",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toBe("`wave` is required — the wave within the release");
+        // PARITY, driven live: the same absence, answered by `cr-plan` itself.
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(
+            await crPlan(key, {
+              cr: "CR-121-NOWAVE",
+              title: "a release without a wave is not a roadmap declaration",
+              release: RELEASE,
+            }),
+          ),
+        );
+
+        expect(await queueEntries(key)).toEqual([]);
+        expect(await plansFor(key, "CR-121-NOWAVE")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC3 `release` present and `title` absent: refused 400 in the sentence cr-plan answers for the " +
+        "same absence, and NEITHER the queue NOR the plan is written",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const refused = await planFile(key, {
+          cr: "CR-121-NOTITLE",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toBe("`title` is required — the CR's brief");
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(await crPlan(key, { cr: "CR-121-NOTITLE", wave: "6", release: RELEASE })),
+        );
+
+        expect(await queueEntries(key)).toEqual([]);
+        expect(await plansFor(key, "CR-121-NOTITLE")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC4 a `release` naming no live proposal and claimed by no recorded release: refused in the " +
+        "EXACT declareMembership shape cr-plan returns for the identical input, nothing written",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        // Deliberately NOT proposed — and no release records this cr either.
+
+        const refused = await planFile(key, {
+          cr: "CR-121-UNPROPOSED",
+          title: "a label the board does not hold",
+          wave: "6",
+          release: UNPROPOSED,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(404);
+        expect(refused.body.error).toBe(
+          `release ${UNPROPOSED} has no live proposal — it is not a plannable target`,
+        );
+        // Including `help[]`: the refusal's whole value is that it names the
+        // move that fixes it, and cr-plan's is the one this route must reuse.
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(
+            await crPlan(key, {
+              cr: "CR-121-UNPROPOSED",
+              title: "a label the board does not hold",
+              wave: "6",
+              release: UNPROPOSED,
+            }),
+          ),
+        );
+
+        expect(await queueEntries(key)).toEqual([]);
+        expect(await plansFor(key, "CR-121-UNPROPOSED")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC5 a cr whose registration would close a dependency ring: refused in the EXACT " +
+        "refuseDependencyCycle shape cr-plan returns, the queue untouched and no plan filed",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        // The ring, through the MIGRATION door — the documented escape hatch
+        // that accepts one (CR-CRU-104 AC7). The per-CR verbs refuse it.
+        const ring = await postJson(`/api/v2/projects/${key}/queue`, {
+          entries: [
+            { cr: "CR-121-X", wave: "5", release: RELEASE, dependsOn: ["CR-121-Y"] },
+            { cr: "CR-121-Y", wave: "5", release: RELEASE, dependsOn: ["CR-121-X"] },
+          ],
+        });
+        expect([200, 202]).toContain(ring.status);
+        const before = await queueEntries(key);
+        expect(before.map((entry) => entry.cr)).toEqual(["CR-121-X", "CR-121-Y"]);
+
+        const refused = await planFile(key, {
+          cr: "CR-121-X",
+          title: "re-plan a ring member",
+          wave: "5",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(409);
+        expect(refused.body.error).toBe(
+          "dependency cycle refused: CR-121-X → CR-121-Y → CR-121-X — nothing was written",
+        );
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(
+            await crPlan(key, {
+              cr: "CR-121-X",
+              title: "re-plan a ring member",
+              wave: "5",
+              release: RELEASE,
+            }),
+          ),
+        );
+
+        // "nothing was written" measured, not quoted: every row byte-identical
+        // and no plan opened for the cr the request named.
+        expect(await queueEntries(key)).toEqual(before);
+        expect(await plansFor(key, "CR-121-X")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC6 REGRESSION PIN — `release` ABSENT files exactly as it does today: the CR-CRU-117/118/119/" +
+        "120 fixture shape (cr, title, cycles, wave), no queue write, and no queue keys on the reply",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+
+        const filed = await planFile(key, {
+          cr: "CR-121-NORELEASE",
+          title: "a CR born mid-release",
+          cycles: [{ label: "red-green" }],
+          wave: "6",
+        });
+
+        expect(filed.status).toBe(201);
+        expect(filed.body.cr).toBe("CR-121-NORELEASE");
+        expect(filed.body.status).toBe("open");
+        expect(filed.body.title).toBe("a CR born mid-release");
+        expect(filed.body.wave).toBe("6");
+        expect((filed.body.cycles as CyclePayload[]).map((c) => c.label)).toEqual(["red-green"]);
+        // The three keys that arrive ONLY with a release: ABSENT, never null
+        // and never an empty object — a caller that reads `entry` as "the row
+        // I registered" must not be handed one nobody registered.
+        expect("release" in filed.body).toBe(false);
+        expect("converged" in filed.body).toBe(false);
+        expect("entry" in filed.body).toBe(false);
+        // And NOTHING reached the queue: a plan declaring no release makes no
+        // roadmap claim — D4's "a CR can be born mid-release", the non-goal
+        // this CR explicitly preserves.
+        expect(await queueEntries(key)).toEqual([]);
+        // The plan itself is filed and readable, exactly as before.
+        const plans = await plansFor(key, "CR-121-NORELEASE");
+        expect(plans.length).toBe(1);
+        expect(plans[0]!.status).toBe("open");
+        expect(plans[0]!.wave).toBe("6");
+      },
+    );
+
+    test(
+      "AC7 ATOMICITY — a cr that already has an OPEN plan is refused by the plan half AFTER every " +
+        "queue-side check passed, and the queue write that half would have made is NOT left behind",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        // A neighbour registration, so "the queue is unchanged" is a
+        // comparison against a real board rather than empty-equals-empty.
+        const neighbour = await crPlan(key, {
+          cr: "CR-121-NEIGHBOUR",
+          release: RELEASE,
+          wave: "6",
+          title: "already on the roadmap",
+        });
+        expect(neighbour.status).toBe(200);
+
+        const first = await planFile(key, {
+          cr: "CR-121-DUP",
+          title: "the plan that is already open",
+          wave: "6",
+          cycles: [{ label: "red-green" }],
+        });
+        expect(first.status).toBe(201);
+
+        const before = await queueEntries(key);
+
+        // Valid release, valid wave, valid title, no ring, no wave conflict —
+        // every queue-side check passes, and only `filePlan` refuses.
+        const refused = await planFile(key, {
+          cr: "CR-121-DUP",
+          title: "the second plan for the same cr",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "verify" }],
+        });
+
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toBe("an open plan already exists for cr: CR-121-DUP");
+
+        const after = await queueEntries(key);
+        expect(after).toEqual(before);
+        expect(after.some((entry) => entry.cr === "CR-121-DUP")).toBe(false);
+        // …and no second plan crept in beside the refusal.
+        expect((await plansFor(key, "CR-121-DUP")).length).toBe(1);
+      },
+    );
+
+    test(
+      "§S3 REGRESSION PIN — `cr-plan` still registers a cr that has NO open plan (the historical-" +
+        "backfill shape): the queue row lands, and the standalone verb opens no execution cycle",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const declared = await crPlan(key, {
+          cr: "CR-121-BACKFILL",
+          release: RELEASE,
+          wave: "6",
+          title: "a shipped CR given its history back",
+        });
+
+        expect(declared.status).toBe(200);
+        expect(declared.body.ok).toBe(true);
+        expect(declared.body.converged).toBe(false);
+
+        const entries = await queueEntries(key);
+        expect(entries.length).toBe(1);
+        expect(entries[0]!.cr).toBe("CR-121-BACKFILL");
+        expect(entries[0]!.release).toBe(RELEASE);
+        expect(entries[0]!.wave).toBe("6");
+        expect(entries[0]!.title).toBe("a shipped CR given its history back");
+        // NOT in progress and linked to no plan: queue-only registration is
+        // the whole point of the verb §S3 leaves alone.
+        expect(entries[0]!.status).toBe("PENDING");
+        expect(entries[0]!.planId).toBeUndefined();
+        expect(await plansFor(key, "CR-121-BACKFILL")).toEqual([]);
+      },
+    );
+  });
 });
