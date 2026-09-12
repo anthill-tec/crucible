@@ -128,7 +128,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-120](CR-CRU-120-an-active-cycles-runs-are-not-reachable.md) | an active cycle's runs are not reachable | bugfix | COMPLETED (0.2.0) | 011, 025, 032 | 6 (0.2.0) |
 | [CR-CRU-121](CR-CRU-121-filing-a-plan-should-register-its-release.md) | filing a plan should register its release | feature | COMPLETED (0.2.0) | 011, 091, 118 | 6 (0.2.0) |
 | [CR-CRU-122](CR-CRU-122-a-loading-delay-deserves-a-spinner.md) | a loading delay deserves a spinner | feature | COMPLETED (0.2.0) | — | 6 (0.2.0) |
-| [CR-CRU-123](CR-CRU-123-the-project-pane-shows-activity-not-a-duplicate-door.md) | the Project pane shows activity, not a duplicate door | feature | PENDING (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-123](CR-CRU-123-the-project-pane-shows-activity-not-a-duplicate-door.md) | the Project pane shows activity, not a duplicate door | feature | COMPLETED (0.2.0) | — | 6 (0.2.0) |
 | [CR-CRU-124](CR-CRU-124-cycle-add-cannot-target-the-plan-it-means.md) | `cycle-add` cannot target the plan it means | bugfix | COMPLETED (0.2.0) | 054 | 6 (0.2.0) |
 | [CR-CRU-125](CR-CRU-125-history-narrates-a-cr-that-is-still-live.md) | History narrates a CR that is still live | bugfix | PENDING (0.2.0) | 020 | 6 (0.2.0) |
 | [CR-CRU-126](CR-CRU-126-a-plan-read-scans-every-event-once-per-plan.md) | a plan read scans every event, once per plan | bugfix | PENDING (0.2.0) | — | 6 (0.2.0) |
@@ -354,6 +354,25 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   asymmetry is invisible from the envelope: the gate prints `files: 152` and says nothing about the
   65 it never looked at.
 
+- 2026-09-12 — **no permanent browser-level pin on a CSS animation's actual MOTION** (candidate patch
+  CR, raised by CR-CRU-123's VERIFY). Every permanent assertion on `public/styles.css` in the bun
+  suites reads the stylesheet as TEXT (`STYLES_RULES`, `ruleBodiesForClass`, `animationsIn`), so a
+  malformed gradient stop, a `background-image` the cascade resolves to `none`, or a `@keyframes`
+  whose two stops are identical would all pass green while nothing moved on screen. CR-CRU-123's
+  `app-stream-flow` shimmer was proven real only by THROWAWAY Chromium probes: GREEN measured
+  `background-position` travelling -60% → -13.68% over 400ms, and VERIFY independently re-measured
+  -58.07% → -5.96% → +48.07% over 900ms with a RESOLVED gradient and the idle sibling at
+  `animationName: none`. Both probes were deleted at the end of their runs — the evidence did not
+  survive its own cycle, which is the actual gap. `tests/roadmap-visual-grammar.test.ts` already owns
+  the harness that could hold it (real playwright Chromium serving the real stylesheet) and already
+  pins motion for the roadmap (`animationName !== "none"` on a running CR). Estimated ~30 lines:
+  assert `animationName`, a `background-image` containing `gradient`, and `background-position`
+  differing across two samples. Deliberately NOT folded into CR-CRU-123 — its ACs as written are
+  met and measured, and bolting a browser suite onto a closing cycle is scope creep.
+  **Harness gotcha, measured by VERIFY:** a bare `chromium.launch()` from outside `node_modules`
+  resolves playwright-core 1.63.0 instead of the project's 1.61.1 and dies on a missing browser
+  build — drive it through the project's own dependency the way the existing suite does.
+
 - **CHECKED AND FOUND CORRECT — the unregistered-caller 409 is not misleading. Do not re-file it.**
   2026-08-28: the orchestrator was refused three times in one session
   (`agent vidushi is not registered with this project`) after long dispatches pruned its
@@ -365,6 +384,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   the same conclusion in the spec itself. The three 409s were operational friction — re-register and
   continue — not a diagnostic defect. What IS real is the participation record being destroyed by
   pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
+  **Recurred 2026-09-12, twice in one session** (executing CR-CRU-123), confirming the disposition
+  above rather than reopening it: `plan-file` was refused 409 after a ~40-minute RED dispatch, and
+  the `cycle-done`/`cycle-activate` pair was refused again after an 8-minute one. Both times
+  `register --agent vidushi --role ORCHESTRATOR` then the same call succeeded unchanged. The
+  operational rule this yields — worth stating even though the refusal is correct — is that ANY
+  orchestrator board write issued after a long wait should be preceded by a re-register, because the
+  orchestrator is silent by construction while its agents work and silence is exactly what prunes
+  it.
 
 - 2026-09-03 — **an out-of-order `cycle-activate` prescribes a transition no client can perform.**
   `cycle-activate 319` on a plan with 316 still pending refuses with
