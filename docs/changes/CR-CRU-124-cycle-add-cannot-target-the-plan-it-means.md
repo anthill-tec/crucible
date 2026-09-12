@@ -85,6 +85,8 @@ candidates is still `"ambiguous"`.
 `open_only` — the same order `cmd_cr_close` already uses — and when `cr` was supplied the message
 stops telling the caller to pass `--cr` and instead names the `--plan` escape from §S3.
 
+**Ruled 2026-09-12 (RED escalation E1).** §S1's rule is worded as applying once the `cr` filter leaves more than one candidate, which left open what happens when NO `--cr` was passed (the filter is then a no-op). The preference **fires regardless of whether `--cr` was supplied**: the rule is "exactly one open candidate among several wins", and a caller on a real board — 121 plans, exactly one open — should reach that open plan with no flags at all, which is what `test_single_open_plan_resolves_without_cr_and_posts_label` has always been reaching for. Two open candidates remain ambiguous with or without `--cr`.
+
 ### §S3 `--plan <id>` targets a plan directly
 
 `cycle-add` accepts an optional `--plan <planId>`, declared once in a shared registrar reaching all
@@ -92,6 +94,8 @@ five clients (the pattern CR-CRU-121 §S2 established for `plan-file --release`)
 plans GET and all resolution are SKIPPED — the route takes the plan id in its path, so there is
 nothing to resolve. `--plan` and `--cr` together, naming a plan whose `cr` differs, is refused
 client-side before any POST.
+
+**Ruled 2026-09-12 (RED escalation E2).** AC2 and AC3 below cannot both be read strictly — a client cannot know a plan's `cr` without reading the board. The resolution: `--plan` ALONE skips the plans GET entirely (nothing needs resolving); `--plan` TOGETHER WITH `--cr` MAY issue the GET, because validating the pair requires it. AC2's zero-GET claim therefore applies to `--plan` alone, and AC3 claims only `ok:false` with zero POSTs, never zero reads.
 
 ### §S4 `cycle-add --kind` reaches the route
 
