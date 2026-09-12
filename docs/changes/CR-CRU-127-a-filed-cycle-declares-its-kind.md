@@ -90,15 +90,39 @@ kind that travels is the kind the caller declared.
 
 ### §S4 The mandate: a filed cycle with no kind is REFUSED
 
-**User ruling 2026-09-12 (enforcement).** The kind is **required**, not optional-with-a-default.
-`plan-file` refuses a cycle carrying no declared kind — client-side, and at the route, so the
-mandate holds for any caller and not merely for the fleet.
+**User ruling 2026-09-12 (enforcement), NARROWED by user ruling 2026-09-13.** The kind is
+**required**, not optional-with-a-default — enforced **CLIENT-SIDE ONLY**. `plan-file` refuses a
+cycle carrying no declared kind before any POST. **The ROUTE stays permissive:** `parseCycleInput`
+keeps its `red-green` default and `POST …/plans` continues to accept a kindless cycle entry.
 
-**The refusal MUST live in `handlePlanFile`, NOT in `parseCycleInput`.** This is the one place this
-CR can break a shipped contract. `parseCycleInput` is shared with `handleCycleAppend`, and
-CR-CRU-124 §S4/AC3 pins that `cycle-add` with no `--kind` sends a body with the field **absent** and
-the server applies its default — asserted by full-body equality. Making the shared parser refuse
-absence would retire that contract silently. The mandate is a property of the `plan-file` route.
+**Why the narrowing, recorded with the measurement that drove it.** The route half of the original
+ruling was measured at **~110 extra call sites** (30 test files POSTing `cycles[]` directly) against
+**~22** for the client half — roughly five times the whole rest of the CR. And its only present-day
+beneficiaries are our own tests: the SPA never POSTs a plan (`WorkflowActive` reads `scopedPlans()`;
+no POST exists in `public/app.js`), so every real filing already goes through a client. The user took
+the narrower option knowing the residue, which is recorded as a candidate in
+`docs/changes/README.md` rather than silently dropped: **anything that is not one of the five
+clients can still file a kindless cycle and the board will store it `red-green`.**
+
+**The refusal was never to live in `parseCycleInput`, and now lives in no server file at all.** The
+original constraint is preserved for the record because it explains the shape: `parseCycleInput` is
+shared with `handleCycleAppend` (`src/v2.ts:1359`, called at `:1551`), and CR-CRU-124 §S4/AC3 pins
+by full-body equality that `cycle-add` with no `--kind` omits the field and lets the server default
+apply. Under the narrowed ruling that contract is untouched by construction — no server file changes
+at all — which is strictly safer than the original placement rule.
+
+**§S4a The legacy `--cycles` door is closed, not exempted.** Found by gap analysis 2026-09-13
+(DRIFT-7) and load-bearing precisely BECAUSE enforcement is now client-only: `--cycles` (the
+comma-split legacy form) also files cycles, and §S1 pairs `--cycle-kind` with the repeatable
+`--cycle` only. MEASURED: **19 of the 22** `plan-file` argv lists in `tests/client/*.py` use
+`--cycles`, so it is the dominant existing form, not a vestige. Leaving it exempt would leave the
+mandate with a hole big enough to drive the original defect straight through — on the only
+enforcement surface left. **Orchestrator ruling:** with kinds required, `--cycles` is REFUSED for
+filing, with a `help[]` handing back the `--cycle` + `--cycle-kind` form. It is already the legacy
+flag, and CR-CRU-078's silent three-cycle comma split is the recorded reason it should not be the
+path new data arrives through. The alternative — pairing kinds positionally against comma-split
+labels — was rejected: it would make a label containing a comma corrupt the KIND pairing too,
+turning one recorded defect into two.
 
 ### §S5 Every caller is migrated
 
@@ -172,15 +196,24 @@ forward guidance would trade one context loss for another.
 **§S4**
 - [ ] `plan-file` with `--cycle` and NO `--cycle-kind` is refused client-side: `ok:false`, non-zero
       exit, zero POSTs.
-- [ ] `POST …/plans` with a cycle entry carrying no `kind` is refused by the ROUTE (400), nothing
-      stored — asserted against the server directly, not through a client.
+- [ ] **The ROUTE is UNCHANGED and still permissive** (narrowed by user ruling 2026-09-13, replacing
+      the original route-refusal AC): `POST …/plans` with a cycle entry carrying no `kind` still
+      succeeds and still stores `red-green`. Asserted against the server directly, as a REGRESSION
+      pin — the enforcement is client-side, and no server file is touched by this CR.
+- [ ] `plan-file --cycles "a,b"` (the legacy form) is REFUSED client-side under the mandate, with a
+      non-empty `help[]` handing back the `--cycle` + `--cycle-kind` form, `ok:false`, non-zero
+      exit, and zero POSTs (§S4a). Asserted on the POST recorder, not just the exit code.
+- [ ] `--cycles` remains accepted by every OTHER verb that takes it, if any — the closure is scoped
+      to `plan-file`'s filing path and is not a fleet-wide retirement of the flag.
 - [ ] **`cycle-add` is UNCHANGED**: with no `--kind` its body still omits the field entirely and the
       server still applies `red-green`. CR-CRU-124 §S4/AC3's full-body equality assertion passes
       byte-unchanged — the regression pin proving the shared parser was not made stricter.
 
 **§S5**
-- [ ] Every caller that files a plan declares kinds; the migrated caller count is asserted, and the
-      figure is MEASURED in this CR's gap analysis rather than estimated.
+- [ ] Every caller that files a plan through a CLIENT declares kinds; the migrated caller count is
+      asserted, and the figure is MEASURED in this CR's gap analysis rather than estimated. Route
+      POSTs are NOT migrated — the narrowed ruling leaves them valid, which is what removes ~110 of
+      the originally measured ~174 sites.
 - [ ] `bun test` and the python client suites are green with no test weakened to accommodate the
       mandate.
 
@@ -215,15 +248,23 @@ forward guidance would trade one context loss for another.
 
 ## Estimated size
 
-M — **two cycles** (corrected by gap analysis 2026-09-13 from "one or two", on measurement).
-§S1–§S4 are a shared registrar, a pairing rule, two refusals and one regression pin — one cycle.
-§S5's migration is its own cycle: the caller count is now MEASURED at **≈174 sites** — 110 route
-POSTs across 30 files, 59 `plan-file` argv invocations across 16 python files (22 carrying
-`--cycle`), 5 client delegations, 5 e2e step files behind one harness helper, and the 2 suggested-
-invocation templates. The spec's yardstick (CR-CRU-118's 184 call sites across 15 suites, a figure
-that was wrong twice before it was measured properly) held up — but migration only PARTLY funnels
-through helpers: `tests/plans.test.ts` has a `planFile` helper and still carries 46 inline
-`cycles: [` bodies, so most sites are individual edits.
+S/M — **ONE cycle** under the narrowed ruling (user, 2026-09-13). The estimate has now been wrong in
+both directions and the arithmetic is written down so the next reader can check it rather than
+re-guess: the spec said "one or two"; the gap analysis measured the ORIGINAL scope at **≈174 sites**
+and corrected it UP to two cycles; the user then dropped the route half, which removes the **110
+route POSTs across 30 files** that were 63% of it.
+
+What remains is MEASURED at **≈64 sites**: 22 `plan-file` argv lists in `tests/client/*.py` that
+pass a cycle flag (**19 of them the legacy `--cycles`**, which §S4a now refuses — so they migrate to
+`--cycle` + `--cycle-kind`), ~23 `.ts` suites that spawn a real client (mostly one mention each;
+`clients-bun-crucible.test.ts` carries 14 and uses `--cycles`), 5 client delegation lines, the 5
+e2e step files behind `harness.ts`'s single `filePlan`, and the 2 suggested-invocation templates.
+`store.filePlan`'s 3 direct callers are untouched, as are all 110 route POSTs.
+
+For the record, the spec's yardstick — CR-CRU-118's 184 call sites across 15 suites, a figure that
+was wrong twice before it was measured properly — was a good predictor of the ORIGINAL scope and a
+bad one for the shipped scope. The lesson is that a size estimate is only meaningful against a
+settled enforcement boundary.
 
 ## Risk
 
@@ -237,6 +278,14 @@ through helpers: `tests/plans.test.ts` has a `planFile` helper and still carries
 
 ## Non-goals
 
+- **Route-level enforcement of the mandate** (user ruling 2026-09-13 — dropped from this CR after
+  the gap analysis measured its price at ~110 extra call sites, 63% of the CR, defending a path
+  whose only present-day non-fleet callers are our own tests). `POST …/plans` stays permissive and
+  keeps its `red-green` default, asserted as a regression pin in §S4 so the omission is deliberate
+  and visible rather than assumed. **The residue is real and is recorded as a candidate in
+  `docs/changes/README.md`:** anything that is not one of the five clients — a curl, a new tool, a
+  future stack — can still file a kindless cycle and the board will store it `red-green`, which is
+  this CR's own defect surviving on the one door it does not close.
 - **Retro-correcting stored kinds.** Plan 132's cycle 433 stays `red-green`; a stored cycle's kind is
   settled history (CR-CRU-124 §S4's non-goal, restated).
 - **Lifting `--cycle` itself into a shared registrar.** It is hand-rolled five times; that is a
@@ -315,9 +364,20 @@ removal): **N/A** — nothing is removed; legacy `--cycles` stays.
 
 ### Verdict
 
-**SPEC_UPDATE_NEEDED → now READY.** DRIFT-1's missing AC is added, DRIFT-4's citation corrected, and
-§S5's figure measured. The one open judgement is DRIFT-3, which is the user's ruling to keep or
-narrow — the analysis states the price rather than deciding it.
+**SPEC_UPDATE_NEEDED → RESOLVED, now READY.** DRIFT-1's missing AC is added, DRIFT-4's citation
+corrected, §S5's figure measured, and **DRIFT-3 decided by the user on 2026-09-13: CLI-only
+enforcement.** The route half is dropped to a non-goal with a regression pin and a candidate note,
+which removed 110 of the 174 measured sites and resized the CR from two cycles to one.
+
+**DRIFT-7, found only because of that ruling.** Narrowing enforcement to the client made the legacy
+`--cycles` flag load-bearing: it also files cycles, §S1 pairs kinds with `--cycle` only, and **19 of
+the 22** python argv invocations use it. Left exempt it would have been an unguarded door on the
+only enforcement surface remaining — the original defect, reachable. Closed by §S4a as an
+orchestrator ruling (refuse `--cycles` for filing, `help[]` hands back the repeatable form) rather
+than by positional pairing against comma-split labels, which would let a comma inside a label
+corrupt the KIND pairing too and turn one recorded defect (CR-CRU-078) into two. **This is the
+finding worth remembering from this analysis:** narrowing a scope did not simply subtract work, it
+MOVED the risk onto a surface that had been safe by redundancy.
 
 ### Close-out steps (planned ONCE, not per cycle)
 

@@ -137,6 +137,20 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-09-13 — **the cycle-kind mandate is enforced only in the clients; the ROUTE still accepts a
+  kindless cycle** (candidate CR, split off `CR-CRU-127` by user ruling at gap-analysis time, not
+  discovered later). CR-127 makes `plan-file` refuse a cycle with no declared kind client-side and
+  closes the legacy `--cycles` door with it, which fixes every real filing path — all five clients.
+  `POST …/plans` stays permissive and keeps `parseCycleInput`'s `red-green` default, pinned as a
+  regression in CR-127 §S4 so the gap is deliberate rather than assumed. **Why it was split:** the
+  route half was MEASURED at ~110 extra call sites across 30 test files — 63% of the whole CR — to
+  defend a path whose only present-day non-fleet callers are the tests themselves, because the SPA
+  never POSTs a plan (`WorkflowActive` reads `scopedPlans()`; no POST exists in `public/app.js`).
+  **What is still open:** a curl, a new tool, or a sixth stack can file a kindless cycle and the
+  board stores it `red-green` — CR-127's own defect surviving on the one door it does not close. The
+  cost is known and unchanged if it is taken later: the refusal belongs in `handlePlanFile`
+  (`src/v2.ts:1378`) and NOT in `parseCycleInput` (`:1359`), which `handleCycleAppend` shares at
+  `:1551` and whose default CR-CRU-124 §S4/AC3 pins by full-body equality.
 - **Primary architecture document** (design effort, NOT a CR, NOT in 0.2.0). Crucible has
   `PRD-crucible-v2.md` and 10 DNs but no Architecture document at the top of the chain, so per the
   Model-B ontology (Architecture → PRDs for complex features / DNs for micro features → CR → source
