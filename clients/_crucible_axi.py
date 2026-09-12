@@ -123,6 +123,25 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
                                       f"(is Crucible running at {base_url}?)"}
+    except TimeoutError:
+        # CR-CRU-126 §S3 — the READ-phase timeout, which is the one a SLOW
+        # board produces: the connection is accepted, so nothing raises until
+        # the bound expires, and `urlopen` then raises a bare `TimeoutError`.
+        # That is NOT a `urllib.error.URLError` (only the CONNECT-phase timeout
+        # arrives wrapped in one), so the handler above never saw it, and
+        # `run_verb` converts only its three typed hard stops — the verb died
+        # with an unhandled traceback and no envelope, which is how every cycle
+        # transition failed on 2026-09-12. Caught NARROWLY, by the exact type
+        # that fires: a broader `except OSError` here would swallow unrelated
+        # transport failures into the same message.
+        #
+        # The BOUND is not tuned (§S3: legibility, not tuning) — `_get`'s 10s
+        # stands. Only the reporting changes: the fleet's standard ok:false
+        # shape, which `open_plans` turns into `PlansFetchFailed` and the
+        # envelope-owning verbs report exactly as they already report an
+        # unreachable board.
+        return {"ok": False, "error": f"request timed out after {timeout}s "
+                                      f"(is Crucible at {base_url} overloaded?)"}
     return json.loads(body) if body else {"ok": True}
 
 

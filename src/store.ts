@@ -644,6 +644,18 @@ interface PlanStatusFacts {
   merge?: unknown;
 }
 
+/**
+ * CR-CRU-126 §S1 — the ONLY event columns a commit boundary is derived from.
+ * `context` carries the answer, `timestamp`/`row_id` carry the order; the wide
+ * columns `SELECT *` used to marshal (37 MB per scan) are read by nobody here.
+ * `context` is non-null by construction: the query filters on it.
+ */
+interface BoundaryEventRow {
+  timestamp: number;
+  row_id: number;
+  context: string;
+}
+
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
 export type TestRun = RunSchema;
 
@@ -1479,6 +1491,17 @@ export class Store {
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
         ON events (project_key, timestamp);
+
+      -- CR-CRU-126 §S1 — the cycle-scoped seek deriveCommitBoundary issues,
+      -- which without it re-scanned every event in the project once per closed
+      -- plan. COMPOSITE on purpose, and timestamp is the third column for a
+      -- measured reason: the derivation orders by it, and an index carrying
+      -- only (project_key, cycle_id) leaves the planner preferring the
+      -- timestamp index above (it makes the ORDER BY sort-free) — so the seek
+      -- never happens and the scan survives the fix. With timestamp here the
+      -- one index serves BOTH the equality filter and the ordering.
+      CREATE INDEX IF NOT EXISTS idx_events_project_cycle
+        ON events (project_key, cycle_id, timestamp);
 
       -- CR-CRU-017 §S1 — OPEN and settled RUNS. A new table, never a retrofit:
       -- the base pass creates it whole for every store, old or new (which is
@@ -3513,11 +3536,7 @@ export class Store {
          WHERE project_key = ? ORDER BY plan_id ASC`,
       )
       .all(projectKey)) {
-      const facts: PlanStatusFacts = {
-        planId: row.plan_id,
-        status: Store.planStatusOf(row.status),
-        ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
-      };
+      const facts = Store.statusFactsOf(row);
       const held = byCr.get(row.cr);
       if (held === undefined) byCr.set(row.cr, [facts]);
       else held.push(facts);
@@ -4351,7 +4370,38 @@ export class Store {
     cr: string,
     shipped: ReadonlySet<string>,
   ): { status: QueueStatus; planId?: number } {
-    return Store.queueStatusOf(cr, this.listPlans(projectKey, { cr }), shipped);
+    // CR-CRU-126 §S1 (DRIFT-2) — the STATUS FACTS, not whole plans. This ran
+    // `listPlans({cr})` once per queue row, so a 125-row queue reached the
+    // commit-boundary derivation 125 times over for plans whose boundary it
+    // never reads (and whose cycles it never reads either). The answer is
+    // unchanged by construction: `queueStatusOf` consumes `PlanStatusFacts`,
+    // which is exactly these four columns, in the same plan_id order.
+    return Store.queueStatusOf(cr, this.planStatusFacts(projectKey, cr), shipped);
+  }
+
+  /**
+   * CR-CRU-116 §S1 / CR-CRU-126 §S1 — a cr's plan rows as the status facts
+   * alone. The ONE place the `PlanRow` -> `PlanStatusFacts` mapping is written
+   * for a single cr; `queueStatuses` does the same for a whole project through
+   * `Store.statusFactsOf`, so the read path and the write path cannot drift.
+   */
+  private planStatusFacts(projectKey: string, cr: string): PlanStatusFacts[] {
+    return this.db
+      .query<PlanRow, [string, string]>(
+        `SELECT plan_id, cr, status, merge_commit FROM plans
+         WHERE project_key = ? AND cr = ? ORDER BY plan_id ASC`,
+      )
+      .all(projectKey, cr)
+      .map((row) => Store.statusFactsOf(row));
+  }
+
+  /** CR-CRU-126 §S1 — one plan row reduced to what `queueStatusOf` reads. */
+  private static statusFactsOf(row: PlanRow): PlanStatusFacts {
+    return {
+      planId: row.plan_id,
+      status: Store.planStatusOf(row.status),
+      ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
+    };
   }
 
   /**
@@ -4551,21 +4601,51 @@ export class Store {
     if (plan.status !== "closed" || plan.merge === undefined || plan.closedAt === undefined) {
       return undefined;
     }
-    const cycleIds = new Set(plan.cycles.map((cycle) => cycle.id));
-    const rows = this.db
-      .query<EventRow, [string]>(
-        `SELECT * FROM events WHERE project_key = ? AND context IS NOT NULL
-         ORDER BY timestamp ASC, rowid ASC`,
-      )
-      .all(plan.projectKey);
+    // CR-CRU-126 §S1 — one INDEXED seek per cycle, projecting the three
+    // columns the answer needs, replacing the `SELECT *` scan of every event
+    // in the project. The wide columns (`tree`/`coverage`/`compile`/`payload`)
+    // were the dominant cost — ~37 MB marshalled per scan to read two strings.
+    //
+    // Equality on `cycle_id`, one cycle at a time, rather than one `IN (…)`
+    // over the plan's cycles: MEASURED 2026-09-12, with no ANALYZE stats (and
+    // this store runs none), the `IN` form makes SQLite fall back to
+    // `idx_events_project_timestamp` — a full project scan again — because the
+    // sort-free ordering outbids a multi-seek it has no statistics for. The
+    // equality form plans to `idx_events_project_cycle` unconditionally, and
+    // sort-free, since the index carries `timestamp` third.
+    //
+    // The membership test is the `cycle_id` COLUMN, which CR-CRU-094 §S1
+    // derives at the one row-insert seam from `context.cycleId`, so the two
+    // cannot disagree; `context IS NOT NULL` still excludes the lifecycle rows
+    // (§S2) that carry a cycle binding but no run context.
+    const rows: BoundaryEventRow[] = [];
+    for (const cycle of plan.cycles) {
+      for (const row of this.db
+        .query<BoundaryEventRow, [string, number]>(
+          `SELECT timestamp, rowid AS row_id, context FROM events
+           WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
+           ORDER BY timestamp ASC, rowid ASC`,
+        )
+        .all(plan.projectKey, cycle.id)) {
+        rows.push(row);
+      }
+    }
+    // A multi-cycle plan's runs INTERLEAVE in time, and first/last are the
+    // earliest and latest across the whole plan — so the per-cycle seeks are
+    // merged back into the one (timestamp, rowid) order the single scan had.
+    // A single-cycle plan is already in it, and is the common case.
+    if (plan.cycles.length > 1) {
+      rows.sort((left, right) =>
+        left.timestamp !== right.timestamp
+          ? left.timestamp - right.timestamp
+          : left.row_id - right.row_id,
+      );
+    }
     let branch: string | undefined;
     let firstRunCommit: string | undefined;
     let lastRunCommit: string | undefined;
     for (const row of rows) {
-      const context = JSON.parse(row.context!) as RunContext;
-      if (typeof context.cycleId !== "number" || !cycleIds.has(context.cycleId)) {
-        continue;
-      }
+      const context = JSON.parse(row.context) as RunContext;
       if (context.git === undefined) {
         continue;
       }
