@@ -933,6 +933,16 @@ export function workflowLens({ plans, events }) {
   // the abandoned attempt's wave. Keyed on `cr` so it reaches INFERRED nodes
   // (`:898-918`) too: they carry no `status` at all, so the plan-record filter
   // below can never exclude them.
+  // The `c.status !== "open"` clause this set stands beside (`:955`) is
+  // retained DELIBERATELY, and not because it still decides anything: §S1
+  // mandates that the existing condition stay as-is beneath the new one, and
+  // the mutation analysis run against this change proved it an EQUIVALENT
+  // mutant — a declared node is built `{cr: plan.cr, status: plan.status}`
+  // (`:857-861`) and `liveCrs` below is every open plan's `cr`, so
+  // `status === "open"` implies its `cr` is in `liveCrs`; no fixture can
+  // separate the two and deleting the clause changes no test. It stays as
+  // defence in depth — a later reader should neither treat it as
+  // load-bearing nor delete it as dead.
   const liveCrs = new Set(
     (plans ?? []).filter((p) => p.status === "open").map((p) => p.cr),
   );

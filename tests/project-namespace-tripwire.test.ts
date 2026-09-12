@@ -1614,9 +1614,43 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // commit touches one file under `tests/`, moves no head. All three `develop`
 // floors are UNCHANGED at 512/378/601 and stay the floors — a floor never
 // moves for a re-pin.
+//
+// UPDATED 2026-09-13 by CR-CRU-125 — moved `public` 476 -> 477, measured at
+// close-out by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL) over the working tree, never
+// transcribed from the VERIFY report that first reported the drift — and
+// re-measured a SECOND time after this CR's last content edit, because that
+// edit lands in `public` too and only the measurement catches it.
+//
+// The +1 is ONE file and ONE literal: public/app-logic.mjs:928, the §S1
+// provenance comment above the `liveCrs` set, recording that History is
+// keyed on the CR and not on the plan RECORD. The clause appended to that
+// same comment at close-out — the one recording that the retained
+// `status !== "open"` condition beneath it is a provably subsumed
+// equivalent mutant, kept as defence in depth because §S1 mandates it —
+// names NO cr id, deliberately: CR_LITERAL counts OCCURRENCES and not
+// distinct ids, so one more id in that prose would have made this figure
+// 478.
+//
+// The CR's OTHER `public` edit carries no citation and was left uncommented
+// for exactly that reason: `.mts` is in this tree's ext list below, so a
+// provenance comment on the widened declaration in public/app-logic.d.mts
+// would have counted just the same. `src` and `clients` are untouched by
+// this CR and re-measured unchanged at 614 and 815; all three `develop`
+// floors stay where they are — a floor never moves for a re-pin.
+//
+// ONE RE-RECORD, TWO CLEARED FAILURES — written down so a future reader does
+// not mis-triage the cascade as a second, unrelated defect. While the head
+// above read 476 the full regression showed TWO failures: the AC8
+// measurement below, and tests/help-surface-order-independence.test.ts,
+// which spawns a CHILD `bun test` over THIS file (its `HELP_FILE` IS
+// tests/project-namespace-tripwire.test.ts, :65-66 there) and asserts the
+// child reported `failed: []` (:190 there). A stale head here therefore
+// fails there too, at one remove. That file is CORRECT and fires for the
+// right reason; it needed no change and got none.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 614 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 476 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
   clients: { exts: [".py"], develop: 601, head: 815 },
 };
 
