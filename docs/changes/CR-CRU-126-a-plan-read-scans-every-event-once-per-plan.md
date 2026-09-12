@@ -337,6 +337,27 @@ timeout surfaces as the fleet's standard `ok:false` envelope naming the conditio
       invents.
 - [ ] The event COUNT is unchanged by the migration: it is an UPDATE, never an insert or a delete
       (the dogfood migration test asserts counts).
+- [ ] **The new index must not break the pre-CR-094 fixture.** `makePreCycleIdStore`
+      (`tests/store-migration.test.ts`) fabricates a pre-CR-094 store by
+      `ALTER TABLE events DROP COLUMN cycle_id`, and `idx_events_project_cycle` references that
+      column, so SQLite refuses the drop: *"error in index idx_events_project_cycle after drop
+      column: no such column: cycle_id"*. The fixture drops the INDEX before the column.
+      **Ruled 2026-09-12** — this is a genuine consequence of §S1's index, found by running the
+      suite that owns `MIGRATIONS` (which the orchestrator's first verification of GREEN failed to
+      run; the miss was the orchestrator's, not GREEN's).
+- [ ] **CR-CRU-094's two chain-length pins are RETARGETED, not deleted.**
+      `tests/store-migration.test.ts` asserts `schemaVersion() === PRE_CYCLE_ID_VERSION + 1` (9) and
+      `migrationChain().length === 9`. `SCHEMA_VERSION` is derived from `MIGRATIONS.length`, so
+      appending §S1b's body makes both 10 and both assertions false.
+      **Ruled 2026-09-12 (RED escalation):** CR-CRU-094's real contract — *its* body is at 8→9,
+      appended, exactly one — is still true and stays asserted, located by DESCRIPTION the way every
+      later body in this repo already does. What goes is the two GLOBAL chain-length literals, which
+      were never a claim about CR-094 but about the world at that moment, and were always going to
+      break on the next migration. A pin that outlived its CR is deleted, never re-pinned to a new
+      number — re-pinning would just defer the same break to CR-127's migration.
+- [ ] After both edits, `tests/store-migration.test.ts` is fully green and CR-CRU-094's AC2 still
+      fails if its body is moved out of position 8→9 or a second body is added beside it — proven by
+      mutation, so the retarget is not a weakening.
 
 **§S2**
 - [ ] The timed pin runs in-process against a `:memory:` store with no server and no concurrent
@@ -388,6 +409,12 @@ envelope on an existing failure path.
 - **`EXPLAIN QUERY PLAN` is a plan assertion, not a performance one.** It proves the index is
   reachable, not that the query is fast; the timed pin is what proves the latter. Both, or neither
   means much.
+- **A schema/DDL change has a blast radius the obvious suites do not cover.** §S1's index broke
+  `tests/store-migration.test.ts` — not through the version number RED predicted, but because a
+  fixture DROPS the indexed column. The orchestrator's first verification of GREEN ran the
+  derivation suite, `plans.test.ts` and `tsc`, and missed it. **Rule for this CR's remaining work:
+  any change under `createBaseTables` or `MIGRATIONS` is verified by running the migration suite,
+  not only the suites the CR names.**
 
 ## Close-out steps (orchestrator, performed ONCE — not per cycle)
 
