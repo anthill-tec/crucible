@@ -1061,9 +1061,18 @@
     // heuristic marker) with the active→done span from the §S0b timestamps.
     const KIND_GLYPHS = { "red-green": "⟲", verify: "☑", fix: "✚" };
 
+    // CR-CRU-120 §S1 — the open span carries its cycle id, mirroring
+    // `declared-marker` (CR-CRU-025 §S1), so the reveal can locate an ACTIVE
+    // cycle's own boundary by cycleId. Purely additive: rendered content is
+    // byte-unchanged, and the row still mounts only when `timelineRows` finds
+    // a linked event (CR-CRU-011 §S6 #3's no-container-when-empty rule).
     const CycleSpanOpenRow = (cycle, plan) =>
       div(
-        { "data-testid": "cycle-span-open", class: "app-cycle-span-open" },
+        {
+          "data-testid": "cycle-span-open",
+          "data-cycle-id": cycle.id,
+          class: "app-cycle-span-open",
+        },
         `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle · ${cycle.label} · ${plan.cr} · active`,
       );
 
@@ -2025,12 +2034,30 @@
     // anchor-fetch confirmed the boundary is truly pruned (empty events, no
     // `cycle`). A real DOM node in the Runs pane, never a silent no-op or the
     // old inaccurate `title` channel. Reactive on state.anchorFeedback.
+    // CR-CRU-120 §S4 — the slot now carries `{cycleId, kind}`: a boundary the
+    // server could not resolve at all is `pruned` (CR-CRU-032's verbatim
+    // wording, unchanged), while a cycle it DID resolve with zero linked runs
+    // is `empty` — an honest, materially different verdict, since nothing has
+    // been lost and the pill keeps its live state. Both `cycleId` and `kind`
+    // are read here, so a new verdict on the same cycle re-renders this node.
+    const ANCHOR_FEEDBACK_TEXT = {
+      pruned:
+        "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.",
+      empty: "No runs have been recorded for this cycle yet — nothing to jump to.",
+    };
+
     const AnchorFetchFeedback = () => {
       const fb = state.anchorFeedback;
       if (fb === null || fb === undefined) return null;
+      const text = ANCHOR_FEEDBACK_TEXT[fb.kind];
+      if (text === undefined) return null;
       return div(
-        { "data-testid": "anchor-fetch-feedback", class: "app-anchor-fetch-feedback app-card-meta" },
-        "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.",
+        {
+          "data-testid": "anchor-fetch-feedback",
+          class: "app-anchor-fetch-feedback app-card-meta",
+          "data-cycle-id": fb.cycleId,
+        },
+        text,
       );
     };
 
@@ -3937,8 +3964,14 @@
     // threaded through so a confirmed-pruned anchor-fetch can reflect the dim
     // verdict back onto it.
     const revealDeclaredMarker = (cycleId, attempts = 0, anchored = false, pillEl = null) => {
+      // CR-CRU-120 §S3 — a cycle's Runs boundary is its `declared-marker` once
+      // it has closed and its `cycle-span-open` header while it is still
+      // ACTIVE (both emitted by `timelineRows`, both carrying `data-cycle-id`).
+      // Either match scrolls + blinks identically; this function never needs to
+      // know which kind it found (same comma-selector shape as revealCycleRow).
       const marker = document.querySelector(
-        `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
+        `[data-testid="declared-marker"][data-cycle-id="${cycleId}"], ` +
+          `[data-testid="cycle-span-open"][data-cycle-id="${cycleId}"]`,
       );
       if (marker !== null) {
         marker.scrollIntoView();
@@ -3986,20 +4019,27 @@
         revealDeclaredMarker(cycleId, 0, true);
         return;
       }
+      // CR-CRU-120 §S4 — zero events with the cycle RESOLVED server-side is a
+      // different fact from a pruned boundary: this cycle exists and simply has
+      // ingested no runs yet (routine now that §S2 offers the affordance to an
+      // ACTIVE cycle, which has zero runs by construction). Honest feedback, and
+      // emphatically NOT the permanent pruned verdict — nothing has been lost.
+      if (body.cycle !== undefined && body.cycle !== null) {
+        state.anchorFeedback = { cycleId, kind: "empty" };
+        return;
+      }
       // Empty events + absent `cycle` field ⇒ server confirms the boundary is
       // truly gone (mirrors the §S1 "unknown cycleId" case). Surface §S3 feedback.
-      if (body.cycle === undefined || body.cycle === null) {
-        state.anchorFeedback = cycleId;
-        // §S3 (VERIFY 1B) — record the PERMANENT pruned verdict for this
-        // cycle so its `→ Runs` pill dims and STAYS dim across later renders
-        // and other pills' clicks (do NOT clear this the way anchorFeedback
-        // is cleared — the feedback text is transient, the dim is permanent).
-        if (!state.prunedCycles.includes(cycleId)) {
-          vanX.replace(state.prunedCycles, () => [...state.prunedCycles, cycleId]);
-        }
-        // Reflect the same verdict onto the clicked pill (now tab-detached).
-        reflectPrunedPill(pillEl);
+      state.anchorFeedback = { cycleId, kind: "pruned" };
+      // §S3 (VERIFY 1B) — record the PERMANENT pruned verdict for this
+      // cycle so its `→ Runs` pill dims and STAYS dim across later renders
+      // and other pills' clicks (do NOT clear this the way anchorFeedback
+      // is cleared — the feedback text is transient, the dim is permanent).
+      if (!state.prunedCycles.includes(cycleId)) {
+        vanX.replace(state.prunedCycles, () => [...state.prunedCycles, cycleId]);
       }
+      // Reflect the same verdict onto the clicked pill (now tab-detached).
+      reflectPrunedPill(pillEl);
     };
 
     // CR-CRU-025 §S1/§S0 — the trailing "→ Runs" affordance on a COMPLETED
@@ -4134,6 +4174,17 @@
     const cycleIsCompleted = (cycle) =>
       cycle.status === "done" || cycle.status === "skipped" || cycle.status === "failed";
 
+    // CR-CRU-120 §S2 — which cycles are OFFERED the `→ Runs` recovery
+    // affordance: every completed one (CR-CRU-025 §S1, unchanged) PLUS the
+    // ACTIVE one, whose runs are just as capable of sitting outside the loaded
+    // window. A `pending` cycle was never activated and so has zero runs by
+    // construction — the affordance exists only where runs could plausibly be.
+    // Defined ONCE and called identically at both `CycleToRunsBadge` render
+    // sites (`CycleRow`, `LensCycleRow`) so the two can never drift apart again
+    // — the Integration AC's whole point; never inline a status test at a site.
+    const cycleHasRunsBoundary = (cycle) =>
+      cycleIsCompleted(cycle) || cycle.status === "active";
+
     // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
     // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
     // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
@@ -4180,9 +4231,10 @@
             ? b({ class: "app-cycle-text" }, ...lineParts)
             : span({ class: "app-cycle-text" }, ...lineParts),
           ...(timer !== null ? [" ", timer] : []),
-          // CR-CRU-025 §S1 — trailing Runs-boundary affordance, AFTER the
-          // timer, on completed rows only (a separate node — never rebinding).
-          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          // CR-CRU-025 §S1 / CR-CRU-120 §S2 — trailing Runs-boundary
+          // affordance, AFTER the timer, on every row whose cycle could have
+          // runs (a separate node — never rebinding). ONE shared predicate.
+          ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
         ),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
@@ -4405,10 +4457,11 @@
           ),
           span({ class: "app-cycle-label" }, cycle.label),
           ...(timer !== null ? [" ", timer] : []),
-          // CR-CRU-025 §S1/§S0 — the Runs-boundary badge, a SEPARATE node
-          // from the existing `cycle-toggle` drill-down glyph, on completed
-          // rows only.
-          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          // CR-CRU-025 §S1/§S0 / CR-CRU-120 §S2 — the Runs-boundary badge, a
+          // SEPARATE node from the existing `cycle-toggle` drill-down glyph,
+          // on every row whose cycle could have runs. The SAME shared
+          // predicate as `CycleRow`, called identically.
+          ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
