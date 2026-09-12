@@ -61,10 +61,18 @@ leftmost tab, a second door two inches away stopped earning its space. User ruli
 ### §S1 An agent with a run in flight animates on its Project-pane row
 
 `AgentRow` gains an activity indicator driven by `state.openRuns`: an agent is STREAMING when at
-least one open run's `agentId` equals that row's agent id. The predicate is a THIRD sibling over
-that slice and must follow the shape of the two that exist rather than invent a fourth:
-`visibleOpenRuns()` filters it by project + active filter (and already filters on `agentId`), and
-`runningRunsFor(cycleId)` filters it by cycle.
+least one open run's `agentId` equals that row's agent id **and that agent is not tombstoned**. The
+predicate is a THIRD sibling over that slice and must follow the shape of the two that exist rather
+than invent a fourth: `visibleOpenRuns()` filters it by project + active filter (and already filters
+on `agentId`), and `runningRunsFor(cycleId)` filters it by cycle.
+
+**Ruled 2026-09-12 (RED escalation 2).** This paragraph originally described the predicate as the
+`agentId` match alone, which contradicts AC6 — a stale open run naming a dead agent would animate a
+tombstone. RED implemented the AC (the AC is the source of truth) and flagged that a literal reading
+of this prose would ship a failing implementation. The liveness gate is now stated HERE too, so the
+Scope text and AC6 say the same thing. `sweepOpenRuns` makes the stale-run case rare, not
+impossible: it settles open runs on read, so a run can name a tombstoned agent in the window before
+the next sweep.
 
 While streaming, the row renders a **new, visually distinct animation** — deliberately NOT any of
 the three animations the stylesheet already declares: NOT `app-spin` (CR-CRU-122's spinner, "a fetch
@@ -148,7 +156,14 @@ fixes on discovery.
       the SAME pathname/pushState contract through the tab-strip door — re-pointed, not deleted, and
       their assertions not weakened.
 - [ ] A grep for `roadmap-chip` and `app-roadmap-chip` returns hits only in shipped CR docs and this
-      CR's own spec (the historical record), never in `public/` or `tests/`.
+      CR's own spec (the historical record), never in `public/`, `tests/`, **or `e2e/`**.
+      **Ruled 2026-09-12 (RED escalation 3):** RED implemented this census over `public/` and
+      `tests/` exactly as originally worded and asked whether to widen it. Widened to `e2e/`
+      deliberately: the chip is a DOM door, an e2e step clicking it is invisible to
+      `pre-merge-gate` (which excludes `test:e2e` fleet-wide), and that is precisely how CR-CRU-118
+      shipped a break the gate could not see. `scripts/` stays out — it is not a UI surface. Both
+      trees are clean today, so widening costs nothing now and catches the case that would
+      otherwise hide.
 
 **§S3**
 - [ ] The corrected comment names every `@keyframes` `public/styles.css` declares as of this CR, and
