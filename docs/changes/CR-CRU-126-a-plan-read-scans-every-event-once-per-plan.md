@@ -165,6 +165,19 @@ SHAPE:
   and 10×M events; elapsed time must NOT scale with the event count.
 - **An absolute ceiling an order of magnitude above the expected figure**, so it fires on a
   regression rather than on a loaded box.
+- **The fixture's events MUST carry wide-column payloads** (`tree`/`coverage`/`payload`) on a
+  realistic share of rows. **Ruled 2026-09-12 (RED escalation 4).** RED's fixture used small events,
+  so its pre-fix figure was 133 ms rather than production's 2.5 s, and it flagged that honestly. The
+  gap matters: DRIFT-4 measured `SELECT *`'s marshalling of the wide columns as the DOMINANT cost
+  (37.0 MB per scan, ~3.87 GB per request), so a fixture without blobs lets a fix that adds the
+  index and the WHERE clause but KEEPS `SELECT *` pass the gated pin while production stays slow.
+  The blobs are what make the pin feel the cost the CR is actually about. The §S2a harness carries
+  the production figure, but it is a script — only this pin is gated.
+
+**Calibration (RED escalation 5, accepted).** The 50 ms ceiling and 30 ms scaling tolerance are
+RED's, derived on this box against a post-fix expectation of ~3-5 ms. If they ever need widening,
+widen the CEILING and not the scaling delta: the delta is the assertion that carries the CR, and a
+ceiling is a smoke alarm.
 
 ### §S2a The end-to-end curve is reproducible
 
@@ -197,8 +210,17 @@ timeout surfaces as the fleet's standard `ok:false` envelope naming the conditio
 - [ ] **Every response that carries `commitBoundary` today still carries it** — the unfiltered
       `GET …/plans`, the `?cr=` and `?track=` filtered forms, and the global cross-project list —
       asserted per route, so a fix that quietly narrows the API surface fails (DRIFT-8).
-- [ ] The new index exists and the query uses it — asserted by `EXPLAIN QUERY PLAN` naming the
-      index, not by timing alone.
+- [ ] `idx_events_project_cycle` EXISTS in `sqlite_master`, and a cycle-scoped lookup of the shape
+      the derivation issues plans to it under `EXPLAIN QUERY PLAN`.
+      **Ruled 2026-09-12 (RED escalation 1):** this AC is deliberately worded to what is
+      ASSERTABLE. The store's `db` handle is private, so no test can `EXPLAIN` the production
+      statement itself; RED asserts a representative lookup through a second connection to the same
+      file. That proves the index exists and is reachable for that shape — it does NOT prove the
+      production query is the one planned to it, and if GREEN batches the lookup into a single
+      `IN (…)` (which §S1 permits) SQLite may plan it differently while the probe still passes.
+      The gap is closed by EVIDENCE, not by a stricter test: **GREEN must quote its production
+      query verbatim and its own `EXPLAIN QUERY PLAN` output in its report.** The timed pin is what
+      proves speed.
 - [ ] `GET …/queue` no longer pays the derivation: `deriveQueueStatus`'s path performs a number of
       event-row reads that does not scale with the event table (DRIFT-2).
 
@@ -224,6 +246,18 @@ timeout surfaces as the fleet's standard `ok:false` envelope naming the conditio
       `cycle-done`, the two verbs that failed this way in practice.
 - [ ] No stack trace reaches stdout/stderr on that path.
 - [ ] The timeout VALUE is unchanged (10s) — this section is about legibility, not tuning.
+- [ ] **Ruled 2026-09-12 (RED escalations 2 and 3):** these three ACs may be discharged by TWO
+      tests (one per verb) rather than three. Each additional test costs a real 10-second wait, and
+      the three are properties of one observation — paying 20 s more wall clock to name them
+      separately is bad value. Also accepted: the envelope must contain the word "timeout"
+      (case-insensitive), NOT the numeral `10` — requiring the number would over-specify GREEN's
+      wording. The 10 s VALUE is pinned BEHAVIOURALLY instead, by bounding the elapsed wait to
+      [9 s, 15 s), which is the better test: it survives a reword and fails a retune.
+- [ ] The mechanism RED measured is the one fixed: `urllib` raises a **bare `TimeoutError`** on a
+      read-phase timeout, which is NOT a `urllib.error.URLError`, so `http_request`'s handler misses
+      it and `run_verb` converts only three typed hard stops — hence the unhandled traceback and
+      empty stdout after 10.08 s. Naming it here so GREEN fixes the actual exception path rather
+      than wrapping a broader `except`.
 
 ## Estimated size
 
