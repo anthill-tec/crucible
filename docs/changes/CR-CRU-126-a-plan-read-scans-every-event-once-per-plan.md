@@ -2,131 +2,185 @@
 
 **Status:** PENDING (0.2.0 — born mid-release, D4)
 **Type:** bugfix
-**Priority:** P1
+**Priority:** P1 — the only P1 in the queue
 **Depends on:** none
 **Labels:** bugfix, server, performance
 **Phase:** Wave 6 (0.2.0 — user-directed, live orchestrator session 2026-09-12)
-**Design reference:** `PRD-crucible-v2.md` §4.7 — *"One Bun process is the single writer"*: the design
-that makes a synchronous O(n×m) derivation on a polled read path a whole-server stall rather than a
-slow endpoint
+**Design reference:** CR-CRU-011 §S0's commit-boundary paragraph, which states this CR's target in
+its own words: *"an orchestrator doing review/code analysis asks Crucible for a CR's boundary **in
+one indexed query** instead of scanning `git log`."* `PRD-crucible-v2.md:428` states the performance
+budget (*"ingest of a 1000-case JUnit directory < 500 ms"*) and §4.7 the single-writer architecture.
+
+**Gap analysis:** run by the orchestrator 2026-09-12, nine findings (four blocking), all folded in
+below. Baseline MEASURED 16:48 IST on clean tree `71b3a9e`: `tests/plans.test.ts` **53 pass / 0 fail
+/ 291 expect()**, `bun x tsc --noEmit` exit 0.
 
 ## Context
 
-Found 2026-09-12 by measurement, after the user reported a run detail that showed
-`loading run detail…` for nearly a minute and never rendered. The UI was not at fault. The run's own
-endpoint answers in **18ms** on an idle board; the identical click stalled for ~a minute while a
-sub-agent was running tests against the same server.
+`deriveCommitBoundary` (`src/store.ts`, symbol) runs for **every closed-and-merged plan on every
+`toPlan`**, and each run scans the project's whole event table with `SELECT *` and `JSON.parse`s
+every returned row. `toPlan` is called by `listPlans`, and `listPlans` is on far more paths than a
+plans poll.
 
-**Measured A/B on the live board (114 plans, 2000 events), same data, one variable — whether a
-sub-agent was running:**
+**Measured on the live board, 2026-09-12, quiet (no agent running, no cycle active):**
 
-| endpoint | agent running | board idle | payload |
+| endpoint | latency (best of 3) | payload |
+|---|---|---|
+| `GET /api/v2/health` — counts three tables | **0.3 ms** | 0.2 KB |
+| `GET …/plans` | **2567.9 ms** | 104.6 KB |
+| `GET …/queue` | **2557.7 ms** | 23.8 KB |
+| `GET /api/v2/events?limit=2000` | **155.8 ms** | 707.9 KB |
+
+`/events` serves **7× the bytes in 1/16th the time**, so payload size is irrelevant. Board shape,
+read from SQLite: **115 plans, 107 closed-with-merge** (the only rows where the derive fires),
+**1214 context-bearing events**, **125 queue rows**, and **37.0 MB** held in the wide columns
+(`tree`/`coverage`/`compile`/`payload`/`context`) that `SELECT *` materialises.
+
+**Per `/plans` request: 107 × 1214 = 129,898 row loads and JSON parses, and ~3.87 GB of column
+data marshalled to produce a 104.6 KB response.**
+
+### The user-visible stall is this cost TIMES the queue depth
+
+A 2.5s request does not explain a minute-long stall, and the user said so. Measured with read-only
+concurrent load (no writes, nothing mutated):
+
+| concurrent `/plans` readers | `GET /health` | run detail (`?depth=suites`) | loader p50 |
 |---|---|---|---|
-| `GET /api/v2/health` | **6.89s** | **0.01s** | 0.2 KB |
-| `GET …/plans` | 5.09s | **2.53s** | 103.6 KB |
-| `GET /api/v2/events?limit=2000` | 5.04s | **0.20s** | 706.4 KB |
-| `GET …/queue` | 5.07s | **2.45s** | 23.2 KB |
+| 0 | 0.2 ms | 0.2 ms | — |
+| 1 | 2.2 ms | 1.2 ms | 2569 ms |
+| 2 | **2551.9 ms** | **5080.5 ms** | 5099 ms |
+| 4 | 7634.0 ms | 10179.8 ms | 10210 ms |
+| 8 | **20795.4 ms** | **19156.9 ms** | 21406 ms |
 
-Two facts fall out of that table, and they are different problems:
+Run-detail latency is **k × 2.5s**, to within noise. This is **head-of-line blocking, not lock
+contention**: `deriveCommitBoundary` is synchronous CPU+IO on Bun's single JS thread (PRD §4.7's
+single writer), so one `/plans` request stalls the entire event loop for ~2.5s and a 0.2 ms health
+check waits its full turn behind it.
 
-1. **Under load every endpoint queues behind a blocked event loop.** `/health` only counts three
-   tables; it cannot be slow for any reason of its own, yet it measured 6.89s and then 0.01s — a
-   700× swing with no change to the endpoint. And 706 KB served in 0.20s while 0.2 KB took 6.89s, so
-   payload size is irrelevant. That is the signature of a saturated single-writer loop serving a
-   queue, exactly as PRD §4.7 designs it to be.
-2. **`/plans` and `/queue` are slow with NO load at all** — 2.53s and 2.45s on a completely idle
-   board. That is not contention; that is the work itself, and it is what turns ordinary agent
-   activity into a freeze.
+That is why the stall appears **only during execution**, as the user observed: one SPA tick already
+fires `/plans`, `/queue`, `/events` and `/health` concurrently (two at 2.5s each), the 5s poll
+interval refires before the previous tick drains, and **every agent ingest adds another 2.5s**
+through `resolveIngestAttach`. Minute-scale latency needs only a handful of overlapping readers.
 
-**The cause of (2), read from source.** `Store.toPlan` (`src/store.ts:4501`) calls
-`deriveCommitBoundary` (`src/store.ts:4550-4583`) for **every plan on every `listPlans`**, and each
-call runs:
+**The corollary that makes §S1 the whole fix:** because latency is `k × cost`, cutting the
+per-request cost to ~20 ms collapses the queue with it — k=8 goes from 20.8 s to ~160 ms. The
+contention is a multiplier on the cost, not a separate defect.
 
-```sql
-SELECT * FROM events WHERE project_key = ? AND context IS NOT NULL ORDER BY timestamp ASC, rowid ASC
-```
+### Every caller pays, and most never read the field
 
-then `JSON.parse`s `row.context` for every row returned, to find the first and last commit among the
-plan's own cycles. Measured on the live board: **105 closed-and-merged plans × 2000 events =
-~210,000 row loads plus 210,000 JSON parses per single `/plans` request** — and the SPA polls
-`/plans` every **5 seconds** (`public/app.js:413`).
+`listPlans`' full caller set, enumerated (gap analysis DRIFT-3):
 
-The cost is the product of two growing numbers, so it has been degrading invisibly all along: the
-2026-09-07 queue note recording *"`GET …/queue` takes ~1.4 s for 108 entries"* is this same defect
-measured earlier and smaller; it is now 2.45s.
+| caller | reads `commitBoundary`? | runs when |
+|---|---|---|
+| `validateCycleBinding` (`src/v2.ts`) | **no** — `.find()` by planId | every cycle-bound registration |
+| `activeCycleIds` (`src/v2.ts`) | **no** | per call |
+| `resolveIngestAttach` (`src/v2.ts`) | **no** — `.find()` by planId | **every ingest from a bound agent** |
+| `deriveQueueStatus` (`src/store.ts`) | **no** — status facts only | **once per queue row** |
+| `handlePlansList` (`src/v2.ts`) | yes | every poll |
+| `handlePlansGlobalList` (`src/v2.ts`) | yes | `flatMap` over ALL projects |
 
-**What it has already cost, beyond the reported symptom:** the fleet clients hardcode a 10s GET
-timeout (`clients/python-crucible.py:175`, `_get(path, timeout=10)`), and 2.5s idle plus any agent
-load crosses it — so **every** `cycle-activate`/`cycle-done` in this session failed with
-`TimeoutError` and had to be issued as a direct route PATCH instead. Orchestrator `ctx_shell` probes
-hit their 30s cap against the same endpoints.
+Four of six never look at the boundary and pay for it in full. Two consequences:
 
-**Surfaces (verified 2026-09-12):** `deriveCommitBoundary` and its caller `toPlan`
-(`src/store.ts:4501-4583`); `listPlans`; the `commitBoundary` field's only consumers.
+- **`GET …/queue` is the SAME defect** (DRIFT-2), not a separate one: `deriveQueueStatus` calls
+  `listPlans({cr})` once per queue row, so the 107 derivations are reached 125 separate times.
+  Measured 10 ms apart from `/plans`. The 2026-09-07 candidate note suspected exactly this. It was
+  previously listed as a non-goal here; that was wrong and is corrected.
+- **The PRD's stated ingest budget is violated** (DRIFT-6): `PRD-crucible-v2.md:428` requires
+  *"ingest of a 1000-case JUnit directory < 500 ms"*, and `resolveIngestAttach` spends ~2.5 s before
+  that budget begins, on every RED/GREEN/FIX/VERIFY ingest.
+
+### What the field is, and why it is not deleted
+
+`commitBoundary` has **zero consumers in `public/`** — measured by a byte-safe scan of 473 files,
+because `public/app-logic.mjs` carries 12 NUL bytes and pattern search silently skips it. Its
+in-repo readers are `src/types.ts`, `toPlan`, and `tests/plans.test.ts`. The clients' `mergeCommit`
+derives from `plan.merge.commit`, not from the boundary.
+
+Deleting the derivation outright would remove the cost completely and was evaluated as the
+subtractive option. **Refused, with a reason:** the field is a user-added affordance (CR-CRU-011 §S0,
+added during CR-007 execution) whose consumer is an orchestrator reading the API — external to this
+repo, so no in-repo test would notice its loss. Removing it needs the user's ruling, not an
+orchestrator's inference. Recorded so it is not re-proposed blindly.
+
+The same fact raises the stakes on correctness: because no `public/` test reads the field, **the
+output-equality ACs below are the only thing standing between a refactor and a silently wrong API.**
 
 ## Scope
 
-### §S1 A plan's commit boundary is derived only when it is needed
+### §S1 A plan's commit boundary costs one indexed query
 
-`commitBoundary` is computed eagerly for every plan on every read, but is only ever *read* when a
-specific plan's boundary is displayed. The derivation moves off the list path: `listPlans` stops
-computing it, and it is produced only for a single-plan read (or lazily on access) so a plans LIST
-costs nothing per plan.
+The derivation stops being a per-plan table scan. Three changes, ordered by MEASURED effect:
 
-Where the field must still appear in a list response, it is derived by ONE bounded pass instead of a
-whole-table scan per plan. Three compounding changes, each verified against the schema 2026-09-12:
+1. **Project two columns instead of `SELECT *`.** This is the dominant cost, not a refinement:
+   `SELECT *` materialises `tree`/`coverage`/`compile`/`payload` — 37.0 MB per scan, ~3.87 GB per
+   request — to extract two strings. The query needs `cycle_id` and `context` only.
+2. **Filter in SQL on the existing `cycle_id` column.** `events.cycle_id` is a first-class column
+   (`src/store.ts`, in `createBaseTables`), written at insert from `context.cycleId`. The membership
+   test belongs in the WHERE clause, not in a JS skip-loop over every row in the project.
+3. **Add the missing index.** `events` is indexed only on `(project_key, timestamp)`. Add
+   `idx_events_project_cycle ON events (project_key, cycle_id)` — additive, idempotent, in the
+   existing style. This is what makes change 2 a seek rather than a scan, and what earns CR-CRU-011
+   §S0's phrase *"one indexed query."*
 
-1. **Hoist the derivation out of the per-plan loop.** `listPlans` performs ONE lookup covering every
-   cycle of every plan it is about to return, builds a `cycleId -> {branch, firstRunCommit,
-   lastRunCommit}` map, and each `toPlan` reads its own cycles out of that map. This removes the
-   per-plan multiplication: `O(plans x events)` becomes `O(events)`, once.
-2. **Project two columns and filter in SQL.** `events` already carries a first-class `cycle_id`
-   column (`src/store.ts:1477`), written at insert (`:2866`), so the membership test belongs in the
-   WHERE clause, not in a JS skip-loop. `SELECT *` is the other half of the cost: it materialises
-   `tree`, `coverage`, `compile` and `payload` - the wide columns - in order to extract two strings.
-   `ORDER BY timestamp ASC, rowid ASC` is load-bearing (it is what makes first/last correct) and
-   stays.
-3. **Add the missing index.** `events` is indexed only on `(project_key, timestamp)` (`:1480`);
-   there is no index on `cycle_id`. `CREATE INDEX IF NOT EXISTS idx_events_project_cycle ON events
-   (project_key, cycle_id)` - additive and idempotent, in the same style as the existing index.
+`ORDER BY timestamp ASC, rowid ASC` is load-bearing — it is what makes `firstRunCommit`/
+`lastRunCommit` the earliest and latest — and is preserved exactly.
 
-Explicitly NOT chosen: persisting the boundary on the `plans` row at close time. A closed plan's
-boundary is settled history so there is no invalidation hazard, and reads would become O(1) - but it
-costs a schema change, a chain step and a backfill, and it converts a DERIVED value into a stored
-one, against this project's deliberate derived-status posture (`deriveQueueStatus`). It is the
-escalation if the three changes above do not measure well enough, not the opening move.
+**The API shape does not change.** An earlier draft proposed deriving the field only on a
+single-plan read, which would have removed it from the unfiltered `GET /plans`. The measurement
+makes that unnecessary: at one indexed query per plan the field can stay on every response that
+carries it today. No consumer, in-repo or external, sees any difference except speed.
 
-The ONE observable contract that must not change: a closed, merged plan still reports the same
-`commitBoundary` values it reports today (`mergeCommit`, `branch`, `firstRunCommit`,
-`lastRunCommit`, `closedAt`), and a plan that is open, unmerged or has no linked runs with git
-context still reports the field as ABSENT — never null, never fabricated.
+**Batching is permitted but not required.** If one query covering every returned plan's cycles is
+cleaner than one query per plan, either satisfies the ACs — what is forbidden is a scan whose cost
+grows with the event table.
+
+### §S1a `toPlan` is not a pure read — do not cache it
+
+`toPlan` calls `deriveAndCheckpointActiveMs` for every ACTIVE cycle, which performs an
+`UPDATE plan_cycles SET active_ms_accumulated` at a ≤60 s cadence. That is CR-CRU-023 §S3(a)'s
+**designed** read-path piggyback: it is how a crash loses at most one 60 s window of attention time
+instead of the whole epoch.
+
+**So memoising `toPlan` or `listPlans` is PROHIBITED.** A cache would silently suppress the
+checkpoint and turn a bounded loss into a total one. The fix makes the derivation cheap; it does not
+make the read skippable. AC pinned below (gap analysis DRIFT-5).
+
+This also names a dogfooding hazard: a load harness hammering `/plans` while a cycle is active is
+**not** read-only — it drives real checkpoint writes. Harnesses run with no cycle active, or state
+the added writes.
 
 ### §S2 The cost is pinned by a TIMED test
 
-This is a performance defect, so the pin is a wall-clock measurement - a read-count proxy can pass
-while the endpoint is still slow. Flakiness is controlled by the test's SHAPE, not by declining to
-measure time:
+**User ruling 2026-09-12:** this is a performance defect, so the pin is a wall-clock measurement — a
+read-count proxy can pass while the endpoint is still slow. Flakiness is controlled by the test's
+SHAPE:
 
 - **In-process, idle store.** The fixture builds its own `Store` over `:memory:` and calls
-  `listPlans` directly - no HTTP, no server process, no agent traffic - so the contention that
-  produced this session's false readings cannot reach it.
+  `listPlans` directly — no HTTP, no server, no agent traffic, so the contention that produced this
+  session's first (wrong) readings cannot reach it.
+- **The fixture's plans MUST be closed-with-merge.** `deriveCommitBoundary` returns immediately
+  unless `status === "closed"`, `merge` is present and `closedAt` is present. A fixture of open plans
+  exercises zero derivations and would pass on today's code — a born-vacuous pin (DRIFT-7).
 - **A scaling assertion, which is the real subject.** The same plan count is timed against M events
-  and against 10xM events; elapsed time must NOT scale with the event count. That is the property
-  being fixed, and it holds regardless of how fast the host is.
-- **An absolute ceiling set an order of magnitude above the expected figure**, so it fires on a
-  genuine regression rather than on a loaded box.
+  and 10×M events; elapsed time must NOT scale with the event count.
+- **An absolute ceiling an order of magnitude above the expected figure**, so it fires on a
+  regression rather than on a loaded box.
 
-The scan's return is what the test detects: restore the unbounded per-plan query and both the
-scaling assertion and the ceiling go red.
+### §S2a The end-to-end curve is reproducible
+
+The contention table above is produced by a committed harness (read-only, GET-only) so the fix is
+provable end to end and the next regression is measurable by re-running it, not re-deriving it. It
+is a script, not a gated test: it needs a live server and real data, which is exactly what
+`pre-merge-gate` must not depend on.
 
 ### §S3 The fleet's 10s client GET timeout is stated, not incidental
 
-`clients/python-crucible.py:175`'s `_get(path, timeout=10)` is a bare default that silently converts
-a slow board into a `TimeoutError` traceback with no envelope — which is how every cycle transition
-in this session failed. This CR does not change the timeout's VALUE (that would paper over §S1);
-it makes the failure legible: a plans-GET timeout surfaces as the fleet's standard `ok:false`
-envelope naming the condition, the way `PlansFetchFailed` already does for an unreachable board
-(`clients/_crucible_axi.py:292-306`), rather than an unhandled stack trace.
+`clients/python-crucible.py`'s `_get(path, timeout=10)` is a bare default that converts a slow board
+into a `TimeoutError` traceback with no envelope — which is how every cycle transition in this
+session failed, forcing direct route PATCHes. This CR does **not** change the timeout's VALUE
+(user ruling: fix the performance, not the symptom). It makes the failure legible: a plans-GET
+timeout surfaces as the fleet's standard `ok:false` envelope naming the condition, the way
+`PlansFetchFailed` already does for an unreachable board.
 
 ## Acceptance criteria
 
@@ -138,17 +192,31 @@ envelope naming the condition, the way `PlansFetchFailed` already does for an un
 - [ ] An OPEN plan, a closed plan with no `merge`, and a closed merged plan whose linked runs carry
       no `context.git` each still report `commitBoundary` ABSENT — not null, not partially populated.
 - [ ] A plan whose linked runs span several cycles still reports the EARLIEST `firstRunCommit` and
-      the LATEST `lastRunCommit` across all its cycles, in timestamp order — the ordering the current
-      `ORDER BY timestamp ASC, rowid ASC` scan provides, preserved by whatever replaces it.
-- [ ] Events belonging to ANOTHER plan's cycles never contribute to this plan's boundary —
-      regression pin on the `cycleIds` membership check the current implementation performs in JS.
+      the LATEST `lastRunCommit` across all its cycles, in timestamp order.
+- [ ] Events belonging to ANOTHER plan's cycles never contribute to this plan's boundary.
+- [ ] **Every response that carries `commitBoundary` today still carries it** — the unfiltered
+      `GET …/plans`, the `?cr=` and `?track=` filtered forms, and the global cross-project list —
+      asserted per route, so a fix that quietly narrows the API surface fails (DRIFT-8).
+- [ ] The new index exists and the query uses it — asserted by `EXPLAIN QUERY PLAN` naming the
+      index, not by timing alone.
+- [ ] `GET …/queue` no longer pays the derivation: `deriveQueueStatus`'s path performs a number of
+      event-row reads that does not scale with the event table (DRIFT-2).
+
+**§S1a**
+- [ ] An ACTIVE cycle read through `listPlans` still checkpoints `active_ms_accumulated` at the
+      ≤60 s cadence — CR-CRU-023 §S3(a)'s contract, asserted as a regression, so a memoising
+      "optimisation" fails the suite instead of silently losing timer state.
 
 **§S2**
 - [ ] The timed pin runs in-process against a `:memory:` store with no server and no concurrent
-      traffic - the conditions under which a wall-clock assertion is sound.
-- [ ] Timing the same plan count against M and 10xM events shows no scaling with the event count.
-- [ ] The pin fails if the whole-table per-plan scan is reintroduced - proven by mutation: restore
-      the unbounded query and BOTH the scaling assertion and the absolute ceiling must go red.
+      traffic.
+- [ ] Its fixture plans are closed-with-merge, and non-vacuity is proven by MUTATION: restore the
+      unbounded per-plan scan and both the scaling assertion and the ceiling must go red.
+- [ ] Timing the same plan count against M and 10×M events shows no scaling with the event count.
+
+**§S2a**
+- [ ] The harness reproduces the k-readers curve on a live board and is committed under `scripts/`,
+      GET-only, with the no-active-cycle precondition stated in its own output.
 
 **§S3**
 - [ ] A plans GET that exceeds the client timeout emits the fleet's standard `ok:false` envelope
@@ -159,27 +227,51 @@ envelope naming the condition, the way `PlansFetchFailed` already does for an un
 
 ## Estimated size
 
-M — one or two cycles. §S1 is a store-layer change to a derivation with a precisely pinned output
-contract; §S2 is a counting harness; §S3 is a client-side envelope on an existing failure path.
+M — one or two cycles. §S1 is a query rewrite plus an index with a precisely pinned output contract;
+§S1a is one regression test; §S2/§S2a are a timed fixture and a harness; §S3 is a client-side
+envelope on an existing failure path.
 
 ## Risk
 
-- **`commitBoundary`'s output contract is the whole risk.** It feeds the workflow lens's history
-  rendering, so a subtly different boundary is a silently wrong UI rather than a test failure —
-  which is why §S1 carries four separate output-equality ACs before any performance claim.
-- **A timed assertion carries a flakiness risk** that §S2's shape is designed to absorb: in-process
-  over `:memory:`, a scaling comparison rather than a bare number, and a ceiling set an order of
-  magnitude above the expected figure. The project has already recorded one false latency alarm
-  (2026-09-07) from measuring under contention, and this CR's own diagnosis was initially wrong for
-  the same reason until A/B'd against an idle board - that is an argument for controlling the
-  measurement, not for refusing to measure.
+- **`commitBoundary`'s output contract is the whole risk, and nothing in `public/` guards it.**
+  Measured: zero consumers in `public/`, so a subtly wrong boundary is a silently wrong API rather
+  than a failing test. That is why §S1 carries five output-equality ACs before any performance claim.
+- **A memoising fix breaks timer persistence** (§S1a). The read path writes by design; that is
+  counter-intuitive and is the likeliest wrong turn.
+- **A timed assertion carries a flakiness risk** that §S2's shape absorbs: in-process over
+  `:memory:`, a scaling comparison rather than a bare number, and a generous ceiling. This project
+  has one recorded false latency alarm (2026-09-07) from measuring under contention, and this CR's
+  own first diagnosis was wrong for the same reason until it was A/B'd.
+- **`EXPLAIN QUERY PLAN` is a plan assertion, not a performance one.** It proves the index is
+  reachable, not that the query is fast; the timed pin is what proves the latter. Both, or neither
+  means much.
+
+## Close-out steps (orchestrator, performed ONCE — not per cycle)
+
+- **Re-record `PROSE_CITATIONS.src.head`** in `tests/project-namespace-tripwire.test.ts`. It is
+  **605** at the branch cut (measured 2026-09-12); this CR's prose naming CR-CRU-126 in
+  `src/store.ts` will raise it. Measured at close-out, never transcribed.
+- **Insertion point matters, measured:** there are **89** `store.ts:<line>` citations across **30**
+  files in `tests/`+`clients/`. Edits confined to `toPlan`/`deriveCommitBoundary` (the 4501+ region)
+  shift **0** of them; inserting beside the existing index declaration in `createBaseTables` shifts
+  **44**. Prefer the former; where the index declaration must be added, accept the shift and do NOT
+  re-pin — ~41 of those citations are already stale (recorded 2026-09-07 candidate), so re-pinning
+  44 is disproportionate. Recorded as a measurement, deliberately not as work.
+- **Re-run the §S2a harness after the fix** and state the new curve in the merge note beside the
+  pre-fix one. The claim being made is that k×cost collapsed; the harness is the evidence.
 
 ## Non-goals
 
-- Changing the 5s poll interval, the per-project `retention` (2000 here), or any client polling
-  behaviour — the poll is not the defect; the per-poll cost is.
-- Changing the single-writer architecture (PRD §4.7) or introducing concurrency.
+- Changing the 5s poll interval or the per-project `retention` — the poll is not the defect, the
+  per-poll cost is.
+- Changing the single-writer architecture (PRD §4.7) or introducing concurrency. Making one request
+  cheap is the fix; making many requests parallel is a different CR and a larger one.
 - Tuning the clients' 10s GET timeout value.
-- `GET …/queue`'s own 2.45s cost, if it proves to have a separate cause — the 2026-09-07 note
-  suspected per-row derivation in `listQueue`/`deriveQueueStatus`. Measure it after §S1 lands and
-  file separately if it survives; this CR's measured subject is the plans path.
+- **Deleting `commitBoundary`.** Evaluated and refused above; needs the user's ruling.
+- Memoising or caching plan reads (§S1a explains why this is prohibited, not merely unchosen).
+- **Standing server-side perf instrumentation** (an env-gated request timing log, per-phase
+  counters, a debug route). Discussed 2026-09-12 and deliberately NOT folded in: it is production
+  code in `src/server.ts` serving a different purpose — catching the NEXT regression rather than
+  fixing this one — and it deserves its own CR and its own ruling. The zero-risk alternatives
+  (`bun --inspect` CPU profile; a `sqlite3 .backup` replica on a second port) need no code at all
+  and are what this analysis used.
