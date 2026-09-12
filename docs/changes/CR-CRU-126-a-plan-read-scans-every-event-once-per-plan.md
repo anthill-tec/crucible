@@ -415,12 +415,33 @@ envelope on an existing failure path.
   derivation suite, `plans.test.ts` and `tsc`, and missed it. **Rule for this CR's remaining work:
   any change under `createBaseTables` or `MIGRATIONS` is verified by running the migration suite,
   not only the suites the CR names.**
+- **Two behavioural deltas VERIFY recorded so they are not rediscovered as defects** (both
+  SUGGESTION, no change requested):
+  1. **The queue read no longer drives a checkpoint.** `deriveQueueStatus` now uses a 4-column
+     `planStatusFacts` query instead of `listPlans`, so it never reaches `toPlan` — which is exactly
+     what DRIFT-2 asked for, but it means the ≤60 s `active_ms_accumulated` durability bound now
+     rests solely on the plans-read callers (`handlePlansList`, `resolveIngestAttach`,
+     `validateCycleBinding`, `activeCycleIds`). All four still fire on every SPA tick and every
+     ingest, so the bound holds; the delta is that `/queue` is no longer one of its guarantors.
+  2. **The membership test's type strictness changed.** It moved from
+     `typeof context.cycleId === "number"` to the `cycle_id` column, and SQLite's INTEGER affinity
+     converts a well-formed numeric STRING losslessly (VERIFY measured `'42'` and `' 42 '` → integer
+     42, `'not-a-number'` stays TEXT, `42.7` → REAL). Since `validateCycleRef` returns `{}` for a
+     non-number rather than refusing, a blob carrying `cycleId: "42"` is storable and would now
+     contribute where the old type guard excluded it. GREEN's no-`CAST` argument covers only the
+     genuinely non-numeric case. Impact today is measured ZERO: the live board's census is 1498
+     integer / 642 null bindings, with no text and no real.
 
 ## Close-out steps (orchestrator, performed ONCE — not per cycle)
 
-- **Re-record `PROSE_CITATIONS.src.head`** in `tests/project-namespace-tripwire.test.ts`. It is
-  **605** at the branch cut (measured 2026-09-12); this CR's prose naming CR-CRU-126 in
-  `src/store.ts` will raise it. Measured at close-out, never transcribed.
+- **Re-record TWO `PROSE_CITATIONS` heads** in `tests/project-namespace-tripwire.test.ts`: `src`
+  **605 → 614** and `clients` **814 → 815**; `public` stays **476**.
+  **Corrected 2026-09-12 (VERIFY finding 1).** This step originally named `src` alone, because the
+  spec was written before §S3 existed — and §S3's comment block in `clients/_crucible_axi.py` also
+  names CR-CRU-126, so the `clients` head moved too. VERIFY measured all three with the guard's own
+  machinery over a `git archive HEAD` replica. The figures above are VERIFY's; the orchestrator
+  re-measures at close-out rather than transcribing them, which is what makes the procedure
+  self-correcting — running the guard surfaces every moved head whether or not the spec predicted it.
 - **Insertion point matters, measured:** there are **89** `store.ts:<line>` citations across **30**
   files in `tests/`+`clients/`. Edits confined to `toPlan`/`deriveCommitBoundary` (the 4501+ region)
   shift **0** of them; inserting beside the existing index declaration in `createBaseTables` shifts
