@@ -1752,3 +1752,39 @@ body {
   font: 400 10px/1.4 var(--mono);
   color: var(--ink-dim);
 }
+
+/* CR-CRU-123 §S1 — AN AGENT WITH A RUN IN FLIGHT. The fourth signal of the
+   app's motion vocabulary, and deliberately none of the three that already
+   exist: not `app-spin` (CR-CRU-122's spinner — "a fetch you are waiting
+   on"), not `app-run-pulse` (the run card's ember BORDER pulse, so an agent
+   row can never be misread as a run card), not `app-locate-blink` (CR-CRU-025's
+   10s locate flash, which also lands on a row and is the nearest neighbour of
+   the three). This one is a travelling shimmer ACROSS the row — the one
+   treatment that reads as data flowing rather than as a thing throbbing in
+   place — carried on the row's OWN box as a background layer, so the row gains
+   no child element and PRD §4.11's locked agent sub-row enumeration ("final
+   form — round 6, 2026-07-15") stands (AC7).
+
+   APPENDED at the end of the sheet, not filed beside the animation family at
+   :1007/:1096/:1119: eleven informal `styles.css:<line>` citations live in the
+   test tree, seven of them at >=1096, and an insertion up there would shift
+   every one. Appending shifts none — a free mitigation, so it is taken.
+
+   It sits after `.app-card`/`.app-agent-row` (both :343/:359, both 0-1-0), so
+   the source-order tie-break is what layers the shimmer over the row's flat
+   `var(--bg-2)` fill without either rule needing extra specificity. */
+@keyframes app-stream-flow {
+  0% { background-position: -60% 0; }
+  100% { background-position: 160% 0; }
+}
+.app-agent-streaming {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 122, 26, 0) 0%,
+    rgba(255, 122, 26, 0.22) 50%,
+    rgba(255, 122, 26, 0) 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 55% 100%;
+  animation: app-stream-flow 1.9s linear infinite;
+}

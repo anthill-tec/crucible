@@ -634,10 +634,14 @@
       return div(
         {
           "data-testid": "agent-row",
+          // CR-CRU-123 §S1 — the streaming join is read INSIDE this reactive
+          // binding, deliberately not hoisted beside `busy` above: both would
+          // satisfy the AC today (the rows rebuild on every poll), but only
+          // the binding re-runs when the `openRuns` slice itself changes.
           class: () =>
             `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
-            }`,
+            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`,
           onclick: () => {
             state.selectedAgent =
               state.selectedAgent === agent.agentId ? null : agent.agentId;
@@ -1034,6 +1038,17 @@
           (projectKey === null || projectKey === undefined || run.projectKey === projectKey) &&
           (agentId === null || agentId === undefined || run.agentId === agentId),
       );
+    }
+
+    // CR-CRU-123 §S1 — the THIRD predicate over the open-run slice, beside
+    // `visibleOpenRuns()` (project/agent filters) and `runningRunsFor()`
+    // (cycle): is THIS agent mid-run? An open run naming the agent is the
+    // signal, gated on liveness — `sweepOpenRuns` settles stale open runs on
+    // read, so a run CAN still name a dead agent in the window before the
+    // next sweep, and a tombstone has nothing in flight (AC6).
+    function isStreamingAgent(agent) {
+      if (agent.liveness === "tombstoned") return false;
+      return state.openRuns.some((run) => run.agentId === agent.agentId);
     }
 
     // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
@@ -2513,19 +2528,14 @@
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
         },
-        // CR-CRU-014 §S3 — the 🗺 roadmap chip: no slide-over, same
-        // destination as the /p/<key>/roadmap deep-link. CR-CRU-079 §S1
-        // supersedes CR-014's "one-rule tab swap": the chip is a DOOR onto the
-        // /p/<key>/roadmap ROUTE (navigate(), pushState) and the tab FOLLOWS
-        // the route — byte-identical pathname to the tab-strip door (AC2).
-        button(
-          {
-            "data-testid": "roadmap-chip",
-            class: "app-chip app-roadmap-chip",
-            onclick: () => selectWorkspaceTab("Roadmap"),
-          },
-          "🗺 roadmap",
-        ),
+        // CR-CRU-123 §S2 — a 🗺 shortcut stood HERE and is retired (user
+        // ruling, 2026-09-12). It shipped under CR-CRU-014 §S3 as a second
+        // door onto the /p/<key>/roadmap route; CR-CRU-076 then made Roadmap
+        // the LEFTMOST tab of the strip two inches away, and a duplicate door
+        // beside the original stopped earning its space. The surviving door is
+        // the tab, unchanged — CR-CRU-079 §S1's pathname/pushState contract is
+        // now driven through it. Nothing was removed from the stylesheet with
+        // it: the class it carried was styled nowhere.
         div({ class: "app-agent-subrows" }, () =>
           visibleAgents().length === 0
             ? div({ class: "app-empty" }, "no agents yet")

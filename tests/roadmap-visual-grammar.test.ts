@@ -2238,8 +2238,16 @@ describe("AC24 — only an IN_PROGRESS CR moves (sampled across frames)", () => 
       new Set(names).size,
       `the roadmap runs ${new Set(names).size} distinct animations, not one`,
     ).toBe(1);
-    // REUSE, not a third vocabulary: `app-run-pulse` and `app-locate-blink`
-    // are the only keyframes public/styles.css declares.
+    // REUSE, not a vocabulary of its own: public/styles.css declares FOUR
+    // keyframes — `app-locate-blink` (CR-CRU-025's 10s locate flash),
+    // `app-run-pulse` (the run card's ember border), `app-spin`
+    // (CR-CRU-122's loading spinner) and `app-stream-flow` (CR-CRU-123 §S1's
+    // agent-row data-flow shimmer) — and the roadmap may use only the two
+    // whitelisted below. The comment said "the only two" and was already
+    // stale when CR-CRU-122 added the third; CR-CRU-123 §S3 corrects it. The
+    // ASSERTION is unchanged and needs no widening: it is scoped to
+    // `[data-testid="roadmap-zones"] *`, so a signal living on a Project-pane
+    // agent row is outside what it measures.
     expect(["app-run-pulse", "app-locate-blink"]).toContain(names[0]);
   });
 });
