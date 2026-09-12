@@ -115,12 +115,31 @@ interface ProjectFixture {
   lastActivity?: number;
 }
 
+/** CR-CRU-017 §S3's open-run brief, as the events feed serves it beside
+ *  `events` in ONE response — the slice CR-CRU-123 §S1 joins against
+ *  `state.agents` on `agentId`. Shape read off `RunningCard`/`runningRunsFor`
+ *  in public/app.js (runId, projectKey, agentId, startedAt, optional tier and
+ *  `context.cycleId`), not invented here. */
+interface OpenRunFixture {
+  runId: string;
+  projectKey: string;
+  agentId: string;
+  startedAt: number;
+  tier?: string;
+  context?: { cycleId?: number };
+}
+
 interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
   agents: AgentFixture[];
   events: EventBriefFixture[];
   eventDetails: Record<string, EventDetailFixture>;
+  /** Served on the events response, where production reads it
+   *  (`vanX.replace(state.openRuns, () => events.openRuns ?? [])`). Omitted =
+   *  `[]`, which is what a server without the field degrades to, so every
+   *  pre-existing test in this file is unaffected. */
+  openRuns?: OpenRunFixture[];
 }
 
 let cacheBust = 0;
@@ -181,7 +200,10 @@ async function mountApp(opts: MountOpts): Promise<void> {
     } else if (url.includes("/api/v2/agents")) {
       body = { ok: true, agents: opts.agents };
     } else if (url.includes("/api/v2/events")) {
-      body = { ok: true, events: opts.events };
+      // CR-CRU-017 §S3 — ONE response carries the settled events AND the open
+      // runs, so a fixture can move a run across the boundary in a single
+      // tick exactly as the server does (CR-CRU-123 §S1/AC4).
+      body = { ok: true, events: opts.events, openRuns: opts.openRuns ?? [] };
     } else if (url.includes("/api/v2/health")) {
       body = { ok: true, version: "2.0.0-test", counts: { events: 0 } };
     } else {
@@ -765,5 +787,374 @@ describe("CR-CRU-037 §S1 characterization — per-agent liveness dimming has no
     const aliveDot = aliveRow!.querySelector(".app-dot");
     expect(aliveDot).not.toBeNull();
     expect(aliveDot!.className).toContain(" g");
+  });
+});
+
+// ── CR-CRU-123 §S1 — a run in flight ANIMATES on its Project-pane row ──────
+//
+// WHY THIS SUITE. §S1 adds a live signal to the Project pane's agent row, and
+// this file is the one that already drives exactly that: the real production
+// shell on `/p/<key>`, the agent row under measurement, a fixture the mocked
+// `fetch` reads LIVE so a payload can change under a running app, and a real
+// poll tick to observe it through. AC4's subject — the row reacting when a run
+// leaves `state.openRuns` in the same response its event enters `state.events`
+// — is that machinery applied to one more slice; rebuilding it beside
+// `shell-final-form` (shape/placement) or `agent-runtime-pane` (runtime_ms
+// rendering) would mean a third copy of this harness for one feature.
+//
+// RED phase (2026-09-12): production computes `busy` and renders a STATIC dot;
+// nothing on the row reads `state.openRuns` at all. Every test below fails at
+// the point it asks for the class a streaming row carries and an idle one does
+// not — there is none, so the derived token set is empty.
+//
+// THE CLASS NAME IS DERIVED, NEVER HARDCODED. §S1 fixes the CONTRACT (its own
+// semantic class, its own `@keyframes`, none of the three the stylesheet
+// already declares) and leaves the NAME to the implementation — so these tests
+// read the token off the rendered DOM (the one class a streaming row has that
+// an otherwise-identical idle row lacks) and then hold the stylesheet to that
+// token. A hardcoded guess would have failed for the wrong reason.
+
+const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+/** Comments stripped once: a provenance comment naming a class must never be
+ *  read as a rule, and a commented-out `@keyframes` must never count as
+ *  declared (the CR-CRU-096 defect shape). */
+const STYLES_RULES = STYLES_SRC.replace(/\/\*[\s\S]*?\*\//g, "");
+
+function classTokens(el: Element): string[] {
+  return el.className.split(/\s+/).filter((t) => t.length > 0);
+}
+
+function projectPane(): HTMLElement {
+  const pane = document.querySelector('[data-testid="project-pane"]') as HTMLElement | null;
+  expect(pane).not.toBeNull();
+  return pane!;
+}
+
+function agentRows(): HTMLElement[] {
+  return Array.from(projectPane().querySelectorAll('[data-testid="agent-row"]')) as HTMLElement[];
+}
+
+function rowFor(agentId: string): HTMLElement {
+  const row = findByText(projectPane(), '[data-testid="agent-row"]', agentId);
+  expect(row).toBeDefined();
+  return row!;
+}
+
+/** The ONE class token a streaming row carries that an otherwise-identical
+ *  idle row does not. Fails loudly (length 0) while §S1 is unimplemented, and
+ *  fails just as loudly at length 2+ — "its own semantic class" is singular. */
+function activityClassFrom(streaming: HTMLElement, idle: HTMLElement): string {
+  const base = new Set(classTokens(idle));
+  const added = classTokens(streaming).filter((t) => !base.has(t));
+  expect(added).toHaveLength(1);
+  return added[0]!;
+}
+
+/** Every `@keyframes` NAME `public/styles.css` declares. */
+function declaredKeyframes(): string[] {
+  return Array.from(STYLES_RULES.matchAll(/@keyframes\s+([A-Za-z][\w-]*)/g)).map((m) => m[1]!);
+}
+
+/** Every rule body whose selector list names `.<cls>` as a standalone class
+ *  token — the `allRuleBodiesForClass` technique from
+ *  tests/pane-scroll-floor.test.ts, for the same reason it exists there: the
+ *  assertion is about the CLASS, not about one selector shape GREEN must
+ *  guess (`.x {}`, `.app-agent-row.x {}` and `.x .app-agent-glyph {}` are all
+ *  legitimate homes for the animation). */
+function ruleBodiesForClass(cls: string): string {
+  const escaped = cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`([^{}]*(?:^|[\\s,>+~])\\.${escaped}(?![\\w-])[^{}]*)\\{([^}]*)\\}`, "gs");
+  const bodies: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(STYLES_RULES)) !== null) bodies.push(m[2] ?? "");
+  return bodies.join("\n");
+}
+
+/** The declared keyframes names referenced by `animation`/`animation-name` in
+ *  `body`. Intersecting against the DECLARED set is what makes this safe to
+ *  run over a shorthand: `1.6s`, `ease-in-out` and `infinite` are not
+ *  keyframes, and a reference to an UNDECLARED name yields nothing — which is
+ *  the correct, loud outcome for a typo'd animation. */
+function animationsIn(body: string, declared: string[]): string[] {
+  const names: string[] = [];
+  for (const decl of body.matchAll(/animation(?:-name)?\s*:\s*([^;}]+)/g)) {
+    for (const word of (decl[1] ?? "").matchAll(/[A-Za-z][\w-]*/g)) {
+      if (declared.includes(word[0]) && !names.includes(word[0])) names.push(word[0]);
+    }
+  }
+  return names;
+}
+
+function openRun(
+  overrides: Partial<OpenRunFixture> & { runId: string; projectKey: string; agentId: string },
+): OpenRunFixture {
+  return { startedAt: Date.now() - 4_000, ...overrides };
+}
+
+/** The three animations that already exist, BY NAME. §S1's whole point is that
+ *  a fourth signal does not collapse into any of them. */
+const EXISTING_ANIMATIONS = ["app-spin", "app-run-pulse", "app-locate-blink"] as const;
+
+describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Project-pane row", () => {
+  test("the row of the agent an open run NAMES carries exactly one class its otherwise-identical sibling does not — and with two agents and one open run, exactly ONE of the two rows carries it", async () => {
+    const projectKey = "proj-stream-one";
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Streaming Project", agentsTotal: 2 })],
+      agents: [
+        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
+      ],
+      events: [],
+      eventDetails: {},
+      openRuns: [
+        openRun({ runId: "run-alpha-1", projectKey, agentId: "alpha-agent", tier: "unit" }),
+      ],
+    });
+
+    const rows = agentRows();
+    expect(rows.length).toBe(2);
+
+    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
+    expect(classTokens(rowFor("alpha-agent"))).toContain(activity);
+    expect(classTokens(rowFor("bravo-agent"))).not.toContain(activity);
+    // COUNTED, per AC3: a fix that animates the whole list (or the pane) fails
+    // here instead of looking right on a one-agent fixture.
+    expect(rows.filter((r) => classTokens(r).includes(activity)).length).toBe(1);
+  });
+
+  test("with `state.openRuns` EMPTY the identical fixture animates nothing — the signal is the open-run join, not a property of being registered", async () => {
+    const projectKey = "proj-stream-empty";
+    const fixtures = {
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Empty Slice Project", agentsTotal: 2 })],
+      agents: [
+        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
+      ],
+      events: [],
+      eventDetails: {},
+    };
+
+    await mountApp({
+      ...fixtures,
+      openRuns: [openRun({ runId: "run-alpha-2", projectKey, agentId: "alpha-agent" })],
+    });
+    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
+
+    await mountApp({ ...fixtures, openRuns: [] });
+    const rows = agentRows();
+    // Non-vacuity: the rows are on screen, so "no row animates" is a fact
+    // about the rows and not about an empty pane. Asserted as COUNTS — a
+    // matcher handed a happy-dom element serialises the node's whole cyclic
+    // document graph to build its failure diff and never returns.
+    expect(rows.length).toBe(2);
+    expect(rows.filter((r) => classTokens(r).includes(activity)).length).toBe(0);
+  });
+
+  test("the activity class drives its OWN `@keyframes` in public/styles.css — not app-spin, not app-run-pulse, not app-locate-blink, each ruled out by name", async () => {
+    const projectKey = "proj-stream-css";
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Animation Identity Project", agentsTotal: 2 })],
+      agents: [
+        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
+      ],
+      events: [],
+      eventDetails: {},
+      openRuns: [openRun({ runId: "run-alpha-3", projectKey, agentId: "alpha-agent" })],
+    });
+
+    const declared = declaredKeyframes();
+    // The three that already exist are still declared — a "fourth signal" that
+    // arrived by renaming one of them is not a fourth signal.
+    for (const existing of EXISTING_ANIMATIONS) expect(declared).toContain(existing);
+
+    // The stylesheet is held to the class the DOM actually carries, so the
+    // signal and its motion cannot be wired to two different names.
+    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
+    const body = ruleBodiesForClass(activity);
+    expect(body.length).toBeGreaterThan(0);
+
+    const used = animationsIn(body, declared);
+    expect(used).toHaveLength(1);
+    const animation = used[0]!;
+    expect(declared).toContain(animation);
+    expect(animation).not.toBe("app-spin");
+    expect(animation).not.toBe("app-run-pulse");
+    expect(animation).not.toBe("app-locate-blink");
+  });
+
+  test(
+    "when the open run SETTLES — the same response drops it from `state.openRuns` and carries its event into `state.events` — the row stops animating, driven by the production refetch and by no timer",
+    async () => {
+      const now = Date.now();
+      const projectKey = "proj-stream-settle";
+      const eventId = "evt-stream-settle-1";
+      const fx = unitFixture(eventId, projectKey, "alpha-agent", now);
+      const opts: MountOpts = {
+        pathname: `/p/${projectKey}`,
+        projects: [project({ key: projectKey, name: "Settling Project", agentsTotal: 2 })],
+        agents: [
+          agent({ agentId: "alpha-agent", projectKey, message: "working" }),
+          agent({ agentId: "bravo-agent", projectKey, message: "working" }),
+        ],
+        events: [],
+        eventDetails: {},
+        openRuns: [
+          openRun({ runId: "run-alpha-settle", projectKey, agentId: "alpha-agent", tier: "unit" }),
+        ],
+      };
+      await mountApp(opts);
+
+      const whileStreaming = classTokens(rowFor("alpha-agent"));
+
+      // The open run is live on the FEED too — same slice, same tick — so what
+      // follows is the real lifecycle transition observed from both sides, not
+      // a fixture nudge only the rail can see.
+      const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+      expect(runsTab).toBeDefined();
+      runsTab!.click();
+      await settle();
+      expect(document.querySelectorAll('[data-testid="running-card"]').length).toBe(1);
+
+      // THE TRANSITION (CR-CRU-017 §S3): one response, the run out of
+      // `openRuns` and its settled event into `events`. Nothing here touches a
+      // class or a timeout — the production poll refetch re-renders the row.
+      opts.openRuns!.length = 0;
+      opts.events.unshift(fx.brief);
+      opts.eventDetails[eventId] = fx.detail;
+
+      await waitForPollTick();
+
+      // Both halves of the transition landed…
+      expect(document.querySelectorAll('[data-testid="running-card"]').length).toBe(0);
+      expect(document.querySelector('[data-testid="event-card"]')).not.toBeNull();
+
+      // …and the row shed exactly the one class it was animating with. Taken
+      // as a DIFF across the same row, so the assertion is "the signal
+      // stopped" and not "the row happens to have no classes".
+      const afterSettle = new Set(classTokens(rowFor("alpha-agent")));
+      const dropped = whileStreaming.filter((t) => !afterSettle.has(t));
+      expect(dropped).toHaveLength(1);
+      // Bound: settling may not ADD row state either (no leftover marker
+      // class), and the row is still on the pane — the signal stopped, the
+      // row did not disappear with it.
+      const streamingSet = new Set(whileStreaming);
+      expect([...afterSettle].filter((t) => !streamingSet.has(t))).toEqual([]);
+      expect(rowFor("alpha-agent").textContent ?? "").toContain("alpha-agent");
+    },
+    POLL_TEST_TIMEOUT_MS,
+  );
+
+  test("the static busy dot and the activity signal are INDEPENDENT — a busy streaming row carries both, a busy idle row keeps the red dot alone, and a streaming non-busy row animates with its plain online dot", async () => {
+    const projectKey = "proj-stream-busy";
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Busy Independence Project", agentsTotal: 3 })],
+      agents: [
+        agent({ agentId: "alpha-agent", projectKey, status: "busy", liveness: "online", message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey, status: "busy", liveness: "online", message: "working" }),
+        agent({ agentId: "delta-agent", projectKey, status: "online", liveness: "online", message: "working" }),
+      ],
+      events: [],
+      eventDetails: {},
+      openRuns: [
+        openRun({ runId: "run-alpha-4", projectKey, agentId: "alpha-agent" }),
+        openRun({ runId: "run-delta-1", projectKey, agentId: "delta-agent" }),
+      ],
+    });
+
+    const dotClass = (agentId: string): string => {
+      const dot = rowFor(agentId).querySelector(".app-dot");
+      expect(dot).not.toBeNull();
+      return dot!.className;
+    };
+
+    // The §S1 regression pin, asserted first because it is the half that must
+    // NOT change: `status === "busy"` still paints the red dot, streaming or
+    // not, and streaming does not repaint a non-busy agent's dot.
+    expect(dotClass("alpha-agent")).toContain(" r");
+    expect(dotClass("bravo-agent")).toContain(" r");
+    expect(dotClass("delta-agent")).toContain(" g");
+
+    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
+    expect(classTokens(rowFor("alpha-agent"))).toContain(activity);
+    expect(classTokens(rowFor("bravo-agent"))).not.toContain(activity);
+    // The other direction of independence: animating without being busy.
+    expect(classTokens(rowFor("delta-agent"))).toContain(activity);
+  });
+
+  test("a TOMBSTONED agent never animates even when a stale open run still names it — while a live streaming sibling in the same render does", async () => {
+    const now = Date.now();
+    const projectKey = "proj-stream-tomb";
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Stale Run Project", agentsOnline: 2, agentsTotal: 3 })],
+      agents: [
+        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
+        agent({
+          agentId: "buried-agent",
+          projectKey,
+          liveness: "tombstoned",
+          lastSeen: now - 7_200_000,
+          message: "died mid-run",
+        }),
+      ],
+      events: [],
+      eventDetails: {},
+      openRuns: [
+        openRun({ runId: "run-alpha-5", projectKey, agentId: "alpha-agent" }),
+        // The stale one `sweepOpenRuns` has not settled yet — it still names a
+        // dead agent, and a dead agent has nothing in flight.
+        openRun({ runId: "run-buried-1", projectKey, agentId: "buried-agent", startedAt: now - 7_100_000 }),
+      ],
+    });
+
+    const buried = rowFor("buried-agent");
+    expect(buried.className).toContain("tombstoned");
+
+    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
+    expect(classTokens(buried)).not.toContain(activity);
+    // Counted across the whole pane: the live streaming row is the only one.
+    expect(agentRows().filter((r) => classTokens(r).includes(activity)).length).toBe(1);
+  });
+
+  test("AC7 — the streaming row gains NO new child element: its child count equals the idle sibling's, and the row is still the PRD's locked sub-row (dot + display name, message, last-seen)", async () => {
+    const projectKey = "proj-stream-shape";
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Locked Shape Project", agentsTotal: 2 })],
+      agents: [
+        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
+        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
+      ],
+      events: [],
+      eventDetails: {},
+      openRuns: [openRun({ runId: "run-alpha-6", projectKey, agentId: "alpha-agent" })],
+    });
+
+    const streaming = rowFor("alpha-agent");
+    const idle = rowFor("bravo-agent");
+
+    // The lock, asserted BEFORE the signal it constrains: equality alone would
+    // still pass if a fifth child were appended to EVERY row, so the absolute
+    // count is pinned too. Three element children on this fixture — the
+    // `app-agent-id` span (liveness dot + display name), `app-agent-msg`, and
+    // the `seen …` card-meta; `agent-runtime` renders only with a runtime_ms,
+    // which this fixture deliberately omits. PRD §4.11's agent sub-row
+    // enumeration is a locked final form ("round 6, 2026-07-15"), so §S1's
+    // signal must ride an existing node or the row's own box.
+    expect(streaming.children.length).toBe(idle.children.length);
+    expect(streaming.children.length).toBe(3);
+    expect(streaming.querySelector(".app-agent-id")).not.toBeNull();
+    expect(streaming.querySelector(".app-agent-msg")).not.toBeNull();
+    expect(streaming.textContent ?? "").toContain("seen ");
+
+    // …and it IS the streaming row whose shape was just measured.
+    const activity = activityClassFrom(streaming, idle);
+    expect(classTokens(streaming)).toContain(activity);
   });
 });

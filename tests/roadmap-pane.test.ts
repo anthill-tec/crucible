@@ -10,18 +10,39 @@
 // RED phase: expected to FAIL against CURRENT production, whose
 // public/app-logic.mjs TAB_NAMES has NO "Roadmap" entry and whose
 // public/app.js WorkspaceBody() ternary has no "Roadmap" branch, no Roadmap
-// pane, no `roadmap-empty`/`roadmap-row`/`roadmap-chip` testids, and whose
+// pane, no `roadmap-empty`/`roadmap-row` testids, and whose
 // routeParse ignores the `/p/<key>/roadmap` deep-link segment — every test
 // below fails at its "the Roadmap tab / pane does not exist yet" assertion.
 //
 // SCOPE — §S3 TABLE view ONLY. The graph-view toggle (Cytoscape) is the NEXT
 // cycle and is deliberately NOT exercised here.
+//
+// CR-CRU-123 §S2 (2026-09-12) — THE PROJECT PANE'S 🗺 SHORTCUT IS RETIRED.
+// Once CR-CRU-076 made Roadmap the LEFTMOST tab in the strip, the pane's
+// second door two inches away stopped earning its space, and the user ruled
+// it out. Three tests in this file named that door, and they are not all the
+// same kind of test:
+//   • the door's OWN test (it renders, it routes) is DELETED with it — see
+//     the narration where it stood, in the §S3 describe below. Its routed
+//     contract is pinned byte-for-byte by "AC1 — clicking the Roadmap TAB
+//     from /p/<key> …", which drives the SURVIVING door;
+//   • the two CR-CRU-079 tests that merely USED it as a way in (§S1 AC2
+//     pathname parity, AC2c Back/Forward) are RE-POINTED at the tab with
+//     their assertions unweakened — the pathname/pushState contract they
+//     protect outlives the door that happened to drive it.
+// The retired testid and its class are never spelled in `public/` or `tests/`
+// again; the census at the END of this file is what enforces that, and it
+// builds both needles from fragments so this tree stays free of them.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+// CR-CRU-123 §S2's census walks two trees as text. The shared walker is used
+// rather than a local one (tests/helpers/source-scan.ts is where CR-CRU-097
+// §S6 put it, for exactly this reason).
+import { listFiles } from "./helpers/source-scan";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -238,38 +259,17 @@ describe("§S3 — Roadmap is a first-class workspace tab", () => {
     expect(tabIsOn("Workflow")).toBe(false);
   });
 
-  // CR-CRU-079 §S1/AC1/AC8 — RENAMED. This test shipped under CR-CRU-014 as
-  // "(same destination, one-rule tab swap)" and asserted only the tab, so it
-  // passed while the chip left the URL at /p/<key>. CR-CRU-079 overturned
-  // that characterisation: the chip is a DOOR onto the /p/<key>/roadmap
-  // ROUTE (navigate(), pushState), and the tab FOLLOWS the route. The name
-  // now states the routed contract, and the body asserts the URL — the
-  // half a tab-only assertion could never fail on.
-  test("the Project pane's 🗺 roadmap chip ROUTES to /p/<key>/roadmap — the tab follows the route (CR-CRU-079 §S1 supersedes CR-CRU-014's tab swap)", async () => {
-    const key = "roadmap-chip-1";
-    await mountApp({
-      pathname: `/p/${key}`,
-      projects: [project({ key, name: "Chip Project" })],
-      queue: [],
-    });
-
-    // Cold /p/<key> defaults to Workflow — the chip must flip to Roadmap.
-    expect(tabIsOn("Workflow")).toBe(true);
-    expect(location.pathname).toBe(`/p/${key}`);
-    const chip = document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]');
-    expect(chip).not.toBeNull();
-    expect((chip!.textContent ?? "")).toContain("🗺");
-
-    chip!.click();
-    await settle();
-
-    // AC1 — the door produces the URL. Asserted FIRST: the tab swap passes
-    // against the unfixed code, the pathname is what this CR adds.
-    expect(location.pathname).toBe(`/p/${key}/roadmap`);
-    expect(tabIsOn("Roadmap")).toBe(true);
-    expect(tabIsOn("Workflow")).toBe(false);
-    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
-  });
+  // CR-CRU-123 §S2 — A TEST STOOD HERE AND WAS DELETED WITH ITS SUBJECT
+  // (2026-09-12). It shipped under CR-CRU-014 as "(same destination, one-rule
+  // tab swap)", was renamed by CR-CRU-079 §S1/AC1/AC8 to pin the Project
+  // pane's 🗺 shortcut as a DOOR onto the /p/<key>/roadmap ROUTE (navigate(),
+  // pushState, with the tab FOLLOWING the route), and the user retired that
+  // door. Nothing is lost by the deletion: the routed contract it asserted is
+  // pinned, unweakened, by "AC1 — clicking the Roadmap TAB from /p/<key> …"
+  // in the CR-CRU-079 describe below, which drives the surviving door through
+  // the identical navigate()/pushState path. Narrated rather than silently
+  // removed — the next reader who comes looking for the shortcut's test
+  // should learn where its contract went, not conclude it was dropped.
 
   test("the Roadmap surface is a TAB, not a slide-over — no scrim and no overlay element exist while it is active", async () => {
     const key = "roadmap-noscrim-1";
@@ -330,7 +330,17 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
     expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
   });
 
-  test("AC2 — no door is privileged: the pathname after a tab click is byte-identical to the pathname after a chip click from the same /p/<key> start", async () => {
+  // CR-CRU-123 §S2 — RE-POINTED, NOT WEAKENED (2026-09-12). This test was
+  // "AC2 — no door is privileged: the pathname after a tab click is
+  // byte-identical to the pathname after a [🗺 shortcut] click". The second
+  // door is retired, so the comparison now runs the SURVIVING door twice from
+  // two cold mounts of the same fixture — which is the half of AC2 that
+  // still has meaning, and the half that can still catch a regression: the
+  // route a door produces must be a FUNCTION of the door, not of how the app
+  // happened to get there. Every assertion of the original body is retained
+  // (equality of the two pathnames, plus the ROUTE bound on each), and the
+  // pathname asserted is the same byte string CR-CRU-079 §S1/AC2 pinned.
+  test("AC2 — the surviving tab door's pathname is a function of the door, not of the mount: two cold /p/<key> mounts clicked through the Roadmap tab land on byte-identical pathnames", async () => {
     const key = "roadmap-route-parity-1";
     const fixtures = {
       pathname: `/p/${key}`,
@@ -342,19 +352,19 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
     expect(location.pathname).toBe(`/p/${key}`);
     tabButton("Roadmap")!.click();
     await settle();
-    const afterTab = location.pathname;
+    const afterFirstMount = location.pathname;
 
     await mountApp(fixtures);
     expect(location.pathname).toBe(`/p/${key}`);
-    document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]')!.click();
+    tabButton("Roadmap")!.click();
     await settle();
-    const afterChip = location.pathname;
+    const afterSecondMount = location.pathname;
 
-    expect(afterTab).toBe(afterChip);
+    expect(afterFirstMount).toBe(afterSecondMount);
     // Bound: "identical" must mean identical at the ROUTE, not both still
-    // sitting on /p/<key> — fixing one door and not the other fails here.
-    expect(afterTab).toBe(`/p/${key}/roadmap`);
-    expect(afterChip).toBe(`/p/${key}/roadmap`);
+    // sitting on /p/<key> — a door that navigates nowhere fails here.
+    expect(afterFirstMount).toBe(`/p/${key}/roadmap`);
+    expect(afterSecondMount).toBe(`/p/${key}/roadmap`);
   });
 
   test("AC2b — from /p/<key>/roadmap, clicking ANY other workspace tab returns location.pathname to /p/<key> with that tab on and the roadmap pane gone", async () => {
@@ -380,7 +390,13 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
     }
   });
 
-  test("AC2c — after chip in and tab out, browser Back re-renders the roadmap at /p/<key>/roadmap and Forward returns to /p/<key> (pushState, not replaceState)", async () => {
+  // CR-CRU-123 §S2 — RE-POINTED, NOT WEAKENED (2026-09-12). Was "after chip
+  // in and tab out…": the way IN was the retired 🗺 shortcut, incidental to
+  // everything this test asserts. The way in is now the surviving tab; the
+  // pushState/Back/Forward contract below — two pushed entries, Back landing
+  // the roadmap pane at its own pathname, Forward returning — is CR-CRU-079
+  // §S1/AC2c's, assertion for assertion, unchanged.
+  test("AC2c — after tab in and tab out, browser Back re-renders the roadmap at /p/<key>/roadmap and Forward returns to /p/<key> (pushState, not replaceState)", async () => {
     const key = "roadmap-route-history-1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -389,8 +405,8 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
     });
     const entriesAtStart = history.length;
 
-    // In through the chip…
-    document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]')!.click();
+    // In through the Roadmap tab…
+    tabButton("Roadmap")!.click();
     await settle();
     expect(location.pathname).toBe(`/p/${key}/roadmap`);
 
@@ -971,5 +987,86 @@ describe("CR-CRU-078 §S6/AC14 — swapping two CRs in the queue swaps their row
     });
     expect(rowOrder()).toEqual([ROOT.cr, "CR-RM-132", "CR-RM-131"]);
     expect(warnedRows()).toEqual([]);
+  });
+});
+
+// ── CR-CRU-123 §S2 — the duplicated Project-pane door is GONE ──────────────
+//
+// RED phase (2026-09-12): both tests below FAIL against current production,
+// which still renders the retired 🗺 shortcut out of `ProjectPane` — two
+// source lines in `public/app.js`, the testid and its `app-`-prefixed class.
+// There is no stylesheet rule to remove alongside them: a full-repo census
+// found that class emitted into the DOM and styled NOWHERE, so §S2 is a
+// deletion and nothing else.
+//
+// Both needles are ASSEMBLED FROM FRAGMENTS rather than written out, for one
+// reason: the census below asserts that neither string occurs anywhere under
+// `public/` or `tests/`, and a test that spells its own needle could never
+// pass. The fragments are the whole trick — no exclusion list, no
+// self-exemption, nothing for a later reader to mistake for a loophole.
+const RETIRED_DOOR_TESTID = ["roadmap", "chip"].join("-");
+const RETIRED_DOOR_CLASS = `app-${RETIRED_DOOR_TESTID}`;
+
+describe("CR-CRU-123 §S2 — the Project pane's retired 🗺 shortcut renders nowhere, and its name survives only in the docs", () => {
+  test("the workspace Project pane renders no 🗺 shortcut on /p/<key> OR on /p/<key>/roadmap, while the tab strip's Roadmap door and the rest of the pane are untouched", async () => {
+    const key = "roadmap-door-removed-1";
+    for (const pathname of [`/p/${key}`, `/p/${key}/roadmap`]) {
+      await mountApp({
+        pathname,
+        projects: [project({ key, name: "Door Removal Project" })],
+        queue: [],
+      });
+
+      // Non-vacuity, asserted BEFORE the absences: the pane and the surviving
+      // door are both on screen, so "nothing matched" cannot mean "nothing
+      // rendered". A mount that failed would otherwise pass every absence
+      // assertion below.
+      const pane = document.querySelector<HTMLElement>('[data-testid="project-pane"]');
+      expect(pane).not.toBeNull();
+      expect(pane!.querySelector('[data-testid="pane-section-title"]')).not.toBeNull();
+      expect(tabButton("Roadmap")).toBeDefined();
+
+      // COUNTS, never the matched nodes themselves: a failing matcher handed a
+      // happy-dom element serialises the node's whole cyclic document graph to
+      // build its diff and never returns (measured here — the suite hung until
+      // these were numbers). Every assertion in this file follows the same
+      // rule, which is why the rest of it reads `.toBeNull()` and lengths.
+      expect(document.querySelectorAll(`[data-testid="${RETIRED_DOOR_TESTID}"]`).length).toBe(0);
+      expect(document.querySelectorAll(`.${RETIRED_DOOR_CLASS}`).length).toBe(0);
+
+      // Bound on the SHAPE of the removal, not just on its name: dropping the
+      // testid while leaving the button on the pane would satisfy both
+      // assertions above and remove nothing the user complained about. No
+      // control inside the pane carries the 🗺 glyph any more — reported as the
+      // offending LABELS, so a failure names what is still on screen.
+      const paneGlyphLabels = Array.from(pane!.querySelectorAll("button"))
+        .map((b) => b.textContent ?? "")
+        .filter((label) => label.includes("🗺"));
+      expect(paneGlyphLabels).toEqual([]);
+    }
+  });
+
+  test("neither the retired testid nor its class occurs anywhere under public/ or tests/ — the only surviving record is in the CR docs", () => {
+    const scanned = [
+      ...listFiles("public", [".js", ".mjs", ".mts", ".css", ".html"]),
+      ...listFiles("tests", [".ts", ".mts"]),
+    ];
+    // Non-vacuity: a walker that silently returned nothing would report the
+    // cleanest census in the repo. Measured 2026-09-12: 12 files under
+    // `public/` and 100+ `.ts` files under `tests/`.
+    expect(scanned.length).toBeGreaterThanOrEqual(40);
+
+    const hits: string[] = [];
+    for (const abs of scanned) {
+      const text = readFileSync(abs, "utf8");
+      const rel = abs.slice(REPO_ROOT.length + 1);
+      for (const needle of [RETIRED_DOOR_TESTID, RETIRED_DOOR_CLASS]) {
+        const count = text.split(needle).length - 1;
+        if (count > 0) hits.push(`${rel}: ${count}× ${needle}`);
+      }
+    }
+    // Reported as the offending file list, never as a bare count — a failure
+    // here should name what to delete.
+    expect(hits).toEqual([]);
   });
 });
