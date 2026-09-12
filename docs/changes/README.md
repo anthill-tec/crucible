@@ -124,7 +124,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | COMPLETED (0.2.0) | 013, 073 | 6 (0.2.0) |
 | [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | COMPLETED (0.2.0) | 013, 115 | 6 (0.2.0) |
 | [CR-CRU-118](CR-CRU-118-every-cr-names-a-release.md) | every live CR names a release, and every release names its target date | feature | COMPLETED (0.2.0) | 091, 099, 104 | 6 (0.2.0) |
-| [CR-CRU-119](CR-CRU-119-a-preserved-position-is-not-a-defaulted-one.md) | a preserved position is not a defaulted one | bugfix | PENDING (0.2.0) | 091, 095 | 6 (0.2.0) |
+| [CR-CRU-119](CR-CRU-119-a-preserved-position-is-not-a-defaulted-one.md) | a preserved position is not a defaulted one | bugfix | COMPLETED (0.2.0) | 091, 095 | 6 (0.2.0) |
+| [CR-CRU-120](CR-CRU-120-an-active-cycles-runs-are-not-reachable.md) | an active cycle's runs are not reachable | bugfix | COMPLETED (0.2.0) | 011, 025, 032 | 6 (0.2.0) |
+| [CR-CRU-121](CR-CRU-121-filing-a-plan-should-register-its-release.md) | filing a plan should register its release | feature | COMPLETED (0.2.0) | 011, 091, 118 | 6 (0.2.0) |
+| [CR-CRU-122](CR-CRU-122-a-loading-delay-deserves-a-spinner.md) | a loading delay deserves a spinner | feature | COMPLETED (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-123](CR-CRU-123-the-project-pane-shows-activity-not-a-duplicate-door.md) | the Project pane shows activity, not a duplicate door | feature | PENDING (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-124](CR-CRU-124-cycle-add-cannot-target-the-plan-it-means.md) | `cycle-add` cannot target the plan it means | bugfix | PENDING (0.2.0) | 054 | 6 (0.2.0) |
+| [CR-CRU-125](CR-CRU-125-history-narrates-a-cr-that-is-still-live.md) | History narrates a CR that is still live | bugfix | PENDING (0.2.0) | 020 | 6 (0.2.0) |
+| [CR-CRU-126](CR-CRU-126-a-plan-read-scans-every-event-once-per-plan.md) | a plan read scans every event, once per plan | bugfix | PENDING (0.2.0) | — | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
