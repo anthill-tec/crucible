@@ -129,7 +129,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-121](CR-CRU-121-filing-a-plan-should-register-its-release.md) | filing a plan should register its release | feature | COMPLETED (0.2.0) | 011, 091, 118 | 6 (0.2.0) |
 | [CR-CRU-122](CR-CRU-122-a-loading-delay-deserves-a-spinner.md) | a loading delay deserves a spinner | feature | COMPLETED (0.2.0) | — | 6 (0.2.0) |
 | [CR-CRU-123](CR-CRU-123-the-project-pane-shows-activity-not-a-duplicate-door.md) | the Project pane shows activity, not a duplicate door | feature | PENDING (0.2.0) | — | 6 (0.2.0) |
-| [CR-CRU-124](CR-CRU-124-cycle-add-cannot-target-the-plan-it-means.md) | `cycle-add` cannot target the plan it means | bugfix | PENDING (0.2.0) | 054 | 6 (0.2.0) |
+| [CR-CRU-124](CR-CRU-124-cycle-add-cannot-target-the-plan-it-means.md) | `cycle-add` cannot target the plan it means | bugfix | COMPLETED (0.2.0) | 054 | 6 (0.2.0) |
 | [CR-CRU-125](CR-CRU-125-history-narrates-a-cr-that-is-still-live.md) | History narrates a CR that is still live | bugfix | PENDING (0.2.0) | 020 | 6 (0.2.0) |
 | [CR-CRU-126](CR-CRU-126-a-plan-read-scans-every-event-once-per-plan.md) | a plan read scans every event, once per plan | bugfix | PENDING (0.2.0) | — | 6 (0.2.0) |
 
@@ -244,16 +244,27 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   inline scope edit. Worked around by adopting the finer granularity rather than aborting the plan:
   destroying a board record to fix a label is the worse trade.
 
-- **`cycle-add` / `checkpoint` / `abort` cannot target a CR that has an aborted plan** (candidate
-  patch CR, hit 2026-09-02 executing CR-CRU-095). They resolve via
-  `resolve_plan(..., open_only=False)` (`clients/_crucible_axi.py:1731+`), so after `abort` +
-  `plan-file` the aborted plan and the open one BOTH match `--cr` and the verb refuses as ambiguous —
-  with no `--plan <id>` escape. Compounding it, the ambiguity message at
-  `clients/_crucible_axi.py:375-379` filters candidates by `open_only` but NOT by the `--cr` the
-  caller passed, so it says "80 plans — pass --cr to pick one" to a caller who already did. Fix:
-  prefer the single open plan when `--cr` matches one open and N non-open plans (or take
-  `open_only=True` for `cycle-add`), and list only the `--cr`-matching candidates. Worked around
-  in 095 by folding the client cycle into cycle 305 rather than hand-rolling the POST.
+- **CLOSED by CR-CRU-124 (2026-09-12) — `cycle-add` can now target the plan it means.** The note
+  read: *"`cycle-add` / `checkpoint` / `abort` cannot target a CR that has an aborted plan (candidate
+  patch CR, hit 2026-09-02 executing CR-CRU-095). They resolve via `resolve_plan(…, open_only=False)`,
+  so after `abort` + `plan-file` the aborted plan and the open one BOTH match `--cr` and the verb
+  refuses as ambiguous — with no `--plan <id>` escape. Compounding it, the ambiguity message filters
+  candidates by `open_only` but NOT by the `--cr` the caller passed, so it says '80 plans — pass
+  --cr to pick one' to a caller who already did. Fix: prefer the single open plan when `--cr` matches
+  one open and N non-open plans, and list only the `--cr`-matching candidates."*
+  CR-CRU-124 shipped both halves the note proposed, plus two the note did not foresee: §S1's
+  open-plan preference in `resolve_single_plan`, §S2's `--cr`-scoped message that names `--plan <id>`
+  instead of re-demanding the flag the caller already passed, §S3's `--plan <id>` escape (which skips
+  the plans GET entirely — verified live at 0.12 s against a 113-plan board where every other cycle
+  verb was timing out at 10 s), and §S4's `--kind`.
+  **One deviation from the note's proposed fix, taken as a recorded ruling:** the open-plan
+  preference fires ONLY when `--cr` was supplied. With no `--cr` two or more candidates keep refusing
+  exactly as before, because CR-CRU-030's pin in `test_bun_crucible_cycle_add.py`
+  (`test_ambiguous_multiple_plans_without_cr_returns_nonzero_without_posting`) is a deliberate
+  safety contract — *"must be non-zero, not a guess"* — and a convenience win is not a reason to
+  retire it. The first ruling on that point was the opposite and was reversed the same day, after
+  the GREEN agent refused to edit the pin and escalated instead. `checkpoint` and `abort` keep
+  `open_only=True` and were left untouched (§S4 non-goal).
 - **`queue-file` drops lifecycle dispositions on import** (candidate patch CR, hit 2026-09-02).
   Repopulating a cleared board via `queue-file` resurrected `CR-CRU-082` (VOID in the README) as
   `PENDING` with `lifecycle: null`, so it read as actionable. VOID/supersede are `cr-void` /
