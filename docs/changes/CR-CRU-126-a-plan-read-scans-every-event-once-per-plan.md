@@ -57,6 +57,22 @@ contention**: `deriveCommitBoundary` is synchronous CPU+IO on Bun's single JS th
 single writer), so one `/plans` request stalls the entire event loop for ~2.5s and a 0.2 ms health
 check waits its full turn behind it.
 
+**Re-run 2026-09-12, post-close-out, same live board, same GET-only harness, no active cycle:**
+
+| concurrent `/plans` readers | `GET /health` | run detail (`?depth=suites`) | loader p50 |
+|---|---|---|---|
+| 0 | 0.1 ms | 0.2 ms | — |
+| 1 | 10.3 ms | 0.6 ms | 17.5 ms |
+| 2 | 26.7 ms | 34.9 ms | 34.2 ms |
+| 4 | 41.5 ms | 68.4 ms | 66.9 ms |
+| 8 | 110.6 ms | 121.8 ms | 132.4 ms |
+
+At k=4 — the row cited above as 7634.0 ms / 10179.8 ms — the collapse is **184× / 149×**. The curve
+is no longer `k × constant`: it grows sub-linearly at small per-request cost, because the per-plan
+scan this CR replaced (one equality seek per cycle instead of a full `events` table scan) no longer
+dominates the request, so concurrent readers contend for a cheap resource instead of queuing behind
+an expensive one.
+
 That is why the stall appears **only during execution**, as the user observed: one SPA tick already
 fires `/plans`, `/queue`, `/events` and `/health` concurrently (two at 2.5s each), the 5s poll
 interval refires before the previous tick drains, and **every agent ingest adds another 2.5s**
@@ -367,7 +383,7 @@ timeout surfaces as the fleet's standard `ok:false` envelope naming the conditio
 - [ ] Timing the same plan count against M and 10×M events shows no scaling with the event count.
 
 **§S2a**
-- [ ] The harness reproduces the k-readers curve on a live board and is committed under `scripts/`,
+- [x] The harness reproduces the k-readers curve on a live board and is committed under `scripts/`,
       GET-only, with the no-active-cycle precondition stated in its own output.
 
 **§S3**
