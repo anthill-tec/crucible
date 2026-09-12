@@ -30,8 +30,10 @@ import {
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type {
+  PlanOpError,
   ProjectPatch,
   QueueEntryInput,
+  QueuePlanInput,
   QueueSeqReport,
   RecordEventMeta,
   RunRecord,
@@ -45,6 +47,7 @@ import type {
   CycleStatus,
   LivenessConfig,
   PackageRef,
+  Plan,
   Project,
   QueueEntry,
   QueueLifecycle,
@@ -1418,6 +1421,39 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
         ? String(body.wave)
         : undefined;
   const track = typeof body.track === "string" ? body.track : undefined;
+  // CR-CRU-121 §S1 — the optional `release` that makes filing a plan a ROADMAP
+  // declaration too. ABSENT, nothing below happens and this route is what it
+  // was before this CR: no queue read beyond the wave scope, no queue write,
+  // no new response keys (D4's "a CR can be born mid-release" stays possible).
+  //
+  // PRESENT, the request IS `cr-plan`'s declaration, so it is answered by
+  // `cr-plan`'s OWN functions, in `cr-plan`'s order — the requiredness of a
+  // wave and a title, then membership, then the dependency ring — and a second
+  // wording of any of them is exactly the drift this CR exists to prevent.
+  // Each check refuses the WHOLE request, all of them before any write.
+  const release = body.release ?? undefined;
+  let entry: QueuePlanInput | undefined;
+  if (release !== undefined) {
+    if (typeof release !== "string" || release.length === 0) {
+      return fail(400, RELEASE_REQUIRED);
+    }
+    if (wave === undefined || wave.length === 0) {
+      return fail(400, "`wave` is required — the wave within the release");
+    }
+    if (title === undefined || title.length === 0) {
+      return fail(400, "`title` is required — the CR's brief");
+    }
+    const membership = declareMembership(
+      liveProposalLabels(store, pk.key),
+      { release, cr: body.cr },
+      undefined,
+      recordedReleaseClaiming(store, pk.key),
+    );
+    if ("fail" in membership) return membership.fail;
+    const cycle = refuseDependencyCycle(store.listQueue(pk.key), [body.cr]);
+    if (cycle !== null) return cycle;
+    entry = { cr: body.cr, release, wave, title };
+  }
   // CR-CRU-116 §S1/§S2/§S3 — the WAVE scope, asked BEFORE the write so a
   // refusal leaves nothing behind: one wave holds open work, and waves open in
   // ascending order. `already-active` before `out-of-order`, both read off the
@@ -1433,14 +1469,39 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
           : waveHints.outOfOrder(waveScope.waveRef, waveScope.crRef),
     });
   }
-  const plan = store.filePlan(pk.key, {
+  const planInput = {
     cr: body.cr,
     ...(title !== undefined ? { title } : {}),
     ...(orchestrator !== undefined ? { orchestrator } : {}),
     ...(wave !== undefined ? { wave } : {}),
     ...(track !== undefined ? { track } : {}),
     cycles,
-  });
+  };
+  // CR-CRU-121 §S1 — when a release was declared, the queue row and the plan
+  // land in ONE transaction: a refusal from EITHER half (and `filePlan`'s
+  // duplicate-open-plan refusal is the reachable one) leaves NEITHER behind,
+  // so the board never holds a registration for a plan that was refused.
+  let registration: QueueSeqReport & { changed: boolean } | undefined;
+  let plan: Plan | PlanOpError;
+  if (entry === undefined) {
+    plan = store.filePlan(pk.key, planInput);
+  } else {
+    // `cr-plan`'s own catch: a wave whose seq block is full refuses in
+    // `wave-sequence`'s envelope, with nothing written.
+    let written: ReturnType<Store["filePlanRegistering"]>;
+    try {
+      written = store.filePlanRegistering(pk.key, entry, planInput);
+    } catch (error) {
+      if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+      throw error;
+    }
+    if ("error" in written) {
+      plan = written;
+    } else {
+      registration = written.report;
+      plan = written.plan;
+    }
+  }
   if ("error" in plan) return fail(400, plan.error, { help: hints.duplicateOpenPlan });
   return json(
     {
@@ -1454,6 +1515,16 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
       ...(plan.wave !== undefined ? { wave: plan.wave } : {}),
       ...(plan.track !== undefined ? { track: plan.track } : {}),
       cycles: plan.cycles,
+      // CR-CRU-121 §S1 — the union of both routes' answers, present EXACTLY
+      // when a release was declared: `converged` is `cr-plan`'s word for "this
+      // call wrote nothing new" (§S7), and `entry` is the queue row the board
+      // now holds, read back rather than echoed.
+      ...(registration !== undefined
+        ? {
+            converged: !registration.changed,
+            entry: store.listQueue(pk.key).find((row) => row.cr === plan.cr),
+          }
+        : {}),
     },
     201,
   );

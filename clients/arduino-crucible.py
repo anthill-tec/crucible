@@ -1280,6 +1280,7 @@ def main():
                     help="One cycle label, never split; repeat --cycle per cycle.")
     pf.add_argument("--cycles", help='Legacy comma-split form; prefer one --cycle per label.')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _axi().add_plan_file_release_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
 
     ca = sub.add_parser("cycle-activate", parents=[common],

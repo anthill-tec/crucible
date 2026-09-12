@@ -598,6 +598,17 @@ GATE_RELEASE_HELP = (
     "records, and is retired the moment it does.")
 
 
+# CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five
+# clients document the flag identically. OPTIONAL, because a CR can be born
+# mid-release and be placed on the roadmap later.
+PLAN_FILE_RELEASE_HELP = (
+    "Label of the release this CR is planned into (e.g. 0.2.0), posted "
+    "VERBATIM as the body's own `release` — the client never invents or "
+    "normalises it. Given, the CR is REGISTERED in the queue by the same "
+    "call (cr-plan's write, and --wave and --title become required); omitted, "
+    "the plan is filed and nothing is claimed on the roadmap.")
+
+
 def gate_identity_skipped_line(agent_id, confirmed=True):
     """The stderr line a gated run prints INSTEAD of the cleanup, so an
     operator can see WHY nothing was removed rather than being told nothing.
@@ -2761,6 +2772,13 @@ def cmd_plan_file(args, project_dir, ops):
                "cycles": [{"label": label} for label in labels]}
     if args.title:
         payload["title"] = args.title
+    # CR-CRU-121 §S2 — the declared release rides as the body's own field, and
+    # ONLY when declared: the route branches on its PRESENCE, so a fabricated
+    # value (an empty string, a derived label) would register the CR into a
+    # release nobody named. No env fallback for the same reason.
+    release = getattr(args, "release", None)
+    if release:
+        payload["release"] = release
     wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
     warnings = []
     if wave:
@@ -5128,6 +5146,15 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
     if context:
         payload["context"] = context
     return post_fn("/api/v2/milestones", payload)
+
+
+def add_plan_file_release_arg(p):
+    """CR-CRU-121 §S2 — declare `--release` on `plan-file`: the release the CR
+    this plan executes belongs to, posted VERBATIM as the body's top-level
+    `release`. The ONE declaration site for the whole fleet — a flag five
+    clients hand-rolled would word itself five ways, and the route reads its
+    PRESENCE (a plan filed without it makes no roadmap claim)."""
+    p.add_argument("--release", help=PLAN_FILE_RELEASE_HELP)
 
 
 def add_gate_cycle_arg(p):

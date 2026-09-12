@@ -1224,6 +1224,19 @@ function writePreUpgradeBackup(db: Database, dbPath: string): string {
   return backupPath;
 }
 
+/**
+ * CR-CRU-121 §S1 — `filePlan` refuses by RETURNING, and a returned value
+ * cannot roll a transaction back. The composed write therefore carries its
+ * refusal out on a throw and hands the caller the identical `PlanOpError` the
+ * standalone call would have returned. Private to this module: it never
+ * crosses the route boundary.
+ */
+class PlanRegistrationRefused extends Error {
+  constructor(readonly refusal: PlanOpError) {
+    super(refusal.error);
+  }
+}
+
 export class Store {
   private readonly db: Database;
   /**
@@ -3194,6 +3207,48 @@ export class Store {
       status: "open",
       cycles,
     };
+  }
+
+  /**
+   * CR-CRU-121 §S1 — file a plan and REGISTER its cr in the queue as ONE
+   * write: `plan-file --release` composes `cr-plan`'s declaration, and the two
+   * tables may never disagree about whether that declaration happened.
+   *
+   * Both halves already guard themselves BEFORE they write (`filePlan` returns
+   * the duplicate-open-plan refusal, `upsertQueueEntry` throws
+   * `QueueWaveOverflowError` out of `nextFreeSlot`), so each is safe ALONE.
+   * What is not safe is the pair: whichever runs second can still refuse after
+   * the first committed, leaving a queue row for a plan nobody filed — or a
+   * plan the roadmap never heard of. One transaction closes both directions,
+   * so a refusal the caller reads is also the state the board holds.
+   *
+   * The inner `emit`s may still fire for an attempt that rolled back; a change
+   * notification is a prompt to RE-READ, and the re-read sees the truth.
+   */
+  filePlanRegistering(
+    projectKey: string,
+    entry: QueuePlanInput,
+    plan: {
+      cr: string;
+      title?: string;
+      orchestrator?: string;
+      wave?: string;
+      track?: string;
+      cycles: Array<{ label: string; kind: CycleKind }>;
+    },
+  ): { plan: Plan; report: QueueSeqReport & { changed: boolean } } | PlanOpError {
+    const compose = this.db.transaction(() => {
+      const report = this.upsertQueueEntry(projectKey, entry);
+      const filed = this.filePlan(projectKey, plan);
+      if ("error" in filed) throw new PlanRegistrationRefused(filed);
+      return { plan: filed, report };
+    });
+    try {
+      return compose();
+    } catch (error) {
+      if (error instanceof PlanRegistrationRefused) return error.refusal;
+      throw error;
+    }
   }
 
   /**

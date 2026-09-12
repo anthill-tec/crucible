@@ -2186,6 +2186,7 @@ def main():
         pf, extra=" The registered id is also stored as the plan's orchestrator "
                   "(the free-text --orchestrator label is retired).")
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _axi().add_plan_file_release_arg(pf)
     _add_project_args(pf)
     pf.set_defaults(func=cmd_plan_file)
 
