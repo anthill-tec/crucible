@@ -493,9 +493,9 @@ describe("Projects manager — edit-in-place liveness + retention negative bound
 // double-submit guard.
 //
 // Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md §S4.
-// `save` (public/app.js:1636-1672) is one of the six audited backend-delay
-// sites: today the form sits inert for the whole PATCH, and nothing stops a
-// second "save" click from firing a second in-flight PATCH.
+// `ManagerRowEdit`'s `save` (public/app.js) is one of the six audited
+// backend-delay sites: today the form sits inert for the whole PATCH, and
+// nothing stops a second "save" click from firing a second in-flight PATCH.
 //
 // Contract for GREEN: a local `van.state(false)` pending flag set before the
 // PATCH and reset in a `finally`; while true the save control renders the

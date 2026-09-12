@@ -687,10 +687,10 @@ describe("Projects manager — edit-in-place (AC6)", () => {
 // guard.
 //
 // Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md §S4.
-// `submit` (public/app.js:1865-1876) is one of the six audited backend-delay
-// sites: today the form sits inert for the whole POST, and nothing stops a
-// second "add" click from firing a second in-flight POST — which is how a
-// project gets created twice.
+// `ManagerAddForm`'s `submit` (public/app.js) is one of the six audited
+// backend-delay sites: today the form sits inert for the whole POST, and
+// nothing stops a second "add" click from firing a second in-flight POST —
+// which is how a project gets created twice.
 //
 // Contract for GREEN: a local `van.state(false)` pending flag set before the
 // POST and reset in a `finally`; while true the add control renders the

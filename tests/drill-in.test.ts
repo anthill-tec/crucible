@@ -2031,8 +2031,10 @@ describe("F4½ anatomy — status-chips row above the heat-strip (Density presen
 // RED phase (cycle 430): NOTHING below exists on the branch. `grep` over
 // public/ finds no `Spinner`, no `app-spinner`, no `app-spin`, no
 // `data-testid="spinner"` — the only loading feedback in the whole app is the
-// bare text "loading run detail…" (public/app.js:5462), and the suite
-// lazy-load has none at all. Every test in this section is expected to FAIL.
+// bare text "loading run detail…" (`RunDetailBody`'s loading branch in
+// public/app.js — GREEN rewrote that very line, so it is cited by symbol),
+// and the suite lazy-load has none at all. Every test in this section is
+// expected to FAIL.
 //
 // Contract this section defines for GREEN:
 //   `Spinner()` — ONE component, ONE CSS rule. Renders a single element with

@@ -502,7 +502,7 @@ describe("Projects manager — unarchive action (§S1b AC)", () => {
 // double-submit guard.
 //
 // Spec: docs/changes/CR-CRU-122-a-loading-delay-deserves-a-spinner.md §S4.
-// `postProjectLifecycle` (public/app.js:1544-1556) is one of the six audited
+// `postProjectLifecycle` (public/app.js) is one of the six audited
 // backend-delay sites, and today the row sits completely inert during the
 // POST — no feedback at all, and nothing stops a second "confirm archive" /
 // "unarchive" click from firing a second in-flight request.

@@ -1470,9 +1470,22 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // body field it rides on, and the fleet's one declaration site. `public` is
 // untouched by this CR and re-measured unchanged at 454; all three `develop`
 // floors stay where they are.
+//
+// UPDATED 2026-09-12 by CR-CRU-122 — moved `public` 454 -> 469, measured at
+// close-out by running this guard against the working tree, never transcribed
+// from the VERIFY report that first reported the drift. The fifteen new
+// citations name the CR that gave the app ONE shared loading spinner at its
+// six backend-delay sites: fourteen in public/app.js — §S1's `Spinner`
+// component (:539), §S2's run-detail loading branch (:5573), §S3's per-suite
+// lazy-load flag, its raise/lower pair and its row (:4890, :4936, :5427), and
+// §S4's five project-manager pending flags with the controls they disable
+// (:1555, :1606, :1614, :1667, :1706, :1804, :1821, :1890, :1944) — plus one
+// in public/styles.css (:1102), the `@keyframes app-spin` rule that spins it.
+// `src` and `clients` are untouched by this CR and re-measured unchanged at
+// 605 and 805; all three `develop` floors stay where they are.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 605 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 454 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 469 },
   clients: { exts: [".py"], develop: 601, head: 805 },
 };
 

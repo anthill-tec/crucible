@@ -1820,9 +1820,24 @@
       const editing = van.state(false);
       // CR-CRU-122 §S4 — this row's archive POST, in flight. Created HERE,
       // beside `editing` and outside the swapping binding below, for the same
-      // reason the edit-field states are: a state created inside that binding
-      // is rebuilt whenever the binding re-runs, and a pending flag that
-      // resets itself mid-request is no guard at all.
+      // reason the edit-field states are: a state created INSIDE that binding
+      // is rebuilt every time it re-runs, so a view↔edit swap mid-POST would
+      // reset the flag and drop both the spinner and the disabled guard.
+      //
+      // What that buys, exactly, and what it does NOT (measured, not assumed):
+      // it survives the BINDING, not the row. `ManagerProjectRow` is itself
+      // re-invoked by the manager pane's own binding,
+      // `() => div([...state.projects].map(ManagerProjectRow))`, on every
+      // projects refresh — the 5s poll, or an SSE projects frame — and each
+      // re-invocation makes a FRESH `van.state(false)`, just as it discards
+      // `editing`. A refresh landing mid-POST therefore DOES lose the spinner
+      // and the disabled guard for the rest of that request. That is inherited
+      // from how the manager list rebuilds, it is a race only against a
+      // sub-second POST, and closing it is not this CR's business.
+      // `ManagerArchivedRow` carries the same limit through
+      // `archived.map(ManagerArchivedRow)`; `ManagerAddForm` does not — it is
+      // invoked ONCE, eagerly, as a static child of the pane, so its
+      // `submitPending` really does live as long as the manager is mounted.
       const archivePending = van.state(false);
       // Edit-field states live HERE — outside the swapping binding below —
       // so input ticks never rebuild the form (see ManagerRowEdit's note).
