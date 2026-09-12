@@ -132,6 +132,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-124](CR-CRU-124-cycle-add-cannot-target-the-plan-it-means.md) | `cycle-add` cannot target the plan it means | bugfix | COMPLETED (0.2.0) | 054 | 6 (0.2.0) |
 | [CR-CRU-125](CR-CRU-125-history-narrates-a-cr-that-is-still-live.md) | History narrates a CR that is still live | bugfix | PENDING (0.2.0) | 020 | 6 (0.2.0) |
 | [CR-CRU-126](CR-CRU-126-a-plan-read-scans-every-event-once-per-plan.md) | a plan read scans every event, once per plan | bugfix | PENDING (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-127](CR-CRU-127-a-filed-cycle-declares-its-kind.md) | a filed cycle declares its kind | bugfix | PENDING (0.2.0) | 011, 107, 121, 124 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
