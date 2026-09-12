@@ -498,6 +498,17 @@ class HelpNextStepTemplatesTest(_BaseAxiConventionsTest):
     PROJECT_KEY = "test-key-help"
 
     def test_plan_file_help_suggests_the_cycle_activate_placeholder_template(self):
+        """CR-CRU-127 §S6 names this as a REGRESSION pin: a mandate that broke
+        the verb's forward guidance would trade one context loss for another.
+        The ASSERTION below is untouched.
+
+        The INVOCATION is migrated, and the contradiction is recorded rather
+        than papered over: §S6's AC says this test passes "byte-unchanged",
+        but it filed with `--cycles "a,b"` — the exact form the SAME amendment's
+        §S4a refuses. Both ACs cannot hold. §S5's rule decides it — an
+        inverting invocation is REWRITTEN to the new contract — which keeps
+        what the criterion is actually about: a SUCCESSFUL filing still hands
+        back `cycle-activate <id>`."""
         resp = {
             "ok": True, "planId": "plan-9", "cr": "CR-HELP",
             "cycles": [{"label": "a", "id": 101}, {"label": "b", "id": 102}],
@@ -505,7 +516,9 @@ class HelpNextStepTemplatesTest(_BaseAxiConventionsTest):
         with mock.patch.object(self.module, "_post", return_value=resp):
             code, out, err = _run_main(
                 self.module,
-                ["plan-file", "--cr", "CR-HELP", "--cycles", "a,b",
+                ["plan-file", "--cr", "CR-HELP",
+                 "--cycle", "a", "--cycle-kind", "red-green",
+                 "--cycle", "b", "--cycle-kind", "verify",
                  "--agent", "test-agent", "--project-dir", self.tmpdir],
             )
 
@@ -1086,24 +1099,38 @@ class BunCruciblePlanFileCycleFlagTest(_BaseAxiConventionsTest):
         return axi
 
     def test_repeatable_cycle_flag_files_one_cycle_per_occurrence_in_order(self):
+        """CR-CRU-107/AC1, REWRITTEN by CR-CRU-127 §S3: still one cycle per
+        occurrence in the order given, but each entry now carries the kind
+        declared at ITS position. The three kinds differ, so a pairing that
+        sorts, reverses or broadcasts one kind fails here."""
         code, out, err, post_mock = self._plan_file(
-            ["--cycle", "a", "--cycle", "b", "--cycle", "c"])
+            ["--cycle", "a", "--cycle-kind", "verify",
+             "--cycle", "b", "--cycle-kind", "fix",
+             "--cycle", "c", "--cycle-kind", "red-green"])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         payload = self._posted_payload(post_mock, out, err)
         self.assertEqual(
             payload.get("cycles"),
-            [{"label": "a"}, {"label": "b"}, {"label": "c"}],
-            f"AC1: three `--cycle` occurrences post three cycles, in the order "
-            f"given and unsplit; got payload={payload!r}")
+            [{"label": "a", "kind": "verify"},
+             {"label": "b", "kind": "fix"},
+             {"label": "c", "kind": "red-green"}],
+            f"AC1 + CR-CRU-127 §S1/§S3: three `--cycle` occurrences post three "
+            f"cycles, in the order given, unsplit, each carrying its own "
+            f"declared kind; got payload={payload!r}")
 
     def test_a_single_cycle_value_carrying_either_delimiter_files_exactly_one_cycle(self):
+        """AC2, REWRITTEN by CR-CRU-127 §S4 to declare the kind the mandate now
+        requires. The no-splitting rule itself is untouched — which is why it
+        is re-asserted here rather than dropped."""
         for label in self.UNSPLIT_LABELS:
             with self.subTest(label=f"{label[:48]}…"):
-                code, out, err, post_mock = self._plan_file(["--cycle", label])
+                code, out, err, post_mock = self._plan_file(
+                    ["--cycle", label, "--cycle-kind", "red-green"])
                 self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
                 payload = self._posted_payload(post_mock, out, err)
                 self.assertEqual(
-                    payload.get("cycles"), [{"label": label}],
+                    payload.get("cycles"),
+                    [{"label": label, "kind": "red-green"}],
                     f"AC2: one `--cycle` is ONE cycle whose label is the value "
                     f"byte-for-byte, however many commas or semicolons it "
                     f"carries; got payload={payload!r}")
@@ -1139,6 +1166,126 @@ class BunCruciblePlanFileCycleFlagTest(_BaseAxiConventionsTest):
             "[crucible] ERROR:", err,
             f"AC6: the bare sys.exit string is REPLACED by the envelope, not "
             f"printed beside it; got stderr={err!r}")
+
+    # ── CR-CRU-127 §S1/§S4/§S4a/§S6 — a filed cycle declares its kind ──
+    #
+    # §S6/AC5 requires this suite's per-verb `help[]` coverage to be EXTENDED
+    # to the new refusals rather than left asserting only the old surface, and
+    # §S6/AC2 requires them to join `_assert_structured_refusal` rather than
+    # invent a second shape. Driven through THIS client's real argparse so a
+    # client that never grew `--cycle-kind` is named by the failure.
+    #
+    # RED, measured against `e5d6275`: no client declares `--cycle-kind`, so
+    # every call below dies in argparse with `unrecognized arguments` — exit 2
+    # with EMPTY stdout, which is exactly why the ENVELOPE carries the
+    # contract and the exit code alone cannot.
+
+    #: the three refusals this CR adds, as (name, argv) — reused by the
+    #: envelope-shape criterion so a refusal cannot be added without it.
+    def _kind_refusals(self):
+        return {
+            "absent kind (§S4)": ["--cycle", "the implementation"],
+            "two cycles, one kind (§S1)": [
+                "--cycle", "the implementation", "--cycle-kind", "red-green",
+                "--cycle", "verify it"],
+            "one cycle, two kinds (§S1)": [
+                "--cycle", "the implementation", "--cycle-kind", "red-green",
+                "--cycle-kind", "verify"],
+            "legacy --cycles (§S4a)": ["--cycles", "a,b"],
+        }
+
+    def test_a_cycle_with_no_declared_kind_is_refused_client_side(self):
+        """§S4 — the mandate, enforced CLIENT-SIDE only (user ruling
+        2026-09-13). No POST, `ok:false`, non-zero exit; the ROUTE stays
+        permissive and that is pinned separately as a regression."""
+        code, out, err, post_mock = self._plan_file(
+            ["--cycle", "the implementation"])
+        axi = self._assert_structured_refusal(code, out, err, post_mock,
+                                              ac="§S4 absent kind")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycle-kind\b",
+            f"§S4: the error must name the flag the caller is missing; got "
+            f"{axi!r}")
+
+    def test_a_kind_count_mismatch_is_refused_in_both_directions(self):
+        """§S1 — "more kinds than cycles, and more cycles than kinds, are BOTH
+        refused ... naming both counts, and ZERO POSTs". Tolerating a mismatch
+        files a plan whose kinds are off by one: silently wrong data, the
+        exact class this CR removes."""
+        for ac, extra in (
+            ("§S1 two cycles, one kind",
+             ["--cycle", "the implementation", "--cycle-kind", "red-green",
+              "--cycle", "verify it"]),
+            ("§S1 one cycle, two kinds",
+             ["--cycle", "the implementation", "--cycle-kind", "red-green",
+              "--cycle-kind", "verify"]),
+        ):
+            with self.subTest(ac=ac):
+                code, out, err, post_mock = self._plan_file(extra)
+                axi = self._assert_structured_refusal(
+                    code, out, err, post_mock, ac=ac)
+                error = str(axi.get("error") or "")
+                for count in ("1", "2"):
+                    self.assertIn(
+                        count, error,
+                        f"{ac}: the error must name BOTH counts so the caller "
+                        f"can see which side is short; got error={error!r}")
+
+    def test_the_legacy_cycles_flag_is_refused_for_filing(self):
+        """§S4a — narrowing enforcement to the client made `--cycles` the one
+        door still filing kindless cycles (MEASURED: 19 of 22 `plan-file` argv
+        lists in this tree use it). It is refused for filing, and the remedy
+        hands back the form that works."""
+        code, out, err, post_mock = self._plan_file(["--cycles", "a,b"])
+        axi = self._assert_structured_refusal(code, out, err, post_mock,
+                                              ac="§S4a legacy --cycles")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycles\b",
+            f"§S4a: the error must name the flag it refused; got {axi!r}")
+        help_list = [str(h) for h in (axi.get("help") or [])]
+        self.assertTrue(
+            [h for h in help_list if "--cycle " in h and "--cycle-kind" in h],
+            f"§S4a: help[] must hand back the `--cycle` + `--cycle-kind` "
+            f"form; got help={help_list!r}")
+        self.assertEqual(
+            [h for h in help_list if "--cycles" in h], [],
+            f"§S4a: no remedy may teach the form that was just refused; got "
+            f"help={help_list!r}")
+
+    def test_every_new_refusal_is_an_envelope_on_stdout_and_never_a_traceback(self):
+        """§S6/AC3 — AXI principle 6, the `_assert_structured_failure` shape:
+        the refusal is a TOON-AXI envelope on STDOUT with a non-zero exit, a
+        non-empty `help[]`, and never a traceback or an argparse usage error.
+        A caller who is handed a stack trace has lost the context the
+        structured channel exists to preserve."""
+        for ac, extra in self._kind_refusals().items():
+            with self.subTest(ac=ac):
+                code, out, err, post_mock = self._plan_file(extra)
+                combined = out + err
+                self.assertNotEqual(
+                    code, 0, f"{ac}: a refusal exits non-zero; got {code}")
+                self.assertEqual(
+                    post_mock.call_args_list, [],
+                    f"{ac}: zero POSTs — asserted on the recorder, not the "
+                    f"exit code; got {post_mock.call_args_list!r}")
+                for noise in ("Traceback (most recent call last)",
+                              "unrecognized arguments", "invalid choice"):
+                    self.assertNotIn(
+                        noise, combined,
+                        f"{ac}: the refusal must be the client's own "
+                        f"structured envelope, never {noise!r}; got "
+                        f"stdout={out!r} stderr={err!r}")
+                axi = self._decode_axi(out)
+                self.assertEqual(axi.get("verb"), "plan-file",
+                                 f"{ac}: got {axi!r}")
+                self.assertIs(axi.get("ok"), False, f"{ac}: got {axi!r}")
+                self.assertTrue(
+                    str(axi.get("error") or "").strip(),
+                    f"{ac}: the envelope must NAME the cause; got {axi!r}")
+                self.assertGreater(
+                    len(axi.get("help") or []), 0,
+                    f"{ac}: an ok:false envelope carries a NON-EMPTY help[] — "
+                    f"an empty one tells the caller nothing; got {axi!r}")
 
 
 if __name__ == "__main__":

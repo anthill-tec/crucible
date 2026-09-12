@@ -1541,24 +1541,36 @@ class PythonCruciblePlanFileCycleFlagTest(_BasePythonAxiTest):
         return axi
 
     def test_repeatable_cycle_flag_files_one_cycle_per_occurrence_in_order(self):
+        """CR-CRU-107/AC1, REWRITTEN by CR-CRU-127 §S3: still one cycle per
+        occurrence in the order given, but each entry now carries the kind
+        declared at ITS position."""
         code, out, err, post_mock = self._plan_file(
-            ["--cycle", "a", "--cycle", "b", "--cycle", "c"])
+            ["--cycle", "a", "--cycle-kind", "verify",
+             "--cycle", "b", "--cycle-kind", "fix",
+             "--cycle", "c", "--cycle-kind", "red-green"])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         payload = self._posted_payload(post_mock, out, err)
         self.assertEqual(
             payload.get("cycles"),
-            [{"label": "a"}, {"label": "b"}, {"label": "c"}],
-            f"AC1: three `--cycle` occurrences post three cycles, in the order "
-            f"given and unsplit; got payload={payload!r}")
+            [{"label": "a", "kind": "verify"},
+             {"label": "b", "kind": "fix"},
+             {"label": "c", "kind": "red-green"}],
+            f"AC1 + CR-CRU-127 §S1/§S3: three `--cycle` occurrences post three "
+            f"cycles, in the order given, unsplit, each carrying its own "
+            f"declared kind; got payload={payload!r}")
 
     def test_a_single_cycle_value_carrying_either_delimiter_files_exactly_one_cycle(self):
+        """AC2, REWRITTEN by CR-CRU-127 §S4 to declare the kind the mandate now
+        requires. The no-splitting rule itself is untouched."""
         for label in self.UNSPLIT_LABELS:
             with self.subTest(label=f"{label[:48]}…"):
-                code, out, err, post_mock = self._plan_file(["--cycle", label])
+                code, out, err, post_mock = self._plan_file(
+                    ["--cycle", label, "--cycle-kind", "red-green"])
                 self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
                 payload = self._posted_payload(post_mock, out, err)
                 self.assertEqual(
-                    payload.get("cycles"), [{"label": label}],
+                    payload.get("cycles"),
+                    [{"label": label, "kind": "red-green"}],
                     f"AC2: one `--cycle` is ONE cycle whose label is the value "
                     f"byte-for-byte, however many commas or semicolons it "
                     f"carries; got payload={payload!r}")

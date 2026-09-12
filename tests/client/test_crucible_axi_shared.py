@@ -1320,7 +1320,8 @@ class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
 
 class _PlanFileArgs:
     """The parsed-namespace shape `cmd_plan_file` reads: `cr`, `cycles`,
-    `cycle`, `title`, `wave`, `agent`, plus `cmd` for `run_verb`'s converter.
+    `cycle`, `cycle_kind`, `title`, `wave`, `agent`, plus `cmd` for
+    `run_verb`'s converter.
 
     `cycles=None` is not a fixture convenience — it is exactly what argparse
     hands the verb once AC5 drops `required=True` from the five clients."""
@@ -1431,6 +1432,7 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
         conversion seam `emit_agent_identity_hard_stop` already uses."""
         fields = {"cr": "CR-FLAG", "agent": "test-agent", "title": "a plan",
                   "wave": "5", "cycles": None, "cycle": None,
+                  "cycle_kind": None,
                   "project_dir": self.tmpdir, "cmd": "plan-file"}
         fields.update(overrides)
         args = _PlanFileArgs(**fields)
@@ -1487,52 +1489,82 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
         return axi
 
     def test_repeatable_cycle_flag_composes_one_payload_cycle_per_occurrence_in_order(self):
-        code, out, err, posts = self._run(cycle=["a", "b", "c"])
+        """CR-CRU-107/AC1, REWRITTEN by CR-CRU-127 §S3: the pairing is still
+        one payload cycle per `--cycle` occurrence, in the order given — but a
+        filed cycle now DECLARES ITS KIND, so the entry the caller observes on
+        the wire is `{label, kind}`. The three kinds are all different so the
+        positional pairing is proven here as well as the ordering."""
+        code, out, err, posts = self._run(
+            cycle=["a", "b", "c"], cycle_kind=["verify", "fix", "red-green"])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         self.assertEqual(len(posts), 1,
                          f"exactly one plans POST expected; got {posts!r}")
         self.assertEqual(
             posts[0][1].get("cycles"),
-            [{"label": "a"}, {"label": "b"}, {"label": "c"}],
-            f"AC1: three `--cycle` occurrences post three cycles, in the order "
-            f"given and unsplit; got payload={posts[0][1]!r}")
+            [{"label": "a", "kind": "verify"},
+             {"label": "b", "kind": "fix"},
+             {"label": "c", "kind": "red-green"}],
+            f"AC1 + CR-CRU-127 §S1/§S3: three `--cycle` occurrences post three "
+            f"cycles, in the order given, unsplit, each carrying the kind "
+            f"declared at ITS position; got payload={posts[0][1]!r}")
 
     def test_a_single_cycle_value_is_never_split_whatever_delimiters_it_carries(self):
         """AC2 — every label this board actually lost to the delimiter files as
         ONE cycle when it rides `--cycle`, in both directions: the four
         semicolon values that became one cycle each, the comma value that
-        became three, and a value carrying both delimiters at once."""
+        became three, and a value carrying both delimiters at once.
+
+        REWRITTEN by CR-CRU-127 §S4: a filed cycle declares its kind, so the
+        call carries one. The no-splitting rule is untouched — which is the
+        point of asserting it beside the kind rather than dropping it."""
         for label in self.UNSPLIT_LABELS:
             with self.subTest(label=f"{label[:48]}…"):
-                code, out, err, posts = self._run(cycle=[label])
+                code, out, err, posts = self._run(
+                    cycle=[label], cycle_kind=["red-green"])
                 self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
                 self.assertEqual(
                     len(posts), 1,
                     f"exactly one plans POST expected; got {posts!r}")
                 self.assertEqual(
-                    posts[0][1].get("cycles"), [{"label": label}],
+                    posts[0][1].get("cycles"),
+                    [{"label": label, "kind": "red-green"}],
                     f"AC2: one `--cycle` is ONE cycle whose label is the value "
                     f"byte-for-byte, however many commas or semicolons it "
                     f"carries; got payload={posts[0][1]!r}")
 
-    def test_the_legacy_cycles_flag_still_posts_todays_byte_identical_payload(self):
-        """AC3 — the legacy form is untouched: same comma split, same order,
-        same payload. Passes on arrival, and is meant to: it is the guard that
-        catches §S1 changing the form ~40 call sites already depend on."""
+    def test_the_legacy_cycles_flag_is_refused_for_filing_under_the_kind_mandate(self):
+        """CR-CRU-107/AC3 pinned that `--cycles "a,b"` posts today's payload
+        byte for byte. CR-CRU-127 §S4a INVERTS it, and the reason is recorded
+        because it is the finding that made §S4a necessary: with the kind
+        mandate enforced CLIENT-SIDE ONLY (user ruling 2026-09-13), `--cycles`
+        became the one door still filing kindless cycles — the original defect,
+        reachable, on the only enforcement surface left.
+
+        So the criterion is rewritten, not deleted and not re-pinned to a new
+        payload: the legacy form is REFUSED for filing, and the caller is
+        handed back the `--cycle` + `--cycle-kind` form. It is not retired as a
+        flag (it must still PARSE, or the refusal degrades into argparse's bare
+        usage error), and it is not paired positionally against comma-split
+        labels — that would let a comma inside a label corrupt the KIND pairing
+        too, turning CR-CRU-078's one recorded defect into two."""
         code, out, err, posts = self._run(cycles="a,b")
-        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
-        self.assertEqual(len(posts), 1,
-                         f"exactly one plans POST expected; got {posts!r}")
-        path, payload = posts[0]
-        self.assertEqual(path, "/api/v2/projects/pk/plans",
-                         f"got path={path!r}")
+        axi = self._assert_structured_refusal(code, out, err, posts,
+                                              ac="§S4a legacy --cycles")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycles\b",
+            f"the refusal must NAME the flag it refused, or the caller cannot "
+            f"tell which half of their call was wrong; got {axi!r}")
+        help_list = [str(h) for h in (axi.get("help") or [])]
+        mandated = [h for h in help_list
+                    if "--cycle " in h and "--cycle-kind" in h]
+        self.assertTrue(
+            mandated,
+            f"§S4a — help[] must hand back the MANDATED `--cycle` + "
+            f"`--cycle-kind` form; got help={help_list!r}")
         self.assertEqual(
-            payload,
-            {"cr": "CR-FLAG", "agentId": "test-agent",
-             "cycles": [{"label": "a"}, {"label": "b"}],
-             "title": "a plan", "wave": "5", "orchestrator": "test-agent"},
-            f"AC3: `--cycles \"a,b\"` must post the payload it posts today, "
-            f"key for key; got {payload!r}")
+            [h for h in help_list if "--cycles" in h], [],
+            f"§S4a — no remedy may teach the form that was just refused; got "
+            f"help={help_list!r}")
 
     def test_both_cycle_flags_together_are_refused_before_anything_is_posted(self):
         """AC4 — the two flags are mutually exclusive: with both given the
@@ -1577,21 +1609,19 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
             f"replaced by the envelope, not printed beside it; got "
             f"stderr={err!r}")
 
-    def _legacy_empty_help(self):
-        """The `help[]` an empty `--cycles` hands back, read off a REAL run of
-        the refusal rather than the module constant — it is the caller-visible
-        remedy the empty-`--cycle` half has to match."""
-        code, out, err, posts = self._run(cycles=",,")
-        self.assertEqual(code, 2, f"stdout={out!r} stderr={err!r}")
-        return [str(h) for h in (self._decode(out).get("help") or [])]
-
     def test_an_empty_cycle_occurrence_is_refused_at_the_door_not_by_the_server(self):
         """§S2 — `--cycle ""` composed `cycles: [{"label": ""}]` and POSTed it;
         the server rejects the whole request with a bare `label is required`
         and no `help[]`, so the caller learned nothing and nothing landed. The
         realistic trigger is an unset shell variable, `--cycle "$LABEL"`. It is
         the same defect as the empty `--cycles`, so it is the same refusal:
-        posted nothing, `cycle-list-empty`, and the SAME actionable help[]."""
+        posted nothing, `cycle-list-empty`, and an actionable help[].
+
+        CR-CRU-127 leaves the INVOCATION byte-unchanged deliberately, and that
+        pins the REFUSAL ORDER: a `--cycle` that names no cycle is answered as
+        `cycle-list-empty`, not as the new absent-kind refusal. A call with no
+        cycle in it has nothing for a kind to pair WITH, so naming the missing
+        kind first would send the caller to fix the wrong flag."""
         code, out, err, posts = self._run(cycle=[""])
         axi = self._assert_structured_refusal(code, out, err, posts,
                                               ac="empty --cycle")
@@ -1604,11 +1634,22 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
             f"the empty `--cycle` is the SAME refusal code as the empty "
             f"`--cycles`, so a caller matching on the code catches both; got "
             f"stderr={err!r}")
+        # REWRITTEN by CR-CRU-127 §S4a: this used to pin that the empty
+        # `--cycle` and the empty `--cycles` hand back the SAME remedy. There
+        # is no longer an empty-`--cycles` path to be equal to — `--cycles` is
+        # refused for filing outright — so the criterion states the remedy
+        # directly instead: the caller is handed the MANDATED form, and never
+        # the legacy one they would be refused for using.
+        help_list = [str(h) for h in (axi.get("help") or [])]
+        self.assertTrue(
+            [h for h in help_list
+             if "--cycle " in h and "--cycle-kind" in h],
+            f"the remedy must hand back the mandated `--cycle` + "
+            f"`--cycle-kind` form; got help={help_list!r}")
         self.assertEqual(
-            [str(h) for h in (axi.get("help") or [])], self._legacy_empty_help(),
-            f"both halves of the empty-cycle-list defect must hand back the "
-            f"same remedy, or the caller's fix depends on which flag they "
-            f"happened to use; got {axi!r}")
+            [h for h in help_list if "--cycles" in h], [],
+            f"a remedy that offers the legacy form sends the caller into the "
+            f"§S4a refusal; got help={help_list!r}")
 
     def test_a_whitespace_only_cycle_names_no_cycle_but_a_kept_value_is_never_stripped(self):
         """The ruling, pinned in one place because the two halves are easy to
@@ -1622,10 +1663,10 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
                 code, out, err, posts = self._run(cycle=[blank])
                 self._assert_structured_refusal(code, out, err, posts,
                                                 ac=f"whitespace-only {blank!r}")
-        code, out, err, posts = self._run(cycle=[" a "])
+        code, out, err, posts = self._run(cycle=[" a "], cycle_kind=["fix"])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         self.assertEqual(
-            posts[0][1].get("cycles"), [{"label": " a "}],
+            posts[0][1].get("cycles"), [{"label": " a ", "kind": "fix"}],
             f"AC2: refusing whitespace-ONLY values must not put a strip on the "
             f"values that are kept — ' a ' files with its spaces; got "
             f"payload={posts[0][1]!r}")
@@ -1641,6 +1682,96 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
         code, out, err, posts = self._run(cycle=["a", "", "b"])
         self._assert_structured_refusal(code, out, err, posts,
                                         ac="empty between valid")
+
+
+# ── CR-CRU-127 §S1/§S4/§S6 — a filed cycle declares its kind ────────────────
+#
+# The two NEW refusals join the SHAPE above rather than inventing a second one
+# (§S6/AC2, which names `_assert_structured_refusal` explicitly): nothing
+# posted, an ok:false `plan-file` envelope on stdout, exit 2, and a `help[]`
+# handing back the CORRECTED invocation. What each adds on top is its own
+# error copy — a caller who declared no kind and a caller who declared the
+# wrong NUMBER of kinds need different next moves.
+
+
+# They are added to `SharedAxiPlanFileCycleFlagTest` itself rather than to a
+# subclass: the harness and the refusal shape are that class's, and a subclass
+# would silently RE-RUN every criterion above under a second name.
+#
+# RED, measured against `e5d6275`: `cmd_plan_file` never reads a kind at all
+# (`plan_file_cycle_labels` returns bare labels and the body is composed as
+# `[{"label": label} …]`), so a kindless call FILES instead of refusing and a
+# mismatched count files the cycles with no kind at all.
+
+    def test_a_cycle_with_no_declared_kind_is_refused_before_any_post(self):
+        """§S4 — the mandate. The kind is REQUIRED, not optional-with-a-default:
+        a client-side default is precisely the defect being fixed (the route's
+        own `red-green` default is what silently mislabelled cycle 442), so the
+        client refuses rather than inventing one."""
+        code, out, err, posts = self._run(cycle=["the implementation"])
+        axi = self._assert_structured_refusal(code, out, err, posts,
+                                              ac="§S4 absent kind")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycle-kind\b",
+            f"the error must name the flag the caller is missing — being "
+            f"refused without being told which flag closes the gap is the "
+            f"context loss AXI principle 9 exists to prevent; got {axi!r}")
+
+    def test_more_cycles_than_kinds_is_refused_with_both_counts_named(self):
+        """§S1 — "a count mismatch is refused client-side before any POST,
+        naming both counts". Silent truncation would file a plan whose kinds
+        are off by one: silently wrong data, the exact class this CR removes."""
+        code, out, err, posts = self._run(
+            cycle=["the implementation", "verify it"], cycle_kind=["red-green"])
+        axi = self._assert_structured_refusal(code, out, err, posts,
+                                              ac="§S1 two cycles, one kind")
+        error = str(axi.get("error") or "")
+        for count in ("2", "1"):
+            self.assertIn(
+                count, error,
+                f"the error must name BOTH counts so the caller can see which "
+                f"side is short; got error={error!r}")
+
+    def test_more_kinds_than_cycles_is_refused_with_both_counts_named(self):
+        """§S1 — the mismatch is refused in BOTH directions. Silent padding is
+        the mirror defect of silent truncation and just as wrong."""
+        code, out, err, posts = self._run(
+            cycle=["the implementation"], cycle_kind=["red-green", "verify"])
+        axi = self._assert_structured_refusal(code, out, err, posts,
+                                              ac="§S1 one cycle, two kinds")
+        error = str(axi.get("error") or "")
+        for count in ("1", "2"):
+            self.assertIn(
+                count, error,
+                f"the error must name BOTH counts; got error={error!r}")
+
+    def test_the_three_refusals_this_cr_adds_are_told_apart_by_their_codes(self):
+        """§S6/AC2 — "the pattern already exists": each refusal needs a
+        DIFFERENT next move, and one canned code reused across them would name
+        none of them. A caller matching on `code` must be able to tell the
+        absent kind, the mis-counted kinds and the refused legacy flag apart."""
+        runs = {
+            "absent kind": {"cycle": ["a"]},
+            "count mismatch": {"cycle": ["a", "b"], "cycle_kind": ["fix"]},
+            "legacy --cycles": {"cycles": "a,b"},
+        }
+        codes = {}
+        for name, kwargs in runs.items():
+            code, out, err, posts = self._run(**kwargs)
+            axi = self._assert_structured_refusal(code, out, err, posts, ac=name)
+            codes[name] = axi.get("code") or self._refusal_code_from(err)
+        self.assertEqual(
+            len(set(codes.values())), len(runs),
+            f"three distinct refusals need three distinct codes; got {codes!r}")
+
+    @staticmethod
+    def _refusal_code_from(stderr_text):
+        """The AXI refusal code as the human line carries it — the fleet prints
+        `[crucible] <code> — <detail>` on stderr beside the envelope."""
+        for token in stderr_text.split():
+            if token.startswith("cycle") and "-" in token:
+                return token
+        return stderr_text.strip()
 
 
 if __name__ == "__main__":

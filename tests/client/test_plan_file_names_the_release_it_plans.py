@@ -441,8 +441,13 @@ class _PlanFileWireTestBase(unittest.TestCase):
             return {"ok": True, "planId": 1, "cr": self.CR,
                     "status": "open", "cycles": [{"label": "red-green", "id": 7}]}
 
+        # CR-CRU-127 §S4 — a filed cycle declares its kind, so the fixture
+        # call declares one. (The label happens to read `red-green` too; it is
+        # this suite's original fixture label, kept so the release assertions
+        # stay byte-comparable with what they pinned before.)
         argv = [VERB, "--cr", self.CR, "--title", "the wire under test",
-                "--cycle", "red-green", "--wave", "6", "--agent", self.AGENT,
+                "--cycle", "red-green", "--cycle-kind", "red-green",
+                "--wave", "6", "--agent", self.AGENT,
                 "--project-dir", self.tmpdir] + list(extra)
         with mock.patch.object(self.module, "_post", side_effect=fake_post):
             code, out, err = _run_main(self.module, argv)
@@ -478,7 +483,7 @@ class PlanFileCarriesTheDeclaredReleaseTest(_PlanFileWireTestBase):
             (payload.get("cr"), payload.get("title"), payload.get("wave"),
              payload.get("agentId"), payload.get("cycles")),
             (self.CR, "the wire under test", "6", self.AGENT,
-             [{"label": "red-green"}]),
+             [{"label": "red-green", "kind": "red-green"}]),
             f"every field plan-file already sends must arrive unchanged beside "
             f"the new one; got {payload!r}")
 
@@ -495,7 +500,12 @@ class PlanFileCarriesTheDeclaredReleaseTest(_PlanFileWireTestBase):
 
 class TodaysPlanFileBodySurvivesTest(_PlanFileWireTestBase):
     """The measurement behind the word "additive": every test here passes
-    BEFORE the flag exists and must pass after it."""
+    BEFORE the `--release` flag exists and must pass after it.
+
+    CR-CRU-127 amends the BASELINE the word "additive" is measured against —
+    a filed cycle now carries its kind — so the body pinned below states that
+    contract. `--release`'s own additivity, which is what this class is for,
+    is unchanged and still asserted the same way."""
 
     def test_without_a_release_the_body_carries_no_release_key_at_all(self):
         payload = self.the_one_plan_file_payload()
@@ -507,18 +517,25 @@ class TodaysPlanFileBodySurvivesTest(_PlanFileWireTestBase):
             f"its presence, and a fabricated value would register the CR into "
             f"a release nobody declared; got {payload!r}")
 
-    def test_the_body_plan_file_sends_today_is_unchanged(self):
+    def test_the_release_less_body_carries_only_the_cr_its_cycles_and_its_wave(self):
+        """Was `test_the_body_plan_file_sends_today_is_unchanged`. REWRITTEN by
+        CR-CRU-127 §S5 rather than deleted or re-pinned to whatever the code
+        now emits: the criterion it states — a client that names no release
+        sends a body carrying no release and nothing invented — is unchanged;
+        the body it is measured against gains the per-cycle `kind` the kind
+        mandate requires."""
         payload = self.the_one_plan_file_payload()
 
         self.assertEqual(
             payload,
             {"cr": self.CR, "agentId": self.AGENT,
-             "cycles": [{"label": "red-green"}], "title": "the wire under test",
+             "cycles": [{"label": "red-green", "kind": "red-green"}],
+             "title": "the wire under test",
              "wave": "6", "orchestrator": self.AGENT},
-            f"the release-less body is composed exactly as it is today — the "
-            f"backward-compatibility constraint this change makes explicit: a "
-            f"client that names no release must send the body it always sent; "
-            f"got {payload!r}")
+            f"the release-less body is composed of exactly the fields the "
+            f"caller declared — the backward-compatibility constraint this "
+            f"change makes explicit: a client that names no release must "
+            f"invent nothing; got {payload!r}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
