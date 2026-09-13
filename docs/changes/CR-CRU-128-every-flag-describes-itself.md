@@ -46,15 +46,20 @@ a hand-rolled flag is described only if its author remembered.
   `:2581` `--crate`
 
 **Six of the 18 are `--agent`, and all six are declared `required=True`** — on `auto-ingest`
-(`bun:2161`, `mvn:2131`, `python:1524`, `rust:2525`), `pre-merge-gate` (`mvn:2152`) and one gate
-verb (`rust:2538`). A mandatory flag with no description is the worst case in the set: the agent
-cannot learn that it is required, or what it takes, from the surface it is meant to read.
+(`bun:2161`, `mvn:2131`, `python:1524`, `rust:2525`), `pre-merge-gate` (`mvn:2152`) and
+`regression-ingest` (`rust:2538`). A mandatory flag with no description is the worst case in the
+set: the agent cannot learn that it is required, or what it takes, from the surface it is meant to
+read.
 
-Two further measurements shape the census in §S2/§S3. Of the 374 option-bearing declarations, **338
-pass a literal help string, 18 pass a NON-literal** (10 a module constant, 4 a concatenation, 4 an
-f-string; 6 of them in `_crucible_axi.py`), and 18 pass none. And **19 `--agent` declarations carry
+Three further measurements shape the census in §S2/§S3. Of the 374 option-bearing declarations,
+**338 pass a literal help string, 18 pass a NON-literal** (10 a module constant, 4 a concatenation,
+4 an f-string; 6 of them in `_crucible_axi.py`), and 18 pass none. **19 `--agent` declarations carry
 help describing the ingest side-effect rather than the flag** — `"If set, ingest surefire
-(compile-fail → /api/v2/runs/compile)"` and 18 more across bun, mvn, python and rust.
+(compile-fail → /api/v2/runs/compile)"` and 18 more across bun, mvn, python and rust. And the
+`milestone --type` flag is declared in all five clients with no `choices=`, its help enumerating
+**five** milestone types while `MILESTONE_TYPES` (`src/v2.ts:1165`) has held **six** since
+CR-CRU-074 added `release` — help that does not merely under-describe but actively hides a valid
+value from every agent reading it.
 
 ## Scope
 
@@ -65,11 +70,11 @@ help describing the ingest side-effect rather than the flag** — `"If set, inge
 The 18 gain help text. Wording follows each flag's existing siblings on the same verb, and comes
 from what the flag actually does — read the code that consumes it, not the flag's name.
 
-`--agent` has **no single existing description to reuse**: its 60 fleet declarations carry 22
+`--agent` has **no single existing description to reuse**: its 60 fleet declarations carry 24
 distinct help values. This CR therefore NOMINATES one canonical wording, applies it to the six
 `required=True` sites, and states in it that the flag is required. Harmonising the other `--agent`
 wordings is out of scope; the nomination is recorded so the next author has one wording to copy
-rather than eight to choose between.
+rather than a dozen to choose between.
 
 ### §S2 A derived census makes it structural, not a one-time sweep
 
@@ -103,8 +108,12 @@ mechanical properties, and deliberately does not grade prose:
 1. The text is non-empty.
 2. It is not a bare repetition of the flag's own name.
 3. A flag declared with no `choices=` whose value comes from a server-owned closed vocabulary names
-   that vocabulary — a flag without `choices=` has nowhere else to teach its values. The
-   vocabularies in scope are enumerated in the implementation, not guessed.
+   that vocabulary, in full — a flag without `choices=` has nowhere else to teach its values. The
+   vocabularies in scope are enumerated in the implementation, not guessed. The five `milestone
+   --type` declarations that name five of the server's six milestone types are REPAIRED here, not
+   exempted: a help string that omits a valid value is worse than a thin one, because the agent
+   reading it concludes the value does not exist. This is the only place this CR edits help text
+   that already exists.
 4. A flag with no `action=` takes a VALUE, so its help must not open with `"If set"` — that
    describes a switch the flag is not. The 19 existing offenders are recorded as a dated exemption
    ceiling that may only SHRINK, following the `PRE_CR_ASSERTION_RESIDUE` shape at
@@ -139,14 +148,17 @@ CR will catch that.
 - [ ] A flag whose help is empty, or is only its own name with punctuation stripped, fails.
 - [ ] A flag declared with no `choices=` whose value comes from an enumerated server-owned
       vocabulary fails unless its help names that vocabulary.
+- [ ] The five `milestone --type` declarations (one per client) name all six `MILESTONE_TYPES`,
+      `release` included; the six are read from `src/v2.ts`, never typed into the test.
 - [ ] A flag with no `action=` whose help begins `"If set"` fails, unless it is one of the 19 listed
       exemptions; the exemption list is asserted to be exactly 19 and may only shrink.
-- [ ] Mutation: adding a 20th such flag turns the census red.
+- [ ] Mutation: adding a 20th such flag turns the census red; dropping `release` from any one of the
+      five `--type` help strings turns the vocabulary check red naming that client.
 
 ## Estimated size
 
-S — one cycle: 18 help strings plus one derived census test. The census is the durable half; the 18
-strings are the one-time debt it stops accruing.
+S — one cycle: 18 help strings, five one-word vocabulary repairs, and one derived census test. The
+census is the durable half; the 23 edits are the one-time debt it stops accruing.
 
 ## Risk
 
@@ -164,10 +176,12 @@ strings are the one-time debt it stops accruing.
 
 ## Non-goals
 
-- Grading the QUALITY of existing help text, or rewriting the 338 flags that already carry some.
+- Grading the QUALITY of existing help text, or rewriting the 338 flags that already carry some —
+  with the single exception of the five `milestone --type` strings, whose enumeration is factually
+  incomplete rather than merely poor (§S3.3).
 - Repairing the 19 `"If set"` `--agent` descriptions — the census refuses a NEW one; the existing 19
   are an exemption ceiling that may only shrink.
-- Harmonising the 22 distinct `--agent` wordings beyond the six sites §S1 nominates.
+- Harmonising the 24 distinct `--agent` wordings beyond the six sites §S1 nominates.
 - Lifting hand-rolled flags into the shared registrar. The measured correlation argues for it, but
   that is a five-client refactor belonging to the registrar-parity family (CR-CRU-075's), not to a
   documentation census. Recorded here as the measured argument FOR that work.
