@@ -964,10 +964,14 @@ function backfillInferredEventRoles(db: Database): void {
 // consumption and the gate retirement each used to re-parse every row's blob
 // to find them. They are DERIVED at the one row-insert seam from the payload,
 // exactly as `cycle_id` is derived from `context`, so the two representations
-// cannot disagree. Everything else a record carries — `releasedAt`, `crs`,
-// `packages`, `targetAt`, the gate object — stays in the generic `payload`
-// blob it has always ridden in, so a record round-trips byte-identically and
-// nothing is re-derived by the move.
+// cannot disagree.
+//
+// CR-CRU-130 §S1 joins `target_at`/`delivered_at` to that list for the same
+// reason: "what is outstanding, and what slipped" are FILTERS, and a filter
+// over a blob is a table scan that re-parses every row. Everything else a
+// record carries — `releasedAt`, `crs`, `packages`, the gate object — stays in
+// the generic `payload` blob it has always ridden in, so a record round-trips
+// byte-identically and nothing is re-derived by the move.
 
 /** The two record tables, in their CURRENT shape. Idempotent, like every DDL here. */
 function createRecordTables(db: Database): void {
@@ -982,7 +986,13 @@ function createRecordTables(db: Database): void {
       -- The filtered fields, derived from the payload at the insert seam.
       type TEXT,
       label TEXT,
-      -- releasedAt / crs / packages / targetAt ride here, verbatim.
+      -- CR-CRU-130 §S1 — a milestone is a dated GOAL, so the two dates that say
+      -- what it is FOR are filtered here too, on the same terms and at the same
+      -- seam: when it is DUE and when it was MET. NULL is the real state
+      -- "undated"/"outstanding", never 0 and never the row's timestamp.
+      target_at INTEGER,
+      delivered_at INTEGER,
+      -- releasedAt / crs / packages ride here, verbatim.
       payload TEXT,
       context TEXT,
       role TEXT,
@@ -1017,6 +1027,44 @@ function createRecordTables(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_gates_project_version
       ON gates (project_key, version);
   `);
+}
+
+/**
+ * CR-CRU-130 §S1 — WHEN a milestone was met, from whichever spelling the
+ * record carries.
+ *
+ * `releasedAt` is not a second date beside `deliveredAt`: it is the same date
+ * under the release-only name it was born with, so a `release` written before
+ * this CR — and every row the migration below reads — answers "delivered"
+ * without its payload being rewritten. ONE rule, used at the insert seam, at
+ * the read mapper and by the migration step, so no two of them can disagree
+ * about what a row means. `null` rather than `undefined`: the callers are a
+ * SQL bind and a column comparison, and NULL is what "outstanding" is stored
+ * as.
+ */
+function deliveredAtOf(record: { deliveredAt?: number; releasedAt?: number }): number | null {
+  return record.deliveredAt ?? record.releasedAt ?? null;
+}
+
+/**
+ * CR-CRU-130 §S1 — the questions the two dates exist to answer, as a filter on
+ * the record read `listMilestonesByType` already is: what is OUTSTANDING, and
+ * what is due before or after a given instant (epoch SECONDS, the unit the
+ * dates themselves use).
+ *
+ * Each field is OPTIONAL and independently combinable, with the type filter
+ * included: "what is outstanding" is a question across types, while "which of
+ * this type is outstanding" is a narrowing within one. An omitted field
+ * constrains nothing — never a default, which would silently answer a
+ * different question than the one asked.
+ */
+export interface MilestoneDateFilter {
+  /** `false` → not yet met; `true` → met. Omitted → both. */
+  delivered?: boolean;
+  /** Due strictly BEFORE this instant. Undated records are due at no time. */
+  targetBefore?: number;
+  /** Due strictly AFTER this instant. Undated records are due at no time. */
+  targetAfter?: number;
 }
 
 /**
@@ -1631,6 +1679,71 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
         )
         .get()!.n;
       return pending === 0;
+    },
+  },
+  {
+    description:
+      "milestones: CR-130 §S1 — a milestone's dates become columns, DERIVED from the payload it already carries: `targetAt` when it is due, `deliveredAt` (or `releasedAt`, the same date under its old name) when it was met",
+    apply(db) {
+      if (!tableExists(db, "milestones")) return;
+      // The columns first — a board whose record table predates this CR has
+      // neither, while one whose table was CREATED by the step above already
+      // has both from the current DDL. Either way the DERIVATION below runs:
+      // adding a column leaves every existing row NULL, which is the state
+      // this step exists to correct.
+      const present = columnsOf(db, "milestones");
+      if (!present.has("target_at")) db.exec(`ALTER TABLE milestones ADD COLUMN target_at INTEGER`);
+      if (!present.has("delivered_at")) {
+        db.exec(`ALTER TABLE milestones ADD COLUMN delivered_at INTEGER`);
+      }
+      // DERIVED, never invented: the two UPDATEs read the row's own payload
+      // and write nothing where it says nothing, so a release aimed at no
+      // declared target and a `cr-merged` row keep NULL in both columns rather
+      // than a 0 that would read as "due in 1970" on every surface.
+      //
+      // An UPDATE of two columns and nothing else — no insert, no delete, no
+      // table rebuild — so every row's id, timestamp, identity columns and
+      // payload BLOB are byte-identical afterwards. That is the only form of
+      // "nothing was lost" that can be asserted rather than eyeballed, and the
+      // CR's Risk section demands it: this history was already lost once.
+      //
+      // IDEMPOTENT by the `IS NULL` predicate alone, exactly as the CR-073 and
+      // CR-126 backfills above: a row a previous pass derived is no longer
+      // NULL, so a re-run cannot re-derive it.
+      //
+      // NO CAST, for the reason the CR-126 step states: `json_extract`
+      // preserves the JSON type, and SQLite's INTEGER affinity converts text
+      // only when it is a well-formed integer literal, where `CAST` would turn
+      // anything else into 0 — the one value these columns must never hold.
+      db.exec(
+        `UPDATE milestones SET target_at = json_extract(payload, '$.targetAt')
+          WHERE target_at IS NULL AND json_extract(payload, '$.targetAt') IS NOT NULL`,
+      );
+      db.exec(
+        `UPDATE milestones
+            SET delivered_at = COALESCE(json_extract(payload, '$.deliveredAt'),
+                                        json_extract(payload, '$.releasedAt'))
+          WHERE delivered_at IS NULL
+            AND COALESCE(json_extract(payload, '$.deliveredAt'),
+                         json_extract(payload, '$.releasedAt')) IS NOT NULL`,
+      );
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "milestones")) return false;
+      const cols = columnsOf(db, "milestones");
+      if (!cols.has("target_at") || !cols.has("delivered_at")) return false;
+      // The data half, as the CR-073, CR-126 and CR-129 steps do it: no record
+      // may still be owed a date its own blob already carries.
+      const owed = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM milestones
+            WHERE (target_at IS NULL AND json_extract(payload, '$.targetAt') IS NOT NULL)
+               OR (delivered_at IS NULL
+                   AND COALESCE(json_extract(payload, '$.deliveredAt'),
+                                json_extract(payload, '$.releasedAt')) IS NOT NULL)`,
+        )
+        .get()!.n;
+      return owed === 0;
     },
   },
 ];
@@ -2627,10 +2740,17 @@ export class Store {
       crs?: string[];
       packages?: PackageRef[];
       /**
-       * CR-CRU-091 §S1 — a `release-proposal`'s declared target, epoch SECONDS.
-       * Ignored (stripped) for every other type.
+       * CR-CRU-130 §S1 — when this milestone is DUE, epoch SECONDS. Carried
+       * for EVERY type; absent means undated.
        */
       targetAt?: number;
+      /**
+       * CR-CRU-130 §S1 — when this milestone was MET, epoch SECONDS. Carried
+       * for every type; absent means outstanding. A `release` that states only
+       * `releasedAt` states this date under its old name, and the seam below
+       * reads it as such.
+       */
+      deliveredAt?: number;
       repairProvenance?: boolean;
     },
   ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink; refused?: boolean } {
@@ -2674,10 +2794,26 @@ export class Store {
     const releasedAt = type === "release" ? meta?.releasedAt : undefined;
     const crs = type === "release" ? meta?.crs : undefined;
     const packages = type === "release" ? meta?.packages : undefined;
-    // CR-CRU-091 §S1 — the mirror of the three lines above: a declared target
-    // belongs to a PROPOSAL and nothing else. A `release` carries `releasedAt`
-    // (when it shipped); a target it was once aimed at is not a fact about it.
-    const targetAt = type === "release-proposal" ? meta?.targetAt : undefined;
+    // CR-CRU-130 §S1 — NOT the mirror of the three lines above, any more.
+    //
+    // CR-CRU-091 §S1 recorded the narrower stance here, and enforced it with
+    // `type === "release-proposal" ? meta?.targetAt : undefined`, which
+    // silently DISCARDED a target sent for any other type. The user's
+    // 2026-09-13 ruling supersedes it: a milestone is a dated GOAL, so what it
+    // was aimed at and when it landed are both facts about it whatever its
+    // type, and the distance between the two is the only thing that can tell
+    // anyone a deliverable slipped. The gate went with the claim that
+    // justified it, because a comment left asserting the opposite of shipped
+    // behaviour is the defect CR-CRU-128 spent a FIX round deleting.
+    //
+    // `releasedAt` above is NOT a fourth provenance field beside this one: it
+    // is THIS date under its old, release-only name, so a release stating only
+    // when it shipped states when it was delivered. Both spellings are carried
+    // — the old one verbatim, so every wire shape a client reads stays
+    // byte-identical (§S0), the new one because it is the one every type
+    // shares.
+    const targetAt = meta?.targetAt;
+    const deliveredAt = meta?.deliveredAt ?? releasedAt;
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -2692,6 +2828,7 @@ export class Store {
       ...(crs !== undefined ? { crs } : {}),
       ...(packages !== undefined ? { packages } : {}),
       ...(targetAt !== undefined ? { targetAt } : {}),
+      ...(deliveredAt !== undefined ? { deliveredAt } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
     const version = type === "release" ? meta?.label : undefined;
@@ -2880,7 +3017,10 @@ export class Store {
     if (offeredNothing) return { event: held, changed: false };
     const repaired: RunEvent = {
       ...held,
-      ...(releasedAt !== undefined ? { releasedAt } : {}),
+      // CR-CRU-130 §S1 — the ship date IS the delivered date, so a re-derived
+      // `releasedAt` moves BOTH spellings; moving one alone would leave the
+      // record disagreeing with itself about when it landed.
+      ...(releasedAt !== undefined ? { releasedAt, deliveredAt: releasedAt } : {}),
       ...(derivedCrs !== undefined ? { crs: derivedCrs } : {}),
       ...(derivedPackages !== undefined ? { packages: derivedPackages } : {}),
     };
@@ -2889,7 +3029,13 @@ export class Store {
     // CR-CRU-129 §S1 — the release is a record now; the repair edits it where
     // it lives. `type`/`label` are untouched: an in-place provenance repair
     // never changes what a release IS, only what it is known to have shipped.
-    this.db.query(`UPDATE milestones SET payload = ? WHERE id = ?`).run(payload, held.id);
+    //
+    // CR-CRU-130 §S1 — `delivered_at` travels WITH the payload it is derived
+    // from, in the one statement, because this is the only write that edits a
+    // record's dates after the insert seam has run.
+    this.db
+      .query(`UPDATE milestones SET payload = ?, delivered_at = ? WHERE id = ?`)
+      .run(payload, deliveredAtOf(repaired), held.id);
     // CR-CRU-086 §S3 — a legitimate shrink stays possible (the measured 58→51
     // case, where nine CRs have no landing record) and is APPLIED, but it
     // never leaves in silence: what it dropped travels back with it.
@@ -3316,15 +3462,54 @@ export class Store {
    *
    * Archived projects are excluded through the same subquery every other
    * project-scoped read uses: nothing is deleted, and unarchiving restores it.
+   *
+   * CR-CRU-130 §S1 — the SAME read answers "what is outstanding" and "what is
+   * due before/after", through `dates`. EXTENDED rather than joined by a
+   * second record read, because a second read would have to be kept unwindowed
+   * and projection-free in parallel with this one and would drift the first
+   * time only one of them was corrected. `type` becomes OPTIONAL (`null`) for
+   * exactly the same reason the route above makes it so: what is outstanding
+   * is a question ACROSS types, including types this build has never heard of.
+   * The filters are COLUMN predicates, so the answer is still the rows the
+   * `(project_key, type)` index leads to rather than a scan that re-parses
+   * every blob.
    */
-  listMilestonesByType(projectKey: string, type: string): RunEvent[] {
+  listMilestonesByType(
+    projectKey: string,
+    type: string | null,
+    dates?: MilestoneDateFilter,
+  ): RunEvent[] {
+    const where: string[] = ["project_key = ?"];
+    const args: (string | number)[] = [projectKey];
+    if (type !== null) {
+      where.push("type = ?");
+      args.push(type);
+    }
+    if (dates?.delivered !== undefined) {
+      // ABSENCE is the signal, so the test is NULL-ness rather than a
+      // comparison with a sentinel: a record has been delivered exactly when
+      // it holds a date saying so.
+      where.push(dates.delivered ? "delivered_at IS NOT NULL" : "delivered_at IS NULL");
+    }
+    if (dates?.targetBefore !== undefined) {
+      // `target_at IS NOT NULL` is stated rather than relied on: SQLite would
+      // exclude a NULL from `< ?` anyway, but an UNDATED milestone is due at
+      // no time at all, and saying so keeps the intent readable next to the
+      // rule the `delivered` clause above states in the other direction.
+      where.push("target_at IS NOT NULL AND target_at < ?");
+      args.push(dates.targetBefore);
+    }
+    if (dates?.targetAfter !== undefined) {
+      where.push("target_at IS NOT NULL AND target_at > ?");
+      args.push(dates.targetAfter);
+    }
     return this.db
-      .query<EventRow, [string, string]>(
-        `${MILESTONE_ROWS} WHERE project_key = ? AND type = ?
+      .query<EventRow, (string | number)[]>(
+        `${MILESTONE_ROWS} WHERE ${where.join(" AND ")}
          AND ${Store.NOT_ARCHIVED_SUBQUERY}
          ORDER BY timestamp DESC, rowid DESC`,
       )
-      .all(projectKey, type)
+      .all(...args)
       .map(Store.toEvent);
   }
 
@@ -3419,9 +3604,12 @@ export class Store {
       // CR-CRU-084 §S1/AC6 — and the packages the release delivered, in the
       // SAME blob for the SAME reason: no column, no migration.
       ...(event.packages !== undefined ? { packages: event.packages } : {}),
-      // CR-CRU-091 §S1 — a PROPOSAL's declared target rides the same blob, so
-      // the new record kind needs no column of its own either.
+      // CR-CRU-091 §S1 / CR-CRU-130 §S1 — a milestone's two dates ride the
+      // same blob as everything else it carries; the COLUMNS beside it are
+      // DERIVED from exactly these two keys at `insertRecord` below, which is
+      // what stops the two representations disagreeing.
       ...(event.targetAt !== undefined ? { targetAt: event.targetAt } : {}),
+      ...(event.deliveredAt !== undefined ? { deliveredAt: event.deliveredAt } : {}),
     };
     return Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
   }
@@ -3444,8 +3632,9 @@ export class Store {
       this.db
         .query(
           `INSERT INTO milestones (id, project_key, agent_id, tier, codec, timestamp, type,
-             label, payload, context, role, role_inferred, retired_at, cycle_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             label, target_at, delivered_at, payload, context, role, role_inferred, retired_at,
+             cycle_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           event.id,
@@ -3456,6 +3645,10 @@ export class Store {
           event.timestamp,
           event.type ?? null,
           event.label ?? null,
+          // CR-CRU-130 §S1 — the two dates, derived HERE from the very fields
+          // `payloadColumn` serialised, on the `type`/`label` terms above.
+          event.targetAt ?? null,
+          deliveredAtOf(event),
           payload,
           event.context !== undefined ? JSON.stringify(event.context) : null,
           event.role ?? null,
@@ -3573,6 +3766,10 @@ export class Store {
         : "test";
     const payload =
       row.payload !== null ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
+    const deliveredAt = deliveredAtOf({
+      ...(typeof payload.deliveredAt === "number" ? { deliveredAt: payload.deliveredAt } : {}),
+      ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
+    });
     return {
       id: row.id,
       projectKey: row.project_key,
@@ -3588,8 +3785,14 @@ export class Store {
       // was stored in; a pre-§S4 release row simply has neither key.
       ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
       ...(Array.isArray(payload.crs) ? { crs: payload.crs as string[] } : {}),
-      // CR-CRU-091 §S1 — a proposal's declared target, from the same blob.
+      // CR-CRU-091 §S1 / CR-CRU-130 §S1 — the milestone's two dates, from the
+      // same blob. `deliveredAt` reads through `deliveredAtOf`, so a record
+      // that says only `releasedAt` — every release written before this CR —
+      // answers when it was met without its payload being rewritten. Each key
+      // is ABSENT when the record holds no such date: outstanding and undated
+      // are real states, and a fabricated 0 would read as delivered in 1970.
       ...(typeof payload.targetAt === "number" ? { targetAt: payload.targetAt } : {}),
+      ...(deliveredAt !== null ? { deliveredAt } : {}),
       // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
       // a release recorded before this CR simply has no key (AC4).
       ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),

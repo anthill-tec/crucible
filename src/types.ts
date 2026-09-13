@@ -248,14 +248,26 @@ export interface RunEvent {
    */
   releasedAt?: number;
   /**
-   * CR-CRU-091 §S1 — a `release-proposal` milestone's DECLARED target date, in
-   * epoch SECONDS — deliberately the SAME unit as `releasedAt` above, so one
-   * formatter serves both and neither surface renders 1970. Optional and
-   * revisable: a proposal with no declared target is a legitimate declared
-   * intent. ABSENT on every other event type (a `release` carries
-   * `releasedAt`, which is when it SHIPPED, not when it was aimed for).
+   * CR-CRU-091 §S1 / CR-CRU-130 §S1 — a milestone's DECLARED target date: when
+   * it is DUE, in epoch SECONDS — deliberately the SAME unit as `releasedAt`
+   * above, so one formatter serves both and neither surface renders 1970.
+   * Optional and revisable: a milestone with no declared target is undated,
+   * which is a legitimate state for a record of something that simply
+   * happened. CR-CRU-091 confined this to a `release-proposal`; CR-CRU-130 §S1
+   * carries it on EVERY type, because what a goal was aimed at is a fact about
+   * that goal whatever kind of goal it is.
    */
   targetAt?: number;
+  /**
+   * CR-CRU-130 §S1 — when the milestone was MET, in epoch SECONDS. Absent
+   * means OUTSTANDING, and the absence is the whole signal: a milestone
+   * defaulted to 0 or to its row's timestamp would read as delivered at the
+   * dawn of time. `releasedAt` above is this same date under its old,
+   * release-only name; both are carried so every wire shape a client already
+   * reads stays byte-identical (§S0), and a record holding only the old
+   * spelling still answers the new question.
+   */
+  deliveredAt?: number;
   /**
    * CR-CRU-080 §S4 — the CR ids a `release` shipped: the ceremony's tag-range
    * scan INTERSECTED with the project's registered queue at record time.

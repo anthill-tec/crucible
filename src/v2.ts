@@ -30,6 +30,7 @@ import {
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type {
+  MilestoneDateFilter,
   PlanOpError,
   ProjectPatch,
   QueueEntryInput,
@@ -134,6 +135,8 @@ interface V2Body {
   // the four fields only the new routes read.
   release?: unknown;
   targetAt?: unknown;
+  /** CR-CRU-130 §S1 — when the milestone was MET, epoch seconds. */
+  deliveredAt?: unknown;
   by?: unknown;
   reason?: unknown;
   // CR-CRU-106 §S1 — `cr-depends`' whole payload: the complete dependency
@@ -1233,6 +1236,28 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
 }
 
 /**
+ * CR-CRU-080 §S4 / CR-CRU-130 §S1 — a stated instant in epoch SECONDS, or
+ * nothing. The CR-CRU-073 §S1 never-coerce rule, in one place now that three
+ * fields (`releasedAt`, `targetAt`, `deliveredAt`) are held to it: a finite
+ * positive number is carried verbatim, and anything else — a string, a zero, a
+ * NaN — drops the FIELD rather than being coerced into a date nobody stated.
+ */
+function epochSeconds(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * CR-CRU-130 §S1 — the same instant, stated as a query parameter. An absent
+ * parameter and an unreadable one are the same answer — no bound — so a
+ * malformed `?targetBefore=soon` narrows nothing rather than silently
+ * answering as if the caller had asked for everything before 1970.
+ */
+function epochParam(url: URL, name: string): number | undefined {
+  const raw = url.searchParams.get(name);
+  return raw === null ? undefined : epochSeconds(Number(raw));
+}
+
+/**
  * CR-CRU-084 §S1 — a well-formed `packages` MEMBER: an object whose `registry`,
  * `name` and `version` are all non-empty strings. The same bar a `crs` member
  * has to clear (`typeof === "string" && length > 0`), applied to each of the
@@ -1280,10 +1305,15 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // never coerced — a finite positive number, and the non-empty strings of an
   // array. An EMPTY array is meaningful and kept: it says the reporter looked
   // and the queue held none of what the tag range merged.
-  const releasedAt =
-    typeof body.releasedAt === "number" && Number.isFinite(body.releasedAt) && body.releasedAt > 0
-      ? body.releasedAt
-      : undefined;
+  const releasedAt = epochSeconds(body.releasedAt);
+  // CR-CRU-130 §S1 — a milestone is a dated GOAL, so the route carries what it
+  // is due (`targetAt`) and when it was met (`deliveredAt`) for EVERY type it
+  // accepts, on exactly the same never-coerce terms as `releasedAt` above.
+  // Carried, not derived: an absent date stays absent all the way to the
+  // column, because "undated" and "outstanding" are the states these fields
+  // exist to express.
+  const targetAt = epochSeconds(body.targetAt);
+  const deliveredAt = epochSeconds(body.deliveredAt);
   const crs = Array.isArray(body.crs)
     ? body.crs.filter((cr: unknown): cr is string => typeof cr === "string" && cr.length > 0)
     : undefined;
@@ -1318,6 +1348,8 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
+    ...(targetAt !== undefined ? { targetAt } : {}),
+    ...(deliveredAt !== undefined ? { deliveredAt } : {}),
     ...(crs !== undefined ? { crs } : {}),
     ...(packages !== undefined ? { packages } : {}),
     ...(repairProvenance ? { repairProvenance } : {}),
@@ -1947,15 +1979,24 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
  * `milestones` is the collection these rows now live in, so that is what they
  * are served under.
  *
+ * CR-CRU-130 §S1 — and by DATE: `?delivered=true|false`, `?targetBefore=<epoch
+ * s>`, `?targetAfter=<epoch s>`, each combinable with `?type=`. The same read,
+ * extended, rather than a second one beside it: a parallel record read would
+ * have to be kept unwindowed and projection-free in step with this one, and
+ * would drift the first time only one of them was corrected.
+ *
  * THE TYPE IS A PARAMETER, NOT A PATH SEGMENT AND NOT A CLOSED LIST. It is
  * required — this route answers "the records of THIS type", and a call that
  * names none is asking a different question (the whole timeline), which is
- * what `GET /api/v2/events` is for. It is never checked against the types the
- * server happens to know: the store's `type` column is unconstrained TEXT and
- * CR-CRU-130 makes the vocabulary project-definable, so a type this build has
- * never heard of must answer with its records rather than a refusal, and a
- * type nobody has recorded is an EMPTY answer rather than a 404 — "none yet"
- * is an answer, not a missing resource (the `releases` precedent).
+ * what `GET /api/v2/events` is for — UNLESS the call names a date filter,
+ * because "what is outstanding" is a question across types by its nature and
+ * the answer has to include a project-defined one. It is never checked against
+ * the types the server happens to know: the store's `type` column is
+ * unconstrained TEXT and CR-CRU-130 makes the vocabulary project-definable, so
+ * a type this build has never heard of must answer with its records rather
+ * than a refusal, and a type nobody has recorded is an EMPTY answer rather
+ * than a 404 — "none yet" is an answer, not a missing resource (the `releases`
+ * precedent).
  *
  * WHOLE, NOT WINDOWED. There is no `limit` here and there must not be one.
  * This route exists because `cr_merged_crs` had to scan the newest N events
@@ -1977,10 +2018,37 @@ function handleProjectMilestones(store: Store, key: string, req: Request, url: U
     return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
   const type = url.searchParams.get("type");
-  if (type === null || type.length === 0) {
-    return fail(400, "`type` is required — the milestone type to read, e.g. `cr-merged`");
+  // CR-CRU-130 §S1 — the two dates are FILTERS on this same read. `delivered`
+  // is a literal `true`/`false` and nothing else (the never-coerce rule a
+  // truthy string would otherwise turn into "everything is delivered"); the
+  // two bounds are epoch SECONDS, the unit the dates themselves use.
+  const delivered = url.searchParams.get("delivered");
+  const targetBefore = epochParam(url, "targetBefore");
+  const targetAfter = epochParam(url, "targetAfter");
+  const dates: MilestoneDateFilter = {
+    ...(delivered === "true" ? { delivered: true } : {}),
+    ...(delivered === "false" ? { delivered: false } : {}),
+    ...(targetBefore !== undefined ? { targetBefore } : {}),
+    ...(targetAfter !== undefined ? { targetAfter } : {}),
+  };
+  const dated = Object.keys(dates).length > 0;
+  if ((type === null || type.length === 0) && !dated) {
+    // `type` stops being required exactly when a DATE filter is present: "what
+    // is outstanding" is a question ACROSS types, and the answer has to include
+    // a type this build has never heard of. A request naming NO parameter at
+    // all is still the whole-timeline question, which `GET /api/v2/events`
+    // answers — so the refusal CR-CRU-129 §S3 wrote stands, unchanged.
+    return fail(
+      400,
+      "`type` is required — the milestone type to read, e.g. `cr-merged` — unless the request " +
+        "names a date filter (`delivered`, `targetBefore`, `targetAfter`)",
+    );
   }
-  const milestones = store.listMilestonesByType(key, type);
+  const milestones = store.listMilestonesByType(
+    key,
+    type === null || type.length === 0 ? null : type,
+    dates,
+  );
   return reply(req, url, { ok: true, milestones, totalCount: milestones.length });
 }
 

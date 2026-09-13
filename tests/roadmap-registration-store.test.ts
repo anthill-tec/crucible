@@ -708,26 +708,28 @@ describe("CR-CRU-091 §S1 — a proposed release is its own record kind", () => 
     expect(listReleaseProposals(store, key).map((proposal) => proposal.label)).toEqual(["0.4.0"]);
   });
 
-  test("`targetAt` is STRIPPED for every other milestone type", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
-
-    const release = store.recordMilestoneEvent(key, AGENT, "release", {
-      label: "0.1.0",
-      commit: "a".repeat(40),
-      releasedAt: 1_787_149_125,
-      targetAt: 1_787_000_000,
-    }).event;
-    expect("targetAt" in release).toBe(false);
-    expect(release.releasedAt).toBe(1_787_149_125);
-    expect("targetAt" in (store.getEvent(release.id) ?? {})).toBe(false);
-
-    const other = store.recordMilestoneEvent(key, AGENT, "merge", {
-      label: "feature",
-      targetAt: 1_787_000_000,
-    }).event;
-    expect("targetAt" in other).toBe(false);
-  });
+  // DELETED by CR-CRU-130 §S1: "`targetAt` is STRIPPED for every other
+  // milestone type".
+  //
+  // It asserted CR-CRU-091 §S1's recorded decision — "a declared target belongs
+  // to a PROPOSAL and nothing else" — by writing a `release` with a `targetAt`
+  // and requiring the store to discard it. The user's 2026-09-13 ruling
+  // supersedes that stance: a milestone is a dated GOAL, so what it was aimed
+  // at and when it landed are both facts about it whatever its type, and the
+  // distance between them is the only thing that can say a deliverable
+  // slipped. The gate this case guarded is gone from `recordMilestoneEvent`,
+  // so the case has no subject left.
+  //
+  // DELETED rather than inverted: the positive is already proved, in the
+  // shapes this case used and more — `tests/milestone-dates-are-first-class
+  // .test.ts` round-trips a `release`'s `targetAt` through the store's own
+  // write path AND through the wire, and asserts both dates for every type the
+  // server accepts rather than for two hand-picked ones. An inverted copy here
+  // would be duplicate coverage of a premise that no longer exists.
+  //
+  // The case ABOVE stays and still passes: a proposal that declares NO target
+  // carries no `targetAt` key. Absence remains a real state under §S1 — it
+  // means undated — and is a different claim from the one deleted here.
 
   test("a proposal is invisible to `listReleases`, and proposals order among themselves by version", () => {
     const store = new Store(":memory:");
