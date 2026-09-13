@@ -108,6 +108,8 @@ The consumers, enumerated so none is discovered by its absence:
 | `GET …/releases`, `GET …/release-proposals`, the roadmap strip | `src/v2.ts` |
 | gate reads and the gate pane | `src/v2.ts`, `public/` |
 | `cr_merged_crs` + `cmd_queue` | `clients/_crucible_axi.py:1692`, `:1702` |
+| `deriveCommitBoundary` — a gate's `context` contributes to a plan's boundary | `src/store.ts` |
+| `getEvent` / `GET …/events/<id>` — the audit read for a moved record | `src/store.ts`, `src/v2.ts:3751` |
 
 Wire shapes do not change. One CLIENT read does, and must: `cr_merged_crs` does not query
 `cr-merged` — it SCANS the newest `QUEUE_EVENTS_LIMIT = 5000` events
@@ -181,6 +183,19 @@ run reported 15 unplaceable without saying which kind they were.
       the missing ids, and writes nothing.
 - [ ] The unplaceable tally distinguishes "never landed" from "landing evidence evicted".
 - [ ] Re-running the ceremony against a complete store writes nothing and reports no shrink.
+
+**Superseded tests**
+- [ ] Tests asserting behaviour this CR ABOLISHES are DELETED, not re-pinned to the new text: the
+      gate's post-retirement prunability (`tests/gate-retirement.test.ts` AC3) and the
+      live-versus-consumed proposal distinction (`tests/roadmap-registration-routes.test.ts` AC22).
+      Each deletion names the superseded AC so the hole is explained rather than found.
+- [ ] Tests whose CLAIM survives keep it and change only their technique — a record never folds into
+      a rollup (`tests/gate-milestone-server.test.ts:420`, `:575`) stays asserted, and its re-seeded
+      form still proves the fold ran for a telemetry row.
+- [ ] Conservation across the migration is asserted TOTAL, over a table list including `milestones`
+      and `gates` (`tests/run-lifecycle.test.ts:670`, `tests/store-migration.test.ts` AC2).
+- [ ] No test pins a cap literal after this CR, including the one that rode
+      `DEFAULT_RETENTION = 100` (`tests/events.test.ts:275`).
 
 **Close-out**
 - [ ] Retention returns from its 200,000 stopgap to a considered cap for the disposable kinds, and
