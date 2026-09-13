@@ -39,21 +39,43 @@ means nothing (measured on `release/0.2.0`, 2026-09-13):
           and `..._the_nominated_wording_states_that_the_flag_is_required` — all
           six of §S1's nominated sites hold no help string at all to compare,
           so there is neither one wording nor a statement of requiredness.
-  RED   `FlagHelpQualityTest.
-          test_a_choiceless_flag_names_the_server_vocabulary_it_draws_on` — NOT
-          foreseen by the CR, and reported as an ESCALATION rather than tuned
-          away. `--type` is declared in all five clients with no `choices=` and
-          its help enumerates FIVE milestone types; `MILESTONE_TYPES` in
-          `src/v2.ts` has held SIX since CR-CRU-074 added `release`. §S3.3's
-          acceptance criterion is exactly "fails unless its help names that
-          vocabulary", so the rule is doing its job on a real, pre-existing
-          drift: five help strings teach a vocabulary the server outgrew. The
-          CR's non-goals forbid "rewriting the 338 flags that already carry
-          some" help, and record a dated exemption ceiling for §S3.4's residue
-          but none for §S3.3's — the spec assumed this check was clean. GREEN
-          must either add `release` to those five strings (five one-word edits)
-          or the CR must grow a §S3.3 residue entry; weakening the rule to the
-          subset the fleet happens to name would make it assert nothing.
+  RED   `OpenVocabularyHelpTest` (CR-CRU-130 §S5 — THE AMENDMENT, see below) —
+          the five `--type` declarations enumerate a vocabulary that is no
+          longer the server's to enumerate, and name neither the configuration
+          field that declares it nor the route that carries it.
+
+§S3.3, AMENDED — CR-CRU-130 §S5, 2026-09-13.
+
+The original rule was: a choice-less flag drawing on a server-owned vocabulary
+must NAME every member of it. It shipped RED on `--type` and caught a real
+drift (five help strings enumerating five milestone types while `MILESTONE_TYPES`
+had held six since CR-CRU-074 added `release`), and GREEN repaired all five.
+
+CR-CRU-130 §S4 then made the milestone vocabulary DEFINABLE: two types stay
+reserved because the server derives behaviour from them, and every other type is
+declared by the PROJECT as configuration. A CLI help string cannot enumerate a
+list configuration invalidates — and `MILESTONE_TYPES` stops being a `Set`
+literal in `src/v2.ts` at all, so the parse that fed this check stops reading
+anything, which its own non-vacuity guard would report as the LOUDER failure.
+
+So the rule is NARROWED where it is now wrong and KEPT everywhere it is still
+right, rather than exempting `--type` — an exemption would leave the next open
+vocabulary unguarded:
+
+  CLOSED, server-owned  `--tier`, `--kind`, `--cycle-kind`, `--role`,
+                        `--source`: must still name every member, and the
+                        non-vacuity guard still fails on an empty parse.
+  OPEN, project-defined `--type`: cannot name its members, and must instead say
+                        WHERE THE LIST COMES FROM — the configuration field
+                        that declares it and the route that carries it, which
+                        is also how a reader SEES the live list.
+
+The `MILESTONE_TYPES` Set parse is REMOVED, not made to tolerate an empty
+result: a parse that may legitimately read nothing cannot bound anything.
+`_ts_set_members` survives because the OPEN rule needs it for a different,
+still-closed server set — `PATCHABLE_FIELDS`, which is what proves the field
+the help is required to name is genuinely a project-configuration field and not
+a sentence this test invented.
 
   GUARD `FlagHelpCensusTest` non-vacuity (client count, per-source flag floors,
           anchor uniqueness, resolver reach) — all pass today. They are the
@@ -72,9 +94,12 @@ means nothing (measured on `release/0.2.0`, 2026-09-13):
           resolver that never reported a partial would satisfy it with nothing.
           They build a mostly-runtime help in a throwaway module and require
           the walk to name it and overflow the guard's own arithmetic.
-  GUARD `FlagHelpQualityTest`, except the vocabulary check above — no help is
-          empty, none is a bare echo of its own flag name, the vocabulary
-          parses are non-empty, and the 19 `"If set"` openers on valued flags
+  GUARD `FlagHelpQualityTest` (all of it since CR-CRU-128 GREEN repaired the
+          five `--type` strings, and the closed vocabulary check stays green
+          through CR-CRU-130 §S5 because the flags it still grades are the
+          server's own) — no help is empty, none is a bare echo of its own flag
+          name, the vocabulary parses are non-empty, and the 19 `"If set"`
+          openers on valued flags
           sit exactly at the dated exemption ceiling. §S3.4 is a forward
           guarantee born green by construction; the 20th `"If set"` is what it
           exists to refuse.
@@ -247,30 +272,62 @@ def _ts_set_members(source, const_name):
 def _server_vocabularies():
     """§S3.3's closed vocabularies, DERIVED from the server that owns them --
     never hand-typed here. A flag whose value must be one of these and which
-    declares no `choices=` has nowhere but its help text to teach them."""
+    declares no `choices=` has nowhere but its help text to teach them.
+
+    CLOSED is the membership test, and CR-CRU-130 §S5 is why it has to be said
+    out loud: `MILESTONE_TYPES` used to be read here and is NOT any more, not
+    because it moved but because a project now defines it. An open vocabulary
+    has no parse to compare against, and a check comparing help text against a
+    list the server no longer owns would either read nothing (vacuous) or
+    demand that five CLIs enumerate one project's configuration."""
     types_ts = TYPES_TS_PATH.read_text()
-    v2_ts = V2_ROUTES_PATH.read_text()
     return {
         "Tier": _ts_union_members(types_ts, "Tier"),
         "CycleKind": _ts_union_members(types_ts, "CycleKind"),
         "AGENT_ROLES": _ts_array_members(types_ts, "AGENT_ROLES"),
         "IDENTITY_SOURCES": _ts_array_members(types_ts, "IDENTITY_SOURCES"),
-        "MILESTONE_TYPES": _ts_set_members(v2_ts, "MILESTONE_TYPES"),
     }
 
 
-# Which declared flag draws on which server-owned vocabulary. Enumerated (§S3:
-# "the vocabularies in scope are enumerated ... not guessed"), and each
-# enumeration is checked against the server source by
+# Which declared flag draws on which CLOSED, server-owned vocabulary.
+# Enumerated (§S3: "the vocabularies in scope are enumerated ... not guessed"),
+# and each enumeration is checked against the server source by
 # `FlagHelpQualityTest.test_the_vocabularies_this_census_enforces_are_the_server_s_own`.
+#
+# `--type` is deliberately ABSENT: CR-CRU-130 §S5 moved it to
+# `OPEN_VOCABULARY_FLAGS` below. `OpenVocabularyHelpTest.
+# test_no_flag_is_graded_by_both_rules` is what keeps the move from becoming a
+# hole -- a flag in neither table would simply stop being graded.
 VOCABULARY_FLAGS = {
     "--tier": "Tier",
     "--kind": "CycleKind",
     "--cycle-kind": "CycleKind",
     "--role": "AGENT_ROLES",
     "--source": "IDENTITY_SOURCES",
-    "--type": "MILESTONE_TYPES",
 }
+
+
+# CR-CRU-130 §S5 — a flag drawing on a vocabulary a PROJECT defines cannot name
+# its members and must name its SOURCE instead: the configuration field that
+# declares it, and the route that field lives on (which is also where a reader
+# goes to SEE the live list). Both tokens are checked against the SERVER by
+# `OpenVocabularyHelpTest.test_the_source_this_rule_requires_is_a_real_project_
+# configuration_field`, so this table cannot require a surface that does not
+# exist.
+OPEN_VOCABULARY_FLAGS = {
+    "--type": ("milestoneTypes", "/api/v2/projects"),
+}
+
+# The server set that OWNS the declaring field above: `PATCHABLE_FIELDS`
+# (`src/v2.ts`), the project route's editable-field list. Still a closed `Set`
+# literal, and still the server's own -- which is exactly why `_ts_set_members`
+# is kept after the `MILESTONE_TYPES` parse was removed.
+PROJECT_CONFIG_FIELD_SET = "PATCHABLE_FIELDS"
+
+
+def _project_config_fields():
+    """The PATCHable project-configuration fields, read off the server."""
+    return _ts_set_members(V2_ROUTES_PATH.read_text(), PROJECT_CONFIG_FIELD_SET)
 
 
 class FlagDecl:
@@ -496,6 +553,54 @@ def _partial_help_over_ceiling(declarations, ceiling):
 
 def _offender_report(declarations):
     return "\n".join("  " + d.offender_line for d in declarations)
+
+
+def closed_vocabulary_offenders(declarations, vocabularies=None):
+    """§S3.3, the CLOSED half — every declaration drawing on a server-owned
+    vocabulary whose help does not name every member of it, as
+    `(declaration, missing members)`. Shared by the live check and by the
+    mutation that proves the check can go red."""
+    vocabularies = _server_vocabularies() if vocabularies is None else vocabularies
+    offenders = []
+    for decl in declarations:
+        name = VOCABULARY_FLAGS.get(decl.flag)
+        if name is None or decl.has_choices:
+            continue
+        missing = [m for m in vocabularies[name] if m not in decl.help_text]
+        if missing:
+            offenders.append((decl, missing))
+    return offenders
+
+
+def closed_vocabulary_reach(declarations):
+    """How many declarations the closed check actually GRADED -- the bound that
+    stops "no offenders" meaning "nothing was looked at"."""
+    return len([d for d in declarations
+                if VOCABULARY_FLAGS.get(d.flag) is not None and not d.has_choices])
+
+
+def open_vocabulary_offenders(declarations):
+    """CR-CRU-130 §S5, the OPEN half — every declaration drawing on a vocabulary
+    a PROJECT defines whose help does not say WHERE the list comes from, as
+    `(declaration, missing source tokens)`.
+
+    Members are deliberately NOT checked: there are none to check, which is the
+    whole point. What is checked is that a reader who cannot be told the values
+    is told where to declare them and where to look."""
+    offenders = []
+    for decl in declarations:
+        required = OPEN_VOCABULARY_FLAGS.get(decl.flag)
+        if required is None or decl.has_choices:
+            continue
+        missing = [token for token in required if token not in decl.help_text]
+        if missing:
+            offenders.append((decl, missing))
+    return offenders
+
+
+def _vocabulary_offender_report(offenders):
+    return "\n".join("  %s (missing %r)" % (d.offender_line, missing)
+                     for d, missing in offenders)
 
 
 class FlagHelpCensusTest(unittest.TestCase):
@@ -837,42 +942,36 @@ class FlagHelpQualityTest(unittest.TestCase):
             vocabularies["Tier"])
         self.assertEqual(("red-green", "verify", "fix"),
                          vocabularies["CycleKind"])
-        # CR-CRU-074 is the CR that added `release` to `MILESTONE_TYPES`. The
-        # provenance is written HERE and not in the message below: an id in a
-        # live assertion position is what CR-CRU-097 AC7's tripwire forbids.
-        self.assertIn("release", vocabularies["MILESTONE_TYPES"],
-                      "`release` is absent from the parsed MILESTONE_TYPES: "
-                      "the CR that added `release` to the milestone "
-                      "vocabulary put it in the server source this parse "
-                      "reads, so losing it here means the parse broke -- and "
-                      "a parse that misses it would make the check below "
-                      "pass on the five clients that never learned it")
+        # CR-CRU-130 §S5 — every vocabulary graded by the CLOSED rule is one
+        # the SERVER still owns. An OPEN one has no members to compare against,
+        # and mapping a flag to one here would grade a CLI against a list
+        # configuration can change under it.
+        self.assertEqual(
+            set(), set(VOCABULARY_FLAGS) & set(OPEN_VOCABULARY_FLAGS),
+            "a flag is graded by BOTH the closed and the open rule")
 
     def test_a_choiceless_flag_names_the_server_vocabulary_it_draws_on(self):
-        """RED (5 offenders today -- see the ESCALATION in the module
+        """GUARD (green since CR-CRU-128 GREEN; NARROWED by CR-CRU-130 §S5 to
+        the CLOSED vocabularies only -- see the amendment in the module
         docstring). A flag WITHOUT `choices=` has nowhere else to teach its
         values: argparse will not print them, and the server's refusal is the
         only other teacher. Naming SOME of the vocabulary is what a stale help
         string looks like, so the check requires all of it."""
-        vocabularies = _server_vocabularies()
-        offenders = []
-        checked = 0
-        for decl in self._described():
-            name = VOCABULARY_FLAGS.get(decl.flag)
-            if name is None or decl.has_choices:
-                continue
-            checked += 1
-            missing = [m for m in vocabularies[name] if m not in decl.help_text]
-            if missing:
-                offenders.append("%s (missing %r)" % (decl.offender_line, missing))
+        described = self._described()
+        offenders = closed_vocabulary_offenders(described)
+        checked = closed_vocabulary_reach(described)
         self.assertEqual(
-            [], offenders,
+            [], [d.offender_line for d, _missing in offenders],
             "%d choice-less flag(s) draw on a closed server vocabulary their "
-            "help does not name: %s" % (len(offenders), "\n".join(offenders)))
+            "help does not name:\n%s"
+            % (len(offenders), _vocabulary_offender_report(offenders)))
         self.assertGreaterEqual(
-            checked, 3,
-            "the check reached %d declaration(s); measured 2026-09-13 it "
-            "reaches 7 (--kind, --cycle-kind and five --type)" % checked)
+            checked, 2,
+            "the check reached %d declaration(s); RE-MEASURED 2026-09-13 once "
+            "the five --type declarations moved to the OPEN rule, it reaches 2 "
+            "(--kind and --cycle-kind, both on the shared registrar). The other "
+            "three closed flags carry `choices=`, which argparse prints for "
+            "them" % checked)
 
     def test_no_valued_flag_opens_its_help_with_if_set_beyond_the_ceiling(self):
         """GUARD (§S3.4). A flag with no `action=` takes a VALUE, so "If set"
@@ -912,6 +1011,165 @@ class FlagHelpQualityTest(unittest.TestCase):
             self.assertIn(label, CENSUS_SOURCES_BY_LABEL,
                           "the ceiling names a file the census does not walk")
             self.assertLessEqual(found[label], PRE_CR128_IF_SET_RESIDUE[label])
+
+
+# The two mutants the amendment's proof needs, BUILT from the server's own
+# vocabulary and from `OPEN_VOCABULARY_FLAGS` rather than typed out, so neither
+# can go stale the way the help strings they stand in for did. Each is written
+# to a throwaway module and walked with resolution ON, because both rules read
+# the help TEXT.
+def _closed_mutant_source(members):
+    return (
+        "import argparse\n\n\n"
+        "def build():\n"
+        "    p = argparse.ArgumentParser()\n"
+        '    p.add_argument("--kind", help="Cycle kind (%s).")\n'
+        "    return p\n" % "|".join(members))
+
+
+def _open_mutant_source(sentence):
+    return (
+        "import argparse\n\n\n"
+        "def build():\n"
+        "    p = argparse.ArgumentParser()\n"
+        '    p.add_argument("--type", help="Milestone type. %s")\n'
+        "    return p\n" % sentence)
+
+
+def _open_compliant_sentence(field, route):
+    """A help sentence that says WHERE the vocabulary comes from -- the shape
+    the open rule is satisfiable by, written from the rule's own tokens."""
+    return ("This project declares its own: PATCH %s/<key> {%s: [...]}, and the "
+            "server names the live set when it refuses one." % (route, field))
+
+
+class OpenVocabularyHelpTest(unittest.TestCase):
+    """CR-CRU-130 §S5 — the AMENDMENT. `--type` draws on a vocabulary the
+    PROJECT defines, so its help cannot name the members and must name the
+    SOURCE: the configuration field that declares them and the route that field
+    lives on.
+
+    RED today on all five clients, which enumerate six milestone types and name
+    no source at all. The two MUTATIONS below are what make this a narrowing
+    rather than a gutting: one proves the OPEN rule goes red when the source
+    reference is stripped, the other proves the CLOSED rule still goes red when
+    a member is stripped from a flag that kept it."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cr130-vocabulary-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _walk_source(self, name, text):
+        path = self.tmp / name
+        path.write_text(text)
+        return walk_flag_declarations({"mutant": path})
+
+    def test_the_source_this_rule_requires_is_a_real_project_configuration_field(self):
+        """GUARD, and the bound on the check below: a rule may not demand that
+        five CLIs point at a surface the server does not have. The declaring
+        field is looked up in the project route's OWN editable-field set, so
+        this table cannot drift away from the server the way the help strings
+        it replaces did."""
+        fields = _project_config_fields()
+        self.assertGreaterEqual(
+            len(fields), 2,
+            "%s parsed as %r -- the project route's editable-field set moved "
+            "and this rule is now requiring a surface nothing confirms"
+            % (PROJECT_CONFIG_FIELD_SET, fields))
+        for flag, (field, route) in sorted(OPEN_VOCABULARY_FLAGS.items()):
+            self.assertIn(
+                field, fields,
+                "%s's help is required to name %r as the field that declares "
+                "its vocabulary, but the project route does not accept that "
+                "field: the declaration surface does not exist"
+                % (flag, field))
+            self.assertTrue(route.startswith("/api/v2/"),
+                            "%s's source route %r is not a v2 route" % (flag, route))
+
+    def test_no_flag_is_graded_by_both_rules(self):
+        """GUARD. Moving `--type` out of the closed table must not drop it out
+        of the census: a flag in NEITHER table is simply ungraded, which is
+        what an exemption would have been."""
+        self.assertEqual(set(), set(VOCABULARY_FLAGS) & set(OPEN_VOCABULARY_FLAGS))
+        self.assertIn("--type", OPEN_VOCABULARY_FLAGS)
+        self.assertNotIn("--type", VOCABULARY_FLAGS)
+        for closed in ("--tier", "--kind", "--cycle-kind", "--role", "--source"):
+            self.assertIn(closed, VOCABULARY_FLAGS,
+                          "%s draws on a CLOSED server vocabulary and must "
+                          "still name every member of it" % closed)
+
+    def test_the_census_no_longer_parses_the_milestone_vocabulary_out_of_source(self):
+        """GUARD. The parse that fed the old rule read a `Set` literal in
+        `src/v2.ts`. Once the vocabulary is configuration there is no literal to
+        read, and a parse that reads nothing bounds nothing -- so it is REMOVED
+        rather than taught to tolerate an empty result."""
+        self.assertNotIn("MILESTONE_TYPES", _server_vocabularies())
+        self.assertNotIn("MILESTONE_TYPES", set(VOCABULARY_FLAGS.values()))
+
+    def test_each_type_flag_names_where_its_vocabulary_comes_from(self):
+        """RED (5 offenders today). The five `--type` declarations enumerate
+        six milestone types and name neither the field that declares the
+        vocabulary nor the route it lives on -- so a caller whose type is
+        refused cannot learn how to declare it, and reaches for `custom`."""
+        described = [d for d in census() if d.has_help and d.help_text is not None]
+        graded = [d for d in described
+                  if OPEN_VOCABULARY_FLAGS.get(d.flag) is not None and not d.has_choices]
+        self.assertGreaterEqual(
+            len(graded), EXPECTED_CLIENT_COUNT,
+            "the open rule graded %d declaration(s); `--type` is declared once "
+            "per client, so it must reach all %d of them -- fewer means the "
+            "rule is passing because it looked at almost nothing"
+            % (len(graded), EXPECTED_CLIENT_COUNT))
+        offenders = open_vocabulary_offenders(described)
+        self.assertEqual(
+            [], [d.offender_line for d, _missing in offenders],
+            "%d flag(s) draw on a PROJECT-defined vocabulary without saying "
+            "where the list comes from:\n%s"
+            % (len(offenders), _vocabulary_offender_report(offenders)))
+
+    def test_stripping_the_source_reference_turns_the_open_rule_red(self):
+        """MUTATION, the OPEN direction. A help that names the declaring field
+        and its route passes; take the field away and the same rule reports
+        that flag and the token it lost."""
+        field, route = OPEN_VOCABULARY_FLAGS["--type"]
+        sentence = _open_compliant_sentence(field, route)
+        compliant = self._walk_source("cr130_open_ok.py", _open_mutant_source(sentence))
+        self.assertEqual([], open_vocabulary_offenders(compliant),
+                         "a help naming both the declaring field and its route "
+                         "must satisfy the open rule, or the rule is "
+                         "unsatisfiable and proves nothing")
+
+        stripped = self._walk_source(
+            "cr130_open_red.py",
+            _open_mutant_source(sentence.replace("{%s: [...]}" % field, "{...}")))
+        offenders = open_vocabulary_offenders(stripped)
+        self.assertEqual(["--type"], [d.flag for d, _missing in offenders])
+        self.assertEqual([[field]], [missing for _d, missing in offenders])
+        self.assertRegex(_vocabulary_offender_report(offenders),
+                         r"cr130_open_red\.py:\d+  --type")
+
+    def test_stripping_a_member_from_a_closed_flags_help_still_turns_it_red(self):
+        """MUTATION, the CLOSED direction — the proof the amendment NARROWED
+        the rule instead of gutting it. `--kind` still draws on `CycleKind`,
+        which the server still owns, so dropping one member must still be
+        caught and named."""
+        members = _server_vocabularies()["CycleKind"]
+        self.assertGreaterEqual(len(members), 2, "CycleKind parsed as %r" % (members,))
+
+        compliant = self._walk_source("cr130_closed_ok.py", _closed_mutant_source(members))
+        self.assertEqual([], closed_vocabulary_offenders(compliant),
+                         "a help naming every CycleKind member must satisfy "
+                         "the closed rule")
+
+        stripped = self._walk_source(
+            "cr130_closed_red.py", _closed_mutant_source(members[:-1]))
+        offenders = closed_vocabulary_offenders(stripped)
+        self.assertEqual(["--kind"], [d.flag for d, _missing in offenders])
+        self.assertEqual([[members[-1]]], [missing for _d, missing in offenders],
+                         "the closed rule must name the member that went "
+                         "missing, not merely report a failure")
+        self.assertRegex(_vocabulary_offender_report(offenders),
+                         r"cr130_closed_red\.py:\d+  --kind")
 
 
 CENSUS_SOURCES_BY_LABEL = {
