@@ -16,7 +16,6 @@ export const hints: Record<
   | "abortNeedsApproval"
   | "gateFields"
   | "gateOutcomes"
-  | "milestoneTypes"
   | "illegalCycleTransition"
   | "planCycleNotFound"
   | "planFileInput"
@@ -97,11 +96,6 @@ export const hints: Record<
   /** CR-CRU-013 §S1 — a gate POST with an out-of-set outcome. */
   gateOutcomes: [
     "gate.outcome must be one of: checks-passed, passed, failed, cancelled",
-  ],
-  /** CR-CRU-013 §S4b/§S4c — a milestone POST with an out-of-set type. */
-  milestoneTypes: [
-    "POST /api/v2/milestones {projectKey, agentId, type, label?, commit?, context?} — record a workflow milestone",
-    "type must be one of: gap-analysis, design-review, stage-flip, custom, cr-merged",
   ],
   /** CR-CRU-024 §S4 — an illegal per-cycle transition (e.g. active→pending). */
   illegalCycleTransition: [
@@ -327,6 +321,33 @@ export const identityHints = {
     `identity.source ${JSON.stringify(received)} is not a known source — it must be exactly one of ${sources.join(" | ")}`,
     `re-register with --source <one of ${sources.join(" | ")}> (wire: register {identity:{source}}); nothing was stored`,
     "identity.source stays OPTIONAL — omit it entirely rather than inventing a value",
+  ],
+};
+
+/**
+ * CR-CRU-130 §S4/§S5 — milestone-vocabulary refusals, RESOLVED and never
+ * held. A milestone type is a project's own word for a dated goal, declared as
+ * configuration, so a help string that ENUMERATED it would be a second
+ * vocabulary: the copy these replaced omitted `release` from the day
+ * CR-CRU-074 accepted it, and a refused caller was handed a `help[]` naming a
+ * different set from the message beside it, in one response. The accepted set
+ * arrives from the SAME read the validator measured the request against
+ * (`Store.acceptedMilestoneTypes`), exactly as `identityHints.invalidSource`
+ * takes the sources it names.
+ */
+export const milestoneHints = {
+  /** §S4 — a milestone POST with no type, or one this project never declared. */
+  types: (accepted: readonly string[]): string[] => [
+    "POST /api/v2/milestones {projectKey, agentId, type, label?, commit?, context?} — record a workflow milestone",
+    `type must be one of: ${accepted.join(", ")}`,
+    "a type this project has not declared is refused rather than filed under a catch-all — declare your own vocabulary: PATCH /api/v2/projects/<key> {milestoneTypes: [\"your-type\", …]}",
+    "GET /api/v2/projects reads back what this project declared; the refusal above names the whole accepted set, declared and reserved alike",
+  ],
+  /** §S4 — a declaration trying to take a name the SERVER derives from. */
+  reservedType: (type: string, derives: string): string[] => [
+    `${type} is a RESERVED milestone type — the server derives ${derives} from that exact name, so a project can neither declare, shadow nor remove it`,
+    "nothing was declared: re-send PATCH /api/v2/projects/<key> {milestoneTypes: […]} without the reserved name — the whole declaration is refused, so a legitimate type beside it is not left half-applied",
+    "a reserved type stays recordable by every project — it never has to be declared to be used",
   ],
 };
 

@@ -10,6 +10,7 @@ import {
   hints,
   cycleHints,
   identityHints,
+  milestoneHints,
   projectDeleteHints,
   roadmapHints,
   waveHints,
@@ -19,6 +20,7 @@ import {
   declaredTracks,
   normalizeTrack,
   QueueWaveOverflowError,
+  reservedMilestoneTypeConflict,
   Store,
   TRACK_LANE_RULE,
   UUID_RE,
@@ -1158,21 +1160,12 @@ const GATE_OUTCOMES: ReadonlySet<string> = new Set([
   "cancelled",
 ]);
 
-/**
- * §S4b/§S4c — accepted milestone types ('cr-merged' joins the set).
- * CR-CRU-074 §S1 — 'release' joins it too: a shipped release is a recorded
- * event whose `label` is the version and `commit` the tagged sha. Purely
- * additive — every pre-existing type keeps its exact behaviour, and the
- * validation error still enumerates the whole accepted set.
- */
-const MILESTONE_TYPES: ReadonlySet<string> = new Set([
-  "gap-analysis",
-  "design-review",
-  "stage-flip",
-  "custom",
-  "cr-merged",
-  "release",
-]);
+// CR-CRU-130 §S4/§S5 — the accepted milestone types are NOT a literal here any
+// more. Two are reserved because the server derives behaviour from them and
+// every other one is a project's own configuration, so this route RESOLVES the
+// set per project (`store.acceptedMilestoneTypes`) from the single definition
+// in `src/store.ts`. A copy here would be a second vocabulary, which is how
+// the hint beside this refusal came to name a different set from the refusal.
 
 /** §S2 — the optional graceful context, cast verbatim (runMeta convention). */
 function eventContext(body: V2Body): { context?: RunContext } {
@@ -1283,12 +1276,16 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
 
+  // CR-CRU-130 §S4 — what THIS project may record: the words it declared, the
+  // seed it started from and the reserved pair, resolved once and used for
+  // both the membership test and the refusal that publishes the set.
+  const accepted = store.acceptedMilestoneTypes(pk.key);
   if (typeof body.type !== "string" || body.type.length === 0) {
-    return fail(400, "type is required", { help: hints.milestoneTypes });
+    return fail(400, "type is required", { help: milestoneHints.types(accepted) });
   }
-  if (!MILESTONE_TYPES.has(body.type)) {
-    return fail(400, `type must be one of: ${[...MILESTONE_TYPES].join(", ")}`, {
-      help: hints.milestoneTypes,
+  if (!accepted.includes(body.type)) {
+    return fail(400, `type must be one of: ${accepted.join(", ")}`, {
+      help: milestoneHints.types(accepted),
     });
   }
   // CR-CRU-056 §S2b — milestones are a workflow verb: a live registered
@@ -3358,6 +3355,10 @@ const PATCHABLE_FIELDS = new Set([
   "liveness",
   "retention",
   "allowRunDeletion",
+  // CR-CRU-130 §S4 — the project's own milestone vocabulary. A declared type
+  // is CONFIGURATION, so it is declared where every other project parameter
+  // is, and this set is what tells a refused caller the surface exists.
+  "milestoneTypes",
 ]);
 
 // CR-CRU-012 §S1 — wire liveness fields (spec's T1/T2/T3 thresholds, ms) →
@@ -3450,6 +3451,30 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       return fail(400, "allowRunDeletion must be a boolean");
     }
     patch.allowRunDeletion = raw.allowRunDeletion;
+  }
+  if (raw.milestoneTypes !== undefined) {
+    // CR-CRU-130 §S4 — a DECLARATION of this project's own milestone
+    // vocabulary, replacing whatever it declared before. Judged WHOLE, like
+    // every other field on this route: a reserved name anywhere in the list
+    // refuses the list it arrived in, so a legitimate type beside it is never
+    // left declared by a request the caller was told was refused.
+    if (
+      !Array.isArray(raw.milestoneTypes) ||
+      !raw.milestoneTypes.every((type) => typeof type === "string" && type.length > 0)
+    ) {
+      return fail(400, "milestoneTypes must be an array of non-empty strings");
+    }
+    const declared = raw.milestoneTypes as string[];
+    const conflict = reservedMilestoneTypeConflict(declared);
+    if (conflict !== null) {
+      return fail(
+        400,
+        `milestoneTypes: "${conflict.type}" is a RESERVED milestone type and cannot be ` +
+          `declared, shadowed or removed — the server derives ${conflict.derives} from it`,
+        { help: milestoneHints.reservedType(conflict.type, conflict.derives) },
+      );
+    }
+    patch.milestoneTypes = [...new Set(declared)];
   }
 
   if (Object.keys(patch).length === 0) {

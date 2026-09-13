@@ -35,6 +35,14 @@ export interface Project {
   /** CR-CRU-008 §S4 — guarded run deletion config gate (default false:
    * the run journal is an immutable audit log unless a human enables this). */
   allowRunDeletion?: boolean;
+  /** CR-CRU-130 §S4 — the milestone vocabulary this project DECLARED, and only
+   * that: the seeded words every project starts with are not its declaration,
+   * and the reserved pair is the server's, so neither appears here. ABSENT
+   * until the project declares one (`PATCH /api/v2/projects/<key>`). What a
+   * milestone POST is actually validated against — declared, seeded and
+   * reserved together — is `Store.acceptedMilestoneTypes`, resolved from the
+   * single definition in `src/store.ts`. */
+  milestoneTypes?: string[];
 }
 
 /**

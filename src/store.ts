@@ -40,6 +40,13 @@ export interface ProjectPatch {
   retention?: number;
   /** CR-CRU-008 §S4 — guarded run deletion config gate. */
   allowRunDeletion?: boolean;
+  /**
+   * CR-CRU-130 §S4 — the milestone vocabulary this project DECLARES, replaced
+   * WHOLE by each patch (a declaration is a statement of the project's words,
+   * never an append). The reserved pair is the server's and is refused at the
+   * route boundary, so it never reaches here.
+   */
+  milestoneTypes?: string[];
 }
 
 /**
@@ -80,6 +87,9 @@ interface ProjectRow {
   archived_at: number | null;
   // CR-CRU-008 §S4 — guarded run deletion config gate; NULL = never set.
   allow_run_deletion: number | null;
+  // CR-CRU-130 §S4 — this project's DECLARED milestone vocabulary, joined in
+  // from `project_milestone_types`; NULL = declared nothing.
+  milestone_types?: string | null;
 }
 
 interface AgentRow {
@@ -734,6 +744,86 @@ const DISPOSABLE_KIND_PLACEHOLDERS = DISPOSABLE_KIND_PARAMS.map(() => "?").join(
 export function defaultRetention(): number | undefined {
   const raw = Number(process.env.CRUCIBLE_DEFAULT_RETENTION);
   return Number.isFinite(raw) && raw > 0 ? raw : undefined;
+}
+
+// ── CR-CRU-130 §S4/§S5 — the milestone vocabulary, defined in ONE place ────
+//
+// A milestone type is a project's own word for a dated goal, so it belongs in
+// the same seam as the cap above: configuration, resolved here, read
+// everywhere. The validator, the refusal's help[], the clients' `--type` help
+// and the board all READ this definition rather than holding a copy of it —
+// which is what §S5's constructional scan asserts, and why the seed lives
+// here and not in the route file.
+
+/**
+ * §S4 — the two types the SERVER derives behaviour from, and the ONLY
+ * declaration of that pair in the codebase.
+ *
+ * `release` carries the releases and release-proposals reads, the `crs`
+ * membership the queue's COMPLETED_UNTRACKED status derives from, `packages`
+ * and provenance repair; `cr-merged` carries the landing evidence a release's
+ * own `crs` is measured against. A project may neither declare, shadow nor
+ * remove either — its narration would land in `listReleases` and re-break the
+ * membership derivation CR-CRU-129 repaired.
+ */
+export const RESERVED_MILESTONE_TYPES = ["release", "cr-merged"] as const;
+
+export type ReservedMilestoneType = (typeof RESERVED_MILESTONE_TYPES)[number];
+
+/**
+ * §S4 — what each reserved name PROTECTS, so a refusal can say why the name is
+ * taken instead of leaving the caller to guess that its value was malformed.
+ * Keyed by the pair above, so a name cannot be reserved without a reason.
+ */
+const RESERVED_MILESTONE_TYPE_DERIVATIONS: Record<ReservedMilestoneType, string> = {
+  release:
+    "the releases and proposals reads, the crs membership the queue's COMPLETED_UNTRACKED " +
+    "status derives from, its packages and its provenance repair",
+  "cr-merged":
+    "the landing evidence a release's own crs is measured against — the provenance the " +
+    "release ceremony reads",
+};
+
+/**
+ * §S4 — the vocabulary a project that has declared NOTHING still records.
+ *
+ * These were server constants until this CR; they were always this project's
+ * own words, so they are seeded from configuration — the declaration a project
+ * starts with rather than a list the server owns. Seeded, not reserved: a
+ * project is free to declare over them, and nothing recording them today
+ * breaks.
+ */
+export const SEEDED_MILESTONE_TYPES: readonly string[] = [
+  "gap-analysis",
+  "design-review",
+  "stage-flip",
+  "custom",
+];
+
+/**
+ * §S4 — the accepted set, resolved ONCE: what the project DECLARED, the seed
+ * it starts from, and the reserved pair the server keeps for itself. Order is
+ * the reading order of the refusal that publishes it; duplicates collapse, so
+ * a project re-declaring a seeded name changes nothing.
+ */
+export function milestoneVocabulary(declared: readonly string[]): string[] {
+  return [...new Set([...SEEDED_MILESTONE_TYPES, ...declared, ...RESERVED_MILESTONE_TYPES])];
+}
+
+/**
+ * §S4 — the first reserved name a declaration tries to take, with what that
+ * name protects. `null` when the declaration takes none. A declaration is
+ * judged WHOLE: one reserved name refuses the list it arrived in, so a
+ * legitimate type smuggled in beside a reserved one is never left declared.
+ */
+export function reservedMilestoneTypeConflict(
+  types: readonly string[],
+): { type: string; derives: string } | null {
+  for (const type of types) {
+    const derives = RESERVED_MILESTONE_TYPE_DERIVATIONS[type as ReservedMilestoneType];
+    if (derives !== undefined) return { type, derives };
+  }
+  return null;
 }
 
 /**
@@ -2317,6 +2407,16 @@ export class Store {
         PRIMARY KEY (project_key, cycle_id)
       );
 
+      -- CR-CRU-130 §S4 — the milestone vocabulary a project DECLARES, one row
+      -- per project holding the declaration verbatim. A new TABLE, never a
+      -- retrofitted column: the base pass creates it whole for every store,
+      -- old or new (the queue_entries / runs precedent), so an open vocabulary
+      -- costs no chain step and no schema version.
+      CREATE TABLE IF NOT EXISTS project_milestone_types (
+        project_key TEXT PRIMARY KEY,
+        types_json TEXT NOT NULL
+      );
+
       -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). The table
       -- itself arrived ADDITIVELY (CREATE TABLE IF NOT EXISTS, no chain step):
       -- a full-replace POST rewrites a project's rows wholesale, so
@@ -2385,9 +2485,20 @@ export class Store {
     return stored;
   }
 
+  /**
+   * CR-CRU-130 §S4 — the declared vocabulary, joined in wherever a project is
+   * read, so `Project.milestoneTypes` is served by the same projection that
+   * serves every other configured field.
+   */
+  private static readonly PROJECT_SELECT =
+    `SELECT projects.*,
+            (SELECT types_json FROM project_milestone_types
+              WHERE project_key = projects.key) AS milestone_types
+       FROM projects`;
+
   getProject(key: string): Project | null {
     const row = this.db
-      .query<ProjectRow, [string]>(`SELECT * FROM projects WHERE key = ?`)
+      .query<ProjectRow, [string]>(`${Store.PROJECT_SELECT} WHERE key = ?`)
       .get(key);
     return row ? Store.toProject(row) : null;
   }
@@ -2399,12 +2510,22 @@ export class Store {
   listProjects(archived = false): Project[] {
     const rows = this.db
       .query<ProjectRow, []>(
-        `SELECT * FROM projects
+        `${Store.PROJECT_SELECT}
          WHERE archived_at IS ${archived ? "NOT NULL" : "NULL"}
          ORDER BY created_at ASC`,
       )
       .all();
     return rows.map(Store.toProject);
+  }
+
+  /**
+   * CR-CRU-130 §S4 — the milestone types this project may record: what it
+   * DECLARED, over the seed it starts from, plus the reserved pair. The ONE
+   * read every caller uses — the validator, the refusal that publishes the set
+   * and the help[] the refusal hands back.
+   */
+  acceptedMilestoneTypes(key: string): string[] {
+    return milestoneVocabulary(this.getProject(key)?.milestoneTypes ?? []);
   }
 
   /** CR-CRU-012 §S1b — is the project currently archived? (false if unknown). */
@@ -2451,6 +2572,12 @@ export class Store {
         : existing.liveness;
     const existingAllow =
       existing.allowRunDeletion !== undefined ? (existing.allowRunDeletion ? 1 : 0) : null;
+    // CR-CRU-130 §S4 — the declaration is replaced WHOLE or left alone; it
+    // lives in its own table, so it is compared as the text that table holds.
+    const existingTypesJson =
+      existing.milestoneTypes !== undefined ? JSON.stringify(existing.milestoneTypes) : null;
+    const nextTypesJson =
+      patch.milestoneTypes !== undefined ? JSON.stringify(patch.milestoneTypes) : existingTypesJson;
     const next = {
       name: patch.name ?? existing.name,
       type: patch.type ?? existing.type,
@@ -2468,8 +2595,17 @@ export class Store {
       next.livenessJson ===
         (existing.liveness !== undefined ? JSON.stringify(existing.liveness) : null) &&
       next.retention === (existing.retention ?? null) &&
-      next.allowRunDeletion === existingAllow;
+      next.allowRunDeletion === existingAllow &&
+      nextTypesJson === existingTypesJson;
     if (unchanged) return false;
+    if (patch.milestoneTypes !== undefined && nextTypesJson !== existingTypesJson) {
+      this.db
+        .query(
+          `INSERT INTO project_milestone_types (project_key, types_json) VALUES (?, ?)
+           ON CONFLICT(project_key) DO UPDATE SET types_json = excluded.types_json`,
+        )
+        .run(key, JSON.stringify(patch.milestoneTypes));
+    }
     this.db
       .query(
         `UPDATE projects SET name = ?, type = ?, sut_root = ?, liveness = ?, retention = ?,
@@ -2541,6 +2677,9 @@ export class Store {
       // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
       // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
       this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
+      // CR-CRU-130 §S4 — and so does the vocabulary it declared, for the same
+      // reason and on the same terms: not a reported count.
+      this.db.query(`DELETE FROM project_milestone_types WHERE project_key = ?`).run(key);
       this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
     })();
     // Emitted only after the transaction COMMITS — a rolled-back teardown
@@ -2564,6 +2703,11 @@ export class Store {
       // absent/false on the wire, matching the AC).
       ...(row.allow_run_deletion !== null
         ? { allowRunDeletion: row.allow_run_deletion === 1 }
+        : {}),
+      // CR-CRU-130 §S4 — key ABSENT until the project declares a vocabulary of
+      // its own; the seeded words it starts with are not its declaration.
+      ...(row.milestone_types !== null && row.milestone_types !== undefined
+        ? { milestoneTypes: JSON.parse(row.milestone_types) as string[] }
         : {}),
     };
   }
