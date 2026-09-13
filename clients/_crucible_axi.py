@@ -119,7 +119,23 @@ def http_request(base_url, method, path, payload=None, timeout=None):
             response.close()
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
-        return {"ok": False, "error": f"HTTP {e.code}: {detail}"}
+        failure = {"ok": False, "error": f"HTTP {e.code}: {detail}"}
+        # CR-CRU-129 §S4 — a client-class status can carry a STRUCTURED answer,
+        # not merely a sentence: the release route REFUSES a lossy replay with
+        # the same `shrink` object an applied repair returns, and a caller that
+        # only ever saw the rendered string could not tell a deliberate refusal
+        # from an unreachable board. So the parsed body travels too, while `ok`
+        # and `error` stay exactly as they have always read — nothing that
+        # already depends on this shape moves, and a non-JSON body (the usual
+        # case) adds nothing at all.
+        try:
+            body = json.loads(detail)
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            carried = {k: v for k, v in body.items() if k not in ("ok", "error")}
+            failure.update(carried)
+        return failure
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
                                       f"(is Crucible running at {base_url}?)"}
@@ -3219,6 +3235,47 @@ def refuse_repair(args, project_dir, ops, crs=None, packages=None):
     return EXIT_REPAIR_REFUSED
 
 
+def replay_refusal_detail(label, shrink):
+    """CR-CRU-129 §S4 (PURE) — the server's REFUSAL of a lossy replay, as the
+    ceremony says it: the release, the counts either side, and every id it
+    declined to drop.
+
+    The ids are NAMED rather than counted because a count cannot be acted on —
+    the operator's next step is to restore those landings (or to say
+    `--repair-provenance` and own the correction), and neither is possible
+    from `9 CR(s)`. The same sentence is carried as the structured warning, so
+    a machine caller is never told less than a human reader."""
+    removed = shrink.get("removed") or []
+    return (f"release {label} replay REFUSED (nothing written) — it would DROP "
+            f"{len(removed)} recorded CR(s): {shrink.get('before')} CR(s) "
+            f"before, {shrink.get('after')} after; would drop: "
+            f"{', '.join(removed)}")
+
+
+def refuse_replay(args, project_dir, ops, shrink):
+    """CR-CRU-129 §S4 — report ONE release's REFUSED replay: the server wrote
+    nothing, on purpose, and said what it declined to lose.
+
+    The SAME bucket CR-CRU-086 §S2's refused repair uses (`EXIT_REPAIR_REFUSED`
+    → `release.sh`'s `REFUSED (nothing written)`), because it is the same
+    verdict: neither recorded nor failed. Mapping it to the FAILED status
+    instead is what let the 2026-09-13 run print a `recover with:` line
+    inviting the operator to re-run the very write that was refused — and, a
+    layer up, to read `4/4 recorded` over a release that had come back with 51
+    of its 60 CRs."""
+    detail = replay_refusal_detail(args.label, shrink)
+    print(f"milestone: {detail}", file=sys.stderr)
+    ops.emit("milestone", True,
+             {"type": args.type, "label": args.label,
+              "commit": getattr(args, "commit", None),
+              "refused": True, "recorded": False,
+              "shrink": shrink,
+              "help": ["status", "queue"]},
+             ops.context(project_dir, cr=args.cr),
+             [{"code": "replay-refused", "detail": detail}], None)
+    return EXIT_REPAIR_REFUSED
+
+
 def shrink_report(label, shrink):
     """CR-CRU-086 §S3 (PURE) — a repair that REDUCED a stored `crs`, as the
     ceremony says it: the count before, the count after, and the ids dropped.
@@ -3300,7 +3357,15 @@ def cmd_milestone(args, project_dir, ops):
              if crs is not None else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
           file=sys.stderr)
-    shrink = resp.get("shrink") if ok else None
+    # CR-CRU-129 §S4 — a REFUSED replay is not a failed write: the server
+    # declined it BECAUSE it would have lost provenance, and it says so in the
+    # very `shrink` object an applied repair carries. That object is the key —
+    # not `ok`, which every transport fault also clears: a not-ok answer with
+    # NO shrink is an ordinary failure and keeps the failed status, so real
+    # failures are never hidden in the refused bucket.
+    shrink = resp.get("shrink")
+    if shrink and not ok:
+        return refuse_replay(args, project_dir, ops, shrink)
     if shrink:
         print(shrink_report(args.label, shrink), file=sys.stderr)
     ops.emit("milestone", bool(ok),

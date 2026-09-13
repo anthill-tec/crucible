@@ -1314,7 +1314,7 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // accident gets. The route carries the flag; deciding what a repair means
   // stays in the store, next to the dedup it is the exception to.
   const repairProvenance = body.repairProvenance === true;
-  const { event, changed, shrink } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+  const written = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
@@ -1323,6 +1323,23 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
     ...(repairProvenance ? { repairProvenance } : {}),
     ...eventContext(body),
   });
+  // CR-CRU-129 §S4 — a REPLAY that would lose provenance the project already
+  // holds is REFUSED, and the refusal is the answer: nothing was written, so
+  // there is no event to echo. A client-class status, because the caller CAN
+  // act on it — re-derive the missing landings, or say `--repair-provenance`
+  // and take responsibility for the correction. The error NAMES the release
+  // and every id that would have gone, since a count alone cannot be acted
+  // on, and the `shrink` object beside it is the very one an applied repair
+  // carries: one vocabulary for one finding, two verdicts.
+  const { event, changed, shrink } = written;
+  if (written.refused === true && shrink !== undefined) {
+    return fail(
+      409,
+      `release ${String(body.label)} replay refused: it would drop ` +
+        `${shrink.removed.length} recorded CR(s) — ${shrink.removed.join(", ")}`,
+      { shrink },
+    );
+  }
   // CR-CRU-086 §S3 — a repair that SHRANK a stored `crs` carries what it
   // dropped back to the reporter, which is the only actor that can say it out
   // loud where a human will read it.

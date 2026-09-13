@@ -2614,12 +2614,22 @@ export class Store {
       targetAt?: number;
       repairProvenance?: boolean;
     },
-  ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
+  ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink; refused?: boolean } {
     this.touchAgent(projectKey, agentId);
-    if (type === "release" && meta?.label !== undefined && meta.commit !== undefined) {
-      const held = this.listReleases(projectKey).find(
-        (r) => r.label === meta.label && r.commit === meta.commit,
-      );
+    if (type === "release" && meta?.label !== undefined) {
+      const forLabel = this.listReleases(projectKey).filter((r) => r.label === meta.label);
+      const held =
+        meta.commit !== undefined ? forLabel.find((r) => r.commit === meta.commit) : undefined;
+      // CR-CRU-129 §S4 — a REPLAY may not quietly shrink what it replaces.
+      // Scoped to the NON-repair path on purpose: a repair was ASKED for, so
+      // CR-CRU-086 §S3's legitimate shrink is still APPLIED and REPORTED (the
+      // measured 58→51 case). A replay asked for nothing — it exists to
+      // restore what is missing — so writing less than the record it replaces
+      // is pure loss, and is refused here, before anything is written.
+      if (meta.repairProvenance !== true && meta.crs !== undefined) {
+        const refusal = this.refuseShrinkingReplay(forLabel, meta.crs, held !== undefined);
+        if (refusal !== undefined) return refusal;
+      }
       if (held !== undefined) {
         // CR-CRU-081 §S3 — the ONE way a held release changes: the caller
         // asked for it, in this call, on purpose. Everything else replays.
@@ -2741,6 +2751,56 @@ export class Store {
       })();
     }
     return { event, changed: true };
+  }
+
+  /**
+   * CR-CRU-129 §S4 — REFUSE a replay that would lose provenance the project
+   * already holds for this release, having written nothing.
+   *
+   * WHAT IS COMPARED. `forLabel` is every record held for the label, whatever
+   * commit each is held under, because what a release is known to have shipped
+   * is a fact about the LABEL: a rebuild against a damaged store posts the
+   * commit the tag resolves to NOW, which is exactly the case where the dedup
+   * misses and a smaller set would be inserted beside the record it should
+   * have replaced. Membership, never size — a derivation that ADDS two ids
+   * while dropping nine is not a bigger set, it is a loss with a disguise, so
+   * the answer is the ids the stored sets hold and this one does not.
+   *
+   * WHAT IS NOT A SHRINK. An EQUAL set (the idempotent re-run) and a LARGER
+   * one (a rebuild that legitimately found more) remove nothing and proceed
+   * untouched — a guard keyed on "a record already exists" would break every
+   * re-run of the ceremony.
+   *
+   * THE ONE EXEMPTION, and it is CR-CRU-086 §S1's rule rather than a new one:
+   * an EMPTY derivation is NO ANSWER, not the answer. Where this post is the
+   * held record's own replay (`replaysHeldRecord` — same type/label/commit)
+   * the dedup writes nothing anyway, so a caller that answered nothing loses
+   * nothing and converges. Where it would INSERT — a commit the store holds no
+   * record under — that same empty answer would make the label read as a
+   * record carrying no provenance at all, which is the extreme shrink and is
+   * refused like every other.
+   *
+   * Reported in the SAME `ProvenanceShrink` vocabulary an applied repair
+   * carries, because it is the same finding: one shrink object, two verdicts.
+   */
+  private refuseShrinkingReplay(
+    forLabel: RunEvent[],
+    crs: string[],
+    replaysHeldRecord: boolean,
+  ): { event: RunEvent; changed: boolean; shrink: ProvenanceShrink; refused: true } | undefined {
+    if (forLabel.length === 0) return undefined;
+    if (crs.length === 0 && replaysHeldRecord) return undefined;
+    const stored = new Set<string>();
+    for (const record of forLabel) for (const cr of record.crs ?? []) stored.add(cr);
+    const offered = new Set(crs);
+    const removed = [...stored].filter((cr) => !offered.has(cr));
+    if (removed.length === 0) return undefined;
+    return {
+      event: forLabel[0]!,
+      changed: false,
+      refused: true,
+      shrink: { before: stored.size, after: offered.size, removed },
+    };
   }
 
   /**

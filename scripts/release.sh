@@ -51,6 +51,14 @@ AGENT=""
 # record that CR-CRU-080 §S3 made immutable may only be corrected because this
 # run's own command line asked for it.
 REPAIR_PROVENANCE=false
+# CR-CRU-129 §S4 — the CR ids a STORED release record names that THIS run's
+# rebuild could not derive, accumulated from the server's own refusals (one
+# space-separated set, appended per refused tag). It is the evidence that
+# separates the two unplaceable classes: a CR in here demonstrably shipped —
+# a release record says so — while the landing record that would say WHERE is
+# gone, which is data loss. A CR no record names is simply one that never
+# landed, and nothing about it is lost.
+REPLAY_NAMED_UNPLACEABLE=""
 
 # ============================================================================
 # Helper Functions
@@ -562,6 +570,20 @@ cr_merged_crs() {
         }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
 }
 
+# CR-CRU-129 §S4 — the CR ids a REFUSED replay would have dropped, from a
+# `milestone` envelope on stdin: the server's `shrink.removed`, which is the
+# set a stored release record NAMES and this rebuild could not derive.
+#
+# The same TOON idiom `cr_merged_crs` reads the queue envelope with — a
+# string list renders as `removed[N]: a,b,c` at whatever depth it sits — so
+# this is the structured channel, not the human line beside it.
+refused_crs() {
+    awk -F': ' '/^[[:space:]]*removed\[[0-9]+\]:/ {
+            gsub(/,/, "\n", $2)
+            print $2
+        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+}
+
 # CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
 # distinct classes §S2 defines, so "tracked, but the landing sha is missing" is
 # never read as "Crucible has no record of this CR landing at all":
@@ -572,6 +594,24 @@ cr_merged_crs() {
 #      — no closed plan, and no `cr-merged` milestone either. This is the class
 #      that was invisible: ancestry cannot place such a CR and nothing reported
 #      it, so 0.1.0's provenance shrank from 58 CRs to 51 in total silence.
+#
+# CR-CRU-129 §S4 — and class 2 is itself TWO facts that demand opposite
+# responses, reported apart because the 2026-09-13 run printed `15 unplaceable`
+# over both and neither could be acted on:
+#
+#   2a. the landing evidence was EVICTED — a stored release record NAMES the
+#       CR, so it demonstrably shipped, yet nothing survives to say where. That
+#       is DATA LOSS: something Crucible held is gone, and the ids are worth
+#       chasing back into the store.
+#   2b. the CR NEVER landed — no record names it anywhere. Nothing is lost,
+#       because nothing was ever recorded; it is simply queued work.
+#
+# The evidence for 2a is `REPLAY_NAMED_UNPLACEABLE`: the ids the SERVER refused
+# to let this run's replay drop. That is a sound partition after a backfill,
+# which replays every tag — a record naming an unplaceable CR cannot be
+# replayed without being refused, so every evicted id is seen. With no replay
+# made (the live `finish` path) nothing is claimed to have been named, and the
+# class reads as 2b: the report states what it checked, and never more.
 #
 # Each class is counted and described SEPARATELY, on its own line, with disjoint
 # id sets — one shared total would re-create exactly the confusion §S2 names.
@@ -584,7 +624,7 @@ cr_merged_crs() {
 # after the newest tag, which is placement, not a gap.
 report_unplaceable_crs() {
     local cr sha queue_out tracked="" merged=""
-    local -a missing_sha=() no_record=()
+    local -a missing_sha=() evicted=() never_landed=()
 
     while read -r cr sha; do
         [ -n "$cr" ] || continue
@@ -598,14 +638,26 @@ report_unplaceable_crs() {
         [ -n "$cr" ] || continue
         [[ " $tracked " != *" $cr "* ]] || continue
         [[ "$merged" != *" $cr "* ]] || continue
-        no_record+=("$cr")
+        # CR-CRU-129 §S4 — class 2 splits on ONE question: does a stored
+        # release record NAME this CR? If it does, the CR demonstrably shipped
+        # and only the evidence of WHERE is gone — data loss, and the class
+        # this project's own 0.1.0 lost nine CRs to. If no record names it,
+        # nothing was lost because nothing was ever recorded.
+        if [[ " $REPLAY_NAMED_UNPLACEABLE " == *" $cr "* ]]; then
+            evicted+=("$cr")
+        else
+            never_landed+=("$cr")
+        fi
     done < <(printf '%s\n' "$queue_out" | queued_crs)
 
     if [ "${#missing_sha[@]}" -gt 0 ]; then
         info "provenance: ${#missing_sha[@]} unplaceable CR(s) — tracked, but the landing sha is missing: the plan is closed and records no merge commit, so there is no commit to test ancestry against: ${missing_sha[*]}"
     fi
-    if [ "${#no_record[@]}" -gt 0 ]; then
-        info "provenance: ${#no_record[@]} unplaceable queued CR(s) — no landing record at all: Crucible holds neither a closed plan nor a cr-merged milestone for them, so where they landed is unknown: ${no_record[*]}"
+    if [ "${#evicted[@]}" -gt 0 ]; then
+        info "provenance: ${#evicted[@]} unplaceable queued CR(s) — landing evidence EVICTED: a stored release record NAMES them, so they shipped, yet no landing record survives at any source (no closed plan, no cr-merged record). This is DATA LOSS, not a gap: ${evicted[*]}"
+    fi
+    if [ "${#never_landed[@]}" -gt 0 ]; then
+        info "provenance: ${#never_landed[@]} unplaceable queued CR(s) — NEVER landed: no release record was found naming them and Crucible holds neither a closed plan nor a cr-merged record, so where they landed is unknown and nothing is lost: ${never_landed[*]}"
     fi
 }
 
@@ -683,9 +735,16 @@ emit_release_milestone() {
         shown="$shown --repair-provenance"
     fi
 
-    local status=0
-    python3 "$client" milestone --type release --label "$version" \
-        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"} || status=$?
+    # The client's ENVELOPE is captured and re-printed verbatim on the same
+    # channel it was written to, so nothing an operator or a machine caller
+    # used to read is lost — it is read on the way past (CR-CRU-129 §S4: a
+    # refusal carries the ids it declined to drop, and this is the ceremony's
+    # only sight of what a stored record names). The interactive stderr line
+    # is never intercepted.
+    local status=0 answer=""
+    answer="$(python3 "$client" milestone --type release --label "$version" \
+        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"})" || status=$?
+    [ -z "$answer" ] || printf '%s\n' "$answer"
     case "$status" in
         "$EXIT_SUCCESS")
             return "$EXIT_SUCCESS"
@@ -694,7 +753,14 @@ emit_release_milestone() {
         # already named the release and the reason on the interactive channel,
         # and a "recover with" line would invite the caller to re-run the very
         # write that was refused. Passed through for the caller to tally.
+        #
+        # CR-CRU-129 §S4 — and the ids it refused to drop are kept: each is a
+        # CR a stored release record NAMES and this rebuild could not place,
+        # which is exactly what tells the unplaceable tally an eviction from a
+        # CR that never landed.
         "$EXIT_REFUSED")
+            REPLAY_NAMED_UNPLACEABLE="$REPLAY_NAMED_UNPLACEABLE $(printf '%s\n' "$answer" \
+                | refused_crs | paste -sd' ' -)"
             return "$EXIT_REFUSED"
             ;;
     esac
@@ -743,11 +809,15 @@ cmd_backfill_releases() {
             info "  $tag: recorded ($sha)"
             recorded=$((recorded + 1))
         elif [ "$status" -eq "$EXIT_REFUSED" ]; then
-            # CR-CRU-086 §S2 — REFUSED, not recorded and not failed: the repair
-            # could not compute this release's provenance, so it wrote nothing
-            # and the client said why. Named here too, so the tally below is
-            # never read as "recorded".
-            info "  $tag: REFUSED — the repair wrote nothing (reason above)"
+            # CR-CRU-086 §S2 — REFUSED, not recorded and not failed: the
+            # report wrote nothing and the client said why. Named here too, so
+            # the tally below is never read as "recorded".
+            #
+            # CR-CRU-129 §S4 — both refusals land here, and neither is a
+            # repair-only condition any more: a repair that could not compute
+            # this release's provenance, and a REPLAY the server declined
+            # because it would have dropped CRs the stored record holds.
+            info "  $tag: REFUSED — nothing was written (reason above)"
             refused+=("$tag")
         else
             failed+=("$tag")
