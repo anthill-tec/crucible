@@ -1,4 +1,4 @@
-# CR-CRU-129 — a release is a record, not an event
+# CR-CRU-129 — a milestone is a record, not an event
 
 **Status:** PENDING
 **Type:** fix
@@ -6,141 +6,181 @@
 **Depends on:** CR-CRU-074, CR-CRU-080, CR-CRU-081, CR-CRU-086, CR-CRU-091
 **Labels:** fix, server, store, data-integrity
 **Phase:** Wave 6 (0.2.0)
-**Design reference:** CR-CRU-074 §S3 made releases first-class on the WIRE; this makes them first-class
-in the STORE.
+**Design reference:** CR-CRU-074 §S3 made releases first-class on the WIRE; this makes the whole
+milestone kind first-class in the STORE.
 
 ## Context
 
 **Crucible lost its release history on 2026-09-13, during ordinary use.** Not to a migration, a crash
 or an operator error — to its own retention policy, working as designed.
 
-There is no `releases` table. There is no `milestones` table. The schema is `agents, events,
-plan_cycles, plans, projects, queue_entries, rollups, runs`. A release is a ROW IN `events` with
-`kind='milestone'` and `payload.type='release'`, and `GET …/releases` is a query over that table
-(`src/store.ts:2730`). So the record of what a release shipped lives in the same buffer as test-run
-telemetry.
+There is no `releases` table and no `milestones` table. The schema is `agents, events, plan_cycles,
+plans, projects, queue_entries, rollups, runs`. A release is a ROW IN `events` with `kind='milestone'`
+and `payload.type='release'`, and `GET …/releases` is a query over that table (`src/store.ts:2747`).
+So the record of what a release shipped lives in the same buffer as test-run telemetry.
 
 `events` is capped. `enforceRetention` (`src/store.ts:3063`) trims each project to its `retention`
 value, oldest first. This project's cap was **2000**. One day of ordinary TDD work — the RED, GREEN,
 VERIFY and FIX ingests of a single CR — appended 165 events. The oldest 165 were evicted. Nine were
-milestones. Four were the `release` records for **0.1.0, 0.1.1, 0.1.2 and 0.1.3** — every release
-this project has ever shipped.
+milestones. Four were the `release` records for **0.1.0, 0.1.1, 0.1.2 and 0.1.3** — every release this
+project has ever shipped. Four more were the `cr-merged` records for **CR-CRU-077, 078, 091 and 092**,
+and one was a `release-proposal`.
 
-The consequences were immediate and were caught by the pre-merge gate, not by any alarm:
+The consequences were caught by the pre-merge gate, not by any alarm: `GET …/releases` answered
+`{"releases":[]}`; 52 landed queue rows became release-less, because a row's membership is derived
+from the release record's `crs` set; and two live-board invariants failed
+(`tests/queue-release-membership-mandatory.test.ts` §S1,
+`tests/queue-historical-membership.test.ts` §S3a).
 
-- `GET …/releases` answered `{"releases":[]}`.
-- 52 landed queue rows became release-less, because a row's membership is derived from the release
-  record's `crs` set.
-- `tests/queue-release-membership-mandatory.test.ts` §S1 and
-  `tests/queue-historical-membership.test.ts` §S3a both failed against the live board.
+**The recovery proved the design's own escape hatch is lossy.** `release.sh backfill-releases`
+re-recorded 4/4 releases from the git tags, and `0.1.0` came back with **51 CRs against the 60 the
+evicted record held** — because the `cr-merged` milestones the derivation reads had been evicted in
+the same sweep. A tag knows a label and a sha; it does not know which CRs a release shipped. The 60
+were recovered only because a pre-upgrade `.db` snapshot happened to still be on disk.
 
-**The exemption list shows this was a decision, not an oversight.** Retention already exempts two
-kinds:
+**The category is the defect.** A test run is an event: numerous, disposable, and exactly what a
+capped buffer is for — 1,957 of this project's 2,013 rows are `test`, `lifecycle` or `compile`. A
+milestone is not. It is a record of something that happened once and stays true: a release, a merge,
+a proposal, a stage flip. Storing records in the telemetry buffer means the project's history is
+evicted by its own activity, and the more work it does the faster it forgets.
 
-```
-src/store.ts:3065   a LIVE gate AWAITING its release … is EXEMPT from the count cap
-src/store.ts:3073   a LIVE `release-proposal` is exempt on the same terms, and for a
-                    stronger reason than the gate's. A pruned `release` is
-                    rebuildable from its git tag (`repair-provenance`); a pruned
-                    proposal is AUTHORED INTENT with no external source
-```
-
-A gate is exempt. A proposal is exempt. The release — the thing both of them exist to serve — is
-not, on the argument that a git tag can rebuild it.
-
-**That argument is measurably false, and the recovery proved it.** `release.sh backfill-releases`
-re-recorded 4/4 releases from the tags, and the rebuild was LOSSY: `0.1.0` came back with **51 CRs
-against the 60 the evicted record held**. A tag knows a label and a sha. It does not know which CRs
-a release shipped — that is derived from `cr-merged` milestones, and five of THOSE were evicted in
-the same sweep. The 60 were recovered only because a pre-upgrade `.db` snapshot happened to still
-exist on disk. Without it, nine CRs' membership would be gone permanently.
+Retention already carries two exemptions — a live gate (`src/store.ts:3072`) and a live
+release-proposal (`:3079`) — with a comment arguing a pruned release is *"rebuildable from its git
+tag"*. Extending that predicate to cover releases was considered and REJECTED: it encodes "a
+milestone is an event we choose not to evict", leaves every read recency-ordered over a table
+dominated by test rows, and today measurably disproved the rebuildability it rests on.
 
 ## Scope
 
-### §S1 Releases and merges are rows, not payloads in a ring buffer
+### §S1 Milestones become records
 
-A release becomes a first-class row with its own table and its own lifetime, holding what it already
-carries on the wire: label, commit, `releasedAt`, `crs`, `packages`. The same applies to the
-`cr-merged` milestone, for the same reason — it is the evidence a release's `crs` is DERIVED from, so
-storing the derivation durably while leaving its inputs prunable moves the failure rather than fixing
-it.
+The whole `milestone` kind leaves `events` for its own table: `release`, `cr-merged`,
+`release-proposal`, `gap-analysis`, `design-review`, `custom` — the six `MILESTONE_TYPES`
+(`src/v2.ts:1158-1172`). Not two types, and not "the important ones": the distinction that matters is
+record versus telemetry, and every milestone type is on the record side of it. Each row keeps what it
+carries today — type, label, commit, `releasedAt`, `crs`, `packages`, `context`, `retired_at` — and
+gains a lifetime that no ingest volume can end.
 
-The migration reads existing `release` and `cr-merged` milestone events out of `events` and writes
-them into the new tables. Events already evicted are gone; the migration recovers what is still
-present and REPORTS what it could not place, rather than silently starting from whatever survives.
+`gate` is lifted on the same terms. It is already half-exempt (`LIVE_GATE`, `:3072`) precisely
+because it is a record; the exemption is the existing code conceding the point one kind at a time.
 
-`GET …/releases`, the queue's membership derivation, `repairReleaseProvenance` and the roadmap read
-the new table. Their wire shapes do not change — this is a storage fix, and no client is touched.
+`events` keeps `test`, `compile` and `lifecycle` — the numerous kinds the cap exists for.
 
-### §S2 The retention policy states what it may never evict
+The migration reads existing milestone and gate rows out of `events` into the new tables, reports a
+per-record result and a tally, and is idempotent. Events already evicted are gone: the migration
+recovers what is present and NAMES what it cannot, rather than silently starting from the survivors.
 
-Retention keeps trimming telemetry: `test` and `compile` events are what the cap exists for. It may
-not evict a STRUCTURAL fact. After §S1 the release and merge rows are outside `events` and so outside
-the cap by construction; §S2 is the guard that keeps it that way — a test that fails if a
-structural kind is ever added back into the prunable set, and the policy stated in one place rather
-than as three exemptions discovered by reading `enforceRetention` top to bottom.
+### §S2 Retention has nothing structural left to reach
 
-### §S3 The recovery path stops being lossy, and says so when it is
+After §S1 the cap governs `test`, `compile` and `lifecycle` only, and the two exemption predicates
+become unreachable — `LIVE_PROPOSAL` can never match, because no milestone remains in the table it
+queries. They are removed rather than left as dead SQL that implies a protection the schema now
+provides.
 
-`backfill-releases` keeps working, but it may no longer quietly return fewer CRs than the record it
-replaces. When a rebuild derives a SMALLER `crs` than the stored record, the write is refused and the
-difference reported — CR-CRU-086 established exactly this rule for the repair path after that path
-erased 58 CRs, and the replay path needs it for the same reason.
+The guard that replaces them is a test: retention may only ever reach kinds on a named disposable
+list, and adding a structural kind to that list fails.
 
-The `unplaceable` tally already printed by the ceremony gains the distinction that matters: a CR that
-never landed anywhere, versus a CR whose landing evidence has been EVICTED. Those are different
-facts and only the second is a data-loss report.
+### §S3 Every read moves with the data
+
+The consumers, enumerated so none is discovered by its absence:
+
+| consumer | site |
+|---|---|
+| `listReleases` | `src/store.ts:2747` |
+| `listReleaseProposals` | `src/store.ts:2787` |
+| queue status derivation (release `crs` → `COMPLETED_UNTRACKED`) | `src/store.ts:4046-4076`, `:4463`, `:4476` |
+| `repairReleaseProvenance` | `src/store.ts` (CR-CRU-081 §S3 operator) |
+| `GET …/releases`, `GET …/release-proposals`, the roadmap strip | `src/v2.ts` |
+| gate reads and the gate pane | `src/v2.ts`, `public/` |
+| `cr_merged_crs` + `cmd_queue` | `clients/_crucible_axi.py:1692`, `:1702` |
+
+Wire shapes do not change. One CLIENT read does, and must: `cr_merged_crs` does not query
+`cr-merged` — it SCANS the newest `QUEUE_EVENTS_LIMIT = 5000` events
+(`clients/_crucible_axi.py:1674`) because `GET /api/v2/events` accepts only a `limit`
+(`src/v2.ts:3748`), and filters client-side. Its comment claims 5,000 is *"far above any real
+project's milestone count"*, but the window counts ALL events: at 2,013 rows it works by luck, and
+1,957 of those rows are telemetry. A milestones read that can be QUERIED by type retires both the
+scan and its false premise.
+
+### §S4 The replay may not quietly shrink what it replaces
+
+`backfill-releases` keeps working, but a rebuild that derives a SMALLER `crs` than the stored record
+is refused and the difference reported. CR-CRU-086 established exactly this rule for the repair path
+after that path erased 58 CRs; today the REPLAY path did the same thing (60 → 51) because the rule
+was never extended to it.
+
+The ceremony's `unplaceable` tally gains the distinction that matters: a CR that never landed
+anywhere, versus a CR whose landing evidence was EVICTED. Only the second is data loss, and today's
+run reported 15 unplaceable without saying which kind they were.
 
 ## Acceptance criteria
 
 **§S1**
-- [ ] `release` and `cr-merged` records survive a retention sweep that evicts every prunable event:
-      a project at its cap, ingesting enough runs to roll the entire buffer, still answers
-      `GET …/releases` with every release and every `crs` byte-identical.
-- [ ] The migration moves existing release and cr-merged milestones out of `events` into the new
-      tables, and reports a per-record result plus a tally; a re-run is idempotent and duplicates
-      nothing.
-- [ ] `GET …/releases`, the queue's membership derivation and the roadmap answer byte-identically
-      before and after the migration, proved against a fixture holding all four of this project's
-      releases.
-- [ ] No client changes: the five clients' `milestone` surfaces and the wire shapes are untouched,
-      asserted by the existing fleet surface tests.
+- [ ] Every milestone type and `gate` survives a retention sweep that evicts every disposable event:
+      a project at its cap, ingesting enough runs to roll the whole buffer, still answers
+      `GET …/releases`, `GET …/release-proposals` and its gate reads with every record and every
+      `crs` byte-identical.
+- [ ] The migration moves existing milestone and gate rows out of `events`; it reports a per-record
+      result plus a tally, and a re-run writes nothing and duplicates nothing.
+- [ ] The migration NAMES what it could not recover rather than reporting success over survivors.
+- [ ] `GET …/releases`, `GET …/release-proposals`, the queue's derived statuses and the roadmap
+      answer byte-identically before and after, proved against a fixture holding all four of this
+      project's releases and all 45 of its `cr-merged` records.
 
 **§S2**
-- [ ] A structural kind can never be evicted: a test enumerates the kinds retention may trim and
-      fails if a structural one is added to that set.
-- [ ] Telemetry still prunes — a project past its cap sheds `test`/`compile` events exactly as
-      today, so this CR does not silently disable retention.
+- [ ] Retention reaches only `test`, `compile` and `lifecycle`; a test enumerates that disposable set
+      and FAILS if a structural kind is added to it.
+- [ ] Telemetry still prunes: a project past its cap sheds test events exactly as today, so this CR
+      does not silently disable retention.
+- [ ] `LIVE_GATE` and `LIVE_PROPOSAL` are removed, and no read depends on them.
 
 **§S3**
-- [ ] A `backfill-releases` replay that would write FEWER crs than the stored record is refused, the
-      shrink is named (which release, which ids), and nothing is written — the CR-CRU-086 rule
-      extended to the replay path.
-- [ ] The unplaceable tally distinguishes "never landed" from "landing evidence evicted", and the
-      second is reported as data loss.
+- [ ] Each consumer in the §S3 table reads the new tables — asserted per site, not as one aggregate
+      "the reads were updated".
+- [ ] `cr_merged_crs` QUERIES milestones by type instead of scanning newest-N events;
+      `QUEUE_EVENTS_LIMIT` and its premise are retired.
+- [ ] Mutation: a project holding more disposable events than the old 5,000 window still returns
+      every `cr-merged` id — the case that silently failed before.
+- [ ] No other client surface changes: the five clients' `milestone` help and wire shapes are
+      unchanged, asserted by the existing fleet surface tests.
+
+**§S4**
+- [ ] A replay that would write FEWER crs than the stored record is refused, names the release and
+      the missing ids, and writes nothing.
+- [ ] The unplaceable tally distinguishes "never landed" from "landing evidence evicted".
 - [ ] Re-running the ceremony against a complete store writes nothing and reports no shrink.
+
+**Close-out**
+- [ ] Retention returns from its 200,000 stopgap to a considered cap for the disposable kinds, and
+      the value is stated in the close-out rather than left at whatever stopped the bleeding.
+- [ ] One re-baseline of both stacks after the migration runs against the live board — the migration,
+      the restored `0.1.0` provenance and the four re-posted `cr-merged` records are all live facts
+      the two board-invariant suites census.
 
 ## Estimated size
 
-M — a table, a migration, a read-path switch and a guard. The migration is the careful part: it
-moves live production data, and this project's own store is the fixture that proves it.
+M — two tables, a migration, the enumerated read moves, one client read, and the replay guard. The
+migration is the careful part: it moves live production data, and this project's own store is the
+fixture that proves it.
 
 ## Risk
 
-- **The migration moves the only copy of data already proven fragile.** It must be a copy-then-verify
-  with the pre-migration snapshot retained, in the shape this repo already uses
-  (`data/crucible.db.pre-upgrade-<ts>`) — which is the only reason the 60 CRs were recoverable at
-  all this time.
-- **Evicted history cannot be recovered by this CR.** Whatever is already gone from `events` stays
-  gone; the migration recovers what remains and reports the rest. Raising a cap does not restore
-  what a cap already dropped.
-- **A cap that never trims structural rows grows without bound.** That is correct for this data —
-  four releases in four months — but the growth must be stated rather than assumed.
+- **The migration moves the only copy of data already proven fragile.** Copy-then-verify with the
+  pre-migration snapshot retained in the shape this repo already uses
+  (`data/crucible.db.pre-upgrade-<ts>`) — the only reason today's 60 CRs were recoverable.
+- **Evicted history cannot be recovered by this CR.** What is gone from `events` stays gone; four
+  `cr-merged` records were re-posted by hand from a backup, and that option existed only by luck.
+- **A structural table never prunes.** Correct for this data — 4 releases and 45 merges in four
+  months — but the growth must be stated rather than assumed.
+- **Lifting `gate` beside the milestones widens the blast radius** past the incident that prompted
+  the CR. It is included because `LIVE_GATE` already concedes a gate is a record; if the migration
+  proves riskier than the parity is worth, the gate half is the seam to defer.
 
 ## Non-goals
 
-- Changing any client, any wire shape, or any `milestone` CLI surface.
+- Changing any wire shape, any `milestone` CLI surface, or any client other than the `cr_merged_crs`
+  read §S3 names.
 - Retiring retention. Telemetry SHOULD be capped; this CR narrows what the cap may reach.
 - Re-deriving membership for CRs whose `cr-merged` evidence is already evicted.
-- The other milestone types (`stage-flip`, `gap-analysis`, `design-review`, `custom`). They are
-  narration and prune correctly; only the two that carry derivable structure are lifted.
+- Reworking `plans`, `plan_cycles` or `queue_entries` — those are already records in their own tables,
+  which is the shape this CR gives the milestones.
