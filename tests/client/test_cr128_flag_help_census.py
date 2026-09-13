@@ -62,9 +62,9 @@ So the rule is NARROWED where it is now wrong and KEPT everywhere it is still
 right, rather than exempting `--type` — an exemption would leave the next open
 vocabulary unguarded:
 
-  CLOSED, server-owned  `--tier`, `--kind`, `--cycle-kind`, `--role`,
-                        `--source`: must still name every member, and the
-                        non-vacuity guard still fails on an empty parse.
+  CLOSED, server-owned  `--kind`, `--cycle-kind`, `--role`, `--source`: must
+                        still name every member, and the non-vacuity guard
+                        still fails on an empty parse.
   OPEN, project-defined `--type`: cannot name its members, and must instead say
                         WHERE THE LIST COMES FROM — the configuration field
                         that declares it and the route that carries it, which
@@ -298,8 +298,13 @@ def _server_vocabularies():
 # `OPEN_VOCABULARY_FLAGS` below. `OpenVocabularyHelpTest.
 # test_no_flag_is_graded_by_both_rules` is what keeps the move from becoming a
 # hole -- a flag in neither table would simply stop being graded.
+#
+# `--tier` is ALSO absent, and for a different reason: no census source
+# declares it at all -- CR-CRU-008 AC11 retired the flag -- so a mapping for it
+# graded ZERO declarations and could never turn red. A map entry that cannot
+# fail is not coverage, it is decoration; the flag comes back into this table
+# the day a client declares it again.
 VOCABULARY_FLAGS = {
-    "--tier": "Tier",
     "--kind": "CycleKind",
     "--cycle-kind": "CycleKind",
     "--role": "AGENT_ROLES",
@@ -970,8 +975,9 @@ class FlagHelpQualityTest(unittest.TestCase):
             "the check reached %d declaration(s); RE-MEASURED 2026-09-13 once "
             "the five --type declarations moved to the OPEN rule, it reaches 2 "
             "(--kind and --cycle-kind, both on the shared registrar). The other "
-            "three closed flags carry `choices=`, which argparse prints for "
-            "them" % checked)
+            "two closed flags -- --role and --source -- carry `choices=`, which "
+            "argparse prints for them, so they are graded without reaching this "
+            "rule" % checked)
 
     def test_no_valued_flag_opens_its_help_with_if_set_beyond_the_ceiling(self):
         """GUARD (§S3.4). A flag with no `action=` takes a VALUE, so "If set"
@@ -1093,7 +1099,7 @@ class OpenVocabularyHelpTest(unittest.TestCase):
         self.assertEqual(set(), set(VOCABULARY_FLAGS) & set(OPEN_VOCABULARY_FLAGS))
         self.assertIn("--type", OPEN_VOCABULARY_FLAGS)
         self.assertNotIn("--type", VOCABULARY_FLAGS)
-        for closed in ("--tier", "--kind", "--cycle-kind", "--role", "--source"):
+        for closed in ("--kind", "--cycle-kind", "--role", "--source"):
             self.assertIn(closed, VOCABULARY_FLAGS,
                           "%s draws on a CLOSED server vocabulary and must "
                           "still name every member of it" % closed)
