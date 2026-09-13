@@ -112,7 +112,9 @@ already consumed by a shipped release becomes that release's delivery rather tha
 
 **What a release CONTAINS at delivery is the flat set of CRs, and that is by design.** A proposal
 carries `waves` because waves are how the work is SCHEDULED into it — measured 2026-09-13, `0.2.0`
-and `0.3.0` hold `['5','6']` and `['7']`. No shipped release carries them, and the unification must
+and `0.3.0` answer `['5','6']` and `['7']` ON THE WIRE. The precision matters to any migration: the
+stored payloads carry no `waves` key at all, so `waves` is DERIVED at read time from the roadmap and
+there is no stored field for delivery to drop or to carry forward. No shipped release carries them, and the unification must
 not "fix" that: user-approved, and it is what the locked definition already says — *"a wave is a
 synchronization device, not a delivery bucket… it does not represent a shipment"*
 (`DN-crucible-wave-track-release.md`). A release logically contains every CR that contributed to the
@@ -323,8 +325,11 @@ exempted from it — an exemption would leave the next open vocabulary unguarded
 - [ ] An UNDECLARED type is refused, and the refusal says how to declare it.
 - [ ] Two distinct project-defined types are distinguishable after the fact — the thing `custom`
       cannot do, and the reason this CR exists.
-- [ ] `gap-analysis`, `design-review`, `stage-flip` are seeded from configuration; the 3 live
-      `gap-analysis` and 5 live `custom` records still read correctly.
+- [ ] `gap-analysis`, `design-review`, `stage-flip` are seeded from configuration; the live
+      `gap-analysis`, `custom` and `stage-flip` records still read correctly. Counts are NOT pinned —
+      the population grows daily (measured 2026-09-13: 70 milestone rows, `cr-merged` 48, `custom` 7,
+      `stage-flip` 5, `release` 4, `gap-analysis` 4, `release-proposal` 2; an earlier draft of this AC
+      said 3 and 5 and was already stale within the day). Tests assert floors and derived shape.
 
 **§S5**
 - [ ] No literal copy of the vocabulary remains in server, hint or client source — asserted by
