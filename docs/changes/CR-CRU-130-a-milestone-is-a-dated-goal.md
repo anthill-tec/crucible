@@ -52,6 +52,24 @@ milestone rows — 4 releases, 2 proposals, 45 `cr-merged`, 3 `gap-analysis`, 5 
 
 ## Scope
 
+### §S0 The backend model gains definition; nothing else moves
+
+**This CR changes the STORE'S model and nothing above it.** Stated first because every section below
+could be misread as licence to redesign:
+
+- The UI is unchanged — the roadmap graph, the release node, the wave container, the track lanes and
+  storyboard F14a render exactly what they render today.
+- Behaviours are unchanged — `wave-complete` stays a derived answer over a wave's MEMBERS, `--track`
+  keeps deciding order, and the `next` vocabulary is untouched.
+- The logical relationships between a SOLO project and a MULTI-TRACK one are unchanged, including
+  that a wave is one container either way, that track count is the project's own property, and that
+  a trackless project has no lane chrome (`DN-crucible-wave-track-release.md`, D1).
+- Wire shapes are unchanged.
+
+What gains definition is the backend: a milestone's dates become first-class, a release stops being
+two records pretending to be two types, and the type vocabulary stops being a literal in the server.
+Every acceptance criterion below is satisfiable without touching `public/` or any client behaviour.
+
 ### §S1 A milestone carries its dates
 
 Every milestone, of every type, carries:
@@ -81,6 +99,17 @@ the column keeps its other, real job (CR-CRU-073's gate retirement).
 
 The migration rewrites the 2 live proposals and 4 live releases into the single form, and a proposal
 already consumed by a shipped release becomes that release's delivery rather than a second row.
+
+**And the container survives delivery.** A release bundles the CRs of one or more waves — that is the
+locked definition (`DN-crucible-wave-track-release.md`, "The three levels") — but measured
+2026-09-13, only the PROPOSAL carries the grouping: `0.2.0` and `0.3.0` hold `waves` `['5','6']` and
+`['7']`, while every shipped release (`0.1.0`–`0.1.3`) has no `waves` field at all. Shipping drops
+it, so a delivered release can say which CRs it bundled but not which waves grouped them.
+
+One record fixes this by construction: `waves` rides through delivery beside `crs`. No new concept —
+the field already exists on the proposal, the definition already says a release contains at least one
+wave's features, and a wave remains a grouping whose meaning is unchanged for solo and multi-track
+projects alike.
 
 ### §S3 The release workflow stays a workflow
 
@@ -128,6 +157,16 @@ list comes from, or read it.
 
 ## Acceptance criteria
 
+**§S0 — invariance, asserted rather than promised**
+- [ ] No file under `public/` changes, and the roadmap's release node, wave container and track lanes
+      render byte-identically — proved by the existing e2e/visual suites passing unmodified.
+- [ ] `wave-complete` still reads a wave's MEMBERS only, and `--track` still decides order: the
+      resolver's behaviour is unchanged for a solo project and for a multi-track one, asserted with
+      the existing `next` suites.
+- [ ] Every wire shape a client or the board reads is byte-identical before and after, including
+      `GET …/releases`, `GET …/release-proposals`, the queue and the roadmap.
+- [ ] No client's behaviour changes beyond the `--type` help §S5 names.
+
 **§S1**
 - [ ] Every milestone type accepts and returns `targetAt` and `deliveredAt`, including a
       project-defined type — asserted per type, not once.
@@ -150,6 +189,12 @@ list comes from, or read it.
       asserted, because that is the column's remaining job.
 - [ ] The roadmap strip and `targetAt` ordering (CR-CRU-091 §S1: proposals ordered by VERSION) are
       unchanged.
+- [ ] A DELIVERED release carries its `waves` — the grouping survives shipping, which no shipped
+      release does today. Proved against the live shape: `0.2.0` holds waves `['5','6']` as a
+      proposal and still holds them once delivered.
+- [ ] `waves` is carried, never re-derived: the migration does not invent a wave list for the four
+      historical releases that never had one, and reports them as undeclared rather than guessing
+      from queue labels.
 
 **§S4**
 - [ ] `release` and `cr-merged` cannot be declared, shadowed or removed; the refusal names the type
