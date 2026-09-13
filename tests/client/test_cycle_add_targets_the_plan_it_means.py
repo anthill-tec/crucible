@@ -848,7 +848,11 @@ class _ScratchBoardTestBase(unittest.TestCase):
     def _file_plan(self, cr, first_cycle="the first cycle"):
         run = self._client(
             "plan-file", "--cr", cr, "--title", f"{cr} under test",
+            # CR-CRU-127 §S5 — a filed cycle declares its kind; this fixture
+            # files the plan `cycle-add` then appends to, so it declares the
+            # red-green kind the first cycle is.
             "--wave", self.WAVE, "--cycle", first_cycle,
+            "--cycle-kind", "red-green",
             "--agent", self.ORCHESTRATOR, "--project-dir", self.project_dir)
         self.assertEqual(
             run.returncode, 0,

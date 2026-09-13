@@ -1063,7 +1063,10 @@ class PlanFileContextCrDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_emit_axi"):
                     rc = module.cmd_plan_file(_make_args(
                         project_dir=self.tmpdir, cr="CR-CRU-054",
-                        cycles="C1", title="a title", wave="wave-4"))
+                        # CR-CRU-127 §S5 — a filed cycle declares its kind,
+                        # and the legacy comma-split flag no longer files.
+                        cycle=["C1"], cycle_kind=["red-green"],
+                        title="a title", wave="wave-4"))
                 self.assertEqual(rc, 1)
                 ctx_mock.assert_called_once()
                 self.assertEqual(
@@ -1085,7 +1088,10 @@ class PlanFileContextCrDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_emit_axi"):
                     rc = module.cmd_plan_file(_make_args(
                         project_dir=self.tmpdir, cr="CR-CRU-054",
-                        cycles="C1", title="a title", wave="wave-4"))
+                        # CR-CRU-127 §S5 — a filed cycle declares its kind,
+                        # and the legacy comma-split flag no longer files.
+                        cycle=["C1"], cycle_kind=["red-green"],
+                        title="a title", wave="wave-4"))
                 self.assertEqual(rc, 0)
                 ctx_mock.assert_called_once()
                 self.assertEqual(

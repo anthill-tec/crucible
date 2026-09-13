@@ -859,7 +859,7 @@ class NextsAnswerIsAPlanTheWriteSideAcceptsTest(unittest.TestCase):
         # refused, with a code the wave scope declares.
         refused_code, refused = self._client(
             ["plan-file", "--cr", LATER_CR, "--title", "the later wave",
-             "--cycle", "c1", "--wave", LATER_WAVE,
+             "--cycle", "c1", "--cycle-kind", "red-green", "--wave", LATER_WAVE,
              "--agent", AGREEMENT_AGENT])
         self.assertEqual(
             (refused_code != 0, refused.get("ok")), (True, False),
@@ -873,7 +873,7 @@ class NextsAnswerIsAPlanTheWriteSideAcceptsTest(unittest.TestCase):
         filed_code, filed = self._client(
             ["plan-file", "--cr", answer.get("cr"),
              "--title", "the cr next named",
-             "--cycle", "c1", "--wave", answer.get("wave"),
+             "--cycle", "c1", "--cycle-kind", "red-green", "--wave", answer.get("wave"),
              "--agent", AGREEMENT_AGENT])
         self.assertEqual(
             (filed_code, filed.get("ok"), filed.get("code")),

@@ -1666,7 +1666,15 @@ class NextBlockCitationsTest(unittest.TestCase):
         # down, 1555-1571 -> 1555-1572 (measured at both ends, not inferred
         # from the shift; the head is unchanged). The narrowest possible
         # drift, ninth time — the CR that shifted the construct re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1555, 1572,
+        # Re-pinned 2026-09-13 (CR-CRU-127 GREEN): TWO changes INSIDE this
+        # very block, both of them the kind mandate's — the shared
+        # `add_plan_file_cycle_kind_arg(pf)` delegation (one line, beside the
+        # `--cycle` it pairs with) and `--cycles`' own help, rewritten to say
+        # it is REFUSED for filing (§S4a) and wrapped over four lines instead
+        # of two. Tail 1572 -> 1576, head unchanged, measured at both ends
+        # after the last edit rather than inferred from the shift. Tenth time
+        # — the CR that shifted the construct re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1555, 1576,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

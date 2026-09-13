@@ -1278,7 +1278,12 @@ def main():
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycle", action="append",
                     help="One cycle label, never split; repeat --cycle per cycle.")
-    pf.add_argument("--cycles", help='Legacy comma-split form; prefer one --cycle per label.')
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
     _axi().add_plan_file_release_arg(pf)
     pf.set_defaults(func=cmd_plan_file)

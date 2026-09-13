@@ -151,7 +151,7 @@ class PlanFileWaveRefusalTest(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", _refusing_urlopen(body)):
             return _run_main(self.module, [
                 "plan-file", "--cr", TARGET_CR, "--title", "a later wave",
-                "--cycle", "c1", "--wave", "7",
+                "--cycle", "c1", "--cycle-kind", "red-green", "--wave", "7",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 

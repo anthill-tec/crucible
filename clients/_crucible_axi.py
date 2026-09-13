@@ -679,6 +679,25 @@ CYCLE_ADD_KIND_HELP = (
     "default (red-green) applies — the client never invents one.")
 
 
+# CR-CRU-127 §S1/§S6 — the ONE `--cycle-kind` help text for `plan-file`. The
+# flag carries no argparse `choices=` (the vocabulary is the server's,
+# `CYCLE_KINDS` in src/v2.ts, and the fleet holds no second copy), which makes
+# this string the ONLY surface a calling agent can read the kinds off: an
+# agent who must discover them by being refused is the context loss AXI
+# principle 10 exists to prevent. So it names all three, first.
+# The three are spelled FIRST for a mechanical reason as well as an editorial
+# one: argparse wraps help through `textwrap` with `break_on_hyphens`, so a
+# `red-green` further into the paragraph renders as `red- green` at whatever
+# width the reader's terminal happens to be. At the head of the block it can
+# never straddle a line break.
+PLAN_FILE_CYCLE_KIND_HELP = (
+    "red-green, verify or fix — the kind of the cycle declared at the SAME "
+    "position (the route's own vocabulary; the client holds no copy and "
+    "vetoes nothing). REQUIRED and repeatable, once per cycle in the order "
+    "given: the Nth kind is the Nth cycle's. A count that does not match, or "
+    "a cycle left without one, is refused before anything is posted.")
+
+
 def gate_identity_skipped_line(agent_id, confirmed=True):
     """The stderr line a gated run prints INSTEAD of the cleanup, so an
     operator can see WHY nothing was removed rather than being told nothing.
@@ -1232,29 +1251,46 @@ CYCLE_FLAGS_CONFLICT_CODE = "cycle-flags-conflict"
 CYCLE_SELECTION_REQUIRED_CODE = "cycle-selection-required"
 CYCLE_LIST_EMPTY_CODE = "cycle-list-empty"
 
+# CR-CRU-127 §S1/§S4/§S4a — the three refusals the kind mandate adds, kept
+# DISTINCT because each needs a different next move: declare the kinds, fix
+# the count, or stop filing through the legacy flag. One code reused across
+# them would name none of them to a caller matching on the code.
+CYCLE_KIND_REQUIRED_CODE = "cycle-kind-required"
+CYCLE_KIND_COUNT_MISMATCH_CODE = "cycle-kind-count-mismatch"
+CYCLE_LEGACY_FLAG_REFUSED_CODE = "cycle-legacy-flag-refused"
+
 # The corrected call every refusal hands back: one label per flag, so there is
 # no delimiter left to collide with the label's own punctuation (§S1). The two
 # occurrences carry DISTINCT placeholders (`<c1>`/`<c2>`, the form AC8 pins on
 # `_next_start_help`): one identical token repeated reads as a duplicated
 # argument to anyone copying it out of a refusal envelope, which is the
 # opposite of the repetition the template exists to teach.
+# CR-CRU-127 §S6 — each cycle now carries the kind declared at its own
+# position, because a template teaching a command the mandate REFUSES turns
+# contextual disclosure into a dead end. `_next_start_help` spells the same
+# form by hand and moves with this one.
 CYCLE_FLAG_TEMPLATE = ('plan-file --cr <CR-id> --title "<brief>" '
-                       '--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
+                       '--cycle "<c1>" --cycle-kind <k1> '
+                       '--cycle "<c2>" --cycle-kind <k2> --agent <agentId>')
 
 
 def cycle_list_empty_help():
     """§S2 — the `cycle-list-empty` remedy, shared by BOTH halves of the same
     defect: a `--cycle` occurrence that names no cycle and a `--cycles` value
-    that splits to nothing. One list, so the two cannot drift into telling the
-    caller different things about the same refusal."""
+    that splits to nothing.
+
+    CR-CRU-127 §S4a — the `--cycles` half of that pairing is gone: the legacy
+    flag is refused for filing outright, so the second step no longer offers
+    it. A remedy that taught the refused form would send the caller straight
+    into the next refusal."""
     return [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, so a label carrying "
             f"commas or semicolons files as ONE cycle",
-            'or give --cycles a comma-separated list with at least one '
-            'non-empty label, e.g. --cycles "c1,c2"']
+            "every --cycle carries its own --cycle-kind (red-green, verify or "
+            "fix), paired by position"]
 
 
 class CycleSelectionRefused(Exception):
-    """§S2 — raised by `plan_file_cycle_labels` when the cycle list a
+    """§S2 — raised by `plan_file_cycle_entries` when the cycle list a
     `plan-file` call asks for cannot be resolved unambiguously.
 
     Like `AgentIdentityRequired` it carries no fallback, because every fallback
@@ -1850,10 +1886,11 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1555-1572`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1555-1576`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
-            f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
+            f'--cycle "<c1>" --cycle-kind <k1> '
+            f'--cycle "<c2>" --cycle-kind <k2> --agent <agentId>')
     wave = entry.get("wave")
     if wave:
         step += f" --wave {wave}"
@@ -2823,41 +2860,64 @@ def cmd_unregister(args, project_dir, ops, *, unregister_fn=None,
     return 0 if ok else 1
 
 
-def plan_file_cycle_labels(args):
-    """CR-CRU-107 §S1 — the ONE rule that resolves a plan's cycle labels, so
-    five clients cannot drift apart on it.
+def plan_file_cycle_entries(args):
+    """CR-CRU-107 §S1 + CR-CRU-127 §S1/§S3 — the ONE rule that resolves a
+    plan's cycles, so five clients cannot drift apart on it. Answers the body's
+    own `cycles` list: one `{label, kind}` entry per declared cycle, in the
+    order declared.
 
     `--cycle` is repeatable: one occurrence per cycle, in the order given, and
     the value is NEVER split — a label may carry commas, semicolons or any other
-    character, because there is no delimiter left to get wrong. `--cycles` keeps
-    the legacy comma split, deliberately UNPOLICED (measured over this board's
-    416 cycles, no character rule separates the four mis-filed labels from the
-    ten that use a semicolon as ordinary punctuation).
+    character, because there is no delimiter left to get wrong. `--cycle-kind`
+    is repeatable beside it and pairs BY POSITION: the Nth kind is the Nth
+    cycle's, travelling verbatim (the vocabulary is the server's, so the client
+    neither invents a kind nor vetoes one it does not recognise).
 
-    Exactly one source. Both flags, neither flag, a `--cycle` occurrence that
-    is empty or whitespace-only, or a `--cycles` that splits to nothing raises
-    `CycleSelectionRefused` — the caller posts NOTHING."""
+    CR-CRU-127 §S4a — `--cycles`, the legacy comma-split form, no longer files.
+    With the kind mandate enforced CLIENT-SIDE ONLY (user ruling 2026-09-13) it
+    was the one door left filing kindless cycles, and pairing kinds against
+    comma-split labels would let a comma inside a label corrupt the KIND
+    pairing too — CR-CRU-078's one recorded defect turned into two.
+
+    Every refusal raises `CycleSelectionRefused` and the caller posts NOTHING.
+    The ORDER below is a contract, not an accident: the conflict is answered
+    FIRST so a caller who passed both flags is told about both (CR-CRU-107/AC4)
+    rather than only about the legacy one; a `--cycle` that names no cycle is
+    answered before any kind check, because a call naming no cycle has nothing
+    for a kind to pair with."""
     repeated = list(getattr(args, "cycle", None) or ())
     legacy = getattr(args, "cycles", None)
+    kinds = list(getattr(args, "cycle_kind", None) or ())
     if repeated and legacy is not None:
         raise CycleSelectionRefused(
             CYCLE_FLAGS_CONFLICT_CODE,
             "--cycle and --cycles were both given, so the cycle list this plan "
             "asks for is ambiguous — pass one form or the other. Nothing was "
             "posted.",
-            [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, filed in the order "
-             f"given",
-             'or keep the legacy form alone: plan-file --cr <CR-id> --cycles '
-             '"<c1,c2>" --agent <agentId>'])
+            [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, each with its own "
+             f"kind, filed in the order given"])
+    if legacy is not None:
+        # §S4a — the flag stays DECLARED (deleting it would replace this
+        # envelope with argparse's bare usage error, which carries no help[]),
+        # and the remedy never hands back the form just refused.
+        raise CycleSelectionRefused(
+            CYCLE_LEGACY_FLAG_REFUSED_CODE,
+            f"--cycles was given as {legacy!r}, and the legacy comma-split "
+            f"form no longer files: a filed cycle declares its kind, and a "
+            f"kind cannot be paired against labels a comma may have split. "
+            f"Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one --cycle per label, each followed by "
+             f"its own --cycle-kind (red-green, verify or fix)",
+             "a label carrying commas or semicolons now files as ONE cycle, "
+             "so nothing needs escaping"])
     if repeated:
-        # §S2 — an occurrence that names no cycle is the same defect as an
-        # empty `--cycles`, and gets the same `cycle-list-empty` refusal rather
-        # than the server's bare `label is required` (which carries no help[]).
-        # The realistic trigger is an unset shell variable: --cycle "$LABEL".
-        # The emptiness TEST strips; the values that are KEPT never do — the
-        # strip below decides only whether a value is blank, and `repeated` is
-        # returned untouched, so AC2's byte-for-byte pass-through still files
-        # `--cycle " a "` as the label ' a '.
+        # §S2 — an occurrence that names no cycle gets the `cycle-list-empty`
+        # refusal rather than the server's bare `label is required` (which
+        # carries no help[]). The realistic trigger is an unset shell variable:
+        # --cycle "$LABEL". The emptiness TEST strips; the values that are KEPT
+        # never do — the strip below decides only whether a value is blank, and
+        # `repeated` is used untouched, so AC2's byte-for-byte pass-through
+        # still files `--cycle " a "` as the label ' a '.
         blank = [label for label in repeated if not label.strip()]
         if blank:
             raise CycleSelectionRefused(
@@ -2866,24 +2926,36 @@ def plan_file_cycle_labels(args):
                 f"usually an unset shell variable in --cycle \"$LABEL\". "
                 f"Nothing was posted.",
                 cycle_list_empty_help())
-        return repeated
-    if legacy is None:
+    else:
         raise CycleSelectionRefused(
             CYCLE_SELECTION_REQUIRED_CODE,
             "no cycle list was declared — a plan needs at least one cycle, "
-            "supplied per-label with --cycle or as the legacy comma-separated "
-            "--cycles. Nothing was posted.",
-            [f"{CYCLE_FLAG_TEMPLATE} — repeat --cycle once per cycle",
-             'the legacy comma-split form --cycles "<c1,c2>" also still files '
-             'a plan, but splits its value on every comma'])
-    labels = [label.strip() for label in legacy.split(",") if label.strip()]
-    if not labels:
+            "declared per-label with --cycle and its --cycle-kind. Nothing was "
+            "posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — repeat --cycle once per cycle, each "
+             f"with its own --cycle-kind"])
+    # CR-CRU-127 §S4 — the kind is REQUIRED, not optional-with-a-default: a
+    # client-side default IS the defect being fixed, since the route's own
+    # `red-green` default is what silently mislabelled every cycle filed here.
+    if not kinds:
         raise CycleSelectionRefused(
-            CYCLE_LIST_EMPTY_CODE,
-            f"--cycles was given as {legacy!r}, which names no cycle once split "
-            f"on commas. Nothing was posted.",
-            cycle_list_empty_help())
-    return labels
+            CYCLE_KIND_REQUIRED_CODE,
+            f"{len(repeated)} cycle(s) were declared with no --cycle-kind, so "
+            f"what kind of work each one is cannot be told — the board would "
+            f"store them all as red-green. Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one --cycle-kind per --cycle "
+             f"(red-green, verify or fix), paired by position"])
+    if len(kinds) != len(repeated):
+        raise CycleSelectionRefused(
+            CYCLE_KIND_COUNT_MISMATCH_CODE,
+            f"{len(repeated)} --cycle occurrence(s) were given but "
+            f"{len(kinds)} --cycle-kind — the kinds pair with the cycles BY "
+            f"POSITION, so an unequal count would file a plan whose kinds are "
+            f"off by one. Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — repeat the --cycle/--cycle-kind PAIR "
+             f"once per cycle, in the order the cycles run"])
+    return [{"label": label, "kind": kind}
+            for label, kind in zip(repeated, kinds)]
 
 
 def cmd_plan_file(args, project_dir, ops):
@@ -2899,9 +2971,11 @@ def cmd_plan_file(args, project_dir, ops):
     # unresolvable one raises rather than exiting on a bare string: `run_verb`
     # converts it into the ok:false envelope, on the same seam as the identity
     # hard stop above, and this stays BEFORE the POST for the same reason.
-    labels = plan_file_cycle_labels(args)
-    payload = {"cr": args.cr, "agentId": agent_id,
-               "cycles": [{"label": label} for label in labels]}
+    # CR-CRU-127 §S3 — each entry carries the kind declared at ITS position,
+    # composed by the same rule so the client invents no default: the kind that
+    # travels is the kind the caller declared.
+    cycles = plan_file_cycle_entries(args)
+    payload = {"cr": args.cr, "agentId": agent_id, "cycles": cycles}
     if args.title:
         payload["title"] = args.title
     # CR-CRU-121 §S2 — the declared release rides as the body's own field, and
@@ -5287,6 +5361,25 @@ def add_plan_file_release_arg(p):
     clients hand-rolled would word itself five ways, and the route reads its
     PRESENCE (a plan filed without it makes no roadmap claim)."""
     p.add_argument("--release", help=PLAN_FILE_RELEASE_HELP)
+
+
+def add_plan_file_cycle_kind_arg(p):
+    """CR-CRU-127 §S1/§S2 — declare `--cycle-kind` on `plan-file`: the kind of
+    the cycle declared at the SAME position, posted VERBATIM inside that
+    cycle's own body entry.
+
+    The ONE declaration site for the whole fleet, following
+    `add_plan_file_release_arg` (CR-CRU-121) and `add_cycle_add_target_args`
+    (CR-CRU-124) — `--cycle` itself is hand-rolled five times and has drifted
+    nowhere yet only by luck, and the NEW flag must not repeat that.
+
+    `action="append"` because §S1's grammar is one occurrence per cycle: a
+    scalar declaration would silently keep the last kind and file every other
+    cycle under it. NO `choices=`: `CYCLE_KINDS` belongs to the server, so an
+    unrecognised kind must travel and come back as the ROUTE's own refusal
+    rather than an argparse exit against a second copy that drifts."""
+    p.add_argument("--cycle-kind", action="append",
+                   help=PLAN_FILE_CYCLE_KIND_HELP)
 
 
 def add_cycle_add_target_args(p):

@@ -304,7 +304,9 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         }
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a,b",
+                "plan-file", "--cr", "CR-X",
+                "--cycle", "a", "--cycle-kind", "red-green",
+                "--cycle", "b", "--cycle-kind", "verify",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -334,7 +336,8 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
                         "cycles": [{"label": "a", "id": 201}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, _err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-Y", "--cycles", "a",
+                "plan-file", "--cr", "CR-Y",
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -347,7 +350,8 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": "bad cr"}):
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-BAD", "--cycles", "a",
+                "plan-file", "--cr", "CR-BAD",
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 

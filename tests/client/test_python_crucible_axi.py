@@ -446,7 +446,8 @@ class PythonCrucibleVerbEnvelopeTest(_BasePythonAxiTest):
         resp = {"ok": True, "planId": "plan-9", "cr": "CR-CRU-030",
                 "cycles": [{"label": "a", "id": 501}]}
         code, out, _err, _p, _g, _pa = self._run(
-            ["plan-file", "--cr", "CR-CRU-030", "--cycles", "a",
+            ["plan-file", "--cr", "CR-CRU-030", "--cycle", "a",
+             "--cycle-kind", "red-green",
              "--agent", "test-agent", "--project-dir", self.tmpdir], post_return=resp)
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -888,7 +889,8 @@ class PythonCrucibleNoWaveWarningTest(_BasePythonAxiTest):
         self.assertNotIn("no-wave", err)
 
     def _run_plan_file(self, post_return, wave_flag=None):
-        argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
+        argv = ["plan-file", "--cr", post_return["cr"],
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir]
         if wave_flag is not None:
             argv += ["--wave", wave_flag]
@@ -956,7 +958,8 @@ class PythonCrucibleNoTitleWarningTest(_BasePythonAxiTest):
         self.assertNotIn("no-title", err)
 
     def _run_plan_file(self, post_return, title=None):
-        argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
+        argv = ["plan-file", "--cr", post_return["cr"],
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir]
         if title is not None:
             argv += ["--title", title]

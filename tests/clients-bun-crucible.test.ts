@@ -1587,8 +1587,16 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
         "CR-X-1",
         "--title",
         "Plan verbs C2",
-        "--cycles",
-        "cycle-a,cycle-b",
+        // CR-CRU-127 §S5 — a filed cycle declares its kind, and the legacy
+        // comma-split `--cycles` no longer files (§S4a).
+        "--cycle",
+        "cycle-a",
+        "--cycle-kind",
+        "red-green",
+        "--cycle",
+        "cycle-b",
+        "--cycle-kind",
+        "verify",
         "--agent",
         "plan-verb-agent",
         "--project-dir",
@@ -1619,7 +1627,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     const res = await runScript(
-      ["plan-file", "--cr", "CR-X-2", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-2", "--cycle", "cycle-a", "--cycle-kind", "red-green", "--cycle", "cycle-b", "--cycle-kind", "verify", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl, env: { WORKFLOW_ROLE: "track-2" } },
     );
 
@@ -1636,7 +1644,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     await runScript(
-      ["plan-file", "--cr", "CR-X-3", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-3", "--cycle", "cycle-a", "--cycle-kind", "red-green", "--cycle", "cycle-b", "--cycle-kind", "verify", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
     const cycleId = (await getPlans(baseUrl, key))[0]!.cycles[0]!.id;
@@ -1660,7 +1668,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     await runScript(
-      ["plan-file", "--cr", "CR-X-4", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-4", "--cycle", "cycle-a", "--cycle-kind", "red-green", "--cycle", "cycle-b", "--cycle-kind", "verify", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
     const cycleId = (await getPlans(baseUrl, key))[0]!.cycles[0]!.id;
@@ -1689,7 +1697,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     await registerFixtureAgent(baseUrl, key, "test-agent");
 
     await runScript(
-      ["plan-file", "--cr", "CR-X-5", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-5", "--cycle", "cycle-a", "--cycle-kind", "red-green", "--cycle", "cycle-b", "--cycle-kind", "verify", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
     const cycles = (await getPlans(baseUrl, key))[0]!.cycles;

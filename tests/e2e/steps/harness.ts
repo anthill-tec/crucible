@@ -278,7 +278,9 @@ export interface PlanFileResponse {
 }
 
 /**
- * POST …/plans — file a plan with one cycle per label, `kind` defaulted.
+ * POST …/plans — file a plan with one cycle per label, each declaring the
+ * red-green kind (CR-CRU-127 §S5; the route itself stays permissive, so this
+ * declares what the scenarios mean rather than relying on the default).
  * CR-CRU-013 C6 — `wave` is an additive optional 5th arg (existing callers
  * unaffected) so the AC150 e2e round trip can pin a plan to the wave its
  * gate event will later target (§S6 `gated` wave-state qualification keys
@@ -299,7 +301,7 @@ export async function filePlan(
     data: {
       cr,
       agentId: HARNESS_AGENT_ID,
-      cycles: cycleLabels.map((label) => ({ label })),
+      cycles: cycleLabels.map((label) => ({ label, kind: "red-green" })),
       ...(wave !== undefined ? { wave } : {}),
     },
   });

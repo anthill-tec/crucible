@@ -659,7 +659,11 @@ class PlanFileRegistersTheCrOnTheBoardTest(unittest.TestCase):
     def _file_plan(self, cr, *extra):
         return self._client(
             VERB, "--cr", cr, "--title", self.TITLE, "--wave", self.WAVE,
-            "--cycle", "red-green", "--agent", self.ORCHESTRATOR,
+            # CR-CRU-127 §S5 — a filed cycle declares its kind, so the e2e
+            # fixture declares one. (The label reads `red-green` too; it is
+            # this suite's original fixture label, left alone.)
+            "--cycle", "red-green", "--cycle-kind", "red-green",
+            "--agent", self.ORCHESTRATOR,
             "--project-dir", self.project_dir, *extra)
 
     def _queue_rows_through_the_client(self):

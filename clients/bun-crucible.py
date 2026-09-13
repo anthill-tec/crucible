@@ -2193,8 +2193,12 @@ def main():
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycle", action="append",
                     help="One cycle label, never split; repeat --cycle per cycle.")
-    pf.add_argument("--cycles",
-                    help='Legacy comma-split form; prefer one --cycle per label.')
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     _add_workflow_agent_arg(
         pf, extra=" The registered id is also stored as the plan's orchestrator "
                   "(the free-text --orchestrator label is retired).")
