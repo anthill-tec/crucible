@@ -54,10 +54,17 @@ dominated by test rows, and today measurably disproved the rebuildability it res
 
 ### §S1 Milestones become records
 
-The whole `milestone` kind leaves `events` for its own table: `release`, `cr-merged`,
-`release-proposal`, `gap-analysis`, `design-review`, `custom` — the six `MILESTONE_TYPES`
-(`src/v2.ts:1158-1172`). Not two types, and not "the important ones": the distinction that matters is
-record versus telemetry, and every milestone type is on the record side of it. Each row keeps what it
+The whole `milestone` kind leaves `events` for its own table. `MILESTONE_TYPES`
+(`src/v2.ts:1165-1172`) holds six: `gap-analysis`, `design-review`, `stage-flip`, `custom`,
+`cr-merged`, `release`. A SEVENTH record kind sits beside them — `release-proposal`, which is not a
+`POST …/milestones` type at all: it is written through `POST …/release-proposals` by
+`recordReleaseProposal` (`src/store.ts:2322`) and carries `targetAt`. It is a milestone row in
+`events` all the same, and CR-CRU-091 already exempted the live ones from the cap, so it moves with
+them.
+
+Not two types, and not "the important ones": the distinction that matters is record versus
+telemetry, and all seven are on the record side of it. Implementations read the vocabulary from the
+server rather than from this list — the spec states it to be checkable, not to be copied. Each row keeps what it
 carries today — type, label, commit, `releasedAt`, `crs`, `packages`, `context`, `retired_at` — and
 gains a lifetime that no ingest volume can end.
 
@@ -112,6 +119,13 @@ project's milestone count"*, but the window counts ALL events: at 2,013 rows it 
 The constant is **DELETED, not resized.** Raising it is the same defect with a bigger number, and a
 bounded window over unbounded content cannot be fixed by choosing a larger bound. Once milestones
 are records the read is a query by type, so there is no window to size and no new limit to declare.
+
+One question §S3 must ANSWER rather than inherit: what `GET /api/v2/events` serves once milestone
+and gate rows leave `events`. The board's pane feed is `listEvents`, which today returns milestones
+and gates and excludes retired gates, so "wire shapes do not change" is a requirement on that feed,
+not an observation about it. `getEvent(id)` / `GET /api/v2/events/<id>` MUST keep answering for a
+moved record either way — the store's own contract already promises it (`listReleaseProposals`:
+a consumed proposal "stays auditable through `getEvent`").
 
 ### §S4 The replay may not quietly shrink what it replaces
 
