@@ -1606,7 +1606,21 @@ class NextBlockCitationsTest(unittest.TestCase):
         # predicted exactly this row. The new number was LOCATED at HEAD, not
         # computed from the old one plus a delta. The three sibling entries
         # were re-measured at both ends in the same pass and none had moved.
-        ("LANDED_STATUSES", "src/store.ts", 4411, 4411,
+        # Re-pinned 2026-09-13 (CR-CRU-129 C4 close-out), 4411 -> 5020: this
+        # CR's four cycles added 609 lines ABOVE `deriveQueueStatus` in
+        # src/store.ts — §S1's milestone and gate RECORDS with their tables,
+        # migrations and queries, and §S2's retention resolution. The drift IS
+        # ours and it is the ordinary case: the CR that shifted the file re-pins
+        # it, ONCE, at close-out after the last content edit — the number was
+        # LOCATED at HEAD (`private deriveQueueStatus(` is unique in the file),
+        # never computed from the old one plus a delta. BOTH halves move in the
+        # same commit: the production comment this row mirrors
+        # (`clients/_crucible_axi.py`) carries the same 5020, so
+        # `test_the_table_covers_every_citation_the_block_carries` never goes
+        # red. The three sibling entries were re-measured at BOTH ends in the
+        # same pass and none had moved (STATUS-CONTRACT.md 65-68,
+        # normalizeTrack 362-365, _next_start_help 1559-1580).
+        ("LANDED_STATUSES", "src/store.ts", 5020, 5020,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split

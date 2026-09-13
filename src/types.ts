@@ -19,7 +19,18 @@ export interface Project {
   sutRoot: string;
   createdAt: number;
   liveness?: Partial<LivenessConfig>;
-  /** §S4 — per-project raw-event retention cap override (default 100). */
+  /** §S4 — this project's OWN raw-event retention cap, in events per kind.
+   * CR-CRU-129 §S2 — THERE IS NO DEFAULT LITERAL. Absent, the sweep falls
+   * back on `defaultRetention()` (`src/store.ts`), which resolves
+   * `$CRUCIBLE_DEFAULT_RETENTION` PER SWEEP and yields `undefined` — NO CAP,
+   * nothing evicted — when that is unset, empty, non-numeric or non-positive.
+   * Unconfigured therefore means UNBOUNDED, and the boot banner discloses it
+   * by project name. The `default 100` this comment used to claim was
+   * `DEFAULT_RETENTION`, deleted by that section: on 2026-09-13 the literal
+   * silently evicted every release this project had shipped. A cap is
+   * configuration; re-introducing a constant here re-introduces the defect.
+   * `retention: 0` is a DECLARED cap and still wins over the fallback
+   * (`??`, never `||`). */
   retention?: number;
   /** CR-CRU-008 §S4 — guarded run deletion config gate (default false:
    * the run journal is an immutable audit log unless a human enables this). */

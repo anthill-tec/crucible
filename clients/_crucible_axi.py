@@ -1793,10 +1793,10 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:4411 — re-pinned 2026-09-12 from :4349,
-# shifted by the 62 lines CR-CRU-126 added above it: the
-# `idx_events_project_cycle` declaration inside `createBaseTables` plus the
-# appended `MIGRATIONS` backfill body). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:5020 — re-pinned 2026-09-13 from :4411,
+# shifted by the 609 lines CR-CRU-129 added above it across its four cycles:
+# §S1's milestone and gate RECORDS, with their tables, migrations and queries,
+# and §S2's per-sweep retention resolution). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 

@@ -1681,10 +1681,52 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // enforced entirely client-side, so the CR edits no server file at all. All
 // three `develop` floors stay at 512/378/601 — a floor never moves for a
 // re-record.
+//
+// UPDATED 2026-09-13 by CR-CRU-129 — the CR's close-out step, taken ONCE at
+// the very end of cycle 450 and deliberately deferred until then: the heads
+// moved in all four of this CR's implementation cycles, so a pin taken at any
+// earlier point would have been re-recorded three times for one CR. Measured
+// by running this guard's OWN machinery (`listFiles` + `extractCitableText` +
+// CR_LITERAL) over the working tree AFTER the last content edit, never
+// transcribed from a mid-cycle brief — the brief this close-out started from
+// carried 640/831, and neither figure is what the classifier yields.
+//
+// TWO trees move. `src` 614 -> 648, +34, and every one of the four moved files
+// is a file §S1/§S2 rewrote: src/store.ts 274 -> 301 (+27), the milestone and
+// gate RECORDS with their tables, migrations and queries, plus §S2's per-sweep
+// retention resolution; src/v2.ts 214 -> 218 (+4), the routes those records
+// are read and written through; src/server.ts 23 -> 25 (+2), §S2/AC6's
+// unbounded-retention boot disclosure; src/types.ts 50 -> 51 (+1), this
+// close-out's own other job — `Project.retention`'s doc comment, which still
+// claimed a `default 100` that §S2 DELETED, and whose correction cites the
+// section that deleted it.
+//
+// `clients` 828 -> 836, +8, ALL of it clients/_crucible_axi.py 196 -> 204: the
+// fleet's shared shim, which is where §S3 put the SINGLE type-scoped landing
+// query and §S4 the SINGLE read of a refused replay, so the five stack clients
+// delegate and none of them moves — each re-measured UNCHANGED in the same run
+// (arduino 106, mvn 135, python 122, rust 126, bun 142, toon 1), checked and
+// not assumed. The +8 is a NET figure and the arithmetic is worth writing
+// down: NINE occurrences are added (eight naming this CR — §S3's record type,
+// its type-scoped argument and its query-not-scan read; §S4's structured
+// client-class status, its pure refusal, its one-release report and the
+// refused-vs-failed distinction — plus one CR-CRU-086 lineage reference, the
+// bucket §S4's refusal shares) and ONE is removed: the CR-CRU-126 lineage in
+// the LANDED_STATUSES citation, which this same commit re-pins :4411 -> :5020
+// and which now names this CR as the shifter instead.
+//
+// `public` does not move at all and re-measures at the recorded 477: this CR
+// reaches the store, the routes and the fleet shim, and edits no renderer
+// file. GROWTH IS THE DIRECTION THE RULE PERMITS — both moved heads are ABOVE
+// their floors by a wide margin (648 >= 512, 836 >= 601) and the three
+// `develop` floors stay at 512/378/601, unchanged, as always for a re-record.
+// `scripts/` is NOT one of the trees below and never has been; the three keys
+// of this table are the whole of what AC8 measures, so this CR's `scripts/`
+// edits move no head by construction.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 614 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 648 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 828 },
+  clients: { exts: [".py"], develop: 601, head: 836 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
