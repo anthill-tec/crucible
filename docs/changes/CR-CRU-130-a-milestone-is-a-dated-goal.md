@@ -169,7 +169,7 @@ and two of them decide whether a CR can be planned at all:
 | the shipped-release refusal | `src/hints.ts:404` | *"a release that has already SHIPPED is settled history and is no longer a plannable target"* — now the DELIVERED case |
 | three `release-proposals` route sentences | `src/hints.ts:382`, `:398`, `:403` | unchanged wording; the route they name keeps answering |
 | proposal convergence | `src/store.ts:2747` | re-proposing one label still converges instead of adding a row |
-| `stampProposalRetired`, both call sites | `src/store.ts:2707`, `:2768` | retirement-on-ship becomes `deliveredAt`; `retired_at` keeps only CR-CRU-073's gate job |
+| `stampProposalRetired`, both call sites | `src/store.ts:2707`, `:2768` | the SHIP call site (`:2707`) goes — delivery is `deliveredAt`. The REVISION call site (`:2768`) stays: `retired_at` means "no longer the live record", which is what it does for a superseded predecessor and for CR-CRU-073's gate alike. What §S2 removes is `retired_at` standing in for DELIVERY, not the column's own meaning |
 | `listReleaseProposals` / `listReleases` | `src/store.ts:3263`, `:2717` | same wire shapes, derived from delivery |
 
 ### §S5 One vocabulary, read everywhere
@@ -248,8 +248,32 @@ exempted from it — an exemption would leave the next open vocabulary unguarded
 - [ ] A DELIVERED release is still refused as a plannable target, carrying `src/hints.ts:404`'s
       settled-history sentence.
 - [ ] Re-proposing one label still converges to a single record (`src/store.ts:2747`).
-- [ ] Shipping sets `deliveredAt` and no longer stamps `retired_at` on the record; `retired_at`
-      still retires a GATE (CR-CRU-073), asserted, because that is its remaining job.
+- [ ] Shipping sets `deliveredAt` and no longer stamps `retired_at` on the record.
+- [ ] `retired_at` still means "no longer the live record": a GATE is still retired by its release
+      (CR-CRU-073), and a REVISED proposal still supersedes its predecessor so a label never holds
+      two live records — asserted as observable behaviour (exactly one live record carrying the new
+      target, the predecessor auditable with the old one), not as a mechanism.
+- [ ] A revision is not a delivery: after revising a target, nothing for that label reads as met and
+      the releases read stays empty for it.
+
+**Superseded tests — the two-type model**
+- [ ] Every test whose SUBJECT is the retired two-type model is DELETED, not inverted, each naming
+      the superseded claim: the five cases in `describe("CR-CRU-091 §S1 — a proposed release is its
+      own record kind")` (`tests/roadmap-registration-store.test.ts:681-825`), and the
+      consumed-proposal-keeps-its-type assertions at `tests/roadmap-registration-routes.test.ts:1553`,
+      `:1568`.
+- [ ] Tests that merely NAME the old type while asserting something still true are RETARGETED, not
+      deleted — the audit read still serves a moved record
+      (`tests/milestone-record-read-sites.test.ts:241`,
+      `tests/events-feed-after-records-moved.test.ts:279`), the wire control still derives its
+      identity keys (`tests/milestone-dates-migration.test.ts:559`), and a legacy pre-migration
+      fixture row stays legacy (`tests/milestone-record-migration.test.ts:230`).
+- [ ] `tests/roadmap-registration-routes.test.ts:1443-1493`'s tripwire — `release-proposal` is not in
+      `MILESTONE_TYPES` and the generic milestone door refuses it — STAYS GREEN and untouched: it was
+      never a type on that door, and retiring it as a concept does not make it one.
+- [ ] C1's step locator is narrowed from the CR id to `§S1`
+      (`tests/milestone-dates-migration.test.ts`, `datesStep()`), because a second CR-130 step makes
+      its `owned.length !== 1` throw on every case that calls it.
 - [ ] The three `release-proposals` route sentences in `src/hints.ts` are unchanged and the route
       they name still answers.
 
