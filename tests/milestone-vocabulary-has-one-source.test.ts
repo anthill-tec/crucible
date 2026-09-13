@@ -39,9 +39,15 @@
 //
 // The sites are scoped BY NAME, because a whole-tree scan is a false-positive
 // machine: a doc, a fixture and a test may all enumerate types legitimately.
-// These five files are the ones that must RESOLVE the vocabulary for a reader
-// — the validator, the hint the validator hands back, the board's rendering
-// and the five clients' `--type` help.
+// The named files are the ones that must RESOLVE the vocabulary for a reader —
+// the validator, the hint the validator hands back, the two server entry
+// points a type name could be re-listed in on its way to the wire, the board's
+// rendering, the SHARED client module that builds the milestone payload (and
+// already holds the fleet's other closed-vocabulary help constants), and the
+// five clients' `--type` help. The shared module and the two server entry
+// points were added by CR-CRU-130's VERIFY, which planted a vocabulary literal
+// in each and watched the scan stay green: a reading site the detector does
+// not open is a reading site the rule does not hold over.
 //
 // `src/store.ts` is NOT scanned, and that is deliberate: §S4 makes the seeded
 // vocabulary CONFIGURATION ("seeded from configuration so nothing that records
@@ -76,7 +82,10 @@ const ORCH = "cru130-c3-one-source";
 const READING_SITES = [
   "src/v2.ts",
   "src/hints.ts",
+  "src/server.ts",
+  "bin/crucible-server.mjs",
   "public/app.js",
+  "clients/_crucible_axi.py",
   "clients/arduino-crucible.py",
   "clients/bun-crucible.py",
   "clients/mvn-crucible.py",
@@ -306,12 +315,10 @@ describe("CR-CRU-130 §S5 — one vocabulary, read everywhere", () => {
     "GUARD — the RESERVED pair is declared exactly ONCE across the server, the board and the " +
       "clients: a second literal naming both is a second reserved set",
     () => {
-      const searched = [
-        ...READING_SITES,
-        "src/store.ts",
-        "src/types.ts",
-        "clients/_crucible_axi.py",
-      ];
+      // `clients/_crucible_axi.py` is NOT repeated here: it is a READING_SITE
+      // now, so listing it again would count any literal it held twice and
+      // turn one second reserved set into a report of two.
+      const searched = [...READING_SITES, "src/store.ts", "src/types.ts"];
       const declarations: string[] = [];
       for (const site of searched) {
         const text = readFileSync(join(process.cwd(), site), "utf8");
