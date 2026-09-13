@@ -3210,6 +3210,46 @@ export class Store {
   }
 
   /**
+   * CR-CRU-129 §S3 — the records of ONE milestone type, newest-first.
+   *
+   * The general form of `listReleases`/`listReleaseProposals`, which each
+   * answer one hardcoded type: this one takes the type as an ARGUMENT and
+   * therefore serves a vocabulary nobody compiled in. C1 stored `type` as
+   * unconstrained TEXT with no CHECK, so the STORE is already open on those
+   * terms, and CR-CRU-130 makes the vocabulary project-definable — a read that
+   * validated its argument against today's six types would have to be edited
+   * again the first time a project names a seventh. There is no known-type
+   * lookup here and there must not be one: an unrecorded type is an EMPTY
+   * answer, not an error.
+   *
+   * WHOLE, not windowed (§S3). The answer is every matching record, because
+   * the question it replaces — `cr_merged_crs` scanning the newest N events —
+   * was wrong precisely in being bounded: a window over a table that also
+   * holds telemetry drops records silently as the telemetry grows. Nothing
+   * here is paged, and the `(project_key, type)` index means the query touches
+   * the rows it returns rather than the table they sit in.
+   *
+   * RETIREMENT IS NOT FILTERED, deliberately. `listReleaseProposals` excludes
+   * retired rows because a consumed proposal is no longer a plan — that is a
+   * judgement about ONE type, and a type-agnostic read cannot make it for a
+   * type it has never heard of. `retiredAt` rides on the row (`toEvent`), so
+   * the caller that knows what retirement means for its type decides.
+   *
+   * Archived projects are excluded through the same subquery every other
+   * project-scoped read uses: nothing is deleted, and unarchiving restores it.
+   */
+  listMilestonesByType(projectKey: string, type: string): RunEvent[] {
+    return this.db
+      .query<EventRow, [string, string]>(
+        `${MILESTONE_ROWS} WHERE project_key = ? AND type = ?
+         AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
+      )
+      .all(projectKey, type)
+      .map(Store.toEvent);
+  }
+
+  /**
    * Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a
    * project. CR-CRU-129 §S1 — across the three tables an event now lives in,
    * so the number still means everything not yet folded away.

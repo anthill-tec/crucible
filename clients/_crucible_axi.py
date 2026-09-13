@@ -1671,11 +1671,12 @@ def cmd_status(args, project_dir, ops):
 
 # ── CR-CRU-081 §S2 — the `queue` READ verb (the landing-record sources) ─────
 
-# The whole feed depth the cr-merged scan reads. The events collection has no
-# type filter, so the milestone source is a bounded scan of the newest N events
-# rather than a query; N is deliberately far above any real project's milestone
-# count so a `cr-merged` marker is not missed by truncation.
-QUEUE_EVENTS_LIMIT = 5000
+# CR-CRU-129 §S3 — the record type the landing read ASKS FOR. It is the whole
+# request: the milestone collection is queried by type, so there is no feed
+# depth beside it and nothing to size. The scan depth this replaces was DELETED
+# rather than raised, because a bounded window over unbounded content loses
+# records silently as the telemetry grows — whatever the bound.
+MERGED_MILESTONE_TYPE = "cr-merged"
 
 
 def build_queue_rows(entries):
@@ -1689,22 +1690,35 @@ def build_queue_rows(entries):
             for e in entries or []]
 
 
-def cr_merged_crs(events):
+def cr_merged_crs(records):
     """CR-CRU-081 §S2 (PURE) — the CR ids carrying a `cr-merged` milestone: the
     project's SECOND landing source, beside the closed plan record. A CR absent
     from BOTH has no landing record at any source, which is exactly the class
-    the release ceremony must name rather than drop in silence."""
-    return sorted({e.get("label") for e in events or []
-                   if e.get("kind") == "milestone"
-                   and e.get("type") == "cr-merged" and e.get("label")})
+    the release ceremony must name rather than drop in silence.
+
+    CR-CRU-129 §S3 — the argument is the answer to a TYPE-SCOPED query, no
+    longer a slice of the whole event feed, so nothing is filtered here that
+    the request already said. In particular NO `kind` is required of a row: a
+    collection addressed by type has already answered "which kind", and a
+    consumer that still demanded one would read a complete answer as an empty
+    set — silently, which is the failure class this CR exists to remove."""
+    return sorted({r.get("label") for r in records or []
+                   if r.get("type") == MERGED_MILESTONE_TYPE and r.get("label")})
 
 
 def cmd_queue(args, project_dir, ops):
     """CR-CRU-081 §S2 — the queue READ verb (no --agent): the two DB-side
     landing sources the release ceremony's provenance needs, in ONE read — the
     registered CR queue (GET …/queue) and the CR ids a `cr-merged` milestone
-    covers (GET /api/v2/events). A pure carrier: every set operation over these
-    ids stays in the ceremony, which is the only actor that also has git.
+    covers (GET …/milestones?type=cr-merged). A pure carrier: every set
+    operation over these ids stays in the ceremony, which is the only actor
+    that also has git.
+
+    CR-CRU-129 §S3 — the second source is a QUERY, not a scan. It names the
+    record type it wants and sends no window with it, so the ids it publishes
+    cannot shrink as the project's telemetry grows: the answer is every
+    `cr-merged` record the project holds, decided server-side by the one
+    surface that can see them all.
 
     Tolerant like `cmd_status`: an unreachable or non-ok source yields the empty
     set plus a structured warning, never an error — a release is PUBLISHED
@@ -1723,16 +1737,16 @@ def cmd_queue(args, project_dir, ops):
                        f"{resp.get('error')}"),
         })
 
-    events = ops.get(f"/api/v2/events?project={key}"
-                     f"&limit={QUEUE_EVENTS_LIMIT}")
-    if events.get("ok"):
-        merged = cr_merged_crs(events.get("events"))
+    milestones = ops.get(f"/api/v2/projects/{key}/milestones"
+                         f"?type={MERGED_MILESTONE_TYPE}")
+    if milestones.get("ok"):
+        merged = cr_merged_crs(milestones.get("milestones"))
     else:
         merged = []
         warnings.append({
             "code": "milestones-unavailable",
             "detail": (f"could not read the cr-merged milestones: "
-                       f"{events.get('error')}"),
+                       f"{milestones.get('error')}"),
         })
 
     ops.emit("queue", True,

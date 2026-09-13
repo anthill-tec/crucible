@@ -1920,6 +1920,54 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
 }
 
 /**
+ * CR-CRU-129 §S3 — GET …/projects/<key>/milestones?type=<type>: the project's
+ * milestone RECORDS of one type, newest-first.
+ *
+ * Declared exactly as `releases`, `queue` and `release-proposals` are —
+ * `segments.length === 2` plus the collection name, existence validated the
+ * handleProjectReleases way (UUID shape, then the row), an archived project
+ * answering 200 with an empty list through the store's NOT_ARCHIVED exclusion.
+ * `milestones` is the collection these rows now live in, so that is what they
+ * are served under.
+ *
+ * THE TYPE IS A PARAMETER, NOT A PATH SEGMENT AND NOT A CLOSED LIST. It is
+ * required — this route answers "the records of THIS type", and a call that
+ * names none is asking a different question (the whole timeline), which is
+ * what `GET /api/v2/events` is for. It is never checked against the types the
+ * server happens to know: the store's `type` column is unconstrained TEXT and
+ * CR-CRU-130 makes the vocabulary project-definable, so a type this build has
+ * never heard of must answer with its records rather than a refusal, and a
+ * type nobody has recorded is an EMPTY answer rather than a 404 — "none yet"
+ * is an answer, not a missing resource (the `releases` precedent).
+ *
+ * WHOLE, NOT WINDOWED. There is no `limit` here and there must not be one.
+ * This route exists because `cr_merged_crs` had to scan the newest N events
+ * and filter client-side, and a bound is what made that read lose records
+ * silently as telemetry grew; a bounded answer here would reintroduce the
+ * defect one layer down.
+ *
+ * The rows are served as `getEvent` serves them — no per-type brief. A brief
+ * would have to enumerate the payload fields of every type that exists
+ * (`crs`, `releasedAt`, `targetAt`, …) and would therefore be lossy for the
+ * first type it did not anticipate, which is precisely the type this route
+ * promises to serve.
+ */
+function handleProjectMilestones(store: Store, key: string, req: Request, url: URL): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  const type = url.searchParams.get("type");
+  if (type === null || type.length === 0) {
+    return fail(400, "`type` is required — the milestone type to read, e.g. `cr-merged`");
+  }
+  const milestones = store.listMilestonesByType(key, type);
+  return reply(req, url, { ok: true, milestones, totalCount: milestones.length });
+}
+
+/**
  * CR-CRU-014 §S1 — GET …/projects/<key>/queue. Existence is validated the
  * handleProjectReleases way (UUID shape, then the row); an archived project
  * still answers 200 but the store's NOT_ARCHIVED exclusion yields an empty
@@ -3656,6 +3704,12 @@ export function handleV2(
     // CR-CRU-074 §S3 — the project's recorded releases, newest-first.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "releases") {
       return handleProjectReleases(store, segments[0]!, req, url);
+    }
+    // CR-CRU-129 §S3 — the project's milestone RECORDS of one type. Beside
+    // `releases` because it is the same read generalised: `releases` answers
+    // the `release` type, this one answers whichever type the caller names.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "milestones") {
+      return handleProjectMilestones(store, segments[0]!, req, url);
     }
     // CR-CRU-014 §S1 — the project's CR execution queue (roadmap).
     if (segments.length === 2 && segments[1] === "queue") {
