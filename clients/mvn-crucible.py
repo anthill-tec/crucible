@@ -2128,7 +2128,11 @@ def main():
     co.set_defaults(func=cmd_compile)
 
     ai = sub.add_parser("auto-ingest", help="Ingest EXISTING surefire/failsafe reports (no mvn run).")
-    ai.add_argument("--agent", required=True)
+    ai.add_argument("--agent", required=True,
+                    help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                         "must already be registered (`register --agent <id> --role <role>`); "
+                         "a cycle-bound agent's ingests are server-stamped with its registered "
+                         "cycle.")
     ai.add_argument("--coverage", action="store_true",
                     help="Also attach JaCoCo (ONLY valid after a known-green full regression)")
     _add_mvn_flags(ai)
@@ -2136,23 +2140,43 @@ def main():
     ai.set_defaults(func=cmd_auto_ingest)
 
     du = sub.add_parser("docker-up", help="docker compose up -d [--wait]. Services from .env or --services.")
-    du.add_argument("--compose-file", default=None)
-    du.add_argument("--no-wait", action="store_true")
-    du.add_argument("--services", nargs="+")
-    du.add_argument("--all-services", action="store_true")
+    du.add_argument("--compose-file", default=None,
+                    help="Compose file (rel to project root); else $MVN_CRUCIBLE_COMPOSE_FILE, "
+                         "else CRUCIBLE_COMPOSE_FILE in .env, else docker auto-discovery")
+    du.add_argument("--no-wait", action="store_true",
+                    help="Skip compose's --wait: return once the containers are created "
+                         "instead of blocking on their healthchecks")
+    du.add_argument("--services", nargs="+",
+                    help="Services to bring up; else CRUCIBLE_DOCKER_SERVICES in .env, else "
+                         "every service in the compose file")
+    du.add_argument("--all-services", action="store_true",
+                    help="Bring up ALL services in the compose file, overriding any "
+                         "CRUCIBLE_DOCKER_SERVICES subset in .env")
     _add_project_args(du)
     du.set_defaults(func=cmd_docker_up)
 
     dd = sub.add_parser("docker-down", help="docker compose down -v.")
-    dd.add_argument("--compose-file", default=None)
+    dd.add_argument("--compose-file", default=None,
+                    help="Compose file (rel to project root); else $MVN_CRUCIBLE_COMPOSE_FILE, "
+                         "else CRUCIBLE_COMPOSE_FILE in .env, else docker auto-discovery. "
+                         "A named file that is absent is skipped, not an error — teardown is "
+                         "never the step that fails the run")
     _add_project_args(dd)
     dd.set_defaults(func=cmd_docker_down)
 
     pmg = sub.add_parser("pre-merge-gate", help="ORCHESTRATOR: docker-up → regression → docker-down.")
-    pmg.add_argument("--agent", required=True)
-    pmg.add_argument("--compose-file", default=None)
-    pmg.add_argument("--goal", default="verify")
-    pmg.add_argument("--coverage-profile")
+    pmg.add_argument("--agent", required=True,
+                     help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                          "must already be registered (`register --agent <id> --role <role>`); "
+                          "a cycle-bound agent's ingests are server-stamped with its registered "
+                          "cycle.")
+    pmg.add_argument("--compose-file", default=None,
+                     help="Compose file (rel to project root); else $MVN_CRUCIBLE_COMPOSE_FILE, "
+                          "else CRUCIBLE_COMPOSE_FILE in .env, else docker auto-discovery")
+    pmg.add_argument("--goal", default="verify",
+                     help="Maven goal (default: verify; use test for libs without IT)")
+    pmg.add_argument("--coverage-profile",
+                     help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
     _add_gate_cycle_arg(pmg)
     _add_project_args(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
@@ -2334,7 +2358,7 @@ def main():
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged|release).")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

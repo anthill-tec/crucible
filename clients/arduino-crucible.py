@@ -1405,7 +1405,7 @@ def main():
     ms = sub.add_parser("milestone", parents=[common],
                         help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged|release).")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

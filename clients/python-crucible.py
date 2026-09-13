@@ -1521,7 +1521,11 @@ def main():
 
     a = sub.add_parser("auto-ingest",
                        help="Ingest an already-produced reports dir (parsed).")
-    a.add_argument("--agent", required=True)
+    a.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     a.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
     _add_project_dir_arg(a)
     a.set_defaults(func=cmd_auto_ingest)
@@ -1722,7 +1726,7 @@ def main():
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged|release).")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

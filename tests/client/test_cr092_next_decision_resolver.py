@@ -1674,7 +1674,14 @@ class NextBlockCitationsTest(unittest.TestCase):
         # of two. Tail 1572 -> 1576, head unchanged, measured at both ends
         # after the last edit rather than inferred from the shift. Tenth time
         # — the CR that shifted the construct re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1555, 1576,
+        # Re-pinned 2026-09-13 (CR-CRU-128 GREEN): §S1 gave `auto-ingest`'s
+        # `--agent` the nominated description, four lines ABOVE this block,
+        # drifting it 1555-1576 -> 1559-1580. Measured at BOTH ends after the
+        # last production edit, not inferred from the shift. Eleventh time —
+        # the CR that shifted the file re-pins it. Worth recording: CR-CRU-128's
+        # own census anchors on (source, scope, flag) precisely to avoid this
+        # rot; this row is the only line-pinned guard left in the repo.
+        ("_next_start_help", "clients/python-crucible.py", 1559, 1580,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

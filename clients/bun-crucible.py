@@ -2105,7 +2105,8 @@ def main():
                         "ingests are server-stamped with this cycle.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
-                   choices=["claude-md", "package-json", "git-repo", "manual"])
+                   choices=["claude-md", "package-json", "git-repo", "manual"],
+                   help="Identity discovery source per agent-protocol (default: claude-md)")
     r.add_argument("--message", help="Optional status message")
     _add_project_dir_arg(r)
     r.set_defaults(func=cmd_register)
@@ -2158,7 +2159,11 @@ def main():
         add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")
-    a.add_argument("--agent", required=True)
+    a.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     _add_reports_arg(a)
     _add_package_dir_arg(a)
     _add_project_dir_arg(a)
@@ -2366,7 +2371,7 @@ def main():
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged|release).")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

@@ -2522,7 +2522,11 @@ def main():
         "auto-ingest",
         help="Ingest only: junit if present, else `cargo check` stderr as compile errors.",
     )
-    a.add_argument("--agent", required=True)
+    a.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     a.add_argument("--crate", required=True, help="Crate name (for compile fallback)")
     a.add_argument(
         "--features",
@@ -2535,7 +2539,11 @@ def main():
         "regression-ingest",
         help="Per-crate coverage regression: clean + llvm-cov nextest + ingest parsed.",
     )
-    g.add_argument("--agent", required=True)
+    g.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     g.add_argument(
         "--crates",
         required=True,
@@ -2552,7 +2560,9 @@ def main():
         "test",
         help="cargo nextest run -p <crate>. With --agent: also ingest junit afterwards.",
     )
-    t.add_argument("--crate", required=True)
+    t.add_argument("--crate", required=True,
+                   help="Cargo package to run (`-p`); required — this verb never falls back "
+                        "to the whole workspace")
     t.add_argument("--features", help="Comma-separated feature flags")
     t.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
     t.add_argument("--test", help="Single test binary, e.g. window_pipeline_e2e")
@@ -2567,7 +2577,9 @@ def main():
         "check",
         help="cargo check -p <crate>. With --agent: ingest stderr as rustc compile errors.",
     )
-    c.add_argument("--crate", required=True)
+    c.add_argument("--crate", required=True,
+                   help="Cargo package to check (`-p`); required — this verb never falls back "
+                        "to the whole workspace")
     c.add_argument("--features", help="Comma-separated feature flags")
     c.add_argument("--tests", action="store_true", help="Add --tests flag (check tests too)")
     c.add_argument("--agent", help="If set, ingest stderr as compile errors")
@@ -2578,7 +2590,9 @@ def main():
         "clippy",
         help="cargo clippy -p <crate>. With --agent: ingest stderr as compile errors.",
     )
-    cl.add_argument("--crate", required=True)
+    cl.add_argument("--crate", required=True,
+                    help="Cargo package to lint (`-p`); required — this verb never falls back "
+                         "to the whole workspace")
     cl.add_argument("--features", help="Comma-separated feature flags")
     cl.add_argument("--tests", action="store_true", help="Add --tests flag (lint tests too)")
     cl.add_argument(
@@ -3003,7 +3017,7 @@ def main():
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged|release).")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")
