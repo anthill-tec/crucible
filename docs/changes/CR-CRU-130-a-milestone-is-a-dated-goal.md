@@ -247,6 +247,10 @@ matter more than their number.
   project wanting derived behaviour is asking for a reserved type, which is a CR, not a configuration
   entry.
 - Retention, the record tables' creation, or the `events` move — CR-CRU-129 owns those.
+- The four numeric limits still compiled into source (`TOON_MAX_BYTES`, `TRUNCATE_LIMIT`,
+  `NO_REPORT_DETAIL_MAX`, `ROADMAP_LIST_LIMIT`) and the project route's refusal of `retention: null`
+  and `retention: 0` — CR-CRU-131 owns those. Same rule as this CR applies to a vocabulary, applied
+  to numbers.
 - Removing `custom`. It stays a legitimate "no particular type" label; this CR removes the need to
   abuse it, and 5 live records use it.
 - Scheduling, reminders or overdue notifications. This CR makes "what is due and what slipped"
