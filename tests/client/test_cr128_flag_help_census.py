@@ -538,7 +538,8 @@ class FlagHelpCensusTest(unittest.TestCase):
                       in Counter(d.anchor for d in census()).items() if count > 1]
         self.assertEqual(
             [], duplicates,
-            "anchor collisions make the CR-CRU-128 pins ambiguous: %r"
+            "anchor collisions make this file's (source, scope, flag) pins "
+            "ambiguous -- widen the anchor or rename the colliding flag: %r"
             % (duplicates,))
 
     def test_every_declared_help_expression_resolves_to_text(self):
@@ -836,10 +837,16 @@ class FlagHelpQualityTest(unittest.TestCase):
             vocabularies["Tier"])
         self.assertEqual(("red-green", "verify", "fix"),
                          vocabularies["CycleKind"])
+        # CR-CRU-074 is the CR that added `release` to `MILESTONE_TYPES`. The
+        # provenance is written HERE and not in the message below: an id in a
+        # live assertion position is what CR-CRU-097 AC7's tripwire forbids.
         self.assertIn("release", vocabularies["MILESTONE_TYPES"],
-                      "CR-CRU-074 added `release` to the accepted milestone "
-                      "types; a parse that misses it would make the check "
-                      "below pass on the five clients that never learned it")
+                      "`release` is absent from the parsed MILESTONE_TYPES: "
+                      "the CR that added `release` to the milestone "
+                      "vocabulary put it in the server source this parse "
+                      "reads, so losing it here means the parse broke -- and "
+                      "a parse that misses it would make the check below "
+                      "pass on the five clients that never learned it")
 
     def test_a_choiceless_flag_names_the_server_vocabulary_it_draws_on(self):
         """RED (5 offenders today -- see the ESCALATION in the module
@@ -932,8 +939,9 @@ class UntouchedFlagSignatureTest(unittest.TestCase):
                              % (decl.offender_line, expected, decl.keywords))
         self.assertEqual(
             [], drift,
-            "CR-CRU-128 adds DESCRIPTION only; these declarations changed "
-            "behaviour too:\n%s" % "\n".join(drift))
+            "this CR adds DESCRIPTION only; these declarations changed "
+            "behaviour too -- restore the pinned keywords, or, if the change "
+            "is intended, it belongs in its own CR:\n%s" % "\n".join(drift))
 
     def test_the_pin_covers_every_declaration_this_cr_touches(self):
         """GUARD. 18 offenders were measured 2026-09-13; the pin must hold all
