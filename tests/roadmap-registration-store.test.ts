@@ -308,16 +308,27 @@ describe("CR-CRU-091 §S2 — the migration adds the three declaration columns",
       expect(before).not.toContain("track");
       expect(before).not.toContain("lifecycle_json");
 
-      // The step is identified BY EFFECT: on this fixture it is the only one in
-      // the whole chain that is not already satisfied.
+      // The step is identified BY EFFECT: on this fixture it reports itself
+      // UNSATISFIED, while every step BEFORE it in the chain reports satisfied
+      // — which is what makes this fixture sit exactly at its `from`.
+      //
+      // CR-CRU-129 §S1 — this used to assert that EXACTLY ONE step in the
+      // WHOLE chain was unsatisfied. That is an incidental over-pin on chain
+      // state: any LATER step appended by any future CR that introduces a
+      // table this pre-091 fixture predates makes the count 2, then 3, forever,
+      // for reasons CR-091 has no stake in. It is re-targeted at the step this
+      // test is actually about, so the next migration does not break it again.
       const probe = new Database(dbPath);
-      const unsatisfied = MIGRATIONS.filter((body) => body.satisfiedBy?.(probe) === false);
+      const satisfaction = MIGRATIONS.map((body) => body.satisfiedBy?.(probe));
       probe.close();
-      expect(unsatisfied.length).toBe(1);
-      // …and BY EFFECT names the same body the description does: the two
-      // identifications agree, so neither can drift silently.
-      expect(unsatisfied[0]).toBe(step);
-      expect(unsatisfied[0]!.to).toBe(step.to);
+      const index = MIGRATIONS.indexOf(step);
+      expect(index).toBeGreaterThanOrEqual(0);
+      // THIS body is the one that has work to do here...
+      expect(satisfaction[index]).toBe(false);
+      // ...and nothing before it does, so the fixture is at this body's `from`
+      // by EFFECT and not only by its stamp. (A step that declares no
+      // `satisfiedBy` answers undefined and makes no claim either way.)
+      expect(satisfaction.slice(0, index).filter((answer) => answer === false)).toEqual([]);
 
       const store = Store.open(dbPath);
 
@@ -338,7 +349,7 @@ describe("CR-CRU-091 §S2 — the migration adds the three declaration columns",
 
       // The probe the baseline path relies on now answers for this store.
       const after = new Database(dbPath);
-      const satisfied = unsatisfied[0]!.satisfiedBy?.(after);
+      const satisfied = step.satisfiedBy?.(after);
       after.close();
       expect(satisfied).toBe(true);
 

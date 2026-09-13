@@ -239,7 +239,21 @@ describe("CR-CRU-073 AC2 — finishing a release retires its gates atomically", 
   });
 });
 
-describe("CR-CRU-073 AC3 — retention: a live gate is cap-exempt, a retired gate is not", () => {
+// CR-CRU-129 §S1 SUPERSEDES the second half of CR-CRU-073 AC3.
+//
+// AC3 read "a live gate is cap-exempt, a RETIRED gate is not", and the test
+// that asserted the second half — "once retired, a gate is retention-eligible
+// again and prunes like any other event" — is DELETED rather than re-pinned.
+// §S1 lifts the whole `gate` kind out of `events` into a record table
+// retention cannot reach, so a retired gate no longer prunes at all; the CR
+// names AC3's exemption as "the existing code conceding the point one kind at
+// a time". Re-pinning that test to the new behaviour would launder the old
+// design into the new one. What SURVIVES here is the half that still holds and
+// that §S1 strengthens: a gate outlives the cap while ordinary telemetry does
+// not. Its replacement in full is tests/milestone-records-survive-retention.ts,
+// which proves a VERSIONLESS and a RETIRED gate survive too — the two shapes
+// AC3's predicate deliberately did not protect.
+describe("CR-CRU-073 AC3 — retention: a gate outlives the count cap (CR-CRU-129 §S1: because it is a record, not because a predicate matched it)", () => {
   test("a live (retired_at NULL) gate survives the count cap while ordinary events prune", () => {
     const store = new Store(":memory:");
     const pk = seed(store);
@@ -258,21 +272,6 @@ describe("CR-CRU-073 AC3 — retention: a live gate is cap-exempt, a retired gat
     // An ordinary old event is pruned by the same cap; a recent one survives.
     expect(getEvent(store, firstTest)).toBeNull();
     expect(getEvent(store, lastTest)).not.toBeNull();
-  });
-
-  test("once retired, a gate is retention-eligible again and prunes like any other event", () => {
-    const store = new Store(":memory:");
-    const pk = seed(store);
-    store.updateProject(pk, { retention: 3 });
-
-    const gateId = recordGate(store, pk, "orch-1", GATE, "0.2.0").id;
-    recordRelease(store, pk, "orch-1", "0.2.0"); // retires the gate
-    expect(typeof getEvent(store, gateId)!.retiredAt).toBe("number");
-
-    // Drive the project well over the cap with newer traffic; the retired
-    // gate (now the oldest ordinary row) is eligible and prunes.
-    for (let i = 0; i < 6; i++) makeTest(store, pk, "worker-GREEN");
-    expect(getEvent(store, gateId)).toBeNull();
   });
 });
 
@@ -373,10 +372,30 @@ describe("CR-CRU-073 AC5 — the migration adds retired_at and retires pre-colum
       raw.close();
     }
 
+    // CR-CRU-129 §S1 — the chain's LAST step moves every gate row out of
+    // `events` into `gates`, so both reads below span the three tables a row
+    // can live in. The conservation this test is about is unchanged and is
+    // what is asserted: the CR-073 stamp is applied, then the row carrying it
+    // is MOVED, and no row is added or lost on the way.
+    const RECORD_TABLES = ["events", "milestones", "gates"] as const;
     const countEvents = (p: string): number => {
       const db = new Database(p);
       try {
-        return db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM events`).get()!.n;
+        // The pre-migration v6 fixture has no record tables yet — an absent
+        // table holds no rows, which is exactly the count conservation needs.
+        const present = new Set(
+          db
+            .query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .all()
+            .map((row) => row.name),
+        );
+        return RECORD_TABLES.reduce(
+          (total, table) =>
+            present.has(table)
+              ? total + db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n
+              : total,
+          0,
+        );
       } finally {
         db.close();
       }
@@ -384,13 +403,22 @@ describe("CR-CRU-073 AC5 — the migration adds retired_at and retires pre-colum
     const retiredOf = (p: string, id: string): number | null => {
       const db = new Database(p);
       try {
-        return (
+        const present = new Set(
           db
-            .query<{ retired_at: number | null }, [string]>(
-              `SELECT retired_at FROM events WHERE id = ?`,
-            )
-            .get(id)?.retired_at ?? null
+            .query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .all()
+            .map((row) => row.name),
         );
+        for (const table of RECORD_TABLES) {
+          if (!present.has(table)) continue;
+          const row = db
+            .query<{ retired_at: number | null }, [string]>(
+              `SELECT retired_at FROM ${table} WHERE id = ?`,
+            )
+            .get(id);
+          if (row !== null) return row.retired_at ?? null;
+        }
+        return null;
       } finally {
         db.close();
       }

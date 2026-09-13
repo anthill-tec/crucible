@@ -395,8 +395,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   // ── §S1 — rollup exclusion ───────────────────────────────────────────
   describe("§S1 gate ingestion does not change test-run rollup counts", () => {
     test(
-      "retention forces a fold: a folded GATE event (oldest, evicted first) leaves rollups " +
-        "unchanged; a subsequently-folded TEST event DOES create a rollup row — proving the " +
+      "a GATE contributes NOTHING to a rollup while a TEST event folds into one — the " +
         "exclusion is kind-specific, not a broken fold pipeline",
       async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
@@ -405,30 +404,41 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
         const patchRes = await patchJson(`/api/v2/projects/${key}`, { retention: 1 });
         expect(patchRes.status).toBe(200);
 
-        // 1. Seed the gate first — it will be the OLDEST row.
+        // 1. Seed the gate first — it is the OLDEST row in the project.
+        //
+        // CR-CRU-129 §S1 — this test used to force the fold by EVICTING the
+        // gate: the cap reached it, and the claim was that the eviction left
+        // rollups alone. A gate is a record now and retention cannot reach it
+        // at all, so the eviction trick is dead while the claim it proved —
+        // a record never contributes to a test-run rollup — is stronger than
+        // before and is what is asserted below.
         const gateRes = await postJson("/api/v2/gates", gateBody(key));
         expect(gateRes.status).toBe(201);
-        // Count is 1 == cap: no overflow, nothing folded yet.
+        const gateId = (await gateRes.json()).event as string;
         expect(handle.store.listRollups(key)).toEqual([]);
 
-        // 2. Ingest one test event: count becomes 2, overflow 1 → the OLDEST
-        // row (the gate) is evicted+folded. Rollup-eligible kinds are
-        // {test, compile} (Implementation Notes) — gate must NOT fold in.
+        // 2. One test event: the DISPOSABLE count is now 1 == cap, so nothing
+        // has overflowed and nothing has folded. The gate is beside it,
+        // untouched by the cap.
         const e1Id = await seedTestEvent(key, "seed-1");
 
         expect(handle.store.listRollups(key)).toEqual([]);
-        expect(handle.store.countEvents(key)).toBe(1);
-        expect(handle.store.listEvents(key, 10).map((e) => e.id)).toEqual([e1Id]);
+        expect(handle.store.getEvent(gateId)).not.toBeNull();
 
-        // 3. Ingest a SECOND test event: the step-2 survivor (a "test" kind)
-        // is now oldest and gets evicted+folded — THIS one must create a
-        // rollup row, confirming the fold mechanism itself still works.
+        // 3. A SECOND test event: seed-1 (a "test" kind) is now the oldest
+        // DISPOSABLE row and is evicted+folded — THIS one must create a rollup
+        // row, confirming the fold mechanism itself still works, so step 2's
+        // empty rollups cannot pass by the pipeline being broken.
         await seedTestEvent(key, "seed-2");
 
         const rollups = handle.store.listRollups(key);
         expect(rollups.length).toBe(1);
+        // ONE run folded, not two: the gate is not in it.
         expect(rollups[0]!.runs).toBe(1);
         expect(rollups[0]!.passed).toBe(1);
+        // The evicted telemetry row is gone; the gate and the survivor are not.
+        expect(handle.store.getEvent(e1Id)).toBeNull();
+        expect(handle.store.getEvent(gateId)).not.toBeNull();
       },
     );
   });
@@ -556,8 +566,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   // ── §S4b/§S4c — milestone rollup exclusion (same technique as gates) ──
   describe("§S4b milestones excluded from test-run rollups (same technique as gates)", () => {
     test(
-      "retention forces a fold: a folded MILESTONE event (oldest, evicted first) leaves " +
-        "rollups unchanged; a subsequently-folded TEST event DOES create a rollup row",
+      "a MILESTONE contributes NOTHING to a rollup while a TEST event folds into one",
       async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const key = await createProject("milestone-rollup-exclusion");
@@ -565,22 +574,31 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
         const patchRes = await patchJson(`/api/v2/projects/${key}`, { retention: 1 });
         expect(patchRes.status).toBe(200);
 
+        // CR-CRU-129 §S1 — as with the gate above, the eviction that used to
+        // force this fold is gone (a milestone is a record and the cap cannot
+        // reach it); the claim it proved is what remains and is asserted.
         const milestoneRes = await postJson("/api/v2/milestones", milestoneBody(key));
         expect(milestoneRes.status).toBe(201);
+        const milestoneId = (await milestoneRes.json()).event as string;
         expect(handle.store.listRollups(key)).toEqual([]);
 
+        // Disposable count is 1 == cap: nothing overflows, nothing folds.
         const e1Id = await seedTestEvent(key, "seed-1");
 
         expect(handle.store.listRollups(key)).toEqual([]);
-        expect(handle.store.countEvents(key)).toBe(1);
-        expect(handle.store.listEvents(key, 10).map((e) => e.id)).toEqual([e1Id]);
+        expect(handle.store.getEvent(milestoneId)).not.toBeNull();
 
+        // seed-1 is now the oldest DISPOSABLE row: evicted and folded, which
+        // is what stops the empty rollups above being a dead pipeline.
         await seedTestEvent(key, "seed-2");
 
         const rollups = handle.store.listRollups(key);
         expect(rollups.length).toBe(1);
+        // ONE run folded, not two: the milestone is not in it.
         expect(rollups[0]!.runs).toBe(1);
         expect(rollups[0]!.passed).toBe(1);
+        expect(handle.store.getEvent(e1Id)).toBeNull();
+        expect(handle.store.getEvent(milestoneId)).not.toBeNull();
       },
     );
   });

@@ -662,12 +662,31 @@ describe("CR-CRU-017 §S0-3 — the upgrade is LOSSLESS: every pre-existing row 
       // would only weaken it.
       return;
     }
-    const tables = ["projects", "agents", "events", "rollups", "plans", "plan_cycles"] as const;
+    // CR-CRU-129 §S1 — `events`, `milestones` and `gates` are counted TOGETHER
+    // and the claim is CONSERVATION, not a per-table constant: the migration
+    // MOVES every milestone and gate row out of the capped buffer into its own
+    // table, so the three tables' total is what "every pre-existing row
+    // survives" means now. A per-table assertion would fail on a move that
+    // loses nothing, which is the opposite of what this test is for.
+    const tables = ["projects", "agents", "rollups", "plans", "plan_cycles"] as const;
+    const eventRowTables = ["events", "milestones", "gates"] as const;
+    const countEventRows = (p: string): number =>
+      eventRowTables.reduce((total, t) => {
+        // `countRows` answers -1 for a table that does not exist; before the
+        // migration the record tables do not, and an absent table holds no
+        // rows — which is precisely what conservation needs it to contribute.
+        const rows = countRows(p, t);
+        return total + (rows < 0 ? 0 : rows);
+      }, 0);
     const before = tables.map((t) => [t, countRows(snapshot, t)] as const);
+    const eventsBefore = countEventRows(snapshot);
+    // Non-vacuity: the real store carries rows in the buffer to begin with.
+    expect(eventsBefore).toBeGreaterThan(0);
 
     expect(Store.open(snapshot).schemaVersion).toBe(SCHEMA_VERSION);
 
     expect(tables.map((t) => [t, countRows(snapshot, t)] as const)).toEqual(before);
+    expect(countEventRows(snapshot)).toBe(eventsBefore);
     expect(missingLifecycleColumns(snapshot)).toEqual([]);
     expect(userVersion(snapshot)).toBe(SCHEMA_VERSION);
   });

@@ -277,10 +277,28 @@ function columnsOf(dbPath: string, table: string): string[] {
 function rowCounts(dbPath: string): Record<string, number> {
   const db = new Database(dbPath);
   try {
+    const present = new Set(
+      db
+        .query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+        .all()
+        .map((row) => row.name),
+    );
+    const count = (table: string): number =>
+      present.has(table)
+        ? (db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1)
+        : 0;
     const counts: Record<string, number> = {};
     for (const table of COUNTED_TABLES) {
+      // CR-CRU-129 §S1 — `events` is reported as the CONSERVED TOTAL of the
+      // three tables an event row can live in. The chain's last step MOVES
+      // every milestone and gate out of the capped buffer into its own table,
+      // and what "no data movement" means across a MOVE is that nothing was
+      // gained or lost — a per-table count would report a lossless move as a
+      // loss. An absent record table counts 0: it holds no rows.
       counts[table] =
-        db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1;
+        table === "events"
+          ? count("events") + count("milestones") + count("gates")
+          : count(table);
     }
     return counts;
   } finally {
@@ -440,14 +458,29 @@ function classificationsOf(
 ): Record<string, EventRoleRow> {
   const db = new Database(dbPath);
   try {
-    return Object.fromEntries(
+    // CR-CRU-129 §S1 — a classification is a property of the ROW, not of the
+    // table it sits in, and the chain's last step moves milestone and gate
+    // rows into their own tables. Reading only `events` would report a MOVED
+    // orchestrator's stamp as an erased one, which is the exact opposite of
+    // what the preservation statement is asserting.
+    const present = new Set(
       db
-        .query<{ id: string; role: string | null; role_inferred: number | null }, []>(
-          `SELECT id, ${cols.role} AS role, ${cols.inferred} AS role_inferred FROM events`,
-        )
+        .query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table'`)
         .all()
-        .map((row) => [row.id, { role: row.role, role_inferred: row.role_inferred }]),
+        .map((row) => row.name),
     );
+    const entries: Array<[string, EventRoleRow]> = [];
+    for (const table of ["events", "milestones", "gates"]) {
+      if (!present.has(table)) continue;
+      for (const row of db
+        .query<{ id: string; role: string | null; role_inferred: number | null }, []>(
+          `SELECT id, ${cols.role} AS role, ${cols.inferred} AS role_inferred FROM ${table}`,
+        )
+        .all()) {
+        entries.push([row.id, { role: row.role, role_inferred: row.role_inferred }]);
+      }
+    }
+    return Object.fromEntries(entries);
   } finally {
     db.close();
   }

@@ -1507,10 +1507,19 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
 
   // ── AC22 — a live proposal outlives the retention cap ─────────────────────
 
-  describe("AC22 — a live proposal survives pruning; a consumed one does not", () => {
+  // CR-CRU-129 §S1 NARROWS this AC. It read "a live proposal survives pruning;
+  // a consumed one does not", and the second half is now false BY DESIGN: a
+  // `release-proposal` is a record in its own table and retention reaches no
+  // record, consumed or not. That half is dropped rather than re-pinned. What
+  // is kept is the ROUTE-level half that still holds and that §S1 strengthens —
+  // and beside it the thing consuming a proposal has always meant and still
+  // does (CR-CRU-091 §S1): it leaves the LIVE read while staying auditable
+  // through the by-id read. That is a property of `retired_at`, not of the cap.
+  describe("AC22 — a live proposal outlives the count cap, and a consumed one leaves the live read while staying auditable", () => {
     test(
       "with the count cap driven below the event total the live release-proposal " +
-        "survives and is still readable, while a CONSUMED proposal prunes away",
+        "survives and is still readable; once its release ships it leaves GET …/release-proposals " +
+        "and is still served by id",
       async () => {
         boot();
         const key = await seed("ac22");
@@ -1522,16 +1531,20 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
           .listEvents(key, 200)
           .find((e) => e.type === "release-proposal")!.id;
 
-        // Drive the count far past the cap with ordinary, prunable events.
+        // Drive the count far past the cap with ordinary, prunable TELEMETRY —
+        // the only thing the cap reaches now, and what makes the survival
+        // below a real answer rather than a sweep that never ran.
+        const filler: string[] = [];
         for (let index = 0; index < 8; index += 1) {
-          const res = await post("/api/v2/milestones", {
-            projectKey: key,
-            agentId: ORCH,
-            type: "custom",
-            label: `filler-${index}`,
-          });
-          expect(res.status).toBe(201);
+          filler.push(
+            handle!.store.recordTestEvent(key, ORCH, {
+              summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },
+              tree: [],
+            }).id,
+          );
         }
+        // The sweep RAN: the oldest filler row is gone.
+        expect(handle!.store.getEvent(filler[0]!)).toBeNull();
 
         // A pruned proposal has no git tag to rebuild it from, so it survives.
         expect((await get(proposalsPath(key))).body.proposals!.map((p) => p.label)).toEqual([
@@ -1539,7 +1552,8 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         ]);
         expect(handle!.store.getEvent(proposalId)?.type).toBe("release-proposal");
 
-        // Once the release SHIPS, the proposal is consumed — and prunable again.
+        // Once the release SHIPS, the proposal is CONSUMED: no longer a plan,
+        // so it leaves the live strip — and is still there to audit.
         const shipped = await post("/api/v2/milestones", {
           projectKey: key,
           agentId: ORCH,
@@ -1549,16 +1563,10 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
           releasedAt: 1_790_000_000,
         });
         expect(shipped.status).toBe(201);
-        for (let index = 0; index < 8; index += 1) {
-          await post("/api/v2/milestones", {
-            projectKey: key,
-            agentId: ORCH,
-            type: "custom",
-            label: `after-${index}`,
-          });
-        }
-        expect(handle!.store.getEvent(proposalId)).toBeNull();
         expect((await get(proposalsPath(key))).body.proposals).toEqual([]);
+        const consumed = handle!.store.getEvent(proposalId);
+        expect(consumed?.type).toBe("release-proposal");
+        expect(typeof consumed?.retiredAt).toBe("number");
       },
     );
   });
