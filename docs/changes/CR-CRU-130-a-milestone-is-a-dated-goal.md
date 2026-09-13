@@ -83,6 +83,16 @@ Both become filtered columns on the record table, following the seam CR-CRU-129 
 representations cannot disagree. `releasedAt` is the delivered date under its old name and migrates
 into it; `targetAt` is already stored by proposals and migrates as-is.
 
+**This SUPERSEDES a recorded decision, and says so because the code says the opposite.**
+`src/store.ts:2677-2680` states *"CR-CRU-091 §S1 — a declared target belongs to a PROPOSAL and
+nothing else. A `release` carries `releasedAt` (when it shipped); a target it was once aimed at is
+not a fact about it"*, and enforces it with `const targetAt = type === "release-proposal" ?
+meta?.targetAt : undefined`. The user's 2026-09-13 ruling supersedes that narrower stance: a
+milestone is a dated GOAL, so what it was aimed at and when it landed are both facts about it — and
+the distance between them is the only thing that can tell anyone a deliverable slipped. The comment
+and the gate go together; leaving a comment that contradicts shipped behaviour is the defect
+CR-CRU-128 spent a FIX round removing.
+
 This is what lets a project ask what a milestone is FOR: what is due, what is outstanding, what
 slipped and by how long. None of those questions are askable today.
 
@@ -147,6 +157,21 @@ An undeclared type is still refused, and the refusal names how to declare it. Op
 unvalidated: a typo must not silently become a new category, which is the failure that makes `custom`
 look attractive in the first place.
 
+### §S4b The consumers of "a live proposal", enumerated
+
+§S2 retires `release-proposal` as a type, so every place that reasons about a LIVE proposal now
+reasons about an UNDELIVERED release. Each is named because an unenumerated one inverts silently —
+and two of them decide whether a CR can be planned at all:
+
+| consumer | site | what it must keep doing |
+|---|---|---|
+| CR-CRU-118's plannable-target gate | `src/v2.ts:2769` | refuse `release <X> has no live proposal — it is not a plannable target`, byte-identical, now resolved from undelivered releases |
+| the shipped-release refusal | `src/hints.ts:404` | *"a release that has already SHIPPED is settled history and is no longer a plannable target"* — now the DELIVERED case |
+| three `release-proposals` route sentences | `src/hints.ts:382`, `:398`, `:403` | unchanged wording; the route they name keeps answering |
+| proposal convergence | `src/store.ts:2747` | re-proposing one label still converges instead of adding a row |
+| `stampProposalRetired`, both call sites | `src/store.ts:2707`, `:2768` | retirement-on-ship becomes `deliveredAt`; `retired_at` keeps only CR-CRU-073's gate job |
+| `listReleaseProposals` / `listReleases` | `src/store.ts:3263`, `:2717` | same wire shapes, derived from delivery |
+
 ### §S5 One vocabulary, read everywhere
 
 The accepted set has one source. The validator, the refusal's `help[]`, `src/hints.ts`, the five
@@ -156,6 +181,19 @@ Measured consequence of not doing it: CR-CRU-128 §S3.3 repaired five `milestone
 that enumerated five of six types, and that repair goes stale the moment a project defines a seventh.
 A CLI whose help is a literal list cannot describe a configurable vocabulary — it must say where the
 list comes from, or read it.
+
+**Which means CR-CRU-128's census must be AMENDED, not merely kept green.** It maps `"--type" →
+"MILESTONE_TYPES"` (`tests/client/test_cr128_flag_help_census.py:272`) and parses that Set out of
+`src/v2.ts` with `_ts_set_members` (`:258`), then asserts the help NAMES every member. Opening the
+vocabulary breaks that two ways: the help stops enumerating, and the Set stops being a literal the
+parse can read — and its own non-vacuity guard fails on an empty parse, which is the louder failure.
+
+So §S3.3's rule is NARROWED where it is now wrong and kept everywhere it is still right: a flag
+drawing on a CLOSED, server-owned vocabulary must still name it (that is `--tier`, `--kind`,
+`--cycle-kind`, `--role`, `--source`, and the rule caught a real drift when it shipped); a flag
+drawing on a vocabulary a PROJECT defines cannot name it and must instead say where it comes from.
+`--type` moves from the first class to the second. The census is amended with that distinction, not
+exempted from it — an exemption would leave the next open vocabulary unguarded.
 
 ## Acceptance criteria
 
@@ -178,6 +216,12 @@ list comes from, or read it.
       field absent rather than zero or epoch.
 - [ ] A project can ask what is outstanding and what slipped: milestones are queryable by
       delivered/undelivered and by target date, and the answer includes project-defined types.
+- [ ] That query EXTENDS CR-CRU-129 §S3's existing surface (`GET …/projects/<key>/milestones`,
+      `listMilestonesByType`, `idx_milestones_project_type`) rather than adding a second record read.
+      It stays unwindowed and projection-free, as that route's own rationale requires.
+- [ ] `src/store.ts:2677-2680`'s comment and its `type === "release-proposal"` gate are BOTH
+      corrected, so no comment survives asserting that a target is not a fact about a release.
+      Asserted: a `release` round-trips a `targetAt`, which today is discarded.
 
 **§S2**
 - [ ] `release-proposal` is no longer a type, and `listReleases` / `listReleaseProposals` keep their
@@ -195,6 +239,19 @@ list comes from, or read it.
       `['5','6']`), and a DELIVERED one does not — the scheduling grouping is deliberately not
       carried forward, and `crs` stays the authoritative expression of the bundling.
 - [ ] The migration invents no wave list for the four historical releases that never declared one.
+
+**§S4b — every enumerated consumer, asserted per site**
+- [ ] CR-CRU-118's gate still refuses a CR planned into a release with no undelivered record, with
+      its sentence and `help[]` BYTE-IDENTICAL (`src/v2.ts:2769`) — and still ACCEPTS one planned
+      into a release that is undelivered. Both directions, because a gate that refuses everything
+      passes a one-sided test.
+- [ ] A DELIVERED release is still refused as a plannable target, carrying `src/hints.ts:404`'s
+      settled-history sentence.
+- [ ] Re-proposing one label still converges to a single record (`src/store.ts:2747`).
+- [ ] Shipping sets `deliveredAt` and no longer stamps `retired_at` on the record; `retired_at`
+      still retires a GATE (CR-CRU-073), asserted, because that is its remaining job.
+- [ ] The three `release-proposals` route sentences in `src/hints.ts` are unchanged and the route
+      they name still answers.
 
 **§S4**
 - [ ] `release` and `cr-merged` cannot be declared, shadowed or removed; the refusal names the type
@@ -214,8 +271,16 @@ list comes from, or read it.
 - [ ] No literal copy of the vocabulary remains in server, hint or client source — asserted by
       CONSTRUCTION: a test scans for a hardcoded type list and fails on one.
 - [ ] The five clients' `--type` help says where the vocabulary comes from instead of enumerating a
-      list configuration can invalidate, and offers a way to SEE the live list; CR-CRU-128's census
-      still passes.
+      list configuration can invalidate, and offers a way to SEE the live list.
+- [ ] CR-CRU-128's census is AMENDED, not exempted: `--type` moves out of the closed-vocabulary map
+      (`tests/client/test_cr128_flag_help_census.py:272`) into an OPEN-vocabulary rule that requires
+      the help to name its source instead of its members.
+- [ ] The closed half keeps its teeth: `--tier`, `--kind`, `--cycle-kind`, `--role` and `--source`
+      must still name their server-owned vocabularies, and the census's non-vacuity guard still
+      fails on an empty parse. Mutation: stripping a member from one of those help strings turns it
+      red, and stripping the SOURCE reference from `--type`'s help turns the open rule red.
+- [ ] No census test parses `MILESTONE_TYPES` as a TS `Set` literal any more — the parse that
+      breaks when the vocabulary leaves source is removed, not made to tolerate an empty result.
 
 ## Estimated size
 
