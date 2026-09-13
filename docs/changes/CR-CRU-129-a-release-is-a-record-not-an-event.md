@@ -167,6 +167,11 @@ run reported 15 unplaceable without saying which kind they were.
 - [ ] The S2 tests pin no cap VALUE: they configure a cap through the project surface and derive
       every expected count from what they read back, so the suite still passes when a project's
       configured cap changes.
+- [ ] An unconfigured cap means NO cap, and says so: with neither a project `retention` nor the
+      operator's configured fallback, retention prunes nothing and the server reports at boot that
+      event retention is unbounded, naming the setting that would bound it. Removing the literal
+      makes retention opt-in, and an opt-in that nobody is told about is how the next silent growth
+      starts. The warning is asserted, not just written.
 
 **§S3**
 - [ ] Each consumer in the §S3 table reads the new tables — asserted per site, not as one aggregate
