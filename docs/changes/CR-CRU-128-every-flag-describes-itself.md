@@ -1,6 +1,6 @@
 # CR-CRU-128 — every flag describes itself
 
-**Status:** PENDING (0.3.0 — scheduled behind wave 6 by user ruling 2026-09-12)
+**Status:** PENDING (0.2.0) — wave 6, `seq 6015`, registered 2026-09-13. Filed 2026-09-12.
 **Type:** patch
 **Priority:** P3
 **Depends on:** CR-CRU-030 (the AXI fleet compliance baseline and the shared module),
@@ -9,8 +9,29 @@ CR-CRU-127 (`--cycle-kind`, the flag whose discoverability raised the question �
 2026-09-13, commit `974cbd8`**, so this dependency is satisfied and its §S6 precedent is quoted in
 the re-measurement below)
 **Labels:** patch, clients, axi, documentation
-**Phase:** Wave 7 (0.3.0) — user ruling 2026-09-12: *"I want a wider compliance check, but that can
-happen after we finish the CRs in the current queue."*
+**Phase:** **Wave 6 (0.2.0)**, sequenced last in the wave at `seq 6015`, behind CR-CRU-127.
+
+> **CORRECTION 2026-09-13 — this CR was filed into the wrong WAVE and the wrong RELEASE, on an
+> invented authority.** It originally read *"Phase: Wave 7 (0.3.0) — user ruling 2026-09-12"*, with
+> a status line saying *"scheduled behind wave 6 by user ruling"*. Both attributions were FALSE.
+> What the user said, quoted correctly even then, was: *"I want a wider compliance check, but that
+> can happen after we finish the CRs in the current queue."* **"The current queue" meant the WAVE 6
+> queue** — confirmed by the user 2026-09-13 — i.e. run this after wave 6's CRs are done, IN wave 6
+> and IN release 0.2.0. The orchestrator instead read "the current queue" as "the current release",
+> inferred `wave 7 / release 0.3.0`, registered the queue row at `seq 7005, release 0.3.0`
+> (commit `71b3a9e`, whose subject even says "wave 7"), and wrote the inference into this spec as
+> the user's own ruling.
+>
+> Recorded rather than quietly repaired, because an invented ruling is worse than a wrong figure: a
+> figure gets re-measured, a ruling gets CITED — by later CRs, by sub-agent briefs, and by the next
+> reader who has no way to tell it apart from a real one. The consequence was material: it parked
+> this CR behind three unrelated feature CRs (015 BDD harness, 018 responsive, 022 analytics) and
+> moved it into a different RELEASE, which this project treats as settled fact once shipped.
+>
+> Corrected on the board by `cr-plan --cr CR-CRU-128 --release 0.2.0 --wave 6` → `seq 6015`,
+> `dependsOn: CR-CRU-127`, `release: 0.2.0`. **The lesson for the queue, stated generally: "the
+> current queue" is a WAVE-scoped phrase in this project, because a wave IS the queue being worked.
+> Reading it as a release boundary silently re-scopes a release.**
 **Design reference:** the AXI manifesto (https://axi.md), principle **10 — consistent `--help`**,
 under the user's standing 2026-07-21 requirement that every client be a *"sane, complete,
 self-explanatory"* AXI interface that *"stops project orchestrators from losing context and process
