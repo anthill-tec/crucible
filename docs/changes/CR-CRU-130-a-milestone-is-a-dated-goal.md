@@ -100,16 +100,18 @@ the column keeps its other, real job (CR-CRU-073's gate retirement).
 The migration rewrites the 2 live proposals and 4 live releases into the single form, and a proposal
 already consumed by a shipped release becomes that release's delivery rather than a second row.
 
-**And the container survives delivery.** A release bundles the CRs of one or more waves — that is the
-locked definition (`DN-crucible-wave-track-release.md`, "The three levels") — but measured
-2026-09-13, only the PROPOSAL carries the grouping: `0.2.0` and `0.3.0` hold `waves` `['5','6']` and
-`['7']`, while every shipped release (`0.1.0`–`0.1.3`) has no `waves` field at all. Shipping drops
-it, so a delivered release can say which CRs it bundled but not which waves grouped them.
+**What a release CONTAINS at delivery is the flat set of CRs, and that is by design.** A proposal
+carries `waves` because waves are how the work is SCHEDULED into it — measured 2026-09-13, `0.2.0`
+and `0.3.0` hold `['5','6']` and `['7']`. No shipped release carries them, and the unification must
+not "fix" that: user-approved, and it is what the locked definition already says — *"a wave is a
+synchronization device, not a delivery bucket… it does not represent a shipment"*
+(`DN-crucible-wave-track-release.md`). A release logically contains every CR that contributed to the
+functionality and software it released; once delivered, the scheduling grouping has done its job and
+the membership is the CR set.
 
-One record fixes this by construction: `waves` rides through delivery beside `crs`. No new concept —
-the field already exists on the proposal, the definition already says a release contains at least one
-wave's features, and a wave remains a grouping whose meaning is unchanged for solo and multi-track
-projects alike.
+So the unified record keeps `waves` while the release is OUTSTANDING — it is the planning structure a
+proposal needs — and delivery does not carry it forward. `crs` remains the authoritative expression
+of the bundling, exactly as it is today.
 
 ### §S3 The release workflow stays a workflow
 
@@ -189,12 +191,10 @@ list comes from, or read it.
       asserted, because that is the column's remaining job.
 - [ ] The roadmap strip and `targetAt` ordering (CR-CRU-091 §S1: proposals ordered by VERSION) are
       unchanged.
-- [ ] A DELIVERED release carries its `waves` — the grouping survives shipping, which no shipped
-      release does today. Proved against the live shape: `0.2.0` holds waves `['5','6']` as a
-      proposal and still holds them once delivered.
-- [ ] `waves` is carried, never re-derived: the migration does not invent a wave list for the four
-      historical releases that never had one, and reports them as undeclared rather than guessing
-      from queue labels.
+- [ ] An OUTSTANDING release carries its `waves` exactly as a proposal does today (`0.2.0` →
+      `['5','6']`), and a DELIVERED one does not — the scheduling grouping is deliberately not
+      carried forward, and `crs` stays the authoritative expression of the bundling.
+- [ ] The migration invents no wave list for the four historical releases that never declared one.
 
 **§S4**
 - [ ] `release` and `cr-merged` cannot be declared, shadowed or removed; the refusal names the type
