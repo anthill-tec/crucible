@@ -1215,28 +1215,47 @@ export function migrateMilestoneRecords(db: Database): MilestoneRecordMigrationR
  * record names that has NO surviving `cr-merged` record. Read from the
  * DESTINATION, so it covers rows a previous run already moved, and reported
  * once per cr (the first release that names it is the one that proves it).
+ *
+ * PER PROJECT, like every other read in this store. A board holds many
+ * projects, and unscoped these two scans answer across all of them: another
+ * project's `cr-merged` record would mask a genuine loss, and a loss's
+ * `reason` could name a release the project never shipped. So the surviving
+ * evidence is keyed by project and a release is only ever measured against
+ * its OWN, and `seen` is keyed the same way — the same cr id in two projects
+ * is two records, not one already reported.
  */
 function measureEvictedMergeEvidence(db: Database): MilestoneRecordLoss[] {
-  const merged = new Set<string>();
+  const merged = new Map<string, Set<string>>();
   for (const row of db
-    .query<{ label: string | null }, []>(`SELECT label FROM milestones WHERE type = 'cr-merged'`)
+    .query<{ project_key: string; label: string | null }, []>(
+      `SELECT project_key, label FROM milestones WHERE type = 'cr-merged'`,
+    )
     .all()) {
-    if (row.label !== null) merged.add(row.label);
+    if (row.label === null) continue;
+    let held = merged.get(row.project_key);
+    if (held === undefined) merged.set(row.project_key, (held = new Set<string>()));
+    held.add(row.label);
   }
   const losses: MilestoneRecordLoss[] = [];
   const seen = new Set<string>();
   for (const row of db
-    .query<{ id: string; label: string | null; payload: string | null }, []>(
-      `SELECT id, label, payload FROM milestones WHERE type = 'release'
+    .query<
+      { id: string; project_key: string; label: string | null; payload: string | null },
+      []
+    >(
+      `SELECT id, project_key, label, payload FROM milestones WHERE type = 'release'
         ORDER BY timestamp ASC, rowid ASC`,
     )
     .all()) {
     if (row.payload === null) continue;
     const crs = (JSON.parse(row.payload) as { crs?: unknown }).crs;
     if (!Array.isArray(crs)) continue;
+    const mergedHere = merged.get(row.project_key);
     for (const cr of crs) {
-      if (typeof cr !== "string" || merged.has(cr) || seen.has(cr)) continue;
-      seen.add(cr);
+      if (typeof cr !== "string" || mergedHere?.has(cr) === true) continue;
+      const key = `${row.project_key}\u0000${cr}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       losses.push({
         what: "cr-merged",
         id: cr,
