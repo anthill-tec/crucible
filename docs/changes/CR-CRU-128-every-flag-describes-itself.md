@@ -149,14 +149,34 @@ Two properties the census must have, both learned from CR-CRU-075's equivalent:
 - **It names offenders.** The failure message lists `file:line  --flag` for each, because a bare
   count tells the next agent nothing actionable.
 
+**Reuse the scaffold; do not invent one** (gap analysis 2026-09-13, DRIFT-4). Both properties above
+already exist as repo convention, and **six suites already AST-walk `add_argument`**
+(`test_client_tier_surface.py`, `test_cr054_fleet_inventory.py`, `test_cr054_verb_surface_lift.py`,
+`test_cycle_add_targets_the_plan_it_means.py`, `test_plan_file_declares_each_cycle_kind.py`,
+`test_plan_file_names_the_release_it_plans.py`). Specifically: `CLIENT_FILES` + `AXI_MODULE_PATH` +
+`EXPECTED_CLIENT_COUNT = 5` at `tests/client/test_client_tier_surface.py:107-125` is the
+non-vacuity shape to copy verbatim, and `_load_module_by_path`
+(`test_cr054_verb_surface_lift.py:188`) is the mechanism for resolving a non-literal `help=`. A
+seventh differently-shaped walker is the cost this CR should not pay.
+
 ### §S3 The census is honest about what it cannot see
 
 `help=` being present is not the same as it being USEFUL. This CR asserts presence, which is
 mechanically checkable, and deliberately does not attempt to grade quality — an assertion that
 wording is "good" would be unfalsifiable. What it DOES additionally check, because it is
-mechanical: the text is non-empty, is not a bare repetition of the flag name, and (for a flag whose
+mechanical: the text is non-empty, is not a bare repetition of the flag name, (for a flag whose
 value comes from a closed vocabulary the server owns) names that vocabulary — the CR-CRU-127 §S6
-rule generalised, since a flag declared without `choices=` has nowhere else to teach its values.
+rule generalised, since a flag declared without `choices=` has nowhere else to teach its values —
+and, per DRIFT-3, that a value-taking flag does not describe itself as a switch.
+
+**The honest limit, now MEASURED rather than asserted** (gap analysis 2026-09-13). The original
+text called presence-vs-usefulness "a known limit" without saying how big it is. It is bigger than
+the defect: **19 `--agent` declarations describe the ingest side-effect instead of the flag**, and
+all three of the original refinements pass them. That measurement is what turned the limit into
+DRIFT-3's fourth check — which is the whole argument for measuring a stated limit instead of
+recording it as a caveat. What remains genuinely unreachable is prose QUALITY: a flag reading
+`"Agent id (typically vidushi)"` is describing the right thing while hardcoding one project's
+orchestrator id, and no mechanical check this CR can write will catch that.
 
 ## Acceptance criteria
 
@@ -168,13 +188,41 @@ rule generalised, since a flag declared without `choices=` has nowhere else to t
       through the shared registrar. Re-measure AGAIN at implementation time regardless — the point
       of the AC is that the figure is never transcribed, and it has now survived one refresh rather
       than being assumed stable.
-- [ ] Where a flag is already described elsewhere in the fleet, the added wording is byte-identical
-      to that existing description — asserted for `--agent`, which appears 6 times in the set.
+- [ ] **`--agent`'s wording is NOMINATED, not "reused"** (corrected by gap analysis 2026-09-13,
+      DRIFT-1 — the original AC said *"the added wording is byte-identical to that existing
+      description — asserted for `--agent`"*, which is **UNSATISFIABLE: there is no single existing
+      description**). MEASURED: **60 `--agent` declarations across the fleet carry 22 DISTINCT help
+      values** (including the 6 with none). Even excluding the 19 covered by DRIFT-3, roughly eight
+      genuine wordings compete: `"Agent id — REQUIRED (§S5): …"` (8×), `"Agent id (typically the
+      orchestrator)"` (4×), `"Agent id (typically the orchestrator's)"` (3×), `"Agent id (typically
+      vidushi)"` (3×, and it hardcodes THIS project's orchestrator id into a fleet client's help),
+      two different `"enforced at RUNTIME"` variants (4× each), `"Agent id for the gate events …"`
+      (4×), and arduino's own singleton. The implementation NOMINATES one canonical wording for the
+      six `required=True` sites and asserts the added text equals THAT, byte-for-byte. Harmonising
+      the other ~54 stays a non-goal (this CR adds description, it does not rewrite 338 strings) —
+      but the nomination is recorded in the spec so the next flag has one wording to copy instead
+      of eight to choose from.
+- [ ] All six are declared `required=True` in argparse — VERIFIED, not inferred, on `auto-ingest`
+      (bun `:2161`, mvn `:2131`, python `:1524`, rust `:2525`), `pre-merge-gate` (mvn `:2152`) and
+      a gate verb (rust `:2538`). The added wording therefore states that the flag is REQUIRED.
 
 **§S2**
 - [ ] A derived census fails if ANY option-bearing `add_argument` in the five clients or the shared
       module lacks `help=`; proven by mutation — strip one help string and the census must go red
       naming that exact `file:line --flag`.
+- [ ] **The census tests for the PRESENCE of a `help=` keyword, NEVER for a literal string**
+      (gap analysis DRIFT-2, blocking as the spec stood). MEASURED across the 374 option-bearing
+      declarations: 338 pass a literal, **18 pass a NON-literal** — 10 an `ast.Name` constant, 4 a
+      `BinOp` concatenation, 4 an f-string — and 18 pass none. A census written as
+      `isinstance(value, ast.Constant)` would therefore report **18 false offenders against a real
+      count of 18**, a numerical coincidence that would ship a wrong figure while looking right.
+      Six of the non-literals live in `_crucible_axi.py` (e.g. `GATE_CYCLE_HELP`,
+      `PLAN_FILE_CYCLE_KIND_HELP`), which is the tree the CR holds up as exemplary — so getting
+      this wrong would indict the registrar it is arguing for.
+- [ ] Where §S3 needs the help TEXT (not merely its presence), a non-literal value is RESOLVED by
+      importing the module and reading the constant — the mechanism
+      `tests/client/test_cr054_verb_surface_lift.py:188` (`_load_module_by_path`) already provides.
+      A `Name`/`BinOp`/f-string help is not exempt from §S3; it is resolved, or the CR states why not.
 - [ ] The census asserts the client count (5) and a per-client minimum flag count, so a walker that
       silently reaches nothing cannot pass.
 - [ ] The failure message enumerates every offender as `file:line  --flag`.
@@ -185,24 +233,51 @@ rule generalised, since a flag declared without `choices=` has nowhere else to t
 - [ ] A flag declared with no `choices=` whose value comes from a server-owned closed vocabulary
       names that vocabulary in its help text — the CR-CRU-127 §S6 rule, asserted generally rather
       than per-CR. The vocabularies in scope are enumerated in the implementation, not guessed.
+- [ ] **A value-taking flag does not describe itself as a switch** (added by gap analysis
+      2026-09-13, DRIFT-3 — the finding that the CR's own mechanism was blind to more flags than it
+      fixes). MEASURED: **19 `--agent` declarations carry help describing the INGEST SIDE-EFFECT
+      rather than the flag** — `"If set, ingest surefire (compile-fail → /api/v2/runs/compile)"`,
+      `"If set, ingest the declared run's junit result"`, and 17 more across bun (3), mvn (8),
+      python (3) and rust (5). Every one of them PASSES a presence census, and passes all three
+      refinements above: non-empty ✓, not a name-echo ✓, no closed vocabulary to name ✓. So 19
+      flags — MORE than the 18 this CR repairs — describe the wrong thing and the census cannot
+      see it.
+      The check is mechanical and narrow: a flag with **no `action=`** takes a VALUE, so help that
+      opens `"If set"` is describing a boolean the flag is not. Those 19 are pre-existing debt and
+      repairing them is NOT in this CR (that would be the 338-string rewrite the non-goals refuse);
+      the AC is that the census REFUSES A NEW ONE, with the 19 recorded as a named, dated
+      exemption ceiling that may only SHRINK — the `PRE_CR_ASSERTION_RESIDUE` shape
+      (`tests/project-namespace-tripwire.test.ts:504-509`), which CR-CRU-127's VERIFY proved is the
+      pattern that stops a guard being disarmed by raising its own ceiling.
 
 ## Estimated size
 
-S — one cycle. 18 help strings plus one derived census test. The census is the durable half; the 18
-strings are the one-time debt it stops accruing.
+S — one cycle. 18 help strings plus one derived census test, the census being the durable half.
+Unchanged by the gap analysis: DRIFT-2 and DRIFT-3 add checks to a test that has to be written
+either way, DRIFT-4 REMOVES work by reusing an existing scaffold, and DRIFT-1 replaces an
+impossible "reuse the existing wording" with a nomination — a decision, not a build. The one real
+addition is the 19-entry shrink-only exemption ceiling for DRIFT-3.
 
 ## Risk
 
-- **A presence check can be satisfied by a useless string.** §S3's three mechanical refinements
-  (non-empty, not a name-echo, names a closed vocabulary) narrow that without pretending to grade
-  prose. Stated as a known limit rather than left as an implied guarantee.
+- **A presence check can be satisfied by a useless string, and that is MEASURED at 19 flags, not
+  hypothetical.** §S3's refinements (non-empty, not a name-echo, names a closed vocabulary, and —
+  added by gap analysis — a value-taking flag not described as a switch) narrow it without
+  pretending to grade prose. The residual gap is stated in §S3 rather than implied.
+- **The census's own walker is a correctness risk, not just the flags it measures** (DRIFT-2). 18
+  declarations pass a non-literal `help=`, which is exactly the count of real offenders — so a
+  walker that conflates "no `help=`" with "help is not a literal" produces the right TOTAL from
+  entirely wrong members. Mutation-proving the census must therefore include stripping a
+  NON-literal help constant, not only a literal one.
 - **`mvn` holds 10 of the 18**, and several are compose/goal flags whose semantics live in that
   stack's own tooling rather than in Crucible. The wording must come from what the flag actually
   does — reading the code that consumes it, not from the flag's name.
 
 ## Non-goals
 
-- Grading the QUALITY of existing help text, or rewriting the 327 flags that already have some.
+- Grading the QUALITY of existing help text, or rewriting the **338** flags that already have some
+  (corrected from "327" by the 2026-09-13 re-measurement: 374 option-bearing declarations = 338
+  literal + 18 non-literal + 18 absent).
 - Lifting hand-rolled flags into the shared registrar. The correlation measured above argues for it,
   but that is a large refactor across five clients and belongs to the registrar-parity family
   (CR-CRU-075's), not to a documentation census. **Recorded here as the measured argument FOR that
@@ -210,3 +285,68 @@ strings are the one-time debt it stops accruing.
 - Changing any flag's name, default, requiredness or behaviour. This CR adds description only.
 - The per-verb `help[]` next-step templates — already enforced by
   `tests/client/test_bun_crucible_axi_conventions.py` and out of scope.
+
+## Gap analysis (orchestrator, 2026-09-13)
+
+Performed by the orchestrator. Not delegated.
+
+### Step 0 — baseline
+
+Python fleet at `4ff59a8`: **1813 pass / 0 fail / 1 pending across 87 files**, `PY_EXIT=0`;
+TypeScript gate exit 0. These are the suites this CR touches — the whole client fleet surface plus
+the guards that read it.
+
+**Recorded against myself:** I ran the FULL two-stack `pre-merge-gate` (4,179 tests, ~12 minutes)
+to obtain this, for the third time in one session, when the only changes since the last green gate
+at `b8d83bc` were three DOCS commits. Step 0 asks for *"the suites the CR touches"*; the
+README-as-fixture risk justified the roadmap suites, not the entire fleet twice. The figures below
+are all STATIC measurements and needed no run at all. **Rule for next time: a docs-only delta
+re-baselines the suites that read those docs, not the gate.**
+
+### Findings
+
+| # | Dim | Finding | Fix scope | Blocking? |
+|---|---|---|---|---|
+| DRIFT-1 | 2 | §S1's *"the added wording is byte-identical to that existing description — asserted for `--agent`"* is UNSATISFIABLE: 60 `--agent` declarations carry **22 distinct help values**, ~8 of them genuine competing wordings. There is no single existing description to be identical to. | SPEC_UPDATE | **Yes** — corrected: the wording is NOMINATED |
+| DRIFT-2 | 2 | **18 of 374** declarations pass a NON-literal `help=` (10 `ast.Name`, 4 `BinOp`, 4 f-string; 6 of them in `_crucible_axi.py`). A `isinstance(ast.Constant)` census reports 18 false offenders against a real count of 18 — the right total from entirely wrong members. | SPEC_UPDATE | **Yes** — the census asserts PRESENCE, and resolves non-literals via `_load_module_by_path` |
+| DRIFT-3 | 7 | **19** `--agent` declarations describe the INGEST SIDE-EFFECT, not the flag (`"If set, ingest surefire …"`). All pass presence AND all three original §S3 refinements. The CR's mechanism was blind to more flags than the CR repairs. | SPEC_UPDATE | **Yes** — fourth mechanical check added; the 19 become a shrink-only ceiling |
+| DRIFT-4 | 4 | The §S2 scaffold already exists: `CLIENT_FILES`/`AXI_MODULE_PATH`/`EXPECTED_CLIENT_COUNT = 5` (`test_client_tier_surface.py:107-125`) and `_load_module_by_path` (`test_cr054_verb_surface_lift.py:188`); **six suites already AST-walk `add_argument`**. | SPEC_UPDATE (reuse) | No — REMOVES work |
+| DRIFT-5 | 3 | The spec's *"six of the 18 are `--agent`, a flag that is REQUIRED"* is CONFIRMED and understated: all six are literally `required=True` — `auto-ingest` ×4 (bun `:2161`, mvn `:2131`, python `:1524`, rust `:2525`), `pre-merge-gate` (mvn `:2152`), one gate verb (rust `:2538`). A mandatory flag with no description at all. | none (claim verified) | No |
+| DRIFT-6 | 16 | Inverse blast radius: **127 citations point into client files**, but only **3 shift** — and one is MACHINE-CHECKED: `clients/_crucible_axi.py:1555` cites `clients/python-crucible.py:1555-1576` (`_next_start_help`), and python's insertion point `:1524` sits above it. That entry is in `test_cr092_next_decision_resolver.py`'s guard and was re-pinned by CR-CRU-127's GREEN hours earlier. | close-out step | No |
+| DRIFT-7 | 2 | The non-goals cited "327 flags that already have some" — the measured figure is **338** (374 = 338 literal + 18 non-literal + 18 absent). | SPEC_UPDATE | No — corrected |
+
+Dimension 3 (bounded surface): **N/A** — no rendered or fixed-width surface; the closest thing is
+argparse's own wrapping, and CR-CRU-127 already established the defence (pin `COLUMNS`; never
+normalise a hyphen away). Dimension 5 (design-lineage): **N/A** — nothing is claimed dead.
+Dimension 6 (public-symbol removal): **N/A** — the CR adds description only; no flag, name, default
+or requiredness changes.
+
+### Verdict
+
+**SPEC_UPDATE_NEEDED → now READY.** Three blocking findings (DRIFT-1, DRIFT-2, DRIFT-3) are
+corrected above; DRIFT-4 removes work rather than adding it; DRIFT-5 confirms a claim; DRIFT-6 and
+DRIFT-7 are a close-out step and a figure correction. Size stands at S / one cycle.
+
+**The finding worth carrying out of this analysis:** every one of the three blocking findings is a
+case of the CR's own MECHANISM being wrong rather than its target. The 18 undescribed flags were
+measured correctly on 2026-09-12 and are still exactly right. What was wrong was (1) assuming a
+canonical wording existed to copy, (2) assuming `help=` is always a literal, and (3) assuming three
+refinements covered the presence-vs-usefulness gap when the gap is 19 flags wide. A census is only
+as good as the walker, and the walker is the part nobody reviews.
+
+### Close-out steps (planned ONCE, not per cycle)
+
+- **Re-pin the machine-checked `_next_start_help` citation** (DRIFT-6): `clients/_crucible_axi.py`'s
+  docstring citing `clients/python-crucible.py:1555-1576` drifts when `help=` is added at python
+  `:1524`. LOCATE the construct at HEAD; never add an offset. The sibling entries in
+  `test_cr092_next_decision_resolver.py`'s table get re-measured in the same pass.
+- **Re-measure the `clients` prose-citation head**, currently **828** (`src` 614, `public` 477). This
+  CR adds provenance comments to five clients, so the head moves by however many `CR-CRU-128`
+  literals land in `clients/**.py`. MEASURE with the guard's own machinery; never transcribe. Note
+  that a stale head fails TWICE — the tripwire and its cascade through
+  `tests/help-surface-order-independence.test.ts:190`, whose `HELP_FILE` IS the tripwire file.
+- **Do NOT re-pin the 3 informal shifted citations** beyond the machine-checked one; the standing
+  ruling (CR-CRU-126, CR-CRU-125) is that informal `path:line` prose is not re-pinned wholesale.
+- **A CR literal in a Python assertion MESSAGE counts as residue** (CR-CRU-127's FIX, the hard way).
+  Keep `CR-CRU-128` out of `assertEqual(...)` messages in the new census test; docstrings are exempt
+  prose.
