@@ -724,8 +724,16 @@ report_unplaceable_crs() {
 # Returns non-zero when the report failed, having printed the warning AND the
 # single-line recovery command carrying the tag's sha (and its provenance, so
 # the recovery records the same release, not a poorer one). Whether that is
-# fatal is the CALLER's call: after publication it never is (report_release
-# swallows it), while the backfill counts it into its tally.
+# fatal is the CALLER's call, and CR-CRU-130 §S2 gave that call ONE exception
+# which is named HERE, beside the status that raises it, so the two halves of
+# the rule cannot be read apart:
+#   - an ORDINARY report failure is not fatal after publication (report_release
+#     swallows it), while the backfill counts it into its tally;
+#   - EXIT_UNDATED is the exception: report_release converts it to EXIT_ERROR.
+#     The tolerance exists so a REPORTING failure cannot unpublish a release;
+#     it does not exist so a DEGRADED RECORD can pass for a good one. A store
+#     holding NO record for this release is recoverable, while a store holding
+#     an UNDATED one is not — the ship date is gone the moment nobody is told.
 #
 # CR-CRU-081 §S3 — the SAME single path also carries the OPT-IN repair. With
 # --repair-provenance the client is told to CORRECT the record the server
