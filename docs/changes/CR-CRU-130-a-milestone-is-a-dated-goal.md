@@ -123,6 +123,28 @@ So the unified record keeps `waves` while the release is OUTSTANDING — it is t
 proposal needs — and delivery does not carry it forward. `crs` remains the authoritative expression
 of the bundling, exactly as it is today.
 
+**A ship settles a label even when its date is unknown.** Measured 2026-09-13 while implementing
+this section: a release can be posted with NO ship date, from three independent layers —
+`scripts/release.sh:733-734` adds `--released-at` only `if [ -n "$ship_date" ]` while
+`release_ship_date` (`:405-407`) prints nothing and exits 0 whenever git cannot resolve the sha (a
+shallow clone, an unfetched tag object); all five clients declare `--released-at` optional and the
+shared payload builder writes it only `if released_at` (`clients/_crucible_axi.py:5423-5424`); and
+the route never requires it, by CR-CRU-080 §S4's own rule that a pre-§S4 release carries neither
+date.
+
+Before this CR that was harmless, because a ship consumed its proposal by TYPE and needed no date to
+do it. Deriving settlement from the date alone would therefore LOSE the cases where the date is
+missing: the record would keep its target, gain no date, and stay a live plan — so
+`GET …/release-proposals` would keep publishing a shipped label and `cr-plan` would keep accepting
+new CRs into it. A 404 would become a 200 in production, reachable from any shallow clone.
+
+So a release is a PLAN while it has declared a target, has no delivery date, **and carries no ship's
+evidence**; a record holding a commit, `crs` or `packages` has shipped whether or not anyone could
+date it. `deliveredAt` stays honestly ABSENT in that case — nothing is invented, and "derived from
+delivery" becomes "derived from delivery or its evidence". The alternative, refusing a dateless
+release at the route, was rejected: CR-CRU-080 §S4 documents that shape as legitimate and §S0 freezes
+client-visible answers, so refusing it would be this CR overreaching.
+
 ### §S3 The release workflow stays a workflow
 
 Release keeps what makes it the key type: propose a target, plan waves into it, ship it, record the
@@ -255,6 +277,19 @@ exempted from it — an exemption would leave the next open vocabulary unguarded
       target, the predecessor auditable with the old one), not as a mechanism.
 - [ ] A revision is not a delivery: after revising a target, nothing for that label reads as met and
       the releases read stays empty for it.
+- [ ] A DATELESS ship settles its label: propose a label, ship it with a commit, `crs` and
+      `packages` but NO date, then the gate REFUSES it, `GET …/release-proposals` has dropped it,
+      `/releases` serves it, and `deliveredAt` is ABSENT rather than invented. This is the hole the
+      evidence clause closes and it is reachable in production from any shallow clone.
+- [ ] ONE predicate decides plan-hood, defined once and used by both reads, the ship and the
+      filter — not two near-identical copies in different files.
+- [ ] The legacy asymmetry is PINNED, not incidental: a dateless release appears in `/releases` AND
+      under `?type=release&delivered=false`, because "settled history" and "carries no delivery
+      date" are different questions that are both true of it. Both reads document the other.
+- [ ] `scripts/release.sh`: a `release_ship_date` that resolves nothing is FATAL to
+      `emit_release_milestone`, naming the sha it could not date and the likely cause — and it is
+      not swallowed by `report_release`'s post-publication tolerance, which exists so a reporting
+      failure cannot unpublish a release, not so a degraded record can pass for a good one.
 
 **Superseded tests — the two-type model**
 - [ ] Every test whose SUBJECT is the retired two-type model is DELETED, not inverted, each naming
