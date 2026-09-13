@@ -5,7 +5,7 @@
 **Priority:** P1
 **Depends on:** CR-CRU-074, CR-CRU-080, CR-CRU-081, CR-CRU-086, CR-CRU-091
 **Labels:** fix, server, store, data-integrity
-**Phase:** Wave 7 (0.3.0)
+**Phase:** Wave 6 (0.2.0)
 **Design reference:** CR-CRU-074 §S3 made releases first-class on the WIRE; this makes them first-class
 in the STORE.
 

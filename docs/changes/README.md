@@ -134,7 +134,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-126](CR-CRU-126-a-plan-read-scans-every-event-once-per-plan.md) | a plan read scans every event, once per plan | bugfix | COMPLETED (0.2.0) | — | 6 (0.2.0) |
 | [CR-CRU-127](CR-CRU-127-a-filed-cycle-declares-its-kind.md) | a filed cycle declares its kind | bugfix | COMPLETED (0.2.0) | 011, 107, 121, 124 | 6 (0.2.0) |
 | [CR-CRU-128](CR-CRU-128-every-flag-describes-itself.md) | every flag describes itself | patch | COMPLETED (0.2.0) | 030, 075, 127 | 6 (0.2.0) |
-| [CR-CRU-129](CR-CRU-129-a-release-is-a-record-not-an-event.md) | a release is a record, not an event | fix | PENDING (0.3.0) | 074, 080, 081, 086, 091 | 7 (0.3.0) |
+| [CR-CRU-129](CR-CRU-129-a-release-is-a-record-not-an-event.md) | a release is a record, not an event | fix | PENDING (0.2.0) | 074, 080, 081, 086, 091 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
