@@ -457,6 +457,14 @@ def _drive_cycle_add_help(client):
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
         env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
         env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # COLUMNS is PINNED (added 2026-09-13, CR-CRU-127 C2 FIX) for the same
+        # reason the sibling `plan-file` driver pins it, stated there in full:
+        # argparse wraps with `textwrap`'s `break_on_hyphens=True`, so an
+        # unpinned width can split `red-green` across a line boundary and the
+        # kind-naming assertion below would read `red- green`. A fixed wide
+        # terminal removes the wrap; a `"- " -> "-"` rewrite would hide a real
+        # one.
+        env["COLUMNS"] = "200"
         _HELP_CACHE[client] = subprocess.run(
             [sys.executable, str(CLIENT_FILES[client]), VERB, "--help"],
             cwd=_PROJECT_DIR, env=env, capture_output=True, text=True,

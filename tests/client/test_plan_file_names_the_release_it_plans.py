@@ -177,6 +177,25 @@ def _drive_plan_file_help(client):
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
         env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
         env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # COLUMNS is PINNED (added 2026-09-13, CR-CRU-127 C2 FIX) so argparse's
+        # wrap width is deterministic across terminals and CI. It is not
+        # cosmetic: argparse wraps help through `textwrap` with
+        # `break_on_hyphens=True`, so a hyphenated kind name (`red-green`) may
+        # be split across a line boundary and read back as `red- green` once
+        # the continuation lines are joined. The §S6 assertions below ask
+        # whether the help NAMES each kind, and whitespace normalisation alone
+        # cannot undo that split — while a `"- " -> "-"` rewrite would let a
+        # genuine `red- green` regression pass. A wide, fixed terminal removes
+        # the wrap instead of papering over it, which is the same defence the
+        # tripwire's `printedLiterals` and the fleet census already rely on.
+        #
+        # The hazard is MEASURED, not theoretical: at the 80-column fallback a
+        # non-tty subprocess gets when COLUMNS is unset, this very help already
+        # splits `cr-plan` into `cr-` / `plan` inside `--cr`'s entry. No
+        # assertion reads that word today, which is the only reason it has
+        # never been red — the split is one reworded sentence away from landing
+        # on a kind name instead.
+        env["COLUMNS"] = "200"
         _HELP_CACHE[client] = subprocess.run(
             [sys.executable, str(CLIENT_FILES[client]), VERB, "--help"],
             cwd=_PROJECT_DIR, env=env, capture_output=True, text=True,

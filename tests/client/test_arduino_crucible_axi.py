@@ -1568,7 +1568,7 @@ class ArduinoCruciblePlanFileCycleFlagTest(_BaseArduinoAxiTest):
             [{"label": "a", "kind": "verify"},
              {"label": "b", "kind": "fix"},
              {"label": "c", "kind": "red-green"}],
-            f"AC1 + CR-CRU-127 §S1/§S3: three `--cycle` occurrences post three "
+            f"AC1 + §S1/§S3: three `--cycle` occurrences post three "
             f"cycles, in the order given, unsplit, each carrying its own "
             f"declared kind; got payload={payload!r}")
 

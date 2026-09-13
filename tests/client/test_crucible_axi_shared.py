@@ -1504,7 +1504,7 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
             [{"label": "a", "kind": "verify"},
              {"label": "b", "kind": "fix"},
              {"label": "c", "kind": "red-green"}],
-            f"AC1 + CR-CRU-127 §S1/§S3: three `--cycle` occurrences post three "
+            f"AC1 + §S1/§S3: three `--cycle` occurrences post three "
             f"cycles, in the order given, unsplit, each carrying the kind "
             f"declared at ITS position; got payload={posts[0][1]!r}")
 
@@ -1657,12 +1657,29 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
         one space is a mis-filed plan nobody asked for, and `" "` arrives the
         same way `""` does — from an unset variable). The strip that decides
         that is a TEST only: a value that is kept still files byte-for-byte, so
-        `--cycle " a "` posts `' a '` with its spaces intact (AC2)."""
+        `--cycle " a "` posts `' a '` with its spaces intact (AC2).
+
+        The refusal CODE is asserted per variant (added 2026-09-13, CR-CRU-127
+        C2 FIX) and not just the refusal SHAPE: each of these argv shapes also
+        declares no kind and no matching kind count, so `cycle-kind-required`
+        and `cycle-kind-count-mismatch` would satisfy a generic refusal check
+        just as well. Naming `cycle-list-empty` here is what makes the order
+        contract — a call with no cycle in it is answered about the CYCLE, not
+        about the kind it has nothing to pair with — hold across all three
+        whitespace shapes rather than resting on the single empty-string
+        sibling above."""
         for blank in (" ", "\t", "   \n"):
             with self.subTest(refused=blank):
                 code, out, err, posts = self._run(cycle=[blank])
                 self._assert_structured_refusal(code, out, err, posts,
                                                 ac=f"whitespace-only {blank!r}")
+                self.assertIn(
+                    "cycle-list-empty", err,
+                    f"a `--cycle` naming no cycle is answered as "
+                    f"`cycle-list-empty`, never as the absent-kind or "
+                    f"count-mismatch refusal — there is nothing for a kind to "
+                    f"pair WITH, so naming the kind would send the caller to "
+                    f"fix the wrong flag; got stderr={err!r}")
         code, out, err, posts = self._run(cycle=[" a "], cycle_kind=["fix"])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         self.assertEqual(

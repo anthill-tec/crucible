@@ -1648,10 +1648,43 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // child reported `failed: []` (:190 there). A stale head here therefore
 // fails there too, at one remove. That file is CORRECT and fires for the
 // right reason; it needed no change and got none.
+//
+// UPDATED 2026-09-13 by CR-CRU-127 — moved `clients` 815 -> 828, measured at
+// close-out by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL) over the working tree, never transcribed
+// from the VERIFY report that first reported the drift, and re-measured AFTER
+// the CR's last content edit because the same fix round rewords six assertion
+// messages under `tests/client/`. Those rewordings move no head — `tests/` is
+// not one of the three trees below — but the measurement is what establishes
+// that rather than the reasoning.
+//
+// The +13 is ONE file, clients/_crucible_axi.py 183 -> 196: the fleet's shared
+// shim, which is where §S1 put the SINGLE declaration of `--cycle-kind` and
+// the single composition of the payload cycles, so the five stack clients
+// delegate and none of them moves (each re-measured unchanged —
+// arduino 106, mvn 135, python 122, rust 126, bun 142, toon 1).
+//
+// NINE of the thirteen name this CR: `--cycle-kind`'s one help text (:682) and
+// its one declaration site (:5367), the three refusals the mandate adds
+// (:1254), the per-cycle kind on the composed payload (:1268, :2974), §S4a's
+// withdrawal of `--cycles` from filing (:1282, :2876), the pairing rule the
+// resolver now states (:2864) and the ruling that the kind is REQUIRED with no
+// client-side default (:2937) — the defect itself, which is a route-side
+// default silently mislabelling a cycle. The other FOUR are the lineage those
+// same new blocks cite, which is why they are prose and not decoration:
+// CR-CRU-107 (the repeatable `--cycle` this mandate pairs with), CR-CRU-121,
+// CR-CRU-124 and CR-CRU-078, one occurrence each.
+//
+// `src` and `public` are untouched by this CR and re-measured UNCHANGED at 614
+// and 477 — checked, not assumed, by the same run that produced the 828. The
+// CLI-only ruling of 2026-09-13 is why `src` cannot have moved: the mandate is
+// enforced entirely client-side, so the CR edits no server file at all. All
+// three `develop` floors stay at 512/378/601 — a floor never moves for a
+// re-record.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 614 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 815 },
+  clients: { exts: [".py"], develop: 601, head: 828 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
