@@ -618,4 +618,124 @@ describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this proj
       expect(delivered).toEqual([]);
     },
   );
+
+  // ── THE THIRD CLAUSE OF `RELEASE_IS_A_PLAN`, at the wire ────────────────
+  //
+  // `delivered_at IS NULL AND target_at IS NOT NULL AND <no provenance>` is a
+  // THREE-clause predicate and each clause has to be pinned by something, or
+  // the one nothing covers is free to be deleted. The delivery clause and the
+  // provenance clauses are pinned by the cases above; the TARGET clause was
+  // not, and CR-CRU-130's VERIFY proved it by deleting `target_at IS NOT NULL`
+  // and running the whole suite against the mutant: 2468 tests, the same 9
+  // failures, not one of them caused by the deletion.
+  //
+  // These two cases are the ends of that clause. The first is the shape the
+  // live store cannot exercise — every release it holds carries a `commit`, so
+  // the provenance clause settles them all and the target clause never decides
+  // anything. The second is the shape the provenance clauses must NOT settle.
+
+  test(
+    "a BARE release — a label and nothing else: no target, no date, no commit, no crs, no " +
+      "packages — is SETTLED history and never a live plan, so the gate refuses to plan into it",
+    async () => {
+      boot();
+      const key = await seedProject();
+
+      // The exact payload the shared client builds for `milestone --type
+      // release --label 0.0.9` and no other flag — nothing here is a shape
+      // only a test can reach.
+      const recorded = await post("/api/v2/milestones", {
+        projectKey: key,
+        agentId: ORCH,
+        type: "release",
+        label: "0.0.9",
+      });
+      expect([200, 201]).toContain(recorded.status);
+
+      // NOTHING EVER AIMED IT ANYWHERE, so it was never a plan: a release with
+      // no target is history whose ship nobody dated. Drop the target clause
+      // and these two invert — the label leaves `GET …/releases` (the §S0 wire
+      // change a delivery-only split silently makes) and reappears as a LIVE
+      // plan that CR-CRU-118's gate will admit new CRs into.
+      expect(
+        (await get(`/api/v2/projects/${key}/releases`)).body.releases!.map((r) => r.version),
+      ).toEqual(["0.0.9"]);
+      expect((await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals).toEqual([]);
+
+      // …and that is the consequence, stated where a reader meets it.
+      const refused = await post(`/api/v2/projects/${key}/queue/plan`, {
+        agentId: ORCH,
+        cr: "CR-AUTH-9",
+        release: "0.0.9",
+        wave: 1,
+        title: "planned into a release that is settled history",
+      });
+      expect(refused.status).toBe(404);
+      expect(refused.body.error).toBe(
+        `release 0.0.9 has no live proposal — it is not a plannable target`,
+      );
+    },
+  );
+
+  test(
+    "an EMPTY `crs` is the ABSENCE of a shipment fact, not evidence of one: a targeted release " +
+      "carrying `crs: []` stays a LIVE plan, and a later empty-handed write does not deliver it",
+    async () => {
+      const server = boot();
+      const key = await seedProject();
+
+      // Reachable only by a raw API caller — every production path avoids it —
+      // which is exactly why the predicate has to decide it rather than trust
+      // the callers. The route keeps an empty `crs` deliberately (CR-CRU-080
+      // §S4: "it says the reporter looked"), so it arrives here intact.
+      const planned = await post("/api/v2/milestones", {
+        projectKey: key,
+        agentId: ORCH,
+        type: "release",
+        label: "0.7.0",
+        targetAt: TARGET_AT,
+        crs: [],
+      });
+      expect([200, 201]).toContain(planned.status);
+
+      // AN EMPTY SET SHIPPED NOTHING. Were the KEY's presence evidence rather
+      // than its LENGTH, this release would classify as settled history the
+      // moment it was declared and its label would never be plannable.
+      const proposals = (await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals!;
+      expect(proposals.map((p) => p.label)).toEqual(["0.7.0"]);
+      expect(proposals[0]!.targetAt).toBe(TARGET_AT);
+      expect((await get(`/api/v2/projects/${key}/releases`)).body.releases).toEqual([]);
+      const plannedId = server.store.listReleaseProposals(key)[0]!.id;
+
+      // AND THE WRITE SIDE AGREES ON THE OUTCOME, which is the property that
+      // matters — not on the spelling of its predicate. A second empty-handed
+      // write for this label MERGES onto the record the first one planned (ONE
+      // record, §S2) and that record stays a live plan carrying no delivery,
+      // because the read above still refuses to call an empty set evidence.
+      // Were the write narrowed to mirror the read literally, this write would
+      // fork the label into a second row and put it in BOTH reads at once.
+      const empty = await post("/api/v2/milestones", {
+        projectKey: key,
+        agentId: ORCH,
+        type: "release",
+        label: "0.7.0",
+        crs: [],
+      });
+      expect([200, 201]).toContain(empty.status);
+
+      expect(recordsFor(server.store, key, "0.7.0").length).toBe(1);
+      const stillPlanned = server.store.listReleaseProposals(key);
+      expect(stillPlanned.map((p) => p.id)).toEqual([plannedId]);
+      expect(stillPlanned[0]!.deliveredAt).toBeUndefined();
+      expect((await get(`/api/v2/projects/${key}/releases`)).body.releases).toEqual([]);
+      const admitted = await post(`/api/v2/projects/${key}/queue/plan`, {
+        agentId: ORCH,
+        cr: "CR-AUTH-7",
+        release: "0.7.0",
+        wave: 1,
+        title: "planned into a release that has shipped nothing",
+      });
+      expect(admitted.status).toBe(200);
+    },
+  );
 });

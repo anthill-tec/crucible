@@ -1216,8 +1216,23 @@ const GATE_ROWS = recordProjection("gates", "gate");
  *     leave its label LIVE: `GET …/release-proposals` would keep publishing a
  *     release that has already shipped and CR-CRU-118's gate would keep
  *     admitting new CRs into it. So the EVIDENCE ends plan-hood too — a
- *     `commit`, a `crs` set or a `packages` list are facts about a shipment
- *     that happened, and none of them can be true of something still planned.
+ *     `commit`, a NON-EMPTY `crs` set or a NON-EMPTY `packages` list are facts
+ *     about a shipment that happened, and none of them can be true of
+ *     something still planned.
+ *
+ *     NON-EMPTY is load-bearing, and the array LENGTH is what is read rather
+ *     than the key's presence: an EMPTY `crs` or `packages` is the ABSENCE of
+ *     a shipment fact, not a quiet one, so `{targetAt, crs: []}` stays a PLAN
+ *     instead of inverting into settled history on a key that says nothing.
+ *     `json_array_length(payload, '$.x')` is the two-argument form on purpose
+ *     — it answers 0 for an absent key, a null and a non-array alike, so a
+ *     malformed payload degrades to "no evidence" rather than raising.
+ *
+ *     The write side (`ships`, in `recordMilestoneEvent`) is deliberately NOT
+ *     spelled the same way, and that was measured rather than assumed: see it
+ *     for why a literal mirror forks one record into two. What the two halves
+ *     share is the OUTCOME — an empty-handed write merges onto the plan and
+ *     the row this predicate still calls a plan stays one.
  *     `deliveredAt` stays honestly ABSENT in that case rather than being
  *     invented from the ingest instant: the record then says "it shipped, and
  *     when is unknown", which is exactly what is true of it.
@@ -1239,8 +1254,8 @@ const GATE_ROWS = recordProjection("gates", "gate");
 const RELEASE_IS_A_PLAN =
   `delivered_at IS NULL AND target_at IS NOT NULL
    AND json_extract(payload, '$.commit') IS NULL
-   AND json_extract(payload, '$.crs') IS NULL
-   AND json_extract(payload, '$.packages') IS NULL`;
+   AND IFNULL(json_array_length(payload, '$.crs'), 0) = 0
+   AND IFNULL(json_array_length(payload, '$.packages'), 0) = 0`;
 
 /** One record the migration looked at, and what became of it. */
 export interface MilestoneRecordMigrationEntry {
@@ -3180,6 +3195,20 @@ export class Store {
     // Scoped to a ship on purpose: a write carrying neither a date nor any
     // provenance is a PLAN, and the one-live-plan rule belongs to
     // `recordReleaseProposal`, which is the door that owns it.
+    //
+    // AND NOT THE READ PREDICATE'S LITERAL MIRROR, ruled 2026-09-13 after it
+    // was measured. `RELEASE_IS_A_PLAN` reads an EMPTY `crs`/`packages` as no
+    // evidence; the presence test here is deliberately kept wider, because the
+    // alternative to delivering is not doing nothing — it is INSERTING A
+    // SECOND ROW. Narrowing this to the array LENGTH turns a raw
+    // `{label, packages: []}` beside a live plan from one record into two, and
+    // puts that one label in `GET …/releases` AND `GET …/release-proposals` at
+    // the same time (measured: 2 records / proposals [0.9.0] / releases
+    // [0.9.0], against 1 / [0.9.0] / [] as it stands). Left wide, the empty
+    // write MERGES onto the plan and the row stays a plan, because the READ
+    // still refuses to call an empty set evidence. The two halves have to
+    // agree on the OUTCOME — one record, correctly classified — not on the
+    // spelling of their predicates.
     const ships =
       deliveredAt !== undefined ||
       meta?.commit !== undefined ||

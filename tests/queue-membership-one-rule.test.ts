@@ -343,7 +343,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
           agentId: ORCH,
           type: "release",
           label: "0.1.0",
-          crs: [],
+          crs: ["CR-SHIPPED-1"],
         });
         expect([200, 201]).toContain(shipped.status);
         const proposals = await get(`/api/v2/projects/${key}/release-proposals`);
