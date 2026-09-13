@@ -80,6 +80,14 @@ provides.
 The guard that replaces them is a test: retention may only ever reach kinds on a named disposable
 list, and adding a structural kind to that list fails.
 
+**And the cap itself stops being a constant in source.** `DEFAULT_RETENTION = 100`
+(`src/store.ts:688`) is a magic number compiled into the store, standing in whenever a project
+declares no cap. A limit is CONFIGURATION: the per-project value already is (`projects.retention`,
+`ProjectPatch.retention`), and the fallback must resolve from the same place rather than from a
+literal a reader has to go find. The tests that prove S2 therefore assert the BEHAVIOUR at whatever
+cap the fixture configured and pin no number, because a test that hardcodes the limit it checks
+freezes the same defect from the other side.
+
 ### §S3 Every read moves with the data
 
 The consumers, enumerated so none is discovered by its absence:
@@ -99,8 +107,11 @@ Wire shapes do not change. One CLIENT read does, and must: `cr_merged_crs` does 
 (`clients/_crucible_axi.py:1674`) because `GET /api/v2/events` accepts only a `limit`
 (`src/v2.ts:3748`), and filters client-side. Its comment claims 5,000 is *"far above any real
 project's milestone count"*, but the window counts ALL events: at 2,013 rows it works by luck, and
-1,957 of those rows are telemetry. A milestones read that can be QUERIED by type retires both the
-scan and its false premise.
+1,957 of those rows are telemetry.
+
+The constant is **DELETED, not resized.** Raising it is the same defect with a bigger number, and a
+bounded window over unbounded content cannot be fixed by choosing a larger bound. Once milestones
+are records the read is a query by type, so there is no window to size and no new limit to declare.
 
 ### §S4 The replay may not quietly shrink what it replaces
 
@@ -133,12 +144,19 @@ run reported 15 unplaceable without saying which kind they were.
 - [ ] Telemetry still prunes: a project past its cap sheds test events exactly as today, so this CR
       does not silently disable retention.
 - [ ] `LIVE_GATE` and `LIVE_PROPOSAL` are removed, and no read depends on them.
+- [ ] No retention limit is a literal in source: `DEFAULT_RETENTION` is gone and the fallback
+      resolves from configuration. Asserted by CONSTRUCTION - a test scans the retention path for a
+      numeric literal standing in for a cap and fails on one, so the next author cannot quietly
+      reintroduce it.
+- [ ] The S2 tests pin no cap VALUE: they configure a cap through the project surface and derive
+      every expected count from what they read back, so the suite still passes when a project's
+      configured cap changes.
 
 **§S3**
 - [ ] Each consumer in the §S3 table reads the new tables — asserted per site, not as one aggregate
       "the reads were updated".
 - [ ] `cr_merged_crs` QUERIES milestones by type instead of scanning newest-N events;
-      `QUEUE_EVENTS_LIMIT` and its premise are retired.
+      `QUEUE_EVENTS_LIMIT` is DELETED, not raised, and no replacement scan depth is introduced.
 - [ ] Mutation: a project holding more disposable events than the old 5,000 window still returns
       every `cr-merged` id — the case that silently failed before.
 - [ ] No other client surface changes: the five clients' `milestone` help and wire shapes are
@@ -184,3 +202,9 @@ fixture that proves it.
 - Re-deriving membership for CRs whose `cr-merged` evidence is already evicted.
 - Reworking `plans`, `plan_cycles` or `queue_entries` — those are already records in their own tables,
   which is the shape this CR gives the milestones.
+- The other hardcoded limits the audit found outside this CR's paths: `TOON_MAX_BYTES = 64 * 1024`
+  (`src/v2.ts:155`), `TRUNCATE_LIMIT = 200` (`clients/_crucible_axi.py:500`) and
+  `ROADMAP_LIST_LIMIT = 20` (`clients/_crucible_axi.py:3484`). Same defect class — a limit compiled
+  into source instead of configured — but they govern envelope sizing and list display, not
+  retention, and folding three more surfaces into a data migration is how a migration goes wrong.
+  Recorded as a candidate CR rather than absorbed here.
