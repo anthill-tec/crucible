@@ -640,8 +640,9 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
   // ── AC — and at REAL scale, against a replica of the live store ─────────
 
   test(
-    "at this project's real population — 4 delivered releases and 2 outstanding proposals, " +
-      "neither of which has a partner — every label migrates into exactly one record",
+    "at this project's real population, whatever its size — where a proposal has no matching " +
+      "release and a release has no surviving proposal — every label migrates into exactly " +
+      "one record",
     async () => {
       const taken = liveStoreReplica(scratch("cru130-c2-live-replica-"));
       if ("skip" in taken) {
