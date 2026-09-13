@@ -137,6 +137,109 @@ function recordOfKind(store: Store, key: string, kind: string): string {
   }
 }
 
+/**
+ * THE RETENTION PATH, by name — the two functions that between them decide
+ * what a cap IS and who it evicts. Named rather than scanned for, because a
+ * whole-file scan of `src/store.ts` would be a false-positive machine (the
+ * module is full of legitimate numbers) and would be silenced within a week.
+ *
+ * If either name moves, the scan below FAILS rather than passing over a
+ * function it can no longer find: a guard that quietly stops looking is worse
+ * than no guard.
+ */
+const RETENTION_PATH = ["enforceRetention", "defaultRetention"] as const;
+
+/**
+ * The body of a named function with comments and string CONTENTS removed, so
+ * the scan reads CODE and nothing else. Without this, `CR-CRU-013` in a
+ * comment and a `LIMIT ?` in SQL both read as source the guard must judge.
+ *
+ * Written as one pass rather than as regexes because brace-matching a body
+ * requires knowing where the strings are anyway.
+ */
+function retentionPathCode(source: string, name: string): string {
+  const decl = new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?(?:private\\s+)?(?:static\\s+)?(?:function\\s+)?${name}\\s*\\(`).exec(
+    source,
+  );
+  if (decl === null) {
+    throw new Error(
+      `CR-CRU-129 §S2: src/store.ts declares no \`${name}\`. The constructional guard against a ` +
+        `hardcoded cap is scoped to the retention path BY NAME; a renamed function must be ` +
+        `re-named here, or the scan silently stops guarding anything.`,
+    );
+  }
+  let i = decl.index + decl[0].length - 1;
+  // Step over the parameter list, then to the body's opening brace.
+  let parens = 0;
+  for (; i < source.length; i++) {
+    if (source[i] === "(") parens++;
+    else if (source[i] === ")" && --parens === 0) break;
+  }
+  i = source.indexOf("{", i);
+  expect(i, `no body found for ${name}`).toBeGreaterThan(-1);
+
+  const code: string[] = [];
+  let depth = 0;
+  for (; i < source.length; i++) {
+    const c = source[i]!;
+    const next = source[i + 1];
+    if (c === "/" && next === "/") {
+      i = source.indexOf("\n", i);
+      if (i === -1) break;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      i = source.indexOf("*/", i) + 1;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      for (i++; i < source.length && source[i] !== c; i++) if (source[i] === "\\") i++;
+      continue;
+    }
+    if (c === "`") {
+      for (i++; i < source.length; i++) {
+        if (source[i] === "\\") i++;
+        else if (source[i] === "`") break;
+        else if (source[i] === "$" && source[i + 1] === "{") {
+          // Re-enter code for the interpolation, balanced on its own braces.
+          let inner = 0;
+          for (i++; i < source.length; i++) {
+            if (source[i] === "{") inner++;
+            else if (source[i] === "}" && --inner === 0) break;
+            else code.push(source[i]!);
+          }
+        }
+      }
+      continue;
+    }
+    code.push(c);
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) break;
+  }
+  return code.join("");
+}
+
+/**
+ * A numeric literal is a CAP unless it is an operand of a COMPARISON. That is
+ * the whole rule, and it is the narrowest one that still bites: `overflow <= 0`
+ * and `raw > 0` are boundary tests, while anything a cap could be ASSIGNED
+ * from — `?? 100`, `= 100`, `return 100`, `? raw : 100` — is a limit compiled
+ * into the source, which is exactly what this CR deleted.
+ */
+const COMPARISON_OPERAND = /(?:<|>|<=|>=|==|===|!=|!==)\s*$/;
+
+function capLiteralsIn(code: string): string[] {
+  const found: string[] = [];
+  const literal = /(?<![\w$.])(?:0[xXbBoO][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)/g;
+  for (const match of code.matchAll(literal)) {
+    const before = code.slice(Math.max(0, match.index - 8), match.index);
+    if (COMPARISON_OPERAND.test(before)) continue;
+    const from = Math.max(0, match.index - 40);
+    found.push(code.slice(from, match.index + match[0].length + 20).replace(/\s+/g, " ").trim());
+  }
+  return found;
+}
+
 describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () => {
   const restoreEnv: Array<[string, string | undefined]> = [];
 
@@ -299,6 +402,44 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
       new RegExp(`const\\s+${name}\\b`).test(source),
     );
     expect(declared).toEqual([]);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // AC — "No retention limit is a literal in source ... Asserted by
+  // CONSTRUCTION: a test scans the retention path for a numeric literal
+  // standing in for a cap and fails on one, so the next author cannot quietly
+  // reintroduce it."
+  //
+  // The behavioural tests above cannot do this job. Each of them CONFIGURES a
+  // cap (9, 4, 30, 7) and asserts the store honoured it — so a literal
+  // reintroduced as the UNCONFIGURED fallback (`?? 100`) is never on any path
+  // they walk, and every one of them stays green while the defect is back.
+  // This test is the only thing that reads the source itself.
+  // ─────────────────────────────────────────────────────────────────────────
+  test("the retention path contains no numeric literal standing in for a cap — the fallback resolves from configuration or resolves to nothing", () => {
+    const source = readFileSync("src/store.ts", "utf8");
+    // Non-vacuity: the scan really did read code, and really can see a number.
+    const bodies = RETENTION_PATH.map((name) => retentionPathCode(source, name));
+    for (const [index, body] of bodies.entries()) {
+      expect(body.length, `${RETENTION_PATH[index]} scanned as empty`).toBeGreaterThan(40);
+    }
+    expect(capLiteralsIn("const cap = project.retention ?? 100;")).not.toEqual([]);
+
+    const offenders = RETENTION_PATH.flatMap((name, index) =>
+      capLiteralsIn(bodies[index]!).map((context) => `${name}: ${context}`),
+    );
+    if (offenders.length > 0) {
+      throw new Error(
+        `CR-CRU-129 §S2: a numeric literal is standing in for a retention cap in the retention ` +
+          `path — ${offenders.join(" | ")}. A limit is CONFIGURATION, never a constant in ` +
+          `source: the per-project value is \`projects.retention\` and its fallback is ` +
+          `$CRUCIBLE_DEFAULT_RETENTION. \`DEFAULT_RETENTION = 100\` was deleted rather than ` +
+          `resized because a literal nobody configured is a cap nobody was told about, and on ` +
+          `2026-09-13 that cap evicted every release this project had ever shipped. An ` +
+          `unconfigured cap must resolve to NO CAP (and say so at boot), not to a number.`,
+      );
+    }
+    expect(offenders).toEqual([]);
   });
 
   // ─────────────────────────────────────────────────────────────────────────
