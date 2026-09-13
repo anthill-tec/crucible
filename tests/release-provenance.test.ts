@@ -3684,6 +3684,22 @@ const LOST_RELEASE_CRS: readonly string[] = STORED_RELEASE_CRS.filter(
  *  superset arm, and the added half of the neither-subset-nor-superset arm. */
 const FOUND_BY_REBUILD_CRS: readonly string[] = ["CR-SHIPPED-70", "CR-SHIPPED-71"];
 
+/**
+ * §S4's discriminator between MEMBERSHIP and SIZE, and the reason it has to
+ * exist: `FOUND_BY_REBUILD_CRS` adds only two ids against nine dropped, so the
+ * mixed-set arm above is still SIZE-DECREASING (53 offered against 60 stored)
+ * and a guard written as `offered.size >= stored.size` passes it unharmed.
+ *
+ * These ids are numerous enough to push the offered set to EXACTLY the stored
+ * size and then PAST it while nine recorded ids are still being dropped —
+ * derived from `LOST_RELEASE_CRS.length`, so the two can never drift apart and
+ * no count here is written twice.
+ */
+const WIDE_REBUILD_FOUND_CRS: readonly string[] = Array.from(
+  { length: LOST_RELEASE_CRS.length + FOUND_BY_REBUILD_CRS.length },
+  (_, i) => `CR-SHIPPED-FOUND-${i + 1}`,
+);
+
 /** §S4's tally, class "landing evidence EVICTED": a release's `crs` NAMES them
  *  — so they demonstrably shipped — yet no landing record survives at any
  *  source (no plan at all, no `cr-merged` record). This is the 2026-09-13
@@ -3969,6 +3985,64 @@ describe("a replay that would SHRINK a stored release's provenance is refused (C
       expect(after.mine.length).toBe(1);
       expect(asBytes(after.mine[0])).toBe(before);
       expect(after.rows.length).toBe(1);
+    },
+  );
+
+  test(
+    "MEMBERSHIP, NEVER SIZE: a derivation that is as large as the stored set — and then larger " +
+      "still — is refused all the same while it drops recorded ids, and names them",
+    async () => {
+      boot();
+      const key = await createProject("replay-membership-not-size");
+      const before = await plantHeldRelease(key, STORED_RELEASE_CRS);
+
+      // The two offers, both dropping the SAME nine recorded ids: one exactly
+      // as large as what is stored, one strictly larger. A guard that compared
+      // SIZES would accept both — that is the whole point of this test, and
+      // the reason the mixed-set arm above cannot stand in for it (53 < 60).
+      const equalSized = [
+        ...REBUILT_RELEASE_CRS,
+        ...WIDE_REBUILD_FOUND_CRS.slice(0, LOST_RELEASE_CRS.length),
+      ];
+      const larger = [...REBUILT_RELEASE_CRS, ...WIDE_REBUILD_FOUND_CRS];
+      expect(equalSized.length).toBe(STORED_RELEASE_CRS.length);
+      expect(larger.length).toBeGreaterThan(STORED_RELEASE_CRS.length);
+      // NON-VACUITY, both arms: the added ids really are new, and the nine
+      // really are being dropped. Without this the offers could be supersets.
+      for (const offer of [equalSized, larger]) {
+        expect(offer.filter((cr) => !STORED_RELEASE_CRS.includes(cr)).length).toBeGreaterThan(0);
+        for (const lost of LOST_RELEASE_CRS) expect(offer).not.toContain(lost);
+      }
+
+      for (const [arm, offer] of [
+        ["equal", equalSized],
+        ["larger", larger],
+      ] as const) {
+        const refused = await replay(key, {
+          commit: REBUILT_COMMIT,
+          releasedAt: SHIP_DATE,
+          crs: offer,
+        });
+
+        expect(refused.ok, `${arm}-sized offer was accepted`).toBe(false);
+        expect(refused.status).toBeGreaterThanOrEqual(400);
+        expect(refused.error).toContain(VERSION);
+        // NAMED, not counted: a refusal that only said "smaller" would have
+        // nothing to say here, because this offer is not smaller.
+        const unnamed = LOST_RELEASE_CRS.filter((cr) => !refused.error.includes(cr));
+        expect(unnamed, `${arm}-sized offer: dropped ids missing from the refusal`).toEqual([]);
+        expect([...(refused.shrink?.removed ?? [])].sort()).toEqual([...LOST_RELEASE_CRS].sort());
+        // `after` is genuinely NOT smaller than `before`, so the report's own
+        // numbers prove the refusal was not a size comparison in disguise.
+        expect(refused.shrink?.before).toBe(STORED_RELEASE_CRS.length);
+        expect(refused.shrink?.after).toBeGreaterThanOrEqual(refused.shrink!.before!);
+
+        // Nothing was written: no second row under the label, same bytes.
+        const after = await stored(key);
+        expect(after.mine.length, `${arm}-sized offer inserted a row`).toBe(1);
+        expect(after.rows.length).toBe(1);
+        expect(asBytes(after.mine[0])).toBe(before);
+      }
     },
   );
 
