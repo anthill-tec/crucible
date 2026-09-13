@@ -1,0 +1,510 @@
+// CR-CRU-130 §S2 — a release is a milestone BEFORE and AFTER delivery, not two
+// types.
+//
+// ── What is broken today ──────────────────────────────────────────────────
+//
+// Proposing `9.9.0` and then shipping `9.9.0` leaves TWO records of TWO types:
+// a `release-proposal` row stamped `retired_at` by `stampProposalRetired`
+// (src/store.ts:3083) and a separate `release` row inserted beside it. The
+// store's own comment already concedes the model it is missing — the release
+// "consumes" its proposal because "the release it became now carries the fact"
+// — and `retired_at` is standing in for the delivered date the record had no
+// column for until CR-CRU-130 §S1 added one.
+//
+// §S2 collapses the pair: a PROPOSED release is a `release` milestone carrying
+// a `targetAt` and no `deliveredAt`; shipping it sets `deliveredAt` on THAT
+// record, alongside the commit, the `crs` and the `packages`. One record, two
+// points in its life — same id, same label, same declared target.
+//
+// ── What this file asserts, and how each case fails if nothing is built ────
+//
+//   1. ONE RECORD, SAME ID. Today the second write INSERTS, so the record
+//      count for the label goes 1 -> 2 and the shipped event's id differs from
+//      the proposed one's. Both assertions fail on today's build.
+//   2. THE TWO READS ARE DERIVED FROM DELIVERY. An UNDELIVERED `release`
+//      record is what `listReleaseProposals` answers and what `listReleases`
+//      must NOT; today `listReleases` filters on the type name alone, so an
+//      undelivered release is served as settled history and the proposals read
+//      answers nothing at all.
+//   3. `retired_at` STOPS CARRYING DELIVERY. Today shipping stamps it on the
+//      proposal row; the assertion that NO record for the label carries
+//      `retiredAt` fails. CR-CRU-073's gate retirement — the column's
+//      remaining job — is asserted in the same case, because it is the easiest
+//      thing to break while removing the other use.
+//   4. WAVES. An OUTSTANDING release carries `waves` exactly as a proposal
+//      does today; a DELIVERED one does not. This is user-approved design, not
+//      a gap (`DN-crucible-wave-track-release.md`: "a wave is a
+//      synchronization device, not a delivery bucket"), and the case exists so
+//      the next reader cannot mistake the absence for a bug. It fails today
+//      because the outstanding half is not reachable through the proposals
+//      read at all.
+//
+// ── Wire shapes are UNCHANGED (§S0) ───────────────────────────────────────
+// `GET …/releases` and `GET …/release-proposals` keep their key sets
+// byte-identically. They are pinned here as exact key arrays rather than
+// spot-checked fields, because "derived from delivery" is only safe if it
+// costs the two consumers nothing.
+//
+// Every store here is `:memory:` or an mkdtemp scratch file, and every server
+// is booted on an OS-assigned port. The live data/crucible.db is never opened
+// and port 3849 is never touched.
+import { describe, test, expect, afterEach } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Store } from "../src/store.ts";
+import { startServer, type ServerHandle } from "../src/server.ts";
+import type { RunEvent } from "../src/types.ts";
+
+const ORCH = "orchestrator-1";
+
+/** Epoch SECONDS, the unit `releasedAt`/`targetAt`/`deliveredAt` already use. */
+const TARGET_AT = 1_789_171_200; // 2026-09-11
+const SHIPPED_AT = 1_790_000_000;
+const DAY = 86_400;
+
+/** The wire key set of one `GET …/release-proposals` member (CR-CRU-091 §S8). */
+const PROPOSAL_KEYS = ["label", "targetAt", "timestamp", "waves"];
+
+/** The wire key set of one `GET …/releases` member carrying full provenance
+ *  (CR-CRU-074 §S3 + CR-CRU-080 §S4 + CR-CRU-084 §S2). */
+const RELEASE_KEYS = ["version", "commit", "releasedAt", "crs", "packages", "timestamp"];
+
+interface ProposalWire {
+  label: string;
+  targetAt?: number;
+  timestamp: number;
+  waves: string[];
+  [key: string]: unknown;
+}
+
+interface ReleaseWire {
+  version?: string;
+  commit?: string;
+  releasedAt?: number;
+  crs?: string[];
+  packages?: unknown[];
+  timestamp: number;
+  [key: string]: unknown;
+}
+
+interface MilestoneWire {
+  id: string;
+  type?: string;
+  label?: string;
+  targetAt?: number;
+  deliveredAt?: number;
+  retiredAt?: number;
+  [key: string]: unknown;
+}
+
+interface AnyBody {
+  ok: boolean;
+  error?: string;
+  help?: string[];
+  project?: { key: string };
+  proposals?: ProposalWire[];
+  totalCount?: number;
+  releases?: ReleaseWire[];
+  milestones?: MilestoneWire[];
+  [key: string]: unknown;
+}
+
+/**
+ * EVERY milestone record the project holds for one label, whatever its type
+ * and whether or not it is retired.
+ *
+ * `listMilestonesByType(key, null)` is CR-CRU-129 §S3's type-agnostic record
+ * read, and it deliberately does NOT filter retirement — which is exactly what
+ * makes it able to see the second row today's build leaves behind. A read that
+ * filtered either would hide the very duplication §S2 exists to remove.
+ */
+function recordsFor(store: Store, key: string, label: string): RunEvent[] {
+  return store.listMilestonesByType(key, null).filter((record) => record.label === label);
+}
+
+describe("CR-CRU-130 §S2 — one record, two points in its life", () => {
+  function seed(store: Store): string {
+    const key = crypto.randomUUID();
+    store.addProject({ key, name: "cru130-c2", type: "backend", sutRoot: "/tmp" });
+    return key;
+  }
+
+  test(
+    "proposing 9.9.0 and then shipping it leaves ONE record with the SAME id: the target and " +
+      "label survive, the delivery and provenance are added, and no second row appears",
+    () => {
+      const store = new Store(":memory:");
+      const key = seed(store);
+
+      const proposed = store.recordReleaseProposal(key, ORCH, {
+        label: "9.9.0",
+        targetAt: TARGET_AT,
+      }).event;
+
+      // ── PRE-STATE, measured rather than assumed ─────────────────────────
+      // Without this, "exactly one record afterwards" would be satisfied by a
+      // fixture that wrote nothing at all. The proposal really is held, really
+      // is OUTSTANDING, and really is the only record for the label before the
+      // ship — so the count below is a claim about the SHIP, not about an
+      // empty store.
+      const before = recordsFor(store, key, "9.9.0");
+      expect(before.length).toBe(1);
+      expect(before[0]!.id).toBe(proposed.id);
+      expect(before[0]!.targetAt).toBe(TARGET_AT);
+      expect(before[0]!.deliveredAt).toBeUndefined();
+
+      const shipped = store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "9.9.0",
+        commit: "c".repeat(40),
+        releasedAt: SHIPPED_AT,
+        crs: ["CR-SHIPPED-1", "CR-SHIPPED-2"],
+        packages: [{ registry: "npm", name: "@anthill-tec/crucible-server", version: "9.9.0" }],
+      }).event;
+
+      // ── ONE RECORD, AND IT IS THE SAME ONE ──────────────────────────────
+      const after = recordsFor(store, key, "9.9.0");
+      expect(after.length).toBe(1);
+      // THE headline: the same id, not merely a record that matches. A build
+      // that inserted a second row and retired the first would satisfy every
+      // field assertion below and still be the two-record model.
+      expect(after[0]!.id).toBe(proposed.id);
+      expect(shipped.id).toBe(proposed.id);
+
+      const record = after[0]!;
+      expect(record.type).toBe("release");
+      expect(record.label).toBe("9.9.0");
+      // What it was aimed at survives delivery — the distance between the two
+      // dates is the only thing that can say a deliverable slipped.
+      expect(record.targetAt).toBe(TARGET_AT);
+      expect(record.deliveredAt).toBe(SHIPPED_AT);
+      expect(record.releasedAt).toBe(SHIPPED_AT);
+      expect(record.commit).toBe("c".repeat(40));
+      expect(record.crs).toEqual(["CR-SHIPPED-1", "CR-SHIPPED-2"]);
+      expect(record.packages).toEqual([
+        { registry: "npm", name: "@anthill-tec/crucible-server", version: "9.9.0" },
+      ]);
+
+      // ── AND THE TWO READS MOVED IT, rather than gaining a member ────────
+      expect(store.listReleaseProposals(key).map((p) => p.label)).toEqual([]);
+      expect(store.listReleases(key).map((r) => r.label)).toEqual(["9.9.0"]);
+      expect(store.listReleases(key).map((r) => r.id)).toEqual([proposed.id]);
+    },
+  );
+
+  test(
+    "shipping sets `deliveredAt` and stamps NO `retired_at` on the record, while a GATE for that " +
+      "version is still retired by its release (CR-CRU-073)",
+    () => {
+      const store = new Store(":memory:");
+      const key = seed(store);
+      const proposed = store.recordReleaseProposal(key, ORCH, {
+        label: "9.9.0",
+        targetAt: TARGET_AT,
+      }).event;
+      const untouched = store.recordReleaseProposal(key, ORCH, {
+        label: "9.9.1",
+        targetAt: TARGET_AT + DAY,
+      }).event;
+      // A PROPOSAL retires no gate (CR-CRU-091 §S1): this one is live until the
+      // release ships, which is what makes the assertion below a claim about
+      // the SHIP rather than about the fixture.
+      const gate = store.recordGateEvent(key, ORCH, { verdict: "pass" }, { version: "9.9.0" });
+      expect(store.getEvent(gate.id)?.retiredAt).toBeUndefined();
+
+      store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "9.9.0",
+        commit: "d".repeat(40),
+        releasedAt: SHIPPED_AT,
+      });
+
+      // `retired_at` no longer carries delivery: NO record for the label holds
+      // one. Asserted across every record rather than on the id we happen to
+      // know, so a build that kept a retired proposal row beside the release
+      // fails here even though the release itself is clean.
+      const held = recordsFor(store, key, "9.9.0");
+      expect(held.length).toBe(1);
+      expect(held.map((record) => record.retiredAt)).toEqual([undefined]);
+      expect(store.getEvent(proposed.id)?.retiredAt).toBeUndefined();
+      // Delivery is said by the date, directly.
+      expect(store.getEvent(proposed.id)?.deliveredAt).toBe(SHIPPED_AT);
+
+      // THE COLUMN'S REMAINING JOB, and the easiest thing to break while
+      // removing the other one: the release retires its gate.
+      expect(typeof store.getEvent(gate.id)?.retiredAt).toBe("number");
+
+      // A release for one label touches no other release's record.
+      expect(store.getEvent(untouched.id)?.deliveredAt).toBeUndefined();
+      expect(store.getEvent(untouched.id)?.retiredAt).toBeUndefined();
+      expect(store.listReleaseProposals(key).map((p) => p.label)).toEqual(["9.9.1"]);
+    },
+  );
+
+  test(
+    "an UNDELIVERED `release` record is what the proposals read answers and what the releases " +
+      "read refuses — the two reads are derived from delivery, not from two type names",
+    () => {
+      const store = new Store(":memory:");
+      const key = seed(store);
+
+      // §S2's form, written through the ordinary milestone door: a `release`
+      // carrying a target and no delivery. Today this lands in `listReleases`
+      // — settled history claiming something that has not shipped — and is
+      // invisible to the proposals read.
+      const outstanding = store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "9.9.0",
+        targetAt: TARGET_AT,
+      }).event;
+      const delivered = store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "9.8.0",
+        commit: "e".repeat(40),
+        releasedAt: SHIPPED_AT,
+      }).event;
+
+      expect(store.listReleaseProposals(key).map((p) => p.id)).toEqual([outstanding.id]);
+      expect(store.listReleases(key).map((r) => r.id)).toEqual([delivered.id]);
+      // NEGATIVE, bounded: exactly one each, so a read that answered every
+      // release record whatever its delivery would fail rather than pass on a
+      // superset.
+      expect(store.listReleaseProposals(key).length).toBe(1);
+      expect(store.listReleases(key).length).toBe(1);
+      expect(store.listReleases(key).some((r) => r.deliveredAt === undefined)).toBe(false);
+      expect(store.listReleaseProposals(key).some((p) => p.deliveredAt !== undefined)).toBe(false);
+    },
+  );
+
+  test("re-proposing one label still converges to a SINGLE record (§S4b, src/store.ts:2747)", () => {
+    const store = new Store(":memory:");
+    const key = seed(store);
+
+    const first = store.recordReleaseProposal(key, ORCH, { label: "9.9.0", targetAt: TARGET_AT });
+    const same = store.recordReleaseProposal(key, ORCH, { label: "9.9.0", targetAt: TARGET_AT });
+
+    // Identical target: nothing is written and the held record is returned.
+    expect(same.changed).toBe(false);
+    expect(same.event.id).toBe(first.event.id);
+    expect(recordsFor(store, key, "9.9.0").length).toBe(1);
+
+    // A REVISION moves the target. Whatever mechanism records the move, the
+    // observable rule is unchanged: ONE live record for the label, carrying
+    // the NEW target, and the predecessor still auditable by id.
+    const moved = store.recordReleaseProposal(key, ORCH, {
+      label: "9.9.0",
+      targetAt: TARGET_AT + 30 * DAY,
+    });
+    expect(moved.changed).toBe(true);
+
+    const live = store.listReleaseProposals(key).filter((p) => p.label === "9.9.0");
+    expect(live.length).toBe(1);
+    expect(live[0]!.targetAt).toBe(TARGET_AT + 30 * DAY);
+    // The fact that the target MOVED is not destroyed: the predecessor keeps
+    // the date it declared.
+    expect(store.getEvent(first.event.id)?.targetAt).toBe(TARGET_AT);
+    // …and a revision is not a delivery.
+    expect(store.getEvent(first.event.id)?.deliveredAt).toBeUndefined();
+    expect(live[0]!.deliveredAt).toBeUndefined();
+  });
+});
+
+describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this project's real shape", () => {
+  const scratchDirs: string[] = [];
+  let handle: ServerHandle | undefined;
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+  });
+
+  function boot(): ServerHandle {
+    const dir = mkdtempSync(join(tmpdir(), "cru130-c2-wire-"));
+    scratchDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    return handle;
+  }
+
+  function base(): string {
+    return `http://localhost:${String(handle!.server.port)}`;
+  }
+
+  async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
+    const res = await fetch(`${base()}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: (await res.json()) as AnyBody };
+  }
+
+  async function get(path: string): Promise<{ status: number; body: AnyBody }> {
+    const res = await fetch(`${base()}${path}`);
+    return { status: res.status, body: (await res.json()) as AnyBody };
+  }
+
+  async function seedProject(): Promise<string> {
+    const created = await post("/api/v2/projects", { name: `cru130-c2-${crypto.randomUUID()}` });
+    const key = created.body.project!.key;
+    const registered = await post("/api/v2/agents/register", {
+      projectKey: key,
+      agentId: ORCH,
+      role: "ORCHESTRATOR",
+    });
+    expect(registered.status).toBe(200);
+    return key;
+  }
+
+  test(
+    "4 delivered releases and 2 outstanding ones: each read answers exactly its half, with the " +
+      "shipped ordering (newest SHIPPED first) and the proposal ordering (VERSION ascending) " +
+      "surviving a deliberately scrambled arrival order",
+    async () => {
+      const server = boot();
+      const key = await seedProject();
+      const store = server.store;
+
+      // SEEDED OUT OF ORDER, on both axes — arrival order contradicts both the
+      // ship dates and the versions, so a read that lost its sort and fell back
+      // to arrival order FAILS rather than coincidentally agreeing.
+      const shipOrder: Array<[string, number]> = [
+        ["0.1.2", SHIPPED_AT + 2 * DAY],
+        ["0.1.0", SHIPPED_AT],
+        ["0.1.3", SHIPPED_AT + 3 * DAY],
+        ["0.1.1", SHIPPED_AT + DAY],
+      ];
+      for (const [label, releasedAt] of shipOrder) {
+        store.recordMilestoneEvent(key, ORCH, "release", {
+          label,
+          commit: label.replaceAll(".", "").padEnd(40, "f"),
+          releasedAt,
+          crs: [`CR-SHIPPED-${label}`],
+          packages: [{ registry: "npm", name: "@anthill-tec/crucible-server", version: label }],
+        });
+      }
+      // The two OUTSTANDING ones, written through BOTH doors §S2 leaves open,
+      // and in DESCENDING version order so the ascending answer is earned:
+      //   0.3.0 — the ordinary milestone door, as a `release` with a target;
+      //   0.2.0 — the sanctioned `release-propose` route.
+      store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "0.3.0",
+        targetAt: TARGET_AT + 21 * DAY,
+      });
+      const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
+        agentId: ORCH,
+        label: "0.2.0",
+        targetAt: TARGET_AT,
+      });
+      expect(proposed.status).toBe(200);
+
+      // ── THE PROPOSALS READ — the UNDELIVERED releases, version ascending ──
+      const proposals = await get(`/api/v2/projects/${key}/release-proposals`);
+      expect(proposals.status).toBe(200);
+      expect(proposals.body.ok).toBe(true);
+      expect((proposals.body.proposals ?? []).map((p) => p.label)).toEqual(["0.2.0", "0.3.0"]);
+      expect(proposals.body.totalCount).toBe(2);
+      // CR-CRU-091 §S8's shape, member by member, byte-identical.
+      for (const proposal of proposals.body.proposals ?? []) {
+        expect(Object.keys(proposal).sort()).toEqual([...PROPOSAL_KEYS].sort());
+        expect(typeof proposal.targetAt).toBe("number");
+        expect(typeof proposal.timestamp).toBe("number");
+        expect(Array.isArray(proposal.waves)).toBe(true);
+      }
+      expect((proposals.body.proposals ?? []).map((p) => p.targetAt)).toEqual([
+        TARGET_AT,
+        TARGET_AT + 21 * DAY,
+      ]);
+
+      // ── THE RELEASES READ — the DELIVERED ones, newest SHIPPED first ─────
+      const releases = await get(`/api/v2/projects/${key}/releases`);
+      expect(releases.status).toBe(200);
+      expect((releases.body.releases ?? []).map((r) => r.version)).toEqual([
+        "0.1.3",
+        "0.1.2",
+        "0.1.1",
+        "0.1.0",
+      ]);
+      // NEGATIVE, and the whole point of "derived from delivery": neither
+      // outstanding release leaks into settled history.
+      expect((releases.body.releases ?? []).map((r) => r.version)).not.toContain("0.2.0");
+      expect((releases.body.releases ?? []).map((r) => r.version)).not.toContain("0.3.0");
+      expect((releases.body.releases ?? []).length).toBe(4);
+      for (const release of releases.body.releases ?? []) {
+        expect(Object.keys(release).sort()).toEqual([...RELEASE_KEYS].sort());
+        // A `waves` key on a delivered release would be the scheduling grouping
+        // carried forward past its job — §S2 forbids it explicitly.
+        expect("waves" in release).toBe(false);
+        expect("targetAt" in release).toBe(false);
+        expect("deliveredAt" in release).toBe(false);
+      }
+      expect((releases.body.releases ?? [])[0]!.releasedAt).toBe(SHIPPED_AT + 3 * DAY);
+    },
+  );
+
+  test(
+    "an OUTSTANDING release carries the waves planned into it and IS a release record; a " +
+      "DELIVERED one carries no waves and is still ONE record",
+    async () => {
+      const server = boot();
+      const key = await seedProject();
+
+      const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
+        agentId: ORCH,
+        label: "0.2.0",
+        targetAt: TARGET_AT,
+      });
+      expect(proposed.status).toBe(200);
+      for (const [cr, wave] of [
+        ["CR-AUTH-1", 5],
+        ["CR-AUTH-2", 6],
+      ] as Array<[string, number]>) {
+        const planned = await post(`/api/v2/projects/${key}/queue/plan`, {
+          agentId: ORCH,
+          cr,
+          release: "0.2.0",
+          wave,
+          title: `planned into the outstanding release, wave ${String(wave)}`,
+        });
+        expect(planned.status).toBe(200);
+      }
+
+      // ── HALF ONE: outstanding carries its waves, as a proposal does today ─
+      const outstanding = (await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals!;
+      expect(outstanding.map((p) => p.label)).toEqual(["0.2.0"]);
+      expect(outstanding[0]!.waves).toEqual(["5", "6"]);
+
+      // …and the thing carrying them is a RELEASE record that simply has not
+      // been delivered — this is what fails today, where the record is its own
+      // `release-proposal` type instead.
+      const undelivered = (
+        await get(`/api/v2/projects/${key}/milestones?type=release&delivered=false`)
+      ).body.milestones!;
+      expect(undelivered.map((m) => m.label)).toEqual(["0.2.0"]);
+      expect(undelivered[0]!.targetAt).toBe(TARGET_AT);
+      expect(undelivered[0]!.deliveredAt).toBeUndefined();
+      const recordId = undelivered[0]!.id;
+
+      // ── HALF TWO: delivery does not carry the scheduling grouping forward ─
+      server.store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "0.2.0",
+        commit: "a".repeat(40),
+        releasedAt: SHIPPED_AT,
+        crs: ["CR-AUTH-1", "CR-AUTH-2"],
+      });
+
+      const delivered = (await get(`/api/v2/projects/${key}/releases`)).body.releases!;
+      expect(delivered.map((r) => r.version)).toEqual(["0.2.0"]);
+      expect("waves" in delivered[0]!).toBe(false);
+      // `crs` is the authoritative expression of the bundling, and it survives.
+      expect(delivered[0]!.crs).toEqual(["CR-AUTH-1", "CR-AUTH-2"]);
+
+      // ONE record still, and it is the SAME one — the queue rows that named
+      // the waves are untouched, they simply stop being published here.
+      const records = (await get(`/api/v2/projects/${key}/milestones?type=release`)).body
+        .milestones!;
+      expect(records.length).toBe(1);
+      expect(records[0]!.id).toBe(recordId);
+      expect(records[0]!.deliveredAt).toBe(SHIPPED_AT);
+      expect(records[0]!.targetAt).toBe(TARGET_AT);
+      expect((await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals).toEqual([]);
+    },
+  );
+});
