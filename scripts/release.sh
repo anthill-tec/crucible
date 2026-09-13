@@ -51,14 +51,6 @@ AGENT=""
 # record that CR-CRU-080 §S3 made immutable may only be corrected because this
 # run's own command line asked for it.
 REPAIR_PROVENANCE=false
-# CR-CRU-129 §S4 — the CR ids a STORED release record names that THIS run's
-# rebuild could not derive, accumulated from the server's own refusals (one
-# space-separated set, appended per refused tag). It is the evidence that
-# separates the two unplaceable classes: a CR in here demonstrably shipped —
-# a release record says so — while the landing record that would say WHERE is
-# gone, which is data loss. A CR no record names is simply one that never
-# landed, and nothing about it is lost.
-REPLAY_NAMED_UNPLACEABLE=""
 
 # ============================================================================
 # Helper Functions
@@ -570,18 +562,50 @@ cr_merged_crs() {
         }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
 }
 
-# CR-CRU-129 §S4 — the CR ids a REFUSED replay would have dropped, from a
-# `milestone` envelope on stdin: the server's `shrink.removed`, which is the
-# set a stored release record NAMES and this rebuild could not derive.
+# CR-CRU-129 §S4 — the CR ids some STORED release record NAMES while Crucible
+# holds no plan that is evidence of work, from the same `queue` envelope, one
+# per line. This is a DIRECT read of stored release membership: the board
+# derives `COMPLETED_UNTRACKED` from `listReleases(...).crs` itself (src/store.ts,
+# `statusFor` — "no plan at all, or only abandoned ones, and some release's
+# `crs` names it"), so the ceremony asks the store what it holds rather than
+# inferring it from what this run happened to be refused.
 #
-# The same TOON idiom `cr_merged_crs` reads the queue envelope with — a
-# string list renders as `removed[N]: a,b,c` at whatever depth it sits — so
-# this is the structured channel, not the human line beside it.
-refused_crs() {
-    awk -F': ' '/^[[:space:]]*removed\[[0-9]+\]:/ {
-            gsub(/,/, "\n", $2)
-            print $2
-        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+# That difference is the whole point. The evidence used to be the ids the
+# SERVER refused to let a replay drop, which is populated ONLY by a 409 — and
+# `cmd_finish` replays just the NEW label while the shrink guard is scoped per
+# label, so on the live `finish` path nothing could ever be refused and every
+# unplaceable CR was reported as "nothing is lost", including a genuinely
+# evicted one. A read of the records themselves answers on every path.
+#
+# The predicate is exact, and the report's wording is held to it: a CR is in
+# here iff a stored release names it AND Crucible holds no plan that is
+# evidence of work. A CR with an OPEN plan is therefore never in here — it is
+# in-flight work rather than a record whose landing evidence is gone — which is
+# why the never-landed line claims only "no stored release record names them as
+# shipped-without-one" rather than "no release record names them".
+#
+# Tolerant like every other reader here: no envelope, no ids, and the caller
+# reports the class it can still tell.
+release_named_crs() {
+    awk '
+        /^[[:space:]]*queue\[[0-9]+\]\{/ {
+            header = $0
+            sub(/^[^{]*\{/, "", header)
+            sub(/\}.*$/, "", header)
+            cols = split(header, name, ",")
+            for (i = 1; i <= cols; i++) col[name[i]] = i
+            next
+        }
+        cols > 0 {
+            row = $0
+            gsub(/"/, "", row)
+            if (split(row, v, ",") < cols) next
+            cr = v[col["cr"]]
+            status = v[col["status"]]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
+            if (cr ~ /^CR-[A-Z]+-[0-9]+$/ && status == "COMPLETED_UNTRACKED") print cr
+        }' | sort -u || true
 }
 
 # CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
@@ -606,12 +630,15 @@ refused_crs() {
 #   2b. the CR NEVER landed — no record names it anywhere. Nothing is lost,
 #       because nothing was ever recorded; it is simply queued work.
 #
-# The evidence for 2a is `REPLAY_NAMED_UNPLACEABLE`: the ids the SERVER refused
-# to let this run's replay drop. That is a sound partition after a backfill,
-# which replays every tag — a record naming an unplaceable CR cannot be
-# replayed without being refused, so every evicted id is seen. With no replay
-# made (the live `finish` path) nothing is claimed to have been named, and the
-# class reads as 2b: the report states what it checked, and never more.
+# The evidence for 2a is `release_named_crs`: a DIRECT read of what the stored
+# release records name, taken from the same `queue` envelope this function
+# already fetches. It answers on EVERY path, which the previous evidence did
+# not — that was the set of ids a replay had been refused, populated only by a
+# 409, and `cmd_finish` replays only the NEW label against a guard scoped per
+# label, so on the live `finish` path the partition was inert and every
+# unplaceable CR was reported as "nothing is lost" whether or not a record
+# named it. A report that claims more than it verified is worse than a silent
+# one, so the claim is now made against the records themselves.
 #
 # Each class is counted and described SEPARATELY, on its own line, with disjoint
 # id sets — one shared total would re-create exactly the confusion §S2 names.
@@ -623,7 +650,7 @@ refused_crs() {
 # A CR whose sha IS recorded but precedes no tag is in NEITHER class: it landed
 # after the newest tag, which is placement, not a gap.
 report_unplaceable_crs() {
-    local cr sha queue_out tracked="" merged=""
+    local cr sha queue_out tracked="" merged="" named=""
     local -a missing_sha=() evicted=() never_landed=()
 
     while read -r cr sha; do
@@ -634,6 +661,7 @@ report_unplaceable_crs() {
 
     queue_out="$(queue_read)"
     merged=" $(printf '%s\n' "$queue_out" | cr_merged_crs | paste -sd' ' -) "
+    named=" $(printf '%s\n' "$queue_out" | release_named_crs | paste -sd' ' -) "
     while IFS= read -r cr; do
         [ -n "$cr" ] || continue
         [[ " $tracked " != *" $cr "* ]] || continue
@@ -643,7 +671,7 @@ report_unplaceable_crs() {
         # and only the evidence of WHERE is gone — data loss, and the class
         # this project's own 0.1.0 lost nine CRs to. If no record names it,
         # nothing was lost because nothing was ever recorded.
-        if [[ " $REPLAY_NAMED_UNPLACEABLE " == *" $cr "* ]]; then
+        if [[ "$named" == *" $cr "* ]]; then
             evicted+=("$cr")
         else
             never_landed+=("$cr")
@@ -657,7 +685,7 @@ report_unplaceable_crs() {
         info "provenance: ${#evicted[@]} unplaceable queued CR(s) — landing evidence EVICTED: a stored release record NAMES them, so they shipped, yet no landing record survives at any source (no closed plan, no cr-merged record). This is DATA LOSS, not a gap: ${evicted[*]}"
     fi
     if [ "${#never_landed[@]}" -gt 0 ]; then
-        info "provenance: ${#never_landed[@]} unplaceable queued CR(s) — NEVER landed: no release record was found naming them and Crucible holds neither a closed plan nor a cr-merged record, so where they landed is unknown and nothing is lost: ${never_landed[*]}"
+        info "provenance: ${#never_landed[@]} unplaceable queued CR(s) — NEVER landed: Crucible holds no landing record for them at any source (no closed plan, no cr-merged record) and no stored release record names them as shipped-without-one, so nothing is lost: ${never_landed[*]}"
     fi
 }
 
@@ -737,10 +765,7 @@ emit_release_milestone() {
 
     # The client's ENVELOPE is captured and re-printed verbatim on the same
     # channel it was written to, so nothing an operator or a machine caller
-    # used to read is lost — it is read on the way past (CR-CRU-129 §S4: a
-    # refusal carries the ids it declined to drop, and this is the ceremony's
-    # only sight of what a stored record names). The interactive stderr line
-    # is never intercepted.
+    # used to read is lost. The interactive stderr line is never intercepted.
     local status=0 answer=""
     answer="$(python3 "$client" milestone --type release --label "$version" \
         --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"})" || status=$?
@@ -754,13 +779,12 @@ emit_release_milestone() {
         # and a "recover with" line would invite the caller to re-run the very
         # write that was refused. Passed through for the caller to tally.
         #
-        # CR-CRU-129 §S4 — and the ids it refused to drop are kept: each is a
-        # CR a stored release record NAMES and this rebuild could not place,
-        # which is exactly what tells the unplaceable tally an eviction from a
-        # CR that never landed.
+        # CR-CRU-129 §S4 — nothing is accumulated here. The ids a refusal
+        # declined to drop are a SUBSET of what `release_named_crs` reads
+        # straight off the stored records, and reading them here would make the
+        # unplaceable partition depend on whether this run happened to be
+        # refused — which on the `finish` path it never is.
         "$EXIT_REFUSED")
-            REPLAY_NAMED_UNPLACEABLE="$REPLAY_NAMED_UNPLACEABLE $(printf '%s\n' "$answer" \
-                | refused_crs | paste -sd' ' -)"
             return "$EXIT_REFUSED"
             ;;
     esac
