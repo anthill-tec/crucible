@@ -3583,3 +3583,775 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// G. CR-CRU-129 §S4 — the REPLAY may not quietly shrink what it replaces (RED).
+//
+// Spec: docs/changes/CR-CRU-129-a-release-is-a-record-not-an-event.md §S4
+//   * a rebuild that derives a SMALLER `crs` than the stored record is
+//     REFUSED, names the release and the missing ids, and writes nothing;
+//   * the ceremony's `unplaceable` tally distinguishes a CR that never landed
+//     ANYWHERE from a CR whose landing EVIDENCE was evicted;
+//   * re-running against a complete store writes nothing and reports no
+//     shrink.
+//
+// WHAT HAPPENED — measured, 2026-09-13. Retention evicted this project's four
+// `release` records; `backfill-releases` was run to replay them; it reported
+// `4/4 recorded` and `15 unplaceable`, and `0.1.0` came back holding 51 of the
+// 60 CRs the evicted record had held — because the `cr-merged` records its
+// provenance derives from went in the SAME sweep. Nothing refused anything, and
+// nothing said which of the 15 unplaceable CRs had never landed versus which
+// had merely lost the evidence of where they landed. The replay looked like a
+// success in both tallies it printed.
+//
+// WHY CR-CRU-086's RULE DOES NOT ALREADY COVER THIS, and where the two paths
+// deliberately DIFFER. CR-CRU-086 governs the REPAIR path — the opt-in
+// `--repair-provenance` correction — on two rungs: an EMPTY derivation is *no
+// answer* and never overwrites (§S1/§S2), while a non-empty derivation that
+// legitimately SHRINKS a stored set IS applied and is REPORTED (§S3, the
+// 58→51 case pinned by section E's "AC5 a repair that legitimately SHRINKS a
+// stored set…"). Both stay exactly as they are. A repair was ASKED for: an
+// operator named the release and demanded a re-derivation, so the loud shrink
+// report is the right rung. A REPLAY was asked for nothing of the kind — it
+// exists to restore what is missing — so a replay that would write less than
+// the record it replaces is not a correction at all, and is REFUSED.
+//
+// ONE VOCABULARY, TWO VERDICTS. The finding is the same finding, so it is said
+// in the same words: the `shrink` object the route already carries beside `ok`
+// (`ProvenanceShrink` — `before`, `after`, `removed`), and the REFUSED bucket
+// the ceremony already tallies (`EXIT_REPAIR_REFUSED` → `REFUSED (nothing
+// written)`, scripts/release.sh). Nothing below asks for a second word for a
+// shrink or a second exit status for a refusal.
+//
+// WHEN A REPLAY ACTUALLY WRITES — the premise the guard needs, and the reason
+// two shapes are covered. With a record held for the same (type, label,
+// commit) the store's dedup writes nothing at all (CR-CRU-080 §S3), so the
+// smaller set never lands — but the loss is still not SAID, and an operator
+// reading `recorded` learns nothing. A rebuild against a DAMAGED store is the
+// shape that writes: the held record's commit is not the commit the tag now
+// resolves to (a re-cut tag, a rewritten history, a record restored from a
+// snapshot), the dedup misses, the smaller set is INSERTED, and the label then
+// reads as the smaller set. Both are below: the inserting shape proves the
+// write is stopped, the deduping shape proves the loss is spoken.
+//
+// After §S1 a milestone can no longer be evicted, so "the evidence was
+// evicted" is a HISTORICAL condition — this project's existing loss, and any
+// store whose records predate the fix. That is precisely when a rebuild runs,
+// which is why the guard and the distinction are worth their weight.
+//
+// RED expectation (measured 2026-09-13 against e9f8c01):
+//   * `recordMilestoneEvent` (src/store.ts) compares an incoming `crs` with a
+//     stored record's NOWHERE. Its only release-path refusal is
+//     `repairReleaseProvenance`'s `offeredNothing`, reachable only with
+//     `repairProvenance: true`. So every replay below answers `201 ok:true`
+//     and the smaller set is stored: the refusal assertions fail on the status
+//     and on the re-read record.
+//   * the ceremony therefore prints no refusal line for a lossy replay
+//     (`refusalLines` is empty) and tallies it as `3/3 recorded`.
+//   * `report_unplaceable_crs` (scripts/release.sh) has two classes — "the
+//     landing sha is missing" and "no landing record at all" — and NEITHER is
+//     keyed on whether a release's `crs` names the CR, so the
+//     evicted-versus-never-landed distinction does not exist: one
+//     undifferentiated line carries both kinds and the word never appears.
+// Each test asserts its PRE-state through the real reads first, so a failure is
+// the missing contract and never an empty fixture.
+//
+// SAFETY: unchanged from sections A–F — in-process server on `port: 0` over a
+// per-test `mkdtemp` db (never 3849, never data/crucible.db), stopped through
+// its own handle; every git fixture under `mkdtemp`, no remote, no push.
+// ---------------------------------------------------------------------------
+
+/** The 2026-09-13 shape at its measured scale: the sixty CR ids `0.1.0`'s
+ *  record held. Synthetic ids (the suite's own namespace) at the real scale, so
+ *  "a strict subset" is unambiguous rather than a two-row fixture artefact. */
+const STORED_RELEASE_CRS: readonly string[] = Array.from(
+  { length: 60 },
+  (_, i) => `CR-SHIPPED-${i + 1}`,
+);
+
+/** …and the fifty-one the replay could still derive once the `cr-merged`
+ *  records for the rest had been evicted. A STRICT SUBSET, by construction. */
+const REBUILT_RELEASE_CRS: readonly string[] = STORED_RELEASE_CRS.slice(0, 51);
+
+/** The nine ids the difference is made of — what the replay would have lost,
+ *  and what the refusal must NAME. Derived from the two sets above, so the
+ *  three can never drift apart. */
+const LOST_RELEASE_CRS: readonly string[] = STORED_RELEASE_CRS.filter(
+  (cr) => !REBUILT_RELEASE_CRS.includes(cr),
+);
+
+/** Ids a rebuild legitimately finds that the stored record never knew — the
+ *  superset arm, and the added half of the neither-subset-nor-superset arm. */
+const FOUND_BY_REBUILD_CRS: readonly string[] = ["CR-SHIPPED-70", "CR-SHIPPED-71"];
+
+/** §S4's tally, class "landing evidence EVICTED": a release's `crs` NAMES them
+ *  — so they demonstrably shipped — yet no landing record survives at any
+ *  source (no plan at all, no `cr-merged` record). This is the 2026-09-13
+ *  class, and the only one of the two that is data LOSS. */
+const EVICTED_EVIDENCE_CRS: readonly string[] = [
+  "CR-SHIPPED-201",
+  "CR-SHIPPED-202",
+  "CR-SHIPPED-203",
+];
+
+/** …and class "NEVER landed": queued, no landing record anywhere, and named by
+ *  NO release's `crs`. Nothing about them is lost — Crucible simply never had
+ *  a record, because they never shipped. TWO of them against the other class's
+ *  three, so neither count can be the other's reused. */
+const NEVER_LANDED_CRS: readonly string[] = ["CR-AUTH-301", "CR-AUTH-302"];
+
+/** The control that keeps the eviction class honest: named by the same
+ *  release's `crs` AND holding its `cr-merged` record. Its evidence is intact,
+ *  so it belongs to NEITHER class — a tally that called every release-named CR
+ *  "evicted" would report it. */
+const EVIDENCED_SHIPPED_CR = "CR-SHIPPED-204";
+
+describe("a replay that would SHRINK a stored release's provenance is refused (CR-CRU-129 §S4)", () => {
+  let handle: ServerHandle | undefined;
+  const dbDirs: string[] = [];
+  let base = "";
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const d of dbDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** In-process server on an OS-assigned port over a throwaway on-disk db —
+   *  never 3849, never data/crucible.db. Stopped by handle in afterEach. */
+  function boot(): void {
+    const dir = mkdtempSync(join(tmpdir(), "release-replay-db-"));
+    dbDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    base = `http://localhost:${handle.server.port}`;
+  }
+
+  async function createProject(name: string): Promise<string> {
+    const res = await postJson(base, "/api/v2/projects", { name });
+    const body = (await res.json()) as { project: { key: string } };
+    const key = body.project.key;
+    const reg = await postJson(base, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      role: "ORCHESTRATOR",
+    });
+    expect(reg.status).toBe(200);
+    return key;
+  }
+
+  /** The release label every test in this block replays. */
+  const VERSION = "0.1.0";
+  /** The commit the record is HELD under, and the commit the tag resolves to
+   *  after the store was damaged — different, which is the only shape in which
+   *  a replay reaches the insert at all. */
+  const HELD_COMMIT = "a".repeat(40);
+  const REBUILT_COMMIT = "b".repeat(40);
+  const SHIP_DATE = Date.UTC(2026, 6, 10, 12, 0, 0) / 1000;
+
+  interface MilestoneAnswer {
+    status: number;
+    ok: boolean;
+    changed: boolean;
+    error: string;
+    shrink?: { before?: number; after?: number; removed?: string[] };
+  }
+
+  /**
+   * A release post at the server's OWN production entry, returning the whole
+   * answer — status, `ok`, `changed`, `error` and `shrink` — because "refused"
+   * and "wrote nothing" are contracts the caller must SEE rather than infer.
+   *
+   * `repair` defaults to FALSE: everything here is the REPLAY path, which is
+   * the path §S4 is about and the path the ceremony's backfill takes.
+   */
+  async function replay(
+    key: string,
+    fields: {
+      label?: string;
+      commit: string;
+      releasedAt?: number;
+      crs?: readonly string[];
+      repair?: boolean;
+    },
+  ): Promise<MilestoneAnswer> {
+    const res = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "release",
+      label: fields.label ?? VERSION,
+      commit: fields.commit,
+      ...(fields.releasedAt !== undefined ? { releasedAt: fields.releasedAt } : {}),
+      ...(fields.crs !== undefined ? { crs: fields.crs } : {}),
+      ...(fields.repair === true ? { repairProvenance: true } : {}),
+    });
+    const body = (await res.json()) as {
+      ok?: boolean;
+      changed?: boolean;
+      error?: string;
+      shrink?: { before?: number; after?: number; removed?: string[] };
+    };
+    return {
+      status: res.status,
+      ok: body.ok === true,
+      changed: body.changed === true,
+      error: body.error ?? "",
+      ...(body.shrink !== undefined ? { shrink: body.shrink } : {}),
+    };
+  }
+
+  /** The project's whole release list, and the rows for the label under test —
+   *  the two things every "wrote nothing" assertion needs. */
+  async function stored(key: string): Promise<{ rows: ReleaseBrief[]; mine: ReleaseBrief[] }> {
+    const rows = await listReleases(base, key);
+    return { rows, mine: rows.filter((r) => r.version === VERSION) };
+  }
+
+  /** A record as BYTES — the only honest form of "nothing was written": a
+   *  status says what the server decided, this says what the store holds. */
+  const asBytes = (brief: ReleaseBrief | undefined): string => JSON.stringify(brief);
+
+  /**
+   * PLANT the record the 2026-09-13 replay met, and PROVE the pre-state: the
+   * set really is held, at its full scale, under `HELD_COMMIT`. Returns its
+   * bytes, so a later read is compared against what was stored rather than
+   * against an expectation written twice.
+   */
+  async function plantHeldRelease(key: string, crs: readonly string[]): Promise<string> {
+    const planted = await replay(key, { commit: HELD_COMMIT, releasedAt: SHIP_DATE, crs });
+    expect(planted.status).toBe(201);
+    const { mine } = await stored(key);
+    expect(mine.length).toBe(1);
+    expect(sortedCrs(mine[0]!.crs)).toEqual([...crs].sort());
+    expect(mine[0]!.crs!.length).toBe(crs.length);
+    return asBytes(mine[0]);
+  }
+
+  test(
+    "a replay deriving a STRICT SUBSET of the stored crs is refused, names the release and " +
+      "every missing id, and leaves the stored record byte-identical — the 60-to-51 case",
+    async () => {
+      boot();
+      const key = await createProject("replay-strict-subset-refused");
+      const before = await plantHeldRelease(key, STORED_RELEASE_CRS);
+      // NON-VACUITY: the difference is real and is nine ids wide.
+      expect(REBUILT_RELEASE_CRS.length).toBeLessThan(STORED_RELEASE_CRS.length);
+      expect(LOST_RELEASE_CRS.length).toBe(
+        STORED_RELEASE_CRS.length - REBUILT_RELEASE_CRS.length,
+      );
+
+      // THE REBUILD, against a store whose landing evidence for the difference
+      // is gone: it can still place 51, and the tag now resolves elsewhere, so
+      // the dedup does not save anybody.
+      const refused = await replay(key, {
+        commit: REBUILT_COMMIT,
+        releasedAt: SHIP_DATE,
+        crs: REBUILT_RELEASE_CRS,
+      });
+
+      // REFUSED — a client-class refusal, not a 5xx and not a 2xx.
+      expect(refused.ok).toBe(false);
+      expect(refused.status).toBeGreaterThanOrEqual(400);
+      expect(refused.status).toBeLessThan(500);
+      // NAMES THE RELEASE…
+      expect(refused.error).toContain(VERSION);
+      // …AND THE MISSING IDS, each of them: a count alone cannot be acted on.
+      const unnamed = LOST_RELEASE_CRS.filter((cr) => !refused.error.includes(cr));
+      expect(unnamed).toEqual([]);
+      // …in the SAME shape a reported repair carries, and BOUNDED: exactly the
+      // nine, so a refusal naming the whole stored set (or one sample) fails.
+      expect(refused.shrink?.before).toBe(STORED_RELEASE_CRS.length);
+      expect(refused.shrink?.after).toBe(REBUILT_RELEASE_CRS.length);
+      expect([...(refused.shrink?.removed ?? [])].sort()).toEqual([...LOST_RELEASE_CRS].sort());
+
+      // WROTE NOTHING — proved by re-reading the record, byte for byte, and by
+      // the absence of a second row for the label.
+      const after = await stored(key);
+      expect(after.mine.length).toBe(1);
+      expect(asBytes(after.mine[0])).toBe(before);
+      expect(after.mine[0]!.crs!.length).toBe(STORED_RELEASE_CRS.length);
+      expect(after.rows.length).toBe(1);
+    },
+  );
+
+  test(
+    "an EQUAL derivation is not a shrink: the idempotent replay writes nothing, reports " +
+      "success and changed:false, and is never refused",
+    async () => {
+      boot();
+      const key = await createProject("replay-equal-set-converges");
+      const before = await plantHeldRelease(key, STORED_RELEASE_CRS);
+
+      const again = await replay(key, {
+        commit: HELD_COMMIT,
+        releasedAt: SHIP_DATE,
+        crs: STORED_RELEASE_CRS,
+      });
+
+      // CONVERGENCE, not refusal — the guard may not turn the dedup into an
+      // error, or every re-run of the ceremony starts reporting failures.
+      expect(again.ok).toBe(true);
+      expect(again.status).toBe(200);
+      expect(again.changed).toBe(false);
+      expect(again.error).toBe("");
+      expect(again.shrink).toBeUndefined();
+
+      const after = await stored(key);
+      expect(after.rows.length).toBe(1);
+      expect(asBytes(after.mine[0])).toBe(before);
+    },
+  );
+
+  test(
+    "a LARGER derivation is not a shrink: a rebuild that legitimately finds MORE proceeds, and " +
+      "the ids it added are readable afterwards",
+    async () => {
+      boot();
+      const key = await createProject("replay-superset-proceeds");
+      await plantHeldRelease(key, REBUILT_RELEASE_CRS);
+      const found = [...REBUILT_RELEASE_CRS, ...FOUND_BY_REBUILD_CRS];
+
+      const wrote = await replay(key, {
+        commit: REBUILT_COMMIT,
+        releasedAt: SHIP_DATE,
+        crs: found,
+      });
+
+      // NOT REFUSED — the guard is about LOSS, so a purely additive rebuild
+      // must still get through. A guard keyed on "a record already exists"
+      // would fail here, which is why this is asserted.
+      expect(wrote.ok).toBe(true);
+      expect(wrote.status).toBe(201);
+      expect(wrote.shrink).toBeUndefined();
+      expect(wrote.error).toBe("");
+
+      // …and the larger set is what the label now reads as.
+      const after = await stored(key);
+      const widest = after.mine
+        .map((r) => r.crs ?? [])
+        .reduce((a, b) => (b.length > a.length ? b : a), [] as string[]);
+      expect([...widest].sort()).toEqual([...found].sort());
+      for (const cr of FOUND_BY_REBUILD_CRS) expect(widest).toContain(cr);
+    },
+  );
+
+  test(
+    "a derivation that is NEITHER subset nor superset is still refused: ids it ADDS do not buy " +
+      "the right to drop ids it lost",
+    async () => {
+      boot();
+      const key = await createProject("replay-mixed-set-refused");
+      const before = await plantHeldRelease(key, STORED_RELEASE_CRS);
+      const mixed = [...REBUILT_RELEASE_CRS, ...FOUND_BY_REBUILD_CRS];
+      // NON-VACUITY: the mixed set genuinely is neither — it adds two ids the
+      // stored record never knew while missing nine it holds.
+      for (const cr of FOUND_BY_REBUILD_CRS) expect(STORED_RELEASE_CRS).not.toContain(cr);
+      expect(mixed.filter((cr) => !STORED_RELEASE_CRS.includes(cr))).toEqual([
+        ...FOUND_BY_REBUILD_CRS,
+      ]);
+
+      const refused = await replay(key, {
+        commit: REBUILT_COMMIT,
+        releasedAt: SHIP_DATE,
+        crs: mixed,
+      });
+
+      expect(refused.ok).toBe(false);
+      expect(refused.status).toBeGreaterThanOrEqual(400);
+      expect(refused.error).toContain(VERSION);
+      // The report is about what would be LOST, and only that: the two added
+      // ids are not losses and must not be listed as removed.
+      expect([...(refused.shrink?.removed ?? [])].sort()).toEqual([...LOST_RELEASE_CRS].sort());
+      for (const cr of FOUND_BY_REBUILD_CRS) {
+        expect(refused.shrink?.removed ?? []).not.toContain(cr);
+      }
+
+      const after = await stored(key);
+      expect(after.mine.length).toBe(1);
+      expect(asBytes(after.mine[0])).toBe(before);
+      expect(after.rows.length).toBe(1);
+    },
+  );
+
+  test(
+    "an EMPTY replay derivation never overwrites a stored set — the extreme shrink is refused " +
+      "like every other, and no empty-crs row is inserted beside the record",
+    async () => {
+      boot();
+      const key = await createProject("replay-empty-set-refused");
+      const before = await plantHeldRelease(key, STORED_RELEASE_CRS);
+
+      const refused = await replay(key, {
+        commit: REBUILT_COMMIT,
+        releasedAt: SHIP_DATE,
+        crs: [],
+      });
+
+      expect(refused.ok).toBe(false);
+      expect(refused.status).toBeGreaterThanOrEqual(400);
+      expect(refused.error).toContain(VERSION);
+      expect(refused.shrink?.after).toBe(0);
+      expect([...(refused.shrink?.removed ?? [])].sort()).toEqual([...STORED_RELEASE_CRS].sort());
+
+      const after = await stored(key);
+      expect(after.rows.length).toBe(1);
+      expect(asBytes(after.mine[0])).toBe(before);
+      expect(after.mine[0]!.crs!.length).toBe(STORED_RELEASE_CRS.length);
+    },
+  );
+
+  test(
+    "the REPAIR path's existing rule is untouched: an opt-in repair whose derivation came back " +
+      "EMPTY still leaves the stored set alone, converging rather than refusing",
+    async () => {
+      boot();
+      const key = await createProject("repair-empty-still-converges");
+      const before = await plantHeldRelease(key, STORED_RELEASE_CRS);
+
+      // CR-CRU-086 §S2's rung, re-asserted rather than re-implemented: this
+      // path already declines the write, and §S4 must not re-route it through
+      // the new refusal — the ceremony's tally depends on the difference
+      // between "nothing to do" and "refused".
+      const repaired = await replay(key, { commit: HELD_COMMIT, crs: [], repair: true });
+
+      expect(repaired.ok).toBe(true);
+      expect(repaired.changed).toBe(false);
+      const after = await stored(key);
+      expect(after.rows.length).toBe(1);
+      expect(asBytes(after.mine[0])).toBe(before);
+      expect(after.mine[0]!.crs!.length).toBe(STORED_RELEASE_CRS.length);
+    },
+  );
+});
+
+describe("the ceremony refuses a lossy replay and tallies it as written-nothing (CR-CRU-129 §S4)", () => {
+  let handle: ServerHandle | undefined;
+  const dbDirs: string[] = [];
+  const repos: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const d of dbDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
+  });
+
+  function boot(): string {
+    const dir = mkdtempSync(join(tmpdir(), "release-replay-ceremony-db-"));
+    dbDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    return `http://localhost:${handle.server.port}`;
+  }
+
+  /**
+   * The ancestry world section E seeds, with the QUEUE as the knob: the plans
+   * carrying each landing sha, one plan closed with NO sha (the existing
+   * class-1 unplaceable), and whatever extra ids a test needs registered.
+   * Written through the same real paths (`replaceQueue` + `seedClosedPlan`),
+   * so nothing here is a hand-built row.
+   */
+  async function seedWorld(
+    base: string,
+    repo: string,
+    mergeShas: Map<string, string>,
+    name: string,
+    queued: readonly string[],
+  ): Promise<string> {
+    const res = await postJson(base, "/api/v2/projects", { name });
+    const body = (await res.json()) as { project: { key: string } };
+    const key = body.project.key;
+    const reg = await postJson(base, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      role: "ORCHESTRATOR",
+    });
+    expect(reg.status).toBe(200);
+
+    handle!.store.replaceQueue(
+      key,
+      queued.map((cr) => ({ cr, title: `${cr} work`, wave: "1", dependsOn: [] })),
+    );
+    expect([...(await queuedCrs(base, key))].sort()).toEqual([...queued].sort());
+
+    for (const [cr, commit] of mergeShas) await seedClosedPlan(base, key, cr, commit);
+    await seedClosedPlan(base, key, UNPLACEABLE_CR, null);
+
+    writeFileSync(join(repo, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    return key;
+  }
+
+  /** A release record planted at the server's own production entry. */
+  async function plantRelease(
+    base: string,
+    key: string,
+    version: string,
+    commit: string,
+    crs: readonly string[],
+  ): Promise<void> {
+    const planted = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "release",
+      label: version,
+      commit,
+      releasedAt: ANCESTRY_RELEASED_AT[version]!,
+      crs,
+    });
+    expect(planted.status).toBe(201);
+  }
+
+  /** A `cr-merged` record — the OTHER landing source, written the way
+   *  `cr-close` writes it. Its presence is what separates "the evidence is
+   *  intact" from "the evidence was evicted". */
+  async function plantMerged(base: string, key: string, cr: string): Promise<void> {
+    const posted = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "cr-merged",
+      label: cr,
+      commit: `merge-${cr}`,
+    });
+    expect(posted.status).toBe(201);
+  }
+
+  /** Every non-empty output line, trimmed — the surface the per-class tally
+   *  assertions partition. */
+  const linesOf = (output: string): string[] =>
+    output
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+  /** A count as a STANDALONE token, so `3` is not satisfied by an id ending in
+   *  `203` — the idiom section E's shrink report already uses. */
+  const countToken = (n: number): RegExp => new RegExp(String.raw`\b${n}\b`);
+
+  test(
+    "the real ceremony REFUSES the release whose replay would shrink it, names it and every " +
+      "missing id, tallies it as refused rather than recorded, and leaves the record byte-identical",
+    async () => {
+      const { repo, mergeShas } = buildAncestryRepo(true);
+      repos.push(repo);
+      const base = boot();
+      const key = await seedWorld(base, repo, mergeShas, "ceremony-refuses-lossy-replay", [
+        ...ANCESTRY_QUEUED_CRS,
+        ...EVICTED_EVIDENCE_CRS,
+      ]);
+
+      // THE 2026-09-13 STORE: the record holds what shipped PLUS the CRs whose
+      // landing evidence went with the sweep, so the rebuild can only derive
+      // the ancestry-placeable subset.
+      const held = [...ANCESTRY_SHIPPED["0.1.0"]!, ...EVICTED_EVIDENCE_CRS];
+      await plantRelease(base, key, "0.1.0", git(repo, ["rev-list", "-n", "1", "0.1.0"]), held);
+
+      // PRE-STATE, through the real reads: the record holds all six, and the
+      // three extras have no landing record at ANY source, which is why the
+      // rebuild cannot place them.
+      const before = byVersion(await listReleases(base, key));
+      expect(sortedCrs(before.get("0.1.0")!.crs)).toEqual([...held].sort());
+      expect(before.get("0.1.0")!.crs!.length).toBe(held.length);
+      const feed = await eventFeedText(base, key);
+      for (const cr of EVICTED_EVIDENCE_CRS) {
+        expect(await queuedCrs(base, key)).toContain(cr);
+        expect(await plansFor(base, key, cr)).toEqual([]);
+        expect(feed).not.toContain(cr);
+      }
+      const bytes = JSON.stringify(before.get("0.1.0"));
+
+      // THE ORDINARY REPLAY — no repair flag, the command that ran.
+      const replayed = await runBackfill(repo, base);
+      expect(replayed.output).not.toMatch(/unknown flag/);
+      // NON-FATAL: a refusal is per-release, so the ceremony finishes.
+      expect(replayed.exitCode).toBe(0);
+
+      // LOUD — and naming both the release and what it would have dropped.
+      const said = refusalLines(replayed.output).join("\n");
+      expect(said.length).toBeGreaterThan(0);
+      expect(said).toContain("0.1.0");
+      const unnamed = EVICTED_EVIDENCE_CRS.filter((cr) => !replayed.output.includes(cr));
+      expect(unnamed).toEqual([]);
+
+      // TALLIED AS WRITTEN-NOTHING, never as recorded: the other two tags did
+      // record, so the tally is 2 of 3 and this one is named as refused.
+      expect(replayed.output).toContain("2/3 recorded");
+      expect(replayed.output).not.toContain("3/3 recorded");
+      const tally = linesOf(replayed.output).filter((l) => /REFUSED/.test(l));
+      expect(tally.join("\n")).toContain("0.1.0");
+
+      // WROTE NOTHING — byte for byte, and still one row for the label.
+      const after = await listReleases(base, key);
+      expect(JSON.stringify(byVersion(after).get("0.1.0"))).toBe(bytes);
+      expect(after.filter((r) => r.version === "0.1.0").length).toBe(1);
+    },
+  );
+
+  test(
+    "re-running the ceremony against a COMPLETE store writes nothing, reports no shrink and " +
+      "refuses nothing — the guard cannot be satisfied by refusing every replay",
+    async () => {
+      const { repo, mergeShas } = buildAncestryRepo(true);
+      repos.push(repo);
+      const base = boot();
+      const key = await seedWorld(
+        base,
+        repo,
+        mergeShas,
+        "ceremony-complete-store-noop",
+        ANCESTRY_QUEUED_CRS,
+      );
+
+      const first = await runBackfill(repo, base);
+      expect(first.exitCode).toBe(0);
+      expect(first.output).toContain("3/3 recorded");
+      // PRE-STATE: three releases holding the real, non-empty provenance the
+      // ceremony itself computed, so "unchanged" below is not two copies of
+      // nothing.
+      const before = byVersion(await listReleases(base, key));
+      for (const [version, crs] of Object.entries(ANCESTRY_SHIPPED)) {
+        expect(sortedCrs(before.get(version)!.crs)).toEqual([...crs].sort());
+        expect(before.get(version)!.crs!.length).toBeGreaterThan(0);
+      }
+      const bytes = JSON.stringify([...before.entries()]);
+
+      const second = await runBackfill(repo, base);
+
+      expect(second.exitCode).toBe(0);
+      expect(second.output).toContain("3/3 recorded");
+      // NOTHING REFUSED, NOTHING SHRANK — a complete store has no finding to
+      // report, so both channels are silent.
+      expect(refusalLines(second.output)).toEqual([]);
+      expect(shrinkLines(second.output)).toEqual([]);
+      // NOTHING WRITTEN — one row per tag, byte-identical to the first run's.
+      const releases = await listReleases(base, key);
+      expect(releases.length).toBe(3);
+      expect(JSON.stringify([...byVersion(releases).entries()])).toBe(bytes);
+    },
+  );
+
+  test(
+    "the unplaceable tally reports 'landing evidence EVICTED' and 'never landed' as two " +
+      "separately counted groups with disjoint ids, and a CR whose cr-merged record survives " +
+      "is in neither",
+    async () => {
+      const { repo, mergeShas } = buildAncestryRepo(true);
+      repos.push(repo);
+      const base = boot();
+      const key = await seedWorld(base, repo, mergeShas, "tally-distinguishes-two-facts", [
+        ...ANCESTRY_QUEUED_CRS,
+        ...EVICTED_EVIDENCE_CRS,
+        ...NEVER_LANDED_CRS,
+        EVIDENCED_SHIPPED_CR,
+      ]);
+
+      // The release NAMES the evicted-evidence CRs and the control; only the
+      // control still has its `cr-merged` record.
+      const held = [...ANCESTRY_SHIPPED["0.1.0"]!, ...EVICTED_EVIDENCE_CRS, EVIDENCED_SHIPPED_CR];
+      await plantRelease(base, key, "0.1.0", git(repo, ["rev-list", "-n", "1", "0.1.0"]), held);
+      await plantMerged(base, key, EVIDENCED_SHIPPED_CR);
+
+      // PRE-STATE, per class, through the real reads.
+      const queue = await queuedCrs(base, key);
+      const namedByRelease = sortedCrs(
+        byVersion(await listReleases(base, key)).get("0.1.0")!.crs,
+      );
+      const feed = await eventFeedText(base, key);
+      for (const cr of EVICTED_EVIDENCE_CRS) {
+        expect(queue).toContain(cr);
+        expect(namedByRelease).toContain(cr);
+        expect(await plansFor(base, key, cr)).toEqual([]);
+        expect(feed).not.toContain(cr);
+      }
+      for (const cr of NEVER_LANDED_CRS) {
+        expect(queue).toContain(cr);
+        expect(namedByRelease).not.toContain(cr);
+        expect(await plansFor(base, key, cr)).toEqual([]);
+        expect(feed).not.toContain(cr);
+      }
+      expect(namedByRelease).toContain(EVIDENCED_SHIPPED_CR);
+      expect(feed).toContain(EVIDENCED_SHIPPED_CR);
+
+      const run = await runBackfill(repo, base);
+      expect(run.exitCode).toBe(0);
+      const lines = linesOf(run.output);
+
+      // CLASS "EVIDENCE EVICTED" — the data-loss class, said as such.
+      const evicted = lines.filter((l) => /evict/i.test(l));
+      expect(evicted.length).toBeGreaterThan(0);
+      const evictedSaid = evicted.join("\n");
+      const unnamedEvicted = EVICTED_EVIDENCE_CRS.filter((cr) => !evictedSaid.includes(cr));
+      expect(unnamedEvicted).toEqual([]);
+      expect(evictedSaid).toMatch(countToken(EVICTED_EVIDENCE_CRS.length));
+      // …and attributed correctly: the never-landed ids are NOT losses.
+      for (const cr of NEVER_LANDED_CRS) expect(evictedSaid).not.toContain(cr);
+      // …nor is the CR whose landing evidence survived.
+      expect(evictedSaid).not.toContain(EVIDENCED_SHIPPED_CR);
+
+      // CLASS "NEVER LANDED" — reported, counted on its own, and never
+      // described as a loss.
+      const neverLanded = lines.filter((l) => NEVER_LANDED_CRS.some((cr) => l.includes(cr)));
+      expect(neverLanded.length).toBeGreaterThan(0);
+      const neverSaid = neverLanded.join("\n");
+      const unnamedNever = NEVER_LANDED_CRS.filter((cr) => !neverSaid.includes(cr));
+      expect(unnamedNever).toEqual([]);
+      expect(neverSaid).toMatch(countToken(NEVER_LANDED_CRS.length));
+      expect(neverSaid).not.toMatch(/evict/i);
+      for (const cr of EVICTED_EVIDENCE_CRS) expect(neverSaid).not.toContain(cr);
+
+      // DISJOINT — no single line carries one of each, which is exactly what
+      // the one undifferentiated `15 unplaceable` line did.
+      const mixedLines = lines.filter(
+        (l) =>
+          EVICTED_EVIDENCE_CRS.some((cr) => l.includes(cr)) &&
+          NEVER_LANDED_CRS.some((cr) => l.includes(cr)),
+      );
+      expect(mixedLines).toEqual([]);
+
+      // AND THE CONTROL IS IN NEITHER: a shipped CR with its `cr-merged`
+      // record intact is not unplaceable at all.
+      expect(unplaceableLines(run.output).join("\n")).not.toContain(EVIDENCED_SHIPPED_CR);
+    },
+  );
+
+  test(
+    "a store with NEITHER condition reports NEITHER category, while the class it does hold is " +
+      "still named — the negative bound that stops 'everything is evicted'",
+    async () => {
+      const { repo, mergeShas } = buildAncestryRepo(true);
+      repos.push(repo);
+      const base = boot();
+      const key = await seedWorld(
+        base,
+        repo,
+        mergeShas,
+        "tally-reports-neither-category",
+        ANCESTRY_QUEUED_CRS,
+      );
+
+      // PRE-STATE: every queued CR here either has a plan carrying its landing
+      // sha or is the one closed WITHOUT one, so neither new class has a
+      // member — and the releases the ceremony is about to record name only
+      // ids that ancestry placed.
+      for (const cr of mergeShas.keys()) {
+        expect((await plansFor(base, key, cr)).length).toBeGreaterThan(0);
+      }
+      expect((await plansFor(base, key, UNPLACEABLE_CR)).length).toBeGreaterThan(0);
+
+      const run = await runBackfill(repo, base);
+      expect(run.exitCode).toBe(0);
+      expect(run.output).toContain("3/3 recorded");
+
+      // NEITHER NEW CATEGORY — not by a count of zero, but by not being
+      // reported at all.
+      expect(linesOf(run.output).filter((l) => /evict/i.test(l))).toEqual([]);
+      const unplaceable = unplaceableLines(run.output);
+      for (const cr of [...EVICTED_EVIDENCE_CRS, ...NEVER_LANDED_CRS, EVIDENCED_SHIPPED_CR]) {
+        expect(unplaceable.join("\n")).not.toContain(cr);
+      }
+      // NON-VACUITY — the reporting mechanism demonstrably RAN: the class this
+      // store does hold (a closed plan recording no landing sha) is named, so
+      // "neither category" is a measurement and not a silent ceremony.
+      expect(unplaceable.length).toBeGreaterThan(0);
+      expect(unplaceable.join("\n")).toContain(UNPLACEABLE_CR);
+      expect(refusalLines(run.output)).toEqual([]);
+    },
+  );
+});
