@@ -205,6 +205,16 @@ run reported 15 unplaceable without saying which kind they were.
 **Close-out**
 - [ ] Retention returns from its 200,000 stopgap to a considered cap for the disposable kinds, and
       the value is stated in the close-out rather than left at whatever stopped the bleeding.
+      **Chosen: 5000, applied as `$CRUCIBLE_DEFAULT_RETENTION` so it bounds EVERY project rather
+      than only the one that was bitten.** Reasoning, measured rather than picked: the pre-incident
+      cap was 2000 and CR-CRU-128's four cycles wrote ~165 events, so 2000 held well under two days
+      of a single CR's telemetry — which is how the oldest rows, the releases, came to be the ones
+      evicted. 5000 holds roughly a wave's worth. It is safe to be generous now for the reason this
+      CR exists: after §S1 the cap can only reach `test`, `compile` and `lifecycle`, so the cost of
+      a larger number is disk, and the cost of a smaller one is no longer history. The two other
+      projects on this board (`Model B`, `Sandesh`) carry no per-project cap and were pruning
+      NOTHING until the boot disclosure named them — the fleet-wide setting is what fixes that, not
+      a third per-project value.
 - [ ] One re-baseline of both stacks after the migration runs against the live board — the migration,
       the restored `0.1.0` provenance and the four re-posted `cr-merged` records are all live facts
       the two board-invariant suites census.
