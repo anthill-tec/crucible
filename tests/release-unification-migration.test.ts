@@ -361,6 +361,67 @@ function liveStoreReplica(
   return { live, replica, sizeBefore: before.size, mtimeBefore: before.mtimeMs };
 }
 
+/**
+ * Does the replica still hold the type §S2's step RETIRES — or has that step
+ * already run against this board?
+ *
+ * A REAL-SCALE MIGRATION PROOF IS SINGLE-USE. It borrows its population from
+ * the live board, so it can only run while that board still holds the shape
+ * its step rewrites; the moment the migrated build boots against
+ * `data/crucible.db`, a replica of it carries ZERO `release-proposal` rows and
+ * the guards below correctly refuse to pass on an empty set. Nor can a
+ * downgrade rescue it: `ageToPreUnification` measured exactly that asymmetry —
+ * re-typing and re-stamping cannot SPLIT a unified record back into the pair a
+ * pre-§S2 board held. This is a PRECONDITION, not a relaxation: nothing below
+ * is weakened, and every assertion runs exactly as written whenever the
+ * replica does hold that shape.
+ *
+ * MEASURED FROM THE REPLICA, never from `user_version` alone — a version check
+ * would also silence a board that legitimately predates this step. The version
+ * is REPORTED regardless, because "already migrated" and "no store on this
+ * machine" must be tellable apart from the one line the case prints.
+ */
+function preUnificationPopulation(
+  replica: string,
+): { pre: number; version: number } | { skip: string } {
+  const db = new Database(replica);
+  try {
+    const version =
+      db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? -1;
+    const at = `\`user_version\` ${String(version)} on the replica`;
+    const carried =
+      "the invariant itself is carried, unweakened, by this case's synthetic sibling above, " +
+      "which always runs";
+    const table = db
+      .query<{ name: string }, []>(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'milestones'`,
+      )
+      .get();
+    if (table === null) {
+      return {
+        skip:
+          `the replica holds no \`milestones\` table at all (${at}), so it predates the record ` +
+          `table this step rewrites — ${carried}`,
+      };
+    }
+    const proposals = db
+      .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM milestones WHERE type = ?`)
+      .get(RETIRED_TYPE)!.n;
+    if (proposals === 0) {
+      return {
+        skip:
+          `the live store is ALREADY MIGRATED — not one \`${RETIRED_TYPE}\` row is left in it ` +
+          `(${at}), so a replica of it cannot supply the pre-§S2 population this case migrates, ` +
+          `and no downgrade can rebuild one: re-typing and re-stamping cannot split a unified ` +
+          `record back into the pair a pre-§S2 board held — ${carried}`,
+      };
+    }
+    return { pre: proposals, version };
+  } finally {
+    db.close();
+  }
+}
+
 describe("CR-CRU-130 §S2 — two types become one record, and history keeps everything else", () => {
   const scratchDirs: string[] = [];
   const openDbs: Database[] = [];
@@ -638,6 +699,17 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
   );
 
   // ── AC — and at REAL scale, against a replica of the live store ─────────
+  //
+  // WHY THIS CASE MAY STOP RUNNING WITHOUT HAVING ROTTED: a real-scale
+  // migration proof is SINGLE-USE. It can only run while the live store still
+  // holds the shape its step rewrites, because once that board has been
+  // migrated it cannot supply a pre-migration population any more, and a
+  // DOWNGRADE cannot reconstruct one — `ageToPreUnification` above measures
+  // exactly that asymmetry: a unified record cannot be split back into the
+  // `release-proposal` + `release` pair a pre-§S2 board held. So a NOT RUN
+  // below means "this board has already been migrated", not "this proof
+  // decayed" — and the invariant it reaches for keeps being proved, on every
+  // run, by the synthetic sibling above.
 
   test(
     "at this project's real population, whatever its size — where a proposal has no matching " +
@@ -647,6 +719,17 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
       const taken = liveStoreReplica(scratch("cru130-c2-live-replica-"));
       if ("skip" in taken) {
         console.log(`[CR-CRU-130] §S2 real-scale migration NOT RUN: ${taken.skip}`);
+        return;
+      }
+      // THE PRECONDITION — the same stated-reason mechanism as the two above,
+      // for one more way the replica can fail to be a subject, and read BEFORE
+      // the chain is run over it so what is measured is the shape the board
+      // itself last wrote. Nothing after this point is conditional: every
+      // assertion, including the non-vacuity guards, runs exactly as written
+      // whenever the replica DOES hold the type this step retires.
+      const population = preUnificationPopulation(taken.replica);
+      if ("skip" in population) {
+        console.log(`[CR-CRU-130] §S2 real-scale migration NOT RUN: ${population.skip}`);
         return;
       }
 

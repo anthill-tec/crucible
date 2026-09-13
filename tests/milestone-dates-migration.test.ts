@@ -93,6 +93,75 @@ function liveStoreReplica(
   return { live, replica, sizeBefore: before.size, mtimeBefore: before.mtimeMs };
 }
 
+/**
+ * Does the replica still hold the shape §S1's step REWRITES — payload dates
+ * with no columns to hold them — or has that step already run against this
+ * board?
+ *
+ * A REAL-SCALE MIGRATION PROOF IS SINGLE-USE. It borrows its population from
+ * the live board, so it can only run while that board still holds the shape
+ * its step rewrites; the moment the migrated build boots against
+ * `data/crucible.db`, a replica of it carries ZERO pre-migration rows, and the
+ * case's own non-vacuity guards correctly fire rather than pass on an empty
+ * set. This is a PRECONDITION, not a relaxation: nothing below is weakened,
+ * and every assertion runs exactly as written whenever the replica does hold
+ * that shape.
+ *
+ * MEASURED FROM THE REPLICA, never from `user_version` alone — a version check
+ * would also silence a board that legitimately predates this step, and what a
+ * reader needs to know is which shape the file actually holds. The version is
+ * REPORTED regardless, because "already migrated" and "no store on this
+ * machine" must be tellable apart from the one line the case prints.
+ */
+function preMigrationPopulation(
+  replica: string,
+): { pre: number; version: number } | { skip: string } {
+  const db = new Database(replica);
+  try {
+    const version =
+      db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? -1;
+    const at = `\`user_version\` ${String(version)} on the replica`;
+    const carried =
+      "the invariant itself is carried, unweakened, by this case's synthetic sibling above, " +
+      "which always runs";
+    const columns = columnsOf(db, "milestones");
+    if (columns.length === 0) {
+      return {
+        skip:
+          `the replica holds no \`milestones\` table at all (${at}), so it predates the record ` +
+          `table this step adds its columns to — ${carried}`,
+      };
+    }
+    if (columns.includes(TARGET_COLUMN) || columns.includes(DELIVERED_COLUMN)) {
+      return {
+        skip:
+          `the live store is ALREADY MIGRATED — its \`milestones\` table carries ` +
+          `\`${TARGET_COLUMN}\`/\`${DELIVERED_COLUMN}\` already (${at}), so a replica of it holds ` +
+          `zero rows of the shape this step rewrites and the proof would run against an empty ` +
+          `population — ${carried}`,
+      };
+    }
+    const dated = db
+      .query<{ n: number }, []>(
+        `SELECT COUNT(*) AS n FROM milestones
+          WHERE json_extract(payload, '$.releasedAt') IS NOT NULL
+             OR json_extract(payload, '$.targetAt') IS NOT NULL`,
+      )
+      .get()!.n;
+    if (dated === 0) {
+      return {
+        skip:
+          `the replica's \`milestones\` table has the two columns absent but not one row whose ` +
+          `payload carries \`releasedAt\` or \`targetAt\` (${at}), so this step has no date to ` +
+          `derive at real scale — ${carried}`,
+      };
+    }
+    return { pre: dated, version };
+  } finally {
+    db.close();
+  }
+}
+
 interface ChainStep {
   readonly from: number;
   readonly to: number;
@@ -810,6 +879,18 @@ describe("the dates a milestone already held become columns, and history keeps e
   );
 
   // ── AC — and at REAL scale, against a replica of the live store ──────────
+  //
+  // WHY THIS CASE MAY STOP RUNNING WITHOUT HAVING ROTTED: a real-scale
+  // migration proof is SINGLE-USE. It can only run while the live store still
+  // holds the shape its step rewrites, because once that board has been
+  // migrated it cannot supply a pre-migration population any more, and a
+  // DOWNGRADE cannot reconstruct one — dropping the columns and re-stamping
+  // the version puts back the schema, never the rows; §S2's sibling states the
+  // sharper form of the same limit, that a unified record cannot be split back
+  // into the `release-proposal` + `release` PAIR a pre-§S2 board held. So a
+  // NOT RUN below means "this board has already been migrated", not "this
+  // proof decayed" — and the invariant it reaches for keeps being proved, on
+  // every run, by the synthetic sibling above.
 
   test(
     "at this project's real population, every record survives the migration byte-identically " +
@@ -818,6 +899,16 @@ describe("the dates a milestone already held become columns, and history keeps e
       const taken = liveStoreReplica(scratch("cru130-live-replica-"));
       if ("skip" in taken) {
         console.log(`[CR-CRU-130] §S1 real-scale migration NOT RUN: ${taken.skip}`);
+        return;
+      }
+      // THE PRECONDITION — the same stated-reason mechanism as the two above,
+      // for one more way the replica can fail to be a subject. Nothing after
+      // this point is conditional: every assertion, including the non-vacuity
+      // guards, runs exactly as written whenever the replica DOES hold the
+      // shape this step rewrites.
+      const population = preMigrationPopulation(taken.replica);
+      if ("skip" in population) {
+        console.log(`[CR-CRU-130] §S1 real-scale migration NOT RUN: ${population.skip}`);
         return;
       }
 
