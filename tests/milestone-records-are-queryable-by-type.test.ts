@@ -220,8 +220,13 @@ describe("CR-CRU-129 §S3 — milestone records are QUERYABLE by type, not scann
 
     // …and the same surface answers for another type, so "only cr-merged"
     // above is a filter and not a hardcoded answer.
+    //
+    // CR-CRU-130 §S2 — the proposal is a `release` record now, an undelivered
+    // one, so the type read answers BOTH. The case's subject is the filter,
+    // and it is sharper for it: the two rows here are a shipped release and a
+    // planned one, and `cr-merged` above returned neither.
     const releases = await get(milestonesByType(key, "release"));
-    expect(labelsOf(recordsOf(releases.body))).toEqual(["0.1.3"]);
+    expect(labelsOf(recordsOf(releases.body)).sort()).toEqual(["0.1.3", "0.2.0"]);
   });
 
   test("reads the record table, not the capped buffer: it answers while `events` holds no milestone row at all", async () => {

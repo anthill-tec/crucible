@@ -256,7 +256,14 @@ describe("CR-CRU-129 §S3 — what `GET /api/v2/events` serves once the records 
     expect(typeof audit.body.event!.retiredAt).toBe("number");
   });
 
-  test("a CONSUMED release proposal leaves the live list and stays readable by id — the store's standing promise", async () => {
+  // RETARGETED by CR-CRU-130 §S2: the subject survives and only the model
+  // beneath it moved. There is no proposal to CONSUME any more — the plan and
+  // the release are ONE record — so what leaves the proposals read on delivery
+  // is that record itself, and what stays readable by id is the same row under
+  // its own type, carrying both the target it declared and the date it was
+  // met. The standing promise the case exists for is unchanged: a record that
+  // leaves a live list is never gone.
+  test("a DELIVERED release leaves the proposals list and stays readable by id — the store's standing promise", async () => {
     boot();
     const key = await seedProject("cru129-consumed-proposal");
     const proposal = store().recordReleaseProposal(key, AGENT, {
@@ -268,7 +275,14 @@ describe("CR-CRU-129 §S3 — what `GET /api/v2/events` serves once the records 
       (beforeShipping.body.proposals ?? []).map((row) => row.label as string),
     ).toEqual(["0.1.3"]);
 
-    store().recordMilestoneEvent(key, AGENT, "release", { label: "0.1.3", commit: "def5678" });
+    // The ship states its date, because under §S2 that date IS the delivery:
+    // a `release` written without one is an OUTSTANDING release, and 0.1.3
+    // would rightly still be standing in the proposals read below.
+    store().recordMilestoneEvent(key, AGENT, "release", {
+      label: "0.1.3",
+      commit: "def5678",
+      releasedAt: 1_790_000_000,
+    });
     expectNoRecordsLeftInTheBuffer(key);
 
     const afterShipping = await get(`/api/v2/projects/${key}/release-proposals`);
@@ -276,8 +290,10 @@ describe("CR-CRU-129 §S3 — what `GET /api/v2/events` serves once the records 
 
     const audit = await get(`/api/v2/events/${proposal.id}`);
     expect(audit.status).toBe(200);
-    expect(audit.body.event!.type).toBe("release-proposal");
+    expect(audit.body.event!.type).toBe("release");
     expect(audit.body.event!.label).toBe("0.1.3");
+    expect(audit.body.event!.targetAt).toBe(1_800_000_000);
+    expect(audit.body.event!.deliveredAt).toBe(1_790_000_000);
   });
 
   // ── §S3 consumer table — the two record ROUTES ───────────────────────────

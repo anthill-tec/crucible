@@ -36,6 +36,11 @@ EXIT_USAGE=2
 # CR-CRU-086 §S2 — the client's REFUSED-repair status (its EXIT_REPAIR_REFUSED):
 # it wrote nothing, on purpose, and said why. Neither recorded nor failed.
 EXIT_REFUSED=3
+# CR-CRU-130 §S2 — the ceremony could not DATE the release it is reporting, so
+# it reported nothing. Its own code, because it is neither a transport failure
+# nor a server refusal: nothing was even attempted, and the remedy is a git
+# one. See `emit_release_milestone`.
+EXIT_UNDATED=4
 
 # Script variables (set via argument parsing)
 SUBCOMMAND=""
@@ -389,10 +394,23 @@ report_release() {
     # CR-CRU-080 §S2/AC3 — non-fatal AFTER publication: the tag is already
     # public, so a transport failure warns (with its recovery command, printed
     # by the reporter) and the ceremony still exits successfully.
-    emit_release_milestone "$version" "$sha" || true
+    #
+    # CR-CRU-130 §S2 — with ONE exception, and it is not a hole in that rule.
+    # The tolerance exists so a REPORTING failure cannot unpublish a release;
+    # it does not exist so a DEGRADED RECORD can pass for a good one. A release
+    # the ceremony could not date was never sent, and the store holding no
+    # record is recoverable while a store holding an undated one is not — the
+    # date is gone the moment nobody is told. So that status alone survives the
+    # `|| true` and the ceremony exits non-zero, having published the tag and
+    # named the remedy.
+    local reported=0
+    emit_release_milestone "$version" "$sha" || reported=$?
     # CR-CRU-081 §S2 — same tally on the live path: an incomplete `crs` must be
     # visible at the moment it is produced, not only in a backfill.
     report_unplaceable_crs
+    if [ "$reported" -eq "$EXIT_UNDATED" ]; then
+        return "$EXIT_ERROR"
+    fi
     return "$EXIT_SUCCESS"
 }
 
@@ -729,11 +747,29 @@ emit_release_milestone() {
     agent="$(ceremony_agent)"
     client="$(repo_root)/clients/python-crucible.py"
 
+    # CR-CRU-130 §S2 — A RELEASE THIS CEREMONY CANNOT DATE IS NOT REPORTED, and
+    # the ceremony says so instead of posting a poorer record in silence.
+    #
+    # `release_ship_date` prints NOTHING and exits 0 whenever git cannot answer
+    # for this sha — a shallow clone, or a tag object the local repo never
+    # fetched. Until this CR the date was simply dropped from the argv and the
+    # release was recorded without it, which is the class of silence §S2 exists
+    # to end: the store then holds a release whose ship date nobody will ever
+    # recover, and the operator is told the ceremony succeeded. The remedy is a
+    # git one and it is named, so the recovery command below records the SAME
+    # release rather than a poorer one.
     ship_date="$(release_ship_date "$sha")"
-    if [ -n "$ship_date" ]; then
-        provenance+=(--released-at "$ship_date")
-        shown="$shown --released-at $ship_date"
+    if [ -z "$ship_date" ]; then
+        info "FAILED: release $version is NOT recorded in Crucible — git could not date $sha"
+        info "  \`git log -1 --format=%ct $sha\` answered nothing: the commit is most likely absent"
+        info "  from this clone (a shallow clone, or a tag object that was never fetched)."
+        info "  remedy: \`git fetch --tags --unshallow\` (or \`--depth=<n>\`) and re-run, or record it"
+        info "  directly once the date is known:"
+        info "  python3 $client milestone --type release --label $version --commit $sha --agent $agent --released-at <epoch-seconds>"
+        return "$EXIT_UNDATED"
     fi
+    provenance+=(--released-at "$ship_date")
+    shown="$shown --released-at $ship_date"
     crs="$(release_crs "$version")"
     if [ -n "$crs" ]; then
         provenance+=(--crs "$crs")

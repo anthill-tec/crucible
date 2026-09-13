@@ -170,11 +170,11 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
     return types;
   }
 
-  async function propose(key: string, label: string): Promise<void> {
+  async function propose(key: string, label: string, targetAt = FIXTURE_TARGET_AT): Promise<void> {
     const res = await post(`/api/v2/projects/${key}/release-proposals`, {
       agentId: ORCH,
       label,
-      targetAt: FIXTURE_TARGET_AT,
+      targetAt,
     });
     expect(res.status).toBe(200);
   }
@@ -364,11 +364,20 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
   // AC1 — `gate` is lifted on the SAME terms, which is strictly more than
   // LIVE_GATE (src/store.ts:3072) exempts today: that predicate protects only
   // a gate that is BOTH unretired AND version-stamped, so a versionless gate
-  // and a retired one are prunable right now. Same for a CONSUMED proposal,
-  // which LIVE_PROPOSAL (:3079) deliberately stops protecting.
+  // and a retired one are prunable right now. Same for a proposal no longer
+  // live, which LIVE_PROPOSAL (:3079) deliberately stops protecting.
+  //
+  // RETARGETED by CR-CRU-130 §S2. The subject is untouched — a record survives
+  // BECAUSE it is a record, not because an exemption predicate happened to
+  // match it — and only the way the fixture obtains a no-longer-live plan
+  // moved with the model. Shipping no longer stamps `retired_at`: a release
+  // and its proposal are ONE record and delivery is `deliveredAt`. A REVISION
+  // still stamps it, because a label may hold only one live plan, so the
+  // superseded predecessor is now what this case protects — the same row in
+  // the same un-exempt state, reached the way the model still reaches it.
   // ─────────────────────────────────────────────────────────────────────────
   test(
-    "a VERSIONLESS gate, a RETIRED gate and a CONSUMED release-proposal survive the roll too — the " +
+    "a VERSIONLESS gate, a RETIRED gate and a SUPERSEDED release plan survive the roll too — the " +
       "record survives because it is a record, not because an exemption predicate happened to match it",
     async () => {
       boot();
@@ -377,7 +386,9 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
       const cap = await configureCap(key, FIXTURE_CAP_SMALL);
 
       await propose(key, "9.9.0");
-      const consumedProposal = store.listReleaseProposals(key)[0]!.id;
+      const supersededProposal = store.listReleaseProposals(key)[0]!.id;
+      // The REVISION retires the predecessor captured above.
+      await propose(key, "9.9.0", FIXTURE_TARGET_AT + 86_400);
       const versionlessGate = await gate(key, "gate with no release");
       await milestone(key, {
         type: "release",
@@ -392,11 +403,12 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
       expect(typeof retiredBefore.retiredAt).toBe("number");
       const versionlessBefore = await eventById(versionlessGate);
       expect(versionlessBefore.version).toBeUndefined();
-      const consumedBefore = await eventById(consumedProposal);
-      expect(typeof consumedBefore.retiredAt).toBe("number");
-      // The consumed proposal is gone from the LIVE read, exactly as designed —
+      const supersededBefore = await eventById(supersededProposal);
+      expect(typeof supersededBefore.retiredAt).toBe("number");
+      // The superseded plan is gone from the LIVE read, exactly as designed —
       // it is auditable through the by-id read and nowhere else, which is what
-      // makes its eviction silent today.
+      // makes its eviction silent today. (The successor left that read too,
+      // by being DELIVERED: the release above is the same record shipping.)
       expect(
         ((await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals as AnyBody[]).length,
       ).toBe(0);
@@ -409,12 +421,12 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
       const after = {
         versionlessGate: await eventRead(versionlessGate),
         retiredGate: await eventRead(retiredGate),
-        consumedProposal: await eventRead(consumedProposal),
+        supersededProposal: await eventRead(supersededProposal),
       };
       expect(after).toEqual({
         versionlessGate: { status: 200, event: versionlessBefore },
         retiredGate: { status: 200, event: retiredBefore },
-        consumedProposal: { status: 200, event: consumedBefore },
+        supersededProposal: { status: 200, event: supersededBefore },
       });
     },
   );

@@ -1088,6 +1088,70 @@ function recordProjection(table: "milestones" | "gates", kind: "milestone" | "ga
 const MILESTONE_ROWS = recordProjection("milestones", "milestone");
 const GATE_ROWS = recordProjection("gates", "gate");
 
+/**
+ * CR-CRU-130 §S2 — WHEN A RELEASE RECORD IS STILL A PLAN, as a column
+ * predicate, written ONCE because three reads must draw the line identically:
+ * the proposals read publishes exactly these, `listReleases` publishes exactly
+ * the rest, and a ship delivers exactly one of these in place. Two copies of
+ * this line would drift, and the drift would be a label in both reads or in
+ * neither.
+ *
+ * A plan is a release that DECLARED A DATE IT AIMS AT and has neither been
+ * delivered nor left any evidence of shipping. All three halves are
+ * load-bearing:
+ *
+ *   `delivered_at IS NULL` — the obvious half, and the one §S2 names: a
+ *     shipped release is settled history, said by the date directly instead of
+ *     by a second type name.
+ *   `target_at IS NOT NULL` — the half a naive reading omits, and §S0 forbids
+ *     omitting. A release recorded with NO dates at all is the pre-CR-CRU-080
+ *     shape, which this project really holds and `listReleases`' own doc
+ *     already accounts for: "a release recorded before §S4 carries none, so
+ *     its ingest instant stands in for its ship instant". It is settled
+ *     history whose ship date was never captured — NOT a plan, because nothing
+ *     ever aimed it anywhere. Splitting on delivery alone would silently drop
+ *     every such release out of `GET …/releases`, which is a wire change §S0
+ *     forbids and a repair path (CR-CRU-081 §S3) would then be unable to find
+ *     the record it exists to correct.
+ *   NO PROVENANCE — "derived from delivery OR ITS EVIDENCE", and the reason
+ *     the two columns are not enough. THE ABSENCE OF A DATE IS NOT THE ABSENCE
+ *     OF A SHIP. A dateless ship is reachable in production, measured
+ *     2026-09-13 at three layers: `scripts/release.sh:733` adds
+ *     `--released-at` only `if [ -n "$ship_date" ]`, and `release_ship_date`
+ *     (`:405`) prints nothing and exits 0 whenever git cannot resolve the sha
+ *     (shallow clone, unfetched tag object); all five clients declare
+ *     `--released-at` optional; and the route carries `releasedAt` only when
+ *     well-formed, because CR-CRU-080 §S4 deliberately left a dateless release
+ *     legitimate. Were plan-hood decided by the date alone, such a ship would
+ *     leave its label LIVE: `GET …/release-proposals` would keep publishing a
+ *     release that has already shipped and CR-CRU-118's gate would keep
+ *     admitting new CRs into it. So the EVIDENCE ends plan-hood too — a
+ *     `commit`, a `crs` set or a `packages` list are facts about a shipment
+ *     that happened, and none of them can be true of something still planned.
+ *     `deliveredAt` stays honestly ABSENT in that case rather than being
+ *     invented from the ingest instant: the record then says "it shipped, and
+ *     when is unknown", which is exactly what is true of it.
+ *
+ * THE ASYMMETRY THIS LEAVES, ruled 2026-09-13 and deliberate: such a record —
+ * and the pre-080 legacy release beside it — answers SETTLED to `listReleases`
+ * and UNDELIVERED to `listMilestonesByType`'s `delivered` filter, which asks a
+ * different question and answers it on the column alone (see that read, which
+ * names this one). "Is it still a plannable plan?" and "does it carry a
+ * delivered date?" are both true of it in those two senses. That is ambiguous
+ * DATA, not an inconsistent model, and it is pinned in
+ * `tests/release-before-and-after-delivery.test.ts` so it cannot invert in
+ * silence.
+ *
+ * Retirement is deliberately NOT part of it: a superseded plan is neither a
+ * live plan nor settled history, so each read states its own `retired_at` rule
+ * beside this one rather than having it decided here.
+ */
+const RELEASE_IS_A_PLAN =
+  `delivered_at IS NULL AND target_at IS NOT NULL
+   AND json_extract(payload, '$.commit') IS NULL
+   AND json_extract(payload, '$.crs') IS NULL
+   AND json_extract(payload, '$.packages') IS NULL`;
+
 /** One record the migration looked at, and what became of it. */
 export interface MilestoneRecordMigrationEntry {
   /** The event id it came from — a record KEEPS its identity across the move. */
@@ -1315,6 +1379,109 @@ function measureEvictedMergeEvidence(db: Database): MilestoneRecordLoss[] {
     }
   }
   return losses;
+}
+
+/**
+ * CR-CRU-130 §S2 — collapse the two-type release model into ONE record per
+ * (project, label): the body of the 12→13 step below.
+ *
+ * THE RULE, and it invents nothing:
+ *
+ *   DELIVERED is whatever the `release` row already said — the `delivered_at`
+ *     §S1's step derived from `deliveredAt`/`releasedAt`. A label with no
+ *     release row is OUTSTANDING and stays so.
+ *   THE TARGET is the LIVE proposal's; failing that the NEWEST superseded or
+ *     consumed one's; failing that whatever the release itself declared. A
+ *     label that never declared a target keeps none — a 0 here would read as
+ *     "due in 1970" on every surface that renders a date.
+ *
+ * WHY THE RULE IS WRITTEN THIS WAY, measured on the live store 2026-09-13: it
+ * holds `0.2.0`/`0.3.0` as proposals matching NO release, and `0.1.0`-`0.1.3`
+ * as releases with no proposal left. So the two shapes a careless step would
+ * assume — "every proposal has a release" and "every release once had a
+ * proposal" — are the two shapes this project's own data does NOT have. A join
+ * drops the first pair; an assumed proposal fabricates a target for the four.
+ *
+ * WHAT IS DELETED, and why that is not a loss. A proposal a release CONSUMED,
+ * or one a REVISION superseded, is not a second milestone: it is an earlier
+ * point in the surviving record's life, and §S2 says a label holds ONE. Its
+ * one irreplaceable fact — the target it declared — is carried onto the
+ * survivor by the rule above BEFORE its row goes, which is what makes the
+ * collapse lossless. Leaving the rows standing would republish the ghost pair
+ * this CR exists to remove.
+ *
+ * IDEMPOTENT by its own subject: it reads the rows still carrying the retired
+ * type, and after one pass there are none, so a re-run writes nothing at all.
+ */
+function unifyReleaseRecords(db: Database): void {
+  // Both representations are matched, because a board may hold either: the
+  // `type` COLUMN CR-CRU-129 derived, and the payload blob it derived it from.
+  const KIND = `COALESCE(type, json_extract(payload, '$.type'))`;
+  const proposals = db
+    .query<ProposalRow, []>(
+      `SELECT id, project_key, label, retired_at,
+              json_extract(payload, '$.targetAt') AS target_at
+         FROM milestones WHERE ${KIND} = 'release-proposal' AND label IS NOT NULL
+        ORDER BY timestamp DESC, rowid DESC`,
+    )
+    .all();
+  if (proposals.length === 0) return;
+  const byLabel = new Map<string, ProposalRow[]>();
+  for (const row of proposals) {
+    const groupKey = `${row.project_key}\u0000${row.label ?? ""}`;
+    byLabel.set(groupKey, [...(byLabel.get(groupKey) ?? []), row]);
+  }
+  // The release the label already has, if any: the OLDEST, which is the record
+  // its history belongs to. A label holding two release rows is a pre-existing
+  // duplicate this step must not resolve by guessing — it carries the target
+  // onto one and leaves both standing, so the duplication stays visible
+  // instead of being silently halved.
+  const releaseFor = db.query<{ id: string }, [string, string]>(
+    `SELECT id FROM milestones
+      WHERE project_key = ? AND label = ? AND ${KIND} = 'release'
+      ORDER BY timestamp ASC, rowid ASC LIMIT 1`,
+  );
+  const carryTarget = db.query(
+    `UPDATE milestones SET target_at = ?, payload = json_set(payload, '$.targetAt', ?)
+      WHERE id = ?`,
+  );
+  const promote = db.query(
+    `UPDATE milestones
+        SET type = 'release', payload = json_set(payload, '$.type', 'release'),
+            retired_at = NULL, target_at = ?
+      WHERE id = ?`,
+  );
+  const drop = db.query(`DELETE FROM milestones WHERE id = ?`);
+  db.transaction(() => {
+    for (const [groupKey, members] of byLabel) {
+      const [projectKey, label] = groupKey.split("\u0000") as [string, string];
+      // The LIVE proposal's target, else the newest one's — the rows arrive
+      // newest-first, so the first of each is the one the rule names.
+      const survivor = members.find((row) => row.retired_at === null) ?? members[0]!;
+      const release = releaseFor.get(projectKey, label);
+      if (release === null) {
+        // OUTSTANDING: the plan becomes the undelivered release it always was.
+        promote.run(survivor.target_at, survivor.id);
+      } else if (survivor.target_at !== null) {
+        // CONSUMED: the release keeps everything it holds and gains the target
+        // the plan declared. A plan that declared none leaves the release's
+        // own target, or its absence, exactly as it stands.
+        carryTarget.run(survivor.target_at, survivor.target_at, release.id);
+      }
+      for (const row of members) {
+        if (release !== null || row.id !== survivor.id) drop.run(row.id);
+      }
+    }
+  })();
+}
+
+/** One `release-proposal` row as CR-CRU-130 §S2's step reads it. */
+interface ProposalRow {
+  id: string;
+  project_key: string;
+  label: string | null;
+  retired_at: number | null;
+  target_at: number | null;
 }
 
 type MigrationBody = Omit<MigrationStep, "from" | "to">;
@@ -1741,6 +1908,32 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
                OR (delivered_at IS NULL
                    AND COALESCE(json_extract(payload, '$.deliveredAt'),
                                 json_extract(payload, '$.releasedAt')) IS NOT NULL)`,
+        )
+        .get()!.n;
+      return owed === 0;
+    },
+  },
+  {
+    description:
+      "milestones: CR-130 §S2 — a release is ONE record before and after delivery: every `release-proposal` becomes the UNDELIVERED half of the `release` it names, and one a shipped release already consumed becomes that release's declared target rather than a second row",
+    apply(db) {
+      if (!tableExists(db, "milestones")) return;
+      const cols = columnsOf(db, "milestones");
+      if (!cols.has("target_at") || !cols.has("delivered_at")) return;
+      unifyReleaseRecords(db);
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "milestones")) return false;
+      // The data half, as every backfill above states it: the retired type may
+      // survive in NEITHER representation — not the `type` column CR-CRU-129
+      // derived, and not the payload blob it was derived FROM. A step that
+      // rewrote only the column would leave the board's own record saying
+      // `release-proposal` to anything that reads the blob.
+      const owed = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM milestones
+            WHERE type = 'release-proposal'
+               OR json_extract(payload, '$.type') = 'release-proposal'`,
         )
         .get()!.n;
       return owed === 0;
@@ -2721,12 +2914,13 @@ export class Store {
    * fields the caller actually re-derived are written over. Without it the
    * dedup replay is untouched, so no ordinary re-post can rewrite a release.
    *
-   * CR-CRU-091 §S1 — a PROPOSED release (`type === "release-proposal"`) is its
-   * own record kind on this same path, carrying an optional `targetAt`. It is
-   * NOT a `release` with `releasedAt` omitted, and the two fields are strictly
-   * type-scoped in both directions: `targetAt` is stripped from anything that
-   * is not a proposal, `releasedAt`/`crs`/`packages` from anything that is not
-   * a release. A shipped release then CONSUMES the proposal it fulfils.
+   * CR-CRU-130 §S2 — a PROPOSED release is not a record kind of its own: it is
+   * a `release` carrying a `targetAt` and no delivery, which SUPERSEDES
+   * CR-CRU-091 §S1's `release-proposal` type and the consumption that went
+   * with it. So a ship for a label already held outstanding UPDATES that
+   * record — same id, same label, same declared target, now carrying the date
+   * it was met and the commit, `crs` and `packages` that met it — instead of
+   * inserting a second row and retiring the first.
    */
   recordMilestoneEvent(
     projectKey: string,
@@ -2756,6 +2950,11 @@ export class Store {
   ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink; refused?: boolean } {
     this.touchAgent(projectKey, agentId);
     if (type === "release" && meta?.label !== undefined) {
+      // CR-CRU-130 §S2 — the DELIVERED records for the label, which is what
+      // `listReleases` now answers. Both rules below are rules about settled
+      // history — a replay of a release already held, and the provenance such
+      // a replay may not shrink — so an outstanding record is rightly invisible
+      // to them: it has shipped nothing yet, and there is nothing to lose.
       const forLabel = this.listReleases(projectKey).filter((r) => r.label === meta.label);
       const held =
         meta.commit !== undefined ? forLabel.find((r) => r.commit === meta.commit) : undefined;
@@ -2814,6 +3013,51 @@ export class Store {
     // shares.
     const targetAt = meta?.targetAt;
     const deliveredAt = meta?.deliveredAt ?? releasedAt;
+    const version = type === "release" ? meta?.label : undefined;
+    // CR-CRU-130 §S2 — ONE RECORD, TWO POINTS IN ITS LIFE.
+    //
+    // A release that is already held OUTSTANDING for this label — proposed, or
+    // written straight through this door with a target and no delivery — is
+    // the record this ship DELIVERS, not a row to insert beside. `retired_at`
+    // used to stand in for the delivery a record had no column for; now that
+    // `deliveredAt` says it, the pair is one row that gains a date, so its id,
+    // its label and the target it declared all survive the ship. That distance
+    // between target and delivery is the only thing that can say a deliverable
+    // slipped, and a second row destroys it.
+    //
+    // A SHIP IS A DELIVERY DATE OR THE EVIDENCE OF ONE — the same rule
+    // `RELEASE_IS_A_PLAN` draws the line with, applied to the incoming write
+    // rather than to the stored row. A dateless ship is reachable in
+    // production (measured; see that predicate), and it must deliver the plan
+    // it fulfils rather than insert a second row beside it — leaving the
+    // record saying "it shipped, and when is unknown" instead of leaving the
+    // label live.
+    //
+    // Scoped to a ship on purpose: a write carrying neither a date nor any
+    // provenance is a PLAN, and the one-live-plan rule belongs to
+    // `recordReleaseProposal`, which is the door that owns it.
+    const ships =
+      deliveredAt !== undefined ||
+      meta?.commit !== undefined ||
+      crs !== undefined ||
+      packages !== undefined;
+    if (version !== undefined && ships) {
+      const outstanding = this.liveUndeliveredRelease(projectKey, version);
+      if (outstanding !== undefined) {
+        return {
+          event: this.deliverRelease(outstanding, version, {
+            ...(deliveredAt !== undefined ? { deliveredAt } : {}),
+            ...(meta?.commit !== undefined ? { commit: meta.commit } : {}),
+            ...(releasedAt !== undefined ? { releasedAt } : {}),
+            ...(crs !== undefined ? { crs } : {}),
+            ...(packages !== undefined ? { packages } : {}),
+            ...(targetAt !== undefined ? { targetAt } : {}),
+            ...(meta?.context !== undefined ? { context: meta.context } : {}),
+          }),
+          changed: true,
+        };
+      }
+    }
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -2831,17 +3075,15 @@ export class Store {
       ...(deliveredAt !== undefined ? { deliveredAt } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
-    const version = type === "release" ? meta?.label : undefined;
     if (version !== undefined) {
       const at = Date.now();
       this.db.transaction(() => {
         this.insertEvent(event);
         this.stampGatesRetired(projectKey, version, at);
-        // CR-CRU-091 §S1 — the SAME transaction consumes the proposal this
-        // release fulfils: either the shipped release and the retirement of
-        // its proposal are both true, or neither is. One gate renders, and
-        // one release record renders, never a pair.
-        this.stampProposalRetired(projectKey, version, at);
+        // CR-CRU-130 §S2 — and NOTHING is retired for the label itself. The
+        // second statement that used to stand here consumed the proposal this
+        // release fulfilled, because the pair was two rows of two types; the
+        // pair is one row now, and delivery is the date it carries.
       })();
     } else {
       this.insertEvent(event);
@@ -2851,7 +3093,11 @@ export class Store {
 
   /**
    * CR-CRU-091 §S1/§S7/AC21 — `release-propose`: record or REVISE the live
-   * `release-proposal` for one label.
+   * proposal for one label.
+   *
+   * CR-CRU-130 §S2 — what it writes is an UNDELIVERED `release` record, not a
+   * kind of its own, so the ship that follows updates THIS row rather than
+   * inserting beside it.
    *
    * Beside `recordMilestoneEvent` rather than inside it, because it adds the
    * one rule a generic milestone write must not have: at most one LIVE
@@ -2867,8 +3113,8 @@ export class Store {
    *
    * CR-CRU-118 §S4 — `targetAt` is REQUIRED here, not optional: every release
    * proposal declares the date it aims at. The requiredness is the METHOD's,
-   * deliberately — `recordMilestoneEvent(…, "release-proposal", …)` still
-   * writes the record KIND without one, because §S4 mandates this door rather
+   * deliberately — `recordMilestoneEvent(…, "release", …)` still writes an
+   * undelivered record without one, because §S4 mandates this door rather
    * than the row shape, and widening it to the kind would refuse callers no
    * criterion named. It is also what makes the convergence comparison below
    * honest: with absence impossible, `live.targetAt === meta.targetAt` only
@@ -2893,7 +3139,11 @@ export class Store {
       kind: "milestone",
       tier: "unit",
       timestamp: Date.now(),
-      type: "release-proposal",
+      // CR-CRU-130 §S2 — a PROPOSED release IS a release: the same type, a
+      // declared `targetAt`, and no `deliveredAt` until it ships. The record
+      // this writes is the very one the ship UPDATES, which is what makes the
+      // two points one record.
+      type: "release",
       label: meta.label,
       targetAt: meta.targetAt,
       ...(meta.context !== undefined ? { context: meta.context } : {}),
@@ -3051,6 +3301,87 @@ export class Store {
   }
 
   /**
+   * CR-CRU-130 §S2 — the record a ship DELIVERS: the LIVE, UNDELIVERED
+   * `release` held for this label, or `undefined` when the label was never
+   * planned and the ship is the first thing said about it.
+   *
+   * The same predicate `listReleaseProposals` publishes, deliberately narrowed
+   * to one label in SQL rather than filtered out of that read in JS: the ship
+   * asks about one label and the project may hold many, and the two answers
+   * must be the same record — a ship that delivered a row the proposals read
+   * does not publish would leave the plan standing beside its own delivery.
+   * Newest first, so a label that somehow holds two live plans is delivered at
+   * the one a reader sees, never at an older one behind it.
+   */
+  private liveUndeliveredRelease(projectKey: string, label: string): RunEvent | undefined {
+    const row = this.db
+      .query<EventRow, [string, string]>(
+        `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release' AND label = ?
+         AND ${RELEASE_IS_A_PLAN} AND retired_at IS NULL AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC LIMIT 1`,
+      )
+      .get(projectKey, label);
+    return row === null ? undefined : Store.toEvent(row);
+  }
+
+  /**
+   * CR-CRU-130 §S2 — write the DELIVERY onto the record that was outstanding:
+   * the date it was met, and the provenance of the thing that met it.
+   *
+   * An UPDATE of one row, never an insert — `repairReleaseProvenance`'s idiom
+   * and for the same reason, so the record's id, its ingest timestamp, its
+   * label and the `targetAt` it declared are all the ones it already had. That
+   * is what "one record, two points in its life" means when it is asserted
+   * rather than described: the shipped event a caller gets back carries the
+   * proposal's id.
+   *
+   * `delivered_at` travels WITH the payload it is derived from, in the one
+   * statement, so the column and the blob cannot disagree (CR-CRU-129's rule
+   * at the insert seam, applied to the one write that edits a record after
+   * it). `context` travels too — a ship declares its own cycle, and dropping
+   * it here would lose a binding the pre-§S2 insert kept.
+   *
+   * The gates the release retires are stamped in the SAME transaction the
+   * insert path stamps them in (CR-CRU-073 §S1): either the delivery and the
+   * gate retirement are both true, or neither is.
+   */
+  private deliverRelease(
+    held: RunEvent,
+    version: string,
+    delivery: {
+      /** ABSENT when the ship stated no date — never invented (§S2). */
+      deliveredAt?: number;
+      commit?: string;
+      releasedAt?: number;
+      crs?: string[];
+      packages?: PackageRef[];
+      targetAt?: number;
+      context?: RunContext;
+    },
+  ): RunEvent {
+    const delivered: RunEvent = { ...held, ...delivery };
+    const at = Date.now();
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `UPDATE milestones SET payload = ?, target_at = ?, delivered_at = ?, context = ?,
+             cycle_id = ? WHERE id = ?`,
+        )
+        .run(
+          Store.payloadColumn(delivered),
+          delivered.targetAt ?? null,
+          deliveredAtOf(delivered),
+          delivered.context !== undefined ? JSON.stringify(delivered.context) : null,
+          delivered.context?.cycleId ?? delivered.cycleId ?? null,
+          held.id,
+        );
+      this.stampGatesRetired(held.projectKey, version, at);
+    })();
+    this.emit("events", held.projectKey);
+    return delivered;
+  }
+
+  /**
    * CR-CRU-073 §S1 — stamp `retired_at` on every LIVE gate whose stored
    * `version` equals `version`.
    *
@@ -3068,24 +3399,32 @@ export class Store {
   }
 
   /**
-   * CR-CRU-091 §S1 — stamp `retired_at` on the LIVE `release-proposal` whose
-   * `label` equals the shipped release's, i.e. consume the proposal the
-   * release fulfils. Called inside the release insert's own transaction.
+   * CR-CRU-091 §S1 — stamp `retired_at` on the LIVE, UNDELIVERED release for
+   * `label`, i.e. supersede the plan a REVISION replaces. Called inside the
+   * revision's own transaction, immediately before the successor's insert.
    *
-   * No new column: `retired_at` (CR-CRU-073) already means *no longer live,
-   * still auditable*, and `listEvents`' filter on it is UNSCOPED, so a
-   * consumed proposal leaves the live feed while `getEvent` still serves it.
+   * No new column: `retired_at` (CR-CRU-073) already means *no longer THE LIVE
+   * RECORD, still auditable*, and `listEvents`' filter on it is UNSCOPED, so a
+   * superseded plan leaves the live feed while `getEvent` still serves it.
+   *
+   * CR-CRU-130 §S2 — ONE call site now, not two. Shipping no longer stamps
+   * this column: delivery is `deliveredAt`, said by the date directly, on the
+   * SAME record. What is left is the column's own meaning, unchanged — a
+   * predecessor a revision has replaced, exactly as a gate is retired by its
+   * release. The predicate follows the unified model: the rows a label may
+   * hold live are its UNDELIVERED `release` records, and a delivered one is
+   * history that no revision may retire out from under `listReleases`.
    *
    * CR-CRU-129 §S1 — ONE statement against the `milestones` record table,
    * scoped by the `type` and `label` COLUMNS derived at the insert seam; a
-   * proposal for any other label is untouched.
+   * record for any other label is untouched.
    */
   private stampProposalRetired(projectKey: string, label: string, at: number): void {
     this.db
       .query(
         `UPDATE milestones SET retired_at = ?
-          WHERE project_key = ? AND type = 'release-proposal' AND label = ?
-            AND retired_at IS NULL`,
+          WHERE project_key = ? AND type = 'release' AND label = ?
+            AND delivered_at IS NULL AND retired_at IS NULL`,
       )
       .run(at, projectKey, label);
   }
@@ -3383,9 +3722,17 @@ export class Store {
     // CR-CRU-129 §S1 — a QUERY BY TYPE against the record table, not a scan of
     // every milestone re-parsing its blob: `type` is a real column, derived at
     // the insert seam from the same field the payload carries.
+    //
+    // CR-CRU-130 §S2 — and settled history is now everything that is NOT a
+    // plan, which is the half of the pair a second type name used to say.
+    // `RELEASE_IS_A_PLAN` is the one place that line is drawn (see it for why
+    // an undelivered release with NO target is history rather than a plan);
+    // both halves are column predicates, so this is still an indexed read and
+    // not a re-parse of the blob.
     const rows = this.db
       .query<EventRow, [string]>(
         `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release'
+         AND NOT (${RELEASE_IS_A_PLAN})
          AND ${Store.NOT_ARCHIVED_SUBQUERY}
          ORDER BY timestamp DESC, rowid DESC`,
       )
@@ -3404,14 +3751,18 @@ export class Store {
   /**
    * CR-CRU-091 §S1 — the LIVE release proposals, ordered by VERSION.
    *
-   * Beside `listReleases`, never inside it: that read filters on
-   * `event.type === "release"`, so a proposal cannot leak into settled history
-   * — and this one filters on `release-proposal`, so a shipped release cannot
-   * leak into the plan. Same archived-project exclusion.
+   * CR-CRU-130 §S2 — a PROPOSED release is no longer a record kind of its own:
+   * it is a `release` milestone carrying a `targetAt` and no `deliveredAt`, so
+   * this read is the UNDELIVERED half of the very rows `listReleases` answers
+   * the delivered half of. Beside that read and never inside it, for the
+   * reason §S1 gave and this CR keeps: settled history and a plan are
+   * different answers, and one query returning both would render the pair.
+   * Same archived-project exclusion.
    *
-   * LIVE means `retired_at IS NULL`: a proposal a real release has consumed is
-   * no longer a plan, and returning it here would render the pair §S1 forbids.
-   * It stays auditable through `getEvent`.
+   * LIVE means `retired_at IS NULL`: a record a REVISION has superseded is no
+   * longer the live one for its label, and returning it here would render two
+   * plans for one label. It stays auditable through `getEvent`. Delivery is no
+   * longer said by that column — it is said by `delivered_at`, directly.
    *
    * ORDER IS VERSION, ASCENDING (AC1: proposing `0.3.0` then `0.2.1` yields
    * `0.2.1`, `0.3.0`) — deliberately NOT the declared target and NOT arrival
@@ -3424,7 +3775,8 @@ export class Store {
   listReleaseProposals(projectKey: string): RunEvent[] {
     const rows = this.db
       .query<EventRow, [string]>(
-        `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release-proposal'
+        `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release'
+         AND ${RELEASE_IS_A_PLAN}
          AND retired_at IS NULL AND ${Store.NOT_ARCHIVED_SUBQUERY}
          ORDER BY timestamp DESC, rowid DESC`,
       )
@@ -3485,10 +3837,46 @@ export class Store {
       where.push("type = ?");
       args.push(type);
     }
+    // CR-CRU-130 §S2 — A DATE QUESTION IS A QUESTION ABOUT LIVE RECORDS, and
+    // that is the ONE thing the dates add to the read's retirement rule above.
+    //
+    // THE PRESENCE OF A DATE FILTER IS WHAT LICENSES THE JUDGEMENT, which is
+    // why the clause appears here and nowhere else — a reader finding
+    // `retired_at IS NULL` only under a filter would otherwise read it as a
+    // bug. The doc above declines to filter retirement because a type-agnostic
+    // read cannot know what retirement MEANS for a type it has never heard of.
+    // That reasoning is untouched and still decides the unfiltered read, which
+    // stays the AUDIT read. But a caller asking `delivered`/`targetBefore`/
+    // `targetAfter` has said which question it is asking, and every one of
+    // them is about goals the project still holds: what is outstanding, what
+    // is due, what slipped. A superseded record holds none of them — it is
+    // history, not something pending — and that is true whatever its type, so
+    // the read CAN make the judgement here where it could not above.
+    //
+    // §S2 makes it concrete: a revised release proposal used to leave a
+    // `release-proposal` row behind, invisible to a `release` read; it now
+    // leaves an undelivered `release`, which without this clause would answer
+    // "outstanding" for a target nobody aims at any more — two live plans for
+    // one label, the very thing `retired_at` is stamped to prevent. Both
+    // halves are pinned together in
+    // `tests/undelivered-release-is-the-plannable-target.test.ts` consumer 5:
+    // the dated read answers the live record alone, the unfiltered one answers
+    // the predecessor too, still carrying the target it declared.
+    if (dates !== undefined && Object.keys(dates).length > 0) {
+      where.push("retired_at IS NULL");
+    }
     if (dates?.delivered !== undefined) {
       // ABSENCE is the signal, so the test is NULL-ness rather than a
       // comparison with a sentinel: a record has been delivered exactly when
       // it holds a date saying so.
+      //
+      // THE COLUMN ALONE, deliberately — this filter asks "does it carry a
+      // delivered date?", which is a different question from the one
+      // `RELEASE_IS_A_PLAN` answers ("is this release still a plannable
+      // plan?"). A release that shipped without stating a date, and the
+      // pre-CR-CRU-080 legacy release beside it, answer SETTLED there and
+      // UNDELIVERED here, and both are true of them. See that predicate for
+      // the ruling; the asymmetry is pinned by a test so it cannot invert.
       where.push(dates.delivered ? "delivered_at IS NOT NULL" : "delivered_at IS NULL");
     }
     if (dates?.targetBefore !== undefined) {

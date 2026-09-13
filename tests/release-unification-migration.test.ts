@@ -274,6 +274,55 @@ function ageToPreUnification(db: Database, at: number): void {
     `UPDATE milestones SET payload = json_remove(payload, '$.deliveredAt')
       WHERE type = 'release' AND json_extract(payload, '$.releasedAt') IS NOT NULL`,
   );
+  // 4. CR-CRU-130 §S2, GREEN — the CONSUMED PAIR, which steps 1-3 cannot
+  //    reconstruct and which this helper's own claim ("the fixture is the same
+  //    either way") silently missed.
+  //
+  //    Post-§S2 a proposal that was shipped is ONE row carrying both the
+  //    target it declared and the date it was met; steps 1-3 only re-type an
+  //    UNDELIVERED release and re-stamp `retired_at`, so neither can SPLIT
+  //    that row back into the pair a pre-§S2 board really held. Without this,
+  //    the guards below count 3 proposals where a pre-§S2 board has 4, and the
+  //    case's whole subject — a proposal a shipped release consumed — is
+  //    absent from the population it claims to cover.
+  //
+  //    So the pair is put back the way a pre-§S2 board wrote it: the target
+  //    moves OFF the delivered release (which never carried one before this
+  //    CR) and onto a `release-proposal` row for the same label, stamped
+  //    `retired_at` because shipping is what consumed it. A no-op on a
+  //    pre-§S2 build, where no delivered release carries a target for it to
+  //    move — measured on both builds rather than assumed.
+  for (const row of db
+    .query<{ id: string; project_key: string; agent_id: string; tier: string;
+             label: string | null; timestamp: number; target_at: number | null }, []>(
+      `SELECT id, project_key, agent_id, tier, label, timestamp,
+              json_extract(payload, '$.targetAt') AS target_at
+         FROM milestones
+        WHERE type = 'release' AND delivered_at IS NOT NULL
+          AND json_extract(payload, '$.targetAt') IS NOT NULL`,
+    )
+    .all()) {
+    db.query(
+      `INSERT INTO milestones (id, project_key, agent_id, tier, timestamp, type, label,
+         target_at, payload, retired_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      `${row.id}-consumed-proposal`,
+      row.project_key,
+      row.agent_id,
+      row.tier,
+      row.timestamp - 1,
+      RETIRED_TYPE,
+      row.label,
+      row.target_at,
+      JSON.stringify({ type: RETIRED_TYPE, label: row.label, targetAt: row.target_at }),
+      at,
+    );
+    db.query(
+      `UPDATE milestones SET payload = json_remove(payload, '$.targetAt'), target_at = NULL
+        WHERE id = ?`,
+    ).run(row.id);
+  }
 }
 
 /**

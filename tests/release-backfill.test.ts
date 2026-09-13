@@ -130,6 +130,13 @@ case "$1" in
     exit 0 ;;
   describe)
     exit 128 ;;
+  log)
+    # CR-CRU-130 §S2 — the SHIP DATE the ceremony now requires before it will
+    # report a release at all. A real clone always answers this; a stub falling
+    # through to the permissive catch-all below answered EMPTY, which is
+    # exactly the shallow-clone shape §S2 made fatal, so modelling it is what
+    # keeps this fixture a real git rather than a degraded one.
+    echo "$CR074_SHIP"; exit 0 ;;
   rev-list)
     # The last argument is the tag; map it to the commit it points at.
     for a in "$@"; do tag="$a"; done
@@ -243,6 +250,8 @@ function makeWorld(): World {
         CR074_ROOT: root,
         CR074_BRANCH: "develop",
         CR074_TAGS: tags.join(" "),
+        // CR-CRU-130 §S2 — the tag's own commit date, in epoch SECONDS.
+        CR074_SHIP: "1787149125",
         CR074_REPORT_FAIL: opts.reportFail ? "1" : "0",
         CR074_FAIL_LABEL: opts.failLabel ?? "",
       };

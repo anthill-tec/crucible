@@ -229,16 +229,31 @@ describe("CR-CRU-129 §S3/AC1 — every read in the consumer table, one site at 
     }).event;
     const gate = store.recordGateEvent(key, AGENT, { status: "pass" }, { version: "0.1.3" });
 
-    // Shipping 0.1.3 consumes the proposal AND retires the gate: after this,
-    // neither is served by any live list, and `getEvent` is the only read that
-    // can still answer for them.
-    store.recordMilestoneEvent(key, AGENT, "release", { label: "0.1.3", commit: "fff6666" });
+    // Shipping 0.1.3 DELIVERS the record that was proposed and retires the
+    // gate: after this the proposals read serves neither, and `getEvent` is
+    // the only read that can still answer for the gate.
+    //
+    // RETARGETED by CR-CRU-130 §S2. The subject is untouched — `getEvent` is
+    // the audit read for a MOVED record — and only the model beneath it
+    // changed: the proposal and the release are one row now, so what the
+    // audit read answers for is a `release` carrying the target it declared
+    // rather than a consumed `release-proposal`. The ship states its date,
+    // because under §S2 that date IS the delivery: a `release` written with
+    // none is an outstanding one, which would leave 0.1.3 correctly standing
+    // in the proposals read and make the line below assert the opposite of
+    // what this case means by "shipping".
+    store.recordMilestoneEvent(key, AGENT, "release", {
+      label: "0.1.3",
+      commit: "fff6666",
+      releasedAt: 1_790_000_000,
+    });
     expect(recordsLeftInTheBuffer(store, key)).toBe(0);
     expect(store.listReleaseProposals(key)).toEqual([]);
 
     expect(store.getEvent(merged.id)!.label).toBe("CR-SHIPPED-9");
     expect(store.getEvent(merged.id)!.kind).toBe("milestone");
-    expect(store.getEvent(proposal.id)!.type).toBe("release-proposal");
+    expect(store.getEvent(proposal.id)!.type).toBe("release");
+    expect(store.getEvent(proposal.id)!.deliveredAt).toBe(1_790_000_000);
     expect(store.getEvent(proposal.id)!.targetAt).toBe(1_800_000_000);
     expect(store.getEvent(gate.id)!.kind).toBe("gate");
     expect(typeof store.getEvent(gate.id)!.retiredAt).toBe("number");

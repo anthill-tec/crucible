@@ -277,7 +277,7 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
     base: string,
     world: { root: string; log: string },
     args: string[],
-    opts: { agent?: string | null; tags?: string[]; tag?: string } = {},
+    opts: { agent?: string | null; tags?: string[]; tag?: string; ship?: string } = {},
   ): Promise<RunResult> {
     const agent = opts.agent === undefined ? AGENT_ID : opts.agent;
     const env: Record<string, string> = {
@@ -290,7 +290,9 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
       RSH_TAG: opts.tag ?? VERSION,
       RSH_SHA: TAGGED_SHA,
       RSH_TAGS: (opts.tags ?? SHIPPED.map(([v]) => v)).join(" "),
-      RSH_SHIP: String(SHIP_DATE),
+      // CR-CRU-130 §S2 — `""` models the branch git really takes when it
+      // cannot date the sha: `release_ship_date` prints nothing and exits 0.
+      RSH_SHIP: opts.ship ?? String(SHIP_DATE),
       // The real client's own contract: where the server is, and which project
       // root holds the .env carrying CRUCIBLE_PROJECT_KEY.
       CRUCIBLE_URL: base,
@@ -336,6 +338,47 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
       expect(releases[0].commit).toBe(TAGGED_SHA);
       // Reported through the repo client, never a bare curl at the server.
       expect(r.log.some((l) => l.startsWith("curl "))).toBe(false);
+    },
+  );
+
+  test(
+    "CR-CRU-130 §S2 — a finish whose sha git cannot DATE records NOTHING, says so naming the " +
+      "sha and the remedy, and exits non-zero: the post-publication tolerance does not cover a " +
+      "degraded record",
+    async () => {
+      const base = boot();
+      const key = await seedProject(base, "live-finish-undated");
+      const world = makeWorld(key);
+
+      // The branch git really takes on a shallow clone or an unfetched tag
+      // object: `git log -1 --format=%ct <sha>` answers nothing and exits 0,
+      // so `release_ship_date` returns empty. Until CR-CRU-130 the flag was
+      // simply dropped and the release was recorded undated, in silence.
+      const r = await runCeremony(base, world, ["finish", VERSION], { ship: "" });
+
+      // NOTHING WAS WRITTEN — this is the half that matters, because a store
+      // holding no record is recoverable and one holding an undated release is
+      // not: the ship date is gone the moment nobody is told.
+      expect(await listReleases(base, key)).toEqual([]);
+      // …and no release record of ANY shape reached the server, so this is not
+      // a release that landed somewhere the releases read cannot see it.
+      expect((await listEvents(base, key)).filter((e) => e.type === "release")).toEqual([]);
+
+      // IT SAID SO, naming the sha it could not date and the git remedy.
+      const said = r.stdout + r.stderr;
+      expect(said).toContain(`release ${VERSION} is NOT recorded in Crucible`);
+      expect(said).toContain(TAGGED_SHA);
+      expect(said).toContain("git fetch --tags --unshallow");
+
+      // AND THE CEREMONY EXITS NON-ZERO. `report_release` swallows a transport
+      // failure so a reporting problem cannot unpublish a release; it must not
+      // swallow this one.
+      expect(r.exitCode).not.toBe(0);
+
+      // The tag was still published — the guard is about the RECORD, and a
+      // ceremony that had refused the publication would be a different and
+      // much worse change.
+      expect(r.log.some((l) => l.startsWith("git flow "))).toBe(true);
     },
   );
 

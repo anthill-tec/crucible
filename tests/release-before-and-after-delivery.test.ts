@@ -507,4 +507,115 @@ describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this proj
       expect((await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals).toEqual([]);
     },
   );
+
+  // ── A SHIP THAT STATES NO DATE (CR-CRU-130 §S2, GREEN finding) ──────────
+
+  test(
+    "a ship that states NO date still ends the label's plan: the gate refuses it, the proposals " +
+      "read drops it and the releases read serves it — while `deliveredAt` stays ABSENT rather " +
+      "than invented",
+    async () => {
+      const server = boot();
+      const key = await seedProject();
+
+      // THE HOLE THIS CLOSES, measured 2026-09-13 rather than imagined:
+      // `scripts/release.sh:733` adds `--released-at` only `if [ -n
+      // "$ship_date" ]`, and `release_ship_date` (:405) prints nothing and
+      // exits 0 whenever git cannot resolve the sha — a shallow clone or an
+      // unfetched tag object. All five clients declare the flag optional, and
+      // the route carries it only when well-formed, because CR-CRU-080 §S4
+      // deliberately left a dateless release legitimate. So this post is not a
+      // hypothetical: it is what the ceremony really sends on that branch.
+      const proposed = await post(`/api/v2/projects/${key}/release-proposals`, {
+        agentId: ORCH,
+        label: "0.4.0",
+        targetAt: TARGET_AT,
+      });
+      expect(proposed.status).toBe(200);
+      const planned = server.store.listReleaseProposals(key);
+      expect(planned.map((p) => p.label)).toEqual(["0.4.0"]);
+      const plannedId = planned[0]!.id;
+
+      const shipped = await post("/api/v2/milestones", {
+        projectKey: key,
+        agentId: ORCH,
+        type: "release",
+        label: "0.4.0",
+        commit: "a".repeat(40),
+        crs: ["CR-SHIPPED-4"],
+      });
+      expect([200, 201]).toContain(shipped.status);
+
+      // THE LABEL IS NO LONGER A PLAN. Were plan-hood decided by the delivered
+      // DATE alone, every assertion in this block would invert: the proposals
+      // read would keep publishing a release that has already shipped, and
+      // CR-CRU-118's gate would keep admitting new CRs into it.
+      expect((await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals).toEqual([]);
+      const refused = await post(`/api/v2/projects/${key}/queue/plan`, {
+        agentId: ORCH,
+        cr: "CR-AUTH-4",
+        release: "0.4.0",
+        wave: 5,
+        title: "planned into a release that shipped without saying when",
+      });
+      expect(refused.status).toBe(404);
+      expect(refused.body.error).toBe(
+        `release 0.4.0 has no live proposal — it is not a plannable target`,
+      );
+
+      // …and it IS settled history, carrying what it shipped.
+      const releases = (await get(`/api/v2/projects/${key}/releases`)).body.releases!;
+      expect(releases.map((r) => r.version)).toEqual(["0.4.0"]);
+      expect(releases[0]!.crs).toEqual(["CR-SHIPPED-4"]);
+      expect("releasedAt" in releases[0]!).toBe(false);
+
+      // NOTHING WAS INVENTED, and this is the half that forbids standing the
+      // ingest instant in for a ship date: the record says "it shipped, and
+      // when is unknown", which is what is true of it. ONE record still, and
+      // the target it declared survives.
+      const records = (await get(`/api/v2/projects/${key}/milestones?type=release`)).body
+        .milestones!;
+      expect(records.length).toBe(1);
+      expect(records[0]!.id).toBe(plannedId);
+      expect(records[0]!.deliveredAt).toBeUndefined();
+      expect(records[0]!.targetAt).toBe(TARGET_AT);
+      expect(server.store.listReleases(key).map((r) => r.id)).toEqual([plannedId]);
+    },
+  );
+
+  test(
+    "THE ASYMMETRY, pinned: a release carrying no date at all is SETTLED to the releases read " +
+      "and UNDELIVERED to the dates filter — two questions, both answered truthfully of one row",
+    async () => {
+      const server = boot();
+      const key = await seedProject();
+
+      // The pre-CR-CRU-080 shape, which this project really holds: a release
+      // recorded with no ship date and no target, because nothing captured one
+      // when it landed.
+      const legacy = server.store.recordMilestoneEvent(key, ORCH, "release", {
+        label: "0.0.9",
+        commit: "b".repeat(40),
+      }).event;
+
+      // SETTLED: it was never aimed anywhere, so it was never a plan — and
+      // dropping it out of `GET …/releases` would be the §S0 wire change a
+      // delivery-only split silently makes.
+      expect((await get(`/api/v2/projects/${key}/releases`)).body.releases!.map((r) => r.version))
+        .toEqual(["0.0.9"]);
+      expect((await get(`/api/v2/projects/${key}/release-proposals`)).body.proposals).toEqual([]);
+
+      // UNDELIVERED: it carries no delivered date, which is the only thing the
+      // dates filter asks. Both answers are true of this row; the ambiguity is
+      // in the DATA, and CR-CRU-130 §S1's read reports the column rather than
+      // guessing past it.
+      const undelivered = (
+        await get(`/api/v2/projects/${key}/milestones?type=release&delivered=false`)
+      ).body.milestones!;
+      expect(undelivered.map((m) => m.id)).toEqual([legacy.id]);
+      const delivered = (await get(`/api/v2/projects/${key}/milestones?type=release&delivered=true`))
+        .body.milestones!;
+      expect(delivered).toEqual([]);
+    },
+  );
 });

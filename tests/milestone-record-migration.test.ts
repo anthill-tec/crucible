@@ -224,6 +224,17 @@ describe("CR-CRU-129 §S1 — the migration out of `events`", () => {
     kind: "milestone",
     payload: { type: "cr-merged", label: cr, commit: `merge-${cr}` },
   }));
+  /**
+   * A LEGACY row, and CR-CRU-130 §S2 deliberately leaves it legacy.
+   *
+   * `release-proposal` is a type no build writes any more — §S2 retired it —
+   * but this fixture is a PRE-MIGRATION buffer row, i.e. exactly what an old
+   * binary left behind, and rewriting it to today's vocabulary would stop it
+   * being the thing it exists to be. CR-CRU-129's move must carry a record it
+   * has never heard of out of the capped buffer, and §S2's own step is what
+   * later rewrites the type; neither can be tested by a fixture that already
+   * speaks the new model.
+   */
   const PROPOSAL_ROW = {
     id: "evt-legacy-proposal",
     kind: "milestone",
@@ -352,9 +363,18 @@ describe("CR-CRU-129 §S1 — the migration out of `events`", () => {
     open.splice(open.indexOf(db), 1);
 
     // And the reads still see exactly one of each, not two.
+    //
+    // CR-CRU-130 §S2 — asked of the RECORD TABLE rather than of the two
+    // release reads. This case drives `migrateMilestoneRecords` DIRECTLY
+    // against a store already stamped at the chain's end, so §S2's step —
+    // which is what rewrites a legacy `release-proposal` row into the
+    // undelivered `release` it always was — never runs over the rows this
+    // fixture just moved. That is an artefact of calling one step by hand, not
+    // a state a booted board can be in, and the case's subject is the MOVE's
+    // idempotency: one record per label, never two.
     const store = Store.open(dbPath);
     expect(store.listReleases(key)).toHaveLength(1);
-    expect(store.listReleaseProposals(key)).toHaveLength(1);
+    expect(store.listMilestonesByType(key, null).filter((r) => r.label === "0.2.0")).toHaveLength(1);
     closeStore(store);
   });
 

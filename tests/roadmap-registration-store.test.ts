@@ -83,17 +83,12 @@ function normalizeTrack(value: string): string | null {
   return (mod.normalizeTrack as (value: string) => string | null)(value);
 }
 
-/** §S1 — the proposals read, beside `listReleases` and isolated from it. */
-function listReleaseProposals(store: Store, projectKey: string): RunEvent[] {
-  const s = store as { listReleaseProposals?: unknown };
-  if (typeof s.listReleaseProposals !== "function") {
-    throw new Error(
-      "CR-CRU-091 §S1: Store exposes no `listReleaseProposals` — a proposed release cannot be " +
-        "read at all without repurposing `listReleases`, which §S1 forbids.",
-    );
-  }
-  return (s.listReleaseProposals as (key: string) => RunEvent[]).call(store, projectKey);
-}
+// The `listReleaseProposals` accessor that stood here went with the five cases
+// CR-CRU-130 §S2 deleted below: it existed only to reach that read from this
+// file, and no case here calls it any more. The read itself is very much alive
+// — it is the UNDELIVERED half of the release records now — and is exercised
+// in `tests/release-before-and-after-delivery.test.ts` and
+// `tests/undelivered-release-is-the-plannable-target.test.ts`.
 
 /**
  * §S2 — THIS CR's own migration body, found by what it declares. Never by
@@ -675,151 +670,39 @@ describe("CR-CRU-091 §S2 — a full replace does not erase a declaration", () =
   );
 });
 
-describe("CR-CRU-091 §S1 — a proposed release is its own record kind", () => {
-  const AGENT = "orchestrator-1";
-
-  test("`targetAt` is accepted for a release-proposal and round-trips as epoch SECONDS", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
-
-    const { event } = store.recordMilestoneEvent(key, AGENT, "release-proposal", {
-      label: "0.2.0",
-      targetAt: 1_787_149_125,
-    });
-
-    expect(event.type).toBe("release-proposal");
-    expect(event.targetAt).toBe(1_787_149_125);
-    // Same unit as releasedAt: seconds, so nothing renders 1970 (AC3's class).
-    expect(event.targetAt! < 2_000_000_000).toBe(true);
-    expect(store.getEvent(event.id)?.targetAt).toBe(1_787_149_125);
-  });
-
-  test("a proposal with ZERO CRs and NO target is legal — a declared intent, not an error", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
-
-    const { event, changed } = store.recordMilestoneEvent(key, AGENT, "release-proposal", {
-      label: "0.4.0",
-    });
-
-    expect(changed).toBe(true);
-    expect("targetAt" in event).toBe(false);
-    expect("crs" in event).toBe(false);
-    expect(listReleaseProposals(store, key).map((proposal) => proposal.label)).toEqual(["0.4.0"]);
-  });
-
-  // DELETED by CR-CRU-130 §S1: "`targetAt` is STRIPPED for every other
-  // milestone type".
-  //
-  // It asserted CR-CRU-091 §S1's recorded decision — "a declared target belongs
-  // to a PROPOSAL and nothing else" — by writing a `release` with a `targetAt`
-  // and requiring the store to discard it. The user's 2026-09-13 ruling
-  // supersedes that stance: a milestone is a dated GOAL, so what it was aimed
-  // at and when it landed are both facts about it whatever its type, and the
-  // distance between them is the only thing that can say a deliverable
-  // slipped. The gate this case guarded is gone from `recordMilestoneEvent`,
-  // so the case has no subject left.
-  //
-  // DELETED rather than inverted: the positive is already proved, in the
-  // shapes this case used and more — `tests/milestone-dates-are-first-class
-  // .test.ts` round-trips a `release`'s `targetAt` through the store's own
-  // write path AND through the wire, and asserts both dates for every type the
-  // server accepts rather than for two hand-picked ones. An inverted copy here
-  // would be duplicate coverage of a premise that no longer exists.
-  //
-  // The case ABOVE stays and still passes: a proposal that declares NO target
-  // carries no `targetAt` key. Absence remains a real state under §S1 — it
-  // means undated — and is a different claim from the one deleted here.
-
-  test("a proposal is invisible to `listReleases`, and proposals order among themselves by version", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
-    store.recordMilestoneEvent(key, AGENT, "release", {
-      label: "0.1.0",
-      commit: "b".repeat(40),
-      releasedAt: 1_787_000_000,
-    });
-    // Proposed NEWEST-version-first on purpose: version orders the strip, and
-    // arrival order must not.
-    store.recordMilestoneEvent(key, AGENT, "release-proposal", { label: "0.3.0" });
-    store.recordMilestoneEvent(key, AGENT, "release-proposal", {
-      label: "0.2.1",
-      targetAt: 1_900_000_000,
-    });
-    store.recordMilestoneEvent(key, AGENT, "release-proposal", { label: "0.10.0" });
-
-    expect(store.listReleases(key).map((release) => release.label)).toEqual(["0.1.0"]);
-    expect(store.listReleases(key).some((r) => r.type === "release-proposal")).toBe(false);
-
-    // Numeric-COMPONENT compare: 0.10.0 is after 0.3.0, not before it.
-    expect(listReleaseProposals(store, key).map((p) => p.label)).toEqual([
-      "0.2.1",
-      "0.3.0",
-      "0.10.0",
-    ]);
-  });
-
-  test("a non-semver label orders DETERMINISTICALLY rather than throwing", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
-    // Four DISTINCT labels by design: AC21 allows a label at most ONE live
-    // proposal, so a repeated label here would document a state the sanctioned
-    // route forbids. Distinctness costs no coverage — the four hard ordering
-    // cases are each still present: a bare word with no digits at all
-    // (`nightly`), a `v`-prefix, a pre-release suffix, and a MULTI-DIGIT
-    // component (`0.10.0`, which a lexical compare would wrongly put before
-    // `0.3.0`).
-    for (const label of ["nightly", "0.10.0", "v1.0.0-rc.1", "0.3.0"]) {
-      store.recordMilestoneEvent(key, AGENT, "release-proposal", { label });
-    }
-
-    const first = listReleaseProposals(store, key).map((p) => p.label);
-    const second = listReleaseProposals(store, key).map((p) => p.label);
-    expect(first.length).toBe(4);
-    // Deterministic AND correct: the componentless label sorts first, and
-    // 0.10.0 sorts AFTER 0.3.0 on numeric components.
-    expect(first).toEqual(["nightly", "0.3.0", "0.10.0", "v1.0.0-rc.1"]);
-    // The read is idempotent — a second call orders identically.
-    expect(second).toEqual(first);
-  });
-
-  test("a shipped release CONSUMES the proposal it fulfils, in the same call, and touches no other", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
-    const target = store.recordMilestoneEvent(key, AGENT, "release-proposal", {
-      label: "0.2.0",
-      targetAt: 1_787_000_000,
-    }).event;
-    const survivor = store.recordMilestoneEvent(key, AGENT, "release-proposal", {
-      label: "0.3.0",
-    }).event;
-    // §S1 — a PROPOSAL retires no gate: the 0.2.0 gate is still live.
-    const gate = store.recordGateEvent(key, AGENT, { verdict: "pass" }, { version: "0.2.0" });
-    expect(store.getEvent(gate.id)?.retiredAt).toBeUndefined();
-
-    const release = store.recordMilestoneEvent(key, AGENT, "release", {
-      label: "0.2.0",
-      commit: "c".repeat(40),
-      releasedAt: 1_787_149_125,
-    }).event;
-
-    // One call, both effects: the release is held AND its proposal is retired.
-    expect(store.listReleases(key).map((r) => r.label)).toEqual(["0.2.0"]);
-    expect(typeof store.getEvent(target.id)?.retiredAt).toBe("number");
-    // Retired means "no longer live, still auditable": out of the live feed…
-    const live = store.listEvents(key, 200).map((event) => event.id);
-    expect(live).not.toContain(target.id);
-    expect(live).toContain(release.id);
-    // …and still retrievable by id.
-    expect(store.getEvent(target.id)?.type).toBe("release-proposal");
-    expect(store.getEvent(target.id)?.label).toBe("0.2.0");
-    expect(store.getEvent(target.id)?.targetAt).toBe(1_787_000_000);
-
-    // ONE 0.2.0 record renders, never a pair.
-    expect(listReleaseProposals(store, key).map((p) => p.label)).toEqual(["0.3.0"]);
-    // A proposal for any other label is untouched.
-    expect(store.getEvent(survivor.id)?.retiredAt).toBeUndefined();
-    // And CR-CRU-073's gate retirement still fires in that same call.
-    expect(typeof store.getEvent(gate.id)?.retiredAt).toBe("number");
-  });
-});
+// DELETED WHOLE by CR-CRU-130 §S2: `describe("CR-CRU-091 §S1 — a proposed
+// release is its own record kind")`, all five cases.
+//
+// Their SUBJECT was the two-type model itself, and §S2 retires it: a proposed
+// release is not a record kind, it is a `release` milestone carrying a
+// `targetAt` and no `deliveredAt`, and shipping it sets that date on the SAME
+// record. Deleted rather than inverted, each naming the claim it made:
+//
+//   1. "`targetAt` is accepted for a release-proposal and round-trips as epoch
+//      SECONDS" — the superseded claim is that the type accepting a target is
+//      `release-proposal`. CR-CRU-130 §S1 already made both dates first-class
+//      on EVERY type, and `tests/milestone-dates-are-first-class.test.ts`
+//      asserts the round-trip per type rather than for this one.
+//   2. "a proposal with ZERO CRs and NO target is legal" — same superseded
+//      premise; absence as a real state is now asserted for every type in that
+//      same file, and for an undelivered `release` specifically in
+//      `tests/release-before-and-after-delivery.test.ts`.
+//   3. "a proposal is invisible to `listReleases`, and proposals order among
+//      themselves by version" — the invisibility was derived from the TYPE
+//      NAME, which is exactly what §S2 replaces with delivery. Both halves
+//      survive, re-derived: the two reads split by `deliveredAt` and the
+//      VERSION-ascending order are asserted together in
+//      `tests/release-before-and-after-delivery.test.ts`'s wire-shape case,
+//      against this project's real population and a scrambled arrival order.
+//   4. "a non-semver label orders DETERMINISTICALLY rather than throwing" —
+//      the comparator is untouched by this CR, but the case can only state its
+//      claim by writing four `release-proposal` records, so its fixture is the
+//      retired model. The comparator's own unit coverage stands
+//      (`compareVersionLabels`, and the ordering case named above).
+//   5. "a shipped release CONSUMES the proposal it fulfils" — THE claim §S2
+//      removes. There is nothing to consume: the release and the proposal are
+//      one row, so the case's central assertion (a retired predecessor beside
+//      a new release record) asserts the pair this CR exists to abolish. Its
+//      one still-true half — a release retires its GATE, and touches no other
+//      label — is asserted in `tests/release-before-and-after-delivery.test
+//      .ts` case 2, where it guards the removal of the other stamp.

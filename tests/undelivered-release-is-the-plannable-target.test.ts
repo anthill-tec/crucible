@@ -414,6 +414,26 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
       expect(undelivered.length).toBe(1);
       expect(undelivered[0]!.targetAt).toBe(TARGET_AT + 30 * DAY);
 
+      // ── THE TWO READS, PINNED AS A PAIR (CR-CRU-130 §S2) ──────────────
+      // The dated read above answers the LIVE record only — a superseded plan
+      // is not something outstanding. The UNFILTERED read is the audit read
+      // and answers BOTH, which is the half that would otherwise be unpinned:
+      // a build that dropped the coupling would serve the predecessor as
+      // outstanding and this case's `length` above would catch it, while a
+      // build that filtered retirement everywhere would lose the audit and
+      // nothing would catch it at all.
+      const audited = (await get(`/api/v2/projects/${key}/milestones?type=release`)).body
+        .milestones!;
+      expect(audited.length).toBe(2);
+      const superseded = audited.filter((m) => m.id !== undelivered[0]!.id);
+      expect(superseded.length).toBe(1);
+      // …and the PREDECESSOR KEEPS THE OLD TARGET. The clause that catches a
+      // build which keeps both rows and revises the target in place: the fact
+      // that the date MOVED is precisely what a slipping plan leaves behind,
+      // and an in-place edit destroys it while satisfying every count here.
+      expect(superseded[0]!.targetAt).toBe(TARGET_AT);
+      expect(superseded[0]!.deliveredAt).toBeUndefined();
+
       // A revision is NOT a delivery: nothing for this label reads as met.
       const delivered = (await get(`/api/v2/projects/${key}/milestones?type=release&delivered=true`))
         .body.milestones!;

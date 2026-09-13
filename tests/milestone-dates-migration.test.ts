@@ -151,11 +151,16 @@ function migrationChain(): readonly ChainStep[] {
 /** The ONE step this CR owns, found by what it DECLARES — never by index. */
 function datesStep(): ChainStep {
   const chain = migrationChain();
-  const owned = chain.filter((step) => /CR-130|CR-CRU-130/.test(step.description ?? ""));
+  // NARROWED to §S1 by CR-CRU-130 §S2. The CR id alone stopped identifying one
+  // step the moment this CR owned a SECOND one (§S2's release unification), and
+  // the `owned.length !== 1` guard below would then throw on every case that
+  // calls this — reporting the absence of §S1's step, which is present. The
+  // locator is still what the step DECLARES, never an index or a length.
+  const owned = chain.filter((step) => /CR-(CRU-)?130 §S1/.test(step.description ?? ""));
   if (owned.length !== 1) {
     throw new Error(
       `CR-CRU-130 §S1: expected exactly ONE step in the ${String(chain.length)}-step migration ` +
-        `chain to declare the milestone date columns (its description must name CR-130), found ` +
+        `chain to declare the milestone date columns (its description must name CR-130 §S1), found ` +
         `${String(owned.length)}. Without it, every existing board keeps its dates locked inside ` +
         `the payload blob, where nothing can filter on them — so "what is outstanding" stays ` +
         `unanswerable on exactly the data that matters.`,
@@ -289,17 +294,27 @@ describe("the dates a milestone already held become columns, and history keeps e
 
   // ── AC — the step exists, and it is a step ───────────────────────────────
 
+  // NARROWED by CR-CRU-130 §S2, not deleted. This case claimed §S1's step was
+  // the END of the chain, which was true when C1 shipped and is not a property
+  // of THIS step: C2 owns the rung after it. What the claim was protecting —
+  // that this build writes the version its chain produces — has MOVED to the
+  // step that now ends the chain, and is asserted there
+  // (`tests/release-unification-migration.test.ts`, `step.to === SCHEMA_VERSION`
+  // beside `SCHEMA_VERSION === MIGRATIONS.length`). What is left here is what
+  // is still this step's own: it is a RUNG, at a real position, and the chain
+  // it sits in still ends where the build says it does.
   test(
-    "exactly ONE migration step declares the date columns, and it is the end of the chain the " +
+    "exactly ONE migration step declares the date columns, and it is a rung of the chain the " +
       "build writes",
     () => {
       const step = datesStep();
 
       // The chain's positions ARE the version numbers (CR-CRU-071 §S1), so a
-      // step that does not end the chain means this build writes a version it
-      // does not produce.
-      expect(step.to).toBe(SCHEMA_VERSION);
-      expect(step.from).toBe(SCHEMA_VERSION - 1);
+      // step whose `to` is not its `from` + 1 means this build writes a version
+      // it does not produce.
+      expect(step.to).toBe(step.from + 1);
+      expect(migrationChain()[step.from]).toBe(step);
+      expect(step.to).toBeLessThanOrEqual(SCHEMA_VERSION);
       expect(SCHEMA_VERSION).toBe(migrationChain().length);
     },
   );
@@ -383,10 +398,18 @@ describe("the dates a milestone already held become columns, and history keeps e
       expect(storedRows(after).map((row) => row.id)).toEqual([...wasStored.keys()].sort());
 
       // And the wire serves the delivered date the migration derived.
+      //
+      // CR-CRU-130 §S2 — the type read answers the PROPOSAL too, because a
+      // proposed release IS a `release` record now, an undelivered one. The
+      // claim this case makes is unchanged and is stated per record instead of
+      // by the answer's length: the shipped row carries the delivered date
+      // §S1's step derived from `releasedAt`, and the planned row carries none.
       const releases = await recordsOfType(handle, key, "release");
-      expect(releases.map((row) => row.id)).toEqual([shipped]);
-      expect(releases[0]!.deliveredAt).toBe(SHIPPED_AT);
-      expect(releases[0]!.releasedAt).toBe(SHIPPED_AT);
+      expect(releases.map((row) => row.id).sort()).toEqual([shipped, proposed].sort());
+      const shippedRow = releases.find((row) => row.id === shipped)!;
+      expect(shippedRow.deliveredAt).toBe(SHIPPED_AT);
+      expect(shippedRow.releasedAt).toBe(SHIPPED_AT);
+      expect(releases.find((row) => row.id === proposed)!.deliveredAt).toBeUndefined();
     },
   );
 
@@ -450,7 +473,12 @@ describe("the dates a milestone already held become columns, and history keeps e
    */
   async function proveMigration(
     dbPath: string,
-  ): Promise<{ rowsBefore: StoredRow[]; compared: number; comparedWithDates: number }> {
+  ): Promise<{
+    rowsBefore: StoredRow[];
+    compared: number;
+    comparedWithDates: number;
+    rewritten: number;
+  }> {
     // ── PRE-STATE, measured rather than assumed ───────────────────────────
     const before = raw(dbPath);
     const wasStored = storedRows(before);
@@ -475,13 +503,40 @@ describe("the dates a milestone already held become columns, and history keeps e
     const after = raw(dbPath);
 
     // 1. NOTHING WAS LOST, AND NOTHING WAS REWRITTEN.
+    //
+    // CR-CRU-130 §S2 — SCOPED to the rows that step does NOT rewrite, which is
+    // the honest form of this claim rather than a weakening of it. §S1's step
+    // derives two columns and touches no blob; §S2's step, one rung later,
+    // collapses the two-type release model — a `release-proposal` becomes the
+    // undelivered `release` it always was, and a consumed proposal's target is
+    // carried onto the release that fulfilled it before its row goes. Both
+    // steps run on the ONE boot below, so a byte-identity claim about the
+    // first cannot survive the second, whose whole job is rewriting exactly
+    // those rows. The comparison therefore covers every record neither step
+    // rewrites — on the live replica, all but six — and §S2's rewrite is
+    // proved row by row, by its own rule, in
+    // `tests/release-unification-migration.test.ts`.
     const nowStored = storedRows(after);
-    expect(nowStored.map((row) => row.id)).toEqual(wasStored.map((row) => row.id));
-    for (const row of nowStored) {
-      const was = wasById.get(row.id)!;
-      expect(row.payload).toBe(was.payload);
-      expect({ ...row }).toEqual({ ...was });
+    const unified = new Set(
+      wasStored
+        .filter((row) => row.type === "release-proposal")
+        .map((row) => `${row.project_key}\u0000${row.label ?? ""}`),
+    );
+    const untouched = (row: StoredRow): boolean =>
+      !(
+        (row.type === "release" || row.type === "release-proposal") &&
+        unified.has(`${row.project_key}\u0000${row.label ?? ""}`)
+      );
+    const nowById = new Map(nowStored.map((row) => [row.id, row]));
+    for (const was of wasStored.filter(untouched)) {
+      const row = nowById.get(was.id);
+      expect(row).toBeDefined();
+      expect(row!.payload).toBe(was.payload);
+      expect({ ...row! }).toEqual({ ...was });
     }
+    // …and NOTHING APPEARED: every row the store holds afterwards was there
+    // before, so neither step inserted a duplicate beside what it rewrote.
+    expect(nowStored.filter((row) => !wasById.has(row.id))).toEqual([]);
 
     // 2. THE COLUMNS ARE DERIVED, ROW BY ROW, FROM THAT UNTOUCHED PAYLOAD.
     const columns = datedColumns(after);
@@ -526,9 +581,19 @@ describe("the dates a milestone already held become columns, and history keeps e
     //    field this CR had added. So the controls between them carry every
     //    column-backed field the production door can put on a milestone —
     //    `context` and the `cycle_id` derived from it, and `retired_at`, which
-    //    a shipped release stamps on the proposal it consumes — and the set is
-    //    then asserted to CONTAIN them BY NAME, so a control that stops being
-    //    representative fails here, loudly, instead of downstream.
+    //    a REVISED release proposal carries on the predecessor it supersedes —
+    //    and the set is then asserted to CONTAIN them BY NAME, so a control
+    //    that stops being representative fails here, loudly, instead of
+    //    downstream.
+    //
+    //    RETARGETED by CR-CRU-130 §S2: the control's subject is unchanged — it
+    //    exists to DERIVE the identity keys — and only the way it obtains a
+    //    retired row moved with the model. Shipping no longer stamps
+    //    `retired_at`, because a release and its proposal are ONE record and
+    //    delivery is `deliveredAt`; a REVISION still stamps it, because a
+    //    label may hold only one live plan. So the control revises before it
+    //    ships, and reads `release` where it used to read the retired type —
+    //    the same population, under one name.
     const controlPath = join(scratch("cru130-wire-control-"), "control.db");
     const control = boot(controlPath);
     const controlKey = crypto.randomUUID();
@@ -546,7 +611,12 @@ describe("the dates a milestone already held become columns, and history keeps e
       label: "9.9.9",
       targetAt: PROPOSED_FOR,
     });
-    // Shipping the release CONSUMES that proposal, stamping `retired_at` on it.
+    // The REVISION stamps `retired_at` on the predecessor it supersedes, which
+    // is what puts a retired row in the control population.
+    control.store.recordReleaseProposal(controlKey, ORCH, {
+      label: "9.9.9",
+      targetAt: PROPOSED_FOR + 86_400,
+    });
     control.store.recordMilestoneEvent(controlKey, ORCH, "release", {
       label: "9.9.9",
       commit: "ddd4444",
@@ -556,7 +626,6 @@ describe("the dates a milestone already held become columns, and history keeps e
     const controlPayloads = new Map(storedRows(controlDb).map((row) => [row.id, payloadOf(row)]));
     const controlServed = [
       ...(await recordsOfType(control, controlKey, "custom")),
-      ...(await recordsOfType(control, controlKey, "release-proposal")),
       ...(await recordsOfType(control, controlKey, "release")),
     ];
     const identityKeys = new Set(
@@ -587,12 +656,23 @@ describe("the dates a milestone already held become columns, and history keeps e
     const wireFaults: string[] = [];
     let compared = 0;
     let comparedWithDates = 0;
+    /** CR-CRU-130 §S2 — records that step rewrote, out of THIS step's scope. */
+    let rewritten = 0;
     for (const [projectKey, types] of pairs) {
       for (const type of types) {
         for (const served of await recordsOfType(handle, projectKey, type)) {
           const was = wasById.get(served.id);
           if (was === undefined) {
             wireFaults.push(`${served.id}: served by the wire but absent before the migration`);
+            continue;
+          }
+          // CR-CRU-130 §S2 — the same scoping the byte-identity comparison
+          // above states, for the same reason: a row that step rewrote serves
+          // `release` where its pre-state payload said `release-proposal`,
+          // which is the rewrite working rather than a field this CR's step
+          // renamed. Counted, so the completeness check below stays exact.
+          if (!untouched(was)) {
+            rewritten += 1;
             continue;
           }
           compared += 1;
@@ -621,7 +701,7 @@ describe("the dates a milestone already held become columns, and history keeps e
       }
     }
     expect(wireFaults).toEqual([]);
-    return { rowsBefore: wasStored, compared, comparedWithDates };
+    return { rowsBefore: wasStored, compared, comparedWithDates, rewritten };
   }
 
   // ── AC — the invariant, on a population this suite writes itself ─────────
@@ -715,7 +795,13 @@ describe("the dates a milestone already held become columns, and history keeps e
       expect(payloads.filter((p) => p.releasedAt !== undefined).length).toBeGreaterThan(0);
       expect(payloads.filter((p) => p.deliveredAt !== undefined).length).toBeGreaterThan(0);
       expect(payloads.filter((p) => p.targetAt !== undefined).length).toBeGreaterThan(0);
-      expect(proof.compared).toBe(proof.rowsBefore.length);
+      // CR-CRU-130 §S2 — every row is accounted for: compared by this step's
+      // claim, or named as one §S2's step rewrote and proved by its own file.
+      // This population holds none of the latter — it is written through
+      // today's doors, which no longer produce the retired type — so the sum
+      // is the whole of it and the scoping cost this case nothing.
+      expect(proof.compared + proof.rewritten).toBe(proof.rowsBefore.length);
+      expect(proof.rewritten).toBe(0);
       expect(proof.comparedWithDates).toBeGreaterThan(0);
       // …and the undated ones really came back undated: a migration that
       // defaulted to 0 or to the row's timestamp would fail here.
@@ -749,6 +835,12 @@ describe("the dates a milestone already held become columns, and history keeps e
       // be satisfied by a migration that added nothing at all).
       expect(proof.compared).toBeGreaterThan(10);
       expect(proof.comparedWithDates).toBeGreaterThan(0);
+      // CR-CRU-130 §S2 — and the scoping above is NOT vacuous at real scale:
+      // this population really does hold rows §S2's step rewrites, so a
+      // comparison that skipped everything would fail here rather than pass
+      // by having nothing left to check.
+      expect(proof.rewritten).toBeGreaterThan(0);
+      expect(proof.compared + proof.rewritten).toBe(proof.rowsBefore.length);
 
       // THE LIVE STORE WAS NEVER WRITTEN.
       const liveAfter = statSync(taken.live);

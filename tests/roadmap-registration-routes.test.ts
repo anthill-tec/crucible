@@ -1390,9 +1390,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const key = await seed("ac21");
         const first = await propose(key, "0.4.0", 1_787_000_000);
         expect(first.body.converged).toBe(false);
+        // CR-CRU-130 §S2 — the record a proposal writes IS a `release`, an
+        // undelivered one; identical retarget to the AC22 case below. The
+        // case's subject — a revision retires rather than editing in place —
+        // is untouched.
         const firstEventId = handle!.store
           .listEvents(key, 200)
-          .find((e) => e.type === "release-proposal")!.id;
+          .find((e) => e.type === "release")!.id;
 
         const revised = await propose(key, "0.4.0", 1_790_000_000);
         expect(revised.status).toBe(200);
@@ -1527,9 +1531,12 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         expect(capped.status).toBe(200);
 
         await propose(key, "0.5.0", 1_790_000_000);
+        // CR-CRU-130 §S2 — the record a proposal writes IS a `release`, an
+        // undelivered one. The lookup follows the model; the case's subject —
+        // what the retention cap may and may not prune — is untouched.
         const proposalId = handle!.store
           .listEvents(key, 200)
-          .find((e) => e.type === "release-proposal")!.id;
+          .find((e) => e.type === "release")!.id;
 
         // Drive the count far past the cap with ordinary, prunable TELEMETRY —
         // the only thing the cap reaches now, and what makes the survival
@@ -1550,10 +1557,15 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         expect((await get(proposalsPath(key))).body.proposals!.map((p) => p.label)).toEqual([
           "0.5.0",
         ]);
-        expect(handle!.store.getEvent(proposalId)?.type).toBe("release-proposal");
+        // DELETED by CR-CRU-130 §S2: `expect(getEvent(proposalId)?.type)
+        // .toBe("release-proposal")`. Its claim was that a live proposal is a
+        // record of its own KIND, which is the two-type model §S2 retires. The
+        // survival it was standing next to is asserted above, on the wire, and
+        // by id below — neither of which needs a second type name to be true.
 
-        // Once the release SHIPS, the proposal is CONSUMED: no longer a plan,
-        // so it leaves the live strip — and is still there to audit.
+        // Once the release SHIPS, that record is DELIVERED: no longer a plan,
+        // so it leaves the live strip — and is the same row, still there to
+        // audit.
         const shipped = await post("/api/v2/milestones", {
           projectKey: key,
           agentId: ORCH,
@@ -1564,9 +1576,17 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         });
         expect(shipped.status).toBe(201);
         expect((await get(proposalsPath(key))).body.proposals).toEqual([]);
-        const consumed = handle!.store.getEvent(proposalId);
-        expect(consumed?.type).toBe("release-proposal");
-        expect(typeof consumed?.retiredAt).toBe("number");
+        // DELETED by CR-CRU-130 §S2: `expect(consumed?.type).toBe(
+        // "release-proposal")` and `expect(typeof consumed?.retiredAt).toBe(
+        // "number")`. Together they asserted the CONSUMPTION — a proposal row
+        // surviving beside the release that fulfilled it, marked retired — and
+        // that pair is exactly what §S2 abolishes. What replaces them is the
+        // same claim under one record: the id the cap did not prune is still
+        // served, and it is now DELIVERED rather than retired.
+        const delivered = handle!.store.getEvent(proposalId);
+        expect(delivered?.id).toBe(proposalId);
+        expect(delivered?.deliveredAt).toBe(1_790_000_000);
+        expect(delivered?.retiredAt).toBeUndefined();
       },
     );
   });
