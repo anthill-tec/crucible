@@ -1793,10 +1793,10 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:5020 — re-pinned 2026-09-13 from :4411,
-# shifted by the 609 lines CR-CRU-129 added above it across its four cycles:
-# §S1's milestone and gate RECORDS, with their tables, migrations and queries,
-# and §S2's per-sweep retention resolution). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:5784 — re-pinned 2026-09-13 from :5020,
+# shifted by the 764 lines CR-CRU-130 added above it across its four cycles:
+# §S1's dated milestone, §S2's release record that survives delivery, and the
+# §S4b reads of a delivered release). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
@@ -1812,7 +1812,7 @@ _TRACK_LANE_RE = re.compile(r"\d+")
 
 def canonical_track(value):
     """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
-    mirror of `normalizeTrack` (src/store.ts:362-365). The first run of digits
+    mirror of `normalizeTrack` (src/store.ts:372-375). The first run of digits
     anywhere in the value, rendered as the PRD's locked wire format
     `track-<n>`; `None` when the value names no lane.
 

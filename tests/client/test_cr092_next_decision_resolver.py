@@ -1620,13 +1620,38 @@ class NextBlockCitationsTest(unittest.TestCase):
         # red. The three sibling entries were re-measured at BOTH ends in the
         # same pass and none had moved (STATUS-CONTRACT.md 65-68,
         # normalizeTrack 362-365, _next_start_help 1559-1580).
-        ("LANDED_STATUSES", "src/store.ts", 5020, 5020,
+        # Re-pinned 2026-09-13 (CR-CRU-130 C4 close-out), 5020 -> 5784: this
+        # CR's four cycles added 764 lines ABOVE `deriveQueueStatus` in
+        # src/store.ts — §S1's dated milestone, §S2/§S4b's release record that
+        # survives delivery, and the reads a delivered release is answered
+        # from. The drift IS ours and it is the ordinary case: the CR that
+        # shifted the file re-pins it, ONCE, at close-out after the last
+        # content edit — the number was LOCATED at HEAD (`grep -c 'private
+        # deriveQueueStatus('` answers 1, so the hit is unique), never computed
+        # from the old one plus a delta. BOTH halves move in the same commit:
+        # the production comment this row mirrors (`clients/_crucible_axi.py`)
+        # carries the same 5784, so
+        # `test_the_table_covers_every_citation_the_block_carries` never goes
+        # red. The two sibling entries that did NOT move were re-measured at
+        # BOTH ends in the same pass (STATUS-CONTRACT.md 65-68, _next_start_help
+        # 1559-1580); the third, `normalizeTrack`, moved and is re-pinned below.
+        ("LANDED_STATUSES", "src/store.ts", 5784, 5784,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split
         # inserted comment and code lines above `normalizeTrack` in
         # src/store.ts. The CR that shifted the file re-pins it.
-        ("canonical_track", "src/store.ts", 362, 365,
+        # Re-pinned 2026-09-13 (CR-CRU-130 C4 close-out), 362-365 -> 372-375:
+        # §S4's declared milestone vocabulary added exactly ten lines ABOVE
+        # `normalizeTrack` in src/store.ts — `ProjectPatch.milestoneTypes` with
+        # its doc comment (+7) and `ProjectRow.milestone_types` with its (+3).
+        # Both ends were LOCATED at HEAD (`grep -c 'export function
+        # normalizeTrack('` answers 1, so the head is a unique hit, and the
+        # closing brace was read off the file), never computed from the old
+        # pair plus the shift. BOTH halves move in the same commit: the
+        # production docstring this row mirrors (`canonical_track` in
+        # `clients/_crucible_axi.py`) carries the same 372-375.
+        ("canonical_track", "src/store.ts", 372, 375,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is

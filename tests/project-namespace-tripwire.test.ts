@@ -1723,8 +1723,49 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // `scripts/` is NOT one of the trees below and never has been; the three keys
 // of this table are the whole of what AC8 measures, so this CR's `scripts/`
 // edits move no head by construction.
+//
+// UPDATED 2026-09-13 by CR-CRU-130 — the CR's close-out step, taken ONCE at
+// the very end of cycle 454 and deliberately deferred until then: the head
+// moved in all four of this CR's implementation cycles, so a pin taken at any
+// earlier point would have been re-recorded three times for one CR, which is
+// exactly what happened on CR-CRU-128 before the deferral became the rule.
+// Measured by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL, imported from `tests/helpers/source-scan`)
+// over the working tree AFTER the last content edit and AFTER this commit's own
+// `clients/_crucible_axi.py` re-pins, never transcribed from a mid-cycle brief.
+//
+// ONE tree moves. `src` 648 -> 710, +62, and every one of the four moved files
+// is a file this CR rewrote:
+//   src/store.ts   301 -> 345  (+44)  §S1's dated milestone, §S2/§S4b's release
+//                                     record that survives delivery, and §S4's
+//                                     declared milestone vocabulary
+//   src/v2.ts      218 -> 230  (+12)  the routes those records are written and
+//                                     read through, and §S4's reserved-pair
+//                                     refusal at the route boundary
+//   src/types.ts    51 ->  56   (+5)  `ProjectPatch.milestoneTypes` and the
+//                                     milestone/release shapes the routes answer on
+//   src/hints.ts    42 ->  43   (+1)  §S2's target-clause hint
+// The six other `src` files (codecs/compile, codecs/index, codecs/junit,
+// codecs/playwright, toon, server) re-measure UNCHANGED at 1/2/3/3/2/25, and
+// 44 + 12 + 5 + 1 = 62 is the whole of the move — checked, not assumed.
+//
+// `public` and `clients` do NOT move and re-measure at the recorded 477 and
+// 836. `public` is untouched by this CR entirely. `clients` IS touched — C3
+// and C4 edited all five stack clients and `_crucible_axi.py` — and the head
+// is flat anyway, which is a measurement rather than an assumption: each of
+// the seven files re-measures at its recorded count (axi 204, arduino 106, mvn
+// 135, python 122, rust 126, bun 142, toon 1). The client edits added the
+// `--type` READ route's help without adding a CR literal, and this commit's
+// own `_crucible_axi.py` re-pins REPLACE the CR-CRU-129 lineage on the
+// LANDED_STATUSES citation with this CR's — one literal out, one in, net zero.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS — the moved head is ABOVE its floor
+// by a wide margin (710 >= 512), no head came out below its baseline, and the
+// three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. `scripts/` is NOT one of the trees below and never has been, so
+// this CR's `scripts/release.sh` edits move no head by construction.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 648 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 710 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
   clients: { exts: [".py"], develop: 601, head: 836 },
 };
