@@ -61,6 +61,17 @@ means nothing (measured on `release/0.2.0`, 2026-09-13):
           reading would report a clean fleet.
   GUARD `FlagHelpCensusWalkerMutationTest` (both) — pass today, and are the only
           proof that the presence check is not a literal check.
+  GUARD `FlagHelpCensusTest.
+          test_the_partial_help_ceiling_is_exactly_four_and_only_shrinks` and
+          the partial half of the resolver-reach guard — four declarations
+          resolve only in PART (one shared `--agent` helper, in four clients,
+          whose `extra=` is a caller value), and §S3 grades the fragment it can
+          read. All four fragments are full sentences today, so nothing is
+          mis-graded; the ceiling refuses the FIFTH, which might be a sliver.
+  GUARD `PartialHelpDetectorMutationTest` (both) — the bound on that ceiling: a
+          resolver that never reported a partial would satisfy it with nothing.
+          They build a mostly-runtime help in a throwaway module and require
+          the walk to name it and overflow the guard's own arithmetic.
   GUARD `FlagHelpQualityTest`, except the vocabulary check above — no help is
           empty, none is a bare echo of its own flag name, the vocabulary
           parses are non-empty, and the 19 `"If set"` openers on valued flags
@@ -184,6 +195,25 @@ PRE_CR128_IF_SET_RESIDUE = {
     "clients/rust-crucible.py": 5,
 }
 PRE_CR128_IF_SET_RESIDUE_TOTAL = 19
+
+# §S2's other residue — the declarations whose `help=` expression only PARTIALLY
+# resolves, because part of it is a runtime value no static read can supply.
+# Four today (measured 2026-09-13 by this file's own resolver): the shared
+# `_add_workflow_agent_arg(p, extra="")` helper in four clients, whose help is a
+# literal sentence plus the caller's `extra`. §S3's four checks grade the
+# fragment the resolver COULD read, so a declaration whose help is mostly
+# runtime would satisfy them on a sliver -- a census satisfiable by a sliver is
+# not a census. Pinned as a dated CEILING in the same shape as
+# `PRE_CR128_IF_SET_RESIDUE` above: a file may shrink freely, it may not grow,
+# and a file ABSENT from this table must be at ZERO, so the FIFTH partial fails
+# in the file that introduced it.
+PRE_CR128_PARTIAL_HELP_RESIDUE = {
+    "clients/bun-crucible.py": 1,
+    "clients/mvn-crucible.py": 1,
+    "clients/python-crucible.py": 1,
+    "clients/rust-crucible.py": 1,
+}
+PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL = 4
 
 IF_SET_OPENER = "if set"
 
@@ -441,6 +471,29 @@ def undescribed(declarations):
     return [d for d in declarations if not d.has_help]
 
 
+def partially_resolved(declarations):
+    """The declarations whose help expression resolved to a FRAGMENT -- part of
+    it was a runtime value. §S3 grades what it can read, so these are the
+    declarations graded on less than their whole description."""
+    return [d for d in declarations if d.has_help and d.help_partial]
+
+
+def _partial_help_over_ceiling(declarations, ceiling):
+    """The per-FILE overflow of `partially_resolved` against a dated ceiling, as
+    the guard's failure lines. A module function, not a method, so the mutation
+    test below exercises the guard's own arithmetic instead of a copy of it."""
+    partial = partially_resolved(declarations)
+    found = Counter(d.label for d in partial)
+    over = []
+    for label, count in sorted(found.items()):
+        allowed = ceiling.get(label, 0)
+        if count > allowed:
+            names = [d.offender_line for d in partial if d.label == label]
+            over.append("%s: %d > ceiling %d\n%s"
+                        % (label, count, allowed, "\n".join(names)))
+    return over
+
+
 def _offender_report(declarations):
     return "\n".join("  " + d.offender_line for d in declarations)
 
@@ -490,12 +543,50 @@ class FlagHelpCensusTest(unittest.TestCase):
 
     def test_every_declared_help_expression_resolves_to_text(self):
         """GUARD. §S3's four checks read the help TEXT, so a help expression the
-        resolver cannot read is a silently unchecked flag, not a passing one."""
+        resolver cannot read is a silently unchecked flag, not a passing one --
+        and one it can only PARTLY read is a flag graded on a fragment, which is
+        the same hole with a smaller mouth. Nothing may be unreadable; the four
+        partials are exempt by FILE COUNT, so the fifth fails."""
         unreadable = [d for d in census() if d.has_help and d.help_text is None]
         self.assertEqual(
             [], [d.offender_line for d in unreadable],
             "the help resolver could not read %d declaration(s); every §S3 "
             "check below would skip them" % len(unreadable))
+        over = _partial_help_over_ceiling(census(),
+                                          PRE_CR128_PARTIAL_HELP_RESIDUE)
+        self.assertEqual(
+            [], over,
+            "a help= expression resolved only in PART -- §S3 would grade the "
+            "fragment as if it were the whole description -- beyond the "
+            "2026-09-13 ceiling:\n%s" % "\n".join(over))
+
+    def test_the_partial_help_ceiling_is_exactly_four_and_only_shrinks(self):
+        """GUARD. The ceiling above is a CEILING: every file may shrink freely,
+        none may grow, and a file absent from the table must be at zero. The
+        four are one shared `--agent` helper whose `extra=` is a caller value;
+        each already resolves to a full sentence, so §S3 grades real text
+        today. That is the reading being pinned, not a permission."""
+        self.assertEqual(PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL,
+                         sum(PRE_CR128_PARTIAL_HELP_RESIDUE.values()))
+        self.assertEqual(4, PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL)
+        partial = partially_resolved(census())
+        self.assertLessEqual(
+            len(partial), PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL,
+            "the fleet holds %d partially-resolved help expression(s) against "
+            "a ceiling of %d:\n%s" % (len(partial),
+                                      PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL,
+                                      _offender_report(partial)))
+        found = Counter(d.label for d in partial)
+        for label in sorted(PRE_CR128_PARTIAL_HELP_RESIDUE):
+            self.assertIn(label, CENSUS_SOURCES_BY_LABEL,
+                          "the ceiling names a file the census does not walk")
+            self.assertLessEqual(found[label],
+                                 PRE_CR128_PARTIAL_HELP_RESIDUE[label])
+        for decl in partial:
+            self.assertTrue(
+                decl.help_text and decl.help_text.strip(),
+                "%s resolves to nothing readable at all; §S3 would grade the "
+                "empty string" % decl.offender_line)
 
 
 class FlagHelpCensusWalkerMutationTest(unittest.TestCase):
@@ -565,6 +656,83 @@ class FlagHelpCensusWalkerMutationTest(unittest.TestCase):
                          "offender at all")
         self.assertRegex(_offender_report(new),
                          r"_crucible_axi\.py:\d+  %s" % re.escape(target.flag))
+
+
+# A declaration whose help is MOSTLY runtime, in the exact shape the fleet's
+# four real partials take: a shared helper appends a caller-supplied `extra`.
+# Written to a throwaway module and walked with resolution ON, because the
+# partial flag is only observable when the resolver actually runs.
+_PARTIAL_MUTANT_SOURCE = '''
+import argparse
+
+PREFIX = "Sets "
+
+
+def _add_mostly_runtime(p, extra=""):
+    p.add_argument("--mostly-runtime", help=PREFIX + extra)
+
+
+def _add_interpolated(p, extra=""):
+    p.add_argument("--interpolated", help=f"Selects {extra} for the run.")
+
+
+def build():
+    p = argparse.ArgumentParser()
+    p.add_argument("--whole", help="Reads the report and ingests it.")
+    _add_mostly_runtime(p, extra="whatever the caller decides at runtime.")
+    _add_interpolated(p, extra="a value only the caller knows")
+    return p
+'''
+
+
+class PartialHelpDetectorMutationTest(unittest.TestCase):
+    """GUARD on the partial-help ceiling. "At most four partially-resolved
+    declarations" is satisfiable by a resolver that never reports one, and the
+    fleet's four real partials each resolve to a full sentence, so nothing in
+    the census would notice the difference. This builds a declaration whose
+    help is MOSTLY runtime -- a two-word literal plus the caller's `extra`, and
+    an f-string whose interpolation is a parameter -- and requires the walk to
+    mark both partial, name them, leave the whole-literal flag beside them
+    alone, and overflow the ceiling arithmetic the guard itself uses."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cr128-partial-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = self.tmp / "cr128_partial_mutant.py"
+        self.path.write_text(_PARTIAL_MUTANT_SOURCE)
+        self.label = str(self.path)
+        self.walk = walk_flag_declarations({"mutant": self.path})
+
+    def test_a_mostly_runtime_help_is_marked_partial_and_named(self):
+        self.assertEqual(
+            ["--interpolated", "--mostly-runtime"],
+            sorted(d.flag for d in partially_resolved(self.walk)),
+            "the resolver read a runtime value as if it were whole text:\n%s"
+            % _offender_report(self.walk))
+        whole = next(d for d in self.walk if d.flag == "--whole")
+        self.assertFalse(whole.help_partial,
+                         "a fully literal help must not be called partial, or "
+                         "the ceiling counts everything and bounds nothing")
+        self.assertEqual("Sets ",
+                         next(d for d in self.walk
+                              if d.flag == "--mostly-runtime").help_text,
+                         "the fragment §S3 would otherwise have graded")
+
+    def test_the_next_partial_overflows_the_ceiling_naming_its_file(self):
+        """The FIFTH partial, in miniature: a file already AT its ceiling gets
+        one more, and the guard's own arithmetic reports it."""
+        self.assertEqual(
+            [], _partial_help_over_ceiling(self.walk, {self.label: 2}),
+            "two partials against a ceiling of two is not an overflow")
+        over = _partial_help_over_ceiling(self.walk, {self.label: 1})
+        self.assertEqual(1, len(over),
+                         "one file overflowed, so one entry: %r" % (over,))
+        self.assertIn("%s: 2 > ceiling 1" % self.label, over[0])
+        self.assertRegex(over[0],
+                         r"cr128_partial_mutant\.py:\d+  --mostly-runtime")
+        self.assertEqual(
+            1, len(_partial_help_over_ceiling(self.walk, {})),
+            "a file ABSENT from the ceiling table must be held at zero")
 
 
 class NominatedRequiredAgentWordingTest(unittest.TestCase):
