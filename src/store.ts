@@ -731,7 +731,7 @@ const DISPOSABLE_KIND_PLACEHOLDERS = DISPOSABLE_KIND_PARAMS.map(() => "?").join(
  * A project's OWN `retention: 0` still wins (`??`, never `||`): zero is a
  * declared cap, not an absent one.
  */
-function defaultRetention(): number | undefined {
+export function defaultRetention(): number | undefined {
   const raw = Number(process.env.CRUCIBLE_DEFAULT_RETENTION);
   return Number.isFinite(raw) && raw > 0 ? raw : undefined;
 }

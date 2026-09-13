@@ -39,8 +39,9 @@
 // Every store here is ":memory:". The live `data/crucible.db` is never opened.
 import { describe, test, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
-import { Store } from "../src/store.ts";
+import { Store, defaultRetention } from "../src/store.ts";
 import * as storeModule from "../src/store.ts";
+import { retentionDisclosure } from "../src/server.ts";
 import type { SuiteNode } from "../src/types.ts";
 
 const emptyTree: SuiteNode[] = [];
@@ -74,11 +75,11 @@ function disposableKinds(): ReadonlySet<string> {
   return found as ReadonlySet<string>;
 }
 
-function seedProject(store: Store, retention?: number): string {
+function seedProject(store: Store, retention?: number, name = "retention-scope"): string {
   const key = crypto.randomUUID();
   store.addProject({
     key,
-    name: "retention-scope",
+    name,
     type: "backend",
     sutRoot: "/tmp",
     ...(retention !== undefined ? { retention } : {}),
@@ -150,6 +151,13 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   function setEnv(name: string, value: string): void {
     restoreEnv.push([name, process.env[name]]);
     process.env[name] = value;
+  }
+
+  /** The UNCONFIGURED state — the one AC6 is about, and the one an inherited
+   *  environment would otherwise hide. */
+  function clearEnv(name: string): void {
+    restoreEnv.push([name, process.env[name]]);
+    delete process.env[name];
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -291,5 +299,80 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
       new RegExp(`const\\s+${name}\\b`).test(source),
     );
     expect(declared).toEqual([]);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // AC — "An unconfigured cap means NO cap, AND SAYS SO." Both halves, because
+  // half of this AC is silent by nature: deleting the literal made retention
+  // OPT-IN, and an opt-in nobody is told about is how the next silent growth
+  // starts. On the live board today `Model B` and `Sandesh` both carry
+  // `retention: null` and prune nothing, and nothing anywhere says so.
+  //
+  // Asserted in BOTH directions on purpose: a disclosure that is always
+  // printed discloses nothing, so the silence when a cap DOES resolve is as
+  // load-bearing as the warning when none does.
+  // ─────────────────────────────────────────────────────────────────────────
+  test("with no cap configured anywhere, retention evicts NOTHING and the boot discloses it, naming the setting that would bound it", () => {
+    clearEnv("CRUCIBLE_DEFAULT_RETENTION");
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    expect(store.getProject(key)?.retention).toBeUndefined();
+    expect(defaultRetention()).toBeUndefined();
+
+    // Half one — nothing is evicted. The count is the fixture's own, not a
+    // cap: every row ingested is still there.
+    const ids = ingestTelemetry(store, key, 40);
+    const surviving = store.listEvents(key, ids.length * 10).filter((e) => e.kind === "test");
+    expect(surviving.length).toBe(ids.length);
+    expect(store.getEvent(ids[0]!)).not.toBeNull();
+
+    // Half two — the boot SAYS SO, on the banner channel, naming the setting
+    // an operator would reach for and the project that is unbounded.
+    const disclosure = retentionDisclosure(store);
+    expect(disclosure).not.toBeNull();
+    expect(disclosure).toContain("CRUCIBLE_DEFAULT_RETENTION");
+    expect(disclosure).toContain(store.getProject(key)!.name);
+    // It describes the sweep the store actually performs, rather than a
+    // vocabulary copied into a message and left to drift.
+    for (const kind of disposableKinds()) {
+      expect(disclosure, `the disclosure does not name '${kind}'`).toContain(kind);
+    }
+  });
+
+  test("the operator's configured fallback silences the disclosure — it is a warning, not a banner line", () => {
+    clearEnv("CRUCIBLE_DEFAULT_RETENTION");
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    // Non-vacuity: this very store DOES warn while nothing is configured, so
+    // the silence below is the fallback's doing and not an inert function.
+    expect(retentionDisclosure(store)).not.toBeNull();
+
+    setEnv("CRUCIBLE_DEFAULT_RETENTION", "9");
+    expect(defaultRetention()).toBe(9);
+    expect(retentionDisclosure(store)).toBeNull();
+    // And the project it would have named is genuinely still uncapped of its
+    // own accord — the fallback is what quietened it.
+    expect(store.getProject(key)?.retention).toBeUndefined();
+  });
+
+  test("a project that configures its own cap is not named, and a board where every project has one stays silent", () => {
+    clearEnv("CRUCIBLE_DEFAULT_RETENTION");
+    const store = new Store(":memory:");
+    const capped = seedProject(store, undefined, "has-its-own-cap");
+    const uncapped = seedProject(store, undefined, "bounded-by-nothing");
+    configuredCap(store, capped, 12);
+
+    const withOneUncapped = retentionDisclosure(store);
+    expect(withOneUncapped).not.toBeNull();
+    // NAMED: the one that is unbounded. The capped one is NOT, or the warning
+    // would indict a project that did the right thing and become noise.
+    expect(withOneUncapped).toContain(store.getProject(uncapped)!.name);
+    expect(withOneUncapped).not.toContain(store.getProject(capped)!.name);
+
+    // `0` is a DECLARED cap, not an absent one (`??`, never `||`) — so
+    // configuring it silences the last warning rather than leaving it.
+    store.updateProject(uncapped, { retention: 0 });
+    expect(store.getProject(uncapped)?.retention).toBe(0);
+    expect(retentionDisclosure(store)).toBeNull();
   });
 });
