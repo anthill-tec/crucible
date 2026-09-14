@@ -116,7 +116,7 @@ One ingest call = one immutable event on the project's timeline.
 |---|---|---|
 | `id` | `evt-<epoch-ms>-<seq>` | v1 format preserved |
 | `projectKey`, `agentId` | | who ran it |
-| `kind` | `"test"` \| `"compile"` | strict panel routing (§4.6) |
+| `kind` | `"test"` \| `"compile"` \| `"lifecycle"` | strict panel routing (§4.6); `lifecycle` (CR-CRU-011) records a registration or unregistration and contributes nothing to rollups. **These three are the whole of `events` (revised 2026-09-13, CR-CRU-129): `milestone` and `gate` were moved OUT to their own tables — see §3.5.** |
 | `timestamp` | epoch ms | |
 | `summary` | `{total, passed, failed, pending, duration_ms}` | test events |
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
@@ -131,6 +131,55 @@ One ingest call = one immutable event on the project's timeline.
 ### 3.4 Ingest state
 Per (`projectKey`, `type ∈ unit|bdd`): pointer to the latest test event + latest compile
 event — what `/api/ingest/status` reports and `/api/ingest/clear` resets.
+
+### 3.5 Milestone — a dated goal (added 2026-09-13; CR-CRU-129, CR-CRU-130)
+
+**A milestone is a RECORD, not an event.** A test run is an event: numerous, disposable,
+and exactly what a capped buffer is for. A milestone is a fact that happened once and
+stays true, so it lives in its own table (`milestones`, beside `gates`) and no ingest
+volume can evict it. §4.7 records what happened when it did not.
+
+**A milestone is a goal with a DATE** — what is intended, when it is due, and when it
+actually landed:
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | project-declared string | see below; `release` and `cr-merged` are reserved |
+| `label` | string | the version, the CR id, or the project's own name for the goal |
+| `targetAt` | epoch seconds? | when it is DUE. Absent = undated, a legitimate state |
+| `deliveredAt` | epoch seconds? | when it was MET. Absent = outstanding |
+| `commit`, `crs`, `packages` | | a release's provenance — what shipped, and the CRs it bundled |
+| `retired_at` | epoch ms? | "no longer the live record" — a superseded predecessor, or a gate its release retired |
+
+The two dates are what make a milestone answerable: what is due, what is outstanding,
+what slipped and by how long. Absence is never zero — an undated milestone that read as
+due-at-epoch would be permanently overdue.
+
+**The TYPE is definable (CR-CRU-130).** A project declares the milestone types it
+records, as project configuration. Two are RESERVED because the SERVER derives behaviour
+from them and a project redefining them would be redefining the server: `release` (the
+releases/proposals reads, `crs` membership → the queue's `COMPLETED_UNTRACKED`,
+provenance repair, the roadmap strip) and `cr-merged` (the landing evidence the release
+ceremony's provenance reads). Everything else is the project's own vocabulary, stored
+under its own name, queryable by type, and rendered as itself. An UNDECLARED type is
+refused and the refusal says how to declare it — open is not unvalidated, because a typo
+must not silently become a new category.
+
+**Release is the KEY type**, and it is three things at once, per
+`DN-crucible-wave-track-release.md`: a dated goal, a CONTAINER of the CRs that
+contributed to what shipped, and a WORKFLOW (propose a target → plan waves into it →
+ship → tag), distinct from the CR-centred plan flow and from the roadmap. It is ONE
+record before and after delivery: a proposed release is a `release` with a `targetAt` and
+no `deliveredAt`; shipping updates that same record in place. `release-proposal` was a
+separate type until 2026-09-13 and is retired — `listReleaseProposals` is now the
+undelivered releases and `listReleases` the delivered ones, derived from delivery rather
+than from two type names.
+
+A release that carries a ship's EVIDENCE — a commit, a non-empty `crs` or `packages` —
+has shipped whether or not anyone could date it, and `deliveredAt` stays honestly absent
+in that case. Deriving settlement from the date alone would leave a shipped label
+plannable whenever the ceremony cannot resolve its tag, which is reachable from any
+shallow clone.
 
 ## 4 Functional requirements
 
@@ -200,13 +249,33 @@ discipline is hammered into every skill; the server enforces it by `kind`.)
 
 ### 4.7 Events API + retention
 As v1 (list newest-first/limit 50, delete-one, clear-project). Growth is bounded by a
-**per-project retention policy** (revised 2026-07-14): the last **100 runs** keep full
-fidelity (tree + failure detail, compressed blob storage); older runs roll up into
-aggregates (pass/fail counts, duration, coverage) that feed trend views — **per wave**
-when `context.wave` is present (a wave's cycle history stays reconstructable), daily
-buckets otherwise; raw trees are pruned with the rollup. Per-project override remains.
-Events indexed on `(projectKey, timestamp)`. One Bun process is the single writer —
-matching SQLite/WAL's concurrency model by construction.
+**per-project retention policy**: older runs roll up into aggregates (pass/fail counts,
+duration, coverage) that feed trend views — **per wave** when `context.wave` is present
+(a wave's cycle history stays reconstructable), daily buckets otherwise; raw trees are
+pruned with the rollup. Events indexed on `(projectKey, timestamp)`. One Bun process is
+the single writer — matching SQLite/WAL's concurrency model by construction.
+
+**Retention reaches TELEMETRY ONLY (revised 2026-09-13, CR-CRU-129).** The cap may evict
+`test`, `compile` and `lifecycle` events and nothing else. It may NOT reach a structural
+record — see §3.5: milestones and gates live in their own tables and are outside the cap
+by construction, not by exemption.
+
+This was learned the hard way. Until 2026-09-13 a release was a milestone event in the
+same capped buffer as test telemetry, and one day's ordinary TDD work — the RED, GREEN,
+VERIFY and FIX ingests of a single CR — evicted the oldest 165 events, taking the release
+records for 0.1.0 through 0.1.3, four `cr-merged` records and a `release-proposal` with
+them. `GET …/releases` answered `[]`, 52 landed queue rows lost their membership, and the
+recovery from git tags was lossy: 0.1.0 came back with 51 CRs against the 60 it held. The
+rule that replaced it is the one above, and the reason it is a rule rather than an
+exemption is that exemptions are what failed — a live gate and a live proposal were both
+exempt, and the release they exist to serve was not.
+
+**The cap is CONFIGURATION and has no literal default (revised 2026-09-13, CR-CRU-129;
+extended by CR-CRU-131).** A per-project `retention` wins; otherwise the fleet default
+resolves from configuration; if nothing is configured there is NO cap and the server SAYS
+SO at boot, naming the uncapped projects and the setting that would bound them. The
+previous "last 100 runs" default was deleted, because a literal nobody configured is a cap
+nobody was told about. See §4.13 for where limits live.
 
 ### 4.8 Live updates
 `GET /api/stream` — SSE channel broadcasting `{type: "projects"|"agents"|"events", projectKey}`
@@ -423,6 +492,42 @@ runs the suite against the project's `sutRoot`, ingests the result through the
 `playwright` codec, and returns the event id). This closes the v1 gap where the
 BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
 
+### 4.13 Configuration — a limit is configuration, never a constant (added 2026-09-14; CR-CRU-129, CR-CRU-131)
+
+**A limit is CONFIGURATION.** No numeric limit that governs what an operator or an agent
+SEES, or how long the server WAITS, is compiled into source. A standing rule, not a
+preference, and it was earned: `DEFAULT_RETENTION = 100` was a number one author chose,
+reachable by nobody, and it evicted every release this project had ever shipped (§4.7).
+
+The corollaries are as load-bearing as the rule:
+
+- **A bounded window over unbounded content cannot be fixed by choosing a larger bound.**
+  Delete the window and query for what you need. `QUEUE_EVENTS_LIMIT = 5000` scanned the
+  newest 5,000 EVENTS to find `cr-merged` milestones, with a comment claiming 5,000 was
+  "far above any real project's milestone count" — it was measuring the wrong population,
+  since 97% of those rows were test telemetry. Raising it would have been the same defect
+  with a bigger number.
+- **The default is configuration too.** Unconfigured resolves to a shipped, EDITABLE,
+  documented default — not to a number hidden in source, and not to unbounded. The one
+  exception is retention, where unbounded IS the honest answer (keeping more events costs
+  disk) and the server therefore DISCLOSES it at boot.
+- **A stated bound must be ENFORCED, from the same data that documents it.** A range
+  declared in prose and checked nowhere is the "stated budget, unbounded content" defect
+  this project keeps finding. The validator reads the bound from the table the operator
+  edits, so the documented bound and the enforced bound cannot drift.
+- **Tests inherit the rule.** A test configures a limit through the real surface and
+  derives its expectation from what it reads back; one that hardcodes the limit it checks
+  freezes the same defect from the other side.
+
+**Where it lives (CR-CRU-131):** `crucible.toml` at the repo root, a `[limits]` table,
+one entry per limit declaring five things — `description`, `recommended`, `min`, `max`
+and `env`. TOML because both stacks already read it: Bun parses it natively and Python
+uses stdlib `tomllib`. Three layers, narrowest wins: the file's default, then the
+environment variable, then a per-project value where one exists. Values are read at the
+POINT OF USE rather than imported, so an operator's edit takes effect without a restart.
+`docs/RUNBOOK.md` carries the same set as prose, with its figures CHECKED against the
+table rather than transcribed from it.
+
 ## 5 Quality requirements
 - **E2E POV (user directive 2026-07-15): the design storyboard is the E2E acceptance
   contract.** Once the server + SPA are alive (Wave 3), a browser-driven E2E suite
@@ -461,6 +566,8 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 (Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
 dedicated `playwright` codec with trace links, and Crucible can harness the run —
 §4.12; run `context` {git, wave, orchestrator} decided as all-optional — §3.3;
-retention: 100 full-fidelity runs + wave-aware rollups — §4.7; TOON: reversed
+retention: wave-aware rollups — §4.7, whose "100 full-fidelity runs" default was
+DELETED 2026-09-13 by CR-CRU-129 and is now configuration with no literal fallback;
+TOON: reversed
 2026-07-28 — official TOON libraries on both stacks and the spec is the contract;
 the Crucible subset was retired by CR-CRU-046.)

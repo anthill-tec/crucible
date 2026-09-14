@@ -397,3 +397,43 @@ runs once rule 3 ships.
 - **A CR may be born mid-release** and named into the release already in flight — the mode this
   project actually runs in, and the reason the rule is "name a release", not "name it first".
 - **No open questions remain in this section.** CRs may be derived from it directly.
+
+## Amendment 2026-09-14 — a proposal is not a record kind any more (CR-CRU-129, CR-CRU-130)
+
+**The locked definition in D1–D3 is untouched.** A wave stays temporal and abstract and is not a
+delivery bucket; a release stays three things at once — a grouping, a workflow, a milestone. What
+changed is where those facts are STORED and how the in-flight state is DERIVED.
+
+1. **A milestone is a record, not an event (CR-CRU-129).** `release`, `cr-merged` and the rest left
+   the capped `events` buffer for their own tables. The incident that forced it is recorded in
+   `PRD-crucible-v2.md` §4.7: one day's TDD ingests evicted every release this project had shipped.
+   Nothing in this DN's model changes — a release is still recorded at publish time and still
+   carries its version, packages and `crs` — but the record now outlives the telemetry around it.
+
+2. **`release-proposal` is RETIRED as a type (CR-CRU-130).** A proposed release is a `release`
+   milestone carrying a `targetAt` and no `deliveredAt`; shipping updates that SAME record in place.
+   `listReleaseProposals` is the undelivered releases and `listReleases` the delivered ones, derived
+   from delivery rather than from two type names. This DN's D3 conclusion holds and is strengthened:
+   the in-flight state was never a new record kind, and now it is not even a second row.
+
+3. **This supersedes one sentence above.** Item 3 of D4's fallout says *"a shipped release's proposal
+   is consumed by its own insert (`stampProposalRetired`)"*. That is no longer how a ship settles a
+   label: shipping sets `deliveredAt`, and `retired_at` keeps only its own meaning — "no longer the
+   live record", which is what it does for a superseded predecessor and for a gate its release
+   retired. The GATE behaviour that sentence explains is unchanged: `cr-plan --release 0.1.0` is
+   still refused for a shipped release, and the derivation in rule 3 (accept a label naming a
+   recorded release only where that release's own `crs` already names the CR) is still the door that
+   opens history.
+
+4. **A ship settles its label even when its date is unknown.** Measured 2026-09-13: a release can be
+   posted with no `releasedAt` from three independent layers (the ceremony omits the flag when git
+   cannot resolve the tag — a shallow clone or unfetched tag object; all five clients declare it
+   optional; the route never requires it, by CR-CRU-080 §S4's own rule). So settlement is derived
+   from delivery OR ITS EVIDENCE — a commit, a non-empty `crs` or `packages` — and `deliveredAt`
+   stays honestly absent. Deriving it from the date alone would leave a shipped label plannable, and
+   `cr-plan` would keep admitting CRs into a released version.
+
+5. **A milestone type is definable (CR-CRU-130).** A project declares its own types; `release` and
+   `cr-merged` are RESERVED because the server derives behaviour from them. This does not touch the
+   wave/track/release ontology — it means a project can record its own dated goals beside the ones
+   Crucible reasons about.
