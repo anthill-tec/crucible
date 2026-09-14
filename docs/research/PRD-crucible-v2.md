@@ -520,8 +520,9 @@ The corollaries are as load-bearing as the rule:
   freezes the same defect from the other side.
 
 **Where it lives (CR-CRU-131):** `crucible.toml`, a `[limits.<name>]` table per limit
-declaring four things — `description`, `recommended`, `min`, `max` — in TOML-conventional
-bare lower `snake_case`. TOML because both stacks already read it: Bun parses it natively
+DOCUMENTING four things — `description`, `recommended`, `min`, `max` — in
+TOML-conventional bare lower `snake_case`, with the operator's own setting as a separate
+optional `value` so an override never destroys the recommendation it departs from. TOML because both stacks already read it: Bun parses it natively
 and Python uses stdlib `tomllib`. Values are read at the POINT OF USE rather than
 imported, so an operator's edit takes effect without a restart. `docs/RUNBOOK.md` carries
 the same set as prose, with its figures CHECKED against the table rather than transcribed
@@ -529,9 +530,9 @@ from it.
 
 **A limit is owned by the process that ENFORCES it**, because the server and the clients
 are not necessarily on the same machine: a client resolves a project directory and posts
-over HTTP, while the server may be installed anywhere. So the server's four (envelope
-size, run-abandon deadline, project-inactive window, retention) live in a `crucible.toml`
-beside the server's own configuration, and the clients' three (field truncation,
+over HTTP, while the server may be installed anywhere. So the server's three (run-abandon
+deadline, project-inactive window, retention) live in a `crucible.toml` beside the
+server's own configuration, and the clients' three (field truncation,
 error-detail truncation, roadmap list length) live in a `crucible.toml` in the PROJECT
 directory beside the `.env` the clients already read. Neither process reads the other's
 file. One schema, one loader shape, two locations — one source per enforcer, not one file

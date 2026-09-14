@@ -123,9 +123,28 @@ old source into the file an operator reads.
 ONE file, a `[limits]` table, one entry per limit. The file is the documentation an operator meets
 first; `docs/RUNBOOK.md` carries the same set as prose with the override order.
 
-**Each limit is declared with four things, not one number:** `description` (what it governs, in a
+**Each limit is DOCUMENTED with four things, not one number:** `description` (what it governs, in a
 sentence an operator can act on), `recommended` (the value we ship and stand behind — today's
 compiled value), and `min`/`max` (the range outside which the value is not supportable).
+
+**Those four are IMMUTABLE documentation. The operator's own setting is a separate, optional
+`value`.** An operator who wants a different number adds `value = …`; the limit then resolves to it,
+range-checked against the `min`/`max` in the same table. With no `value`, the limit resolves to
+`recommended`.
+
+The alternative — having the operator overwrite `recommended` — was considered and REJECTED, and the
+reason is the user's own requirement: the documentation must carry the recommended setting. An
+operator who edits `recommended` in place destroys, in the very file they read, the record of what we
+recommended. `value` beside it keeps both facts visible: what we advise, and what this install does.
+It also keeps the widen/narrow-`max` proof intact, since the value and the bound still live in one
+table.
+
+**Retention's degradation is the one exception, and the distinction is sharp.** An ABSENT or
+MALFORMED file means the operator configured NOTHING, so retention keeps CR-CRU-129's semantics — no
+cap, and the boot disclosure names the uncapped projects. An OUT-OF-RANGE `value` is an operator who
+configured something ILLEGAL, which is a different fact: it is refused and falls back to
+`recommended`, disclosed. The other limits have no such split: nothing configured and something
+illegal both land on `recommended`.
 
 **There is no environment-variable layer.** An authoritative, editable, documented file does not need
 a second way to say the same thing, and a second way is a second place to look when a value is not
@@ -293,7 +312,7 @@ this sense.
 - [ ] The keys are the limit's OWN names — `run_abandon_ms`,
       `project_inactive_ms`, `retention`, `truncate_field_chars`, `error_detail_chars`,
       `roadmap_list_rows` — not transliterations of the retired constants.
-- [ ] OWNERSHIP: the SERVER resolves its four from a `crucible.toml` beside its own configuration,
+- [ ] OWNERSHIP: the SERVER resolves its THREE from a `crucible.toml` beside its own configuration,
       by the same rule that resolves its database path. A CLIENT resolves its three from a
       `crucible.toml` in the PROJECT DIRECTORY, by the same rule that finds the `.env` it already
       reads. Asserted per side, and asserted NEGATIVELY: a server limit configured in the project
@@ -319,13 +338,22 @@ this sense.
 - [ ] The enforced bound and the documented bound are THE SAME DATA: the validator reads `min`/`max`
       from the table the operator edits. Asserted by CONSTRUCTION — a test fails if a `min` or `max`
       literal appears anywhere in source, the same scan §S3 extends.
-- [ ] `recommended` EQUALS the value the limit resolves to when nothing else is configured, per
-      limit — so the documentation cannot recommend one thing while the software does another.
+- [ ] `recommended` EQUALS the value the limit resolves to when no `value` is set, per limit — so the
+      documentation cannot recommend one thing while the software does another.
+- [ ] An operator's `value` overrides `recommended` and is range-checked against the SAME table's
+      `min`/`max`; `recommended`, `description`, `min` and `max` are never rewritten to express an
+      operator's choice. Asserted per limit, and asserted NEGATIVELY: after setting `value`, the
+      file's `recommended` still reads as the shipped recommendation.
+- [ ] Retention: an ABSENT or MALFORMED file means NO cap plus the boot disclosure (CR-CRU-129's
+      semantics, nothing configured); an OUT-OF-RANGE `value` is refused and falls back to
+      `recommended`, disclosed. Both asserted, because they are different facts about the operator.
 - [ ] Mutation: widening a `max` in the file makes a previously-refused value resolve, and narrowing
       it makes a previously-accepted value refuse. That is the proof the file is the source and not
       a second copy.
-- [ ] Both stacks read the SAME file: the server via Bun's native TOML support, the clients via
-      `tomllib` — asserted by editing the file once and observing both stacks change.
+- [ ] Both stacks read the same SCHEMA, each from its OWN location — the server via Bun's native
+      TOML support, the clients via `tomllib`. One declaration shape, two files. (An earlier draft of
+      this AC said "the SAME file … observing both stacks change", which contradicted the ownership
+      ruling three lines above it; a shared file is exactly what the cross-machine case forbids.)
 - [ ] EDITING the file changes behaviour on the next call with NO restart, asserted per stack. A
       static `import` that caches the table fails this.
 - [ ] Precedence is TWO layers and only retention has both: the file's value, then the per-project
