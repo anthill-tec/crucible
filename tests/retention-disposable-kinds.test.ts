@@ -193,17 +193,37 @@ const CONFIGURATION_SEAM: Record<(typeof RETENTION_PATH)[number], string> = {
  * Written as one pass rather than as regexes because brace-matching a body
  * requires knowing where the strings are anyway.
  */
-function retentionPathCode(source: string, name: string): string {
+function tsDeclaration(source: string, name: string, file: string): RegExpExecArray {
   const decl = new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?(?:private\\s+)?(?:static\\s+)?(?:function\\s+)?${name}\\s*\\(`).exec(
     source,
   );
   if (decl === null) {
     throw new Error(
-      `CR-CRU-129 §S2: src/store.ts declares no \`${name}\`. The constructional guard against a ` +
+      `CR-CRU-129 §S2: ${file} declares no \`${name}\`. The constructional guard against a ` +
         `hardcoded cap is scoped to the retention path BY NAME; a renamed function must be ` +
         `re-named here, or the scan silently stops guarding anything.`,
     );
   }
+  return decl;
+}
+
+/**
+ * CR-CRU-131 §S3 — `file` and `keepStrings` are the EXTENSION points, and both
+ * default to what CR-CRU-129 asserted, so the retention-path scan below is
+ * byte-for-byte the scan it always was. `file` lets the same walker read
+ * `src/v2.ts`'s resolver without the refusal naming the wrong module;
+ * `keepStrings` yields the SEAM projection, in which a call keeps the limit
+ * name it passes (`resolveLimit("run_abandon_ms")`) so a site can be asked
+ * which limit it actually resolves. The literal scan keeps running on the
+ * default projection, where a number inside a message is not code.
+ */
+function retentionPathCode(
+  source: string,
+  name: string,
+  file = "src/store.ts",
+  keepStrings = false,
+): string {
+  const decl = tsDeclaration(source, name, file);
   let i = decl.index + decl[0].length - 1;
   // Step over the parameter list, then to the body's opening brace.
   let parens = 0;
@@ -229,7 +249,9 @@ function retentionPathCode(source: string, name: string): string {
       continue;
     }
     if (c === '"' || c === "'") {
+      const open = i;
       for (i++; i < source.length && source[i] !== c; i++) if (source[i] === "\\") i++;
+      if (keepStrings) code.push(source.slice(open, Math.min(i + 1, source.length)));
       continue;
     }
     if (c === "`") {
@@ -264,12 +286,31 @@ function retentionPathCode(source: string, name: string): string {
  */
 const COMPARISON_OPERAND = /(?:<|>|<=|>=|==|===|!=|!==)\s*$/;
 
+/**
+ * CR-CRU-131 §S3 — the SECOND exemption, and the only one the extension adds:
+ * a literal that ADJUSTS a value already resolved is an offset, not a bound.
+ *
+ * Measured, not anticipated. `no_report_warning`
+ * (`clients/_crucible_axi.py`) resolves `error_detail_chars` through the seam
+ * and then spends one character of the room it was given on the ellipsis it
+ * prepends — `cause[-(room - 1):]`. That `1` is not a limit anybody could
+ * configure; it is the width of `…`. Flagging it would demand the production
+ * code be contorted to satisfy a guard, which is the failure C2 retired the
+ * length floor for.
+ *
+ * NARROW on purpose: an IDENTIFIER or a closing bracket must sit immediately
+ * before the operator, so `= -1` (an operator writing a sentinel cap) is still
+ * a cap, while `room - 1` and `detail_max - 1` are not.
+ */
+const ADJUSTMENT_OPERAND = /[\w$)\]]\s*[-+]\s*$/;
+
 function capLiteralsIn(code: string): string[] {
   const found: string[] = [];
   const literal = /(?<![\w$.])(?:0[xXbBoO][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)/g;
   for (const match of code.matchAll(literal)) {
     const before = code.slice(Math.max(0, match.index - 8), match.index);
     if (COMPARISON_OPERAND.test(before)) continue;
+    if (ADJUSTMENT_OPERAND.test(before)) continue;
     const from = Math.max(0, match.index - 40);
     found.push(code.slice(from, match.index + match[0].length + 20).replace(/\s+/g, " ").trim());
   }
@@ -599,5 +640,378 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
     store.updateProject(uncapped, { retention: 0 });
     expect(store.getProject(uncapped)?.retention).toBe(0);
     expect(retentionDisclosure(store)).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// CR-CRU-131 §S3 — the rule is enforced by EXTENDING this scan.
+//
+// The rule CR-CRU-129 earned for ONE limit is categorical: a limit is
+// CONFIGURATION, never a constant compiled into source. Five more limits now
+// resolve from a `crucible.toml`, and nothing stops the next author putting a
+// number back beside any of them.
+//
+// This is an EXTENSION of the cap-literal scan above, not a third walker —
+// the discipline CR-CRU-128 §S2 established. It reuses that scan's predicate
+// (`capLiteralsIn`), its exemption rule (`COMPARISON_OPERAND`), its body
+// walker (`retentionPathCode`) and, above all, its SCOPING: BY NAME, to the
+// function that resolves the limit. A whole-file scan is a false-positive
+// machine — these modules are full of legitimate numbers and a SQL `LIMIT ?`
+// is not a limit in this sense. C3's RED measured the cost of the other shape
+// on a related predicate: "a file containing a numeric literal at least as
+// large as the shipped retention recommendation" selects 118+ files, because
+// millisecond constants are everywhere.
+//
+// TWO grammars, ONE predicate. Three of the six limits are enforced by the
+// CLIENTS, in `clients/_crucible_axi.py`, and a scan that read only `src/`
+// would hold the rule over half the fleet while reporting green for all of
+// it. So the TS walker gains a `file` argument and a Python span reader sits
+// beside it; both feed `capLiteralsIn`, which stays the single judge of what
+// a cap literal is.
+//
+// The limit SET is derived from the DECLARATIONS — the package data each
+// distribution ships — rather than typed here, so a seventh limit is covered
+// the day it is declared. Its count is asserted too: a limit declared with no
+// resolution site named below fails, instead of passing unnoticed.
+// ═════════════════════════════════════════════════════════════════════════
+
+/** Where the limits are DECLARED: one data file per enforcing process, which
+ *  is what the ownership split means in packaging terms. */
+const DECLARATION_FILES = ["src/crucible.toml", "clients/crucible.toml"] as const;
+
+interface ResolutionSite {
+  /** The file that ENFORCES the limit — repo-root relative. */
+  file: string;
+  /** The function that produces the limit's number, scoped BY NAME. */
+  fn: string;
+  language: "ts" | "py";
+  /** The configuration call the body must actually MAKE (live code). */
+  callee: string;
+  /** …resolving THIS limit and not some other one (the call with its name). */
+  seam: string;
+}
+
+/**
+ * The SIX resolution sites, one per declared limit. Named rather than searched
+ * for, so a renamed resolver fails here loudly instead of quietly leaving the
+ * scan with nothing to read.
+ */
+const RESOLUTION_SITES: Record<string, ResolutionSite> = {
+  run_abandon_ms: {
+    file: "src/store.ts",
+    fn: "runAbandonAfterMs",
+    language: "ts",
+    callee: "resolveLimit",
+    seam: `resolveLimit("run_abandon_ms")`,
+  },
+  project_inactive_ms: {
+    file: "src/v2.ts",
+    fn: "projectInactiveMs",
+    language: "ts",
+    callee: "resolveLimit",
+    seam: `resolveLimit("project_inactive_ms")`,
+  },
+  // Retention resolves through its own named door rather than by string,
+  // because its UNCONFIGURED answer is `undefined` — NO cap — and that
+  // exception is a documented behaviour, not a value a generic resolver could
+  // return.
+  retention: {
+    file: "src/store.ts",
+    fn: "defaultRetention",
+    language: "ts",
+    callee: "configuredRetention",
+    seam: "configuredRetention()",
+  },
+  truncate_field_chars: {
+    file: "clients/_crucible_axi.py",
+    fn: "truncate_field",
+    language: "py",
+    callee: "resolve_limit",
+    seam: `resolve_limit("truncate_field_chars")`,
+  },
+  error_detail_chars: {
+    file: "clients/_crucible_axi.py",
+    fn: "no_report_warning",
+    language: "py",
+    callee: "resolve_limit",
+    seam: `resolve_limit("error_detail_chars")`,
+  },
+  roadmap_list_rows: {
+    file: "clients/_crucible_axi.py",
+    fn: "truncate_rows",
+    language: "py",
+    callee: "resolve_limit",
+    seam: `resolve_limit("roadmap_list_rows")`,
+  },
+};
+
+function sourceOf(file: string): string {
+  return readFileSync(file, "utf8");
+}
+
+/** Every limit NAME the two distributions declare, in declaration order. */
+function declaredLimitNames(): string[] {
+  const names: string[] = [];
+  for (const file of DECLARATION_FILES) {
+    const parsed = Bun.TOML.parse(sourceOf(file)) as { limits?: unknown };
+    const limits = parsed.limits;
+    const tables =
+      typeof limits === "object" && limits !== null ? (limits as Record<string, unknown>) : {};
+    names.push(...Object.keys(tables));
+  }
+  return names;
+}
+
+function lineAt(source: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index; i++) if (source[i] === "\n") line++;
+  return line;
+}
+
+/**
+ * A module-level Python function as TEXT, from its `def` line to the dedent
+ * that ends it.
+ *
+ * The SIGNATURE is deliberately inside the span: `limit=TRUNCATE_LIMIT`, bound
+ * as a default argument at `def` time, is exactly the shape §S1 deleted from
+ * two of these three functions, and it is invisible to a scan that starts at
+ * the body.
+ */
+function pythonFunctionSpan(
+  source: string,
+  name: string,
+  file: string,
+): { index: number; text: string } {
+  const decl = new RegExp(`(?:^|\\n)def\\s+${name}\\s*\\(`).exec(source);
+  if (decl === null) {
+    throw new Error(
+      `§S3: ${file} declares no module-level \`${name}\`. This scan is scoped to the resolvers BY ` +
+        `NAME; a renamed resolver must be re-named here, or the scan silently stops guarding it.`,
+    );
+  }
+  const index = decl.index + (source[decl.index] === "\n" ? 1 : 0);
+  const lines = source.slice(index).split("\n");
+  const span: string[] = [lines[0]!];
+  for (let n = 1; n < lines.length; n++) {
+    const line = lines[n]!;
+    // A non-blank line at column 0 is the next module-level statement.
+    if (line.length > 0 && !/^\s/.test(line)) break;
+    span.push(line);
+  }
+  return { index, text: span.join("\n") };
+}
+
+/**
+ * Python's answer to `retentionPathCode`: `#` comments dropped and string
+ * literals dropped (or KEPT, for the seam projection), so the predicate reads
+ * CODE and nothing else.
+ *
+ * Stripping strings is not tidiness here, it is measured: `truncate_field`'s
+ * own docstring says "(200)" and `truncate_rows`'s says "(20)", both narrating
+ * the constants this CR family deleted. A scan over raw text would report
+ * those two forever, and a guard that is always red is a guard nobody reads.
+ */
+function pythonCodeOnly(text: string, keepStrings: boolean): string {
+  const code: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "#") {
+      const nl = text.indexOf("\n", i);
+      if (nl === -1) break;
+      i = nl;
+      code.push("\n");
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const close = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      let j = i + close.length;
+      for (; j < text.length; j++) {
+        if (text[j] === "\\") {
+          j++;
+          continue;
+        }
+        if (text.startsWith(close, j)) break;
+        if (close.length === 1 && text[j] === "\n") break;
+      }
+      const end = Math.min(j + close.length, text.length);
+      if (keepStrings) code.push(text.slice(i, end));
+      i = end - 1;
+      continue;
+    }
+    code.push(c);
+  }
+  return code.join("");
+}
+
+interface ScannedResolver {
+  /** The resolver as CODE — comments and string contents gone. */
+  code: string;
+  /** The resolver with its strings intact, so the call it makes still names
+   *  the limit it resolves. */
+  named: string;
+  /** The line the resolver is declared on, so a report is navigable. */
+  line: number;
+}
+
+function scanResolver(site: ResolutionSite, source: string): ScannedResolver {
+  if (site.language === "ts") {
+    const decl = tsDeclaration(source, site.fn, site.file);
+    const at = decl.index + (source[decl.index] === "\n" ? 1 : 0);
+    return {
+      code: retentionPathCode(source, site.fn, site.file),
+      named: retentionPathCode(source, site.fn, site.file, true),
+      line: lineAt(source, at),
+    };
+  }
+  const span = pythonFunctionSpan(source, site.fn, site.file);
+  return {
+    code: pythonCodeOnly(span.text, false),
+    named: pythonCodeOnly(span.text, true),
+    line: lineAt(source, span.index),
+  };
+}
+
+/** A number no limit in this fleet could plausibly be, so a detection is
+ *  unambiguous and no real value can produce it by coincidence. */
+const REINTRODUCED = 424242;
+
+/** The source as it would read if the next author gave a resolver a literal
+ *  fallback again — the defect, planted in memory and never written to disk. */
+function withReintroducedLiteral(source: string, site: ResolutionSite): string {
+  const at = source.indexOf(site.seam);
+  expect(
+    at,
+    `${site.file} does not contain \`${site.seam}\`, so the mutation has nothing to plant against`,
+  ).toBeGreaterThan(-1);
+  const planted =
+    site.language === "ts"
+      ? `(${site.seam} ?? ${String(REINTRODUCED)})`
+      : `(${site.seam} or ${String(REINTRODUCED)})`;
+  return source.slice(0, at) + planted + source.slice(at + site.seam.length);
+}
+
+describe("§S3 — no numeric literal stands in for a configured limit, in either tree", () => {
+  test("the limit set is DERIVED from what the two distributions declare, and each of the six has a named resolution site", () => {
+    const declared = declaredLimitNames();
+
+    // SIX — the five surviving constants plus retention, whose literal was
+    // deleted before this CR and whose FALLBACK this CR moved. Asserted as a
+    // count, so a seventh limit declared later fails here rather than shipping
+    // with no coverage at all.
+    expect(declared.length).toBe(6);
+    // Ownership: no limit is declared by both distributions, or "one source
+    // per enforcer" would already be two copies.
+    expect(new Set(declared).size).toBe(declared.length);
+
+    expect([...Object.keys(RESOLUTION_SITES)].sort()).toEqual([...declared].sort());
+
+    // BOTH trees are covered: three of the six are enforced by the clients,
+    // and a scan that read only the server's would report green for a rule it
+    // never applied to half the fleet.
+    const trees = new Set(Object.values(RESOLUTION_SITES).map((site) => site.file.split("/")[0]!));
+    expect([...trees].sort()).toEqual(["clients", "src"]);
+  });
+
+  test("no numeric literal stands in for any of the six limits where it is resolved — each site resolves through its configuration seam instead", () => {
+    const offenders: string[] = [];
+    const scanned: string[] = [];
+
+    for (const [name, site] of Object.entries(RESOLUTION_SITES)) {
+      const source = sourceOf(site.file);
+      const resolver = scanResolver(site, source);
+      const at = `${site.file}:${String(resolver.line)} ${site.fn}`;
+      scanned.push(name);
+
+      // NON-VACUITY, per site and in both directions. The body must CALL the
+      // configuration seam — a stub, or a body that decided a number for
+      // itself, calls nothing — and the call must name THIS limit, so a
+      // resolver cannot be wired to another limit's setting and still pass.
+      expect(
+        resolver.code.includes(site.callee),
+        `${at} does not call \`${site.callee}\` — it was read as ${JSON.stringify(resolver.code)}`,
+      ).toBe(true);
+      expect(
+        resolver.named.includes(site.seam),
+        `${at} does not resolve \`${name}\`: the call it makes is not \`${site.seam}\``,
+      ).toBe(true);
+
+      for (const context of capLiteralsIn(resolver.code)) {
+        offenders.push(`${at} (${name}) — ${context}`);
+      }
+    }
+
+    // The walk was not empty: every declared limit was actually opened.
+    expect(scanned.sort()).toEqual([...declaredLimitNames()].sort());
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `§S3: a numeric literal is standing in for a configured limit — ${offenders.join(" | ")}. ` +
+          `A limit is CONFIGURATION, never a constant in source: each of these resolves from the ` +
+          `\`[limits.<name>]\` table of the crucible.toml its own process owns, and the shipped ` +
+          `default lives in that distribution's package data. A literal nobody configured is a ` +
+          `limit nobody was told about, and one of those evicted every release this project had ` +
+          `ever shipped.`,
+      );
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("the scan can SEE a literal in either grammar, and reads code rather than the prose beside it", () => {
+    // ── TypeScript ────────────────────────────────────────────────────────
+    const tsPlanted = `function probe(): number {\n  return 1800000;\n}\n`;
+    expect(capLiteralsIn(retentionPathCode(tsPlanted, "probe", "probe.ts"))).not.toEqual([]);
+
+    const tsResolved =
+      `function probe(): number {\n` +
+      `  // 1800000 was the compiled default this CR family deleted.\n` +
+      `  return resolveLimit("run_abandon_ms");\n}\n`;
+    expect(capLiteralsIn(retentionPathCode(tsResolved, "probe", "probe.ts"))).toEqual([]);
+    // …and the SEAM projection still knows which limit that body resolved,
+    // which is the half a comment alone could otherwise fake.
+    expect(retentionPathCode(tsResolved, "probe", "probe.ts", true)).toContain(
+      `resolveLimit("run_abandon_ms")`,
+    );
+
+    // ── Python ────────────────────────────────────────────────────────────
+    const pyCode = (text: string): string =>
+      pythonCodeOnly(pythonFunctionSpan(text, "probe", "probe.py").text, false);
+
+    expect(capLiteralsIn(pyCode(`def probe():\n    return 500\n`))).not.toEqual([]);
+    // The default-argument shape §S1 deleted is inside the span, not beyond it.
+    expect(capLiteralsIn(pyCode(`def probe(value, limit=200):\n    return limit\n`))).not.toEqual(
+      [],
+    );
+
+    const pyResolved =
+      `def probe(value):\n` +
+      `    """It was 200, bound at def time, so no operator could reach it."""\n` +
+      `    # 200 again, this time in a comment.\n` +
+      `    return resolve_limit("truncate_field_chars")\n`;
+    expect(capLiteralsIn(pyCode(pyResolved))).toEqual([]);
+    expect(pythonCodeOnly(pythonFunctionSpan(pyResolved, "probe", "probe.py").text, true)).toContain(
+      `resolve_limit("truncate_field_chars")`,
+    );
+  });
+
+  test("a literal reintroduced at ANY ONE of the six sites is reported, naming the file, the line and the resolver — proved per limit", () => {
+    const detected: string[] = [];
+
+    for (const [name, site] of Object.entries(RESOLUTION_SITES)) {
+      const mutated = withReintroducedLiteral(sourceOf(site.file), site);
+      const resolver = scanResolver(site, mutated);
+      const found = capLiteralsIn(resolver.code);
+      if (found.some((context) => context.includes(String(REINTRODUCED)))) {
+        detected.push(name);
+        continue;
+      }
+      throw new Error(
+        `§S3: a literal fallback planted at ${site.file}:${String(resolver.line)} \`${site.fn}\` ` +
+          `(${name}) was NOT reported. The scan is reading ${JSON.stringify(resolver.code)}, so ` +
+          `the rule does not hold over that limit and a reintroduced constant would ship green.`,
+      );
+    }
+
+    // PER LIMIT: every declared limit was mutated, and every mutation was seen.
+    expect(detected.sort()).toEqual([...declaredLimitNames()].sort());
   });
 });
