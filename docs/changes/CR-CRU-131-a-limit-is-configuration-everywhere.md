@@ -148,7 +148,8 @@ illegal both land on `recommended`.
 
 **There is no environment-variable layer.** An authoritative, editable, documented file does not need
 a second way to say the same thing, and a second way is a second place to look when a value is not
-what you expected. So `$CRUCIBLE_DEFAULT_RETENTION` and `$CRUCIBLE_RUN_ABANDON_MS` are RETIRED as
+what you expected. So `$CRUCIBLE_DEFAULT_RETENTION`, `$CRUCIBLE_RUN_ABANDON_MS` and
+`$CRUCIBLE_PROJECT_INACTIVE_MS` are RETIRED as
 limit overrides by this CR — the file replaces them, and the tests that pin them move with it.
 
 This does not touch the `CRUCIBLE_*` variables that are not limits: `CRUCIBLE_DB`, `CRUCIBLE_PORT`
@@ -334,8 +335,15 @@ this sense.
 - [ ] A client works with the board on a DIFFERENT machine: with no server file reachable at all,
       every client limit still resolves and every client verb still formats its output. Proved with
       the client run against a board whose config directory the client cannot see.
-- [ ] There is NO environment-variable layer for a limit: `$CRUCIBLE_DEFAULT_RETENTION` and
-      `$CRUCIBLE_RUN_ABANDON_MS` are retired, and setting either has NO effect on the resolved value.
+- [ ] There is NO environment-variable layer for a limit: `$CRUCIBLE_DEFAULT_RETENTION`,
+      `$CRUCIBLE_RUN_ABANDON_MS` and `$CRUCIBLE_PROJECT_INACTIVE_MS` are retired, and setting any of
+      them has NO effect on the resolved value. (An earlier draft of this AC enumerated only the
+      first two; `src/v2.ts:371` reads the third the same way, and `project_inactive_ms` is
+      unambiguously a limit under §S1b. The rule was always categorical — the list was short.)
+- [ ] The retired set is declared ONCE and shared by both stacks, so a fourth retirement is one line
+      and cannot land on one stack only. `CRUCIBLE_DB`, `CRUCIBLE_PORT` and `CRUCIBLE_PROJECT_KEY`
+      are excluded BY NAME, never by a `CRUCIBLE_*` prefix, and their continued presence is the
+      scan's control — a green scan must be the retirement's doing and not an empty walk.
       Asserted by behaviour, not by absence of a string.
 - [ ] `CRUCIBLE_DB`, `CRUCIBLE_PORT` and `CRUCIBLE_PROJECT_KEY` keep working unchanged — they are
       bootstrap and identity, answerable before any file can be found, and the existing tests that
