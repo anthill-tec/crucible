@@ -32,8 +32,10 @@
 //     SERVER-computed `runtime_ms = endedAt - startedAt`, alongside the
 //     tool-reported `summary.duration_ms`; re-ending a closed run -> 409.
 //   An open run is auto-aborted — stored event `status:"aborted"` + `reason` —
-//     when its agent tombstones (`agent died`) or when it outlives
-//     `CRUCIBLE_RUN_ABANDON_MS` (`abandoned`).
+//     when its agent tombstones (`agent died`) or when it outlives the
+//     configured `run_abandon_ms` deadline (`abandoned`). That deadline lives
+//     in the SERVER's own crucible.toml since CR-CRU-131 §S1b retired the
+//     environment override that used to carry it.
 //
 // SPELLING: the DB columns are pinned exactly (`started_at`, `runtime_ms`,
 // `status` — §S0 names them). The SERVED event key is accepted in either the
@@ -63,6 +65,13 @@ import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { Store, MIGRATIONS, SCHEMA_VERSION } from "../src/store.ts";
 import type { MigrationStep } from "../src/store.ts";
+import { shippedLimits } from "../src/limits.ts";
+import {
+  declare,
+  restoreServerLimitsFixture,
+  serverConfigDir,
+  writeConfig,
+} from "./helpers/server-limits-fixture.ts";
 import type { RunEvent } from "../src/types.ts";
 
 // ── the §S0 contract, spelled once ─────────────────────────────────────────
@@ -109,7 +118,6 @@ const PRE_CR_EVENT_KEYS: Record<string, true> = {
 
 const scratchDirs: string[] = [];
 const handles: ServerHandle[] = [];
-const envBackup = new Map<string, string | undefined>();
 
 function tmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-cr017-"));
@@ -117,9 +125,25 @@ function tmpDir(): string {
   return dir;
 }
 
-function setEnv(key: string, value: string): void {
-  if (!envBackup.has(key)) envBackup.set(key, process.env[key]);
-  process.env[key] = value;
+/**
+ * CR-CRU-131 §S1b — the abandon deadline is CONFIGURATION, and since C2 the
+ * only surface that configures it is the SERVER's own `crucible.toml`.
+ * `$CRUCIBLE_RUN_ABANDON_MS`, which these tests used to set, is retired: a
+ * limit read from the environment carries no `description`, no `recommended`
+ * and no supportable range, which is the condition PRD §4.13 exists to end.
+ * What the two auto-abort tests PROVE is unchanged — the deadline is read per
+ * sweep and settles a run that outlives it — only the surface has moved.
+ *
+ * `min` is RE-STATED beside the value, and legitimately: the shipped floor is
+ * a supportability judgement for a real fleet, while these are wall-clock
+ * tests that must settle a run inside a few hundred milliseconds. §S1b's
+ * validator reads `min` off the VERY TABLE the operator edits, so a bound
+ * moved in the file is configuration, not a bypass of it.
+ */
+function configureAbandonDeadline(ms: number): void {
+  writeConfig(serverConfigDir(), {
+    run_abandon_ms: declare(shippedLimits().run_abandon_ms!, ms, { min: ms }),
+  });
 }
 
 afterEach(() => {
@@ -129,11 +153,7 @@ afterEach(() => {
   while (scratchDirs.length > 0) {
     fs.rmSync(scratchDirs.pop() as string, { recursive: true, force: true });
   }
-  for (const [key, value] of envBackup) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-  envBackup.clear();
+  restoreServerLimitsFixture();
 });
 
 // ── raw sqlite helpers (a second connection; never a Store) ────────────────
@@ -955,7 +975,7 @@ describe("CR-CRU-017 §S1-4 — double-end is a 409: a closed run cannot be clos
 describe("CR-CRU-017 §S1-5 — an open run with neither end nor abort is AUTO-ABORTED, with the reason naming which trigger fired", () => {
   test("its agent TOMBSTONES -> the run is aborted with reason exactly `agent died`", async () => {
     // Staleness is ruled out, so the reason can only be the tombstone.
-    setEnv("CRUCIBLE_RUN_ABANDON_MS", "3600000");
+    configureAbandonDeadline(3_600_000);
     const handle = boot();
     const key = seedProject(handle, {
       staleAfterMs: 10,
@@ -975,9 +995,9 @@ describe("CR-CRU-017 §S1-5 — an open run with neither end nor abort is AUTO-A
     expect(aborted[0]!.agentId).toBe("cr017-dead");
   });
 
-  test("it outlives CRUCIBLE_RUN_ABANDON_MS -> the run is aborted with reason exactly `abandoned`", async () => {
+  test("it outlives the configured `run_abandon_ms` -> the run is aborted with reason exactly `abandoned`", async () => {
     // Tombstoning is ruled out, so the reason can only be the staleness timeout.
-    setEnv("CRUCIBLE_RUN_ABANDON_MS", "60");
+    configureAbandonDeadline(60);
     const handle = boot();
     const key = seedProject(handle, {
       staleAfterMs: 3_600_000,

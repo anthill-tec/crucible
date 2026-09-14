@@ -38,10 +38,18 @@
 // ── Safety ─────────────────────────────────────────────────────────────────
 // Every store here is ":memory:". The live `data/crucible.db` is never opened.
 import { describe, test, expect, afterEach } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Store, defaultRetention } from "../src/store.ts";
 import * as storeModule from "../src/store.ts";
 import { retentionDisclosure } from "../src/server.ts";
+import { serverConfigPath, shippedLimits } from "../src/limits.ts";
+import {
+  declare,
+  restoreServerLimitsFixture,
+  serverConfigDir,
+  writeConfig,
+} from "./helpers/server-limits-fixture.ts";
 import type { SuiteNode } from "../src/types.ts";
 
 const emptyTree: SuiteNode[] = [];
@@ -241,26 +249,56 @@ function capLiteralsIn(code: string): string[] {
 }
 
 describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () => {
-  const restoreEnv: Array<[string, string | undefined]> = [];
+  // ── The fleet cap moved from the environment to a FILE (CR-CRU-131 §S1b) ──
+  //
+  // These tests used to drive the fallback through `$CRUCIBLE_DEFAULT_RETENTION`.
+  // C2 retires that variable: a limit read from the environment carries no
+  // `description`, no `recommended` and no supportable range, which is the
+  // condition PRD §4.13 exists to end. What each test PROVES is unchanged —
+  // the fallback is configuration, read per sweep, and an unconfigured cap is
+  // no cap at all — only the surface it configures through has moved.
+
+  let configDir: string | undefined;
 
   afterEach(() => {
-    while (restoreEnv.length > 0) {
-      const [name, value] = restoreEnv.pop()!;
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
+    configDir = undefined;
+    restoreServerLimitsFixture();
   });
 
-  function setEnv(name: string, value: string): void {
-    restoreEnv.push([name, process.env[name]]);
-    process.env[name] = value;
+  /** The server's own configuration directory for THIS test — created once, so
+   *  two writes inside one test edit the SAME file (which is what the
+   *  read-per-sweep proof needs). Every retired variable is cleared on the way
+   *  in, so nothing here can pass on a value an inherited environment supplied. */
+  function serverDir(): string {
+    configDir ??= serverConfigDir();
+    return configDir;
+  }
+
+  /**
+   * The operator's file, setting the FLEET cap to `chosen` — §S1b's
+   * `[limits.retention]` table, with the four documentation fields untouched
+   * and their own `value` beside them.
+   *
+   * `min` is RE-STATED beside the value, and legitimately: the shipped floor
+   * is a supportability judgement for a real fleet, while these fixtures
+   * ingest tens of rows, and §S1b's validator reads `min` off the VERY TABLE
+   * the operator edits — so a bound moved in the file is configuration, not a
+   * bypass of it.
+   */
+  function configureFleetCap(chosen: number): void {
+    writeConfig(serverDir(), {
+      retention: declare(shippedLimits().retention!, chosen, { min: chosen }),
+    });
   }
 
   /** The UNCONFIGURED state — the one AC6 is about, and the one an inherited
-   *  environment would otherwise hide. */
-  function clearEnv(name: string): void {
-    restoreEnv.push([name, process.env[name]]);
-    delete process.env[name];
+   *  environment would otherwise hide: no file at all, which §S1b defines as
+   *  the operator having configured NOTHING. */
+  function nothingConfigured(): string {
+    const dir = serverDir();
+    const file = join(dir, "crucible.toml");
+    expect(existsSync(file), "nothing may be configured here").toBe(false);
+    return file;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -356,13 +394,17 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   // is already configuration (`projects.retention`); its FALLBACK is not —
   // `DEFAULT_RETENTION = 100` (src/store.ts:688) is a magic number with no
   // configuration channel at all, while the abandon deadline two declarations
-  // below it already has one ($CRUCIBLE_RUN_ABANDON_MS, src/store.ts:696-700,
-  // "read per sweep, not cached: the deadline is operational configuration").
+  // below it already has one (`runAbandonAfterMs`, src/store.ts, "read per
+  // sweep, not cached: the deadline is operational configuration").
   // Same rule, same mechanism, and this test pins no value of its own: it
   // configures one and asserts the store honoured THAT.
+  //
+  // CR-CRU-131 §S1b — that channel is now the server's own `crucible.toml`,
+  // not `$CRUCIBLE_DEFAULT_RETENTION`. The rule this test defends is the same
+  // one it always defended; only the surface has moved.
   // ─────────────────────────────────────────────────────────────────────────
   test("a project that configures no cap of its own takes the operator's configured default, not a constant compiled into the source", () => {
-    setEnv("CRUCIBLE_DEFAULT_RETENTION", "9");
+    configureFleetCap(9);
     const store = new Store(":memory:");
     // No `retention` — this project falls back on purpose.
     const key = seedProject(store);
@@ -376,12 +418,14 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   });
 
   test("the fallback is read per sweep, so an operator's change takes effect without a restart", () => {
-    setEnv("CRUCIBLE_DEFAULT_RETENTION", "9");
+    configureFleetCap(9);
     const store = new Store(":memory:");
     const key = seedProject(store);
     ingestTelemetry(store, key, 40);
 
-    setEnv("CRUCIBLE_DEFAULT_RETENTION", "4");
+    // The operator EDITS the same file. Same process, same module graph — a
+    // loader that cached the table at import would still be capping at 9.
+    configureFleetCap(4);
     const ids = ingestTelemetry(store, key, 1);
     const surviving = store.listEvents(key, 400).filter((e) => e.kind === "test");
 
@@ -432,8 +476,9 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
       throw new Error(
         `CR-CRU-129 §S2: a numeric literal is standing in for a retention cap in the retention ` +
           `path — ${offenders.join(" | ")}. A limit is CONFIGURATION, never a constant in ` +
-          `source: the per-project value is \`projects.retention\` and its fallback is ` +
-          `$CRUCIBLE_DEFAULT_RETENTION. \`DEFAULT_RETENTION = 100\` was deleted rather than ` +
+          `source: the per-project value is \`projects.retention\` and its fallback is the ` +
+          `\`[limits.retention]\` table in the server's own crucible.toml (CR-CRU-131 §S1b). ` +
+          `\`DEFAULT_RETENTION = 100\` was deleted rather than ` +
           `resized because a literal nobody configured is a cap nobody was told about, and on ` +
           `2026-09-13 that cap evicted every release this project had ever shipped. An ` +
           `unconfigured cap must resolve to NO CAP (and say so at boot), not to a number.`,
@@ -454,7 +499,7 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   // load-bearing as the warning when none does.
   // ─────────────────────────────────────────────────────────────────────────
   test("with no cap configured anywhere, retention evicts NOTHING and the boot discloses it, naming the setting that would bound it", () => {
-    clearEnv("CRUCIBLE_DEFAULT_RETENTION");
+    nothingConfigured();
     const store = new Store(":memory:");
     const key = seedProject(store);
     expect(store.getProject(key)?.retention).toBeUndefined();
@@ -471,7 +516,11 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
     // an operator would reach for and the project that is unbounded.
     const disclosure = retentionDisclosure(store);
     expect(disclosure).not.toBeNull();
-    expect(disclosure).toContain("CRUCIBLE_DEFAULT_RETENTION");
+    // CR-CRU-131 §S1b — the setting that would bound it is the `retention`
+    // limit in the server's own file, named BY PATH. It used to be
+    // `$CRUCIBLE_DEFAULT_RETENTION`; that variable is retired, and advice
+    // naming it would send an operator to a lever that moves nothing.
+    expect(disclosure).toContain(serverConfigPath());
     expect(disclosure).toContain(store.getProject(key)!.name);
     // It describes the sweep the store actually performs, rather than a
     // vocabulary copied into a message and left to drift.
@@ -481,14 +530,14 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   });
 
   test("the operator's configured fallback silences the disclosure — it is a warning, not a banner line", () => {
-    clearEnv("CRUCIBLE_DEFAULT_RETENTION");
+    nothingConfigured();
     const store = new Store(":memory:");
     const key = seedProject(store);
     // Non-vacuity: this very store DOES warn while nothing is configured, so
     // the silence below is the fallback's doing and not an inert function.
     expect(retentionDisclosure(store)).not.toBeNull();
 
-    setEnv("CRUCIBLE_DEFAULT_RETENTION", "9");
+    configureFleetCap(9);
     expect(defaultRetention()).toBe(9);
     expect(retentionDisclosure(store)).toBeNull();
     // And the project it would have named is genuinely still uncapped of its
@@ -497,7 +546,7 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   });
 
   test("a project that configures its own cap is not named, and a board where every project has one stays silent", () => {
-    clearEnv("CRUCIBLE_DEFAULT_RETENTION");
+    nothingConfigured();
     const store = new Store(":memory:");
     const capped = seedProject(store, undefined, "has-its-own-cap");
     const uncapped = seedProject(store, undefined, "bounded-by-nothing");

@@ -37,22 +37,37 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
+import { shippedLimits } from "../src/limits.ts";
+import {
+  declare,
+  restoreServerLimitsFixture,
+  serverConfigDir,
+  writeConfig,
+} from "./helpers/server-limits-fixture.ts";
 
 const handles: ServerHandle[] = [];
-const envBackup = new Map<string, string | undefined>();
 
-function setEnv(key: string, value: string): void {
-  if (!envBackup.has(key)) envBackup.set(key, process.env[key]);
-  process.env[key] = value;
+/**
+ * CR-CRU-131 §S1b — the abandon deadline is CONFIGURATION, and since C2 the
+ * only surface that configures it is the SERVER's own `crucible.toml`.
+ * `$CRUCIBLE_RUN_ABANDON_MS`, which this suite used to set, is retired. What
+ * the test below proves is unchanged: with the deadline pushed far out, the
+ * ONLY trigger left that can settle the run is the agent's tombstone, so the
+ * reason it carries is `agent died` and nothing else.
+ *
+ * `min` is RE-STATED beside the value because §S1b's validator reads it off
+ * the very table the operator edits — a bound moved in the file is
+ * configuration, not a bypass of it.
+ */
+function configureAbandonDeadline(ms: number): void {
+  writeConfig(serverConfigDir(), {
+    run_abandon_ms: declare(shippedLimits().run_abandon_ms!, ms, { min: ms }),
+  });
 }
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
-  for (const [key, value] of envBackup) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-  envBackup.clear();
+  restoreServerLimitsFixture();
 });
 
 function boot(dbPath = ":memory:"): ServerHandle {
@@ -297,7 +312,7 @@ describe("CR-CRU-017 §S3-R2 — a run RESOLVES on the read surface: the ingest 
 describe("CR-CRU-017 §S3-R3 — an ABORTED run is DISTINGUISHABLE on the read surface: status + abortReason travel with the event brief", () => {
   test("an auto-aborted run (agent tombstoned) leaves `openRuns` empty and serves a brief with status 'aborted' and the reason text the aborted card renders", async () => {
     // Staleness ruled out, so the only trigger left is the tombstone.
-    setEnv("CRUCIBLE_RUN_ABANDON_MS", "3600000");
+    configureAbandonDeadline(3_600_000);
     const handle = boot();
     const key = seedProject(handle, {
       staleAfterMs: 5,

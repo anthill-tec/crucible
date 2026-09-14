@@ -86,11 +86,27 @@
 // or created, and `data/crucible.db` is never touched.
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import {
+  activeFlags,
+  boot,
+  clearEnv,
+  declare,
+  documentOnly,
+  eventCount,
+  ingest,
+  projectLastActiveAgo,
+  projectOutlivingHorizon,
+  restoreServerLimitsFixture,
+  scratch,
+  serverConfigDir,
+  setEnv,
+  writeConfig,
+  writeRaw,
+  type LimitDeclaration,
+} from "./helpers/server-limits-fixture.ts";
 import { Store } from "../src/store.ts";
-import { startServer, retentionDisclosure } from "../src/server.ts";
-import type { SuiteNode } from "../src/types.ts";
+import { retentionDisclosure } from "../src/server.ts";
 
 /**
  * The four fields §S1b requires of every limit — DOCUMENTATION, all of it.
@@ -120,15 +136,6 @@ const SERVER_LIMITS = ["run_abandon_ms", "project_inactive_ms", "retention"] as 
 /** The limits a CLIENT enforces. Here only so the ownership NEGATIVE can name
  *  one; the server must never resolve any of them. */
 const CLIENT_LIMITS = ["truncate_field_chars", "error_detail_chars", "roadmap_list_rows"] as const;
-
-interface LimitDeclaration {
-  description: string;
-  recommended: number;
-  min: number;
-  max: number;
-  /** The OPERATOR's own setting. Absent on every shipped declaration. */
-  value?: number;
-}
 
 interface LimitsModule {
   SERVER_LIMIT_NAMES: readonly string[];
@@ -180,217 +187,17 @@ async function limits(): Promise<LimitsModule> {
 
 // ── Fixture plumbing ───────────────────────────────────────────────────────
 
-const scratchDirs: string[] = [];
-const envRestore: Array<[string, string | undefined]> = [];
-const openHandles: Array<{ stop(): void }> = [];
+// Everything the two suites share — the scratch `crucible.toml`, the env
+// save/restore, and the store/server fixtures that observe a limit at its
+// enforcement site — was LIFTED to tests/helpers/server-limits-fixture.ts in
+// CR-CRU-131 C2, unchanged, because the six suites that used to drive a limit
+// through an environment variable now configure it through the same file this
+// one does. Seven copies of `write a [limits.<name>] table into a scratch dir`
+// is where they would start to disagree about what an operator's file looks
+// like (the standing rule tests/helpers/source-scan.ts states in its own
+// header, CR-CRU-097 §S6).
 
-function scratch(prefix: string): string {
-  // NEVER inside the repo (tests/boot-safety.test.ts's convention).
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  scratchDirs.push(dir);
-  return dir;
-}
-
-function setEnv(name: string, value: string): void {
-  envRestore.push([name, process.env[name]]);
-  process.env[name] = value;
-}
-
-function clearEnv(name: string): void {
-  envRestore.push([name, process.env[name]]);
-  delete process.env[name];
-}
-
-/**
- * A scratch directory standing in for the server's own configuration
- * directory, pointed at by the SAME rule that resolves the database path
- * (`CRUCIBLE_DB`, src/server.ts:65). No database is opened there — every Store
- * below is ":memory:"; only the config PATH is resolved from it.
- *
- * The env vars this CR retires as limit overrides are cleared, so nothing here
- * can pass on a value the file did not supply.
- */
-function serverConfigDir(): string {
-  const dir = scratch("crucible-server-limits-");
-  setEnv("CRUCIBLE_DB", path.join(dir, "crucible.db"));
-  clearEnv("CRUCIBLE_DEFAULT_RETENTION");
-  clearEnv("CRUCIBLE_RUN_ABANDON_MS");
-  clearEnv("CRUCIBLE_PROJECT_INACTIVE_MS");
-  return dir;
-}
-
-/** Render `[limits.<name>]` tables — the shape an operator meets: four fields
- *  of documentation, and their own `value` only where they set one. */
-function toml(tables: Record<string, LimitDeclaration>): string {
-  return Object.entries(tables)
-    .map(
-      ([name, d]) =>
-        `[limits.${name}]\n` +
-        `description = ${JSON.stringify(d.description)}\n` +
-        `recommended = ${d.recommended}\n` +
-        `min = ${d.min}\n` +
-        `max = ${d.max}\n` +
-        (d.value === undefined ? "" : `value = ${d.value}\n`),
-    )
-    .join("\n");
-}
-
-function writeConfig(dir: string, tables: Record<string, LimitDeclaration>): string {
-  const file = path.join(dir, "crucible.toml");
-  fs.writeFileSync(file, toml(tables));
-  return file;
-}
-
-function writeRaw(dir: string, text: string): string {
-  const file = path.join(dir, "crucible.toml");
-  fs.writeFileSync(file, text);
-  return file;
-}
-
-/**
- * The same limit as the operator finds it BEFORE touching anything: four
- * fields of documentation and no `value` at all. This is what an installed,
- * unedited `crucible.toml` holds, and a limit must resolve to `recommended`
- * from it. `min`/`max` may be re-stated so the widen/narrow tests can move the
- * bound a value is judged against; no test ever writes a bound the shipped
- * table did not supply.
- */
-function documentOnly(
-  shipped: LimitDeclaration,
-  bounds?: { min?: number; max?: number },
-): LimitDeclaration {
-  return {
-    description: shipped.description,
-    recommended: shipped.recommended,
-    min: bounds?.min ?? shipped.min,
-    max: bounds?.max ?? shipped.max,
-  };
-}
-
-/**
- * The operator's file for ONE limit they HAVE set: the shipped documentation
- * carried through VERBATIM — `description` and `recommended` untouched — plus
- * their own `value` beside it.
- *
- * `recommended` is never overwritten here, and that is deliberate: this helper
- * is the only way a test configures anything, so no test CAN accidentally
- * express the in-place edit the schema exists to prevent.
- */
-function declare(
-  shipped: LimitDeclaration,
-  value: number,
-  bounds?: { min?: number; max?: number },
-): LimitDeclaration {
-  return { ...documentOnly(shipped, bounds), value };
-}
-
-const emptyTree: SuiteNode[] = [];
-
-/**
- * A project whose agents never tombstone within the horizon a sweep is driven
- * to. `sweepOpenRuns` settles an open run as `agent died` BEFORE it ever
- * considers the abandon deadline (src/store.ts:3737-3742), so a run-abandon
- * test that let its agent tombstone would be measuring liveness and reporting
- * it as a deadline. The thresholds are derived from the horizon under test,
- * never pinned.
- */
-function projectOutlivingHorizon(store: Store, horizonMs: number, name = "limits-subject"): string {
-  const key = crypto.randomUUID();
-  store.addProject({
-    key,
-    name,
-    type: "backend",
-    sutRoot: "/tmp/limits",
-    liveness: {
-      staleAfterMs: horizonMs * 4,
-      tombstoneAfterMs: horizonMs * 8,
-      pruneAfterMs: horizonMs * 16,
-    },
-  });
-  return key;
-}
-
-interface QueryHandle {
-  run(...args: unknown[]): void;
-}
-interface RawDb {
-  query(sql: string): QueryHandle;
-}
-
-/** Backdate an event's timestamp column (tests/v2-projects-activity.test.ts's
- *  convention — Store stamps Date.now() with no override lever). */
-function backdateEvent(store: Store, eventId: string, msAgo: number): void {
-  (store as unknown as { db: RawDb }).db
-    .query(`UPDATE events SET timestamp = ? WHERE id = ?`)
-    .run(Date.now() - msAgo, eventId);
-}
-
-/** Backdate an agent's last_seen column (same convention). */
-function backdateAgent(store: Store, projectKey: string, agentId: string, msAgo: number): void {
-  (store as unknown as { db: RawDb }).db
-    .query(`UPDATE agents SET last_seen = ? WHERE project_key = ? AND agent_id = ?`)
-    .run(Date.now() - msAgo, projectKey, agentId);
-}
-
-/** A project whose only activity is `msAgo` old and whose only agent went
- *  silent at the same moment — so `active` is decided by the window alone. */
-function projectLastActiveAgo(store: Store, msAgo: number, name: string): string {
-  const key = crypto.randomUUID();
-  store.addProject({ key, name, type: "backend", sutRoot: "/tmp/inactive" });
-  const ev = store.recordTestEvent(
-    key,
-    `${name}-ghost`,
-    { summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 }, tree: emptyTree },
-    { tier: "unit" },
-  );
-  backdateEvent(store, ev.id, msAgo);
-  backdateAgent(store, key, `${name}-ghost`, msAgo);
-  return key;
-}
-
-interface ProjectActivityRow {
-  key: string;
-  active: boolean;
-}
-
-type BootedServer = ReturnType<typeof startServer>;
-
-async function activeFlags(handle: BootedServer): Promise<Map<string, boolean>> {
-  const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/v2/projects`);
-  expect(res.status).toBe(200);
-  const body = (await res.json()) as { ok: boolean; projects: ProjectActivityRow[] };
-  expect(body.ok).toBe(true);
-  return new Map(body.projects.map((p) => [p.key, p.active]));
-}
-
-function boot(): BootedServer {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
-  openHandles.push(handle);
-  return handle;
-}
-
-function ingest(store: Store, key: string, n: number): void {
-  for (let i = 0; i < n; i++) {
-    store.recordTestEvent(key, "limits-agent", {
-      summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },
-      tree: emptyTree,
-    });
-  }
-}
-
-function eventCount(store: Store, key: string): number {
-  return store.listEvents(key, Number.MAX_SAFE_INTEGER).length;
-}
-
-afterEach(() => {
-  while (openHandles.length > 0) openHandles.pop()!.stop();
-  while (envRestore.length > 0) {
-    const [name, value] = envRestore.pop()!;
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-  while (scratchDirs.length > 0) fs.rmSync(scratchDirs.pop()!, { recursive: true, force: true });
-});
+afterEach(restoreServerLimitsFixture);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §S1b — the schema is complete and self-describing

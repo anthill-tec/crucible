@@ -41,8 +41,14 @@
 // real board id, which would decay the day the board moves.
 import { describe, test, expect, afterEach, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Store } from "../src/store.ts";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import {
+  restoreServerLimitsFixture,
+  serverConfigDir,
+} from "./helpers/server-limits-fixture.ts";
 
 /**
  * The window `QUEUE_EVENTS_LIMIT` scanned, quoted as HISTORY rather than
@@ -75,27 +81,33 @@ interface AnyBody {
 
 describe("CR-CRU-129 §S3 — milestone records are QUERYABLE by type, not scannable", () => {
   let handle: ServerHandle | undefined;
-  let savedDefaultRetention: string | undefined;
 
   beforeEach(() => {
-    // §S2 left the fallback cap in the operator's environment, read per sweep.
     // This suite needs a project whose telemetry is NOT pruned, and the honest
     // way to arrange that is to configure the real surface to its "no cap"
-    // value rather than to pick a big number. An ambient cap would silently
+    // state rather than to pick a big number. An ambient cap would silently
     // shrink the fixture, and the measured assertion in the mutation test
     // below would then fail loudly rather than pass over a small window.
-    savedDefaultRetention = process.env.CRUCIBLE_DEFAULT_RETENTION;
-    delete process.env.CRUCIBLE_DEFAULT_RETENTION;
+    //
+    // CR-CRU-131 §S1b — that surface is now a FILE. §S2's fallback used to sit
+    // in `$CRUCIBLE_DEFAULT_RETENTION`, which C2 retires; what expresses "the
+    // operator configured NOTHING" is an ABSENT server `crucible.toml`, and
+    // retention's documented exception says an absent file means NO cap.
+    //
+    // This is also what keeps the suite honest once the fleet's own file
+    // exists: the fixture below writes 5001 telemetry events, which is more
+    // than the shipped retention recommendation, so a run that resolved the
+    // REPO's crucible.toml would be silently capped and the mutation test
+    // would be measuring the cap instead of the scan window. The scratch
+    // directory puts this suite beyond it.
+    const dir = serverConfigDir();
+    expect(existsSync(join(dir, "crucible.toml")), "no cap may be configured here").toBe(false);
   });
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
-    if (savedDefaultRetention === undefined) {
-      delete process.env.CRUCIBLE_DEFAULT_RETENTION;
-    } else {
-      process.env.CRUCIBLE_DEFAULT_RETENTION = savedDefaultRetention;
-    }
+    restoreServerLimitsFixture();
   });
 
   function boot(): ServerHandle {

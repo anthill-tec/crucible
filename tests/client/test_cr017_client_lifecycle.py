@@ -19,7 +19,11 @@ SCOPE NOTE — why the signal path posts NOTHING here. The abort ROUTE
 (`POST /api/v2/runs/<id>/abort`) is §S2 and does NOT exist yet; §S1 (already
 on this branch) ships the server-side auto-abort instead: an open run is
 settled with reason `agent died` the moment its agent tombstones, and with
-reason `abandoned` once it is older than `CRUCIBLE_RUN_ABANDON_MS`. So this
+reason `abandoned` once it is older than the server's configured
+`run_abandon_ms` deadline (a `[limits.run_abandon_ms]` table in the server's
+own crucible.toml since CR-CRU-131 §S1b retired the environment variable that
+used to carry it -- and the WORDING a user is shown for that settlement is
+pinned in tests/client/test_open_run_warning_names_the_limit.py). So this
 cycle's client obligation on SIGINT/SIGTERM is exactly three things — stop
 cleanly, invent NO abort call, and SAY in the envelope that the open run was
 left to the server's own auto-abort — which is what the signal tests below
