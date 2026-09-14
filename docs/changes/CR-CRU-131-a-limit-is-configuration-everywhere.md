@@ -202,6 +202,43 @@ limits then resolve through it.
 `--full` keeps working exactly as it does: a per-invocation escape hatch is not a substitute for a
 configured default, and a configured default is not a substitute for it.
 
+### §S1c Packaging — the defaults must SHIP, and the editable file must be INSTALLED
+
+A repo-root `crucible.toml` is a file in a git checkout. Neither install package ships one, so an
+installed deployment would resolve every limit from a file that does not exist. Measured 2026-09-14:
+
+- **`crucible-axi`** (PyPI, driven by `uv`) is an INSTALL ORCHESTRATOR, not just a library:
+  `pyproject.toml` force-includes `"clients" = "crucible_axi/clients"` as package data, and
+  `crucible_axi/install.py` lays the five clients plus `STATUS-CONTRACT.md` down under
+  `<target-dir>/clients/`, writing a `crucible-clients.json` manifest (`manifest.py:29`) that
+  `uninstall` reverses.
+- **`@anthill-tec/crucible-server`** (npm) ships `files = ["bin/", "src/", "public/"]` — no config
+  file of any kind.
+- The two are SEPARATE packages by design, installable on different hosts, at independently
+  resolved versions.
+
+So the defaults travel as PACKAGE DATA and the editable file is INSTALLED:
+
+1. **Shipped defaults** — a `crucible.toml` inside each distribution: force-included into
+   `crucible_axi/` the same way `clients/` already is, and added to the npm `files` list beside
+   `src/`. This is what makes "no literal in source" achievable rather than aspirational: the last
+   resort is a DATA FILE in the distribution, not a number in a resolver.
+2. **The operator's editable file** — laid down by the installer, which already has a `[config]`
+   stage and already writes one file at `<target-dir>`. It lands COMMENTED, with each limit's
+   description, recommended value and range, so the operator meets the documentation at the path
+   they will edit. An install that only ships defaults gives the operator nothing to edit; a
+   checkout-only file gives an installed deployment nothing to read.
+3. **The manifest declares it, and uninstall respects it.** A file the installer writes belongs in
+   `crucible-clients.json` like everything else it lays down. But an operator-EDITED config is data,
+   not an artifact: `uninstall` must not silently delete a modified `crucible.toml` — the install
+   stages are already fail-fast-first and destructive-last for exactly this class of reason.
+
+**Version skew is why the ownership split in §S1 is not merely tidy.** Client and server are separate
+packages on possibly different hosts at different versions. Because each side's limits live in its
+own package's data and its own installed file, a client never needs a file the server's version
+wrote, and neither side can be broken by the other's upgrade. A shared file would have coupled two
+independently released artifacts across a machine boundary.
+
 ### §S2 A cap can be cleared, and zero is a cap
 
 `PATCH …/projects/<key>` accepts:
@@ -322,6 +359,28 @@ this sense.
 - [ ] The shipped defaults EQUAL today's compiled values — 65536, 30 min, 1 h, 200, 500, 20 — so
       this CR changes no behaviour until someone edits the file. Asserted per limit, because a
       "configuration" CR that quietly retunes six limits is a different CR.
+
+**§S1c — packaging**
+- [ ] The shipped defaults are PACKAGE DATA in both distributions: force-included into
+      `crucible_axi/` alongside `clients/`, and present in the npm `files` list. Asserted from a
+      BUILT artifact — a wheel and an `npm pack` tarball — not from the checkout, because the
+      checkout is exactly where the file exists anyway.
+- [ ] An INSTALLED client resolves every client limit with no git checkout present: proved by
+      installing the wheel into a throwaway prefix and running a client verb from a directory that
+      is not this repo.
+- [ ] An INSTALLED server resolves every server limit from its own packaged defaults, proved the
+      same way from the packed tarball.
+- [ ] The installer LAYS DOWN a commented, operator-editable `crucible.toml` carrying each limit's
+      description, recommended value and range, and the `[config]`/`[manifest]` stage ordering is
+      unchanged.
+- [ ] The laid-down file is declared in `crucible-clients.json` like every other installed artifact.
+- [ ] `uninstall` does NOT silently delete an operator-EDITED `crucible.toml`: it is left in place or
+      its removal is reported, and the existing fail-fast-first / destructive-last stage order is
+      preserved. Asserted with a modified file, since an unmodified one is the easy case.
+- [ ] A re-install over an existing edited file does not overwrite the operator's values.
+- [ ] VERSION SKEW: a client at one version resolves its limits with a server at another, and
+      neither reads the other's file — asserted, because this is the property the ownership split
+      exists to guarantee and the one a shared file would have destroyed.
 
 **§S2**
 - [ ] `retention: null` clears the override; the project then inherits the fleet default and a read

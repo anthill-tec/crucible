@@ -537,6 +537,19 @@ directory beside the `.env` the clients already read. Neither process reads the 
 file. One schema, one loader shape, two locations — one source per enforcer, not one file
 for two machines.
 
+**The defaults SHIP with the package; the editable file is INSTALLED.** The two install
+artifacts are separate by design — `crucible-axi` on PyPI (driven by `uv`) is an install
+orchestrator that lays the client fleet down on the agent's machine, and
+`@anthill-tec/crucible-server` on npm carries the server — so a file in a git checkout
+reaches neither. Each distribution therefore carries its own `crucible.toml` as PACKAGE
+DATA (the client fleet is already force-included the same way), which is what makes "no
+literal in source" reachable: the last resort is a data file in the distribution, not a
+number in a resolver. The operator's editable copy is laid down by the installer,
+commented, at the path they will edit, declared in the install manifest, and not silently
+deleted by `uninstall` once edited. Because each side's limits live in its own package,
+client and server can be at different versions on different hosts without either reading
+a file the other wrote.
+
 **There is no environment-variable layer for a limit.** An authoritative, editable,
 documented file does not need a second way to say the same thing, and a second way is a
 second place to look when a value is not what you expected, so
