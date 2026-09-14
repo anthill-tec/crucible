@@ -1205,4 +1205,58 @@ describe("§S3 — no numeric literal stands in for a configured limit, in eithe
 
     expect(detected.length).toBe(VALIDATOR_SITES.length);
   });
+
+  test("the by-name scoping does NOT over-match: a clean function in a file full of legitimate numbers reports nothing", () => {
+    // The positive halves above prove the scan BITES. This is the other half,
+    // and it is the one the retired predicate failed: "a file containing a
+    // numeric literal at least as large as the shipped recommendation" matched
+    // 118+ files, because millisecond constants are everywhere. Scoping BY NAME
+    // was the fix, and a fix that narrows is owed a fixture proving it narrowed
+    // to the right thing rather than to nothing.
+    //
+    // Both fixtures are files, not functions: the numerals sit at module scope,
+    // in a NEIGHBOURING function, and in the scanned function's own comments and
+    // strings — every place a false positive would come from.
+
+    // ── TypeScript ────────────────────────────────────────────────────────
+    const tsFile =
+      `const POLL_INTERVAL_MS = 250;\n` +
+      `const COLUMN_WIDTHS = [12, 34, 56];\n` +
+      `export const SCHEMA_VERSION = 13;\n` +
+      `\n` +
+      `function probe(): number {\n` +
+      `  // 1800000 was the compiled default, and 100 the retention one.\n` +
+      `  const label = "capped at 5000 events";\n` +
+      `  void label;\n` +
+      `  return resolveLimit("run_abandon_ms");\n` +
+      `}\n` +
+      `\n` +
+      `function migrate(): number {\n` +
+      `  return SCHEMA_VERSION * 2;\n` +
+      `}\n`;
+    expect(capLiteralsIn(retentionPathCode(tsFile, "probe", "probe.ts"))).toEqual([]);
+    // …and the walker was not simply blind to this file: the NEIGHBOUR it
+    // declined to read does hold a literal, and is reported when asked for.
+    expect(capLiteralsIn(retentionPathCode(tsFile, "migrate", "probe.ts"))).not.toEqual([]);
+
+    // ── Python ────────────────────────────────────────────────────────────
+    const pyFile =
+      `PREFLIGHT_TIMEOUT_S = 10\n` +
+      `_WIDTHS = (12, 34, 56)\n` +
+      `SCHEMA_VERSION = 13\n` +
+      `\n` +
+      `def probe(value):\n` +
+      `    """It was 200, bound at def time, so no operator could reach it."""\n` +
+      `    # 500 again, this time in a comment.\n` +
+      `    label = "capped at 5000 events"\n` +
+      `    del label\n` +
+      `    return resolve_limit("truncate_field_chars")\n` +
+      `\n` +
+      `def migrate():\n` +
+      `    return SCHEMA_VERSION * 2\n`;
+    const pyCode = (name: string): string =>
+      pythonCodeOnly(pythonFunctionSpan(pyFile, name, "probe.py").text, false);
+    expect(capLiteralsIn(pyCode("probe"))).toEqual([]);
+    expect(capLiteralsIn(pyCode("migrate"))).not.toEqual([]);
+  });
 });
