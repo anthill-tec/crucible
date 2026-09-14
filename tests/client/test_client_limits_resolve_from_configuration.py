@@ -125,6 +125,7 @@ Fallback:
     python3 tests/client/test_client_limits_resolve_from_configuration.py
 """
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -921,6 +922,155 @@ class ClientLimitDegradationTest(_ClientLimitsTestCase):
                          self.visible_rows(self.shipped("roadmap_list_rows")["recommended"] + 9))
 
         self.assertIn(expected, "\n".join(_seam(self.axi, "limit_disclosures")()))
+
+
+# ===========================================================================
+# §S1 -- the seam is bound by EVERY client, not just the one with a test
+# ===========================================================================
+
+class _ProjectDirArg(str):
+    """Both call conventions in the fleet, in one object.
+
+    Four clients' project-dir resolvers take the `--project-dir` VALUE (a
+    string); arduino's takes the parsed argparse NAMESPACE and reads
+    `.project_dir` off it. A `str` carrying that attribute satisfies either,
+    so the census below drives whichever convention a client adopts without a
+    per-client table to keep in step -- which is the whole point of deriving
+    the fleet rather than typing it."""
+
+    @property
+    def project_dir(self):
+        return str(self)
+
+
+def _client_scripts():
+    """Every client in the fleet, DERIVED from the tree: `clients/*-crucible.py`.
+
+    Typed out, this list is a sixth client's blind spot -- it would ship
+    unmeasured until somebody remembered to add it here, which is precisely
+    the failure the fleet census idiom exists to prevent. Globbed, a new client
+    is asserted the day it lands."""
+    return sorted(CLIENTS_DIR.glob("*-crucible.py"))
+
+
+def _bind_project_dir_callers(path):
+    """`(function names that call `bind_project_dir`, total call count)` for one
+    client, read off its AST -- so a mention in a docstring or a comment counts
+    for nothing and only a real call does."""
+    tree = ast.parse(path.read_text())
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "bind_project_dir"]
+    callers = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+               and c.func.attr == "bind_project_dir" for c in ast.walk(node)):
+            callers.append(node.name)
+    return callers, len(calls)
+
+
+class ClientSeamIsBoundByEveryClientTest(_ClientLimitsTestCase):
+    """"The client settings seam exists once in `clients/_crucible_axi.py` and
+    all five clients resolve through it -- asserted as a caller count per
+    client."
+
+    All five DO bind it today. Only ONE of them was proved by a test, so
+    deleting the bind from any of the other four would break that client's
+    limit resolution -- every display width silently back on the shipped
+    recommendation, every project `crucible.toml` unread -- with nothing going
+    red. This class is that proof, for the fleet as the tree defines it.
+
+    Both halves are here on purpose. The COUNT is the AC's own form and catches
+    a second bind wired somewhere else (two binds is two answers to "which
+    project am I in"). The BEHAVIOUR is what makes the count non-vacuous: a
+    call sitting in a function nothing reaches would satisfy a source census
+    and resolve nothing, so each client's own resolver is DRIVEN and the file
+    it then reads is the one asserted.
+    """
+
+    def resolver_of(self, path):
+        callers, total = _bind_project_dir_callers(path)
+        self.assertEqual(
+            1, total,
+            "%s must bind the project root EXACTLY ONCE: zero binds leaves every "
+            "limit on the shipped recommendation with the operator's file unread, "
+            "and two is two answers to which project this client is working in "
+            "(callers: %r)" % (path.name, callers))
+        self.assertEqual(
+            1, len(callers),
+            "%s: the bind belongs to the ONE function that resolves the project "
+            "root, on the client's own boot path (callers: %r)"
+            % (path.name, callers))
+        return callers[0]
+
+    def test_the_fleet_is_derived_from_the_tree_and_is_not_empty(self):
+        """Non-vacuity for every test below: a glob that matched nothing would
+        make each of them iterate an empty fleet and pass having measured no
+        client at all. FIVE is what the tree holds today; the assertion is a
+        FLOOR rather than an equality, because a sixth client must be COVERED
+        by the census when it lands, not rejected by it."""
+        scripts = _client_scripts()
+        self.assertGreaterEqual(
+            len(scripts), 5,
+            "the fleet is at least the five clients CR-CRU-054 consolidated; "
+            "found %r" % ([p.name for p in scripts],))
+        for expected in ("bun", "python", "rust", "mvn", "arduino"):
+            self.assertIn("%s-crucible.py" % expected,
+                          [p.name for p in scripts])
+
+    def test_every_client_binds_the_project_root_exactly_once(self):
+        offenders = {}
+        for path in _client_scripts():
+            callers, total = _bind_project_dir_callers(path)
+            if total != 1 or len(callers) != 1:
+                offenders[path.name] = "%d call(s) in %r" % (total, callers)
+        self.assertEqual(
+            {}, offenders,
+            "§S1: every client resolves its project root through the ONE shared "
+            "seam, once, on its own boot path: %r" % (offenders,))
+
+    def test_driving_each_clients_own_resolver_binds_the_file_its_limits_read(self):
+        """The behavioural half, per client: call the function the census just
+        identified, then ask THAT client's copy of the shared module which file
+        it now reads and what a limit configured there resolves to. A bind that
+        existed in source but was never reached would pass the count and fail
+        here."""
+        shipped = self.shipped("truncate_field_chars")
+        chosen = shipped["min"]
+        self.assertNotEqual(chosen, shipped["recommended"],
+                            "the configured value must be distinguishable")
+        expected_file = self.write_project_config(
+            {"truncate_field_chars": _declare(shipped, chosen)})
+
+        offenders = {}
+        for path in _client_scripts():
+            resolver_name = self.resolver_of(path)
+            client = _load_module_by_path(
+                path, "%s_seam_%d" % (path.stem.replace("-", "_"), next(_COUNTER)))
+            getattr(client, resolver_name)(_ProjectDirArg(self.project_dir))
+
+            axi = client._axi()
+            if axi.project_config_path() != expected_file:
+                offenders[path.name] = (
+                    "%s() left the module reading %r"
+                    % (resolver_name, axi.project_config_path()))
+                continue
+            # …and the limit RESOLVES from that file, which is the behaviour the
+            # bind exists for. A path that merely matched would still leave
+            # every width on the recommendation.
+            resolved = axi.resolve_limit("truncate_field_chars")
+            if resolved != chosen:
+                offenders[path.name] = (
+                    "binds %s but resolves truncate_field_chars to %r, not the "
+                    "configured %r" % (expected_file, resolved, chosen))
+        self.assertEqual(
+            {}, offenders,
+            "§S1b: each client hands the shared module its ALREADY-RESOLVED "
+            "project root, and the limits then resolve from that project's "
+            "crucible.toml: %r" % (offenders,))
 
 
 # ===========================================================================
