@@ -71,9 +71,30 @@ TOML, and the capability is already in the tree on both sides — verified 2026-
 - The repo already carries root-level TOML config (`bunfig.toml`, `pyproject.toml`), so a
   `crucible.toml` sits where an operator would look for it.
 
-ONE file, a `[limits]` table, one entry per limit, **each with a comment saying what it governs and
-what happens at the extremes**. The file is the documentation an operator meets first; `docs/RUNBOOK.md`
-carries the same set as prose with the override order.
+ONE file, a `[limits]` table, one entry per limit. The file is the documentation an operator meets
+first; `docs/RUNBOOK.md` carries the same set as prose with the override order.
+
+**Each limit is declared with five things, not one number:** `description` (what it governs, in a
+sentence an operator can act on), `recommended` (the value we ship and stand behind — today's
+compiled value), `min` and `max` (the range outside which the value is not supportable), and `env`
+(the environment variable that overrides it).
+
+**The range is ENFORCED, not decorative.** A stated bound that nothing checks is the defect this
+project keeps finding: a budget declared in one place and unbounded content arriving from another. A
+configured value outside `[min, max]` is REFUSED at resolution, with a message naming the limit, the
+offending value, the range and the recommended setting. It is NOT silently clamped — a clamp leaves
+the operator's stated intent and the running behaviour different with nothing saying so.
+
+**The range has ONE source: the file.** The validator reads `min` and `max` from the same table the
+operator edits, so the documented bound and the enforced bound cannot drift. That is the failure this
+CR family has already hit twice — `src/hints.ts` holding a second hand-maintained copy of the
+milestone vocabulary that omitted `release` for a month, and `src/types.ts` still documenting
+`retention` as "(default 100)" after CR-CRU-129 deleted that literal. A second copy of a bound would
+be the third.
+
+`min` and `max` are a supportability judgement, so the implementation states them and states the
+reasoning per limit: a truncation width of 0 shows nothing, and a run-abandon deadline of one second
+abandons every live run, so both have floors that are more than "positive".
 
 **Three layers, in precedence order**, which is the order the code already half-implements:
 
@@ -167,8 +188,25 @@ this sense.
 
 **§S1b — the defaults file, editable and documented**
 - [ ] `crucible.toml` exists at the repo root with a `[limits]` table holding all six, and every
-      entry carries a comment naming what it governs, its environment-variable override, and what
-      happens at the extremes.
+      entry declares all five fields: `description`, `recommended`, `min`, `max`, `env`. Asserted per
+      limit AND as a completeness check over the table, so a seventh limit added without its
+      documentation fails rather than shipping undocumented.
+- [ ] `description` is a sentence, not a restatement of the key: asserted non-empty and not a bare
+      echo of the limit's own name — the rule CR-CRU-128 §S3 established for flag help.
+- [ ] The RANGE IS ENFORCED: a configured value below `min` or above `max` is REFUSED at resolution,
+      with a message naming the limit, the offending value, the range and the `recommended` setting.
+      Asserted per limit, at BOTH ends of BOTH bounds.
+- [ ] A refused value is NOT silently clamped: after a refusal the running behaviour is the
+      documented fallback and the refusal was reported — proved by observing behaviour, not by
+      reading a return value.
+- [ ] The enforced bound and the documented bound are THE SAME DATA: the validator reads `min`/`max`
+      from the table the operator edits. Asserted by CONSTRUCTION — a test fails if a `min` or `max`
+      literal appears anywhere in source, the same scan §S3 extends.
+- [ ] `recommended` EQUALS the value the limit resolves to when nothing else is configured, per
+      limit — so the documentation cannot recommend one thing while the software does another.
+- [ ] Mutation: widening a `max` in the file makes a previously-refused value resolve, and narrowing
+      it makes a previously-accepted value refuse. That is the proof the file is the source and not
+      a second copy.
 - [ ] Both stacks read the SAME file: the server via Bun's native TOML support, the clients via
       `tomllib` — asserted by editing the file once and observing both stacks change.
 - [ ] EDITING the file changes behaviour on the next call with NO restart, asserted per stack. A
@@ -179,9 +217,14 @@ this sense.
 - [ ] A MALFORMED or absent `crucible.toml` does not crash the server or the clients: it degrades to
       the environment layer and SAYS SO, in the shape CR-CRU-129's boot disclosure established.
       Asserted both ways — absent file, and a file with a syntax error.
-- [ ] `docs/RUNBOOK.md` documents all six limits, their env overrides and the precedence order —
-      including `CRUCIBLE_DEFAULT_RETENTION` and `CRUCIBLE_RUN_ABANDON_MS`, which are
-      operator-configurable TODAY and documented NOWHERE.
+- [ ] `docs/RUNBOOK.md` documents all six limits with, per limit: the description, the RECOMMENDED
+      setting, the MIN and MAX, the env override and the precedence order — including
+      `CRUCIBLE_DEFAULT_RETENTION` and `CRUCIBLE_RUN_ABANDON_MS`, which are operator-configurable
+      TODAY and documented NOWHERE.
+- [ ] The RUNBOOK's figures are checked against `crucible.toml`, not transcribed from it: a test
+      fails if any documented recommended/min/max disagrees with the table. Prose that drifts from
+      the data it describes is how `src/hints.ts` came to omit `release` for a month, and a docs
+      table is the easiest place in this CR for that to recur.
 - [ ] The shipped defaults EQUAL today's compiled values — 65536, 30 min, 1 h, 200, 500, 20 — so
       this CR changes no behaviour until someone edits the file. Asserted per limit, because a
       "configuration" CR that quietly retunes six limits is a different CR.
