@@ -870,9 +870,9 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
 #
 # There is deliberately NO client-side abort. `POST /runs/<id>/abort` is §S2 and
 # does not exist yet; §S1 already ships the server-side sweep that settles an
-# open run (reason `agent died` when its agent tombstones, `abandoned` past
-# CRUCIBLE_RUN_ABANDON_MS). So the signal/no-result paths STATE that the run was
-# left to that sweep rather than inventing a route.
+# open run (reason `agent died` when its agent tombstones, `abandoned` past the
+# server's `run_abandon_ms` limit). So the signal/no-result paths STATE that the
+# run was left to that sweep rather than inventing a route.
 
 NO_LIFECYCLE_ENV = "BUN_CRUCIBLE_NO_LIFECYCLE"
 _TRUTHY = ("1", "true", "yes", "on")
@@ -925,7 +925,8 @@ def _run_left_open_warning(run_id, cause):
                    f"The client posts no abort: the server settles it with "
                    f"its own auto-abort — reason `agent died` as soon as "
                    f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is "
+                   f"older than the `run_abandon_ms` limit the server resolves "
+                   f"from the crucible.toml beside its database. The run is "
                    f"abandoned, not lost"),
     }
 

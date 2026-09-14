@@ -1649,7 +1649,21 @@ class NextBlockCitationsTest(unittest.TestCase):
         # never goes red. Re-pinned MID-CR rather than at close-out because C1
         # must hand over a green suite; the sibling entries moved too and are
         # re-pinned in the same pass.
-        ("LANDED_STATUSES", "src/store.ts", 5790, 5790,
+        # Re-pinned 2026-09-14 (CR-CRU-131 C2), 5790 -> 5787: §S1b retired the
+        # environment-variable layer, DELETING three lines ABOVE
+        # `deriveQueueStatus` in src/store.ts — two from `defaultRetention`'s
+        # `$CRUCIBLE_DEFAULT_RETENTION` read and one from `runAbandonAfterMs`'s.
+        # The first drift this row has taken UPWARD, and the rule is unchanged:
+        # the CR that shifted the file re-pins it. The number was LOCATED at
+        # HEAD (`private deriveQueueStatus(` is a unique hit), never computed
+        # from the old one minus a delta. BOTH halves move in the same commit:
+        # the production comment this row mirrors (`clients/_crucible_axi.py`)
+        # carries the same 5787, so
+        # `test_the_table_covers_every_citation_the_block_carries` never goes
+        # red. Re-pinned MID-CR, as C1's own row was and for the same reason:
+        # C2 must hand over a green suite. The three sibling entries were
+        # re-measured at BOTH ends in the same pass and none had moved.
+        ("LANDED_STATUSES", "src/store.ts", 5787, 5787,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split

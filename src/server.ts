@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { limitDisclosures } from "./limits.ts";
+import { limitDisclosures, serverConfigPath } from "./limits.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 
@@ -300,11 +300,13 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
  *
  * Deleting `DEFAULT_RETENTION = 100` made retention opt-in, and an opt-in
  * nobody is told about is how the next silent growth starts: a project with no
- * `retention` of its own, on a board with no `$CRUCIBLE_DEFAULT_RETENTION`
- * behind it, prunes NOTHING for ever without a word. So the disclosure goes on
- * the same channel that already names the store and a schema rewrite — the
- * boot banner — and it names both the projects that are unbounded and the
- * setting that would bound them.
+ * `retention` of its own, on a board whose own `crucible.toml` declares no
+ * `[limits.retention]` either, prunes NOTHING for ever without a word. So the
+ * disclosure goes on the same channel that already names the store and a
+ * schema rewrite — the boot banner — and it names both the projects that are
+ * unbounded and the FILE and the LIMIT that would bound them — §S1b retired
+ * the environment override this advice used to name, and advice naming it
+ * would send an operator to a lever that moves nothing.
  *
  * `null` when a cap resolves, because a line that is always printed discloses
  * nothing. The operator's fallback silences it for every project at once; a
@@ -320,12 +322,13 @@ export function retentionDisclosure(store: Store): string | null {
   if (uncapped.length === 0) return null;
   const kinds = [...RETENTION_DISPOSABLE_KINDS].sort().join(", ");
   const named = uncapped.map((project) => project.name).join(", ");
+  const file = serverConfigPath();
   return (
     `[crucible] WARNING: event retention is UNBOUNDED for ${uncapped.length} project(s) ` +
-    `(${named}) — neither a per-project \`retention\` nor $CRUCIBLE_DEFAULT_RETENTION ` +
-    `resolves a cap, so ${kinds} events are never evicted and the store grows without limit. ` +
-    `Set $CRUCIBLE_DEFAULT_RETENTION to bound every project, or configure \`retention\` on ` +
-    `each project named above.`
+    `(${named}) — neither a per-project \`retention\` nor a \`[limits.retention]\` table in ` +
+    `${file} resolves a cap, so ${kinds} events are never evicted and the store grows without ` +
+    `limit. Declare \`[limits.retention]\` in ${file} to bound every project, or configure ` +
+    `\`retention\` on each project named above.`
   );
 }
 

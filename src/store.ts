@@ -744,8 +744,6 @@ const DISPOSABLE_KIND_PLACEHOLDERS = DISPOSABLE_KIND_PARAMS.map(() => "?").join(
  * `||`): zero is a declared cap, not an absent one.
  */
 export function defaultRetention(): number | undefined {
-  const raw = Number(process.env.CRUCIBLE_DEFAULT_RETENTION);
-  if (Number.isFinite(raw) && raw > 0) return raw;
   return configuredRetention();
 }
 
@@ -840,8 +838,7 @@ export function reservedMilestoneTypeConflict(
  * resolves from the server's `crucible.toml` like every other limit.
  */
 function runAbandonAfterMs(): number {
-  const raw = Number(process.env.CRUCIBLE_RUN_ABANDON_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : resolveLimit("run_abandon_ms");
+  return resolveLimit("run_abandon_ms");
 }
 
 /** CR-CRU-002 §S4 — project keys are UUIDs; ingest routes validate against this. */
@@ -3722,7 +3719,7 @@ export class Store {
    * §S1 — the auto-abort sweep, riding CR-CRU-011's liveness machinery rather
    * than a second staleness clock: an open run whose agent has TOMBSTONED (or
    * whose agent row is gone) is aborted `agent died`; one that has outlived
-   * `CRUCIBLE_RUN_ABANDON_MS` is aborted `abandoned`. Idempotent — an aborted
+   * the `run_abandon_ms` limit is aborted `abandoned`. Idempotent — an aborted
    * run leaves `run_state = 'aborted'` and is never swept again.
    */
   sweepOpenRuns(now: number = Date.now()): RunEvent[] {

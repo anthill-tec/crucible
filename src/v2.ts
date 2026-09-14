@@ -368,8 +368,7 @@ async function handleProjectCreate(store: Store, req: Request): Promise<Response
  * the next read without a restart.
  */
 function projectInactiveMs(): number {
-  const raw = Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : resolveLimit("project_inactive_ms");
+  return resolveLimit("project_inactive_ms");
 }
 
 /**
@@ -703,7 +702,7 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const now = Date.now();
   // CR-CRU-017 §S1 — the auto-abort sweep rides CR-011's liveness, so it runs
   // exactly where liveness is computed: an open run whose agent has tombstoned
-  // (or which has outlived CRUCIBLE_RUN_ABANDON_MS) is aborted here, before the
+  // (or which has outlived the `run_abandon_ms` limit) is aborted here, before the
   // dashboard reads a dead agent with a run still "running".
   store.sweepOpenRuns(now);
   const agents = store.listAgents(project, now).map((agent) => ({

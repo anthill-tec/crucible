@@ -158,6 +158,34 @@ function recordOfKind(store: Store, key: string, kind: string): string {
 const RETENTION_PATH = ["enforceRetention", "defaultRetention"] as const;
 
 /**
+ * The CONFIGURATION SEAM each of those two functions must do its work through
+ * — the call whose presence means the body resolved a cap from somewhere an
+ * operator can reach, instead of deciding one itself.
+ *
+ * CR-CRU-131 §S1b — this REPLACES a `body.length > 40` floor that stood here
+ * as the scan's non-vacuity check. The floor was never the property worth
+ * asserting: it was a stand-in for "this body does its work through the seam",
+ * and it held only while the bodies happened to be long. Retiring the
+ * environment override made `defaultRetention` a PURE DELEGATE — `{ return
+ * configuredRetention(); }`, 35 characters — which is the CORRECT shape for a
+ * resolver under §S1b ("each resolver reads the file and nothing else"), and
+ * the only ways to clear 41 characters were to pad the body or to inline
+ * src/limits.ts into the store. A guard satisfiable only by making the code
+ * worse is a broken guard, so the guard changed.
+ *
+ * DO NOT restore the length floor on the grounds that it looks stricter. A
+ * character count penalises brevity, which this design rewards; naming the
+ * seam fails a stub, fails a body that resolves a cap on its own, and cannot
+ * be defeated by a body getting SHORTER.
+ */
+const CONFIGURATION_SEAM: Record<(typeof RETENTION_PATH)[number], string> = {
+  // The per-project cap, falling back on the fleet's — never a number of its own.
+  enforceRetention: "defaultRetention",
+  // The fleet's cap, read off the server's `crucible.toml` (src/limits.ts).
+  defaultRetention: "configuredRetention",
+};
+
+/**
  * The body of a named function with comments and string CONTENTS removed, so
  * the scan reads CODE and nothing else. Without this, `CR-CRU-013` in a
  * comment and a `LIMIT ?` in SQL both read as source the guard must judge.
@@ -463,9 +491,16 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   test("the retention path contains no numeric literal standing in for a cap — the fallback resolves from configuration or resolves to nothing", () => {
     const source = readFileSync("src/store.ts", "utf8");
     // Non-vacuity: the scan really did read code, and really can see a number.
+    // Each body must do its work THROUGH its configuration seam — a stub, or a
+    // body that decided a cap on its own, names nothing (see CONFIGURATION_SEAM).
     const bodies = RETENTION_PATH.map((name) => retentionPathCode(source, name));
     for (const [index, body] of bodies.entries()) {
-      expect(body.length, `${RETENTION_PATH[index]} scanned as empty`).toBeGreaterThan(40);
+      const name = RETENTION_PATH[index]!;
+      const seam = CONFIGURATION_SEAM[name];
+      expect(
+        body.includes(seam),
+        `${name} does not resolve its cap through \`${seam}\` — it was scanned as ${JSON.stringify(body)}`,
+      ).toBe(true);
     }
     expect(capLiteralsIn("const cap = project.retention ?? 100;")).not.toEqual([]);
 

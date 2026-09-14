@@ -21,9 +21,11 @@ export interface Project {
   liveness?: Partial<LivenessConfig>;
   /** §S4 — this project's OWN raw-event retention cap, in events per kind.
    * CR-CRU-129 §S2 — THERE IS NO DEFAULT LITERAL. Absent, the sweep falls
-   * back on `defaultRetention()` (`src/store.ts`), which resolves
-   * `$CRUCIBLE_DEFAULT_RETENTION` PER SWEEP and yields `undefined` — NO CAP,
-   * nothing evicted — when that is unset, empty, non-numeric or non-positive.
+   * back on `defaultRetention()` (`src/store.ts`), which reads the
+   * `[limits.retention]` table of the server's own `crucible.toml` PER SWEEP
+   * and yields `undefined` — NO CAP, nothing evicted — when that file is
+   * absent or does not parse. Nothing sits in front of that file and nothing
+   * beneath it: the environment override that once did is retired.
    * Unconfigured therefore means UNBOUNDED, and the boot banner discloses it
    * by project name. The `default 100` this comment used to claim was
    * `DEFAULT_RETENTION`, deleted by that section: on 2026-09-13 the literal
