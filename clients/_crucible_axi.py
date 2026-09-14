@@ -1188,7 +1188,7 @@ def cycle_transition_help(status, plan, cycle_id=None):
 # plan's stored orchestrator.
 #
 # `$WORKFLOW_ROLE` is deliberately NOT part of the chain: it carries the TRACK
-# LANE (`mainline` | `track-n`; PRD-crucible-v2.md:291, DN-model-b-language.md:53)
+# LANE (`mainline` | `track-n`; PRD-crucible-v2.md:362, DN-model-b-language.md:53)
 # and is read into `ctx["track"]` by `axi_context`/`fleet_context` — registering
 # an agent named after a lane is the same category error as `bun-crucible`,
 # merely with a tidier-looking value.
