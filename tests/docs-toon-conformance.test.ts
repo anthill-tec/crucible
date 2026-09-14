@@ -12,7 +12,7 @@
 //   §S5b — docs/research/PRD-crucible-v2.md's resolved-note (line ~446) drops
 //          the superseded "pin the documented subset" clause and replaces it
 //          with the 2026-07-28 reversal, leaving neighbouring resolved-note
-//          entries (`tier`, `playwright`, retention 100) untouched.
+//          entries (`tier`, `playwright`, retention) untouched.
 //   §S3 (invocation sweep) — no doc under docs/RUNBOOK.md, docs/research/, or
 //          AGENTS.md (if it exists) may present `python3 clients/<x>-crucible.py`
 //          as THE documented invocation; the documented way is `uv run`.
@@ -168,11 +168,22 @@ describe("§S5b PRD — resolved-note records the 2026-07-28 TOON reversal", () 
     // (tier/playwright/retention entries preceding the TOON clause); this
     // guards against a sloppy GREEN edit eating its neighbours while
     // rewriting the TOON clause.
+    //
+    // The retention anchor is PRESENCE-based — the entry's label plus the
+    // §4.7 pointer that makes it an entry — rather than value-based. It used
+    // to read /retention:\s*100/, which pinned a FIGURE instead of a
+    // neighbour: CR-CRU-129 deleted the `DEFAULT_RETENTION = 100` literal and
+    // the note entry was rewritten to record that deletion, so the old anchor
+    // went red on a fact the design had legitimately moved past rather than
+    // on the collateral damage this test exists to catch. Anchoring on the
+    // entry itself keeps the guard red for the only thing it is for (a
+    // TOON-clause rewrite eating its neighbours) while staying silent about
+    // whatever the retention default happens to be.
     const prd = readText(PRD_PATH);
     const note = extractResolvedNote(prd);
     expect(note).toMatch(/`tier`\s*\n?\s*explicitly/);
     expect(note).toMatch(/`playwright`\s*\n?\s*codec/);
-    expect(note).toMatch(/retention:\s*100/);
+    expect(note).toMatch(/retention:[^;]*§4\.7/);
   });
 });
 

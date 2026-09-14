@@ -2,7 +2,7 @@
 
 See `test_bun_crucible_agent_identity_required.py`'s module docstring for the
 full defect narrative (live phantom `bun-crucible` row, the WORKFLOW_ROLE
-gap-analysis resolution, PRD-crucible-v2.md:291 / DN-model-b-language.md:53 /
+gap-analysis resolution, PRD-crucible-v2.md:362 / DN-model-b-language.md:53 /
 `clients/_crucible_axi.py:71-73`/`:373-375`). This file pins the identical
 contract for arduino-crucible.py's own independently-copied `_agent_id()`
 (today's fallback: `or "arduino-crucible"`).
