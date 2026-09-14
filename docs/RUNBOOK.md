@@ -93,25 +93,164 @@ Recovery is therefore automatic — the service comes up clean. Historical data
 in the moved-aside `*.corrupt-*` file is not auto-recovered; keep or forensically
 inspect it as needed, then delete it once you no longer need it.
 
+## Limits
+
+Every bound Crucible enforces is **configuration** — a `[limits.<name>]` table
+in a `crucible.toml`, read at the point of use — never a constant compiled into
+a source file. The limits are split across **two files**, because a limit is
+owned by the process that **enforces** it. The server resolves its own store
+and may be installed anywhere, while a client resolves a project directory and
+then posts over HTTP. Neither process reads the other's file, and editing one
+never changes the other.
+
+Every limit's table carries four fields of documentation — `description`,
+`recommended`, `min` and `max` — and, only where you set one, your own `value`.
+The two tables below are that documentation, reproduced from the shipped files
+themselves.
+
+### The server's limits — beside the server's own database
+
+The server reads the `crucible.toml` in the directory of the database it
+resolved on boot (see "Database path" above). With the store at
+`~/.local/share/crucible/crucible.db` the file is
+`~/.local/share/crucible/crucible.toml`, and `GET /api/health` names the store
+this process opened, which is how you confirm the directory before editing.
+When the board runs on another machine, that file lives on THAT machine — these
+three limits cannot be set from a project checkout. The distribution's own
+copy, `src/crucible.toml`, is package data replaced wholesale on upgrade and is
+**not** the file you edit.
+
+| Limit | Description | Recommended | Min | Max |
+|---|---|---|---|---|
+| `run_abandon_ms` | Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off the board sooner. | `1800000` (30 minutes) | `60000` (1 minute) | `86400000` (24 hours) |
+| `project_inactive_ms` | Milliseconds of silence after which a project with no live agent reads INACTIVE on the board's project list. Raise it to keep occasional projects visible; lower it to retire finished ones from the default view sooner. | `3600000` (1 hour) | `300000` (5 minutes) | `2592000000` (30 days) |
+| `retention` | Events kept per project for projects that declare no `retention` of their own. NOTE the documented exception: with NO crucible.toml at all there is NO cap and the boot banner names the uncapped projects — this number applies only once the table exists. | `5000` | `10` | `1000000` |
+
+### The project's limits — in the project directory
+
+A client reads the `crucible.toml` in the **project directory** it is working
+in, beside the `.env` the clients already read, and it reads it on every call.
+These three bound what a client PRINTS, so they belong to the machine reading
+the output. On a fleet whose board is on a different machine, widening a
+display width over there changes nothing — edit the file in your own project
+directory. The distribution's own copy, `clients/crucible.toml`, is package
+data; the installer also lays an operator-editable copy down at the target
+directory.
+
+| Limit | Description | Recommended | Min | Max |
+|---|---|---|---|---|
+| `truncate_field_chars` | Visible characters of a long text field before the envelope cuts it and appends a size hint naming the true length; `--full` defeats it per call. | `200` | `20` | `4000` |
+| `error_detail_chars` | Maximum characters of the warning detail reported for a run that produced NO report, so a starved runner's output cannot flood the envelope carrying its cause. | `500` | `100` | `20000` |
+| `roadmap_list_rows` | Rows of a roadmap list emitted before it is truncated; `totalCount` always reports the TRUE total and `--full` emits the list whole. | `20` | `5` | `500` |
+
+### Changing a limit
+
+Add a `value = …` line to that limit's table in the file that owns it. Nothing
+needs restarting — both sides re-read their file at the point of use, so an
+edit takes effect on the next call and on the next sweep.
+
+```toml
+[limits.roadmap_list_rows]
+# the four documented fields, exactly as shipped — left alone
+value = 40
+```
+
+**Never edit `description`, `recommended`, `min` or `max`.** Those four are
+documentation — the record of what we ship and stand behind — and overwriting
+`recommended` in place destroys, in the very file you are reading, the means of
+telling our number from yours after the next upgrade. Your `value` sits beside
+them, and the range beside it is the range that is enforced.
+
+**A refused value is not clamped.** A `value` outside the `[min, max]` declared
+beside it is refused at resolution and disclosed — naming the limit, your
+value, the range it crossed and the recommendation — and the limit runs at its
+`recommended` until the file is corrected:
+
+```
+[crucible] WARNING: /srv/crucible/crucible.toml sets `run_abandon_ms` to 30000, outside the range [60000, 86400000] declared beside it — the value is REFUSED, not clamped, so `run_abandon_ms` runs at its recommended 1800000 until the file is corrected.
+```
+
+An absent or unparseable file is not an error either. Every limit then runs at
+its `recommended`, and the server says so at boot, naming the file it could not
+read.
+
+**Two of the floors are not round numbers.** `project_inactive_ms` may not go
+beneath the agent tombstone horizon the board already keeps (`DEFAULT_LIVENESS`,
+`300000` ms) — a shorter window would report a project inactive while its own
+agents still read live, a verdict the board cannot honour. `error_detail_chars`
+may not go beneath the length of the warning prefix it bounds, because that
+prefix is composed first and is never truncated, so `100` is the floor that
+leaves the prefix intact with room for a fragment of the cause.
+
+### `--full`
+
+`--full` defeats the two display widths for one invocation — a call carrying it
+prints a `truncate_field_chars` field whole and emits every row a
+`roadmap_list_rows` list would otherwise have cut. A truncated list reports the
+true total in `totalCount` either way. `--full` never reaches
+`error_detail_chars`, which is composed at warning time and takes no `full`
+argument at all.
+
+### Retired environment variables
+
+Three environment variables once overrode limits from the environment. They are
+gone — nothing reads them, and exporting one changes nothing:
+
+- `$CRUCIBLE_DEFAULT_RETENTION` is RETIRED and no longer read; declare a
+  `[limits.retention]` table in the server's file instead.
+- `$CRUCIBLE_RUN_ABANDON_MS` is RETIRED and no longer read; set a `value` in
+  the `[limits.run_abandon_ms]` table instead.
+- `$CRUCIBLE_PROJECT_INACTIVE_MS` is RETIRED and no longer read; set a `value`
+  in the `[limits.project_inactive_ms]` table instead.
+
+`CRUCIBLE_DB`, `CRUCIBLE_PORT` and `CRUCIBLE_PROJECT_KEY` are untouched and
+still read — they answer *where am I* and *who am I*, and must work before any
+configuration file can be found. See "Environment variables" below.
+
 ## Retention
 
-Raw events are capped **per project** to bound db growth. The default cap is
-**`DEFAULT_RETENTION = 100`** events per project. Override it per project by
-setting the project's **`retention`** value (the `projects.retention` column);
-when set, it replaces the default for that project (`retention ?? 100`).
+Retention is the only limit with **two layers**, and the only one a project can
+set for itself.
 
-Enforcement runs on ingest: when a project's raw-event count exceeds its cap,
-the **oldest** events (ordered by timestamp, then insertion order) are pruned
-down to the cap. Pruning is transactional so a crash can never leave an event
-both folded and re-foldable:
+**What it governs.** Retention caps a project's disposable events — `test`,
+`compile` and `lifecycle` — and nothing else. A `gate` and a `milestone` are
+RECORDS rather than telemetry, each living in a table of its own that retention
+cannot reach, so no cap ever evicts one.
 
-- **`test`** and **`compile`** events are folded into their daily test-run
-  rollup *before* deletion, so their aggregate contribution survives pruning.
-- all other kinds (`lifecycle`, `gate`, `milestone`, …) flow through retention
-  but contribute nothing to rollups — they are simply pruned.
+**Enforcement.** On ingest, when a project's disposable-event count exceeds its
+cap, the oldest of them (ordered by timestamp, then insertion order) are pruned
+back to the cap, transactionally, so a crash can never leave an event both
+folded and re-foldable. A `test` or `compile` event folds into its daily
+test-run rollup *before* deletion, so what it contributed to that day's totals
+survives pruning, while a `lifecycle` event contributes nothing to a rollup and
+is simply pruned. Rollups and active-cycle state are untouched.
 
-Rollups and any active-cycle state are unaffected by retention pruning; only raw
-per-project events are capped.
+**Precedence.** A project's own `retention` overrides the `[limits.retention]`
+value in the server's file, and it does so for that project alone. Set it with
+a PATCH on the project:
+
+```sh
+curl -fsSL -X PATCH http://127.0.0.1:3849/api/v2/projects/<key> \
+  -H 'content-type: application/json' -d '{"retention": 5000}'
+```
+
+`0` is a declared cap of zero, not an absent one, and still wins over the
+file's value. Clearing a project's own cap by sending `null` makes that project
+fall back to the `[limits.retention]` value in the file rather than to zero.
+
+**With nothing configured anywhere, there is no cap at all.** When the server's
+file declares no `[limits.retention]` table — or is absent, or does not
+parse — and a project declares no `retention` of its own, nothing is evicted.
+The server discloses that at boot rather than growing quietly, naming the
+uncapped projects:
+
+```
+[crucible] WARNING: event retention is UNBOUNDED for 2 project(s) (alpha, beta) — neither a per-project `retention` nor a `[limits.retention]` table in /srv/crucible/crucible.toml resolves a cap, so compile, lifecycle, test events are never evicted and the store grows without limit. Declare `[limits.retention]` in /srv/crucible/crucible.toml to bound every project, or configure `retention` on each project named above.
+```
+
+Once that table exists its value is the cap for every project that declares
+none, which is what the `retention` row above means by the number applying only
+once the table exists.
 
 ## Health
 

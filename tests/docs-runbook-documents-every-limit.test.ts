@@ -510,6 +510,49 @@ function retirementReport(md: string, names: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * The DECLARATION of the constant CR-CRU-129 deleted, matched by its GRAMMAR.
+ *
+ * This was `readFileSync(file).includes("DEFAULT_RETENTION")`, which tested
+ * "the name never appears anywhere in `src`" — a different and strictly worse
+ * claim than "the symbol is gone", and one the source refutes for the best
+ * possible reason. `src/limits.ts:5`, `src/server.ts:301` and `src/types.ts:31`
+ * each name the constant inside a sentence explaining that it was DELETED and
+ * why (it was a number one author chose, reachable by nobody, and it evicted
+ * every release this project had ever shipped). Prose recording a deletion is
+ * EVIDENCE OF COMPLIANCE, not a violation of it — the distinction
+ * tests/limits-have-no-environment-layer.test.ts:348-351 already draws for
+ * `docs/`, and `src` differs from a document only in ADDITIONALLY containing
+ * declarations. So the declaration is what is matched, and the lineage stays.
+ * (Ruled 2026-09-14; the fifth proxy this CR retires.)
+ */
+const DELETED_CONSTANT = /\b(?:export\s+)?(?:const|let|var)\s+DEFAULT_RETENTION\b/;
+
+/**
+ * The deleted constant NAMED in prose — the document's half of the same rule.
+ *
+ * By WORD, because the two scans this file used to run could not tell one
+ * symbol from another: `CRUCIBLE_DEFAULT_RETENTION` is a RETIRED environment
+ * variable, a different thing entirely, and a substring scan for the constant
+ * reads it as the constant. Since §S1b REQUIRES the document to name that
+ * variable, the substring form was jointly unsatisfiable with the
+ * retired-variables suite. `_` is a word character, so `\b` spares the variable
+ * by GRAMMAR rather than by an exception list the next shared suffix reopens.
+ */
+const DELETED_CONSTANT_NAMED = /\bDEFAULT_RETENTION\b/;
+
+/** Whether one source TEXT declares it — the instrument the control drives. */
+function declaresDeletedConstant(source: string): boolean {
+  return DELETED_CONSTANT.test(source);
+}
+
+/** The `src` files that DECLARE the deleted constant. Any at all is the defect. */
+function sourceDeclaringDeletedConstant(): string[] {
+  return listFiles("src", [".ts"]).filter((file) =>
+    declaresDeletedConstant(readFileSync(file, "utf8")),
+  );
+}
+
 /** The complete event-kind vocabulary, read off the store's own row type. */
 function eventKinds(): string[] {
   const match = /interface RunEvent\b[\s\S]*?\bkind:\s*([^;]+);/.exec(text("src/types.ts"));
@@ -656,6 +699,61 @@ describe("CR-CRU-131 §S1b — the guard's own instruments", () => {
       expect(claimsAbout(spared, "gate", /retention|prun|evict|cap/i)).toEqual([]);
     },
   );
+
+  test(
+    "CONTROL — the deleted-constant scan matches the DECLARATION: a planted `const " +
+      "DEFAULT_RETENTION` is CAUGHT, and the same name inside prose recording its deletion is " +
+      "not reported",
+    () => {
+      // Both halves, because a narrowing with only the negative half is
+      // indistinguishable from a weakening, and the next reader could not tell
+      // which was approved.
+      expect(declaresDeletedConstant("const DEFAULT_RETENTION = 100;")).toBe(true);
+      expect(declaresDeletedConstant("export const DEFAULT_RETENTION = 5000;")).toBe(true);
+      expect(declaresDeletedConstant("let DEFAULT_RETENTION = 100;")).toBe(true);
+      // The three real sites, quoted as they stand: a deletion's own obituary.
+      expect(
+        declaresDeletedConstant("// The rule was EARNED. `DEFAULT_RETENTION = 100` was a number"),
+      ).toBe(false);
+      expect(
+        declaresDeletedConstant(" * Deleting `DEFAULT_RETENTION = 100` made retention opt-in,"),
+      ).toBe(false);
+      expect(
+        declaresDeletedConstant("   * `DEFAULT_RETENTION`, deleted by that section: on 2026-09-13"),
+      ).toBe(false);
+      // Non-vacuity: the scanner is pointed at a tree that DOES carry the name,
+      // so a filter that matched nothing at all would not read as a pass here.
+      expect(
+        listFiles("src", [".ts"]).filter((file) =>
+          readFileSync(file, "utf8").includes("DEFAULT_RETENTION"),
+        ).length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
+  test(
+    "CONTROL — the DOCUMENT scan is by word too: a line naming the deleted constant is CAUGHT, " +
+      "and the retirement record for `$CRUCIBLE_DEFAULT_RETENTION` is not reported",
+    () => {
+      const named = DELETED_CONSTANT_NAMED;
+      expect(named.test("The default cap is `DEFAULT_RETENTION = 100` events per project.")).toBe(
+        true,
+      );
+      expect(named.test("it replaces the default for that project (DEFAULT_RETENTION).")).toBe(true);
+      // The bullet §S1b REQUIRES the document to carry. Spared by GRAMMAR — `_`
+      // is a word character, so there is no boundary before `DEFAULT` here —
+      // not by an exception the next shared suffix would have to be added to.
+      expect(
+        named.test(
+          "- `$CRUCIBLE_DEFAULT_RETENTION` is RETIRED and no longer read; declare a " +
+            "`[limits.retention]` table in the server's file instead.",
+        ),
+      ).toBe(false);
+      // …and the two halves meet on the real document: it names the variable
+      // and does not name the constant.
+      expect(text(RUNBOOK)).toContain("CRUCIBLE_DEFAULT_RETENTION");
+    },
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -736,13 +834,22 @@ describe("CR-CRU-131 §S1b — the retention section describes the software that
     const md = collapse(text(RUNBOOK));
     expect(md).not.toContain("DEFAULT_RETENTION = 100");
     expect(md).not.toContain("retention ?? 100");
-    // Derived, not remembered: the symbol is absent from the server's source,
-    // so a document naming it documents something that does not exist.
-    const inSource = listFiles("src", [".ts"]).filter((file) =>
-      readFileSync(file, "utf8").includes("DEFAULT_RETENTION"),
-    );
-    expect(inSource).toEqual([]);
-    expect(md).not.toContain("DEFAULT_RETENTION");
+    // Derived, not remembered: the server's source DECLARES no such constant,
+    // so a document naming it documents something that does not exist. Matched
+    // by the declaration GRAMMAR — see DELETED_CONSTANT for why the name
+    // appearing in lineage prose is compliance rather than a violation.
+    expect(sourceDeclaringDeletedConstant()).toEqual([]);
+    // The document must not name the deleted CONSTANT — by WORD, not by
+    // substring. `not.toContain("DEFAULT_RETENTION")` could not distinguish two
+    // DIFFERENT symbols: the deleted server constant, and the retired
+    // environment variable `CRUCIBLE_DEFAULT_RETENTION`, which merely shares a
+    // suffix and which the retired-variables suite above REQUIRES this document
+    // to name (§S1b — an operator who learned it from the source has to be told
+    // it is gone). The two assertions were jointly unsatisfiable: no document
+    // can name the variable without carrying the constant's characters. `_` is
+    // a word character, so `\b` spares the variable by GRAMMAR rather than by
+    // an exception list that the next shared suffix would reopen.
+    expect(md).not.toMatch(DELETED_CONSTANT_NAMED);
   });
 
   test(
