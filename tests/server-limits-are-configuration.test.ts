@@ -26,14 +26,16 @@
 //   export const SERVER_LIMIT_NAMES: readonly string[];
 //   export function shippedLimits(): Record<string, LimitDeclaration>;
 //   export function serverConfigPath(): string;
-//   export function limitDeclarations(): Record<string, LimitDeclaration>;
 //   export function resolveLimit(name: string): number;
 //   export function limitDisclosures(): string[];
 //
 // `shippedLimits()` is the PACKAGE DATA table — the last resort, readable
 // without the operator's file being present or even valid, which is what makes
-// "no literal in source" reachable (§S1c). `limitDeclarations()` is what is in
-// EFFECT: the operator's file when it parses, the shipped table otherwise.
+// "no literal in source" reachable (§S1c). What is in EFFECT is read through
+// `resolveLimit()` — the number a limit RUNS at — and disclosed through
+// `limitDisclosures()`. There is deliberately no third "effective declarations"
+// surface: it had no consumer, and an API kept warm on the chance is an API
+// nothing keeps honest.
 //
 // ── The four fields are DOCUMENTATION; `value` is the operator's setting ────
 //
@@ -141,7 +143,6 @@ interface LimitsModule {
   SERVER_LIMIT_NAMES: readonly string[];
   shippedLimits(): Record<string, LimitDeclaration>;
   serverConfigPath(): string;
-  limitDeclarations(): Record<string, LimitDeclaration>;
   resolveLimit(name: string): number;
   limitDisclosures(): string[];
 }
@@ -171,7 +172,6 @@ async function limits(): Promise<LimitsModule> {
     "SERVER_LIMIT_NAMES",
     "shippedLimits",
     "serverConfigPath",
-    "limitDeclarations",
     "resolveLimit",
     "limitDisclosures",
   ]) {
@@ -323,10 +323,11 @@ describe("CR-CRU-131 §S1b — every server limit declares itself", () => {
       );
       expect(parsed.limits[name]!.value).toBe(chosen);
 
-      // …and what the loader reports as in effect says the same.
-      const effective = mod.limitDeclarations()[name]!;
-      expect(effective.recommended).toBe(shipped.recommended);
-      expect(effective.value).toBe(chosen);
+      // …and what the LOADER says, with the operator's file now in place, says
+      // the same: the shipped documentation still reads as ours, because the
+      // file laid a `value` beside it rather than over it…
+      expect(mod.shippedLimits()[name]!.recommended).toBe(shipped.recommended);
+      expect(mod.shippedLimits()[name]!.value).toBeUndefined();
       // …while the limit actually RUNS at the operator's number.
       expect(mod.resolveLimit(name)).toBe(chosen);
     }

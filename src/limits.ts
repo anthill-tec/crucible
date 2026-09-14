@@ -271,19 +271,6 @@ export function shippedLimits(): Record<string, LimitDeclaration> {
 }
 
 /**
- * The declarations in EFFECT: the operator's file where it parses, the shipped
- * table otherwise. A table for a limit this server does not enforce is IGNORED
- * rather than adopted — the ownership split is enforced in both directions.
- */
-export function limitDeclarations(): Record<string, LimitDeclaration> {
-  const { tables } = readServerConfig();
-  const table = shippedLimits();
-  if (tables === null) return table;
-  for (const name of SERVER_LIMIT_NAMES) table[name] = declaredFrom(table[name]!, tables[name]);
-  return table;
-}
-
-/**
  * §S1/§S1b — the number a limit RUNS at: the operator's `value` when the range
  * beside it admits one, its `recommended` otherwise.
  *

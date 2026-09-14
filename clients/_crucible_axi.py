@@ -290,19 +290,6 @@ def _effective_limit(name, declaration, path):
     return declaration["recommended"], _limit_refusal(name, declaration, path)
 
 
-def limit_declarations():
-    """The declarations in EFFECT: the operator's file where it parses, the
-    shipped table otherwise. A table for a limit this client does not enforce
-    is IGNORED rather than adopted -- ownership holds in both directions."""
-    path, tables = _read_project_config()
-    table = shipped_limits()
-    if tables is None:
-        return table
-    for name in CLIENT_LIMIT_NAMES:
-        table[name] = _declared_limit(table[name], tables.get(name))
-    return table
-
-
 def resolve_limit(name):
     """§S1/§S1b -- the number a limit RUNS at: the operator's `value` when the
     range beside it admits one, its `recommended` otherwise.

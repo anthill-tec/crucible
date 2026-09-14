@@ -27,9 +27,14 @@ locations:
     bind_project_dir(project_dir)       -> None
     project_config_path()               -> str   (<project dir>/crucible.toml)
     shipped_limits()                    -> dict[str, dict]   (package data)
-    limit_declarations()                -> dict[str, dict]   (in effect)
     resolve_limit(name)                 -> int
     limit_disclosures()                 -> list[str]
+    limit_disclosure_warnings()         -> list[dict]  (envelope warnings[])
+
+What is in EFFECT is read through `resolve_limit` -- the number a limit RUNS at
+-- and disclosed through `limit_disclosures`. There is deliberately no third
+"effective declarations" surface beside them: it had no consumer on either side
+of the wire, and an API kept warm on the chance is an API nothing keeps honest.
 
 `bind_project_dir` rather than a `project_dir=` parameter threaded through
 `truncate_field` / `truncate_rows` / `no_report_warning`, for the reason this
@@ -443,7 +448,7 @@ class ClientLimitSchemaTest(_ClientLimitsTestCase):
         be one upgrade away from not knowing whose number is in front of
         them."""
         resolve = _seam(self.axi, "resolve_limit")
-        declarations = _seam(self.axi, "limit_declarations")
+        shipped_table = _seam(self.axi, "shipped_limits")
 
         for name in CLIENT_LIMITS:
             shipped = self.shipped(name)
@@ -460,10 +465,12 @@ class ClientLimitSchemaTest(_ClientLimitsTestCase):
                              "%s: the documentation was overwritten" % name)
             self.assertEqual(chosen, parsed["value"])
 
-            # …and what the loader reports as in effect says the same.
-            effective = declarations()[name]
-            self.assertEqual(shipped["recommended"], effective["recommended"])
-            self.assertEqual(chosen, effective.get("value"))
+            # …and what the LOADER says, with the operator's file now in place,
+            # says the same: the shipped documentation still reads as ours,
+            # because the file laid a `value` beside it rather than over it…
+            self.assertEqual(shipped["recommended"],
+                             shipped_table()[name]["recommended"])
+            self.assertIsNone(shipped_table()[name].get("value"))
             # …while the limit actually RUNS at the operator's number.
             self.assertEqual(chosen, resolve(name))
 
