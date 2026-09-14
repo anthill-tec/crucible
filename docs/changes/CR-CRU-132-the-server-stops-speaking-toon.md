@@ -41,7 +41,11 @@ capability built for a consumer that never arrived, kept alive by its own covera
 **Two facts make the deletion worth doing rather than merely defensible.**
 
 `@toon-format/toon` (`^4.1.0`) is the server's **only runtime dependency**. Removing the server's
-TOON path makes the server dependency-free — every remaining `package.json` entry is a devDependency.
+TOON path makes the server dependency-free at RUNTIME — but the library MOVES to `devDependencies`
+rather than leaving the repo, because it is the REFERENCE DECODER for the client-emit oracle that
+survives this CR (`tests/toon-conformance.test.ts:25`, `tests/roadmap-registration-routes.test.ts:46`
+both `import { decode } from "@toon-format/toon"`). Deleting it outright would remove the only
+independent check that `clients/toon.py` is conformant — the very contract §S2 preserves.
 
 And `src/toon.ts` is imported from exactly **one** line, `src/v2.ts:32`. The blast radius is one
 import, one constant, three functions and one branch of `reply()`.
@@ -57,7 +61,9 @@ untouched here. This CR removes the server's ability to SERVE TOON over HTTP, no
 
 `reply()` loses its TOON branch and becomes what it already is for every write: a JSON responder.
 `wantsToon`, `truncatedToon`, `jsonVariantUrl` and `TOON_MAX_BYTES` are DELETED, along with the
-`toToon` import and `src/toon.ts` itself. `@toon-format/toon` leaves `package.json`.
+`toToon` import and `src/toon.ts` itself (a 12-line adapter over the library). `@toon-format/toon`
+MOVES from `dependencies` to `devDependencies` — the server's runtime dependency set becomes empty,
+and the test oracle keeps its reference implementation.
 
 A GET carrying `?fmt=toon` or `Accept: text/toon` is not refused — it answers JSON, like any other
 GET. The parameter becomes inert rather than an error, because a 406 would be a new refusal for a
@@ -79,9 +85,26 @@ Six files assert the server's TOON behaviour. Each is examined and split:
   JSON" asserts the absence of a feature rather than a requirement;
 - assertions that merely USED `?fmt=toon` as a convenient way to read a payload are **retargeted**
   to the JSON read, because their subject is the payload, not the encoding;
-- `tests/toon-conformance.test.ts` is the delicate one: it validates our TOON against the official
-  spec. Its SERVER half goes; any part validating `clients/toon.py` stays, because the clients still
-  speak TOON and must still speak it correctly.
+The split is ENUMERATED here rather than left to judgement, because two of these files hold
+assertions that have nothing to do with server TOON and would be lost with a wholesale deletion:
+
+- **`tests/axi-negotiation.test.ts` — the hazard.** Its own header says it covers CR-CRU-005
+  "§S2 (content negotiation) + §S3 (help[] hints module) + §S4 (TOON truncation)". Only §S2 and §S4
+  go: the SIX negotiation tests (`:121`, `:132`, `:145`, `:156`, `:167`, `:203`) and the ONE
+  truncation test (`:296`). The FIVE `help[]` hints tests (`:226`, `:232`, `:239`, `:257`, `:276`)
+  STAY — those are the AXI next-step hints the whole API emits. So does `:353`, which asserts
+  `src/v2.ts` contains ZERO `Response.json(` so every response routes through the shared gate; that
+  guard is MORE valuable after this CR, not less. The file survives, smaller.
+- **`tests/toon-conformance.test.ts` — split ~11/3.** The server-wire round-trips (`:139`–`:282`,
+  seven envelope shapes), the server-direction type-preservation cases (`:319`) and the two
+  server-fetched `help[]` decode tests (`:351`, `:369`) go. The CLIENT-EMIT ORACLE stays — `:469`,
+  `:517`, `:542` — because it is this CR's proof that removing the server's TOON did not touch the
+  fleet's. The file survives, substantially smaller.
+- **`tests/roadmap-registration-routes.test.ts` — 49 tests, 10 TOON sites.** Its subject is roadmap
+  registration; `?fmt=toon` is incidental plumbing for reading a payload. Every one RETARGETS to the
+  JSON read. Named because the file's size makes wholesale deletion tempting and catastrophic.
+- `tests/plans-global.test.ts`, `tests/v2-brief-reshape.test.ts`, `tests/events-anchored.test.ts` —
+  examined per assertion by the same rule: subject-is-TOON deletes, TOON-as-reader retargets.
 
 The split is stated per file in the implementation, and a deletion names the superseded claim — the
 discipline CR-CRU-130 used when it retired `release-proposal`.
@@ -94,10 +117,10 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
 - `docs/research/DN-crucible-toon-subset.md` is already a RETIRED pointer document whose "Current
   contract" names two pinned implementations. It keeps the client one and records that the server no
   longer speaks TOON.
-- `tests/docs-toon-conformance.test.ts` asserts what that DN says, including the pinned
-  `@toon-format/toon` version. Since the dependency is being removed, those assertions move with the
-  doc — the guard must end up asserting the CLIENT contract, and must not be left asserting a pinned
-  version of a package the repo no longer depends on.
+- `tests/docs-toon-conformance.test.ts` reads the pinned version from `pkg.dependencies` (`:78`) and
+  asserts the DN names it (`:82`). With the library MOVED rather than removed, that guard is
+  RETARGETED to `devDependencies` — not deleted. It keeps asserting a real pin of a real dependency,
+  now scoped to the client contract it actually protects.
 
 ## Acceptance criteria
 
@@ -105,8 +128,11 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
 - [ ] `reply()` answers JSON for every GET; `wantsToon`, `truncatedToon`, `jsonVariantUrl`,
       `TOON_MAX_BYTES`, the `toToon` import and `src/toon.ts` no longer exist — asserted by
       CONSTRUCTION, a scan that fails if any of those names reappears in `src/`.
-- [ ] `@toon-format/toon` is absent from `package.json`, and the server's `dependencies` object is
-      EMPTY — asserted, because dependency-free is the outcome worth pinning, not an incidental.
+- [ ] The server's `dependencies` object is EMPTY — asserted, because runtime-dependency-free is the
+      outcome worth pinning, not an incidental.
+- [ ] `@toon-format/toon` is present in `devDependencies` at its pinned version, and the client-emit
+      oracle still imports and uses it. A CR that deleted it would take the surviving client
+      conformance check with it.
 - [ ] The server boots and serves with the dependency uninstalled: proved from a clean
       `bun install --production` (or equivalent) rather than from a tree that still has it cached.
 - [ ] A GET with `?fmt=toon` answers **JSON, 200**, with `content-type: application/json` — inert,
@@ -123,8 +149,14 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
 - [ ] Each of the six files is accounted for: assertions whose subject was server TOON deleted with
       the superseded claim named, assertions that merely used TOON as a reader retargeted to JSON.
       Stated per file; no file left half-converted.
-- [ ] `tests/toon-conformance.test.ts`'s CLIENT-side validation survives and still passes — the
-      clients' TOON must still be conformant, and this CR must not weaken that.
+- [ ] `tests/axi-negotiation.test.ts` KEEPS its five `help[]` hints tests (`:226`, `:232`, `:239`,
+      `:257`, `:276`) and the zero-`Response.json(` guard at `:353`. Asserted by name — this file is
+      the one a wholesale deletion would gut.
+- [ ] `tests/toon-conformance.test.ts` KEEPS its client-emit oracle (`:469`, `:517`, `:542`) and it
+      still passes — the clients' TOON must still be proved conformant by the official library, and
+      this CR must not weaken that.
+- [ ] `tests/roadmap-registration-routes.test.ts`'s 49 tests all survive, retargeted to JSON reads —
+      not one is deleted, because not one has server TOON as its subject.
 - [ ] No test asserts that a TOON request is REFUSED: inert is the contract, and a test pinning a
       refusal would invent one.
 - [ ] The full two-stack suite is green with no net loss of coverage over anything that still
@@ -136,10 +168,17 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
       2026-07-14 decision superseded rather than erased.
 - [ ] `DN-crucible-toon-subset.md` records that the server no longer speaks TOON and that the client
       contract is unchanged.
-- [ ] `tests/docs-toon-conformance.test.ts` asserts the CLIENT contract and no longer pins a version
-      of a package the repo does not depend on.
+- [ ] `tests/docs-toon-conformance.test.ts` reads the pinned version from `devDependencies` and
+      still asserts the DN names it — retargeted, not deleted, because the pin is still real.
 - [ ] No documentation still offers `?fmt=toon` as a capability — asserted across `docs/` and
       `clients/STATUS-CONTRACT.md`.
+
+**Close-out**
+- [ ] ONE re-record after the last content edit: the `src` prose-citation head (pinned at 710 after
+      CR-CRU-130) will move DOWN as `src/v2.ts` loses ~15 sites and `src/toon.ts` goes entirely.
+      RE-MEASURE it — the guard asserts a head is never BELOW its develop baseline of 512, so a
+      falling head is the case to check rather than assume. `src/store.ts` is untouched, so
+      `LANDED_STATUSES` and `canonical_track` should hold; confirm rather than assume.
 
 ## Estimated size
 
