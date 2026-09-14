@@ -59,7 +59,43 @@ that lives in CONFIGURATION TOO** — a shipped, EDITABLE, documented defaults f
 reader has to find in a source file. That is the rule: the VALUE is always configuration. Whether it
 is overridden is the operator's business; whether it is legible and editable is not optional.
 
-### Where the defaults live: `crucible.toml`, read by both stacks
+### A limit is owned by the process that ENFORCES it
+
+The six limits are not one population. Measured 2026-09-14:
+
+| enforced by the SERVER | site |
+|---|---|
+| `TOON_MAX_BYTES` | `src/v2.ts:204`, `:215` — the envelope truncation loop |
+| run-abandon deadline | `src/store.ts:836` — the open-run sweep |
+| project-inactive window | `src/v2.ts:366` — the project read |
+| retention cap | `src/store.ts` — `enforceRetention` |
+
+| enforced by a CLIENT | site |
+|---|---|
+| field truncation | `clients/_crucible_axi.py:519` — `truncate_field` |
+| error-detail truncation | `:1106`, `:1119` |
+| roadmap list length | `:3720` — `truncate_rows` |
+
+**The server and the clients are not necessarily on the same machine.** A client resolves a PROJECT
+DIRECTORY and its `.env` (for `CRUCIBLE_PROJECT_KEY`), then talks to the board over HTTP on `:3849`.
+The server resolves its own database by its own rule and may be installed anywhere. So a single
+repo-root file is wrong the moment the board is remote: the clients could not read it, and the server
+has no business dictating a display width to a machine it cannot see.
+
+So: **a limit lives in the configuration of the process that enforces it.** Two locations, ONE schema
+and ONE loader shape:
+
+- **server limits** — `crucible.toml` beside the server's own configuration, resolved by the same rule
+  that already resolves its database path;
+- **client limits** — `crucible.toml` in the PROJECT DIRECTORY, beside the `.env` the clients already
+  read, resolved by the same `--project-dir` rule.
+
+That is "one source per enforcer", not "one file for two machines". It is also the smaller design: the
+alternative — the server serving its limits over the API for clients to fetch — needs an endpoint, a
+fetch, a cache and an offline fallback, which is machinery for a knob nobody turns, and it would leave
+a client unable to format its own output when the board is down.
+
+### The file: `crucible.toml`, read by both stacks
 
 TOML, and the capability is already in the tree on both sides — verified 2026-09-14:
 
@@ -71,13 +107,49 @@ TOML, and the capability is already in the tree on both sides — verified 2026-
 - The repo already carries root-level TOML config (`bunfig.toml`, `pyproject.toml`), so a
   `crucible.toml` sits where an operator would look for it.
 
+**Keys follow TOML convention**: bare lower `snake_case`, one TABLE per limit, so each limit's
+declaration reads as a block rather than as six parallel arrays:
+
+```toml
+[limits.toon_max_bytes]
+description = "Bytes at which an AXI envelope is truncated and re-rendered smaller."
+recommended = 65536
+min         = 4096
+max         = 1048576
+```
+
+The names are the limit's own, not its old constant's: `toon_max_bytes`, `run_abandon_ms`,
+`project_inactive_ms`, `retention`, `truncate_field_chars`, `error_detail_chars`,
+`roadmap_list_rows`. A key that transliterated `NO_REPORT_DETAIL_MAX` would carry an accident of the
+old source into the file an operator reads.
+
 ONE file, a `[limits]` table, one entry per limit. The file is the documentation an operator meets
 first; `docs/RUNBOOK.md` carries the same set as prose with the override order.
 
-**Each limit is declared with five things, not one number:** `description` (what it governs, in a
+**Each limit is declared with four things, not one number:** `description` (what it governs, in a
 sentence an operator can act on), `recommended` (the value we ship and stand behind — today's
-compiled value), `min` and `max` (the range outside which the value is not supportable), and `env`
-(the environment variable that overrides it).
+compiled value), and `min`/`max` (the range outside which the value is not supportable).
+
+**There is no environment-variable layer.** An authoritative, editable, documented file does not need
+a second way to say the same thing, and a second way is a second place to look when a value is not
+what you expected. So `$CRUCIBLE_DEFAULT_RETENTION` and `$CRUCIBLE_RUN_ABANDON_MS` are RETIRED as
+limit overrides by this CR — the file replaces them, and the tests that pin them move with it.
+
+This does not touch the `CRUCIBLE_*` variables that are not limits: `CRUCIBLE_DB`, `CRUCIBLE_PORT`
+and `CRUCIBLE_PROJECT_KEY` are bootstrap and identity — they answer *where am I and who am I*, which
+must be answerable BEFORE any file can be found. The prefix stays reserved for Crucible's own
+configuration (PRD §4.11).
+
+**So the layers are two, not three**, and only retention has both:
+
+1. `crucible.toml` `[limits.<name>]` — the shipped, editable value for this install or this project.
+2. a per-project value in the store (`projects.retention`) — narrowest wins, and it exists because a
+   cap is per-project data an operator sets through the API, not a per-install setting.
+
+The close-out has one consequence to discharge: this board currently runs with
+`CRUCIBLE_DEFAULT_RETENTION=5000` in its process environment, set by hand during CR-CRU-129's
+close-out. Retiring the variable means that 5000 must move into the server's `crucible.toml` and the
+board be restarted, or the cap silently becomes whatever the file says.
 
 **The range is ENFORCED, not decorative.** A stated bound that nothing checks is the defect this
 project keeps finding: a budget declared in one place and unbounded content arriving from another. A
@@ -95,13 +167,6 @@ be the third.
 `min` and `max` are a supportability judgement, so the implementation states them and states the
 reasoning per limit: a truncation width of 0 shows nothing, and a run-abandon deadline of one second
 abandons every live run, so both have floors that are more than "positive".
-
-**Three layers, in precedence order**, which is the order the code already half-implements:
-
-1. `crucible.toml` `[limits]` — the shipped, editable default.
-2. the environment variable — per-deployment override (`$CRUCIBLE_DEFAULT_RETENTION`,
-   `$CRUCIBLE_RUN_ABANDON_MS` and the rest, one per limit, named in the file's comments).
-3. a per-project value where one exists (`projects.retention`) — narrowest wins.
 
 **Read at the point of use, not imported at module load.** A static `import` caches the table, which
 would break the no-restart contract `runAbandonAfterMs()` already keeps; the file is read when the
@@ -187,10 +252,28 @@ this sense.
       expectation from what it reads back.
 
 **§S1b — the defaults file, editable and documented**
-- [ ] `crucible.toml` exists at the repo root with a `[limits]` table holding all six, and every
-      entry declares all five fields: `description`, `recommended`, `min`, `max`, `env`. Asserted per
-      limit AND as a completeness check over the table, so a seventh limit added without its
-      documentation fails rather than shipping undocumented.
+- [ ] Each limit is declared as a `[limits.<name>]` TABLE with all FOUR fields — `description`,
+      `recommended`, `min`, `max` — in TOML-conventional bare lower `snake_case`. Asserted per limit
+      AND as a completeness check over the table, so a seventh limit added without its documentation
+      fails rather than shipping undocumented.
+- [ ] The keys are the limit's OWN names — `toon_max_bytes`, `run_abandon_ms`,
+      `project_inactive_ms`, `retention`, `truncate_field_chars`, `error_detail_chars`,
+      `roadmap_list_rows` — not transliterations of the retired constants.
+- [ ] OWNERSHIP: the SERVER resolves its four from a `crucible.toml` beside its own configuration,
+      by the same rule that resolves its database path. A CLIENT resolves its three from a
+      `crucible.toml` in the PROJECT DIRECTORY, by the same rule that finds the `.env` it already
+      reads. Asserted per side, and asserted NEGATIVELY: a server limit configured in the project
+      file has no effect on the server, and a client limit in the server's file has no effect on a
+      client. Neither process reads the other's file.
+- [ ] A client works with the board on a DIFFERENT machine: with no server file reachable at all,
+      every client limit still resolves and every client verb still formats its output. Proved with
+      the client run against a board whose config directory the client cannot see.
+- [ ] There is NO environment-variable layer for a limit: `$CRUCIBLE_DEFAULT_RETENTION` and
+      `$CRUCIBLE_RUN_ABANDON_MS` are retired, and setting either has NO effect on the resolved value.
+      Asserted by behaviour, not by absence of a string.
+- [ ] `CRUCIBLE_DB`, `CRUCIBLE_PORT` and `CRUCIBLE_PROJECT_KEY` keep working unchanged — they are
+      bootstrap and identity, answerable before any file can be found, and the existing tests that
+      pin them stay green untouched.
 - [ ] `description` is a sentence, not a restatement of the key: asserted non-empty and not a bare
       echo of the limit's own name — the rule CR-CRU-128 §S3 established for flag help.
 - [ ] The RANGE IS ENFORCED: a configured value below `min` or above `max` is REFUSED at resolution,
@@ -211,16 +294,27 @@ this sense.
       `tomllib` — asserted by editing the file once and observing both stacks change.
 - [ ] EDITING the file changes behaviour on the next call with NO restart, asserted per stack. A
       static `import` that caches the table fails this.
-- [ ] Precedence is asserted as a chain, not per layer: file default < environment variable <
-      per-project value. Each step proved to override the one before it, and a missing layer proved
-      to fall through rather than to zero.
-- [ ] A MALFORMED or absent `crucible.toml` does not crash the server or the clients: it degrades to
-      the environment layer and SAYS SO, in the shape CR-CRU-129's boot disclosure established.
-      Asserted both ways — absent file, and a file with a syntax error.
+- [ ] Precedence is TWO layers and only retention has both: the file's value, then the per-project
+      value in the store. Each proved to override the one before it, and a missing per-project value
+      proved to fall through to the file rather than to zero.
+- [ ] `docs/RUNBOOK.md` states the OWNERSHIP split — which limits live in the server's file and which
+      in the project's — and what to do when the board is on another machine. An operator who reads
+      only the RUNBOOK must not go looking for a display width on the server.
+- [ ] A MALFORMED or absent `crucible.toml` does not crash the server or the clients. With the env
+      layer retired there is nothing beneath the file, so it degrades to the limit's OWN
+      `recommended` — which is why `recommended` must be readable without the file being valid: the
+      loader carries the shipped table as its last resort and SAYS SO, in the shape CR-CRU-129's boot
+      disclosure established. Asserted both ways — absent file, and a file with a syntax error — and
+      asserted that the disclosure names which file it could not read.
+- [ ] Retention keeps CR-CRU-129's semantics through the change of mechanism: with no cap configured
+      anywhere there is still NO cap and the boot disclosure still names the uncapped projects. The
+      close-out moves this board's hand-set `CRUCIBLE_DEFAULT_RETENTION=5000` into the server file
+      and restarts, so the live cap is not silently changed by retiring the variable.
 - [ ] `docs/RUNBOOK.md` documents all six limits with, per limit: the description, the RECOMMENDED
-      setting, the MIN and MAX, the env override and the precedence order — including
-      `CRUCIBLE_DEFAULT_RETENTION` and `CRUCIBLE_RUN_ABANDON_MS`, which are operator-configurable
-      TODAY and documented NOWHERE.
+      setting, the MIN and MAX, which file owns it, and the precedence — and records that
+      `CRUCIBLE_DEFAULT_RETENTION` and `CRUCIBLE_RUN_ABANDON_MS` are RETIRED, since they were
+      operator-configurable today and documented nowhere, and an operator who learned them from the
+      source must be told they are gone.
 - [ ] The RUNBOOK's figures are checked against `crucible.toml`, not transcribed from it: a test
       fails if any documented recommended/min/max disagrees with the table. Prose that drifts from
       the data it describes is how `src/hints.ts` came to omit `release` for a month, and a docs

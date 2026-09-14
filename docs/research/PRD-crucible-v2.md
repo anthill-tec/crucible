@@ -519,14 +519,33 @@ The corollaries are as load-bearing as the rule:
   derives its expectation from what it reads back; one that hardcodes the limit it checks
   freezes the same defect from the other side.
 
-**Where it lives (CR-CRU-131):** `crucible.toml` at the repo root, a `[limits]` table,
-one entry per limit declaring five things — `description`, `recommended`, `min`, `max`
-and `env`. TOML because both stacks already read it: Bun parses it natively and Python
-uses stdlib `tomllib`. Three layers, narrowest wins: the file's default, then the
-environment variable, then a per-project value where one exists. Values are read at the
-POINT OF USE rather than imported, so an operator's edit takes effect without a restart.
-`docs/RUNBOOK.md` carries the same set as prose, with its figures CHECKED against the
-table rather than transcribed from it.
+**Where it lives (CR-CRU-131):** `crucible.toml`, a `[limits.<name>]` table per limit
+declaring four things — `description`, `recommended`, `min`, `max` — in TOML-conventional
+bare lower `snake_case`. TOML because both stacks already read it: Bun parses it natively
+and Python uses stdlib `tomllib`. Values are read at the POINT OF USE rather than
+imported, so an operator's edit takes effect without a restart. `docs/RUNBOOK.md` carries
+the same set as prose, with its figures CHECKED against the table rather than transcribed
+from it.
+
+**A limit is owned by the process that ENFORCES it**, because the server and the clients
+are not necessarily on the same machine: a client resolves a project directory and posts
+over HTTP, while the server may be installed anywhere. So the server's four (envelope
+size, run-abandon deadline, project-inactive window, retention) live in a `crucible.toml`
+beside the server's own configuration, and the clients' three (field truncation,
+error-detail truncation, roadmap list length) live in a `crucible.toml` in the PROJECT
+directory beside the `.env` the clients already read. Neither process reads the other's
+file. One schema, one loader shape, two locations — one source per enforcer, not one file
+for two machines.
+
+**There is no environment-variable layer for a limit.** An authoritative, editable,
+documented file does not need a second way to say the same thing, and a second way is a
+second place to look when a value is not what you expected, so
+`$CRUCIBLE_DEFAULT_RETENTION` and `$CRUCIBLE_RUN_ABANDON_MS` are retired as overrides.
+The variables that are NOT limits are untouched: `CRUCIBLE_DB`, `CRUCIBLE_PORT` and
+`CRUCIBLE_PROJECT_KEY` answer *where am I and who am I*, which must be answerable before
+any file can be found. The `CRUCIBLE_*` prefix is reserved for Crucible's own
+configuration (§4.11). Precedence is therefore two layers, and only retention has both:
+the file, then a per-project value in the store.
 
 ## 5 Quality requirements
 - **E2E POV (user directive 2026-07-15): the design storyboard is the E2E acceptance
