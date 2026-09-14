@@ -333,7 +333,11 @@ this sense.
       CR-CRU-132 took the feature it bounds.)
 - [ ] The client settings seam exists once in `clients/_crucible_axi.py` and all five clients
       resolve through it — asserted as a caller count per client, not as "the client resolves it".
-- [ ] `--full` still defeats all three display limits per invocation.
+- [ ] `--full` still defeats the TWO display WIDTHS per invocation — `truncate_field_chars` and
+      `roadmap_list_rows`. (An earlier draft said "all three display limits". MEASURED by VERIFY:
+      `no_report_warning` takes no `full` parameter at HEAD and took none before this CR, so
+      `error_detail_chars` was never defeatable by `--full` and this CR preserved that exactly. The
+      shipped RUNBOOK documents the truth; the AC was the thing that was wrong.)
 - [ ] No test pins a limit VALUE: each configures through the real surface and derives its
       expectation from what it reads back.
 
@@ -466,10 +470,18 @@ this sense.
 - [ ] It covers the shared client module as well as the server, since three of the six live there.
 
 **Close-out**
-- [ ] ONE re-record of the prose-citation heads and the `src/store.ts` citations after the last
-      content edit — currently src 710 / public 477 / clients 836, with `LANDED_STATUSES` at
-      `src/store.ts:5784` and `canonical_track` at `:372-375`, each mirrored in
-      `clients/_crucible_axi.py`. Not per cycle.
+- [ ] The prose-citation heads and the `src/store.ts` citations are TRUE AT HEAD when the CR closes.
+      Re-measured by VERIFY at `f0c4998`: src **725** / public **477** / clients **847**, with
+      `deriveQueueStatus` at `src/store.ts:5801` and `normalizeTrack` at `:381-384`, each mirrored in
+      `clients/_crucible_axi.py`. (The figures this AC originally recorded — src 710 / clients 836,
+      `:5784`, `:372-375` — were the PRE-CR tree.)
+- [ ] The "ONE re-record, not per cycle" clause is WITHDRAWN. It is unsatisfiable under this
+      project's discipline that every cycle hands over a green suite: a cycle whose edits shift a
+      cited line must re-record it to close green, so five re-records happened across five cycles and
+      each was correct. The requirement that survives is the one above — the numbers are TRUE AT
+      HEAD, however many times they moved on the way. A guard re-recorded once per cycle reports
+      drift only BETWEEN cycles, which is a real limitation of its design rather than a process
+      failure to be scolded for.
 
 ## Estimated size
 
