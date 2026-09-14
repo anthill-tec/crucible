@@ -172,15 +172,20 @@ describe("§S5 docs — RUNBOOK", () => {
     expect(runbook).toMatch(/\.corrupt-<?epoch>?/i);
   });
 
-  test("docs/RUNBOOK.md documents retention (default 100 + override knob)", () => {
-    const runbook = readText(join("docs", "RUNBOOK.md"));
-    const lower = runbook.toLowerCase();
-
-    // §S5: retention — real src/store.ts DEFAULT_RETENTION = 100, overridable
-    // via project.retention.
-    expect(lower).toContain("retention");
-    expect(runbook).toContain("100");
-  });
+  // DELETED — "documents retention (default 100 + override knob)".
+  //
+  // It cited `src/store.ts DEFAULT_RETENTION = 100`, which CR-CRU-129 deleted:
+  // retention has no compiled default at all any more, and CR-CRU-131 made
+  // every limit configuration read from a `crucible.toml` at the point of use.
+  // What the assertion `expect(runbook).toContain("100")` then matched was an
+  // unrelated number — `error_detail_chars`' floor and the prose explaining it
+  // — so the test would have passed with the retention documentation deleted
+  // outright, which is the one thing it existed to notice.
+  //
+  // NOT re-pointed at the current number: pinning a limit VALUE in a test is
+  // what §S3 of CR-CRU-131 forbids, and re-pointing would rebuild the identical
+  // defect one CR later. The claim is covered, derived from the declarations
+  // rather than transcribed, by tests/docs-runbook-documents-every-limit.test.ts.
 });
 
 // ---------------------------------------------------------------------------
