@@ -220,6 +220,19 @@ configured default, and a configured default is not a substitute for it.
 
 ### §S1c Packaging — the defaults must SHIP, and the editable file must be INSTALLED
 
+**One shipped template, two laid-down files.** C1's `crucible.toml` documents the whole vocabulary —
+all six limits, with the server's three under their own banner and a header stating plainly that a
+server limit set there has no effect. As a TEMPLATE that is right: a reader learns every knob
+Crucible has and which process owns it.
+
+But the file the installer LAYS DOWN in the project directory must carry only the three CLIENT
+limits, and the one beside the database only the three SERVER limits. A laid-down file that shows an
+operator a knob which provably does nothing where it sits contradicts, in documentation, the
+ownership negatives C1 asserts in tests — and the tests are the behaviour.
+
+Each table keeps its inert-here marker on the TABLE, not only under the section banner: an operator
+navigating to `[limits.retention]` to add a `value` arrives at the table, not at the banner above it.
+
 A repo-root `crucible.toml` is a file in a git checkout. Neither install package ships one, so an
 installed deployment would resolve every limit from a file that does not exist. Measured 2026-09-14:
 
