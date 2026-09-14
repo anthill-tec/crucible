@@ -54,7 +54,14 @@ raw-options = { local_scheme = "no-local-version" }
 [tool.hatch.build.targets.wheel]
 packages = ["crucible_axi"]
 
-# The client fleet + its status contract ship as package data so the installed
-# `crucible-axi` orchestrator carries the clients it lays down (S1).
+# The client fleet + its status contract + the fleet's own shipped limit
+# declarations ship as package data so the installed `crucible-axi`
+# orchestrator carries the clients it lays down (S1), and so those clients
+# resolve every limit with no git checkout present (CR-CRU-131 §S1c).
+#
+# The mapping is RECURSIVE and must stay so: `clients/crucible.toml` is the
+# fleet's last resort and the file `[manifest]` copies to `<target-dir>` for the
+# operator to edit, so narrowing this to the `*.py` fleet would ship an
+# orchestrator whose clients have nothing to fall back to.
 [tool.hatch.build.targets.wheel.force-include]
 "clients" = "crucible_axi/clients"

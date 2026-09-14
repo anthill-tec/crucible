@@ -78,57 +78,81 @@ export const SERVER_LIMIT_NAMES: readonly string[] = [
 ];
 
 /**
- * §S1c — the PACKAGE DATA table: the last resort, readable without the
- * operator's file being present or even valid. Every `recommended` here is
- * today's compiled value, so an install with no `crucible.toml` behaves
- * EXACTLY as it did before this CR — which is the whole safety argument for a
- * configuration change of this reach.
+ * §S1c — the SHIPPED declarations are PACKAGE DATA, not a table in this file.
+ * `crucible.toml` sits beside this module inside the distribution (the npm
+ * `files` whitelist ships `src/`), so the file a reader READS and the table
+ * this resolver FALLS BACK TO are the same bytes. A declaration held in BOTH a
+ * source table and a data file is two copies of one datum, and the file an
+ * operator reads can then disagree with the numbers the code falls back to
+ * with nothing saying so.
  *
- * `min`/`max` are a SUPPORTABILITY judgement, so each states its reasoning: a
- * bound nobody can justify is the same defect as a default nobody chose.
+ * It documents the three limits THIS distribution enforces and no others: the
+ * clients are a separate package on a possibly different host at an
+ * independently resolved version, and a table for a limit this side does not
+ * enforce is ignored rather than adopted.
  */
-const SHIPPED: Readonly<Record<string, LimitDeclaration>> = {
-  run_abandon_ms: {
-    description:
-      "Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it " +
-      "when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off " +
-      "the board sooner.",
-    recommended: 1_800_000,
-    // A one-second deadline abandons every live run, so the floor is more than
-    // "positive": a minute is shorter than any suite this fleet reports on.
-    min: 60_000,
-    // A day. Past it an open run is not "still going", it is a row nobody will
-    // ever settle.
-    max: 86_400_000,
-  },
-  project_inactive_ms: {
-    description:
-      "Milliseconds of silence after which a project with no live agent reads INACTIVE on the " +
-      "board's project list. Raise it to keep occasional projects visible; lower it to retire " +
-      "finished ones from the default view sooner.",
-    recommended: 3_600_000,
-    // The default agent TOMBSTONE horizon (`DEFAULT_LIVENESS`, src/types.ts): a
-    // window shorter than that would call a project inactive while its own
-    // agents still read as live, which is a verdict the board cannot honour.
-    min: 300_000,
-    // Thirty days, past which "inactive" has stopped distinguishing anything.
-    max: 2_592_000_000,
-  },
-  retention: {
-    description:
-      "Events kept per project for projects that declare no `retention` of their own. NOTE the " +
-      "documented exception: with NO crucible.toml at all there is NO cap and the boot banner " +
-      "names the uncapped projects — this number applies only once the table exists.",
-    // The value this fleet actually runs at, carried forward from CR-CRU-129's
-    // close-out rather than invented, so adopting the file changes no cap.
-    recommended: 5_000,
-    // Ten events still leaves one run's own history readable; beneath that a
-    // board evicts what it has only just ingested.
-    min: 10,
-    // A million rows for one project is where disk, not usefulness, binds.
-    max: 1_000_000,
-  },
-};
+const SHIPPED_DATA_FILE = path.join(import.meta.dir, "crucible.toml");
+
+/**
+ * The shipped declaration of one limit, as the data file states it. Every
+ * documented field is REQUIRED: a distribution whose own data cannot answer
+ * what it enforces is broken in a way no fallback could honestly paper over,
+ * so it fails naming the file rather than inventing a number — which is the
+ * defect this whole section exists to end.
+ */
+function shippedDeclaration(name: string, table: unknown, file: string): LimitDeclaration {
+  const t = typeof table === "object" && table !== null ? (table as Record<string, unknown>) : {};
+  const num = (field: string): number => {
+    const raw = t[field];
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      throw new Error(
+        `CR-CRU-131 §S1c: ${file} does not declare a numeric \`${field}\` for \`${name}\`. That ` +
+          `file is this distribution's PACKAGE DATA — the last resort every limit resolves ` +
+          `from — so a missing field is a broken distribution, not an operator error.`,
+      );
+    }
+    return raw;
+  };
+  if (typeof t.description !== "string" || t.description === "") {
+    throw new Error(
+      `CR-CRU-131 §S1c: ${file} does not describe \`${name}\`. A limit without a sentence an ` +
+        `operator can act on is a number nobody chose, which is the defect PRD §4.13 names.`,
+    );
+  }
+  return {
+    description: t.description,
+    recommended: num("recommended"),
+    min: num("min"),
+    max: num("max"),
+  };
+}
+
+/**
+ * One read of the PACKAGE DATA, at the point of use — never cached, for the
+ * same reason the operator's file is never cached (see the header): a table
+ * bound once at import time is a table no later state can reach.
+ */
+function readShipped(): Record<string, LimitDeclaration> {
+  let text: string;
+  try {
+    text = readFileSync(SHIPPED_DATA_FILE, "utf8");
+  } catch {
+    throw new Error(
+      `CR-CRU-131 §S1c: no shipped defaults at ${SHIPPED_DATA_FILE}. They travel as PACKAGE DATA ` +
+        `beside this resolver and are named in package.json's \`files\` whitelist; without them ` +
+        `this build can resolve nothing, because there is no number compiled in to fall back to.`,
+    );
+  }
+  const parsed = Bun.TOML.parse(text) as { limits?: unknown };
+  const limits = parsed.limits;
+  const tables =
+    typeof limits === "object" && limits !== null ? (limits as Record<string, unknown>) : {};
+  const out: Record<string, LimitDeclaration> = {};
+  for (const name of SERVER_LIMIT_NAMES) {
+    out[name] = shippedDeclaration(name, tables[name], SHIPPED_DATA_FILE);
+  }
+  return out;
+}
 
 /** The server's own configuration file, beside the database it already resolves. */
 export function serverConfigPath(): string {
@@ -238,13 +262,12 @@ function assertServerLimit(name: string): void {
 }
 
 /**
- * §S1c — the shipped declarations, as data. Fresh copies, so a caller cannot
- * edit the package's own documentation by accident.
+ * §S1c — the shipped declarations, read from the distribution's own data. A
+ * fresh parse per call, so a caller cannot edit the package's documentation by
+ * accident and so a rebuilt distribution is observed rather than remembered.
  */
 export function shippedLimits(): Record<string, LimitDeclaration> {
-  const table: Record<string, LimitDeclaration> = {};
-  for (const name of SERVER_LIMIT_NAMES) table[name] = { ...SHIPPED[name]! };
-  return table;
+  return readShipped();
 }
 
 /**
@@ -271,8 +294,8 @@ export function limitDeclarations(): Record<string, LimitDeclaration> {
 export function resolveLimit(name: string): number {
   assertServerLimit(name);
   const { tables, file } = readServerConfig();
-  const shipped = SHIPPED[name]!;
-  const d = tables === null ? { ...shipped } : declaredFrom(shipped, tables[name]);
+  const shipped = readShipped()[name]!;
+  const d = tables === null ? shipped : declaredFrom(shipped, tables[name]);
   return effective(name, d, file).value;
 }
 
@@ -288,8 +311,9 @@ export function limitDisclosures(): string[] {
   const { tables, file } = readServerConfig();
   if (tables === null) return [unreadableLine(file)];
   const lines: string[] = [];
+  const shipped = readShipped();
   for (const name of SERVER_LIMIT_NAMES) {
-    const { refusal } = effective(name, declaredFrom(SHIPPED[name]!, tables[name]), file);
+    const { refusal } = effective(name, declaredFrom(shipped[name]!, tables[name]), file);
     if (refusal !== null) lines.push(refusal);
   }
   return lines;
@@ -312,5 +336,5 @@ export function configuredRetention(): number | undefined {
   if (tables === null) return undefined;
   const table = tables.retention;
   if (typeof table !== "object" || table === null) return undefined;
-  return effective("retention", declaredFrom(SHIPPED.retention!, table), file).value;
+  return effective("retention", declaredFrom(readShipped().retention!, table), file).value;
 }

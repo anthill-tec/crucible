@@ -1817,8 +1817,24 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // always for a re-record. The repo-root `crucible.toml` this CR lays down is
 // not a `.ts`/`.js`/`.py` file in any of the three trees, so it moves no head
 // by construction.
+//
+// §S1c RE-RECORD: `src` 722 -> 721, -1, and the whole of the move is ONE
+// citation that LEFT the tree rather than one that was deleted. §S1c makes the
+// shipped declarations PACKAGE DATA, so the `SHIPPED` table at src/limits.ts:90
+// — and with it the note that `retention`'s recommendation was "carried forward
+// from CR-CRU-129's close-out rather than invented" — moved verbatim into
+// `src/crucible.toml`. A `.toml` is in none of the three trees' extension
+// lists, so the lineage is intact where the number now lives and simply is not
+// counted here. Re-stating it in `src/limits.ts` as well would be the second
+// copy of a datum this whole section exists to end.
+//
+// Measured at BOTH ends: every other `src` file re-measures unchanged, 721 is
+// still far above the 512 floor, and `public` (477) and `clients` (846)
+// re-measure at their recorded heads — this CR edits no renderer, and the
+// client-side move takes `_SHIPPED_LIMITS` out of `clients/_crucible_axi.py`
+// while its CR-CRU-131 §S1c lineage stays in the prose that replaces it.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 722 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 721 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
   clients: { exts: [".py"], develop: 601, head: 846 },
 };

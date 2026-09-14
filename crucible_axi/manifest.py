@@ -28,6 +28,18 @@ CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
 
 MANIFEST_FILENAME = "crucible-clients.json"
 
+# CR-CRU-131 §S1c — the operator-editable configuration the installer LAYS DOWN
+# at `<target-dir>`, beside the manifest that declares it.
+#
+# It is a byte copy of the client fleet's OWN shipped `crucible.toml` (package
+# data beside the fleet, `source_clients_dir()`), so the file an operator edits
+# and the declarations the fleet falls back to are ONE datum rather than a
+# template that can drift from the numbers the code actually uses. It arrives
+# commented, carrying each limit's description, recommendation and supportable
+# range: an install that only ships defaults gives the operator nothing to
+# edit, and a checkout-only file gives an installed deployment nothing to read.
+CONFIG_FILENAME = "crucible.toml"
+
 # CR-CRU-090 §S2 — the two candidates for the SOURCE client fleet, derived from
 # this package's own location: the repo checkout's `clients/` beside the
 # package, then the wheel's force-included `crucible_axi/clients` package data.
@@ -57,6 +69,53 @@ def source_clients_dir() -> str:
     return _CLIENTS_CANDIDATES[0]
 
 
+def operator_config_path(install_dir: str) -> str:
+    """The operator-editable configuration under `install_dir` — the path the
+    manifest publishes as `config` and the one `uninstall` reasons about."""
+    return os.path.join(install_dir, CONFIG_FILENAME)
+
+
+def shipped_config_path() -> str:
+    """The SOURCE of that configuration: this package's own shipped limit
+    declarations, which travel beside the fleet in the same package data.
+
+    Resolved from `_CLIENTS_CANDIDATES` DIRECTLY rather than through
+    `source_clients_dir()`, and the distinction is real rather than stylistic:
+    that function answers "where is the SOURCE FLEET" — the eight files
+    `install.run_fleet_stage` copies — while this is the package's own data,
+    consumed by a different stage and laid down at a different path. Pointing
+    the fleet source elsewhere must not decide where the shipped declarations
+    come from. Both derive from the one candidate list, so neither can drift.
+    """
+    for candidate in _CLIENTS_CANDIDATES:
+        path = os.path.join(candidate, CONFIG_FILENAME)
+        if os.path.isfile(path):
+            return path
+    return os.path.join(_CLIENTS_CANDIDATES[0], CONFIG_FILENAME)
+
+
+def lay_down_operator_config(target_dir: str) -> bool:
+    """Lay the operator-editable `crucible.toml` down under `target_dir`, and
+    report whether this call WROTE it.
+
+    NEVER overwrites — not even under `--force`, which is the one place this
+    stage departs from the fleet's re-copy semantics and does so deliberately:
+    an artifact is replaceable, an operator's configuration is DATA, and an
+    upgrade that resets configuration is the defect §S1c exists to prevent.
+    A missing SOURCE fails definitively with the path named, exactly as the
+    fleet stage fails, rather than leaving a deployment with nothing to read.
+    """
+    destination = operator_config_path(target_dir)
+    if os.path.lexists(destination):
+        return False
+    source = shipped_config_path()
+    if not os.path.isfile(source):
+        raise FileNotFoundError(
+            f"packaged limit defaults missing at source: {source}")
+    Path(destination).write_bytes(Path(source).read_bytes())
+    return True
+
+
 def _package_version() -> str:
     """The installed `crucible-axi` version, or a dev placeholder when the
     package is not installed (running from the source checkout in C1)."""
@@ -70,8 +129,14 @@ def build_manifest(install_dir: str) -> dict:
     """Build the discovery manifest for clients laid down under `install_dir`.
 
     Returns a dict with EXACTLY the top-level keys `version`, `clients`,
-    `status`. `clients` maps each of the five stacks to its installed client
-    path under `install_dir`; `status` references the STATUS-CONTRACT.
+    `status`, `config`. `clients` maps each of the five stacks to its installed
+    client path under `install_dir`; `status` references the STATUS-CONTRACT;
+    `config` is the operator-editable configuration the install laid down
+    (CR-CRU-131 §S1c — a file the installer WRITES belongs here like everything
+    else it lays down, or automation cannot discover the file it is meant to
+    edit). `config` names the ARTIFACT, not its payload: limits are what
+    happens to be in that file today, and anything that legitimately joins it
+    later costs no consumer a rename.
     """
     clients_dir = os.path.join(install_dir, "clients")
     clients = {
@@ -82,6 +147,7 @@ def build_manifest(install_dir: str) -> dict:
         "version": _package_version(),
         "clients": clients,
         "status": os.path.join(clients_dir, "STATUS-CONTRACT.md"),
+        "config": operator_config_path(install_dir),
     }
 
 
@@ -100,17 +166,27 @@ def write_manifest(target_dir: str, manifest_dict: dict) -> str:
 
 
 def run_manifest_stage(target_dir: str, force: bool = False) -> dict:
-    """The default `manifest` stage runner: (re)write the discovery manifest.
+    """The default `manifest` stage runner: lay the operator's configuration
+    down, then (re)write the discovery manifest that declares it.
 
-    `converged` is False when the manifest is freshly written (no prior file or
-    a changed document) and True only when an identical document already sits on
-    disk — the AC's "re-running converges (no duplicate installs)" signal.
+    The laydown happens HERE, inside the stage that publishes it, for the same
+    reason `[fleet]` precedes `[manifest]`: a manifest may only publish paths
+    that already exist, and the two artifacts this stage owns both sit directly
+    at `<target-dir>`. The stage ordering is therefore unchanged (CR-CRU-131
+    §S1c).
+
+    `converged` is False when either artifact is freshly written (no prior
+    file, or a changed document) and True only when the configuration was
+    already there AND an identical manifest already sits on disk — the AC's
+    "re-running converges (no duplicate installs)" signal.
     """
+    wrote_config = lay_down_operator_config(target_dir)
     manifest = build_manifest(target_dir)
     path = os.path.join(target_dir, MANIFEST_FILENAME)
     fresh = _serialize(manifest)
     converged = (
         not force
+        and not wrote_config
         and os.path.exists(path)
         and Path(path).read_text(encoding="utf-8") == fresh
     )

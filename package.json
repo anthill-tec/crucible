@@ -12,6 +12,7 @@
   "files": [
     "bin/",
     "src/",
+    "src/crucible.toml",
     "public/"
   ],
   "bin": {

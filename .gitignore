@@ -1,4 +1,13 @@
 data/
+# CR-CRU-131 §S1c — an operator's CONFIGURATION is not a tracked artifact.
+# `<project dir>/crucible.toml` is what the clients resolve, and in this
+# checkout the project dir IS the repo root, so this file is THIS PROJECT'S
+# operator state exactly as `data/crucible.toml` is the board's. Tracking it
+# would turn an operator's edit into a git diff on every install, which is the
+# whole reason the installer split exists. The SHIPPED declarations are tracked
+# — `src/crucible.toml` and `clients/crucible.toml`, one per distribution — so
+# the anchor matters: this pattern must never swallow those.
+/crucible.toml
 node_modules/
 .lavish/*.excalidraw
 coverage/

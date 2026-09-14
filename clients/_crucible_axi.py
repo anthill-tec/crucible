@@ -111,50 +111,33 @@ def _toon():
 CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
                       "roadmap_list_rows")
 
-#: §S1c -- the PACKAGE DATA table: the last resort, readable without the
-#: operator's file being present or even valid. Every `recommended` is today's
-#: compiled value, so an install with no `crucible.toml` behaves EXACTLY as it
-#: did before this CR. `min`/`max` are a SUPPORTABILITY judgement and each
-#: states its reasoning -- a bound nobody can justify is the same defect as a
-#: default nobody chose.
-_SHIPPED_LIMITS = {
-    "truncate_field_chars": {
-        "description": ("Visible characters of a long text field before the "
-                        "envelope cuts it and appends a size hint naming the "
-                        "true length; `--full` defeats it per call."),
-        "recommended": 200,
-        # A width of 0 shows nothing at all, so the floor is more than
-        # "positive": 20 characters is the least that can carry a recognisable
-        # fragment of an error before the hint.
-        "min": 20,
-        # Past a few thousand characters a "field" is a document, and the
-        # reader's context is what these limits exist to protect.
-        "max": 4_000,
-    },
-    "error_detail_chars": {
-        "description": ("Maximum characters of the warning detail reported for "
-                        "a run that produced NO report, so a starved runner's "
-                        "output cannot flood the envelope carrying its cause."),
-        "recommended": 500,
-        # The composed PREFIX is never truncated, so a floor beneath its own
-        # length would be a bound the envelope could not honour; 100 leaves the
-        # prefix intact plus room for a fragment of the cause.
-        "min": 100,
-        # 20k is past the point where a machine caller is reading a detail
-        # rather than the runner's own stream.
-        "max": 20_000,
-    },
-    "roadmap_list_rows": {
-        "description": ("Rows of a roadmap list emitted before it is "
-                        "truncated; `totalCount` always reports the TRUE "
-                        "total and `--full` emits the list whole."),
-        "recommended": 20,
-        # Fewer than a handful of rows is a list that cannot show a wave.
-        "min": 5,
-        # 500 rows is four times the largest board this fleet has carried.
-        "max": 500,
-    },
-}
+#: §S1c -- the SHIPPED declarations are PACKAGE DATA, not a table in this
+#: module. `crucible.toml` travels inside `crucible-axi` beside this file (the
+#: wheel force-includes `clients` as `crucible_axi/clients`), so the file a
+#: reader READS and the table this module FALLS BACK TO are the same bytes. A
+#: declaration held in BOTH a source table and a data file is two copies of one
+#: datum, and the file an operator reads can then disagree with the numbers the
+#: code falls back to with nothing saying so.
+#:
+#: TWO candidates, because this module ships in two shapes. Beside it is where
+#: the data sits in the checkout (`clients/`) and in the wheel
+#: (`crucible_axi/clients/`). The installer lays the fleet down under
+#: `<target-dir>/clients/` and the declarations one level up at
+#: `<target-dir>/crucible.toml` -- the operator-editable copy it writes there --
+#: so a LAID-DOWN fleet finds them at the parent. The list is ordered so the
+#: package's own data always wins where it is present.
+_SHIPPED_DATA_FILENAME = "crucible.toml"
+_SHIPPED_DATA_CANDIDATES = (
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 _SHIPPED_DATA_FILENAME),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 _SHIPPED_DATA_FILENAME),
+)
+
+#: The four fields a shipped limit is DOCUMENTED with. A declaration missing
+#: one is a limit an operator cannot act on, and the range is enforced from the
+#: very data that documents it.
+_DOCUMENTED_FIELDS = ("description", "recommended", "min", "max")
 
 _PROJECT_DIR = None
 
@@ -175,10 +158,67 @@ def project_config_path():
     return os.path.join(_PROJECT_DIR or os.getcwd(), "crucible.toml")
 
 
+def shipped_data_path():
+    """§S1c -- the distribution's own `crucible.toml`, at whichever of the two
+    shapes this module is running in (see `_SHIPPED_DATA_CANDIDATES`).
+
+    Raises when neither exists: a distribution whose own data cannot answer
+    what it enforces is broken in a way no fallback could honestly paper over,
+    and there is deliberately no number in this module to fall back to."""
+    for candidate in _SHIPPED_DATA_CANDIDATES:
+        if os.path.isfile(candidate):
+            return candidate
+    raise RuntimeError(
+        "no shipped limit defaults found at %s. They travel as PACKAGE DATA "
+        "beside this module; without them a client can resolve nothing, "
+        "because the last resort is a DATA FILE in the distribution rather "
+        "than a number in a resolver."
+        % (", ".join(_SHIPPED_DATA_CANDIDATES),))
+
+
+def _shipped_declaration(name, table, path):
+    """One shipped declaration as the data file states it. Every documented
+    field is REQUIRED -- a limit missing its range is a bound nothing can
+    check, and a limit missing its sentence is a number nobody chose."""
+    if not isinstance(table, dict):
+        raise RuntimeError(
+            "%s declares no `[limits.%s]` table, so this distribution cannot "
+            "say what it enforces" % (path, name))
+    out = {}
+    for field in _DOCUMENTED_FIELDS:
+        raw = table.get(field)
+        if field == "description":
+            if not isinstance(raw, str) or not raw:
+                raise RuntimeError(
+                    "%s does not describe `%s`: a limit without a sentence an "
+                    "operator can act on is a number nobody chose"
+                    % (path, name))
+        elif not isinstance(raw, int) or isinstance(raw, bool):
+            raise RuntimeError(
+                "%s does not declare an integer `%s` for `%s`; that file is "
+                "this distribution's PACKAGE DATA, so a missing field is a "
+                "broken distribution rather than an operator error"
+                % (path, field, name))
+        out[field] = raw
+    return out
+
+
 def shipped_limits():
-    """§S1c -- the shipped declarations, as data. Fresh copies, so a caller
-    cannot edit the package's own documentation by accident."""
-    return {name: dict(_SHIPPED_LIMITS[name]) for name in CLIENT_LIMIT_NAMES}
+    """§S1c -- the shipped declarations, read from the distribution's own data.
+
+    A fresh parse per call, at the POINT OF USE, for the same reason the
+    operator's file is never cached: a table bound once at import time is a
+    table no later state can reach. A limit this side does not ENFORCE is
+    ignored rather than adopted, so a data file carrying another package's
+    vocabulary -- the two are independently upgradable -- changes nothing."""
+    path = shipped_data_path()
+    with open(path, "rb") as fh:
+        parsed = tomllib.load(fh)
+    tables = parsed.get("limits")
+    if not isinstance(tables, dict):
+        tables = {}
+    return {name: _shipped_declaration(name, tables.get(name), path)
+            for name in CLIENT_LIMIT_NAMES}
 
 
 def _read_project_config():
@@ -282,8 +322,8 @@ def resolve_limit(name):
             "SERVER's own crucible.toml, never from here."
             % (name, ", ".join(CLIENT_LIMIT_NAMES)))
     path, tables = _read_project_config()
-    shipped = _SHIPPED_LIMITS[name]
-    declaration = (dict(shipped) if tables is None
+    shipped = shipped_limits()[name]
+    declaration = (shipped if tables is None
                    else _declared_limit(shipped, tables.get(name)))
     return _effective_limit(name, declaration, path)[0]
 
@@ -299,9 +339,10 @@ def limit_disclosures():
     if tables is None:
         return [_limits_unreadable(path)]
     lines = []
+    shipped = shipped_limits()
     for name in CLIENT_LIMIT_NAMES:
         _, refusal = _effective_limit(
-            name, _declared_limit(_SHIPPED_LIMITS[name], tables.get(name)), path)
+            name, _declared_limit(shipped[name], tables.get(name)), path)
         if refusal is not None:
             lines.append(refusal)
     return lines

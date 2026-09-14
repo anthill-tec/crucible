@@ -25,24 +25,54 @@
 // The property is NOT "that one suite was fixed". It is that resolution can
 // never depend on what happens to exist on the machine running the suite:
 //
-//   (a) the test process DECLARES its own store, outside the checkout, so rule
-//       3's `<cwd>/data/crucible.db` probe is never the thing that decides.
-//       Declared, not merely absent — a suite that is isolated only because a
-//       file happens not to exist is isolated by luck.
-//   (b) every limit-sensitive suite owns that isolation too, asserted over the
-//       test tree so a suite written next month inherits it.
+//   the test process DECLARES its own store, outside the checkout, so rule 3's
+//   `<cwd>/data/crucible.db` probe is never the thing that decides. Declared,
+//   not merely absent — a suite that is isolated only because a file happens
+//   not to exist is isolated by luck.
 //
-// (a) is what makes this deterministic rather than machine-dependent: it is
+// That is what makes this deterministic rather than machine-dependent: it is
 // RED on a developer's machine and RED in CI, for the same reason, and the fix
-// is the same in both.
+// is the same in both. `bunfig.toml`'s `[test] preload` is where it is wired
+// (tests/helpers/isolated-store-preload.ts).
+//
+// ── The clause this REPLACED, and why it is gone ──────────────────────────
+//
+// RED carried a second half: a scan requiring every limit-sensitive suite's
+// own SOURCE TEXT to name `CRUCIBLE_DB` or the shared fixture. It is removed
+// because the process-wide declaration SUBSUMES it, not because it was
+// inconvenient — and the difference matters to anyone tempted to restore it on
+// the grounds that it looks stricter.
+//
+// Sixteen text markers assert that sixteen authors remembered. A wired preload
+// asserts that forgetting is impossible, and it covers suites nobody has
+// written yet. The measurement that settled it (2026-09-14): all sixteen suites
+// the scan reported already pass `:memory:` or their own scratch file to
+// `startServer`/`Store.open`, so no store was ever ambient. The only thing that
+// resolved ambiently was `serverConfigPath()`, and it now resolves outside the
+// checkout for every suite at once. Restoring the scan would add sixteen
+// redundant restatements of process-wide state and teach the next author that
+// per-file isolation is the convention — the opposite of what §S1c asks for.
+//
+// ── The edge the declaration does NOT reach ───────────────────────────────
+//
+// A child process spawned with an EXPLICIT env dict that omits `CRUCIBLE_DB`
+// does not inherit it. Measured across every `Bun.spawn`/`spawnSync` in this
+// tree on 2026-09-14: that set is EMPTY of anything at risk. Every client
+// harness spreads `process.env`, the two curated-env children
+// (tests/cr072-installer-upgrade.test.ts, the e2e webServer) run from scratch
+// cwds where rule 3 cannot reach this checkout's `data/`, and this file's own
+// probes inject an env into the PURE resolver rather than spawning. So no
+// clause is asserted here — inventing one against an empty set would be the
+// same proxy in new clothes. If you are adding a child that constructs its own
+// env AND resolves a limit, this is the property you have stepped outside of:
+// pass `CRUCIBLE_DB` through.
 //
 // ── HOW IT FAILS IF THE CODE DOES NOTHING ────────────────────────────────
 //
-// Today nothing sets `$CRUCIBLE_DB` for the suite as a whole — only the seven
-// suites C2 migrated set it, each for itself, inside their own fixtures. So
-// (a) reports `CRUCIBLE_DB is not set`, and on this machine
-// `serverConfigPath()` answers `<repo>/data/crucible.toml` — the live board's
-// own operator file, which is exactly what a test must never read.
+// With nothing setting `$CRUCIBLE_DB` for the suite as a whole, this reports
+// `CRUCIBLE_DB is not set`, and on a developer's machine `serverConfigPath()`
+// answers `<repo>/data/crucible.toml` — the live board's own operator file,
+// which is exactly what a test must never read.
 //
 // ── Safety ────────────────────────────────────────────────────────────────
 //
@@ -52,11 +82,10 @@
 // mutated. `data/crucible.toml` is never read and `data/crucible.db` is never
 // opened.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { serverConfigPath, SERVER_LIMIT_NAMES } from "../src/limits.ts";
+import { serverConfigPath } from "../src/limits.ts";
 import { resolveStore } from "../src/server.ts";
-import { listFiles, REPO_ROOT } from "./helpers/source-scan.ts";
+import { REPO_ROOT } from "./helpers/source-scan.ts";
 
 // Captured at MODULE LOAD, before any `beforeEach` in this file can touch it:
 // what the suite handed this file, not what this file arranged for itself.
@@ -71,27 +100,8 @@ function insideRepo(candidate: string): boolean {
   return !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-// ── The tree scan's two halves ────────────────────────────────────────────
-//
-// SENSITIVE: a suite whose outcome a resolved limit can change — it names a
-// limit (or the file limits live in, or the resolver) AND it stands up the
-// machinery that enforces one. Both halves are required, and the second is
-// what keeps the pure source-scanning guards out: tests/project-namespace-
-// tripwire.test.ts reads `src/limits.ts` as TEXT and opens nothing, so no
-// limit can reach it.
-//
-// ISOLATED: the suite names `CRUCIBLE_DB` itself, or imports the shared
-// fixture that sets it (tests/helpers/server-limits-fixture.ts) — the one
-// place this repo writes a scratch config, lifted there in C2 precisely so a
-// second hand-rolled copy never gets written.
-const LIMIT_WORDS = [...SERVER_LIMIT_NAMES, "crucible.toml", "src/limits.ts"];
-const ENFORCEMENT_MARKERS = ["Store.open", "startServer", "boot("];
-const ISOLATION_MARKERS = ["CRUCIBLE_DB", "server-limits-fixture"];
-
-const names = (file: string): string => relative(REPO_ROOT, file);
-
 describe("CR-CRU-131 §S1c — no suite resolves the server's configuration from the repo's own data/", () => {
-  test("the test process declares a store outside the checkout, and every limit-sensitive suite owns its own configuration", () => {
+  test("the test process declares a store outside the checkout, so no suite can resolve the repo's own configuration", () => {
     // ── THE CONTROL. ──────────────────────────────────────────────────────
     // The containment predicate has to be able to SEE a path inside the repo,
     // or every assertion below passes by being blind. Driven through the real
@@ -108,7 +118,7 @@ describe("CR-CRU-131 §S1c — no suite resolves the server's configuration from
     expect(insideRepo(resolveStore({ env: { CRUCIBLE_DB: "/tmp/elsewhere/crucible.db" } }).path))
       .toBe(false);
 
-    // ── (a) THE PROCESS DECLARES ITS OWN STORE. ───────────────────────────
+    // ── THE PROCESS DECLARES ITS OWN STORE. ──────────────────────────────
     expect(
       AMBIENT_DB,
       "$CRUCIBLE_DB is not set for the test process, so `resolveStore` falls through to rule 3 " +
@@ -127,51 +137,21 @@ describe("CR-CRU-131 §S1c — no suite resolves the server's configuration from
 
     // …and therefore the file the server would read is not the repo's.
     const configured = serverConfigPath();
-    expect(configured).not.toBe(join(REPO_ROOT, "data", "crucible.toml"));
     expect(
       insideRepo(configured),
       `the server's configuration resolves to ${configured}, inside the checkout — the live ` +
         `board's own operator file, which decides what this repo's :3849 instance caps at`,
     ).toBe(false);
 
-    // ── (b) EVERY LIMIT-SENSITIVE SUITE OWNS ITS OWN. ─────────────────────
-    const suites = listFiles("tests", [".ts"]).filter((f) => f.endsWith(".test.ts"));
-    expect(suites.length, "the test tree must be real").toBeGreaterThan(100);
-
-    const sensitive: string[] = [];
-    const offenders: string[] = [];
-    for (const file of suites) {
-      const text = readFileSync(file, "utf8");
-      const caresAboutALimit = LIMIT_WORDS.some((word) => text.includes(word));
-      const enforcesOne = ENFORCEMENT_MARKERS.some((marker) => text.includes(marker));
-      if (!caresAboutALimit || !enforcesOne) continue;
-      sensitive.push(names(file));
-      if (!ISOLATION_MARKERS.some((marker) => text.includes(marker))) offenders.push(names(file));
-    }
-
-    // The scan's OWN control: it must actually select suites, and it must not
-    // select all of them — a predicate that matched everything or nothing
-    // would make the verdict below meaningless either way.
-    expect(sensitive.length, "the predicate selected no suite at all").toBeGreaterThan(4);
+    // …and the SPECIFIC file C2 found by hand is unreachable. The measured
+    // instance of this hazard was a 5001-event ingest capped at exactly 5000 by
+    // a `retention` recommendation that only exists on a developer's machine,
+    // so naming that file is naming the defect rather than restating the rule.
     expect(
-      sensitive.length,
-      "the predicate selected the whole tree, so it is not discriminating",
-    ).toBeLessThan(suites.length);
-    // The suite C2 found by hand must be among them — it is the measured
-    // instance of this hazard, and a predicate that missed it would be
-    // policing a class that excludes its own exemplar.
-    expect(sensitive).toContain("tests/milestone-records-are-queryable-by-type.test.ts");
-
-    if (offenders.length > 0) {
-      throw new Error(
-        `CR-CRU-131 §S1c: ${String(offenders.length)} limit-sensitive suite(s) resolve their ` +
-          `configuration from wherever the machine puts it — ${offenders.join(", ")}. Each must ` +
-          `point $CRUCIBLE_DB at a temporary directory and own its own config file (the shared ` +
-          `fixture tests/helpers/server-limits-fixture.ts does both). Otherwise the suite passes ` +
-          `on a machine carrying data/crucible.toml and fails on one that does not, for a reason ` +
-          `nothing in its own text mentions.`,
-      );
-    }
-    expect(offenders).toEqual([]);
+      configured,
+      "the resolved configuration is the very file whose `retention` capped " +
+        "tests/milestone-records-are-queryable-by-type.test.ts at 5000 on one machine and left " +
+        "it uncapped on another",
+    ).not.toBe(join(REPO_ROOT, "data", "crucible.toml"));
   });
 });

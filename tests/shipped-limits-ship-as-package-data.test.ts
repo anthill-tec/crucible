@@ -130,7 +130,29 @@ const SCANNED_TREES = ["src", "clients"];
 const SCANNED_EXTS = [".ts", ".js", ".mjs", ".py"];
 const DOC_WINDOW = 200;
 
-const FIELD_LITERAL = /["']?\b(?:recommended|min|max)\b["']?\s*[:=]\s*-?\d[\d_]*/g;
+// BUILT PER CALL, never a module constant — the same discipline
+// `nameBesideDoc` below already follows, and for a measured reason.
+//
+// `RegExp.prototype.test` on a `/g` regex READS AND WRITES `lastIndex`, so a
+// shared instance carries state from one name, one file and one test into the
+// next. With one held at module scope, `namesDeclaredIn` reported a limit as
+// UNDECLARED whenever the previous file scanned happened to be longer than the
+// current one: the stale offset sat past the end, the first `.test()` returned
+// false and reset, and exactly one name was lost per call. Measured on
+// 2026-09-14 — the control walked the checkout's data files and left
+// `lastIndex` at 4100, the staged 3964-byte `src/crucible.toml` then lost
+// `run_abandon_ms`, and the fix by content would have been to trim comments
+// until the byte offsets aligned. That makes the comment budget of a shipped
+// documentation file load-bearing for a packaging assertion, and green by
+// coincidence is worse than red. Constructing per call makes the hazard
+// unrepresentable rather than merely managed; a `lastIndex = 0` reset would
+// leave shared state that every future caller has to remember to clear.
+//
+// `declarationHits` was never affected: `String.prototype.matchAll` clones the
+// regex it is given, so it neither reads nor writes the original's state.
+function fieldLiteral(): RegExp {
+  return /["']?\b(?:recommended|min|max)\b["']?\s*[:=]\s*-?\d[\d_]*/g;
+}
 
 function nameBesideDoc(name: string): RegExp {
   return new RegExp(`${name}[\\s\\S]{0,${String(DOC_WINDOW)}}?\\bdescription\\b`, "g");
@@ -145,7 +167,7 @@ interface Hit {
 function declarationHits(where: string, text: string, names: readonly string[]): Hit[] {
   const lineOf = (index: number): number => text.slice(0, index).split("\n").length;
   const hits: Hit[] = [];
-  for (const match of text.matchAll(FIELD_LITERAL)) {
+  for (const match of text.matchAll(fieldLiteral())) {
     hits.push({ where: `${where}:${String(lineOf(match.index))}`, what: match[0].trim() });
   }
   for (const name of names) {
@@ -161,7 +183,7 @@ function declarationHits(where: string, text: string, names: readonly string[]):
 
 /** Which of `names` this text declares AT ALL — the control's measurement. */
 function namesDeclaredIn(text: string, names: readonly string[]): string[] {
-  return names.filter((name) => nameBesideDoc(name).test(text) && FIELD_LITERAL.test(text));
+  return names.filter((name) => nameBesideDoc(name).test(text) && fieldLiteral().test(text));
 }
 
 // The data files a READER reads, in the checkout. `data/crucible.toml` is
@@ -177,6 +199,38 @@ const CANDIDATE_DATA_FILES = [
 ];
 
 describe("CR-CRU-131 §S1c — no limit DECLARATION is a literal in source", () => {
+  test("a name's verdict does not depend on what was scanned before it — the matchers carry no state between files", () => {
+    // THE MATCHER'S OWN REGRESSION. Every assertion in this file runs
+    // `namesDeclaredIn` repeatedly, over different files, in one process; a
+    // matcher holding `lastIndex` between calls silently loses one name per
+    // call whenever the previous text was the longer one. That failure is
+    // INVISIBLE when the byte offsets happen to align, which is why it needs
+    // an assertion rather than a comment: the guard would go on passing for
+    // months and then fail on an edited `description`.
+    //
+    // Driven as ORDER-DEPENDENCE, not as an implementation check: the same two
+    // texts are measured in both orders and each must report its own
+    // declarations either way. A shared `/g` matcher fails this; a per-call
+    // one cannot.
+    const long = `${"# padding\n".repeat(400)}[limits.retention]\ndescription = "d"\nrecommended = 1\nmin = 1\nmax = 2\n`;
+    const short = `[limits.roadmap_list_rows]\ndescription = "d"\nrecommended = 1\nmin = 1\nmax = 2\n`;
+    expect(long.length, "the first text must be the longer one, or nothing is at risk").
+      toBeGreaterThan(short.length);
+
+    expect(namesDeclaredIn(long, ["retention"])).toEqual(["retention"]);
+    expect(
+      namesDeclaredIn(short, ["roadmap_list_rows"]),
+      "a declaration went unseen because a LONGER text was measured first — the matcher is " +
+        "carrying `lastIndex` between calls, so a green scan depends on the byte lengths of " +
+        "files it is not testing",
+    ).toEqual(["roadmap_list_rows"]);
+
+    // …and the reverse order, so the assertion is about independence rather
+    // than about one lucky sequence.
+    expect(namesDeclaredIn(short, ["roadmap_list_rows"])).toEqual(["roadmap_list_rows"]);
+    expect(namesDeclaredIn(long, ["retention"])).toEqual(["retention"]);
+  });
+
   test("neither src/ nor clients/ declares a limit's description, recommendation or range — and the same matchers find every declaration in the data file, so this is not an empty walk", () => {
     expect(
       DECLARED_LIMITS.length,

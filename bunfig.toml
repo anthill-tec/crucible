@@ -3,3 +3,13 @@
 # file `bun test` runs. Do not reintroduce `[test] pathIgnorePatterns` for the
 # tests/ tree: a permanently-excluded directory makes the suite size
 # unreconcilable. Guarded by tests/suite-integrity.test.ts.
+
+# CR-CRU-131 §S1c — the test process DECLARES its own store, outside the
+# checkout, before any suite loads. `resolveStore` rule 3 adopts an
+# already-existing `<cwd>/data/crucible.db` and the server's `crucible.toml`
+# sits beside it, so without this a suite resolved this board's own operator
+# file on a developer's machine and nothing at all on a fresh clone. This is
+# an ADDITION, not an exclusion: nothing here narrows what the runner
+# collects.
+[test]
+preload = ["./tests/helpers/isolated-store-preload.ts"]

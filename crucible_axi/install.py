@@ -1167,21 +1167,65 @@ def _server_uninstall_stage(target_dir: str, purge: bool) -> dict:
     return {"path": server_path, "converged": False, "bun": bun}
 
 
+def _operator_config_is_untouched(path: str) -> bool:
+    """Whether the laid-down `crucible.toml` at `path` is still exactly the
+    bytes the install wrote (CR-CRU-131 §S1c).
+
+    Bytes against the SHIPPED source, never an mtime: a file touched by a
+    backup tool is not an edit, and a file rewritten with different numbers at
+    the same size is. A source that cannot be read answers False -- the
+    fail-safe direction, since the cost of keeping a replaceable artifact is a
+    stale file and the cost of the other mistake is an operator's
+    configuration.
+    """
+    try:
+        return Path(path).read_bytes() == Path(
+            manifest.shipped_config_path()).read_bytes()
+    except OSError:
+        return False
+
+
 def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
-    """[config] inverse -- removes `<target-dir>/crucible-clients.json`, the
-    artifact the [manifest] install stage wrote, but ONLY under `purge`.
+    """[config] inverse -- removes the two artifacts the [manifest] install
+    stage wrote at `<target-dir>`: `crucible-clients.json` and the
+    operator-editable `crucible.toml`. ONLY under `purge`.
 
     Without `purge` the stage is a NO-OP that reports the path it RETAINED: a
     plain uninstall destroys nothing and stays reversible by reinstalling, and
     automation must never be left guessing where the state it kept now lives.
+
+    An operator-EDITED `crucible.toml` SURVIVES a purge (CR-CRU-131 §S1c). The
+    manifest is an artifact and is replaceable; an unmodified config is an
+    artifact too, and removing it is what keeps that protection observable
+    rather than indistinguishable from "uninstall stopped removing anything".
+    A config carrying an operator's own values is DATA, and the stage order is
+    already fail-fast-first / destructive-last for exactly this class of
+    reason. The retained path is reported, so a purge that kept something says
+    so instead of leaving it to be discovered.
     """
     path = config_path(target_dir)
+    operator_config = manifest.operator_config_path(target_dir)
     if not purge:
         return {"path": path, "converged": True, "retained": True}
-    if not os.path.exists(path):
-        return {"path": path, "converged": True}
-    os.remove(path)
-    return {"path": path, "converged": False}
+    removed = False
+    if os.path.exists(path):
+        os.remove(path)
+        removed = True
+    retained = False
+    if os.path.exists(operator_config):
+        if _operator_config_is_untouched(operator_config):
+            os.remove(operator_config)
+            removed = True
+        else:
+            retained = True
+    result = {"path": path, "converged": not removed}
+    if retained:
+        result["retained"] = True
+        result["reason"] = (
+            f"kept {_abbreviate_home(operator_config)}: it carries edits, and "
+            f"an operator's configuration is data rather than a replaceable "
+            f"artifact")
+    return result
 
 
 def _store_uninstall_stage(target_dir: str, purge: bool) -> dict:
