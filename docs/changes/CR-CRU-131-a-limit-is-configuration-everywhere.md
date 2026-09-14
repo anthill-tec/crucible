@@ -13,12 +13,11 @@ the configuration surface itself.
 ## Context
 
 CR-CRU-129 deleted `DEFAULT_RETENTION = 100` after that literal evicted every release this project
-had ever shipped. It removed one limit and left the rule half-applied. Measured 2026-09-14, **six**
-numeric limits are still compiled into source:
+had ever shipped. It removed one limit and left the rule half-applied. Measured 2026-09-14, **five**
+numeric limits are in scope here (a sixth, `TOON_MAX_BYTES`, is deliberately excluded — see below):
 
 | limit | site | governs | reached by |
 |---|---|---|---|
-| `TOON_MAX_BYTES = 64 * 1024` | `src/v2.ts:160` | when a TOON envelope is truncated | every AXI read |
 | `DEFAULT_RUN_ABANDON_MS = 30 * 60_000` | `src/store.ts:834` | how long an OPEN run may live before the sweep abandons it | every ingest |
 | `DEFAULT_PROJECT_INACTIVE_MS = 3_600_000` | `src/v2.ts:362` | when a project reads as inactive | every project read |
 | `TRUNCATE_LIMIT = 200` | `clients/_crucible_axi.py:516` | visible chars of a text field before the size hint | all five clients |
@@ -51,8 +50,7 @@ because keeping more events costs **disk**, and CR-CRU-129 made that safe by dis
 **That reasoning does not transfer to the other five.** `TRUNCATE_LIMIT` and `ROADMAP_LIST_LIMIT`
 bound what an agent READS, and they exist to protect the reader's context — unbounded-by-default
 would print every field in full and the whole 128-row roadmap on every call, for every agent, and
-call it honesty. `TOON_MAX_BYTES` is a real ceiling driving the truncating loop at `src/v2.ts:204`,
-so a consumer may depend on it. An absent run-abandon deadline would leave open runs open forever.
+call it honesty. An absent run-abandon deadline would leave open runs open forever.
 
 So a limit resolves from configuration, and **when nothing is configured it resolves to a default
 that lives in CONFIGURATION TOO** — a shipped, EDITABLE, documented defaults file, not a number a
@@ -61,11 +59,10 @@ is overridden is the operator's business; whether it is legible and editable is 
 
 ### A limit is owned by the process that ENFORCES it
 
-The six limits are not one population. Measured 2026-09-14:
+The five limits are not one population. Measured 2026-09-14:
 
 | enforced by the SERVER | site |
 |---|---|
-| `TOON_MAX_BYTES` | `src/v2.ts:204`, `:215` — the envelope truncation loop |
 | run-abandon deadline | `src/store.ts:836` — the open-run sweep |
 | project-inactive window | `src/v2.ts:366` — the project read |
 | retention cap | `src/store.ts` — `enforceRetention` |
@@ -108,17 +105,17 @@ TOML, and the capability is already in the tree on both sides — verified 2026-
   `crucible.toml` sits where an operator would look for it.
 
 **Keys follow TOML convention**: bare lower `snake_case`, one TABLE per limit, so each limit's
-declaration reads as a block rather than as six parallel arrays:
+declaration reads as a block rather than as parallel arrays:
 
 ```toml
-[limits.toon_max_bytes]
-description = "Bytes at which an AXI envelope is truncated and re-rendered smaller."
-recommended = 65536
-min         = 4096
-max         = 1048576
+[limits.run_abandon_ms]
+description = "Milliseconds an OPEN run may live before the sweep abandons it."
+recommended = 1800000
+min         = 60000
+max         = 86400000
 ```
 
-The names are the limit's own, not its old constant's: `toon_max_bytes`, `run_abandon_ms`,
+The names are the limit's own, not its old constant's: `run_abandon_ms`,
 `project_inactive_ms`, `retention`, `truncate_field_chars`, `error_detail_chars`,
 `roadmap_list_rows`. A key that transliterated `NO_REPORT_DETAIL_MAX` would carry an accident of the
 old source into the file an operator reads.
@@ -181,7 +178,7 @@ Two limits were already operator-configurable and no operator could have known.
 
 ### §S1 Every limit resolves from configuration, including its default
 
-The six limits resolve at the point of use from configuration, with no numeric literal standing in
+The five limits resolve at the point of use from configuration, with no numeric literal standing in
 for any of them anywhere in source. Read at the point of use, not cached at import, so an operator's
 change takes effect without a restart — the contract `runAbandonAfterMs()` and `defaultRetention()`
 already keep, and which this CR completes rather than invents.
@@ -269,8 +266,8 @@ this sense.
 ## Acceptance criteria
 
 **§S1**
-- [ ] Each of the SIX limits resolves from configuration; no numeric literal stands in for any of
-      them in source, asserted by CONSTRUCTION per §S3. The six are enumerated in the Context table
+- [ ] Each of the FIVE limits resolves from configuration; no numeric literal stands in for any of
+      them in source, asserted by CONSTRUCTION per §S3. The five are enumerated in the Context table
       and the count is asserted, so a seventh added later fails rather than passing unnoticed.
 - [ ] Each resolves at the point of use: changing the configured value changes behaviour WITHOUT a
       restart — asserted per limit, not once.
@@ -293,7 +290,7 @@ this sense.
       `recommended`, `min`, `max` — in TOML-conventional bare lower `snake_case`. Asserted per limit
       AND as a completeness check over the table, so a seventh limit added without its documentation
       fails rather than shipping undocumented.
-- [ ] The keys are the limit's OWN names — `toon_max_bytes`, `run_abandon_ms`,
+- [ ] The keys are the limit's OWN names — `run_abandon_ms`,
       `project_inactive_ms`, `retention`, `truncate_field_chars`, `error_detail_chars`,
       `roadmap_list_rows` — not transliterations of the retired constants.
 - [ ] OWNERSHIP: the SERVER resolves its four from a `crucible.toml` beside its own configuration,
@@ -347,7 +344,7 @@ this sense.
       anywhere there is still NO cap and the boot disclosure still names the uncapped projects. The
       close-out moves this board's hand-set `CRUCIBLE_DEFAULT_RETENTION=5000` into the server file
       and restarts, so the live cap is not silently changed by retiring the variable.
-- [ ] `docs/RUNBOOK.md` documents all six limits with, per limit: the description, the RECOMMENDED
+- [ ] `docs/RUNBOOK.md` documents all five limits with, per limit: the description, the RECOMMENDED
       setting, the MIN and MAX, which file owns it, and the precedence — and records that
       `CRUCIBLE_DEFAULT_RETENTION` and `CRUCIBLE_RUN_ABANDON_MS` are RETIRED, since they were
       operator-configurable today and documented nowhere, and an operator who learned them from the
@@ -356,9 +353,9 @@ this sense.
       fails if any documented recommended/min/max disagrees with the table. Prose that drifts from
       the data it describes is how `src/hints.ts` came to omit `release` for a month, and a docs
       table is the easiest place in this CR for that to recur.
-- [ ] The shipped defaults EQUAL today's compiled values — 65536, 30 min, 1 h, 200, 500, 20 — so
+- [ ] The shipped defaults EQUAL today's compiled values — 30 min, 1 h, 200, 500, 20 — so
       this CR changes no behaviour until someone edits the file. Asserted per limit, because a
-      "configuration" CR that quietly retunes six limits is a different CR.
+      "configuration" CR that quietly retunes five limits is a different CR.
 
 **§S1c — packaging**
 - [ ] The shipped defaults are PACKAGE DATA in both distributions: force-included into
@@ -396,9 +393,9 @@ this sense.
 **§S3**
 - [ ] The constructional scan is an EXTENSION of an existing scan, not a third walker — named in the
       implementation.
-- [ ] It covers all six resolvers and fails on a reintroduced literal at that `file:line`, proved by
+- [ ] It covers all five resolvers and fails on a reintroduced literal at that `file:line`, proved by
       mutation PER LIMIT.
-- [ ] It covers the shared client module as well as the server, since three of the six live there.
+- [ ] It covers the shared client module as well as the server, since three of the five live there.
 
 **Close-out**
 - [ ] ONE re-record of the prose-citation heads and the `src/store.ts` citations after the last
@@ -408,7 +405,7 @@ this sense.
 
 ## Estimated size
 
-M — six resolvers, one new client settings seam, a defaults source, one route validator, and an
+M — five resolvers, one new client settings seam, a defaults source, one route validator, and an
 extension of an existing guard. No migration, no data movement. The seam is the new machinery; the
 five other limits are one-line resolutions once it exists.
 
@@ -418,9 +415,9 @@ five other limits are one-line resolutions once it exists.
   reached by all five clients on every call. Their configured defaults must equal today's values —
   200, 500, 20 — so this CR is a no-op in behaviour until someone configures otherwise. Assert that
   equality, or the CR silently reformats every agent's output.
-- **`TOON_MAX_BYTES` guards an envelope a consumer may size-limit.** Check the five clients and the
-  board before changing its default; its current value is a ceiling the truncating loop at
-  `src/v2.ts:204` depends on.
+- **The server's limit count is three, not four, and that is deliberate** — see the Non-goal on
+  `TOON_MAX_BYTES`. If the TOON removal CR does not land, that limit stays hardcoded and this CR
+  does not reach it.
 - **Clearing an override removes information.** §S2's `null` must be distinguishable from absent.
 - **The client seam is the one piece of real machinery here.** If it grows beyond resolving a value
   and its default, it has become a configuration framework and the CR has overreached — the seam
@@ -432,7 +429,27 @@ five other limits are one-line resolutions once it exists.
   those and shipped.
 - The milestone type vocabulary — CR-CRU-130 owns that; it is the same rule applied to a vocabulary
   rather than to a number.
-- Making every number in the codebase configurable. The six named here govern what an operator or an
+- **`TOON_MAX_BYTES` (`src/v2.ts:160`) — left HARDCODED, deliberately, and this is the interesting
+  exclusion.** It bounds the server's TOON envelope: `reply()` (`:212`) encodes TOON when a GET
+  carries `?fmt=toon` or an `Accept` containing `toon`, and `truncatedToon()` halves the payload's
+  largest array until the body fits 64 KB, stamping `truncated: true` and a `full: GET …?fmt=json`
+  pointer. Sound machinery for a stated purpose — PRD §65, *"agent-facing reads first"*, token
+  economy for the reader.
+
+  Except **nothing asks for it.** Measured 2026-09-14: no `fmt=toon` and no `Accept: …toon` anywhere
+  in `clients/*.py`, nothing in `public/`. The five clients consume JSON and then render their OWN
+  stdout envelopes with `clients/toon.py`. The server's TOON path is exercised only by six test
+  files. So making it configurable would be machinery for a limit on a code path this project's
+  fleet never takes — which is precisely the cost question this CR family exists to ask, and the
+  answer is no.
+
+  **User ruling 2026-09-14: server-side TOON is spec creep and is being REMOVED**, by CR-CRU-132,
+  along with the tests that target it. Configuring a limit days before deleting the feature it
+  bounds would be the most expensive way to reach the same place. If that removal does not land, the
+  limit stays hardcoded and a later CR can pick it up; nothing here depends on which way it goes.
+  Client-side TOON is NOT affected — all seven files in `clients/` use `toon.py` for their own
+  envelopes, and that is the AXI contract.
+- Making every number in the codebase configurable. The five named here govern what an operator or an
   agent SEES, or how long the server waits. Array bounds, buffer sizes, protocol constants and SQL
   `LIMIT ?` parameters are not limits in this sense.
 - Changing any limit's VALUE. This CR moves where the values live; it does not retune them.
