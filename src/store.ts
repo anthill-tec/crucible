@@ -38,7 +38,15 @@ export interface ProjectPatch {
   type?: Project["type"];
   sutRoot?: string;
   liveness?: Partial<LivenessConfig>;
-  retention?: number;
+  /**
+   * CR-CRU-131 §S2 — this project's OWN cap, in three distinguishable states.
+   * A number (including `0`, a declared cap of zero) SETS it; `null` CLEARS
+   * it, so the project falls back on the fleet default the server's
+   * `crucible.toml` resolves; ABSENT leaves whatever the project already had.
+   * The three are separated by key PRESENCE, never by truthiness — `0`,
+   * `null` and absent are all falsy and mean three different things.
+   */
+  retention?: number | null;
   /** CR-CRU-008 §S4 — guarded run deletion config gate. */
   allowRunDeletion?: boolean;
   /**
@@ -2601,7 +2609,13 @@ export class Store {
       type: patch.type ?? existing.type,
       sutRoot: patch.sutRoot ?? existing.sutRoot,
       livenessJson: nextLiveness !== undefined ? JSON.stringify(nextLiveness) : null,
-      retention: patch.retention ?? existing.retention ?? null,
+      // CR-CRU-131 §S2 — PRESENCE decides, not truthiness: a patch that names
+      // `retention` writes exactly what it named (`null` CLEARS the override,
+      // `0` is a cap of zero), and one that does not name it leaves the stored
+      // cap alone — including a stored zero, which `??` on the patched value
+      // would have silently wiped.
+      retention:
+        patch.retention !== undefined ? patch.retention : (existing.retention ?? null),
       // CR-CRU-008 §S4 — guarded-deletion config gate (1/0; NULL = never set).
       allowRunDeletion:
         patch.allowRunDeletion !== undefined ? (patch.allowRunDeletion ? 1 : 0) : existingAllow,

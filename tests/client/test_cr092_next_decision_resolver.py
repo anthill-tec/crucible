@@ -1663,7 +1663,15 @@ class NextBlockCitationsTest(unittest.TestCase):
         # red. Re-pinned MID-CR, as C1's own row was and for the same reason:
         # C2 must hand over a green suite. The three sibling entries were
         # re-measured at BOTH ends in the same pass and none had moved.
-        ("LANDED_STATUSES", "src/store.ts", 5787, 5787,
+        # Re-pinned 2026-09-14 (CR-CRU-131 §S2), 5787 -> 5801: §S2 added
+        # fourteen lines ABOVE this construct — eight on `ProjectPatch`, where
+        # `retention` now names its three distinguishable states, and six in
+        # `updateProject`, where the cap is merged by key PRESENCE so an
+        # unrelated patch cannot wipe a cap of zero. Re-read at the line
+        # rather than inferred from the shift. The production docstring this
+        # row mirrors (`LANDED_STATUSES` in `clients/_crucible_axi.py`)
+        # carries the same :5801.
+        ("LANDED_STATUSES", "src/store.ts", 5801, 5801,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split
@@ -1687,7 +1695,15 @@ class NextBlockCitationsTest(unittest.TestCase):
         # halves move in the same commit: the production docstring this row
         # mirrors (`canonical_track` in `clients/_crucible_axi.py`) carries the
         # same 373-376.
-        ("canonical_track", "src/store.ts", 373, 376,
+        # Re-pinned 2026-09-14 (CR-CRU-131 §S2), 373-376 -> 381-384: the eight
+        # lines §S2 added to `ProjectPatch` — `retention`'s three
+        # distinguishable states (a number sets, `null` clears, absent leaves
+        # alone) — sit ABOVE this construct. Head AND tail re-read at the
+        # lines rather than inferred from the shift. BOTH halves move in the
+        # same commit: the production docstring this row mirrors
+        # (`canonical_track` in `clients/_crucible_axi.py`) carries the same
+        # 381-384.
+        ("canonical_track", "src/store.ts", 381, 384,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is

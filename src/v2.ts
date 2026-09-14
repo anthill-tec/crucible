@@ -3379,7 +3379,9 @@ const LIVENESS_WIRE_KEYS = {
  * (backend|frontend), sutRoot (camelCase, matching POST's wire contract),
  * liveness {t1_ms,t2_ms,t3_ms} (translated to the store's partial override
  * and MERGED with any existing one — updateProject owns the merge), and
- * retention (takes effect on the NEXT ingest, never retroactively).
+ * retention (takes effect on the NEXT ingest, never retroactively; CR-CRU-131
+ * §S2 — a number sets the project's own cap, `0` included, and `null` clears
+ * it back to the fleet default).
  * projectKey is immutable → 400; unknown fields → 400 naming the field, and
  * EVERYTHING validates before anything writes (no partial apply). An empty
  * body is the codebase's standard 200 {ok:true, changed:false} no-op.
@@ -3440,15 +3442,32 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       patch.liveness = liveness;
     }
   }
-  if (raw.retention !== undefined) {
-    if (
-      typeof raw.retention !== "number" ||
-      !Number.isInteger(raw.retention) ||
-      raw.retention < 1
-    ) {
-      return fail(400, "retention must be a positive integer");
+  if ("retention" in raw) {
+    // CR-CRU-131 §S2 — the cap's only door, and it now expresses everything the
+    // model allows. `null` CLEARS the override (the project falls back on the
+    // fleet default resolved from the server's own crucible.toml); `0` is a
+    // DECLARED cap of zero, which the store has always enforced
+    // (`enforceRetention` resolves with `??`, never `||`). Membership — not
+    // `!== undefined` and never truthiness — is what asks the question, because
+    // `0`, `null` and ABSENT are three different intents and all three are
+    // falsy: a patch that does not name retention must leave a stored zero at
+    // zero. What stays refused is what is not a cap, and each refusal names the
+    // forms that exist so an operator who sent one learns the others.
+    const value = raw.retention;
+    const accepted =
+      "retention must be a non-negative integer (0 caps at zero) or null to clear " +
+      "the override and inherit the fleet default";
+    if (value === null) {
+      patch.retention = null;
+    } else if (typeof value !== "number") {
+      return fail(400, `${accepted} — received a ${typeof value}`);
+    } else if (!Number.isInteger(value)) {
+      return fail(400, `${accepted} — ${value} is not a whole number of events`);
+    } else if (value < 0) {
+      return fail(400, `${accepted} — ${value} is negative`);
+    } else {
+      patch.retention = value;
     }
-    patch.retention = raw.retention;
   }
   if (raw.allowRunDeletion !== undefined) {
     // CR-CRU-008 §S4 — the guarded-deletion config gate is a plain boolean.

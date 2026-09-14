@@ -1833,10 +1833,55 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // re-measure at their recorded heads — this CR edits no renderer, and the
 // client-side move takes `_SHIPPED_LIMITS` out of `clients/_crucible_axi.py`
 // while its CR-CRU-131 §S1c lineage stays in the prose that replaces it.
+// §S2 RE-RECORD (C4) — `src` 721 -> 725, +4, and every one of the four is a
+// citation ADDED by §S2's production prose; none left any tree. This is the
+// THIRD mid-CR re-record of this head (C1 710 -> 722, §S1c 722 -> 721, now
+// §S2 721 -> 725), and the close-out re-record after the CR's LAST content
+// edit still stands — these three bought green handovers, not an exemption.
+// Three intermediate re-records in one CR is itself worth a reader's notice:
+// a head re-recorded once per cycle reports drift only BETWEEN cycles, which
+// is a limitation of the instrument rather than of any one cycle.
+//
+// TWO files move, and no other `src` file does:
+//   src/store.ts   348 -> 350  (+2)  `ProjectPatch.retention`'s three
+//                                     distinguishable states (number / `null`
+//                                     clears / absent leaves alone), and
+//                                     `updateProject` merging by key PRESENCE
+//                                     rather than `??`, which would wipe a
+//                                     stored cap of zero
+//   src/v2.ts      231 -> 233  (+2)  the PATCH route's clear-and-zero
+//                                     rationale, and the jsdoc line that now
+//                                     states what the field accepts
+// The nine other `src` files re-measure UNCHANGED (limits 6, server 26, types
+// 56, hints 43, toon 2, codecs/compile 1, codecs/index 2, codecs/junit 3,
+// codecs/playwright 3), and 2 + 2 = 4 is the whole of the move — measured with
+// this guard's OWN machinery over the working tree after §S2's last content
+// edit, never transcribed.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 725 is far above the 512 floor, no
+// head came out below its baseline, and the three `develop` floors stay at
+// 512/378/601. The head rising because citations were ADDED is the healthy
+// case — this guard exists to catch a head FALLING because lineage was
+// deleted. `public` re-measures at its recorded 477: §S2 edits one route, one
+// store method and one type, and reaches no renderer.
+//
+// `clients` 846 -> 847, +1, and the one is the SECOND half of §S2's line-pin
+// re-pin. The eight and six lines above moved two constructs `_crucible_axi.py`
+// cites by line — `deriveQueueStatus` :5787 -> :5801 and `normalizeTrack`
+// 373-376 -> 381-384 (heads and tails re-read at the lines, never inferred
+// from the shift) — and the §S2 lineage explaining the drift was ADDED beside
+// C2's rather than written over it. Holding this head at 846 was possible and
+// was REFUSED (user ruling, 2026-09-14): swapping C2's provenance out for
+// §S2's is net zero only to the counter, and to a reader it is the loss of the
+// reason C2 touched that file — the very thing the citation convention exists
+// to keep. The head is a MEASUREMENT of the tree, not a budget to be balanced,
+// so 847 is recorded because 847 is what the tree holds. `clients/toon.py` and
+// the six `.py` clients re-measure unchanged; `_crucible_axi.py` 209 -> 210 is
+// the whole of the move.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 721 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 725 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 846 },
+  clients: { exts: [".py"], develop: 601, head: 847 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
