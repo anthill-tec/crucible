@@ -85,12 +85,18 @@ _STACK = "arduino"
 
 
 def _project_dir(args):
+    """CR-CRU-131 §S1b — the resolved root is BOUND into the shared module,
+    which reads this project's `crucible.toml` beside the `.env` checked below
+    for the three display limits. Bound HERE, on this client's own boot path,
+    because project-dir resolution stays client-specific and the shared module
+    takes it ALREADY RESOLVED."""
     d = (getattr(args, "project_dir", None)
          or os.environ.get("ARDUINO_CRUCIBLE_PROJECT_DIR") or os.getcwd())
     d = os.path.abspath(d)
     if not os.path.exists(os.path.join(d, ".env")):
         sys.exit(f"[crucible] no .env at {d} — pass --project-dir <subproject> "
                  f"(the dir holding .env + tests/native, e.g. sheetal-firmware)")
+    _axi().bind_project_dir(d)
     return d
 
 

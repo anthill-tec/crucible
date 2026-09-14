@@ -1,0 +1,90 @@
+# Crucible limits — CR-CRU-131 §S1/§S1b.
+#
+# A limit is CONFIGURATION, never a constant compiled into source (PRD §4.13).
+# This file is where every limit Crucible enforces is DOCUMENTED, and where an
+# operator changes one.
+#
+# ── How to change a limit ──────────────────────────────────────────────────
+#
+# Add a `value = …` line to the limit's table. Do NOT edit `recommended`,
+# `min`, `max` or `description`: those four are DOCUMENTATION — the record of
+# what we ship and stand behind — and overwriting `recommended` in place
+# destroys, in the very file you are reading, the means of telling our number
+# from yours after the next upgrade.
+#
+#     [limits.roadmap_list_rows]
+#     …the four documented fields, untouched…
+#     value = 40          # <- yours, beside ours
+#
+# With no `value`, a limit runs at its `recommended`. With one, it runs at
+# `value`, range-checked against the `min`/`max` sitting beside it. A `value`
+# outside that range is REFUSED — never silently clamped — and the refusal is
+# disclosed, naming the limit, your value, the range and the recommendation;
+# the limit then runs at `recommended` until the file is corrected.
+#
+# Read at the POINT OF USE: an edit here takes effect on the next call. Nothing
+# needs restarting.
+#
+# ── Which process reads which file ─────────────────────────────────────────
+#
+# A limit is owned by the process that ENFORCES it, and the server and the
+# clients are not necessarily on the same machine. So this document is the
+# whole vocabulary, but each side reads only its own copy:
+#
+#   * the three CLIENT limits (`truncate_field_chars`, `error_detail_chars`,
+#     `roadmap_list_rows`) are read from the `crucible.toml` in the PROJECT
+#     DIRECTORY — this file — beside the `.env` the clients already read;
+#   * the three SERVER limits (`run_abandon_ms`, `project_inactive_ms`,
+#     `retention`) are read from the `crucible.toml` beside the server's own
+#     DATABASE, resolved by the same rule that resolves the database path
+#     (`$CRUCIBLE_DB`, else `<cwd>/data/crucible.db`, else the XDG data dir).
+#     In this checkout that is `data/crucible.toml`.
+#
+# Neither process reads the other's file. A server limit set here has no effect
+# on the server, and a client limit set in the server's file has no effect on a
+# client — which is what lets a client and a board at different versions, on
+# different hosts, be upgraded independently.
+
+# ── SERVER limits — read from the crucible.toml beside the DATABASE ────────
+
+[limits.run_abandon_ms]
+description = "Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off the board sooner."
+recommended = 1800000
+min = 60000
+max = 86400000
+
+[limits.project_inactive_ms]
+description = "Milliseconds of silence after which a project with no live agent reads INACTIVE on the board's project list. Raise it to keep occasional projects visible; lower it to retire finished ones from the default view sooner."
+recommended = 3600000
+# The default agent TOMBSTONE horizon: a shorter window would call a project
+# inactive while its own agents still read as live.
+min = 300000
+max = 2592000000
+
+[limits.retention]
+description = "Events kept per project for projects that declare no `retention` of their own. NOTE the documented exception: with NO crucible.toml at all there is NO cap and the boot banner names the uncapped projects — this number applies only once the table exists."
+recommended = 5000
+min = 10
+max = 1000000
+
+# ── CLIENT limits — read from the crucible.toml in the PROJECT DIRECTORY ───
+
+[limits.truncate_field_chars]
+description = "Visible characters of a long text field before the envelope cuts it and appends a size hint naming the true length; `--full` defeats it per call."
+recommended = 200
+min = 20
+max = 4000
+
+[limits.error_detail_chars]
+description = "Maximum characters of the warning detail reported for a run that produced NO report, so a starved runner's output cannot flood the envelope carrying its cause."
+recommended = 500
+# The composed prefix is never truncated, so a floor beneath its own length
+# would be a bound the envelope could not honour.
+min = 100
+max = 20000
+
+[limits.roadmap_list_rows]
+description = "Rows of a roadmap list emitted before it is truncated; `totalCount` always reports the TRUE total and `--full` emits the list whole."
+recommended = 20
+min = 5
+max = 500

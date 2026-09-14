@@ -1635,7 +1635,21 @@ class NextBlockCitationsTest(unittest.TestCase):
         # red. The two sibling entries that did NOT move were re-measured at
         # BOTH ends in the same pass (STATUS-CONTRACT.md 65-68, _next_start_help
         # 1559-1580); the third, `normalizeTrack`, moved and is re-pinned below.
-        ("LANDED_STATUSES", "src/store.ts", 5784, 5784,
+        # Re-pinned 2026-09-14 (CR-CRU-131 C1), 5784 -> 5790: §S1 added six
+        # lines ABOVE `deriveQueueStatus` in src/store.ts — the `./limits.ts`
+        # import (+1), `defaultRetention`'s rewritten doc comment and its
+        # resolution through the file (+2), and `runAbandonAfterMs` losing its
+        # `DEFAULT_RUN_ABANDON_MS` literal for a doc block that says why (+3).
+        # The drift IS ours and it is the ordinary case: the CR that shifted
+        # the file re-pins it. The number was LOCATED at HEAD (`private
+        # deriveQueueStatus(` is a unique hit), never computed from the old one
+        # plus a delta. BOTH halves move in the same commit: the production
+        # comment this row mirrors (`clients/_crucible_axi.py`) carries the
+        # same 5790, so `test_the_table_covers_every_citation_the_block_carries`
+        # never goes red. Re-pinned MID-CR rather than at close-out because C1
+        # must hand over a green suite; the sibling entries moved too and are
+        # re-pinned in the same pass.
+        ("LANDED_STATUSES", "src/store.ts", 5790, 5790,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split
@@ -1651,7 +1665,15 @@ class NextBlockCitationsTest(unittest.TestCase):
         # pair plus the shift. BOTH halves move in the same commit: the
         # production docstring this row mirrors (`canonical_track` in
         # `clients/_crucible_axi.py`) carries the same 372-375.
-        ("canonical_track", "src/store.ts", 372, 375,
+        # Re-pinned 2026-09-14 (CR-CRU-131 C1), 372-375 -> 373-376: the one
+        # line §S1 added to src/store.ts's import block (`./limits.ts`) sits
+        # ABOVE `normalizeTrack`. Both ends were LOCATED at HEAD (`export
+        # function normalizeTrack(` is a unique hit; the closing brace was read
+        # off the file), never computed from the old pair plus the shift. BOTH
+        # halves move in the same commit: the production docstring this row
+        # mirrors (`canonical_track` in `clients/_crucible_axi.py`) carries the
+        # same 373-376.
+        ("canonical_track", "src/store.ts", 373, 376,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is
@@ -1720,7 +1742,12 @@ class NextBlockCitationsTest(unittest.TestCase):
         # the CR that shifted the file re-pins it. Worth recording: CR-CRU-128's
         # own census anchors on (source, scope, flag) precisely to avoid this
         # rot; this row is the only line-pinned guard left in the repo.
-        ("_next_start_help", "clients/python-crucible.py", 1559, 1580,
+        # Re-pinned 2026-09-14 (CR-CRU-131 C1), 1559-1580 -> 1567-1588: §S1b
+        # made `_resolve_project_dir` BIND the resolved root into the shared
+        # loader, adding eight lines ABOVE this block. Measured at BOTH ends
+        # after the last production edit, not inferred from the shift. Twelfth
+        # time — the CR that shifted the file re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1567, 1588,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

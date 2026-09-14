@@ -1764,10 +1764,63 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // three `develop` floors stay at 512/378/601, unchanged, as always for a
 // re-record. `scripts/` is NOT one of the trees below and never has been, so
 // this CR's `scripts/release.sh` edits move no head by construction.
+//
+// UPDATED 2026-09-14 by CR-CRU-131 C1 — and taken MID-CR rather than at
+// close-out, which is a departure from CR-CRU-130's deferral rule and is
+// stated as one. C1 lands `src/limits.ts` and the client loader in one commit
+// and must hand over a green suite; a head left three cycles stale is a guard
+// that reports nothing until the CR ends. C2 and C3 both edit these trees
+// again, so this figure WILL move and the close-out re-record still happens —
+// this pin buys a green handover, not an exemption from the final one.
+// Measured by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL, imported from `tests/helpers/source-scan`)
+// over the working tree AFTER C1's last content edit and AFTER this commit's
+// own `clients/_crucible_axi.py` re-pins, never transcribed from a brief.
+//
+// TWO trees move. `src` 710 -> 722, +12, across the new module and the three
+// enforcement sites §S1 rewires — no other file:
+//   src/limits.ts    0 ->   7  (+7)  the loader itself: the ownership split,
+//                                     the documentation/`value` schema, the
+//                                     range refusal and retention's exception
+//   src/store.ts   345 -> 348  (+3)  `defaultRetention` and `runAbandonAfterMs`
+//                                     now resolving from the file
+//   src/v2.ts      230 -> 231  (+1)  `projectInactiveMs`, same
+//   src/server.ts   25 ->  26  (+1)  the boot disclosure of a refused limit
+// The seven other `src` files (types, hints, codecs/compile, codecs/index,
+// codecs/junit, codecs/playwright, toon) re-measure UNCHANGED at
+// 56/43/1/2/3/3/2, and 7 + 3 + 1 + 1 = 12 is the whole of the move — checked,
+// not assumed.
+//
+// `clients` 836 -> 846, +10, and every one of the six `.py` clients moves
+// because every one of them BINDS its resolved project dir into the shared
+// loader on its own boot path (§S1b) — a limit that resolved in isolation but
+// was never bound on a client's boot path would be green in a unit test and
+// unwired in production:
+//   clients/_crucible_axi.py  204 -> 209  (+5, NET) the loader, the three
+//                                      rewired display limits, and this
+//                                      commit's own citation re-pins, which
+//                                      REPLACE a CR-CRU-129 lineage rather
+//                                      than adding one
+//   arduino 106 -> 107, mvn 135 -> 136, python 122 -> 123, rust 126 -> 127,
+//   bun 142 -> 143            (+1 each) the `bind_project_dir` note on each
+//                                      client's own project-dir resolver
+// `clients/toon.py` re-measures UNCHANGED at 1, and 5 + 1 + 1 + 1 + 1 + 1 = 10
+// is the whole of the move.
+//
+// `public` does not move at all and re-measures at the recorded 477: this CR
+// reaches the store, the routes, the boot banner and the client fleet, and
+// edits no renderer file.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS — both moved heads are ABOVE their
+// floors by a wide margin (722 >= 512, 846 >= 601), no head came out below its
+// baseline, and the three `develop` floors stay at 512/378/601, unchanged, as
+// always for a re-record. The repo-root `crucible.toml` this CR lays down is
+// not a `.ts`/`.js`/`.py` file in any of the three trees, so it moves no head
+// by construction.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 710 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 722 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 836 },
+  clients: { exts: [".py"], develop: 601, head: 846 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

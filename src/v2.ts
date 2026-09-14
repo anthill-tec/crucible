@@ -5,6 +5,7 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
+import { resolveLimit } from "./limits.ts";
 import {
   authHints,
   hints,
@@ -358,12 +359,17 @@ async function handleProjectCreate(store: Store, req: Request): Promise<Response
   return json({ ok: true, changed: true, project });
 }
 
-// CR-CRU-007 §S5.1 — system-wide project-inactive timeout (ms), env-configurable.
-const DEFAULT_PROJECT_INACTIVE_MS = 3_600_000;
-
+/**
+ * CR-CRU-007 §S5.1 — the system-wide project-inactive timeout (ms).
+ *
+ * CR-CRU-131 §S1 — resolved from the server's own `crucible.toml` at the point
+ * of use rather than from `DEFAULT_PROJECT_INACTIVE_MS`, a literal no operator
+ * could reach. Read per request, not cached, so widening the window re-decides
+ * the next read without a restart.
+ */
 function projectInactiveMs(): number {
   const raw = Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROJECT_INACTIVE_MS;
+  return Number.isFinite(raw) && raw > 0 ? raw : resolveLimit("project_inactive_ms");
 }
 
 /**

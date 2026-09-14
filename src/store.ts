@@ -2,6 +2,7 @@
 
 import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
+import { configuredRetention, resolveLimit } from "./limits.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
@@ -730,20 +731,22 @@ const DISPOSABLE_KIND_PLACEHOLDERS = DISPOSABLE_KIND_PARAMS.map(() => "?").join(
  * A limit is CONFIGURATION, never a constant in source (user ruling,
  * 2026-09-13): the per-project value already is (`projects.retention`,
  * `ProjectPatch.retention`) and the fallback resolves from the same kind of
- * place. Read PER SWEEP, not cached — same posture as `runAbandonAfterMs()`
- * below: a long-lived board must see an operator's change without a restart.
+ * place. CR-CRU-131 §S1 makes that place a FILE — the server's own
+ * `crucible.toml` — read PER SWEEP, not cached, so a long-lived board sees an
+ * operator's change without a restart.
  *
- * `undefined` means NO CAP, and it is what an UNSET, EMPTY, NON-NUMERIC or
- * NON-POSITIVE `$CRUCIBLE_DEFAULT_RETENTION` resolves to — there is no literal
- * left to fall back ON, and inventing one would reintroduce the very defect
- * this CR deletes. A project that wants telemetry pruned configures a cap, on
- * itself or on the operator's environment; absent both, nothing is evicted.
- * A project's OWN `retention: 0` still wins (`??`, never `||`): zero is a
- * declared cap, not an absent one.
+ * `undefined` means NO CAP, and retention is the DOCUMENTED exception to §S1b
+ * (see {@link configuredRetention}): an absent or malformed file is an
+ * operator who configured NOTHING, and keeping more events costs only disk, so
+ * unbounded is the honest answer — disclosed at boot by name rather than grown
+ * quietly. An out-of-range `value` is a different fact and is refused onto
+ * `recommended`. A project's OWN `retention: 0` still wins (`??`, never
+ * `||`): zero is a declared cap, not an absent one.
  */
 export function defaultRetention(): number | undefined {
   const raw = Number(process.env.CRUCIBLE_DEFAULT_RETENTION);
-  return Number.isFinite(raw) && raw > 0 ? raw : undefined;
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return configuredRetention();
 }
 
 // ── CR-CRU-130 §S4/§S5 — the milestone vocabulary, defined in ONE place ────
@@ -830,12 +833,15 @@ export function reservedMilestoneTypeConflict(
  * CR-CRU-017 §S1 — how long an OPEN run may live before the sweep abandons it.
  * Read per sweep, not cached: the deadline is operational configuration, and a
  * long-lived process must see a change without a restart.
+ *
+ * CR-CRU-131 §S1 — the fallback is no longer a literal. This function was the
+ * pattern CR-CRU-129 held up as the one to copy while its own default was
+ * `DEFAULT_RUN_ABANDON_MS = 30 * 60_000`, a number nobody could reach; it now
+ * resolves from the server's `crucible.toml` like every other limit.
  */
-const DEFAULT_RUN_ABANDON_MS = 30 * 60_000;
-
 function runAbandonAfterMs(): number {
   const raw = Number(process.env.CRUCIBLE_RUN_ABANDON_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RUN_ABANDON_MS;
+  return Number.isFinite(raw) && raw > 0 ? raw : resolveLimit("run_abandon_ms");
 }
 
 /** CR-CRU-002 §S4 — project keys are UUIDs; ingest routes validate against this. */

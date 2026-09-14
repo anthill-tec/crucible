@@ -38,6 +38,7 @@ import shlex
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.request
 
@@ -63,6 +64,247 @@ def _toon():
         _TOON_MOD = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_TOON_MOD)
     return _TOON_MOD
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CR-CRU-131 §S1/§S1b — the CLIENT's limits are CONFIGURATION, resolved from
+# the PROJECT's `crucible.toml` at the POINT OF USE.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A limit is configuration, never a constant compiled into source (PRD §4.13,
+# user ruling 2026-09-14). It was EARNED: `DEFAULT_RETENTION = 100` was a
+# number one author chose, reachable by nobody, and on 2026-09-13 it evicted
+# every release this project had ever shipped (PRD §4.7).
+#
+# OWNERSHIP follows ENFORCEMENT. The server resolves its own database and may
+# be installed on a machine no client can see; a client resolves a PROJECT
+# DIRECTORY and then posts over HTTP. So the three limits a CLIENT enforces
+# live in a `crucible.toml` beside the `.env` the clients already read, and the
+# server's three live beside its database, loaded by the mirror of this block
+# in `src/limits.ts`. Neither process reads the other's file: one schema, one
+# loader shape, two locations. Built ONCE here, where all five clients inherit
+# it (the shared-module discipline CR-CRU-030 established).
+#
+# The four fields are DOCUMENTATION; `value` is the operator's SETTING.
+# `description`, `recommended`, `min` and `max` are immutable; an operator who
+# overwrote `recommended` in place would destroy, in the very file they read,
+# the record of what we recommend. Keeping both in ONE table is also what lets
+# the range be enforced from the data that documents it — the validator reads
+# `min`/`max` off the very table the operator edits, so the documented bound
+# and the enforced bound cannot drift into two copies.
+#
+# READ AT THE POINT OF USE. `TRUNCATE_LIMIT`, `NO_REPORT_DETAIL_MAX` and
+# `ROADMAP_LIST_LIMIT` were each bound as a DEFAULT ARGUMENT at `def` time,
+# which is a cache with the earliest possible expiry: no edit an operator ever
+# made could reach them. Every entry point below re-reads the file.
+#
+# `bind_project_dir` rather than a `project_dir=` parameter threaded through
+# `truncate_field`/`truncate_rows`/`no_report_warning`, for the reason this
+# module's own scope boundary already states (see the module docstring):
+# project-dir resolution stays CLIENT-specific and arrives ALREADY RESOLVED.
+# The client resolves its root exactly once and hands it over; the pure
+# formatters keep their pure signatures.
+
+#: The limits a CLIENT enforces, by their OWN names -- a key that
+#: transliterated `NO_REPORT_DETAIL_MAX` would carry an accident of the old
+#: source into the file an operator reads.
+CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
+                      "roadmap_list_rows")
+
+#: §S1c -- the PACKAGE DATA table: the last resort, readable without the
+#: operator's file being present or even valid. Every `recommended` is today's
+#: compiled value, so an install with no `crucible.toml` behaves EXACTLY as it
+#: did before this CR. `min`/`max` are a SUPPORTABILITY judgement and each
+#: states its reasoning -- a bound nobody can justify is the same defect as a
+#: default nobody chose.
+_SHIPPED_LIMITS = {
+    "truncate_field_chars": {
+        "description": ("Visible characters of a long text field before the "
+                        "envelope cuts it and appends a size hint naming the "
+                        "true length; `--full` defeats it per call."),
+        "recommended": 200,
+        # A width of 0 shows nothing at all, so the floor is more than
+        # "positive": 20 characters is the least that can carry a recognisable
+        # fragment of an error before the hint.
+        "min": 20,
+        # Past a few thousand characters a "field" is a document, and the
+        # reader's context is what these limits exist to protect.
+        "max": 4_000,
+    },
+    "error_detail_chars": {
+        "description": ("Maximum characters of the warning detail reported for "
+                        "a run that produced NO report, so a starved runner's "
+                        "output cannot flood the envelope carrying its cause."),
+        "recommended": 500,
+        # The composed PREFIX is never truncated, so a floor beneath its own
+        # length would be a bound the envelope could not honour; 100 leaves the
+        # prefix intact plus room for a fragment of the cause.
+        "min": 100,
+        # 20k is past the point where a machine caller is reading a detail
+        # rather than the runner's own stream.
+        "max": 20_000,
+    },
+    "roadmap_list_rows": {
+        "description": ("Rows of a roadmap list emitted before it is "
+                        "truncated; `totalCount` always reports the TRUE "
+                        "total and `--full` emits the list whole."),
+        "recommended": 20,
+        # Fewer than a handful of rows is a list that cannot show a wave.
+        "min": 5,
+        # 500 rows is four times the largest board this fleet has carried.
+        "max": 500,
+    },
+}
+
+_PROJECT_DIR = None
+
+
+def bind_project_dir(project_dir):
+    """§S1b -- hand the shared module the ALREADY-RESOLVED project root, once,
+    on the client's own boot path. Every client's `_resolve_project_dir` (and
+    arduino's `_project_dir`) calls this, so a limit resolves against the
+    directory the verb is actually working in rather than the process cwd."""
+    global _PROJECT_DIR
+    _PROJECT_DIR = str(project_dir) if project_dir else None
+
+
+def project_config_path():
+    """§S1b -- the PROJECT's own configuration file, beside the `.env` the
+    clients already read. Never the server's: the board may be on another
+    host, and its config directory simply is not on this filesystem."""
+    return os.path.join(_PROJECT_DIR or os.getcwd(), "crucible.toml")
+
+
+def shipped_limits():
+    """§S1c -- the shipped declarations, as data. Fresh copies, so a caller
+    cannot edit the package's own documentation by accident."""
+    return {name: dict(_SHIPPED_LIMITS[name]) for name in CLIENT_LIMIT_NAMES}
+
+
+def _read_project_config():
+    """One read of the file, at the point of use -- never cached.
+
+    Returns `(path, tables)`, where `tables` is None when the file is ABSENT or
+    does not parse. `tomllib` is stdlib (3.11+; this repo runs 3.14) and
+    already in the tree at `clients/rust-crucible.py`."""
+    path = project_config_path()
+    try:
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+    except (OSError, ValueError):
+        # ValueError covers tomllib.TOMLDecodeError; a malformed file must
+        # DEGRADE, never take a client's verb down with it.
+        return path, None
+    tables = parsed.get("limits")
+    return path, tables if isinstance(tables, dict) else {}
+
+
+def _declared_limit(shipped, table):
+    """One limit as the file leaves it: the shipped declaration with whichever
+    fields the operator's table actually supplies laid over it. A field of the
+    wrong TYPE is ignored rather than obeyed -- a `min` that is a string is a
+    bound nothing can enforce, and a fractional character count is not a
+    supportable setting."""
+    out = dict(shipped)
+    if not isinstance(table, dict):
+        return out
+    description = table.get("description")
+    if isinstance(description, str):
+        out["description"] = description
+    for field in ("recommended", "min", "max", "value"):
+        raw = table.get(field)
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            out[field] = raw
+    return out
+
+
+def _limit_refusal(name, declaration, path):
+    """§S1b -- what an out-of-range `value` owes its operator: the limit, the
+    offending value, the range it crossed and the setting running instead.
+    REFUSED, never clamped -- a clamp leaves the operator's stated intent and
+    the running behaviour different with nothing saying so."""
+    return ("[crucible] WARNING: %s sets `%s` to %d, outside the range "
+            "[%d, %d] declared beside it — the value is REFUSED, not clamped, "
+            "so `%s` runs at its recommended %d until the file is corrected."
+            % (path, name, declaration["value"], declaration["min"],
+               declaration["max"], name, declaration["recommended"]))
+
+
+def _limits_unreadable(path):
+    """Named by PATH: told only that "a config file is broken", on a machine
+    carrying two of them, an operator learns nothing."""
+    return ("[crucible] WARNING: no readable configuration at %s — it is "
+            "absent or does not parse, so every bound this client enforces "
+            "runs at the value the build recommends. Create the file (or "
+            "correct its TOML) to configure them." % path)
+
+
+def _effective_limit(name, declaration, path):
+    """`(value, refusal)` -- the number the limit RUNS at, and the disclosure
+    it owes, in one pass."""
+    value = declaration.get("value")
+    if value is None:
+        return declaration["recommended"], None
+    if declaration["min"] <= value <= declaration["max"]:
+        return value, None
+    return declaration["recommended"], _limit_refusal(name, declaration, path)
+
+
+def limit_declarations():
+    """The declarations in EFFECT: the operator's file where it parses, the
+    shipped table otherwise. A table for a limit this client does not enforce
+    is IGNORED rather than adopted -- ownership holds in both directions."""
+    path, tables = _read_project_config()
+    table = shipped_limits()
+    if tables is None:
+        return table
+    for name in CLIENT_LIMIT_NAMES:
+        table[name] = _declared_limit(table[name], tables.get(name))
+    return table
+
+
+def resolve_limit(name):
+    """§S1/§S1b -- the number a limit RUNS at: the operator's `value` when the
+    range beside it admits one, its `recommended` otherwise.
+
+    Raises only for an unknown or FOREIGN limit name, which is a programming
+    error rather than an operator error. A bad FILE never raises: a client must
+    still format its output on a machine whose `crucible.toml` was mistyped.
+
+    The refusal names no CR: it is a runtime string a client can EMIT, and
+    CR-CRU-097 AC3a keeps this project's own change-request namespace out of
+    every such string."""
+    if name not in CLIENT_LIMIT_NAMES:
+        raise ValueError(
+            "`%s` is not a limit a client enforces (%s). A limit is owned by the process "
+            "that ENFORCES it, and the server is not necessarily on this machine — "
+            "`run_abandon_ms`, `project_inactive_ms` and `retention` resolve from the "
+            "SERVER's own crucible.toml, never from here."
+            % (name, ", ".join(CLIENT_LIMIT_NAMES)))
+    path, tables = _read_project_config()
+    shipped = _SHIPPED_LIMITS[name]
+    declaration = (dict(shipped) if tables is None
+                   else _declared_limit(shipped, tables.get(name)))
+    return _effective_limit(name, declaration, path)[0]
+
+
+def limit_disclosures():
+    """§S1b -- everything the current file owes its operator: one line per
+    REFUSED `value`, or one line naming a file that could not be read at all.
+
+    Stateless and recomputed from the file, mirroring the server's
+    `retentionDisclosure()` rather than inventing a drainable buffer: a
+    disclosure that had to be drained is a disclosure that can be missed."""
+    path, tables = _read_project_config()
+    if tables is None:
+        return [_limits_unreadable(path)]
+    lines = []
+    for name in CLIENT_LIMIT_NAMES:
+        _, refusal = _effective_limit(
+            name, _declared_limit(_SHIPPED_LIMITS[name], tables.get(name)), path)
+        if refusal is not None:
+            lines.append(refusal)
+    return lines
 
 
 # ── CR-CRU-054 §S2 — the fleet's HTTP core, lifted to ONE locus of truth ────
@@ -510,19 +752,21 @@ def select_status_fields(rows, extra_fields):
     return [{k: r.get(k) for k in keys} for r in rows]
 
 
-# §S11 — the visible-content limit before a large text field is truncated in
-# the envelope. The CR gives no number; the CR-CRU-030 C1 slice-3 RED contract
-# pins 200 chars of visible content before the size-hint suffix.
-TRUNCATE_LIMIT = 200
+def truncate_field(value, full=False):
+    """§S11 (PURE) — truncate a large text field to the configured visible width
+    with a `(truncated, <N> chars total — use --full)` size hint naming the
+    TOTAL original length. `full=True` (the `--full` flag) returns the value
+    verbatim; a value at or under the limit (or a non-str/None) is returned
+    unchanged — content that was never cut never carries a fabricated hint.
 
-
-def truncate_field(value, full=False, limit=TRUNCATE_LIMIT):
-    """§S11 (PURE) — truncate a large text field to `limit` visible chars with a
-    `(truncated, <N> chars total — use --full)` size hint naming the TOTAL
-    original length. `full=True` (the `--full` flag) returns the value verbatim;
-    a value at or under the limit (or a non-str/None) is returned unchanged —
-    content that was never cut never carries a fabricated hint."""
-    if full or not isinstance(value, str) or len(value) <= limit:
+    CR-CRU-131 §S1 — the width is `truncate_field_chars`, resolved from the
+    PROJECT's `crucible.toml` AT THE POINT OF USE. It was `limit=TRUNCATE_LIMIT`
+    (200), bound as a default argument at `def` time, so no edit an operator
+    ever made could reach it."""
+    if full or not isinstance(value, str):
+        return value
+    limit = resolve_limit("truncate_field_chars")
+    if len(value) <= limit:
         return value
     return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
 
@@ -1042,9 +1286,6 @@ def gate_step_abort_warning(verb, step, detail):
     }
 
 
-NO_REPORT_DETAIL_MAX = 500
-
-
 def _last_non_empty_line(output):
     """The last line of a captured runner stream that carries anything — the
     CAUSE line of a starved run (`ModuleNotFoundError: No module named
@@ -1098,12 +1339,17 @@ def no_report_warning(verb, artifact, exit_code, output, cause=None):
     is the wrong pick). A supplied cause is bounded keeping its HEAD, the
     mirror of the derived path's tail-keeping bound. `cause=None` or a
     blank/whitespace-only cause is NOT an override: it falls back to the
-    derived rule, so every existing caller is byte-identical to CR-CRU-064."""
+    derived rule, so every existing caller is byte-identical to CR-CRU-064.
+
+    CR-CRU-131 §S1 — the bound is `error_detail_chars`, resolved from the
+    PROJECT's `crucible.toml` AT THE POINT OF USE rather than from the module
+    constant `NO_REPORT_DETAIL_MAX = 500`, which no operator could reach."""
+    detail_max = resolve_limit("error_detail_chars")
     prefix = (f"{verb} produced no {artifact} — the runner exited "
               f"{exit_code} before writing a report")
     joiner = "; last output line: "
     if cause is not None and cause.strip():
-        room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+        room = detail_max - len(prefix) - len(joiner)
         if room <= 0:
             return {"code": "no-test-reports", "detail": prefix}
         fragment = cause
@@ -1116,7 +1362,7 @@ def no_report_warning(verb, artifact, exit_code, output, cause=None):
                 "detail": (f"{prefix}; no runner output reached this envelope, "
                            f"so the runner's own stream is the only evidence "
                            f"left")}
-    room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+    room = detail_max - len(prefix) - len(joiner)
     if room <= 0:
         return {"code": "no-test-reports", "detail": prefix}
     if len(cause) > room:
@@ -1793,7 +2039,7 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:5784 — re-pinned 2026-09-13 from :5020,
+# (`deriveQueueStatus`, src/store.ts:5790 — re-pinned 2026-09-14 from :5784,
 # shifted by the 764 lines CR-CRU-130 added above it across its four cycles:
 # §S1's dated milestone, §S2's release record that survives delivery, and the
 # §S4b reads of a delivered release). Anything else — PENDING,
@@ -1812,7 +2058,7 @@ _TRACK_LANE_RE = re.compile(r"\d+")
 
 def canonical_track(value):
     """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
-    mirror of `normalizeTrack` (src/store.ts:372-375). The first run of digits
+    mirror of `normalizeTrack` (src/store.ts:373-376). The first run of digits
     anywhere in the value, rendered as the PRD's locked wire format
     `track-<n>`; `None` when the value names no lane.
 
@@ -1916,7 +2162,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1559-1580`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1567-1588`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle-kind <k1> '
@@ -3557,11 +3803,6 @@ ROADMAP_ROLE = "ORCHESTRATOR"
 # is a transport-class outcome and keeps the fleet's `0 if ok else 1`.
 EXIT_USAGE = 2
 
-# §S10 P3 — a roadmap list truncates by default; `--full` emits it whole.
-# `totalCount` (P4) always carries the true total, so a truncated list can
-# never be mistaken for the whole one.
-ROADMAP_LIST_LIMIT = 20
-
 # §S6/P6 — the two fields `cr-plan` will not guess, in the order `needs`
 # reports them.
 CR_PLAN_DECLARED_FIELDS = ("release", "wave")
@@ -3717,11 +3958,20 @@ def select_row_fields(rows, fields):
     return [{k: row[k] for k in keys if k in row} for row in rows]
 
 
-def truncate_rows(rows, full=False, limit=ROADMAP_LIST_LIMIT):
+def truncate_rows(rows, full=False):
     """§S10 P3 (PURE) — the visible head of a roadmap list; `--full` defeats
-    it. The caller emits `totalCount` from the UNtruncated list."""
+    it. The caller emits `totalCount` from the UNtruncated list, so a truncated
+    list can never be mistaken for the whole one.
+
+    CR-CRU-131 §S1 — the length is `roadmap_list_rows`, resolved from the
+    PROJECT's `crucible.toml` AT THE POINT OF USE rather than from
+    `limit=ROADMAP_LIST_LIMIT` (20), bound as a default argument at `def`
+    time."""
     rows = list(rows or [])
-    return rows if full or len(rows) <= limit else rows[:limit]
+    if full:
+        return rows
+    limit = resolve_limit("roadmap_list_rows")
+    return rows if len(rows) <= limit else rows[:limit]
 
 
 def roadmap_rows(resp, key, args):

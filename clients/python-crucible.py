@@ -99,16 +99,24 @@ def _resolve_project_dir(arg_value):
 
     No project is hardcoded. The `.env` holding CRUCIBLE_PROJECT_KEY must live at that
     resolved root.
+
+    CR-CRU-131 §S1b — the resolved root is BOUND into the shared module, which reads
+    this project's `crucible.toml` beside that `.env` for the three display limits.
+    Bound HERE, on the client's own boot path, because project-dir resolution stays
+    client-specific and the shared module takes it ALREADY RESOLVED.
     """
     if arg_value:
-        return arg_value
-    env_value = os.environ.get("PY_CRUCIBLE_PROJECT_DIR")
-    if env_value:
-        return env_value
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else os.getcwd()
+        root = arg_value
+    elif (env_value := os.environ.get("PY_CRUCIBLE_PROJECT_DIR")):
+        root = env_value
+    else:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+        )
+        root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
+                else os.getcwd())
+    _axi().bind_project_dir(root)
+    return root
 
 
 def _read_env(project_dir):

@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { limitDisclosures } from "./limits.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 
@@ -344,6 +345,14 @@ if (import.meta.main) {
       `[crucible] migrated store schema v${migrated.from} -> v${migrated.to}` +
         (migrated.backupPath === null ? "" : ` (pre-upgrade backup: ${migrated.backupPath})`),
     );
+  }
+  // CR-CRU-131 §S1b — a limits file that could not be read, and every `value`
+  // refused for leaving the range declared beside it, on the same channel that
+  // already names the store: a refusal nobody is told about is a board running
+  // at a number its operator did not choose. Silent when the file is readable
+  // and every value is legal.
+  for (const disclosure of limitDisclosures()) {
+    console.log(disclosure);
   }
   // CR-CRU-129 §S2 — retention became opt-in when the literal default went, so
   // a board on which nothing bounds it discloses that at boot instead of

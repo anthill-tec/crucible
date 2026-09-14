@@ -990,6 +990,13 @@ describe("CR-CRU-131 §S1b — a value outside [min, max] is REFUSED at resoluti
     writeConfig(dir, { run_abandon_ms: declare(shipped, value) });
     expect(mod.resolveLimit("run_abandon_ms")).toBe(value);
 
+    // ONE store spans BOTH halves, deliberately. An implementation that
+    // snapshotted the limits table at `Store.open()` would pass this pair if
+    // the after-half were given a store of its own — the fresh store would read
+    // the edited file at construction and nothing here would notice. The single
+    // long-lived store is the pressure that keeps the widen/narrow pair a proof
+    // about the FILE rather than a proof about object lifetime; do not
+    // "simplify" it into two stores.
     const store = Store.open(":memory:");
     const keyBefore = projectOutlivingHorizon(store, value, "before-narrowing");
     const before = store.startRun(keyBefore, "before-narrowing-agent");
@@ -1003,9 +1010,25 @@ describe("CR-CRU-131 §S1b — a value outside [min, max] is REFUSED at resoluti
 
     const keyAfter = projectOutlivingHorizon(store, value, "after-narrowing");
     const after = store.startRun(keyAfter, "after-narrowing-agent");
-    expect(store.sweepOpenRuns(after.startedAt + shipped.recommended).map((e) => e.abortReason)).toEqual(
-      ["abandoned"],
-    );
+
+    // The state the store is in going into the sweep, stated rather than
+    // assumed: the before-run is STILL OPEN, so what the sweep does below is
+    // not confounded by an unknown board.
+    expect(store.listOpenRuns(keyBefore).map((r) => r.runId)).toEqual([before.runId]);
+
+    // `sweepOpenRuns` is board-wide (src/store.ts — `WHERE run_state='open'`
+    // across every project), and the before-run's age at this instant exceeds
+    // the NARROWED deadline too, so it is abandoned in the same call. The claim
+    // under test was never about the board: it is that the AFTER run is
+    // abandoned at the NEW deadline, so the assertion is scoped to that project.
+    // (The proof that the OLD deadline did not settle the before-run is the
+    // before-half's own first sweep asserting `[]`, which has already run.)
+    expect(
+      store
+        .sweepOpenRuns(after.startedAt + shipped.recommended)
+        .filter((e) => e.projectKey === keyAfter)
+        .map((e) => e.abortReason),
+    ).toEqual(["abandoned"]);
   });
 });
 
@@ -1041,6 +1064,10 @@ describe("CR-CRU-131 §S1b — a limit is owned by the process that enforces it"
     // …and the server does not see it: it runs at the shipped recommendation.
     expect(mod.resolveLimit("run_abandon_ms")).toBe(shipped.recommended);
 
+    // ONE store spans both halves, for the same reason the widen/narrow pair
+    // gives: a store per half would let a loader that snapshotted the table at
+    // `Store.open()` pass the POSITIVE CONTROL below without ever re-reading
+    // the file.
     const store = Store.open(":memory:");
     const key = projectOutlivingHorizon(store, shipped.recommended, "wrong-file");
     const run = store.startRun(key, "wrong-file-agent");
@@ -1054,9 +1081,20 @@ describe("CR-CRU-131 §S1b — a limit is owned by the process that enforces it"
 
     const key2 = projectOutlivingHorizon(store, shipped.recommended, "right-file");
     const run2 = store.startRun(key2, "right-file-agent");
-    expect(store.sweepOpenRuns(run2.startedAt + value).map((e) => e.abortReason)).toEqual([
-      "abandoned",
-    ]);
+
+    // The board's state going into the sweep, stated rather than assumed.
+    expect(store.listOpenRuns(key).map((r) => r.runId)).toEqual([run.runId]);
+
+    // Board-wide sweep, project-scoped claim: the first run's age also exceeds
+    // the now-configured deadline, so it is abandoned in the same call. What is
+    // under test is that the deadline MOVED once the declaration reached the
+    // server's OWN file.
+    expect(
+      store
+        .sweepOpenRuns(run2.startedAt + value)
+        .filter((e) => e.projectKey === key2)
+        .map((e) => e.abortReason),
+    ).toEqual(["abandoned"]);
   });
 
   test("a CLIENT limit written into the SERVER's file is still not a limit the server resolves", async () => {
