@@ -67,6 +67,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
 from tests.client.test_cr054_fleet_inventory import (
@@ -316,6 +321,7 @@ class _BaseRustAxiTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="rust-crucible-axi-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        install_project_limits(self.tmpdir)
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)

@@ -56,6 +56,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 TOON_PATH = CLIENTS_DIR / "toon.py"
@@ -142,6 +147,7 @@ class _RoadmapVerbTestBase(unittest.TestCase):
             fh.write(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
             # arduino's `_load_env` requires the name too; harmless elsewhere.
             fh.write("CRUCIBLE_PROJECT_NAME=cr091-roadmap-project\n")
+        install_project_limits(self.tmpdir)
         self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
         for k in ENV_KEYS:
             os.environ.pop(k, None)

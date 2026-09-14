@@ -348,6 +348,33 @@ def limit_disclosures():
     return lines
 
 
+#: The envelope `warnings[]` code every limit disclosure carries. ONE code for
+#: the fleet, so a consumer matches on it without parsing the sentence -- the
+#: same contract `no-test-reports` and `UNIT_RUN_WALL_EXCEEDS_CPU_CODE` have.
+LIMIT_CONFIGURATION_CODE = "limit-configuration"
+
+
+def limit_disclosure_warnings():
+    """§S1b -- `limit_disclosures()` as the envelope `warnings[]` fragment:
+    `[]`, or one `{code, detail}` per disclosure, in the shape
+    `preflight_cycle_warnings` returns its finding.
+
+    The CLIENT's counterpart to the server's boot banner (src/server.ts:357),
+    mirroring its SHAPE rather than copying its channel. A server boots once
+    and discloses on the console it owns; a client has no boot -- each verb
+    invocation IS its boot -- so the disclosure rides the envelope that
+    invocation already emits, on the generic `warnings[]` channel the whole
+    fleet already renders.
+
+    Nothing is buffered and nothing is drained: it is recomputed from the file
+    on every exit, so an operator who corrects the file sees the next envelope
+    go quiet, and one who does not is told again. Silent when the file is
+    readable and every `value` is legal.
+    """
+    return [{"code": LIMIT_CONFIGURATION_CODE, "detail": line}
+            for line in limit_disclosures()]
+
+
 # ── CR-CRU-054 §S2 — the fleet's HTTP core, lifted to ONE locus of truth ────
 #
 # Every client used to carry its OWN byte-identical `_request` (plus the
@@ -551,11 +578,20 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     statement is ASSEMBLED HERE, once for the fleet, from what the ingest seam
     recorded (`ingested_tier`, and the closed vocabulary beside
     `TIER_MEANINGS`): a client that ingested nothing on this exit says so
-    rather than claiming coverage it never obtained."""
+    rather than claiming coverage it never obtained.
+
+    CR-CRU-131 §S1b — the limit disclosures this invocation owes its operator
+    ride the SAME `warnings[]`, appended AFTER whatever the caller carried
+    (its findings were decided first). Wired HERE, at the one exit every verb
+    of every client passes through, for the reason the server wires its own to
+    the boot banner: a refused `value`, or a `crucible.toml` that could not be
+    read, that nobody is told about is a client running at a number its
+    operator did not choose. A per-verb or per-client wiring would be five
+    places for four of them to be right."""
     axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
     axi.update(result_fields)
     axi["context"] = context
-    axi["warnings"] = warnings
+    axi["warnings"] = list(warnings) + limit_disclosure_warnings()
     sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
     if legacy_line is not None:
         print(legacy_line, file=sys.stderr)

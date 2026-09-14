@@ -291,6 +291,27 @@ def _build_fake_bin_dir():
     return bin_dir
 
 
+def install_project_limits(project_dir):
+    """CR-CRU-131 §S1b — lay the project's `crucible.toml` down beside its
+    `.env`, which is what the installer does and therefore what a REAL project
+    directory holds.
+
+    Without it a fixture is an UNCONFIGURED project, and every envelope driven
+    out of it correctly carries the client's `limit-configuration` disclosure
+    naming the file it could not read (`emit_axi`, clients/_crucible_axi.py).
+    That disclosure is a property of the fixture, not of the verb under test,
+    so the fixture is made real rather than the finding filtered out — a filter
+    would also hide a disclosure a verb genuinely started emitting.
+
+    The SHIPPED declarations are copied verbatim: no `value` anywhere, so every
+    limit resolves to its `recommended` exactly as it does for an operator who
+    has installed and not yet edited.
+    """
+    shutil.copyfile(CLIENTS_DIR / "crucible.toml",
+                    Path(project_dir) / "crucible.toml")
+    return Path(project_dir) / "crucible.toml"
+
+
 def _make_project_dir(client_key):
     """A throwaway project fixture: `.env` with CRUCIBLE_PROJECT_KEY (+
     CRUCIBLE_PROJECT_NAME for arduino, which reads it), plus whatever each
@@ -310,6 +331,7 @@ def _make_project_dir(client_key):
     if client_key == "arduino":
         env_lines.append("CRUCIBLE_PROJECT_NAME=detector-project\n")
     (d / ".env").write_text("".join(env_lines))
+    install_project_limits(d)
     if client_key == "python":
         tests_dir = d / "tests"
         tests_dir.mkdir()
@@ -1114,6 +1136,11 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-real-copy-"))
         shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.tmp_dir / "_crucible_axi.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
+        # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
+        # `_crucible_axi.py`, so a copy of the module without them is a broken
+        # distribution rather than a scratch client: `shipped_limits()` refuses
+        # to invent a number and says so.
+        shutil.copy(CLIENTS_DIR / "crucible.toml", cls.tmp_dir / "crucible.toml")
 
         # The bare verb's function definition must sit BEFORE `def main():`
         # in the file: the real client's trailing `if __name__ == "__main__":

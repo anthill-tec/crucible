@@ -106,8 +106,16 @@ Measured on release/0.2.0, 2026-09-14 (python 1852 tests, 1851 pass, 1 pending,
         as DEFAULT ARGUMENT VALUES at function-definition time, which is the
         strongest form of the cache this CR forbids. Each test fails naming the
         seam member it wanted.
-  GUARD `--full` still defeats all three display limits (asserted inside the
-        three resolution tests). It passes today and must keep passing: a
+  GUARD `--full` still defeats the TWO display WIDTHS -- `truncate_field_chars`
+        (asserted at `TruncateFieldCharsResolutionTest
+        .test_the_operators_value_decides_the_cut_and_no_value_falls_to_recommended`)
+        and `roadmap_list_rows` (`RoadmapListRowsResolutionTest
+        .test_the_operators_value_decides_the_list_length_and_no_value_falls_to_recommended`).
+        Two guards, because there are two: `no_report_warning` takes no `full`
+        parameter at HEAD and took none before this CR, so `error_detail_chars`
+        was never defeatable that way and this CR preserved that exactly. (An
+        earlier draft of this docstring, and of the AC it repeated, claimed all
+        three; both are corrected.) The two pass today and must keep passing: a
         per-invocation escape hatch is not a substitute for a configured
         default, and a configured default is not a substitute for it.
 
@@ -135,6 +143,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 BUN_CLIENT_PATH = CLIENTS_DIR / "bun-crucible.py"
+#: The fleet's OWN TOON decoder, so an envelope a real run emitted is read the
+#: way its consumers read it rather than pattern-matched out of stdout.
+TOON_MODULE_PATH = CLIENTS_DIR / "toon.py"
 
 #: The four fields §S1b requires of every limit -- DOCUMENTATION, all of it.
 #: A vocabulary, not a limit. `value` is deliberately NOT one of them: it is
@@ -910,6 +921,147 @@ class ClientLimitDegradationTest(_ClientLimitsTestCase):
                          self.visible_rows(self.shipped("roadmap_list_rows")["recommended"] + 9))
 
         self.assertIn(expected, "\n".join(_seam(self.axi, "limit_disclosures")()))
+
+
+# ===========================================================================
+# §S1b -- the disclosure REACHES the operator, on a real verb's envelope
+# ===========================================================================
+
+class ClientLimitDisclosureReachesTheEnvelopeTest(_ClientLimitsTestCase):
+    """"A refused value is NOT silently clamped: after a refusal the running
+    behaviour is the documented fallback AND the refusal was reported." The
+    second half of that is a claim about REACHING somebody, and only a real
+    invocation can make it.
+
+    So every assertion below drives `bun-crucible.py` through its own `main()`
+    with nothing but the wire mocked, and reads the `warnings[]` the run
+    actually emitted. Calling `limit_disclosures()` and inspecting the list it
+    returns would pass just as happily against a function with NO CALLERS AT
+    ALL -- which is the state this class exists to make impossible, and the
+    state the client half was in when VERIFY measured it.
+
+    The envelope's `warnings[]` is the channel because it already exists,
+    fleet-wide and generic (`{code, detail}`), and every consumer already
+    renders it. The server discloses on the console it owns at boot; a client
+    has no boot, so each invocation's envelope is its banner.
+    """
+
+    #: One open plan, so `status` has something real to render. The wire is the
+    #: only thing mocked -- the verb, its formatting and its envelope are the
+    #: production ones.
+    PLANS = {"ok": True, "plans": [
+        {"planId": "plan-1", "cr": "CR-SHIPPED-001", "wave": "6",
+         "status": "open", "cycles": []},
+    ]}
+
+    def envelope_warnings(self, verb="status"):
+        """The `warnings[]` a REAL run of `<verb>` emitted, decoded off the
+        TOON envelope on stdout with the fleet's own decoder."""
+        client = _load_module_by_path(
+            BUN_CLIENT_PATH, "bun_crucible_disclosure_%d" % next(_COUNTER))
+        with mock.patch.object(client, "_get", return_value=self.PLANS):
+            code, out, err = _run_main(
+                client, [verb, "--project-dir", self.project_dir])
+        self.assertEqual(0, code, "stdout=%r stderr=%r" % (out, err))
+        envelope = _load_module_by_path(
+            TOON_MODULE_PATH, "crucible_toon_%d" % next(_COUNTER)).decode(out)
+        self.assertIn("axi", envelope, "the verb emitted no envelope: %r" % (out,))
+        return envelope["axi"].get("warnings") or []
+
+    def disclosures_on_the_envelope(self, verb="status"):
+        code = _seam(self.axi, "LIMIT_CONFIGURATION_CODE")
+        return [w["detail"] for w in self.envelope_warnings(verb)
+                if w.get("code") == code]
+
+    def test_a_refused_value_is_reported_on_the_envelope_of_a_real_verb(self):
+        shipped = self.shipped("truncate_field_chars")
+        illegal = shipped["max"] + 1
+        file = self.write_project_config(
+            {"truncate_field_chars": _declare(shipped, illegal)})
+
+        reported = self.disclosures_on_the_envelope()
+        self.assertEqual(
+            1, len(reported),
+            "exactly one refusal was owed and the envelope carried %r" % (reported,))
+        detail = reported[0]
+        # WHICH limit, WHICH value, WHICH range, WHICH file -- an operator told
+        # only that 'a config file is broken' learns nothing.
+        self.assertIn("truncate_field_chars", detail)
+        self.assertIn(str(illegal), detail)
+        self.assertIn(str(shipped["min"]), detail)
+        self.assertIn(str(shipped["max"]), detail)
+        self.assertIn(str(shipped["recommended"]), detail)
+        self.assertIn(file, detail)
+
+        # …and the OTHER half of the same AC: the running behaviour after the
+        # refusal is the documented fallback, never the illegal value and never
+        # a clamp to the bound it crossed.
+        self.assertEqual(shipped["recommended"], self.visible_width())
+
+    def test_a_legal_file_leaves_the_envelope_silent(self):
+        """The control. Without it a wiring that warned unconditionally -- or
+        that appended the shipped table on every exit -- would satisfy every
+        other test here, and an operator who had configured correctly would be
+        warned about it forever."""
+        for name in CLIENT_LIMITS:
+            shipped = self.shipped(name)
+            self.write_project_config({name: _declare(shipped, shipped["min"])})
+            self.assertEqual([], self.disclosures_on_the_envelope(),
+                             "%s was configured legally and was disclosed anyway" % name)
+
+    def test_a_file_that_does_not_parse_is_reported_by_PATH_on_the_envelope(self):
+        file = self.write_raw("[limits.truncate_field_chars\nrecommended = = 5\n")
+
+        reported = self.disclosures_on_the_envelope()
+        self.assertEqual(1, len(reported), reported)
+        self.assertIn(file, reported[0],
+                      "the disclosure must name WHICH file it could not read -- a machine "
+                      "carries two crucible.toml files and the client owns exactly one")
+
+    def test_an_absent_file_is_reported_by_PATH_on_the_envelope(self):
+        expected = os.path.join(self.project_dir, "crucible.toml")
+        self.assertFalse(os.path.exists(expected))
+
+        reported = self.disclosures_on_the_envelope()
+        self.assertEqual(1, len(reported), reported)
+        self.assertIn(expected, reported[0])
+
+    def test_the_disclosure_rides_every_verbs_envelope_not_one_wired_verb(self):
+        """`emit_axi` is the one exit every verb of every client passes through,
+        and that is where the disclosure is wired. A second verb proves the
+        wiring is the shared exit rather than a line added to `status`."""
+        shipped = self.shipped("roadmap_list_rows")
+        file = self.write_project_config(
+            {"roadmap_list_rows": _declare(shipped, shipped["min"] - 1)})
+
+        for verb in ("status", "plans"):
+            reported = self.disclosures_on_the_envelope(verb)
+            self.assertEqual(1, len(reported), "%s: %r" % (verb, reported))
+            self.assertIn("roadmap_list_rows", reported[0], verb)
+            self.assertIn(file, reported[0], verb)
+
+    def test_the_disclosure_is_appended_to_the_warnings_the_run_already_carried(self):
+        """A disclosure that REPLACED the caller's findings would silence the
+        pre-flight attribution warning, the no-report warning and every other
+        `warnings[]` entry the fleet depends on. The run's own findings come
+        first -- they were decided first -- and the disclosure follows."""
+        shipped = self.shipped("truncate_field_chars")
+        self.write_project_config(
+            {"truncate_field_chars": _declare(shipped, shipped["max"] + 1)})
+
+        carried = {"code": "caller-finding", "detail": "decided before the exit"}
+        emit = _seam(self.axi, "emit_axi")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            emit("status", True, {}, {"projectKey": self.PROJECT_KEY}, [carried])
+        warnings = _load_module_by_path(
+            TOON_MODULE_PATH,
+            "crucible_toon_%d" % next(_COUNTER)).decode(stdout.getvalue())["axi"]["warnings"]
+
+        self.assertEqual(carried, warnings[0])
+        self.assertEqual(2, len(warnings), warnings)
+        self.assertEqual(_seam(self.axi, "LIMIT_CONFIGURATION_CODE"),
+                         warnings[1]["code"])
 
 
 if __name__ == "__main__":
