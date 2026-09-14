@@ -208,6 +208,41 @@ function tsDeclaration(source: string, name: string, file: string): RegExpExecAr
 }
 
 /**
+ * The BODY's opening brace, given the index of the parameter list's closing
+ * `)`. Not simply the next `{`.
+ *
+ * A return type can itself be an object type, and `src/limits.ts`'s `effective`
+ * is exactly that — `): { value: number; refusal: string | null } {`. Read
+ * naively, the walker stepped into the TYPE, balanced straight back out of it
+ * and reported the body as `{ value: number; refusal: string | null }`: a guard
+ * that had silently stopped guarding the function it named. MEASURED when §S3's
+ * scope was widened to the validators, 2026-09-14.
+ *
+ * The rule: a `{` belongs to the ANNOTATION when the last non-space character
+ * before it continues a type (`:` `|` `&` `,` `<` `=`). Anything else — a
+ * closed type's `}`, an identifier, the `)` itself — means the annotation is
+ * over and this brace opens the body.
+ */
+function tsBodyBrace(source: string, afterParams: number): number {
+  const TYPE_CONTINUATION = new Set([":", "|", "&", ",", "<", "="]);
+  let from = afterParams + 1;
+  for (;;) {
+    const brace = source.indexOf("{", from);
+    if (brace === -1) return -1;
+    let before = brace - 1;
+    while (before >= 0 && /\s/.test(source[before]!)) before--;
+    if (!TYPE_CONTINUATION.has(source[before] ?? "")) return brace;
+    let depth = 0;
+    let j = brace;
+    for (; j < source.length; j++) {
+      if (source[j] === "{") depth++;
+      else if (source[j] === "}" && --depth === 0) break;
+    }
+    from = j + 1;
+  }
+}
+
+/**
  * CR-CRU-131 §S3 — `file` and `keepStrings` are the EXTENSION points, and both
  * default to what CR-CRU-129 asserted, so the retention-path scan below is
  * byte-for-byte the scan it always was. `file` lets the same walker read
@@ -231,7 +266,7 @@ function retentionPathCode(
     if (source[i] === "(") parens++;
     else if (source[i] === ")" && --parens === 0) break;
   }
-  i = source.indexOf("{", i);
+  i = tsBodyBrace(source, i);
   expect(i, `no body found for ${name}`).toBeGreaterThan(-1);
 
   const code: string[] = [];
@@ -679,17 +714,89 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
  *  is what the ownership split means in packaging terms. */
 const DECLARATION_FILES = ["src/crucible.toml", "clients/crucible.toml"] as const;
 
-interface ResolutionSite {
+/** Anything this scan opens: a function, in one of the two trees, scoped BY
+ *  NAME so a rename fails loudly instead of quietly leaving the walker with
+ *  nothing to read. */
+interface ScannedSite {
   /** The file that ENFORCES the limit — repo-root relative. */
   file: string;
-  /** The function that produces the limit's number, scoped BY NAME. */
+  /** The function scoped BY NAME. */
   fn: string;
   language: "ts" | "py";
+}
+
+interface ResolutionSite extends ScannedSite {
+  /** The function that produces the limit's number. */
+  fn: string;
   /** The configuration call the body must actually MAKE (live code). */
   callee: string;
   /** …resolving THIS limit and not some other one (the call with its name). */
   seam: string;
 }
+
+/**
+ * CR-CRU-131 §S3 — the VALIDATOR half of the same rule.
+ *
+ * The six resolvers above answer "what does this limit RUN at". These four
+ * answer "is the operator's `value` ALLOWED", and they are where a hardcoded
+ * bound would do the most damage while looking most reasonable: a `min` or a
+ * `max` written here would judge every limit against a number that is not the
+ * one documented beside it, and the operator reading their own file would have
+ * no way to tell. The AC is explicit that the enforced bound and the
+ * documented bound are THE SAME DATA.
+ *
+ * The substance already holds — `src/limits.ts` and the client's loader carry
+ * no numeric literal anywhere, and the widen/narrow mutation proves it
+ * behaviourally — but a scan scoped to the six resolver bodies alone would let
+ * a bound added HERE ship green. So the constructional guard covers the
+ * validators too, in both trees, with the same walker and the same judge.
+ */
+interface ValidatorSite extends ScannedSite {
+  /** The declaration FIELDS the body must actually READ, so a validator that
+   *  decided for itself — or was wired to another table — cannot pass by
+   *  merely containing no digits. Matched against the SEAM projection, because
+   *  Python names its fields with string keys. */
+  reads: readonly string[];
+  /** An expression inside this body for the mutation to plant a literal
+   *  against, proving the scan can SEE one here. */
+  plant: string;
+}
+
+const VALIDATOR_SITES: readonly ValidatorSite[] = [
+  {
+    file: "src/limits.ts",
+    fn: "effective",
+    language: "ts",
+    reads: ["d.value", "d.min", "d.max", "d.recommended"],
+    plant: "d.recommended",
+  },
+  {
+    file: "src/limits.ts",
+    fn: "declaredFrom",
+    language: "ts",
+    reads: ["t.description", "t.recommended", "t.min", "t.max", "t.value"],
+    plant: "t.min",
+  },
+  {
+    file: "clients/_crucible_axi.py",
+    fn: "_effective_limit",
+    language: "py",
+    reads: [
+      `declaration.get("value")`,
+      `declaration["min"]`,
+      `declaration["max"]`,
+      `declaration["recommended"]`,
+    ],
+    plant: `declaration["recommended"]`,
+  },
+  {
+    file: "clients/_crucible_axi.py",
+    fn: "_declared_limit",
+    language: "py",
+    reads: [`table.get("description")`, `("recommended", "min", "max", "value")`],
+    plant: "dict(shipped)",
+  },
+];
 
 /**
  * The SIX resolution sites, one per declared limit. Named rather than searched
@@ -853,7 +960,7 @@ interface ScannedResolver {
   line: number;
 }
 
-function scanResolver(site: ResolutionSite, source: string): ScannedResolver {
+function scanResolver(site: ScannedSite, source: string): ScannedResolver {
   if (site.language === "ts") {
     const decl = tsDeclaration(source, site.fn, site.file);
     const at = decl.index + (source[decl.index] === "\n" ? 1 : 0);
@@ -888,6 +995,27 @@ function withReintroducedLiteral(source: string, site: ResolutionSite): string {
       ? `(${site.seam} ?? ${String(REINTRODUCED)})`
       : `(${site.seam} or ${String(REINTRODUCED)})`;
   return source.slice(0, at) + planted + source.slice(at + site.seam.length);
+}
+
+/** The same defect planted inside a VALIDATOR body. Anchored from the
+ *  function's own start rather than the file's, so an expression that also
+ *  appears elsewhere in the module still plants where it is meant to. */
+function withPlantedLiteral(source: string, site: ValidatorSite): string {
+  const start =
+    site.language === "ts"
+      ? tsDeclaration(source, site.fn, site.file).index
+      : pythonFunctionSpan(source, site.fn, site.file).index;
+  const at = source.indexOf(site.plant, start);
+  expect(
+    at,
+    `${site.file} \`${site.fn}\` does not contain \`${site.plant}\`, so the mutation has ` +
+      `nothing to plant against`,
+  ).toBeGreaterThan(-1);
+  const planted =
+    site.language === "ts"
+      ? `(${site.plant} ?? ${String(REINTRODUCED)})`
+      : `(${site.plant} or ${String(REINTRODUCED)})`;
+  return source.slice(0, at) + planted + source.slice(at + site.plant.length);
 }
 
 describe("§S3 — no numeric literal stands in for a configured limit, in either tree", () => {
@@ -1013,5 +1141,68 @@ describe("§S3 — no numeric literal stands in for a configured limit, in eithe
 
     // PER LIMIT: every declared limit was mutated, and every mutation was seen.
     expect(detected.sort()).toEqual([...declaredLimitNames()].sort());
+  });
+
+  test("the VALIDATOR that judges a value against its bounds holds no literal either — the enforced bound IS the documented data", () => {
+    const offenders: string[] = [];
+    const scanned: string[] = [];
+
+    for (const site of VALIDATOR_SITES) {
+      const scan = scanResolver(site, sourceOf(site.file));
+      const at = `${site.file}:${String(scan.line)} ${site.fn}`;
+      scanned.push(at);
+
+      // NON-VACUITY: the body must READ the declaration it is judging against.
+      // A validator that decided a bound for itself, or was wired to a table
+      // other than the operator's, would otherwise pass by merely containing
+      // no digits — which is the whole failure mode a literal creates.
+      for (const field of site.reads) {
+        expect(
+          scan.named.includes(field),
+          `${at} never reads \`${field}\` — it was read as ${JSON.stringify(scan.named)}`,
+        ).toBe(true);
+      }
+
+      for (const context of capLiteralsIn(scan.code)) offenders.push(`${at} — ${context}`);
+    }
+
+    // The walk opened every validator, in BOTH trees: a scan that read only the
+    // server's would hold the rule over half the fleet and report green for all
+    // of it, exactly as the resolver scan above refuses to.
+    expect(scanned.length).toBe(VALIDATOR_SITES.length);
+    expect([...new Set(VALIDATOR_SITES.map((s) => s.file.split("/")[0]!))].sort()).toEqual([
+      "clients",
+      "src",
+    ]);
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `§S3: a numeric literal is standing in for a declared BOUND — ${offenders.join(" | ")}. ` +
+          `A \`min\` or \`max\` written into the validator judges every limit against a number ` +
+          `that is not the one documented beside it in the file the operator edits, and the ` +
+          `operator reading that file has no way to tell.`,
+      );
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("a literal planted in ANY ONE of the four validators is reported — the widened scope really did widen", () => {
+    const detected: string[] = [];
+
+    for (const site of VALIDATOR_SITES) {
+      const mutated = withPlantedLiteral(sourceOf(site.file), site);
+      const scan = scanResolver(site, mutated);
+      if (capLiteralsIn(scan.code).some((context) => context.includes(String(REINTRODUCED)))) {
+        detected.push(`${site.file} ${site.fn}`);
+        continue;
+      }
+      throw new Error(
+        `§S3: a bound planted at ${site.file}:${String(scan.line)} \`${site.fn}\` was NOT ` +
+          `reported. The scan is reading ${JSON.stringify(scan.code)}, so the rule does not ` +
+          `hold over that validator and a hardcoded bound would ship green.`,
+      );
+    }
+
+    expect(detected.length).toBe(VALIDATOR_SITES.length);
   });
 });
