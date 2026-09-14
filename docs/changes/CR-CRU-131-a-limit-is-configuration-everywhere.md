@@ -234,6 +234,20 @@ ownership negatives C1 asserts in tests — and the tests are the behaviour.
 Each table keeps its inert-here marker on the TABLE, not only under the section banner: an operator
 navigating to `[limits.retention]` to add a `value` arrives at the table, not at the banner above it.
 
+**No test resolves configuration from the repo's own `data/`.** The server's file is untracked
+operator state — tracking it would turn an operator's edit into a git diff on every install, which
+is what this installer split exists to avoid. But that creates a divergence: on a developer's
+machine `data/crucible.toml` exists and a suite run from the repo root resolves its cap; on a fresh
+clone or in CI it does not, and the same suite resolves none. Green here, red there, surfacing at
+gate time wearing an unrelated face.
+
+So every suite that cares about a limit points `$CRUCIBLE_DB` at a temporary directory and owns its
+own config file, and a guard asserts it — making the isolation C2 applied by hand into a property
+the suite enforces. C2 RED found the first instance of this hazard by measurement:
+`milestone-records-are-queryable-by-type.test.ts` ingests 5001 events and asserts more than 5000 are
+held, so the moment a 5000-row recommendation became resolvable from the repo root it would have
+capped at exactly 5000 and failed for a reason nothing in its own text mentions.
+
 A repo-root `crucible.toml` is a file in a git checkout. Neither install package ships one, so an
 installed deployment would resolve every limit from a file that does not exist. Measured 2026-09-14:
 
