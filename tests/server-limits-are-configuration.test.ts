@@ -21,6 +21,7 @@
 //
 //   export interface LimitDeclaration {
 //     description: string; recommended: number; min: number; max: number;
+//     value?: number;
 //   }
 //   export const SERVER_LIMIT_NAMES: readonly string[];
 //   export function shippedLimits(): Record<string, LimitDeclaration>;
@@ -32,10 +33,25 @@
 // `shippedLimits()` is the PACKAGE DATA table — the last resort, readable
 // without the operator's file being present or even valid, which is what makes
 // "no literal in source" reachable (§S1c). `limitDeclarations()` is what is in
-// EFFECT: the operator's file when it parses, the shipped table otherwise. The
-// operator's file carries the same four fields, and the field an operator
-// EDITS to change a limit is `recommended` — which is why widening `max` in
-// that same table can make a previously-refused `recommended` resolve.
+// EFFECT: the operator's file when it parses, the shipped table otherwise.
+//
+// ── The four fields are DOCUMENTATION; `value` is the operator's setting ────
+//
+// `description`, `recommended`, `min` and `max` are IMMUTABLE documentation.
+// The operator's own choice is a SEPARATE, OPTIONAL `value` in the same table:
+// with no `value` the limit resolves to `recommended`, with one it resolves to
+// `value`, range-checked against the `min`/`max` sitting beside it.
+//
+// An operator who instead overwrote `recommended` in place would destroy, in
+// the very file they read, the record of what we recommend — and would then be
+// one upgrade away from not knowing whether the number in front of them is
+// ours or theirs. That is why a test below asserts that setting a `value`
+// leaves `recommended` reading as the SHIPPED recommendation: it is the
+// assertion that stops a later simplification back to editing in place.
+//
+// The widen/narrow proof is unaffected by the split, and that is the point:
+// the value and the bound that judges it still live in ONE table, so widening
+// `max` there can still make a previously-refused `value` resolve.
 //
 // ── Read at the POINT OF USE, not imported ─────────────────────────────────
 //
@@ -76,7 +92,13 @@ import { Store } from "../src/store.ts";
 import { startServer, retentionDisclosure } from "../src/server.ts";
 import type { SuiteNode } from "../src/types.ts";
 
-/** The four fields §S1b requires of every limit. A vocabulary, not a limit. */
+/**
+ * The four fields §S1b requires of every limit — DOCUMENTATION, all of it.
+ * A vocabulary, not a limit.
+ *
+ * `value` is deliberately NOT one of them: it is the operator's own setting,
+ * optional, and absent from every shipped declaration.
+ */
 const DECLARED_FIELDS = ["description", "recommended", "min", "max"] as const;
 
 /**
@@ -104,6 +126,8 @@ interface LimitDeclaration {
   recommended: number;
   min: number;
   max: number;
+  /** The OPERATOR's own setting. Absent on every shipped declaration. */
+  value?: number;
 }
 
 interface LimitsModule {
@@ -195,7 +219,8 @@ function serverConfigDir(): string {
   return dir;
 }
 
-/** Render `[limits.<name>]` tables — the shape an operator edits. */
+/** Render `[limits.<name>]` tables — the shape an operator meets: four fields
+ *  of documentation, and their own `value` only where they set one. */
 function toml(tables: Record<string, LimitDeclaration>): string {
   return Object.entries(tables)
     .map(
@@ -204,7 +229,8 @@ function toml(tables: Record<string, LimitDeclaration>): string {
         `description = ${JSON.stringify(d.description)}\n` +
         `recommended = ${d.recommended}\n` +
         `min = ${d.min}\n` +
-        `max = ${d.max}\n`,
+        `max = ${d.max}\n` +
+        (d.value === undefined ? "" : `value = ${d.value}\n`),
     )
     .join("\n");
 }
@@ -222,22 +248,40 @@ function writeRaw(dir: string, text: string): string {
 }
 
 /**
- * The operator's declaration of ONE limit: the shipped documentation with the
- * value the operator chose substituted for `recommended`, and `min`/`max`
- * optionally re-stated. Everything a test configures goes through here, so no
- * test ever writes a bound the shipped table did not supply.
+ * The same limit as the operator finds it BEFORE touching anything: four
+ * fields of documentation and no `value` at all. This is what an installed,
+ * unedited `crucible.toml` holds, and a limit must resolve to `recommended`
+ * from it. `min`/`max` may be re-stated so the widen/narrow tests can move the
+ * bound a value is judged against; no test ever writes a bound the shipped
+ * table did not supply.
+ */
+function documentOnly(
+  shipped: LimitDeclaration,
+  bounds?: { min?: number; max?: number },
+): LimitDeclaration {
+  return {
+    description: shipped.description,
+    recommended: shipped.recommended,
+    min: bounds?.min ?? shipped.min,
+    max: bounds?.max ?? shipped.max,
+  };
+}
+
+/**
+ * The operator's file for ONE limit they HAVE set: the shipped documentation
+ * carried through VERBATIM — `description` and `recommended` untouched — plus
+ * their own `value` beside it.
+ *
+ * `recommended` is never overwritten here, and that is deliberate: this helper
+ * is the only way a test configures anything, so no test CAN accidentally
+ * express the in-place edit the schema exists to prevent.
  */
 function declare(
   shipped: LimitDeclaration,
   value: number,
   bounds?: { min?: number; max?: number },
 ): LimitDeclaration {
-  return {
-    description: shipped.description,
-    recommended: value,
-    min: bounds?.min ?? shipped.min,
-    max: bounds?.max ?? shipped.max,
-  };
+  return { ...documentOnly(shipped, bounds), value };
 }
 
 const emptyTree: SuiteNode[] = [];
@@ -435,6 +479,51 @@ describe("CR-CRU-131 §S1b — every server limit declares itself", () => {
     expect(empty).toEqual([]);
     expect(echoes).toEqual([]);
   });
+
+  test("a shipped declaration carries NO value — the four fields are documentation, not a setting", async () => {
+    const { shippedLimits } = await limits();
+    const table = shippedLimits();
+    const preset = SERVER_LIMITS.filter((name) => table[name]?.value !== undefined);
+    expect(
+      preset,
+      "the shipped table documents what we recommend; a `value` in it would be us " +
+        "configuring the operator's install on their behalf",
+    ).toEqual([]);
+  });
+
+  test("setting a value leaves `recommended` still reading as the SHIPPED recommendation", async () => {
+    // The assertion that stops a later simplification back to editing
+    // `recommended` in place. An operator who overwrote it would destroy, in
+    // the very file they read, the record of what we recommend — and would be
+    // one upgrade away from not knowing whose number is in front of them.
+    const dir = serverConfigDir();
+    const mod = await limits();
+
+    for (const name of SERVER_LIMITS) {
+      const shipped = mod.shippedLimits()[name]!;
+      const chosen = shipped.min;
+      expect(chosen, `${name}: pick a value distinguishable from the recommendation`).not.toBe(
+        shipped.recommended,
+      );
+      const file = writeConfig(dir, { [name]: declare(shipped, chosen) });
+
+      // What the operator READS back out of their own file.
+      const parsed = Bun.TOML.parse(fs.readFileSync(file, "utf8")) as {
+        limits: Record<string, LimitDeclaration>;
+      };
+      expect(parsed.limits[name]!.recommended, `${name}: the documentation was overwritten`).toBe(
+        shipped.recommended,
+      );
+      expect(parsed.limits[name]!.value).toBe(chosen);
+
+      // …and what the loader reports as in effect says the same.
+      const effective = mod.limitDeclarations()[name]!;
+      expect(effective.recommended).toBe(shipped.recommended);
+      expect(effective.value).toBe(chosen);
+      // …while the limit actually RUNS at the operator's number.
+      expect(mod.resolveLimit(name)).toBe(chosen);
+    }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -448,17 +537,20 @@ describe("CR-CRU-131 §S1b — every server limit declares itself", () => {
 // reads the compiled number instead of the configured one.
 
 describe("CR-CRU-131 §S1 — run_abandon_ms resolves from the server's file", () => {
-  test("the configured deadline decides when the sweep abandons an open run, and spares one that has not reached it", async () => {
+  test("the operator's `value` decides when the sweep abandons an open run; a declaration with no `value` runs at its `recommended`", async () => {
     const dir = serverConfigDir();
     const shipped = (await limits()).shippedLimits().run_abandon_ms!;
     // The smallest deadline the declaration admits: legal by construction, and
     // far from the shipped recommendation, so a resolver that ignored the file
     // would land somewhere else.
     const deadline = shipped.min;
+    expect(deadline, "the two halves below must be distinguishable").toBeLessThan(
+      shipped.recommended,
+    );
     writeConfig(dir, { run_abandon_ms: declare(shipped, deadline) });
 
     const store = Store.open(":memory:");
-    const key = projectOutlivingHorizon(store, deadline);
+    const key = projectOutlivingHorizon(store, shipped.recommended);
     const run = store.startRun(key, "abandon-subject");
 
     // NEGATIVE — one millisecond short of the configured deadline settles
@@ -466,10 +558,21 @@ describe("CR-CRU-131 §S1 — run_abandon_ms resolves from the server's file", (
     expect(store.sweepOpenRuns(run.startedAt + deadline - 1)).toEqual([]);
     expect(store.listOpenRuns(key).map((r) => r.runId)).toEqual([run.runId]);
 
-    // POSITIVE — at the configured deadline, aborted for exactly that reason.
+    // POSITIVE — at the operator's value, aborted for exactly that reason.
     const aborted = store.sweepOpenRuns(run.startedAt + deadline);
     expect(aborted.map((e) => e.abortReason)).toEqual(["abandoned"]);
     expect(store.listOpenRuns(key)).toEqual([]);
+
+    // THE OTHER WAY — the same limit as an operator finds it before touching
+    // anything: four fields of documentation, no `value`. It runs at the
+    // recommendation, so the deadline they had set no longer settles anything.
+    writeConfig(dir, { run_abandon_ms: documentOnly(shipped) });
+    const untouchedKey = projectOutlivingHorizon(store, shipped.recommended, "untouched");
+    const untouched = store.startRun(untouchedKey, "untouched-agent");
+    expect(store.sweepOpenRuns(untouched.startedAt + deadline)).toEqual([]);
+    expect(
+      store.sweepOpenRuns(untouched.startedAt + shipped.recommended).map((e) => e.abortReason),
+    ).toEqual(["abandoned"]);
   });
 
   test("EDITING the file moves the deadline on the NEXT sweep, with no restart — a cached table fails here", async () => {
@@ -512,19 +615,38 @@ describe("CR-CRU-131 §S1 — run_abandon_ms resolves from the server's file", (
 });
 
 describe("CR-CRU-131 §S1 — project_inactive_ms resolves from the server's file", () => {
-  test("the configured window decides which projects read inactive on GET /api/v2/projects", async () => {
+  test("the operator's `value` decides which projects read inactive on GET /api/v2/projects; with no `value` the recommendation does", async () => {
     const dir = serverConfigDir();
     const shipped = (await limits()).shippedLimits().project_inactive_ms!;
     const window = shipped.min;
+    expect(window, "the two halves below must be distinguishable").toBeLessThan(
+      shipped.recommended,
+    );
     writeConfig(dir, { project_inactive_ms: declare(shipped, window) });
 
     const handle = boot();
     const fresh = projectLastActiveAgo(handle.store, Math.floor(window / 2), "within-window");
     const stale = projectLastActiveAgo(handle.store, window * 2, "beyond-window");
+    // Old enough to exceed the operator's window but not the recommendation:
+    // the ONLY project whose verdict differs between the two halves, which is
+    // what makes the second half a claim about the resolution and not about
+    // the fixtures.
+    const between = projectLastActiveAgo(
+      handle.store,
+      window + Math.floor((shipped.recommended - window) / 2),
+      "between-the-two",
+    );
 
-    const active = await activeFlags(handle);
-    expect(active.get(fresh)).toBe(true);
-    expect(active.get(stale)).toBe(false);
+    const configured = await activeFlags(handle);
+    expect(configured.get(fresh)).toBe(true);
+    expect(configured.get(stale)).toBe(false);
+    expect(configured.get(between)).toBe(false);
+
+    // THE OTHER WAY — documentation only, no `value`.
+    writeConfig(dir, { project_inactive_ms: documentOnly(shipped) });
+    const recommended = await activeFlags(handle);
+    expect(recommended.get(between)).toBe(true);
+    expect(recommended.get(fresh)).toBe(true);
   });
 
   test("EDITING the file re-decides activity on the NEXT read, with no restart — a cached table fails here", async () => {
@@ -551,7 +673,7 @@ describe("CR-CRU-131 §S1 — project_inactive_ms resolves from the server's fil
 });
 
 describe("CR-CRU-131 §S1 — retention's fleet fallback resolves from the server's file", () => {
-  test("the configured fleet cap evicts telemetry down to itself for a project that declares none", async () => {
+  test("the operator's `value` caps telemetry for a project that declares none; with no `value` the recommendation does", async () => {
     const dir = serverConfigDir();
     const shipped = (await limits()).shippedLimits().retention!;
     const cap = shipped.min;
@@ -560,6 +682,9 @@ describe("CR-CRU-131 §S1 — retention's fleet fallback resolves from the serve
       "retention's floor must stay small enough that a behavioural eviction test is practical; " +
         "a floor in the tens of thousands is a floor nobody can observe",
     ).toBeLessThanOrEqual(10_000);
+    expect(shipped.recommended, "the two halves below must be distinguishable").toBeGreaterThan(
+      cap + 2,
+    );
     writeConfig(dir, { retention: declare(shipped, cap) });
 
     const store = Store.open(":memory:");
@@ -569,9 +694,18 @@ describe("CR-CRU-131 §S1 — retention's fleet fallback resolves from the serve
 
     ingest(store, key, cap + 2);
 
-    // POSITIVE, and bounded: exactly the configured cap survives — not "at
+    // POSITIVE, and bounded: exactly the operator's cap survives — not "at
     // most", not "fewer than everything".
     expect(eventCount(store, key)).toBe(cap);
+
+    // THE OTHER WAY — documentation only. The recommendation is wider than
+    // anything ingested here, so the next ingest evicts nothing and the two
+    // rows the operator's cap had already dropped stay dropped.
+    writeConfig(dir, { retention: documentOnly(shipped) });
+    const untouched = crypto.randomUUID();
+    store.addProject({ key: untouched, name: "fleet-default", type: "backend", sutRoot: "/tmp/rd" });
+    ingest(store, untouched, cap + 2);
+    expect(eventCount(store, untouched)).toBe(cap + 2);
   });
 
   test("EDITING the file moves the fleet cap on the NEXT ingest, with no restart — a cached table fails here", async () => {
@@ -815,60 +949,63 @@ describe("CR-CRU-131 §S1b — a value outside [min, max] is REFUSED at resoluti
     const dir = serverConfigDir();
     const mod = await limits();
     const shipped = mod.shippedLimits().run_abandon_ms!;
-    const value = shipped.min;
-    expect(value, "the chosen value must be distinguishable from the fallback").toBeLessThan(
-      shipped.recommended,
+    // A value ABOVE the recommendation, so narrowing `max` beneath it leaves
+    // `recommended` — the fallback — still inside the range it documents.
+    const value = shipped.max;
+    expect(shipped.recommended, "the value and the fallback must be distinguishable").toBeLessThan(
+      value,
     );
 
-    // The operator declares a legal VALUE but a ceiling below it. Refused.
+    // The operator sets a value and a ceiling below it. Refused.
     writeConfig(dir, { run_abandon_ms: declare(shipped, value, { max: value - 1 }) });
     expect(mod.resolveLimit("run_abandon_ms")).toBe(shipped.recommended);
     expect(refusalFor(mod.limitDisclosures(), "run_abandon_ms")).toBeDefined();
 
     const store = Store.open(":memory:");
-    const keyBefore = projectOutlivingHorizon(store, shipped.recommended, "before-widening");
+    const keyBefore = projectOutlivingHorizon(store, value, "before-widening");
     const before = store.startRun(keyBefore, "before-widening-agent");
-    expect(store.sweepOpenRuns(before.startedAt + value)).toEqual([]);
+    expect(store.sweepOpenRuns(before.startedAt + shipped.recommended).map((e) => e.abortReason)).toEqual(
+      ["abandoned"],
+    );
 
-    // ONE field changes: `max`. The value the operator asked for is untouched.
+    // ONE field changes: `max`. The `value` the operator asked for, and the
+    // `recommended` documenting what we stand behind, are both untouched.
     writeConfig(dir, { run_abandon_ms: declare(shipped, value, { max: shipped.max }) });
 
     expect(mod.resolveLimit("run_abandon_ms")).toBe(value);
     expect(refusalFor(mod.limitDisclosures(), "run_abandon_ms")).toBeUndefined();
 
-    const keyAfter = projectOutlivingHorizon(store, shipped.recommended, "after-widening");
+    const keyAfter = projectOutlivingHorizon(store, value, "after-widening");
     const after = store.startRun(keyAfter, "after-widening-agent");
-    expect(store.sweepOpenRuns(after.startedAt + value).map((e) => e.abortReason)).toEqual([
-      "abandoned",
-    ]);
+    expect(store.sweepOpenRuns(after.startedAt + shipped.recommended)).toEqual([]);
   });
 
   test("NARROWING max in the file makes a previously-accepted value refuse — the enforced bound and the documented bound are one datum", async () => {
     const dir = serverConfigDir();
     const mod = await limits();
     const shipped = mod.shippedLimits().run_abandon_ms!;
-    const value = shipped.min;
-    expect(value).toBeLessThan(shipped.recommended);
+    const value = shipped.max;
+    expect(shipped.recommended).toBeLessThan(value);
 
     writeConfig(dir, { run_abandon_ms: declare(shipped, value) });
     expect(mod.resolveLimit("run_abandon_ms")).toBe(value);
 
     const store = Store.open(":memory:");
-    const keyBefore = projectOutlivingHorizon(store, shipped.recommended, "before-narrowing");
+    const keyBefore = projectOutlivingHorizon(store, value, "before-narrowing");
     const before = store.startRun(keyBefore, "before-narrowing-agent");
-    expect(store.sweepOpenRuns(before.startedAt + value).map((e) => e.abortReason)).toEqual([
-      "abandoned",
-    ]);
+    expect(store.sweepOpenRuns(before.startedAt + shipped.recommended)).toEqual([]);
 
-    // ONE field changes: `max` drops below the value already in the file.
+    // ONE field changes: `max` drops below the `value` already in the file.
     writeConfig(dir, { run_abandon_ms: declare(shipped, value, { max: value - 1 }) });
 
     expect(mod.resolveLimit("run_abandon_ms")).toBe(shipped.recommended);
     expect(refusalFor(mod.limitDisclosures(), "run_abandon_ms")).toBeDefined();
 
-    const keyAfter = projectOutlivingHorizon(store, shipped.recommended, "after-narrowing");
+    const keyAfter = projectOutlivingHorizon(store, value, "after-narrowing");
     const after = store.startRun(keyAfter, "after-narrowing-agent");
-    expect(store.sweepOpenRuns(after.startedAt + value)).toEqual([]);
+    expect(store.sweepOpenRuns(after.startedAt + shipped.recommended).map((e) => e.abortReason)).toEqual(
+      ["abandoned"],
+    );
   });
 });
 
@@ -899,7 +1036,7 @@ describe("CR-CRU-131 §S1b — a limit is owned by the process that enforces it"
     const parsed = Bun.TOML.parse(fs.readFileSync(wrongFile, "utf8")) as {
       limits: Record<string, LimitDeclaration>;
     };
-    expect(parsed.limits.run_abandon_ms!.recommended).toBe(value);
+    expect(parsed.limits.run_abandon_ms!.value).toBe(value);
 
     // …and the server does not see it: it runs at the shipped recommendation.
     expect(mod.resolveLimit("run_abandon_ms")).toBe(shipped.recommended);

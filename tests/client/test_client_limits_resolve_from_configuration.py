@@ -40,10 +40,25 @@ keep their pure signatures.
 
 `shipped_limits()` is the PACKAGE DATA table -- the last resort, readable
 without the operator's file being present or even valid, which is what makes
-"no literal in source" reachable (§S1c) rather than aspirational. The field an
-operator EDITS to change a limit is `recommended`, in their own file, beside
-the `min`/`max` the validator reads -- which is why widening `max` there can
-make a previously-refused value resolve.
+"no literal in source" reachable (§S1c) rather than aspirational.
+
+── The four fields are DOCUMENTATION; `value` is the operator's setting ────
+
+`description`, `recommended`, `min` and `max` are IMMUTABLE documentation. The
+operator's own choice is a SEPARATE, OPTIONAL `value` in the same table: with
+no `value` the limit resolves to `recommended`, with one it resolves to
+`value`, range-checked against the `min`/`max` sitting beside it.
+
+An operator who instead overwrote `recommended` in place would destroy, in the
+very file they read, the record of what we recommend -- and would then be one
+upgrade away from not knowing whether the number in front of them is ours or
+theirs. That is why a test below asserts that setting a `value` leaves
+`recommended` reading as the SHIPPED recommendation: it is the assertion that
+stops a later simplification back to editing in place.
+
+The widen/narrow proof is unaffected by the split, and that is the point: the
+value and the bound that judges it still live in ONE table, so widening `max`
+there can still make a previously-refused `value` resolve.
 
 ── Read at the POINT OF USE ───────────────────────────────────────────────
 
@@ -52,6 +67,24 @@ second differs. Each asserts the FIRST call's behaviour before the edit, so
 "it changed" is a claim about the edit and not about the fixture. A loader that
 parsed the table once at import time -- the easiest way to satisfy every other
 test here and lose the contract later -- fails exactly there.
+
+That this is a real failure mode and not a theoretical one was MEASURED on the
+server side of the same CR, 2026-09-14, bun 1.3.14: `(await
+import(p)).default…recommended` returned 1800000 both BEFORE and AFTER the file
+was rewritten to 999, while a re-read of the same path saw 999. The module
+graph caches; a file read does not. Python's equivalent trap is one line
+shorter and already in the tree -- `TRUNCATE_LIMIT`, `NO_REPORT_DETAIL_MAX` and
+`ROADMAP_LIST_LIMIT` are bound as DEFAULT ARGUMENT values at def time, which is
+the same cache with an even earlier expiry.
+
+── Why the seam is reached per test, never at module scope ────────────────
+
+`_load_module_by_path` runs a FRESH copy of the shared module per test and
+`_seam()` raises a named error for each missing member. A single module-scope
+import would collapse 29 contracts into one collection error that tells GREEN
+nothing about which of them it has satisfied; this way each test fails on its
+own and says what it wanted. It also keeps one test's `bind_project_dir` out of
+the next one's state.
 
 ── No test pins a limit VALUE (PRD §4.13, user ruling) ────────────────────
 
@@ -103,7 +136,10 @@ CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 BUN_CLIENT_PATH = CLIENTS_DIR / "bun-crucible.py"
 
-#: The four fields §S1b requires of every limit. A vocabulary, not a limit.
+#: The four fields §S1b requires of every limit -- DOCUMENTATION, all of it.
+#: A vocabulary, not a limit. `value` is deliberately NOT one of them: it is
+#: the operator's own setting, optional, and absent from every shipped
+#: declaration.
 DECLARED_FIELDS = ("description", "recommended", "min", "max")
 
 #: The three limits a CLIENT enforces, by their OWN names -- not
@@ -176,30 +212,48 @@ def _seam(axi, name):
 
 
 def _toml(tables):
-    """Render `[limits.<name>]` tables -- the shape an operator edits."""
+    """Render `[limits.<name>]` tables -- the shape an operator meets: four
+    fields of documentation, and their own `value` only where they set one."""
     out = []
     for name, d in tables.items():
-        out.append(
-            "[limits.%s]\n"
-            "description = %s\n"
-            "recommended = %d\n"
-            "min = %d\n"
-            "max = %d\n" % (name, json.dumps(d["description"]), d["recommended"],
-                            d["min"], d["max"]))
+        block = ("[limits.%s]\n"
+                 "description = %s\n"
+                 "recommended = %d\n"
+                 "min = %d\n"
+                 "max = %d\n" % (name, json.dumps(d["description"]),
+                                 d["recommended"], d["min"], d["max"]))
+        if d.get("value") is not None:
+            block += "value = %d\n" % d["value"]
+        out.append(block)
     return "\n".join(out)
 
 
-def _declare(shipped, value, minimum=None, maximum=None):
-    """The operator's declaration of ONE limit: the shipped documentation with
-    the chosen value substituted for `recommended`, and `min`/`max` optionally
-    re-stated. Everything a test configures goes through here, so no test ever
-    writes a bound the shipped table did not supply."""
+def _document_only(shipped, minimum=None, maximum=None):
+    """The same limit as the operator finds it BEFORE touching anything: four
+    fields of documentation and no `value` at all. This is what an installed,
+    unedited `crucible.toml` holds, and a limit must resolve to `recommended`
+    from it. `min`/`max` may be re-stated so the widen/narrow tests can move
+    the bound a value is judged against; no test ever writes a bound the
+    shipped table did not supply."""
     return {
         "description": shipped["description"],
-        "recommended": value,
+        "recommended": shipped["recommended"],
         "min": shipped["min"] if minimum is None else minimum,
         "max": shipped["max"] if maximum is None else maximum,
     }
+
+
+def _declare(shipped, value, minimum=None, maximum=None):
+    """The operator's file for ONE limit they HAVE set: the shipped
+    documentation carried through VERBATIM -- `description` and `recommended`
+    untouched -- plus their own `value` beside it.
+
+    `recommended` is never overwritten here, and that is deliberate: this
+    helper is the only way a test configures anything, so no test CAN
+    accidentally express the in-place edit the schema exists to prevent."""
+    declaration = _document_only(shipped, minimum, maximum)
+    declaration["value"] = value
+    return declaration
 
 
 class _ClientLimitsTestCase(unittest.TestCase):
@@ -360,6 +414,47 @@ class ClientLimitSchemaTest(_ClientLimitsTestCase):
         self.assertEqual([], echoes,
                          "description repeats the limit's own key: %r" % (echoes,))
 
+    def test_a_shipped_declaration_carries_no_value_of_its_own(self):
+        """The four fields are DOCUMENTATION, not a setting. A `value` in the
+        shipped table would be us configuring the operator's install on their
+        behalf -- which is the defect one layer up from the one this CR
+        deletes."""
+        table = _seam(self.axi, "shipped_limits")()
+        preset = [name for name in CLIENT_LIMITS
+                  if table.get(name, {}).get("value") is not None]
+        self.assertEqual([], preset)
+
+    def test_setting_a_value_leaves_recommended_reading_as_the_shipped_recommendation(self):
+        """The assertion that stops a later simplification back to editing
+        `recommended` in place. An operator who overwrote it would destroy, in
+        the very file they read, the record of what we recommend -- and would
+        be one upgrade away from not knowing whose number is in front of
+        them."""
+        resolve = _seam(self.axi, "resolve_limit")
+        declarations = _seam(self.axi, "limit_declarations")
+
+        for name in CLIENT_LIMITS:
+            shipped = self.shipped(name)
+            chosen = shipped["min"]
+            self.assertNotEqual(
+                chosen, shipped["recommended"],
+                "%s: pick a value distinguishable from the recommendation" % name)
+            file = self.write_project_config({name: _declare(shipped, chosen)})
+
+            # What the operator READS back out of their own file.
+            with open(file, "rb") as fh:
+                parsed = tomllib.load(fh)["limits"][name]
+            self.assertEqual(shipped["recommended"], parsed["recommended"],
+                             "%s: the documentation was overwritten" % name)
+            self.assertEqual(chosen, parsed["value"])
+
+            # …and what the loader reports as in effect says the same.
+            effective = declarations()[name]
+            self.assertEqual(shipped["recommended"], effective["recommended"])
+            self.assertEqual(chosen, effective.get("value"))
+            # …while the limit actually RUNS at the operator's number.
+            self.assertEqual(chosen, resolve(name))
+
 
 # ===========================================================================
 # §S1 -- each limit resolves FROM THE FILE, at the point of use
@@ -367,12 +462,14 @@ class ClientLimitSchemaTest(_ClientLimitsTestCase):
 
 class TruncateFieldCharsResolutionTest(_ClientLimitsTestCase):
 
-    def test_the_configured_width_decides_where_a_large_text_field_is_cut(self):
+    def test_the_operators_value_decides_the_cut_and_no_value_falls_to_recommended(self):
         """RED. `truncate_field` binds `limit=TRUNCATE_LIMIT` as a default
         argument (clients/_crucible_axi.py:519), so the configured file changes
         nothing and the cut lands on the compiled number."""
         shipped = self.shipped("truncate_field_chars")
         width = shipped["min"]
+        self.assertLess(width, shipped["recommended"],
+                        "the two halves below must be distinguishable")
         self.write_project_config({"truncate_field_chars": _declare(shipped, width)})
 
         self.assertEqual(width, self.visible_width())
@@ -385,6 +482,11 @@ class TruncateFieldCharsResolutionTest(_ClientLimitsTestCase):
         # GUARD -- `--full` still defeats the limit per invocation.
         long_text = "z" * (width + 500)
         self.assertEqual(long_text, self.axi.truncate_field(long_text, full=True))
+
+        # THE OTHER WAY -- the same limit as an operator finds it before
+        # touching anything: four fields of documentation, no `value`.
+        self.write_project_config({"truncate_field_chars": _document_only(shipped)})
+        self.assertEqual(shipped["recommended"], self.visible_width())
 
     def test_editing_the_file_moves_the_cut_on_the_next_call_with_no_restart(self):
         """RED, and the one contract easiest to satisfy accidentally and lose
@@ -409,12 +511,14 @@ class ErrorDetailCharsResolutionTest(_ClientLimitsTestCase):
 
     LONG = "ModuleNotFoundError: No module named 'xmlrunner' " + ("q" * 40_000)
 
-    def test_the_configured_bound_decides_how_much_of_a_runner_failure_is_shown(self):
+    def test_the_operators_value_bounds_the_failure_detail_and_no_value_falls_to_recommended(self):
         """RED. `no_report_warning` sizes its cause fragment off
         NO_REPORT_DETAIL_MAX (clients/_crucible_axi.py:1106, :1119), a module
         constant, so the configured file changes nothing."""
         shipped = self.shipped("error_detail_chars")
         bound = shipped["min"]
+        self.assertLess(bound, shipped["recommended"],
+                        "the two halves below must be distinguishable")
         self.write_project_config({"error_detail_chars": _declare(shipped, bound)})
 
         detail = self.axi.no_report_warning("regression", "junit.xml", 1, self.LONG)["detail"]
@@ -425,6 +529,12 @@ class ErrorDetailCharsResolutionTest(_ClientLimitsTestCase):
         # NEGATIVE -- bounded, not emptied: the cause still reaches the consumer.
         self.assertIn("regression", detail)
         self.assertIn("1", detail)
+
+        # THE OTHER WAY -- documentation only, no `value`.
+        self.write_project_config({"error_detail_chars": _document_only(shipped)})
+        wider = self.detail_length(self.LONG)
+        self.assertLessEqual(wider, shipped["recommended"])
+        self.assertGreater(wider, bound)
 
     def test_editing_the_file_moves_the_bound_on_the_next_call_with_no_restart(self):
         shipped = self.shipped("error_detail_chars")
@@ -448,11 +558,13 @@ class ErrorDetailCharsResolutionTest(_ClientLimitsTestCase):
 
 class RoadmapListRowsResolutionTest(_ClientLimitsTestCase):
 
-    def test_the_configured_length_decides_how_many_roadmap_rows_are_emitted(self):
+    def test_the_operators_value_decides_the_list_length_and_no_value_falls_to_recommended(self):
         """RED. `truncate_rows` binds `limit=ROADMAP_LIST_LIMIT` as a default
         argument (clients/_crucible_axi.py:3722)."""
         shipped = self.shipped("roadmap_list_rows")
         rows = shipped["min"]
+        self.assertLess(rows, shipped["recommended"],
+                        "the two halves below must be distinguishable")
         self.write_project_config({"roadmap_list_rows": _declare(shipped, rows)})
 
         self.assertEqual(rows, self.visible_rows(rows + 5))
@@ -463,6 +575,11 @@ class RoadmapListRowsResolutionTest(_ClientLimitsTestCase):
         # GUARD -- `--full` still emits the list whole.
         whole = [{"cr": "CR-SHIPPED-%03d" % i} for i in range(rows + 5)]
         self.assertEqual(rows + 5, len(self.axi.truncate_rows(whole, full=True)))
+
+        # THE OTHER WAY -- documentation only, no `value`.
+        self.write_project_config({"roadmap_list_rows": _document_only(shipped)})
+        self.assertEqual(shipped["recommended"],
+                         self.visible_rows(shipped["recommended"] + 5))
 
     def test_editing_the_file_moves_the_length_on_the_next_call_with_no_restart(self):
         shipped = self.shipped("roadmap_list_rows")
@@ -604,9 +721,12 @@ class ClientLimitRangeTest(_ClientLimitsTestCase):
         field changes between the two halves -- `max` -- and the value the
         operator asked for is untouched."""
         shipped = self.shipped("truncate_field_chars")
-        value = shipped["min"]
-        self.assertLess(value, shipped["recommended"],
-                        "the chosen value must be distinguishable from the fallback")
+        # A value ABOVE the recommendation, so narrowing `max` beneath it
+        # leaves `recommended` -- the fallback -- still inside the range it
+        # documents.
+        value = shipped["max"]
+        self.assertLess(shipped["recommended"], value,
+                        "the value and the fallback must be distinguishable")
         resolve = _seam(self.axi, "resolve_limit")
 
         self.write_project_config(
@@ -623,8 +743,8 @@ class ClientLimitRangeTest(_ClientLimitsTestCase):
 
     def test_narrowing_max_makes_a_previously_accepted_value_refuse(self):
         shipped = self.shipped("truncate_field_chars")
-        value = shipped["min"]
-        self.assertLess(value, shipped["recommended"])
+        value = shipped["max"]
+        self.assertLess(shipped["recommended"], value)
         resolve = _seam(self.axi, "resolve_limit")
 
         self.write_project_config({"truncate_field_chars": _declare(shipped, value)})
@@ -665,7 +785,7 @@ class ClientLimitOwnershipTest(_ClientLimitsTestCase):
         # string the test just wrote.
         with open(wrong_file, "rb") as fh:
             parsed = tomllib.load(fh)
-        self.assertEqual(value, parsed["limits"]["truncate_field_chars"]["recommended"])
+        self.assertEqual(value, parsed["limits"]["truncate_field_chars"]["value"])
 
         # …and the client does not see it.
         self.assertEqual(shipped["recommended"], self.visible_width())
