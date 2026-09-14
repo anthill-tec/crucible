@@ -1878,10 +1878,39 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // so 847 is recorded because 847 is what the tree holds. `clients/toon.py` and
 // the six `.py` clients re-measure unchanged; `_crucible_axi.py` 209 -> 210 is
 // the whole of the move.
+//
+// `clients` 847 -> 848 at the CR's FIX cycle, and the one is again
+// `_crucible_axi.py` (210 -> 211). `emit_axi` gained the §S1b paragraph saying
+// why the client's limit disclosures are appended THERE — at the one exit every
+// verb of every client passes through — rather than at five call sites, and the
+// `limit_declarations` that went (no caller on either side of the wire) carried
+// no lineage line to lose. GROWTH again, and again because a reason was written
+// down rather than because a count was balanced.
+//
+// ── WHAT THIS GUARD CANNOT SEE: A NET-ZERO PROVENANCE SWAP ─────────────────
+//
+// State it here so nobody credits the guard with catching it. What is measured
+// is a per-tree AGGREGATE against a recorded head. A change that DELETES one
+// citation and ADDS another in the same tree moves the aggregate by zero and
+// passes in silence — and it is the deletion, not the total, that this guard
+// exists to catch: the lost line is the reason some earlier CR touched that
+// file, which is the whole point of the citation convention.
+//
+// Not hypothetical. Exactly that swap was proposed during CR-CRU-131 — holding
+// `clients` at 846 by writing §S2's lineage OVER C2's rather than beside it —
+// and it was caught by a HUMAN RULING (2026-09-14), not by this test, which
+// would have reported green either way. The `847` above is the record of that
+// ruling going the other way.
+//
+// So: a passing head is evidence that no tree SHED provenance on net. It is not
+// evidence that every citation present is the one that was there before. A
+// reviewer wanting the stronger claim has to read the diff; a guard wanting it
+// would have to count citations per FILE and per CR ID, which is a different
+// instrument and a different CR.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 725 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 847 },
+  clients: { exts: [".py"], develop: 601, head: 848 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

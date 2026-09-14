@@ -1022,8 +1022,8 @@ class ClientSeamIsBoundByEveryClientTest(_ClientLimitsTestCase):
         scripts = _client_scripts()
         self.assertGreaterEqual(
             len(scripts), 5,
-            "the fleet is at least the five clients CR-CRU-054 consolidated; "
-            "found %r" % ([p.name for p in scripts],))
+            "the fleet is at least the five clients the shared module was lifted "
+            "for; found %r" % ([p.name for p in scripts],))
         for expected in ("bun", "python", "rust", "mvn", "arduino"):
             self.assertIn("%s-crucible.py" % expected,
                           [p.name for p in scripts])
