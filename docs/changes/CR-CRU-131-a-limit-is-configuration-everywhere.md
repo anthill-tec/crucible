@@ -313,9 +313,12 @@ this sense.
 ## Acceptance criteria
 
 **§S1**
-- [ ] Each of the FIVE limits resolves from configuration; no numeric literal stands in for any of
-      them in source, asserted by CONSTRUCTION per §S3. The five are enumerated in the Context table
-      and the count is asserted, so a seventh added later fails rather than passing unnoticed.
+- [ ] Each of the SIX limits resolves from configuration; no numeric literal stands in for any of
+      them in source, asserted by CONSTRUCTION per §S3. Two counts appear in this document and both
+      are correct: the Context table holds the FIVE surviving CONSTANTS, while the configured set is
+      SIX — retention is the sixth, whose literal CR-CRU-129 already deleted and whose FALLBACK this
+      CR moves. The configured count is asserted, so a seventh added later fails rather than passing
+      unnoticed.
 - [ ] Each resolves at the point of use: changing the configured value changes behaviour WITHOUT a
       restart — asserted per limit, not once.
 - [ ] An unconfigured limit resolves to its SHIPPED DEFAULT, not to unbounded — asserted per limit,
@@ -323,9 +326,11 @@ this sense.
 - [ ] Retention keeps CR-CRU-129's shipped semantics: unconfigured means NO cap, and the boot
       disclosure still fires naming the uncapped projects and the setting that would bound them.
       This CR moves where its fallback LIVES, not what it does.
-- [ ] Configuring one limit changes exactly the behaviour it names: TOON truncation, run
-      abandonment, project inactivity, field truncation, error-detail truncation and roadmap list
-      length are asserted INDEPENDENTLY, so one setting cannot be wired to another's site.
+- [ ] Configuring one limit changes exactly the behaviour it names: run abandonment, project
+      inactivity, retention eviction, field truncation, error-detail truncation and roadmap list
+      length are asserted INDEPENDENTLY, so one setting cannot be wired to another's site. (An
+      earlier draft listed TOON truncation here; `TOON_MAX_BYTES` left this CR's scope when
+      CR-CRU-132 took the feature it bounds.)
 - [ ] The client settings seam exists once in `clients/_crucible_axi.py` and all five clients
       resolve through it — asserted as a caller count per client, not as "the client resolves it".
 - [ ] `--full` still defeats all three display limits per invocation.
@@ -407,7 +412,7 @@ this sense.
       anywhere there is still NO cap and the boot disclosure still names the uncapped projects. The
       close-out moves this board's hand-set `CRUCIBLE_DEFAULT_RETENTION=5000` into the server file
       and restarts, so the live cap is not silently changed by retiring the variable.
-- [ ] `docs/RUNBOOK.md` documents all five limits with, per limit: the description, the RECOMMENDED
+- [ ] `docs/RUNBOOK.md` documents all six limits with, per limit: the description, the RECOMMENDED
       setting, the MIN and MAX, which file owns it, and the precedence — and records that
       `CRUCIBLE_DEFAULT_RETENTION` and `CRUCIBLE_RUN_ABANDON_MS` are RETIRED, since they were
       operator-configurable today and documented nowhere, and an operator who learned them from the
@@ -418,7 +423,7 @@ this sense.
       table is the easiest place in this CR for that to recur.
 - [ ] The shipped defaults EQUAL today's compiled values — 30 min, 1 h, 200, 500, 20 — so
       this CR changes no behaviour until someone edits the file. Asserted per limit, because a
-      "configuration" CR that quietly retunes five limits is a different CR.
+      "configuration" CR that quietly retunes six limits is a different CR.
 
 **§S1c — packaging**
 - [ ] The shipped defaults are PACKAGE DATA in both distributions: force-included into
@@ -458,7 +463,7 @@ this sense.
       implementation.
 - [ ] It covers all five resolvers and fails on a reintroduced literal at that `file:line`, proved by
       mutation PER LIMIT.
-- [ ] It covers the shared client module as well as the server, since three of the five live there.
+- [ ] It covers the shared client module as well as the server, since three of the six live there.
 
 **Close-out**
 - [ ] ONE re-record of the prose-citation heads and the `src/store.ts` citations after the last
