@@ -42,7 +42,23 @@ classifiers = [
 #                            each <testcase> with `file=`, which is what makes
 #                            `_parse_junit_dir`'s `files` count per-FILE rather
 #                            than degrading to per-CLASS (python-crucible.py:456).
-dev = ["coverage>=7", "unittest-xml-reporting>=4"]
+#   build                  — the PEP 517 frontend the packaging contracts
+#                            build a real wheel with. Fail-fast, never
+#                            skipped: `setUpClass` RAISES when no reachable
+#                            interpreter can `import build`, because a silent
+#                            skip is how a packaging defect stays invisible.
+#                            Reachability is the operative word — under
+#                            `uv run`, `sys.executable`, `which("python3")`
+#                            and `sys.base_prefix` all resolve to the venv or
+#                            the uv-managed interpreter, so a `build` present
+#                            only in the SYSTEM python is not reachable and
+#                            the gate correctly reports it missing. Named
+#                            demanders: test_cr046_uv_env_gate.py:174,
+#                            test_crucible_axi_wheel_packaging.py:121, and
+#                            test_shipped_limits_ship_as_package_data.py:125
+#                            (three classes — CR-CRU-131 §S1c's travel,
+#                            one-datum and version-skew proofs).
+dev = ["coverage>=7", "unittest-xml-reporting>=4", "build>=1"]
 
 [project.scripts]
 crucible-axi = "crucible_axi.cli:main"
