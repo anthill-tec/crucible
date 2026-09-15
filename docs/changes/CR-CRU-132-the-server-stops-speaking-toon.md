@@ -254,9 +254,18 @@ correct fix is deletion, not repair.
 
 **§S4**
 - [ ] `cli/crucible-axi.ts` and `cli/package.json` no longer exist.
-- [ ] `tests/cli-axi.test.ts` and `tests/cli-axi-role-flag.test.ts` no longer exist — deleted whole,
-      not partially retargeted, since the retirement is of the artifact itself, not one behaviour
-      inside it.
+- [ ] `tests/cli-axi.test.ts` and `tests/cli-axi-role-flag.test.ts` no longer exist — 20 tests total
+      (measured 2026-09-15; the spec's own earlier "~24" was an estimate, corrected here), deleted
+      whole, not partially retargeted, since the retirement is of the artifact itself, not one
+      behaviour inside it.
+- [ ] **The carve-out §S2 already established applies here too.** `tests/cli-axi.test.ts` holds
+      TWO subjects, not one: 15 tests on the retired Bun fleet CLI, and 3 (CR-CRU-066 §S4/AC6) on
+      the SHIPPED PYTHON `crucible_axi` console script — a live drift guard asserting README/RUNBOOK
+      document every verb `_COMMANDS` actually dispatches. That guard's subject survives; only its
+      file is retired for an unrelated reason. The 3 tests are RELOCATED, verbatim, to
+      `tests/docs-cli-surface.test.ts`, not deleted with the rest — found by RED during
+      implementation; an earlier draft of this AC said the two files "no longer exist" with no
+      exception, which would have silently dropped a live guard.
 - [ ] The evidence for retirement is recorded in the Context, not merely asserted: the npm-registry
       absence, the PyPI/npm naming-collision identification, and the verb-by-verb redundancy check
       against the `*-crucible.py` fleet and `public/app.js`'s Add-project form.
