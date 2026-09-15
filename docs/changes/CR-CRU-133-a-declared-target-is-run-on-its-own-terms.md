@@ -65,6 +65,29 @@ the additive `remedy=`/`cause=` keywords CR-CRU-064/065 already added are this C
 — the richer detail rides those, and neither helper's required-parameter shape changes for the other
 four clients.
 
+### §S4 A scheduling-order guard forces the order it needs, rather than trusting the scheduler (added post-gate)
+
+**Found by the pre-merge gate, not by design.** `tests/help-surface-order-independence.test.ts` is a
+real defect guard (a bun runtime zombie-process pipe-read hang, triggered only when a Chromium-driving
+test file runs immediately before a help-surface test in the SAME `bun test` process) that asserts bun
+schedules its two named files browser-first. Its own docstring states this order is "read out of the
+run, never assumed" — it does not trust argument order.
+
+§S1/§S2's changes to `clients/bun-crucible.py` — a `.py` file wholly unrelated to either `.ts` file the
+guard names — flip which file bun schedules first. Bisected: reverting `clients/bun-crucible.py` alone
+(package.json and playwright.config.ts left at this CR's HEAD) restores browser-first scheduling;
+reverting either of the other two files alone does not reproduce the flip. Bun's scheduler for this
+pairing is therefore sensitive to unrelated repository state in a way the guard's own design did not
+anticipate — it assumed order was stable for a NAMED PAIR, not merely reproducible at the moment it was
+written.
+
+The fix is to stop trusting the scheduler for the property that matters (browser file executes
+immediately before the help file, in one process) and force it — GREEN designs the mechanism (e.g.
+deterministic same-process sequencing via explicit import evaluation order, or an equivalent bun
+primitive), preserving every existing assertion in the file (the pipe-read outcome, the two duration
+budgets, the non-vacuity floors) unweakened. This is a test-file-only change; no `src/`/`clients/`
+production code is touched by this section.
+
 ## Acceptance criteria
 
 - [ ] `e2e` ingests. The 46 e2e tests reach the board with `tier: e2e`, asserted by an ingest whose
@@ -77,6 +100,11 @@ four clients.
 - [ ] A target producing no report names the script, the command and the expected path in its error.
 - [ ] The docstring's claim and the code agree: a test fails if the invocation classifies a declared
       target by anything other than its declaration.
+- [ ] `tests/help-surface-order-independence.test.ts` forces the browser-file-immediately-before-help
+      execution order rather than relying on bun's scheduler, so the guard exercises the same defect
+      it always has regardless of unrelated repository churn — asserted by running the pairing gate
+      itself, and by every one of the file's existing assertions (pipe-read outcome, both duration
+      budgets, non-vacuity floors) still present and unweakened.
 
 ## Non-goals
 
