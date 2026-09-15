@@ -157,11 +157,33 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
     path: (c) => `/api/v2/projects/${c.key}/release-proposals`,
     keys: ["ok", "proposals", "totalCount"],
   },
+  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (`src/v2.ts:3667`,
+  // entered when `?cycleId=` is present) is a genuinely DIFFERENT payload
+  // from the unanchored recent-N feed two rows above, not the same URL under
+  // another query string: it omits `openRuns` ENTIRELY and adds `cycle` only
+  // when the cycleId resolves. Both of its two shapes are pinned, because
+  // "an unknown cycleId answers 200 with an empty set and NO `cycle` field"
+  // is itself the documented contract (`src/v2.ts`'s own comment on that
+  // branch), and a row that only ever drove the resolving case would miss a
+  // regression that started emitting `cycle: null`.
+  {
+    path: (c) => `/api/v2/events?project=${c.key}&cycleId=${c.cycleId}`,
+    keys: ["ok", "events", "cycle"],
+  },
+  {
+    path: (c) => `/api/v2/events?project=${c.key}&cycleId=${UNKNOWN_CYCLE_ID}`,
+    keys: ["ok", "events"],
+  },
 ];
+
+// A cycle id no fixture plan can have been assigned — the anchored branch's
+// unknown-cycleId arm.
+const UNKNOWN_CYCLE_ID = 999_999;
 
 interface Fixture {
   key: string;
   eventId: string;
+  cycleId: number;
 }
 
 describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
@@ -198,6 +220,27 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
       role: "ORCHESTRATOR",
     });
     expect(registered.status).toBe(200);
+    // A real plan cycle, ACTIVATED through the real transition, so the
+    // anchored read below resolves a `cycle` descriptor rather than falling
+    // into the unknown-cycleId arm.
+    const planRes = await postJson(`/api/v2/projects/${key}/plans`, {
+      agentId: "json-only-agent",
+      cr: "CR-AUTH-1",
+      cycles: [{ label: "A" }],
+    });
+    expect(planRes.status).toBe(201);
+    const plan = (await planRes.json()) as { planId: number | string; cycles: Array<{ id: number }> };
+    const cycleId = plan.cycles[0]!.id;
+    const activated = await fetch(
+      `http://localhost:${handle!.server.port}/api/v2/projects/${key}/plans/${plan.planId}/cycles/${cycleId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentId: "json-only-agent", status: "active" }),
+      },
+    );
+    expect(activated.status).toBe(200);
+
     const runRes = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "json-only-agent",
@@ -205,9 +248,10 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
       tree: [
         { name: "s", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 50 }] },
       ],
+      context: { cycleId },
     });
     const run = (await runRes.json()) as { event: string };
-    return { key, eventId: run.event };
+    return { key, eventId: run.event, cycleId };
   }
 
   // ── AC1 + AC9 — by CONSTRUCTION ──────────────────────────────────────────
@@ -347,7 +391,7 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   // ── AC8 — no payload moves ───────────────────────────────────────────────
 
   describe("GREEN-GUARD — every reply()-routed v2 GET keeps its JSON envelope exactly", () => {
-    test("the 13 reply()-routed GET routes publish their measured top-level key sets, in order, over the ordinary JSON path", async () => {
+    test("every reply()-routed GET shape — including BOTH arms of the anchored events branch — publishes its measured top-level key set, in order, over the ordinary JSON path", async () => {
       // PASSES TODAY (measured against `da33801`) and must keep passing:
       // this CR drops an encoding, never a payload. It fails the moment a
       // handler gains, loses or reorders a top-level field.
