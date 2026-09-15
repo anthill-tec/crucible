@@ -14,10 +14,10 @@ spec creep, and the fix is a DELETION.
 
 **The server can render every v2 GET as TOON, and nothing has ever asked it to.**
 
-The machinery is real and well built. `reply()` (`src/v2.ts:212`) is the shared response gate that
-**16** GET handlers route through. `wantsToon()` (`:163`) selects TOON when a GET carries `?fmt=toon`
+The machinery is real and well built. `reply()` (`src/v2.ts:213`) is the shared response gate that
+**16** GET handlers route through. `wantsToon()` (`:164`) selects TOON when a GET carries `?fmt=toon`
 or an `Accept` header containing `toon`; the body returns as `text/toon`. If the encoded payload
-exceeds `TOON_MAX_BYTES = 64 * 1024` (`:160`), `truncatedToon()` (`:180`) finds the largest
+exceeds `TOON_MAX_BYTES = 64 * 1024` (`:161`), `truncatedToon()` (`:181`) finds the largest
 top-level array, halves it until the body fits, and stamps `truncated: true` beside a
 `full: GET …?fmt=json` pointer at the untruncated variant of the same URL. Writes always answer
 JSON; JSON never truncates; an unshrinkable payload is emitted oversize rather than silently cut.
@@ -47,7 +47,7 @@ survives this CR (`tests/toon-conformance.test.ts:25`, `tests/roadmap-registrati
 both `import { decode } from "@toon-format/toon"`). Deleting it outright would remove the only
 independent check that `clients/toon.py` is conformant — the very contract §S2 preserves.
 
-And `src/toon.ts` is imported from exactly **one** line, `src/v2.ts:32`. The blast radius is one
+And `src/toon.ts` is imported from exactly **one** line, `src/v2.ts:33`. The blast radius is one
 import, one constant, three functions and one branch of `reply()`.
 
 **Client-side TOON is NOT in scope and does not change.** All seven files under `clients/` use
@@ -100,9 +100,18 @@ assertions that have nothing to do with server TOON and would be lost with a who
   server-fetched `help[]` decode tests (`:351`, `:369`) go. The CLIENT-EMIT ORACLE stays — `:469`,
   `:517`, `:542` — because it is this CR's proof that removing the server's TOON did not touch the
   fleet's. The file survives, substantially smaller.
-- **`tests/roadmap-registration-routes.test.ts` — 49 tests, 10 TOON sites.** Its subject is roadmap
-  registration; `?fmt=toon` is incidental plumbing for reading a payload. Every one RETARGETS to the
-  JSON read. Named because the file's size makes wholesale deletion tempting and catastrophic.
+- **`tests/roadmap-registration-routes.test.ts` — 49 tests, 2 TOON sites, not incidental.**
+  Measured 2026-09-14 (an earlier draft of this section said "10 TOON sites… every one
+  RETARGETS" — wrong on both the count and the treatment): the file's entire TOON footprint is one
+  `toonReply()` helper and the two tests it feeds, `:1937` and `:1960`, and BOTH are
+  CR-CRU-108 §S1/AC3's deliberate independence check — "the `?fmt=toon` reply carries `tracks`
+  under the SAME name, asserted by reading the TOON text… not by trusting `reply()`." Their subject
+  IS server TOON (a `content-type: text/toon` assertion, a TOON-grammar regex, `decode()` from the
+  reference library), not a convenient payload read, so they are **deleted**, not retargeted —
+  retargeting is either impossible (no TOON reply is left to read) or a vacuous restatement of the
+  JSON-only test immediately above them in the same `describe` block (`:1912`–`:1935`), which
+  already proves the same fact (`tracks` published under a stable name) without TOON. The other 47
+  tests never touch TOON and are untouched by this CR.
 - `tests/plans-global.test.ts`, `tests/v2-brief-reshape.test.ts`, `tests/events-anchored.test.ts` —
   examined per assertion by the same rule: subject-is-TOON deletes, TOON-as-reader retargets.
 
@@ -115,8 +124,19 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
   2026-09-14 as spec creep, with the measurement that justified it. The 2026-07-14 decision is not
   erased — it is superseded, dated, with its reason.
 - `docs/research/DN-crucible-toon-subset.md` is already a RETIRED pointer document whose "Current
-  contract" names two pinned implementations. It keeps the client one and records that the server no
-  longer speaks TOON.
+  contract" names two pinned implementations — but its FIRST bullet, "Server (TypeScript):
+  `@toon-format/toon` `^4.1.0` (the first-party reference implementation), pinned in `package.json`",
+  is what a reader hits first, and after this CR it is misleading: the pin is still real but the
+  server no longer SPEAKS TOON on the wire, only carries the library as the reference decoder for
+  the client-emit oracle. That bullet is reworded to say so; it keeps the client bullet unchanged
+  and records that the server no longer speaks TOON.
+- **Measured 2026-09-14, a live DN this CR's own sweep missed the first time:**
+  `docs/research/DN-crucible-analytics.md:124` — a LOCKED design note for CR-CRU-022 (wave 7,
+  PENDING, `queue_snapshots` not yet built) — states "TOON forms follow the standard `?fmt=toon`
+  rules" as forward guidance for a feature that does not exist yet. Left alone, it tells CR-CRU-022's
+  future implementer to build against a rule this CR retires. Corrected to state that TOON
+  negotiation is not a server capability by the time that CR is built, and that the analytics reads
+  follow the same JSON-only contract as every other v2 GET.
 - `tests/docs-toon-conformance.test.ts` reads the pinned version from `pkg.dependencies` (`:78`) and
   asserts the DN names it (`:82`). With the library MOVED rather than removed, that guard is
   RETARGETED to `devDependencies` — not deleted. It keeps asserting a real pin of a real dependency,
@@ -155,8 +175,10 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
 - [ ] `tests/toon-conformance.test.ts` KEEPS its client-emit oracle (`:469`, `:517`, `:542`) and it
       still passes — the clients' TOON must still be proved conformant by the official library, and
       this CR must not weaken that.
-- [ ] `tests/roadmap-registration-routes.test.ts`'s 49 tests all survive, retargeted to JSON reads —
-      not one is deleted, because not one has server TOON as its subject.
+- [ ] `tests/roadmap-registration-routes.test.ts`'s 47 non-TOON tests are untouched, and the 2
+      CR-CRU-108 §S1/AC3 TOON tests (`:1937`, `:1960`) are DELETED with the superseded claim named
+      — their subject is the TOON encoding itself, and the fact they proved (`tracks` published
+      under a stable name) stays proven by the JSON-only test immediately above them.
 - [ ] No test asserts that a TOON request is REFUSED: inert is the contract, and a test pinning a
       refusal would invent one.
 - [ ] The full two-stack suite is green with no net loss of coverage over anything that still
@@ -170,15 +192,28 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
       contract is unchanged.
 - [ ] `tests/docs-toon-conformance.test.ts` reads the pinned version from `devDependencies` and
       still asserts the DN names it — retargeted, not deleted, because the pin is still real.
-- [ ] No documentation still offers `?fmt=toon` as a capability — asserted across `docs/` and
-      `clients/STATUS-CONTRACT.md`.
+- [ ] `DN-crucible-analytics.md:124` no longer tells CR-CRU-022's future implementer that TOON
+      negotiation is the standard rule for a new route.
+- [ ] No LIVE documentation still offers `?fmt=toon` as a capability — asserted across
+      `docs/research/`, `docs/RUNBOOK.md` and `clients/STATUS-CONTRACT.md`. **`docs/changes/*.md` is
+      OUT OF SCOPE for this scan**, deliberately: it is the shipped-CR archive, never retro-edited,
+      and CR-005/006/026/108 correctly record `?fmt=toon` as true when they shipped. This CR's own
+      spec file is likewise exempt — it necessarily names `?fmt=toon` throughout as the subject of
+      the deletion it specifies. (An earlier draft of this AC said "asserted across `docs/`" with no
+      exclusion, which a literal scan would have failed against this very sentence.)
 
 **Close-out**
-- [ ] ONE re-record after the last content edit: the `src` prose-citation head (pinned at 710 after
-      CR-CRU-130) will move DOWN as `src/v2.ts` loses ~15 sites and `src/toon.ts` goes entirely.
-      RE-MEASURE it — the guard asserts a head is never BELOW its develop baseline of 512, so a
-      falling head is the case to check rather than assume. `src/store.ts` is untouched, so
-      `LANDED_STATUSES` and `canonical_track` should hold; confirm rather than assume.
+- [ ] ONE re-record after the last content edit. The baseline is the tree AS THIS CR FINDS IT, not
+      the post-CR-130 figures an earlier draft of this section recorded (`src` "710", symbols
+      `LANDED_STATUSES`/`canonical_track`) — CR-CRU-131 landed since and moved all three: measured
+      2026-09-15, `src` head is **725**, `public` **477**, `clients` **848**, and the two `src/store.ts`
+      citations this section must confirm are `deriveQueueStatus` (`src/store.ts:5801`) and
+      `normalizeTrack` (`:381-384`) — the names `LANDED_STATUSES`/`canonical_track` no longer exist
+      in that file. RE-MEASURE `src` after this CR's edits — it will move DOWN as `src/v2.ts` loses
+      its TOON block and `src/toon.ts` goes entirely, and the guard asserts a head is never BELOW its
+      develop baseline of 512, so a falling head is the case to check rather than assume.
+      `src/store.ts` is untouched by this CR, so `deriveQueueStatus` and `normalizeTrack` should hold
+      at their CURRENT lines; confirm rather than assume.
 
 ## Estimated size
 
