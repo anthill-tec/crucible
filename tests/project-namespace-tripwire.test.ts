@@ -1907,8 +1907,37 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // reviewer wanting the stronger claim has to read the diff; a guard wanting it
 // would have to count citations per FILE and per CR ID, which is a different
 // instrument and a different CR.
+//
+// ── A HEAD THAT FELL, AND WHY IT IS THE PERMITTED KIND ────────────────────
+//
+// `src` 725 -> 724 at CR-CRU-132, and this is the FALLING head the guard is
+// actually for, so it is accounted for citation by citation rather than simply
+// re-recorded. Two go and one arrives. `src/toon.ts` is DELETED whole and takes
+// both of its lineage lines with it — `CR-CRU-046 §S1` (the CR that replaced
+// CR-005's hand-written subset serializer with the official library) and the
+// `CR-CRU-005` that line names as what it superseded. Nothing is lost by that:
+// the module's whole subject was the server-side TOON encoding CR-CRU-132
+// removes, and both citations survive in the CR archive and in
+// `docs/research/DN-crucible-toon-subset.md`, which CR-CRU-132 §S3 updated in
+// the same commit rather than leaving to point at a file that no longer exists.
+// In `src/v2.ts` the deleted negotiation block's `(CR-CRU-005)` header is
+// REPLACED, not dropped — the surviving gate comment still cites CR-005 as the
+// origin of the shared `reply()` seam — and `CR-CRU-132` is ADDED beside it,
+// recording why the branch under it went. Net -2 +1 = -1.
+//
+// This is the direction the rule permits a head to move only when the deletion
+// is the POINT: 724 is still far above the 512 floor, and the lineage did not
+// evaporate, it moved to the documents that now own the subject. `cli/` is
+// deleted in the same CR (§S4, the orphaned bun fleet CLI) and moves no figure
+// here, because it is none of the three trees this guard measures — stated so a
+// reader does not go looking for its contribution in the arithmetic above.
+// `public` and `clients` re-measure unchanged at 477 and 848: CR-CRU-132
+// reaches no renderer and no `.py` file. Re-confirmed at the same pass and not
+// inferred: `deriveQueueStatus` holds at `src/store.ts:5801` and
+// `normalizeTrack` at `:381-384`, both read at the line — `src/store.ts` is
+// untouched by this CR.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 725 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
   clients: { exts: [".py"], develop: 601, head: 848 },
 };
