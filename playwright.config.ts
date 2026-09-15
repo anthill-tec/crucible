@@ -75,7 +75,23 @@ export default defineConfig({
   timeout: 30_000,
   // "junit" additionally feeds the Crucible auto-ingest path
   // (`bun-crucible.py auto-ingest`), which reads test-reports/junit.xml.
-  reporter: [["list"], ["junit", { outputFile: "test-reports/junit.xml" }]],
+  //
+  // CR-CRU-133 §S2 — `package.json`'s `crucible.reportPath` DECLARES that this
+  // target takes its report path from PLAYWRIGHT_JUNIT_OUTPUT_NAME, and
+  // playwright's junit reporter prefers an explicit `outputFile` OVER that
+  // variable — so a hardcoded path here would make the declaration a lie and
+  // the client could never move the file this suite writes. The default is
+  // kept for a bare `bun run test:e2e`, which is unaffected.
+  reporter: [
+    ["list"],
+    [
+      "junit",
+      {
+        outputFile:
+          process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
+      },
+    ],
+  ],
   use: {
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",

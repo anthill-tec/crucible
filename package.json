@@ -30,6 +30,11 @@
     "test:e2e": "bunx bddgen && bunx playwright test",
     "start": "bun run src/server.ts"
   },
+  "crucible": {
+    "reportPath": {
+      "test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"
+    }
+  },
   "devDependencies": {
     "@cucumber/gherkin": "^41.0.0",
     "@happy-dom/global-registrator": "^20.10.6",
