@@ -35,7 +35,7 @@ run is left open for the abandon sweep to settle. A `run-left-open` warning fire
 
 Playwright takes its JUnit path from `PLAYWRIGHT_JUNIT_OUTPUT_NAME`, not a flag. Any declared target
 whose runner is not `bun test` hits the same wall — a pytest-backed target, a `vitest` target, a
-shell script. The declaration mechanism CR-CRU-046 §S6 introduced is therefore only usable for one
+shell script. The declaration mechanism CR-CRU-111 §S6 introduced is therefore only usable for one
 runner, which is not what a declaration is for.
 
 ## Scope
@@ -51,12 +51,18 @@ the caller.
 The client needs the XML at a known path; the runner decides how it is told. The declaration carries
 that, so a target states its own contract — a flag for `bun test`, an environment variable for
 playwright — and the client honours whichever the declaration names without knowing which runner is
-behind it.
+behind it. A target that states NO mechanism defaults to the FLAG contract — `bun test`'s own
+convention, which is every target this project declares today except `test:e2e` — so AC4's existing
+declared targets need no change to their `package.json` entries; only a target whose runner is not
+`bun test` opts in to the environment mechanism explicitly.
 
 ### §S3 A target that produces no report fails LOUDLY and says which target
 
 Today's `no JUnit XML produced` names no target and offers no diagnosis. It must name the script, the
-command it ran, and the report path it expected.
+command it ran, and the report path it expected. `no_report_help`/`no_report_warning`
+(`clients/_crucible_axi.py`) are shared across all five clients (12 call sites); the additive
+`remedy=`/`cause=` keywords CR-CRU-064/065 already added are this CR's extension point — the richer
+detail rides those, and neither helper's required-parameter shape changes for the other four clients.
 
 ## Acceptance criteria
 
