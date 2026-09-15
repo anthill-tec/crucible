@@ -19,7 +19,8 @@
 // then copied into `clients/` and upgraded there by GREEN. That is how the
 // file began, not how it reads today.)
 //
-// Technique: reuses tests/cli-axi.test.ts's proven pattern — a real
+// Technique: the pattern came from the since-deleted tests/cli-axi.test.ts
+// (retired with the bun fleet CLI it covered, CR-CRU-132 §S4) — a real
 // `startServer({port:0, dbPath:":memory:"})` instance + `Bun.spawn`
 // against it. NEW here: a tiny CAPTURING PROXY (`startCapturingProxy`) —
 // its own `Bun.serve` that records {method, path} for every request it
