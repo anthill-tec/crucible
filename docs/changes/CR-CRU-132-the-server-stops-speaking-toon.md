@@ -26,7 +26,8 @@ It was decided on 2026-07-14 for a stated reason — PRD §65, *"TOON (decided 2
 agent-facing reads first"* — token economy for the reader, since an agent doing a `GET /api/v2`
 orientation pays for every byte of JSON punctuation.
 
-**Measured 2026-09-14, no consumer takes that path:**
+**Measured 2026-09-14, no consumer takes that path — with one correction found during
+implementation.** The original measurement was:
 
 - no `fmt=toon` and no `Accept: …toon` anywhere in `clients/*.py` — all five stack clients consume
   **JSON**;
@@ -35,8 +36,17 @@ orientation pays for every byte of JSON punctuation.
   `tests/toon-conformance.test.ts`, `tests/plans-global.test.ts`, `tests/v2-brief-reshape.test.ts`,
   `tests/events-anchored.test.ts`, `tests/roadmap-registration-routes.test.ts`.
 
-So the feature's only users are the tests that assert it exists. That is the shape of spec creep: a
-capability built for a consumer that never arrived, kept alive by its own coverage.
+**That measurement never checked `cli/`, and it was wrong to skip it.** Found by GREEN during
+implementation, 2026-09-15: `cli/crucible-axi.ts` sends `Accept: text/toon` and pipes the body
+straight to stdout for four commands (`dashboard`, `project list`, `events`, `status`), regressing
+4 of `tests/cli-axi.test.ts`'s 18 tests the instant §S1 lands. §S4 traces what this file actually
+is and rules on it; the finding does not change §S1's premise about the SIX enumerated test files
+or about `clients/*.py`/`public/` — it adds exactly one more artifact to the count, and that
+artifact turns out to belong to the same defect class this whole CR removes.
+
+So the feature's only users are the tests that assert it exists, plus one more piece of dead-end
+code that turns out to be the same shape of problem. That is the shape of spec creep: a capability
+built for a consumer that never arrived, kept alive by its own coverage.
 
 **Two facts make the deletion worth doing rather than merely defensible.**
 
@@ -142,6 +152,46 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
   RETARGETED to `devDependencies` — not deleted. It keeps asserting a real pin of a real dependency,
   now scoped to the client contract it actually protects.
 
+### §S4 The orphaned CLI is retired, not converted
+
+`cli/crucible-axi.ts` — CR-CRU-008's (2026-07-18) TypeScript "fleet CLI for the Crucible server" —
+is deleted in full: the file, `cli/package.json`, and both its test files
+(`tests/cli-axi.test.ts`, `tests/cli-axi-role-flag.test.ts`, ~24 tests total).
+
+**Why retirement and not a JSON conversion.** Three questions, each answered by measurement rather
+than inference, 2026-09-15:
+
+1. **Was it ever reachable from outside this repo?** No. `cli/package.json` declares
+   `"name": "crucible-axi", "bin": {"crucible-axi": "./crucible-axi.ts"}` — CR-CRU-008's AC said
+   `npx crucible-axi` — but that publish step was never taken: the npm registry returns `Not found`
+   for `crucible-axi`, the root `package.json`'s `bin` carries only `crucible-server`, and `files`
+   does not include `cli/`. `cli/package.json`'s version has been touched exactly once, in the
+   commit that created it, in the ~2 months since. The name `crucible-axi` was separately claimed
+   by the PYTHON console script (`pyproject.toml`: `crucible-axi = "crucible_axi.cli:main"`,
+   published to PyPI at `0.1.3`) — the one `docs/RUNBOOK.md` documents (`install`/`serve`/
+   `uninstall`) and the one operators actually run. `tests/cli-axi.test.ts`'s own CR-CRU-066
+   comment already names this collision explicitly: "this file's `describe` above exercises the
+   BUN fleet CLI (`cli/crucible-axi.ts`)... NOT... the shipped `crucible-axi`."
+2. **Does anything invoke it today?** No — exhaustively checked. No `package.json` script, no
+   `.github/` workflow, no `scripts/` file, no git hook. Its only callers are its own two test
+   files and three historical CR specs (008 which created it, 044/059 which touched its `--role`
+   flag) — provenance, not consumption.
+3. **Would retiring it lose a capability nothing else provides?** No, verb by verb:
+   `register`/`heartbeat`/`unregister` and JUnit ingestion are duplicated verbatim by the
+   `*-crucible.py` fleet (`register` doubles as heartbeat; `auto-ingest` reads a reports directory).
+   `project add` is the one command with no fleet-client equivalent — but `public/app.js`'s
+   "+ Add project" form already does the identical `POST /api/v2/projects` operation from the SPA,
+   and nothing has ever invoked the CLI's copy. `project list`/`events`/`status`/`dashboard`
+   (the four TOON consumers) surface data already reachable via the fleet's `status`/`plans`/`queue`
+   verbs, just not through this exact no-flag shape.
+
+**A converted-to-JSON version would not be free of cost, either.** `ROLE_ENUM`
+(`cli/crucible-axi.ts:170`) is a hand-typed literal copy of `src/types.ts`'s `AGENT_ROLES` — not
+imported, not cross-checked by any test. Keeping the file alive keeps that drift risk alive with
+it, for a tool nothing calls. This is the same cost argument §S1 makes for the server's TOON path,
+applied one file over: the machinery is real, but nothing that matters depends on it, and the
+correct fix is deletion, not repair.
+
 ## Acceptance criteria
 
 **§S1**
@@ -202,6 +252,19 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
       the deletion it specifies. (An earlier draft of this AC said "asserted across `docs/`" with no
       exclusion, which a literal scan would have failed against this very sentence.)
 
+**§S4**
+- [ ] `cli/crucible-axi.ts` and `cli/package.json` no longer exist.
+- [ ] `tests/cli-axi.test.ts` and `tests/cli-axi-role-flag.test.ts` no longer exist — deleted whole,
+      not partially retargeted, since the retirement is of the artifact itself, not one behaviour
+      inside it.
+- [ ] The evidence for retirement is recorded in the Context, not merely asserted: the npm-registry
+      absence, the PyPI/npm naming-collision identification, and the verb-by-verb redundancy check
+      against the `*-crucible.py` fleet and `public/app.js`'s Add-project form.
+- [ ] No other file references `cli/crucible-axi.ts`, `runCli`, or `cli/package.json` after the
+      deletion — asserted by a repo-wide scan; `clients/STATUS-CONTRACT.md`'s fleet-listing mention
+      is updated to drop the sixth entry.
+
+
 **Close-out**
 - [ ] ONE re-record after the last content edit. The baseline is the tree AS THIS CR FINDS IT, not
       the post-CR-130 figures an earlier draft of this section recorded (`src` "710", symbols
@@ -217,8 +280,12 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
 
 ## Estimated size
 
-S — a deletion. One import, one constant, three functions, one branch, one file, one dependency, and
-the coverage that pinned them. The care is in §S2's split and in not touching client-side TOON.
+S/M — a deletion, in two parts. §S1–§S3 are the originally-scoped "S": one import, one constant,
+three functions, one branch, one file, one dependency, and the coverage that pinned them. §S4 adds
+a second, larger deletion found during implementation (a Dimension 6 miss in the original
+gap-analysis, corrected 2026-09-15): a whole orphaned CLI, its package manifest, and ~24 tests. The
+care is in §S2's split, in not touching client-side TOON, and in §S4's evidence being measured
+rather than assumed before a second artifact goes.
 
 ## Risk
 
