@@ -38,7 +38,7 @@ There is exactly ONE scan for a retired name across the shipped tree, and it is
 on the bun side (tests/limits-have-no-environment-layer.test.ts), walking
 `src/`, `clients/` and `public/` together -- one walker, both stacks, the "no
 seventh walker" discipline CR-CRU-128 §S2 established. It is what catches the
-module comment at clients/bun-crucible.py:874. This file asserts BEHAVIOUR: what
+module comment at clients/bun-crucible.py:943. This file asserts BEHAVIOUR: what
 a user is told.
 
 Invocation:
