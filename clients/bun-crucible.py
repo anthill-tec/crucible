@@ -465,31 +465,87 @@ def _wipe(reports_dir):
             pass
 
 
+# CR-CRU-133 §S2 — the vocabulary a project states a declared target's
+# report-path mechanism in (`package.json`'s `crucible.reportPath.<target>`,
+# beside the script table the target is already declared in). `flag` — or NO
+# entry at all — is the DEFAULT: `bun test`'s own flag contract, which is every
+# target this project declares today except `test:e2e`. `env:<VAR>` names the
+# environment variable the target's OWN runner reads the path from.
+REPORT_MECHANISM_FLAG = "flag"
+REPORT_MECHANISM_ENV_PREFIX = "env:"
+
+
+def _bun_test_report_flags(junit_path, coverage, coverage_dir):
+    """The FLAG mechanism: `bun test`'s own report/coverage flag contract,
+    spelled in ONE place (CR-CRU-133 §S2) so an invocation can SELECT it
+    without naming any runner's flags itself."""
+    flags = ["--reporter=junit", f"--reporter-outfile={junit_path}"]
+    if coverage:
+        flags += ["--coverage", "--coverage-reporter=lcov",
+                  f"--coverage-dir={coverage_dir}"]
+    return flags
+
+
 def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
-    """Build the `bun test` invocation. Targeted (file paths) or whole-suite."""
+    """Build the `bun test` invocation. Targeted (file paths) or whole-suite.
+
+    This one IS `bun test` — the runner is this client's own choice, not a
+    project's declaration — so it takes the flag contract unconditionally."""
     cmd = [bun, "test"]
     if targets:
         cmd += list(targets)
-    cmd += ["--reporter=junit", f"--reporter-outfile={junit_path}"]
-    if coverage:
-        cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
-    return cmd
+    return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)
 
 
-def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir):
+def _report_path_variable(mechanism):
+    """CR-CRU-133 §S2 — the environment variable a declared mechanism names, or
+    None when the declaration is the flag default (`flag`, or no entry at all).
+
+    An unrecognised value is NOT honoured as a variable name: it falls back to
+    the default and SAYS so, because a typo'd declaration that silently starved
+    the report is the class of failure this CR exists to end."""
+    text = (mechanism or "").strip()
+    if text.startswith(REPORT_MECHANISM_ENV_PREFIX):
+        variable = text[len(REPORT_MECHANISM_ENV_PREFIX):].strip()
+        if variable:
+            return variable
+    if text and text != REPORT_MECHANISM_FLAG:
+        print(f"[crucible] WARN: unknown crucible.reportPath mechanism "
+              f"{mechanism!r} — falling back to {REPORT_MECHANISM_FLAG!r}",
+              file=sys.stderr)
+    return None
+
+
+def _declared_report_mechanism(package_dir, script):
+    """CR-CRU-133 §S2 — the mechanism the PROJECT declared for this target's
+    report path, read from `crucible.reportPath.<target>` in the same manifest
+    the script table lives in. `None` (no entry) is the flag default, so every
+    declaration that exists today keeps its meaning with no edit."""
+    crucible = _package_manifest(package_dir).get("crucible") or {}
+    return (crucible.get("reportPath") or {}).get(script)
+
+
+def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
+                        mechanism=None):
     """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
     is run BY NAME (`bun run test:unit`), never by re-parsing its body.
 
     That is the whole point of a declaration: the project can change what the
     script does without this client noticing, and the client never classifies
-    what the project declared. The reporter flags ride after the script name,
-    where `bun run` forwards them to it, so a declared target is ingested by
-    the same junit path every other run here takes."""
-    cmd = [bun, "run", script,
-           "--reporter=junit", f"--reporter-outfile={junit_path}"]
-    if coverage:
-        cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
-    return cmd
+    what the project declared.
+
+    CR-CRU-133 §S1/§S2 — that includes how the target is TOLD where to write its
+    report. This client needs the XML at `junit_path`; WHICH mechanism carries
+    it there is the declaration's business, never an inference about the runner
+    standing behind the name. Returns `(cmd, env)` — the invocation, and the
+    environment OVERLAY it must be spawned with: empty under the flag default,
+    one variable under `env:<VAR>`, and under the latter the invocation carries
+    nothing the target's runner never agreed to accept."""
+    variable = _report_path_variable(mechanism)
+    if variable:
+        return [bun, "run", script], {variable: junit_path}
+    return ([bun, "run", script]
+            + _bun_test_report_flags(junit_path, coverage, coverage_dir), {})
 
 
 def _parse_junit_file(junit_path):
@@ -1199,9 +1255,16 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
     try:
-        cmd = (_bun_run_script_cmd(bun, script, junit_path, coverage_on,
-                                   coverage_dir) if script
-               else _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir))
+        if script:
+            # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
+            # builder returns both the command and the environment overlay the
+            # target's DECLARATION asked the report path to be carried in.
+            cmd, report_env = _bun_run_script_cmd(
+                bun, script, junit_path, coverage_on, coverage_dir,
+                _declared_report_mechanism(package_dir, script))
+            env.update(report_env)
+        else:
+            cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
         print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
         # §S2c — capture the run output (failure detail lives only there).
         log_path = getattr(args, "log", None)
@@ -1254,12 +1317,26 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
                 warnings.append(_run_left_open_warning(
                     run_id, "the runner produced no JUnit XML, so there was "
                             "nothing to ingest"))
+            # CR-CRU-133 §S3/AC5 — a DECLARED target that produced nothing is
+            # named: which script starved, the exact command that ran it, and
+            # the path the report was expected at. It rides the ADDITIVE
+            # `remedy=`/`cause=` keywords of the shared helpers, so neither
+            # helper's shape changes for the other four clients.
+            starved = None
+            if script:
+                starved = (f"declared target `{script}` exited "
+                           f"{result.returncode} and wrote no report at "
+                           f"{junit_path} — re-run `{' '.join(cmd)}` in "
+                           f"{package_dir} and make `{script}` write its JUnit "
+                           f"XML to that path")
             _emit_axi(verb, False,
-                      {"help": _axi().no_report_help(verb, "junit.xml")},
+                      {"help": _axi().no_report_help(verb, "junit.xml",
+                                                     remedy=starved)},
                       _axi_context(project_dir, agent_id=args.agent),
                       warnings + [_axi().no_report_warning(
                           verb, "junit.xml", result.returncode,
-                          getattr(result, "stdout", None) or "")],
+                          getattr(result, "stdout", None) or "",
+                          cause=starved)],
                       f"{verb}: ok=False — no JUnit XML, nothing to ingest")
             return 1
 
@@ -1978,22 +2055,30 @@ def _add_declared_tier_args(p):
     _add_no_lifecycle_arg(p)
 
 
-def _package_scripts(args):
-    """The `package.json` script table — bun's declaration surface, read in ONE
-    place for both the by-name lookup (§S6) and the enumeration a gate composes
-    over (CR-CRU-112 §S1), so the two cannot disagree about what is declared."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+def _package_manifest(package_dir):
+    """The `package.json` a bun package declares itself in, read in ONE place —
+    the script table (§S6 / CR-CRU-112 §S1) and the report-path declaration
+    beside it (CR-CRU-133 §S2) are two readings of the same file, and a second
+    reader is a second answer about what the project declared."""
     manifest = os.path.join(package_dir, "package.json")
     try:
         with open(manifest, encoding="utf-8") as handle:
-            return (json.load(handle) or {}).get("scripts") or {}
+            return json.load(handle) or {}
     except OSError:
         return {}
     except ValueError as error:
         print(f"[crucible] WARN: {manifest} is not readable JSON ({error}) — "
               f"no declared tier target can be read from it", file=sys.stderr)
         return {}
+
+
+def _package_scripts(args):
+    """The `package.json` script table — bun's declaration surface, read in ONE
+    place for both the by-name lookup (§S6) and the enumeration a gate composes
+    over (CR-CRU-112 §S1), so the two cannot disagree about what is declared."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    return _package_manifest(package_dir).get("scripts") or {}
 
 
 def _read_declared_script(args, target):
