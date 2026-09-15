@@ -15,7 +15,7 @@ spec creep, and the fix is a DELETION.
 **The server can render every v2 GET as TOON, and nothing has ever asked it to.**
 
 The machinery is real and well built. `reply()` (`src/v2.ts:213`) is the shared response gate that
-**16** GET handlers route through. `wantsToon()` (`:164`) selects TOON when a GET carries `?fmt=toon`
+**16** `reply()` call sites, across 13 GET handlers, route through it. `wantsToon()` (`:164`) selects TOON when a GET carries `?fmt=toon`
 or an `Accept` header containing `toon`; the body returns as `text/toon`. If the encoded payload
 exceeds `TOON_MAX_BYTES = 64 * 1024` (`:161`), `truncatedToon()` (`:181`) finds the largest
 top-level array, halves it until the body fits, and stamps `truncated: true` beside a
@@ -156,7 +156,7 @@ discipline CR-CRU-130 used when it retired `release-proposal`.
 
 `cli/crucible-axi.ts` — CR-CRU-008's (2026-07-18) TypeScript "fleet CLI for the Crucible server" —
 is deleted in full: the file, `cli/package.json`, and both its test files
-(`tests/cli-axi.test.ts`, `tests/cli-axi-role-flag.test.ts`, ~24 tests total).
+(`tests/cli-axi.test.ts`, `tests/cli-axi-role-flag.test.ts`, 20 tests total).
 
 **Why retirement and not a JSON conversion.** Three questions, each answered by measurement rather
 than inference, 2026-09-15:
@@ -210,7 +210,8 @@ correct fix is deletion, not repair.
 - [ ] A GET with `Accept: text/toon` does the same.
 - [ ] `?fmt=json` still answers JSON, 200 — the documented escape hatch keeps working for callers
       who have it written down.
-- [ ] Every one of the 16 GET handlers that routed through `reply()` returns the SAME JSON body
+- [ ] Every one of the 16 `reply()` call sites (across 13 GET handlers — `handleEventsList` and
+      `handleEventGet` each route through it more than once) returns the SAME JSON body
       byte-for-byte as before this CR — asserted against the live shape, since this CR must change
       no payload, only drop an encoding.
 - [ ] `text/toon` appears nowhere in `src/`.
@@ -244,13 +245,17 @@ correct fix is deletion, not repair.
       still asserts the DN names it — retargeted, not deleted, because the pin is still real.
 - [ ] `DN-crucible-analytics.md:124` no longer tells CR-CRU-022's future implementer that TOON
       negotiation is the standard rule for a new route.
-- [ ] No LIVE documentation still offers `?fmt=toon` as a capability — asserted across
-      `docs/research/`, `docs/RUNBOOK.md` and `clients/STATUS-CONTRACT.md`. **`docs/changes/*.md` is
-      OUT OF SCOPE for this scan**, deliberately: it is the shipped-CR archive, never retro-edited,
-      and CR-005/006/026/108 correctly record `?fmt=toon` as true when they shipped. This CR's own
-      spec file is likewise exempt — it necessarily names `?fmt=toon` throughout as the subject of
-      the deletion it specifies. (An earlier draft of this AC said "asserted across `docs/`" with no
-      exclusion, which a literal scan would have failed against this very sentence.)
+- [ ] No LIVE documentation still offers `?fmt=toon` as a capability — measured 2026-09-15 across
+      `docs/research/`, `docs/RUNBOOK.md` and `clients/STATUS-CONTRACT.md`, with no permanent scan
+      performing this check (unlike §S1/1's construction scan, this is a one-time sweep — a future
+      edit could reintroduce a live promise with nothing going RED; recorded as a residual rather
+      than built out, since the capability itself is gone from the code and there is no ongoing
+      surface for the claim to drift from). **`docs/changes/*.md` is OUT OF SCOPE for this scan**,
+      deliberately: it is the shipped-CR archive, never retro-edited, and CR-005/006/026/108
+      correctly record `?fmt=toon` as true when they shipped. This CR's own spec file is likewise
+      exempt — it necessarily names `?fmt=toon` throughout as the subject of the deletion it
+      specifies. (An earlier draft of this AC said "asserted across `docs/`" with no exclusion,
+      which a literal scan would have failed against this very sentence.)
 
 **§S4**
 - [ ] `cli/crucible-axi.ts` and `cli/package.json` no longer exist.
@@ -270,8 +275,9 @@ correct fix is deletion, not repair.
       absence, the PyPI/npm naming-collision identification, and the verb-by-verb redundancy check
       against the `*-crucible.py` fleet and `public/app.js`'s Add-project form.
 - [ ] No other file references `cli/crucible-axi.ts`, `runCli`, or `cli/package.json` after the
-      deletion — asserted by a repo-wide scan; `clients/STATUS-CONTRACT.md`'s fleet-listing mention
-      is updated to drop the sixth entry.
+      deletion — measured 2026-09-15 by a repo-wide scan, with the same one-time-sweep caveat as
+      §S3's documentation check above (no permanent guard performs it); `clients/STATUS-CONTRACT.md`'s
+      fleet-listing mention is updated to drop the sixth entry.
 
 
 **Close-out**
@@ -292,7 +298,7 @@ correct fix is deletion, not repair.
 S/M — a deletion, in two parts. §S1–§S3 are the originally-scoped "S": one import, one constant,
 three functions, one branch, one file, one dependency, and the coverage that pinned them. §S4 adds
 a second, larger deletion found during implementation (a Dimension 6 miss in the original
-gap-analysis, corrected 2026-09-15): a whole orphaned CLI, its package manifest, and ~24 tests. The
+gap-analysis, corrected 2026-09-15): a whole orphaned CLI, its package manifest, and 20 tests. The
 care is in §S2's split, in not touching client-side TOON, and in §S4's evidence being measured
 rather than assumed before a second artifact goes.
 
