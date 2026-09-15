@@ -30,7 +30,6 @@ import {
   waveOverflowMessage,
   waveSeqBase,
 } from "./store.ts";
-import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type {
   MilestoneDateFilter,
@@ -156,71 +155,24 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-// ── §S2+§S4 (CR-CRU-005) — content negotiation + TOON truncation ────────────
-
-const TOON_MAX_BYTES = 64 * 1024;
-
-/** §S2 — `?fmt=toon` OR an Accept header containing `toon` selects TOON. */
-function wantsToon(req: Request, url: URL): boolean {
-  if (url.searchParams.get("fmt") === "toon") return true;
-  return (req.headers.get("accept") ?? "").includes("toon");
-}
-
-/** §S4 — pointer to the untruncated JSON variant of the same call. */
-function jsonVariantUrl(url: URL): string {
-  const variant = new URL(url);
-  variant.searchParams.set("fmt", "json");
-  return `${variant.pathname}?${variant.searchParams.toString()}`;
-}
+// ── §S2 (CR-CRU-005) — the shared response gate ─────────────────────────────
+//
+// CR-CRU-132 §S1 (2026-09-14) DELETED the server's TOON rendering: the
+// content-negotiation branch, its 64 KB truncation helper, the JSON-variant
+// pointer, the byte ceiling and the `src/toon.ts` adapter are all gone.
+// Measured before the deletion: no client and nothing in `public/` ever
+// negotiated the alternative encoding — only the tests that asserted it
+// existed did.
 
 /**
- * §S4 — shrink the payload's largest top-level array (keeping head items,
- * halving until the TOON body fits 64 KB), marked with a `truncated: true`
- * scalar and a `full:` pointer at the JSON variant of the same URL.
- */
-function truncatedToon(payload: Record<string, unknown>, url: URL): string {
-  let largestKey: string | undefined;
-  let largestLen = 0;
-  for (const [key, value] of Object.entries(payload)) {
-    if (Array.isArray(value) && value.length > largestLen) {
-      largestKey = key;
-      largestLen = value.length;
-    }
-  }
-  if (largestKey === undefined) {
-    // Nothing shrinkable — emit oversize rather than drop data silently.
-    return `${toToon(payload)}\n`;
-  }
-  const items = payload[largestKey] as unknown[];
-  let keep = items.length;
-  let text: string;
-  do {
-    keep = Math.floor(keep / 2);
-    text = `${toToon({
-      ...payload,
-      [largestKey]: items.slice(0, keep),
-      truncated: true,
-      full: `GET ${jsonVariantUrl(url)}`,
-    })}\n`;
-  } while (Buffer.byteLength(text, "utf8") > TOON_MAX_BYTES && keep > 0);
-  return text;
-}
-
-/**
- * §S2 — the shared response gate every v2 GET routes through: TOON when
- * negotiated (with §S4 truncation), JSON otherwise. JSON never truncates.
+ * §S2 — the shared response gate every v2 GET routes through: JSON, always,
+ * exactly as every write already answered. A GET still carrying the retired
+ * `?fmt=toon` parameter, or an Accept header naming the retired media type,
+ * is INERT rather than refused — it gets this same JSON body, which was
+ * always the untruncated variant and is now the only one. `?fmt=json` keeps
+ * working for callers who wrote it down.
  */
 function reply(req: Request, url: URL, payload: Record<string, unknown>, status = 200): Response {
-  if (req.method === "GET" && wantsToon(req, url)) {
-    let text = `${toToon(payload)}\n`;
-    if (Buffer.byteLength(text, "utf8") > TOON_MAX_BYTES) {
-      text = truncatedToon(payload, url);
-    }
-    return new Response(text, {
-      status,
-      headers: { "content-type": "text/toon; charset=utf-8" },
-    });
-  }
   return json(payload, status);
 }
 
@@ -1890,8 +1842,8 @@ function handlePlansList(store: Store, key: string, req: Request, url: URL): Res
  * CR-CRU-026 §S3.2 — GET /api/v2/plans: ALL non-archived projects' plans in
  * one additive global read (the home timeline's plan feed). Item shape is
  * IDENTICAL to the project-scoped list — both derive from store.listPlans()
- * (toPlan() already stamps projectKey) — and reply() gives the same
- * ?fmt=toon negotiation. GET-only: any other method falls through handleV2
+ * (toPlan() already stamps projectKey) — and both route through the same
+ * reply() JSON gate. GET-only: any other method falls through handleV2
  * to the server's generic 404 catch-all. store.listProjects() excludes
  * archived projects by default, which IS the exclusion rule here.
  */

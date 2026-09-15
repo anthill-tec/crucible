@@ -62,8 +62,18 @@ around two commitments:
   dropped 2026-07-15: agents nest under their project everywhere, §4.11);
   every run card opens a drill-in showing the suite→test tree and, for failures,
   the assertion message + stack trace.
-- **TOON (decided 2026-07-14):** agent-facing reads first (`GET /api/v2` orientation,
-  events, status, agents) via `?fmt=toon` / `Accept`; JSON default everywhere.
+- **TOON (decided 2026-07-14; the SERVER path REMOVED 2026-09-14):** the original decision
+  was agent-facing reads first (`GET /api/v2` orientation, events, status, agents) via
+  `?fmt=toon` / `Accept`, JSON default everywhere — token economy for a reader that pays for
+  every byte of JSON punctuation. **CR-CRU-132 deleted the server's TOON rendering on
+  2026-09-14 as spec creep.** Superseded, not erased: the reason was real, but the consumer
+  it was built for never arrived. Measured 2026-09-14 — no `fmt=toon` and no `Accept: …toon`
+  anywhere in the five stack clients under `clients/` (all consume JSON), nothing in
+  `public/` (the board's own SPA fetches JSON), and the only exercisers were six test files.
+  Every v2 GET now answers JSON, and `?fmt=toon` / `Accept: text/toon` are INERT rather than
+  refused, because a 406 would be a new refusal for a shape that used to work. **Client-side
+  TOON is untouched** — `clients/toon.py` still renders the fleet's stdout AXI envelopes
+  (CR-CRU-030, CR-CRU-046).
 - **Persistence (decided 2026-07-14): embedded SQLite via Bun's built-in
   `bun:sqlite`** (WAL mode; one machine-scoped db file resolved in order — an explicit
   `startServer` path, then `CRUCIBLE_DB`, then an already-existing `./data/crucible.db`
@@ -603,4 +613,8 @@ retention: wave-aware rollups — §4.7, whose "100 full-fidelity runs" default 
 DELETED 2026-09-13 by CR-CRU-129 and is now configuration with no literal fallback;
 TOON: reversed
 2026-07-28 — official TOON libraries on both stacks and the spec is the contract;
-the Crucible subset was retired by CR-CRU-046.)
+the Crucible subset was retired by CR-CRU-046 — and narrowed again 2026-09-14, when
+CR-CRU-132 deleted the SERVER's TOON rendering outright as spec creep (measured that
+day: no `fmt=toon` in any client, none in `public/`, six test files the only
+exercisers), leaving official TOON as the contract for the CLIENT-side AXI envelopes
+only — §65.)
