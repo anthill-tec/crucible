@@ -60,9 +60,10 @@ declared targets need no change to their `package.json` entries; only a target w
 
 Today's `no JUnit XML produced` names no target and offers no diagnosis. It must name the script, the
 command it ran, and the report path it expected. `no_report_help`/`no_report_warning`
-(`clients/_crucible_axi.py`) are shared across all five clients (12 call sites); the additive
-`remedy=`/`cause=` keywords CR-CRU-064/065 already added are this CR's extension point — the richer
-detail rides those, and neither helper's required-parameter shape changes for the other four clients.
+(`clients/_crucible_axi.py`) are shared across all five clients (11 call sites / 22 helper calls);
+the additive `remedy=`/`cause=` keywords CR-CRU-064/065 already added are this CR's extension point
+— the richer detail rides those, and neither helper's required-parameter shape changes for the other
+four clients.
 
 ## Acceptance criteria
 
