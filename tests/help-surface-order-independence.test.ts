@@ -28,12 +28,31 @@
 // in-process assertion can reach it, and the guard drives the pairing as a
 // child `bun test` and asserts that child's own report.
 //
-// THE ORDER IS READ OUT OF THE RUN, NEVER ASSUMED. bun's file order is not the
-// argument order — four probes across both argument orders ran the Chromium
-// file first every time, and mtime-ascending is falsified — so a guard that
-// took the argument order for the run order would quietly stop proving
-// anything the day the runner's scheduling changed. If the browser file did
-// not run first, this guard has starved nothing and fails saying so.
+// THE ORDER IS FORCED, AND STILL READ OUT OF THE RUN. bun's file order is not
+// the argument order — four probes across both argument orders ran the
+// Chromium file first every time, and mtime-ascending is falsified. That
+// reproducibility was never a guarantee, and it did not hold: the pairing
+// later flipped to help-first, and the bisection put the cause in a `.py`
+// client that neither named file imports and this file does not run —
+// reverting that one file alone restored browser-first scheduling, reverting
+// either other changed file alone did not. The runner's choice for a NAMED
+// PAIR is therefore sensitive to repository state with nothing to do with the
+// pairing, so a guard that merely reads the order and hopes spends its life
+// either red for a cause no one can act on, or — the day it flips back —
+// green while starving nothing.
+//
+// SO THE CHILD IS HANDED ONE FILE. It is written beside the report it will
+// produce, DERIVED from the two constants below, and it `require`s the browser
+// file and then the help file inside two `describe`s named after them. Module
+// evaluation is ordered and `require` is synchronous, so the last browser test
+// is followed by the first help test in ONE process with nothing between them:
+// the precondition this guard needs, held by construction instead of by the
+// runner's scheduling. The order is STILL an output — the groups appear in the
+// report in the order they executed, and it is asserted, because a wrapper
+// that stopped forcing what it claims (a group that collected nothing, a
+// require the runner reordered) must fail here rather than pass vacuously. If
+// the browser group did not run first, this guard has starved nothing and
+// fails saying so.
 //
 // IT SPAWNS SYNCHRONOUSLY, DELIBERATELY. This file is INTEGRATION and may
 // itself run after the Chromium suite inside one invocation — precisely the
@@ -47,20 +66,27 @@
 // upgrade re-opens this question deliberately rather than silently.
 //
 // IT PINS THAT RUNNER'S JUNIT FORMAT TOO, deliberately and loudly. The order
-// regex below depends on the reporter's INDENTATION (two leading spaces is the
-// file level) and the duration regex on its ATTRIBUTE ORDER (`name` … `time` …
-// `file`). Neither can fail quietly: a format change empties `filesRun` and
-// reddens the order assertion, or drops `time` and reddens the budget with a
-// NaN. So if this guard goes red in those two shapes at once, suspect the
-// reporter's format before suspecting a starved run.
+// regex below depends on the reporter's INDENTATION (the child runs ONE file,
+// so two leading spaces is that file and FOUR is a required group — six and
+// deeper are the describe blocks inside the file that group required), the
+// duration regex on its ATTRIBUTE ORDER (`name` … `classname` … `time`), and
+// the attribution on `classname` carrying the enclosing describes innermost
+// first, so the group's label — the required file — is its LAST segment. None
+// can fail quietly: a format change empties `filesRun` and reddens the order
+// assertion, or drops the case names and reddens `helpTestRan`, or drops
+// `time` and reddens the budget with a NaN. So if this guard goes red in those
+// shapes at once, suspect the reporter's format before suspecting a starved
+// run.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../scripts/test-targets";
 
-/** The pairing, in the argument order the reproduction uses. Which of the two
- *  bun actually runs first is an OUTPUT of the run, asserted below. */
+/** The pairing, in the order the child is made to run it. The wrapper that
+ *  forces that order is GENERATED from these two constants, so the files it
+ *  requires cannot drift from the files this guard names — and the order the
+ *  run actually produced is still an OUTPUT, asserted below. */
 const BROWSER_FILE = join("tests", "roadmap-visual-grammar.test.ts");
 const HELP_FILE = join("tests", "project-namespace-tripwire.test.ts");
 
@@ -118,9 +144,28 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
       const reportDir = mkdtempSync(join(tmpdir(), "help-surface-order-"));
       const reportPath = join(reportDir, "paired-run.junit.xml");
 
+      // THE WRAPPER, written from the constants above. It sits beside the
+      // report and outside the checkout, so no discovery but this run's will
+      // ever collect it and the repo gains no second copy of the pairing. The
+      // child's cwd is still the repo, so `bunfig.toml` (and its store
+      // preload) applies exactly as it does to a normal run, and each
+      // `require` resolves from the required file's own directory — an
+      // absolute path in, a module that sees its own `import.meta.dir` out.
+      const pairedFile = join(reportDir, "paired-run.test.ts");
+      writeFileSync(
+        pairedFile,
+        `import { describe } from "bun:test";\n` +
+          [BROWSER_FILE, HELP_FILE]
+            .map(
+              (file) =>
+                `describe(${JSON.stringify(file)}, () => {\n  require(${JSON.stringify(join(REPO_ROOT, file))});\n});\n`,
+            )
+            .join(""),
+      );
+
       const startedAt = Bun.nanoseconds();
       const child = Bun.spawnSync({
-        cmd: ["bun", "test", "--reporter=junit", "--reporter-outfile", reportPath, BROWSER_FILE, HELP_FILE],
+        cmd: ["bun", "test", "--reporter=junit", "--reporter-outfile", reportPath, pairedFile],
         cwd: REPO_ROOT,
         env: { ...process.env },
         timeout: CHILD_HARD_CAP_MS,
@@ -131,19 +176,26 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
       const report = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : "";
       rmSync(reportDir, { recursive: true, force: true });
 
-      // The file-level suites, in the order bun RAN them: bun runs one file at
-      // a time in a process, so document order is execution order. Two leading
-      // spaces is the file level — four and deeper are the describe blocks
-      // inside it.
-      const filesRun = [...report.matchAll(/^ {2}<testsuite name="([^"]+)"[^>]*tests="(\d+)"/gm)].map(
+      // The two required groups, in the order the child RAN them: a describe
+      // runs where it was declared, so document order is execution order. The
+      // child collected ONE file, so two leading spaces is the wrapper and
+      // FOUR is a group the wrapper named — six and deeper are the describe
+      // blocks inside the file that group required.
+      const filesRun = [...report.matchAll(/^ {4}<testsuite name="([^"]+)"[^>]*tests="(\d+)"/gm)].map(
         ([, file, tests]) => ({ file, tests: Number(tests) }),
       );
-      const casesRun = [...report.matchAll(/<testcase name="([^"]*)"[^>]*file="([^"]*)"/g)].map(
-        ([, name, file]) => `${file} › ${name.replaceAll("&apos;", "'")}`,
+      // WHICH FILE A CASE CAME FROM is read off `classname`, not off `file`:
+      // every case in this run belongs to the wrapper's path, while classname
+      // carries the enclosing describes innermost first, so its LAST segment
+      // is the group's label — the required file itself.
+      const caseKey = (name: string, classname: string) =>
+        `${classname.split("&amp;gt;").at(-1)?.trim() ?? ""} › ${name.replaceAll("&apos;", "'")}`;
+      const casesRun = [...report.matchAll(/<testcase name="([^"]*)" classname="([^"]*)"/g)].map(
+        ([, name, classname]) => caseKey(name, classname),
       );
       const failed = [
-        ...report.matchAll(/<testcase name="([^"]*)"[^>]*file="([^"]*)"[^>]*>\s*<failure type="([^"]*)"/g),
-      ].map(([, name, file, type]) => `${file} › ${name.replaceAll("&apos;", "'")} [${type}]`);
+        ...report.matchAll(/<testcase name="([^"]*)" classname="([^"]*)"[^>]*>\s*<failure type="([^"]*)"/g),
+      ].map(([, name, classname, type]) => `${caseKey(name, classname)} [${type}]`);
 
       // THE SHARP SIGNAL, read out of the child's own report: bun's junit
       // reporter emits `time` in SECONDS on each testcase, so this is the help
@@ -153,9 +205,9 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
       // than passing vacuously.
       const helpTestMs = Math.round(
         Number(
-          [...report.matchAll(/<testcase name="([^"]*)"[^>]*time="([^"]*)"[^>]*file="([^"]*)"/g)].find(
-            ([, name, , file]) => `${file} › ${name.replaceAll("&apos;", "'")}` === `${HELP_FILE} › ${HELP_TEST_NAME}`,
-          )?.[2] ?? "NaN",
+          [...report.matchAll(/<testcase name="([^"]*)" classname="([^"]*)" time="([^"]*)"/g)].find(
+            ([, name, classname]) => caseKey(name, classname) === `${HELP_FILE} › ${HELP_TEST_NAME}`,
+          )?.[3] ?? "NaN",
         ) * 1000,
       );
 
@@ -178,7 +230,9 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
 
       // THE ORDER THE RUN ACTUALLY PRODUCED. Both files ran, and the browser
       // file ran FIRST — without that this pairing starves nothing and proves
-      // nothing, so it fails here rather than passing vacuously.
+      // nothing, so it fails here rather than passing vacuously. The wrapper
+      // forces this; the assertion is what catches a wrapper that stopped
+      // forcing it.
       expect(filesRun.map((f) => f.file)).toEqual([BROWSER_FILE, HELP_FILE]);
 
       // THE OUTCOME, on the child's reported counts and not on its exit code
@@ -191,7 +245,9 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
 
       // NON-VACUITY. A pairing that silently stopped collecting — an empty
       // suite, a mis-parsed verb list, a file that reported one test — is not
-      // a green this CR accepts. Floors, against 90 and 21 as measured.
+      // a green this CR accepts. Floors, against 91 and 21 as measured — the
+      // group counts a required file yields, which is what a collection that
+      // quietly emptied would drop.
       expect(filesRun[0]?.tests).toBeGreaterThanOrEqual(80);
       expect(filesRun[1]?.tests).toBeGreaterThanOrEqual(21);
 
