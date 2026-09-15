@@ -1,7 +1,7 @@
 """CR-CRU-131 §S1b -- what a CLIENT TELLS A USER about an abandoned run names
 the LIMIT, not a retired environment variable.
 
-`_run_left_open_warning` (clients/bun-crucible.py:903) builds the `{code,
+`_run_left_open_warning` (clients/bun-crucible.py:979) builds the `{code,
 detail}` entry that rides the AXI envelope when a run this client OPENED is
 interrupted before it could be closed. Its detail currently ends:
 

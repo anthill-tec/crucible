@@ -90,7 +90,7 @@ and, for GAP 1, asserts only the outcome both readings agree on.
   predecessor keeps ITS OWN, whatever syntax declared either.
 
 WIRE FORMS (AC3). Every gate runs over BOTH legal result-line families
-documented at clients/bun-crucible.py:544-564 -- the ANSI-colourised `✗` form
+documented at clients/bun-crucible.py:643-663 -- the ANSI-colourised `✗` form
 bun emits even through a pipe, and the plain `(fail)` form. The ANSI fixtures
 are NOT synthesised from the plain ones: each is an independent verbatim
 capture of the same fixture project run under FORCE_COLOR=1.
@@ -120,7 +120,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 
-# Both legal wire forms, per clients/bun-crucible.py:544-564 (AC3).
+# Both legal wire forms, per clients/bun-crucible.py:643-663 (AC3).
 WIRE_FORMS = ("plain", "ansi")
 
 
