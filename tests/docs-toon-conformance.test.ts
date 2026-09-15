@@ -72,10 +72,19 @@ describe("§S5 DN — the subset DN is retired in place, not deleted", () => {
 
     // The npm-side pinned implementation, with its ACTUAL pinned version (read
     // from package.json so this test doesn't rot the moment the pin bumps).
+    //
+    // RETARGETED by CR-CRU-132 §S3, from `dependencies` to `devDependencies`
+    // — not deleted, because the pin is still REAL. §S1 deletes the server's
+    // TOON rendering and MOVES `@toon-format/toon` out of the runtime
+    // dependency set; the library stays in the repo as the reference decoder
+    // for the surviving client-emit oracle
+    // (tests/toon-conformance.test.ts), which is the contract this guard
+    // actually protects. Reading the version from `dependencies` after the
+    // move would read `undefined` and pin nothing.
     const pkg = JSON.parse(readText("package.json")) as {
-      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
     };
-    const rawVersion = pkg.dependencies?.["@toon-format/toon"];
+    const rawVersion = pkg.devDependencies?.["@toon-format/toon"];
     expect(rawVersion).toBeTruthy();
     const pinnedVersion = (rawVersion as string).replace(/^[\^~]/, "");
 

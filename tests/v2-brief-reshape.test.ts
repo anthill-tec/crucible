@@ -137,11 +137,6 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`);
   }
 
-  async function getText(path: string): Promise<{ status: number; text: string }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`);
-    return { status: res.status, text: await res.text() };
-  }
-
   async function createProject(name: string): Promise<string> {
     const res = await postJson("/api/v2/projects", { name });
     const body = (await res.json()) as OkResponse & { project: { key: string } };
@@ -353,40 +348,21 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   // -------------------------------------------------------------------
 
   // -------------------------------------------------------------------
-  // 5. TOON uniform-table form — ≥2 test-event briefs now scalar-only.
+  // 5. TOON uniform-table form — DELETED by CR-CRU-132 §S2.
+  //
+  //    SUPERSEDED CLAIM: CR-CRU-006 §S0 — "GET /api/v2/events?fmt=toon with
+  //    >=2 test-event briefs emits TOON's uniform-table form
+  //    (`^events[N]{…}`)". SUPERSEDED BY CR-CRU-132 §S1, which deletes the
+  //    server's TOON rendering: the route no longer emits a TOON body, so
+  //    there is no table form to detect. Its SUBJECT was the encoding's
+  //    tabular emission, not the brief — the test read the raw wire text
+  //    and matched a TOON grammar, and there is no JSON retarget for it
+  //    that is not a restatement of section 1 above.
+  //
+  //    THE FACT IT DEPENDED ON IS NOT LOST: that a test-event brief is
+  //    all-scalar with an identical, order-identical field set across rows
+  //    (the precondition uniform-table detection needed) is exactly what
+  //    section 1's JSON test asserts directly — flattened top-level run
+  //    numbers plus `hasCoverage`, and NO `summary` key.
   // -------------------------------------------------------------------
-  test("GET /api/v2/events?fmt=toon with >=2 test-event briefs emits the uniform-table form", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const key = await createProject("brief-toon");
-
-    // CR-CRU-056 §S2b fixture-repair: register BOTH agents UP FRONT (each
-    // registration's own "lifecycle" event lands before either test event),
-    // then seed both test-event briefs back to back so they are the two
-    // NEWEST events — `limit=2` below fetches exactly those two, keeping
-    // the uniform-table precondition (identical, non-lifecycle shape
-    // across rows) intact without touching the reshape contract itself.
-    await registerAgent(key, "toon-1");
-    await registerAgent(key, "toon-2");
-
-    // Two same-shaped test-kind briefs (both without coverage) so the
-    // flattened field set is identical/order-identical across rows —
-    // the precondition for TOON's uniform-table detection.
-    await postJson("/api/v2/runs/parsed", {
-      projectKey: key,
-      agentId: "toon-1",
-      summary: { total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 20 },
-      tree: [{ name: "s", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 10 }] }],
-    });
-    Bun.sleepSync(2);
-    await postJson("/api/v2/runs/parsed", {
-      projectKey: key,
-      agentId: "toon-2",
-      summary: { total: 3, passed: 2, failed: 1, pending: 0, duration_ms: 30 },
-      tree: [{ name: "s", status: "fail", children: [{ name: "t1", status: "fail", duration_ms: 15 }] }],
-    });
-
-    const { status, text } = await getText(`/api/v2/events?project=${key}&limit=2&fmt=toon`);
-    expect(status).toBe(200);
-    expect(text).toMatch(/^events\[\d+\]\{/m);
-  });
 });

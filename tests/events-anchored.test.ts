@@ -286,23 +286,17 @@ describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)"
     expect(body.cycle).toBeUndefined();
   });
 
-  test("?fmt=toon on the anchored route negotiates the same TOON contract as sibling v2 GET routes", async () => {
-    const handle = boot();
-    const key = await createProject(handle);
-    const { planId, a } = await filePlanAB(handle, key, "CR-ANCHOR-TOON");
-    await transition(handle, key, planId, a, "active");
-    await transition(handle, key, planId, a, "done");
-    await registerAgent(handle, key, "agent-a");
-    await postParsedRun(handle, key, "agent-a", { cycleId: a });
-
-    const res = await getRaw(handle, `/api/v2/events?project=${key}&cycleId=${a}&fmt=toon`);
-
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("text/toon; charset=utf-8");
-    const text = await res.text();
-    const firstLine = text.split("\n")[0] ?? "";
-    expect(firstLine).toBe("ok: true");
-  });
+  // ?fmt=toon on the anchored route — DELETED by CR-CRU-132 §S2.
+  //
+  // SUPERSEDED CLAIM: CR-CRU-094 §S1 — "`?fmt=toon` on the anchored route
+  // negotiates the same TOON contract as sibling v2 GET routes
+  // (`content-type: text/toon; charset=utf-8`, first line `ok: true`)."
+  // SUPERSEDED BY CR-CRU-132 §S1, which deletes the server's TOON rendering.
+  // Its SUBJECT was the negotiation contract, not the anchored payload: it
+  // asserted the media type and the wire text's first line and never looked
+  // at `events` or `cycle`. The anchored route's own contract — the cycle's
+  // linked runs and its `PlanCycle` descriptor — is asserted by every other
+  // test in this file, over JSON, unchanged by this CR.
 
   test("regression: GET /api/v2/events?project=<k>&limit=N (no cycleId) is byte-unchanged — the recent-N feed still works", async () => {
     const handle = boot();

@@ -43,7 +43,6 @@
 //
 // Every server here is booted on an OS-assigned port against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
-import { decode } from "@toon-format/toon";
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1830,10 +1829,26 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
       }
     }
 
-    async function toonReply(key: string): Promise<{ res: Response; text: string }> {
-      const res = await send("GET", `${queuePath(key)}?fmt=toon`);
-      return { res, text: await res.text() };
-    }
+    // CR-CRU-132 §S2 — the `toonReply()` helper and the TWO tests it alone
+    // fed are DELETED with the encoding they read.
+    //
+    // SUPERSEDED CLAIM: CR-CRU-108 §S1/AC3 — "the `?fmt=toon` reply carries
+    // `tracks` under the SAME name, asserted by READING the TOON text
+    // (a `content-type: text/toon` header, a `^tracks\[2\]: ` grammar line,
+    // an independent `decode()` by the reference library) rather than by
+    // trusting `reply()`", together with its trackless twin "a trackless
+    // queue's TOON reply STATES `tracks: []` so the empty fact survives the
+    // encoding". SUPERSEDED BY CR-CRU-132 §S1: the server no longer renders
+    // TOON, so there is no second encoding for a cross-encoding check to
+    // read. The independence check retires WITH the encoding it checked.
+    //
+    // THE FACT IT PROVED IS NOT LOST. `tracks` being published under a
+    // stable name — legacy `2` beside normalised `track-2`, both values,
+    // sorted, the row unrewritten, and the trimmed/collapsed padded lane —
+    // stays proven by the JSON-only AC2 tests immediately above, which
+    // assert `publishedTracks(body)` off the real read. What the deleted
+    // pair added over them was the cross-ENCODING confirmation, and that is
+    // exactly what this CR removes.
 
     function publishedTracks(body: AnyBody): unknown {
       return body.tracks;
@@ -1931,49 +1946,6 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         // both still carry the padding they were handed.
         expect(body.entries!.find((e) => e.cr === "CR-PAD")!.track).toBe(" track-2 ");
         expect(rowsByCr(key).get("CR-PAD")!.track).toBe(" track-2 ");
-      },
-    );
-
-    test(
-      "AC3 — the ?fmt=toon reply carries `tracks` under the SAME name, asserted by READING the " +
-        "TOON text: a top-level two-member array line that decodes to the JSON reply's own list",
-      async () => {
-        boot();
-        const key = await seed("cru108-ac3-toon");
-        await seedWave(key, ["CR-LEGACY", "CR-NORM"]);
-        expect((await sequence(key, RELEASE, 5, ["CR-NORM"], "2")).status).toBe(200);
-        plantTrack(key, "CR-LEGACY", "2");
-
-        const { res, text } = await toonReply(key);
-
-        expect(res.status).toBe(200);
-        expect(res.headers.get("content-type")).toBe("text/toon; charset=utf-8");
-        // IN THE TEXT — not read back off `reply()`'s JSON twin.
-        expect(text).toMatch(/^tracks\[2\]: /m);
-        const decoded = decode(text) as { tracks?: unknown };
-        expect(decoded.tracks).toEqual(["2", "track-2"]);
-        // The SAME field under the SAME name — one fact, two encodings.
-        expect(decoded.tracks).toEqual(publishedTracks((await get(queuePath(key))).body));
-      },
-    );
-
-    test(
-      "AC3 — a trackless queue's ?fmt=toon reply STATES `tracks: []`, so the empty fact survives " +
-        "the TOON encoding instead of vanishing from it",
-      async () => {
-        boot();
-        const key = await seed("cru108-ac3-toon-empty");
-        await seedWave(key, ["CR-NOLANE"]);
-
-        const { res, text } = await toonReply(key);
-
-        expect(res.status).toBe(200);
-        expect(text).toMatch(/^tracks: \[\]$/m);
-        const decoded = decode(text) as { tracks?: unknown; entries?: unknown[] };
-        expect(decoded.tracks).toEqual([]);
-        // The read really returned an entry — an empty queue would make
-        // `tracks: []` true for the wrong reason.
-        expect(decoded.entries).toHaveLength(1);
       },
     );
   });

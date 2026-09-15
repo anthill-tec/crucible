@@ -1,51 +1,43 @@
-// CR-CRU-046 §S4 — server-side TOON conformance gate, RED phase.
+// CR-CRU-046 §S4 — the CLIENT-EMIT TOON conformance oracle: a real client's
+// own stdout AXI envelope, decoded by the official `@toon-format/toon`
+// library, in the client→agent direction.
 //
-// EXPECTED RED MODE: `@toon-format/toon` is NOT yet a dependency of this
-// package (package.json declares zero runtime deps today) — this file is
-// RED via MODULE-RESOLUTION FAILURE on the import below, the same
-// documented RED convention CR-005's own serializer test used for
-// `../src/toon.ts` (a not-yet-existing SUT module). That test file,
-// `tests/toon.test.ts`, was itself retired by CR-CRU-046 C2 GREEN part 1
-// (`a0360f1`) when the hand-written subset serializer was replaced by the
-// official `@toon-format/toon` library — history, cited here only for
-// provenance; THIS file is its successor. Once GREEN adds
-// `@toon-format/toon` as a runtime dependency and flips `src/toon.ts` (or
-// its replacement) to encode through the official library, these tests
-// become the §S4 server-side conformance gate — no edits needed here.
+// THIS FILE WAS the two-direction §S4 gate. CR-CRU-132 §S2 deleted its
+// SERVER-WIRE half: the seven envelope-shape round-trips, the six
+// type-preservation cases and the two server-fetched `help[]` decode tests.
 //
-// Today's hand-written `src/toon.ts` (CR-CRU-005 subset) is NOT conformant
-// per the CR-CRU-046 context: list arrays lack the `- `-prefixed element
-// form the official spec requires, and the quoting predicate under-quotes
-// (misses leading-hyphen / leading-trailing-whitespace / numeric-looking /
-// boolean-looking / null-looking strings). Both defects are exercised below
-// by decoding the server's real HTTP TOON output with the OFFICIAL decoder
-// and comparing against the JSON twin from the same real server — never by
-// binding to `toToon` by name, since GREEN may delete or rename it; the
-// wire is the seam this file pins.
+// THE SUPERSEDED CLAIM, named rather than silently dropped:
+//
+//   - CR-CRU-046 §S4, server direction — "the TOON body the server returns
+//     for every v2 GET envelope shape decodes, via the OFFICIAL library, to
+//     exactly the JSON twin of the same call: list arrays in the official
+//     `- `-prefixed form, and number/boolean/null-LOOKING strings still
+//     strings." SUPERSEDED BY CR-CRU-132 §S1, which deletes the server's
+//     TOON rendering: there is no server wire left to decode, so the
+//     conformance of a body that is never emitted is not a requirement.
+//     `src/toon.ts` and the `toToon` seam those tests pinned go with it.
+//
+// WHAT SURVIVES — and what this file now exists for — is the CLIENT-EMIT
+// ORACLE below. `clients/toon.py` still encodes every fleet client's stdout
+// envelope (the TOON-AXI contract of CR-CRU-030 / CR-CRU-046), and this is
+// the only independent check that its output is conformant, measured by the
+// official library rather than by our own encoder agreeing with itself. It
+// is ALSO this CR's own proof that removing the server's TOON did not touch
+// the fleet's — which is why `@toon-format/toon` MOVES to `devDependencies`
+// instead of leaving the repo. Deleting it would take this oracle with it.
 import { decode } from "@toon-format/toon";
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
-import type { RunSummary, SuiteNode } from "../src/types.ts";
 
 interface OkResponse {
   ok: true;
   [key: string]: unknown;
 }
 
-// 3-case junit fixture, 1 failing case → RED verdict (matches other v2 suites' fixture,
-// reused from tests/axi-negotiation.test.ts's JUNIT_1FAIL pattern).
-const JUNIT_1FAIL = [
-  '<testsuite name="Suite1" tests="3">',
-  '<testcase name="t1" time="0.01"/>',
-  '<testcase name="t2" time="0.02"/>',
-  '<testcase name="t3" time="0.03"><failure message="boom">trace</failure></testcase>',
-  "</testsuite>",
-].join("\n");
-
-describe("TOON conformance — official library decode of the real server wire (CR-CRU-046 §S4)", () => {
+describe("TOON conformance — official library decode of a real CLIENT envelope (CR-CRU-046 §S4)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
 
   afterEach(() => {
@@ -61,345 +53,15 @@ describe("TOON conformance — official library decode of the real server wire (
     });
   }
 
-  async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
-  }
-
-  async function getToonText(path: string): Promise<{ res: Response; text: string }> {
-    const toonPath = path.includes("?") ? `${path}&fmt=toon` : `${path}?fmt=toon`;
-    const res = await fetch(`http://localhost:${handle!.server.port}${toonPath}`);
-    const text = await res.text();
-    return { res, text };
-  }
-
-  /**
-   * CR-CRU-046 C2 test-fix pass — the JSON and TOON bodies for a given
-   * envelope are fetched SEQUENTIALLY (two real HTTP round-trips), so any
-   * field derived from the live wall clock (`Date.now()`) can tick between
-   * the two fetches and make an otherwise-identical deep-equal flake
-   * (~40-60% observed on `GET /api/v2/agents`'s `runtime_ms` and
-   * `GET /api/v2/health`'s `uptime_s`). Strip exactly the named volatile
-   * key(s) from BOTH decoded representations before the comparison — every
-   * other field, including every other agent field, stays fully compared.
-   * `JSON.stringify`'s replacer walks every key at every depth, so this
-   * reaches `runtime_ms` nested inside `agents[]` as well as a top-level
-   * `uptime_s`.
-   */
-  function stripVolatile<T>(value: T, volatileKeys: string[]): T {
-    return JSON.parse(
-      JSON.stringify(value, (key, val) => (volatileKeys.includes(key) ? undefined : val)),
-    ) as T;
-  }
-
   async function createProject(name: string): Promise<string> {
     const res = await postJson("/api/v2/projects", { name });
     const body = (await res.json()) as OkResponse & { project: { key: string } };
     return body.project.key;
   }
 
-  async function registerAgent(
-    projectKey: string,
-    agentId: string,
-    message: string,
-  ): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", {
-      projectKey,
-      agentId,
-      message,
-      role: "report",
-    });
-    expect(res.status).toBe(200);
-  }
-
-  function parsedRunBody(overrides: { projectKey: string; agentId?: string; summary?: Partial<RunSummary> }) {
-    return {
-      projectKey: overrides.projectKey,
-      agentId: overrides.agentId ?? "conformance-agent",
-      summary: {
-        total: 5,
-        passed: 5,
-        failed: 0,
-        pending: 0,
-        duration_ms: 100,
-        ...overrides.summary,
-      },
-      tree: [
-        {
-          name: "s",
-          status: "pass",
-          children: [{ name: "t1", status: "pass", duration_ms: 50 }],
-        },
-      ] as SuiteNode[],
-    };
-  }
-
-  // ── §S4 — round-trip: every AXI envelope shape the server emits ──────────
-
-  describe("round-trip through every v2 GET envelope shape (§S4 AC — 'every AXI envelope shape')", () => {
-    test("GET /api/v2 (orientation) — official decode of TOON body deep-equals the JSON twin", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      await createProject("orientation-rt");
-
-      const jsonRes = await getJson("/api/v2");
-      const jsonBody = (await jsonRes.json()) as OkResponse;
-
-      const { res: toonRes, text: toonText } = await getToonText("/api/v2");
-      expect(toonRes.status).toBe(200);
-      expect(toonRes.headers.get("content-type")).toBe("text/toon; charset=utf-8");
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
-
-      expect(decoded).toEqual(jsonBody);
-    });
-
-    test("GET /api/v2/agents (agents listing) — official decode deep-equals the JSON twin, including a non-uniform 'message' field", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const key = await createProject("agents-rt");
-      await registerAgent(key, "agent-one", "hello agent one");
-      await registerAgent(key, "agent-two", "hello agent two");
-
-      const jsonRes = await getJson("/api/v2/agents");
-      const jsonBody = (await jsonRes.json()) as OkResponse;
-
-      const { res: toonRes, text: toonText } = await getToonText("/api/v2/agents");
-      expect(toonRes.status).toBe(200);
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
-
-      // Flake fix (CR-CRU-046 C2): `runtime_ms` (nested in each agent) ticks
-      // between the JSON and TOON fetches above — strip it from BOTH sides
-      // before the deep-equal so the live clock can't flip this test red.
-      // Every other agent field (including `message`) stays compared as-is.
-      expect(stripVolatile(decoded, ["runtime_ms"])).toEqual(stripVolatile(jsonBody, ["runtime_ms"]));
-    });
-
-    test("GET /api/v2/projects — official decode deep-equals the JSON twin", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      await createProject("projects-rt-a");
-      await createProject("projects-rt-b");
-
-      const jsonRes = await getJson("/api/v2/projects");
-      const jsonBody = (await jsonRes.json()) as OkResponse;
-
-      const { res: toonRes, text: toonText } = await getToonText("/api/v2/projects");
-      expect(toonRes.status).toBe(200);
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
-
-      expect(decoded).toEqual(jsonBody);
-    });
-
-    test("GET /api/v2/events (events listing) — official decode deep-equals the JSON twin", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const key = await createProject("events-rt");
-      // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed now refuses
-      // an unregistered agentId (409) — register first. Its own "lifecycle"
-      // event (CR-CRU-011 §S1) is NOT this test's subject (the round-trip
-      // fidelity of the single ingested TEST event); drop it from both sides
-      // before comparing.
-      await registerAgent(key, "conformance-agent", "");
-      await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
-
-      const jsonRes = await getJson("/api/v2/events");
-      const jsonBody = (await jsonRes.json()) as OkResponse & { events: Array<{ kind?: string }> };
-      jsonBody.events = jsonBody.events.filter((e) => e.kind !== "lifecycle");
-
-      const { res: toonRes, text: toonText } = await getToonText("/api/v2/events");
-      expect(toonRes.status).toBe(200);
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as OkResponse & { events: Array<{ kind?: string }> };
-      decoded.events = decoded.events.filter((e) => e.kind !== "lifecycle");
-
-      expect(decoded).toEqual(jsonBody);
-    });
-
-    test("GET /api/v2/events/:id (single event) — official decode deep-equals the JSON twin", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const key = await createProject("event-single-rt");
-      await registerAgent(key, "conformance-agent", "");
-      const runRes = await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
-      const runBody = (await runRes.json()) as OkResponse & { event: string };
-      const eventId = runBody.event;
-
-      const jsonRes = await getJson(`/api/v2/events/${eventId}`);
-      const jsonBody = (await jsonRes.json()) as OkResponse;
-
-      const { res: toonRes, text: toonText } = await getToonText(`/api/v2/events/${eventId}`);
-      expect(toonRes.status).toBe(200);
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
-
-      expect(decoded).toEqual(jsonBody);
-    });
-
-    test("GET /api/v2/status?project= — official decode deep-equals the JSON twin", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const key = await createProject("status-rt");
-      await registerAgent(key, "conformance-agent", "");
-      await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
-
-      const jsonRes = await getJson(`/api/v2/status?project=${key}`);
-      const jsonBody = (await jsonRes.json()) as OkResponse;
-
-      const { res: toonRes, text: toonText } = await getToonText(`/api/v2/status?project=${key}`);
-      expect(toonRes.status).toBe(200);
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
-
-      expect(decoded).toEqual(jsonBody);
-    });
-
-    test("GET /api/v2/health — official decode deep-equals the JSON twin", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-
-      const jsonRes = await getJson("/api/v2/health");
-      const jsonBody = (await jsonRes.json()) as OkResponse;
-
-      const { res: toonRes, text: toonText } = await getToonText("/api/v2/health");
-      expect(toonRes.status).toBe(200);
-      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
-      // library's `JsonValue` union, which pins `.toEqual`'s overload and
-      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
-      // (not a narrower type) so every field still round-trips through the
-      // real deep-equal below — this is a type-level unblock only, no
-      // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
-
-      // Flake fix (CR-CRU-046 C2): `uptime_s` ticks between the JSON and
-      // TOON fetches above — strip it from BOTH sides before the deep-equal
-      // so the live clock can't flip this test red. Every other health
-      // field (status/version/counts) stays compared as-is.
-      expect(stripVolatile(decoded, ["uptime_s"])).toEqual(stripVolatile(jsonBody, ["uptime_s"]));
-    });
-  });
-
-  // ── §S4 AC — string values must survive encode→official-decode as strings ─
-
-  describe("type preservation through the wire — number/boolean/null-LOOKING strings stay strings (§S4 AC)", () => {
-    const cases: Array<{ label: string; value: string }> = [
-      { label: '"42"', value: "42" },
-      { label: '"true"', value: "true" },
-      { label: '"null"', value: "null" },
-      { label: '""', value: "" },
-      { label: '" padded "', value: " padded " },
-      { label: '"-leading"', value: "-leading" },
-    ];
-
-    for (const { label, value } of cases) {
-      test(`agent 'message' field carrying the STRING ${label} round-trips as a string, not coerced, via GET /api/v2/agents`, async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
-        const slug = label.replace(/[^a-z0-9]/gi, "") || "empty";
-        const key = await createProject(`type-preserve-${slug}-${crypto.randomUUID().slice(0, 8)}`);
-        await registerAgent(key, "type-agent", value);
-
-        const jsonRes = await getJson("/api/v2/agents");
-        const jsonBody = (await jsonRes.json()) as OkResponse & { agents: Array<{ agentId: string; message: string }> };
-        const jsonAgent = jsonBody.agents.find((a) => a.agentId === "type-agent");
-        expect(jsonAgent).toBeDefined();
-        // Sanity: the JSON twin itself carries the exact literal (proves the
-        // fixture actually drove the intended value through the real API).
-        expect(jsonAgent!.message).toBe(value);
-
-        const { res: toonRes, text: toonText } = await getToonText("/api/v2/agents");
-        expect(toonRes.status).toBe(200);
-        const decoded = decode(toonText) as OkResponse & { agents: Array<{ agentId: string; message: unknown }> };
-        const toonAgent = decoded.agents.find((a) => a.agentId === "type-agent");
-        expect(toonAgent).toBeDefined();
-
-        // POSITIVE — the exact string value, unchanged.
-        expect(toonAgent!.message).toBe(value);
-        // NEGATIVE — never silently coerced to a different JS type by the
-        // official decoder reading today's (or tomorrow's) wire encoding.
-        expect(typeof toonAgent!.message).toBe("string");
-      });
-    }
-  });
-
-  // ── §S4 AC — list array emits `- `-prefixed elements (help[], the hottest path) ─
-
-  describe("list-array defect pinned on help[] — the most-emitted case (§S4 AC)", () => {
-    test("GET /api/v2 orientation 'help[]' decodes via the official library to the exact JSON array (form-agnostic: fails today because the subset emitter's unprefixed list form is not valid official TOON)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-
-      const jsonRes = await getJson("/api/v2");
-      const jsonBody = (await jsonRes.json()) as OkResponse & { help: string[] };
-      // Sanity: orientation really carries a non-empty help[] — the hottest
-      // list-array surface named by the CR (every AXI envelope emits help[]).
-      expect(Array.isArray(jsonBody.help)).toBe(true);
-      expect(jsonBody.help.length).toBeGreaterThan(0);
-
-      const { res: toonRes, text: toonText } = await getToonText("/api/v2");
-      expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText) as OkResponse & { help: unknown };
-
-      // POSITIVE + bound — exact array equality, not "≥1 element" / non-empty.
-      expect(decoded.help).toEqual(jsonBody.help);
-    });
-
-    test("a RED-verdict POST /api/v2/runs response's help[] (fetched back via the events surface in TOON) decodes to the exact JSON array", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const key = await createProject("help-list-rt");
-      await registerAgent(key, "red-agent", "");
-
-      const runRes = await postJson("/api/v2/runs", {
-        projectKey: key,
-        agentId: "red-agent",
-        codec: "junit",
-        data: JUNIT_1FAIL,
-      });
-      const runBody = (await runRes.json()) as OkResponse & { verdict: string; help: string[] };
-      expect(runBody.verdict.startsWith("RED")).toBe(true);
-      expect(runBody.help.length).toBeGreaterThan(0);
-
-      // The run's own POST response never carries TOON (POSTs stay JSON,
-      // per CR-CRU-005 §S2) — so drive the SAME help[] shape through a GET
-      // envelope that also carries it: orientation. This keeps the
-      // assertion bound to a real GET/TOON wire response rather than any
-      // unit-level call to the encoder by name.
-      const { text: toonText } = await getToonText("/api/v2");
-      const decoded = decode(toonText) as OkResponse & { help: unknown };
-      const jsonRes = await getJson("/api/v2");
-      const jsonBody = (await jsonRes.json()) as OkResponse & { help: string[] };
-
-      expect(decoded.help).toEqual(jsonBody.help);
-      expect(Array.isArray(decoded.help)).toBe(true);
-    });
-  });
-
   // ── §S4 AC — client-emit direction: a REAL client's own stdout envelope ──
-  // decodes via the official library. The describe block above proves
-  // server-emit → official-decode; this proves the MISSING direction named
-  // by §S4 ("client `_emit` output ... → `@toon-format/toon` decode ...
+  // decodes via the official library. This is the direction named by §S4
+  // ("client `_emit` output ... → `@toon-format/toon` decode ...
   // across the client envelope shapes"). `clients/bun-crucible.py` writes
   // its own AXI envelope to stdout via `_crucible_axi.py:84`
   // (`sys.stdout.write(_toon().encode({"axi": axi}) + "\n")`) — a REAL
