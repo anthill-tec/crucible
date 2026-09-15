@@ -1,8 +1,10 @@
 // CR-CRU-032 §S1 — anchored events query: GET /api/v2/events?project=<k>&cycleId=<id>
 // returns ONE cycle's linked runs + its declared "Cycle done" boundary, without
-// pulling all project history. Additive, TOON-negotiable like sibling v2 GET
-// routes; the existing `?limit=N` recent-feed behavior (no cycleId) is
-// byte-unchanged. Unknown cycleId -> empty set (never a 4xx).
+// pulling all project history. Additive, and it answers JSON like every
+// sibling v2 GET — the TOON negotiation this route originally carried was
+// retired by CR-CRU-132 §S1 (see the superseded-claim note below); the
+// existing `?limit=N` recent-feed behavior (no cycleId) is byte-unchanged.
+// Unknown cycleId -> empty set (never a 4xx).
 //
 // RED phase: `handleEventsList` (src/v2.ts ~line 1260) has NO cycleId
 // awareness at all today — it only reads `project`/`limit`. Every assertion

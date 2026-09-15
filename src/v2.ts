@@ -171,6 +171,14 @@ function json(body: unknown, status = 200): Response {
  * is INERT rather than refused — it gets this same JSON body, which was
  * always the untruncated variant and is now the only one. `?fmt=json` keeps
  * working for callers who wrote it down.
+ *
+ * `req` and `url` are DELIBERATELY RETAINED though nothing reads them today:
+ * every one of the 16 call sites keeps one uniform shape, and the next
+ * negotiation-shaped concern (or anything else that must look at the request
+ * or its query string before a body goes out) has one obvious place to read
+ * them from. This is not forgotten cleanup — dropping them would mean editing
+ * all 16 call sites for no behavioural gain, and it is precisely this
+ * signature's sameness that makes "no payload moved" trivially checkable.
  */
 function reply(req: Request, url: URL, payload: Record<string, unknown>, status = 200): Response {
   return json(payload, status);

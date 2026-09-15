@@ -137,6 +137,10 @@ const PLANTED_PROVENANCE = [
 //
 // Measured against the live server at `da33801`, BEFORE this CR's edits.
 // This CR changes no payload, so every one of these must still hold after it.
+//
+// 17 rows for 16 `reply()` call sites: `handleEventsList`'s anchored branch is
+// one call site driven twice (resolving cycleId + unknown cycleId), and every
+// other call site is driven exactly once. See the branching-handler note below.
 const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: string[] }> = [
   { path: () => "/api/v2", keys: ["ok", "service", "version", "projects", "help"] },
   { path: () => "/api/v2/health", keys: ["ok", "status", "version", "uptime_s", "counts", "store"] },
@@ -157,15 +161,30 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
     path: (c) => `/api/v2/projects/${c.key}/release-proposals`,
     keys: ["ok", "proposals", "totalCount"],
   },
-  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (`src/v2.ts:3667`,
+  // ── The two BRANCHING handlers, whose extra arms are separate call sites ──
+  //
+  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (`src/v2.ts:3619`,
   // entered when `?cycleId=` is present) is a genuinely DIFFERENT payload
-  // from the unanchored recent-N feed two rows above, not the same URL under
-  // another query string: it omits `openRuns` ENTIRELY and adds `cycle` only
-  // when the cycleId resolves. Both of its two shapes are pinned, because
-  // "an unknown cycleId answers 200 with an empty set and NO `cycle` field"
-  // is itself the documented contract (`src/v2.ts`'s own comment on that
-  // branch), and a row that only ever drove the resolving case would miss a
-  // regression that started emitting `cycle: null`.
+  // from the unanchored recent-N feed (`src/v2.ts:3640`, the `/api/v2/events`
+  // row above), not the same URL under another query string: it omits
+  // `openRuns` ENTIRELY and adds `cycle` only when the cycleId resolves. Both
+  // of its two shapes are pinned, because "an unknown cycleId answers 200
+  // with an empty set and NO `cycle` field" is itself the documented contract
+  // (`src/v2.ts`'s own comment on that branch), and a row that only ever drove
+  // the resolving case would miss a regression that started emitting
+  // `cycle: null`.
+  //
+  // `handleEventGet` is a THREE-arm branch, and its arms are three distinct
+  // `reply()` call sites, not one: `?suite=<name>` (`src/v2.ts:3673`),
+  // `?depth=suites` (`src/v2.ts:3681`) and the plain whole-event read
+  // (`src/v2.ts:3683`, the `/api/v2/events/<id>` row above). CR-CRU-004 §S4
+  // added the first two as progressive detail; each is driven here so this
+  // table really does cover every `reply()` call site rather than 14 of 16.
+  //
+  // Both progressive-detail arms publish the SAME top-level envelope as the
+  // plain read — `ok` then `event` — because they reshape `event.tree` and
+  // nothing above it; that sameness is the point, and a regression that
+  // hoisted the reshaped tree to the top level would fail here.
   {
     path: (c) => `/api/v2/events?project=${c.key}&cycleId=${c.cycleId}`,
     keys: ["ok", "events", "cycle"],
@@ -174,11 +193,23 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
     path: (c) => `/api/v2/events?project=${c.key}&cycleId=${UNKNOWN_CYCLE_ID}`,
     keys: ["ok", "events"],
   },
+  {
+    path: (c) => `/api/v2/events/${c.eventId}?suite=${SEEDED_SUITE}`,
+    keys: ["ok", "event"],
+  },
+  {
+    path: (c) => `/api/v2/events/${c.eventId}?depth=suites`,
+    keys: ["ok", "event"],
+  },
 ];
 
 // A cycle id no fixture plan can have been assigned — the anchored branch's
 // unknown-cycleId arm.
 const UNKNOWN_CYCLE_ID = 999_999;
+
+// The one suite `seed()` ingests, named here so the `?suite=` row above asks
+// for a suite that really exists (a miss answers 404, not an envelope).
+const SEEDED_SUITE = "s";
 
 interface Fixture {
   key: string;
@@ -246,7 +277,11 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
       agentId: "json-only-agent",
       summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 100 },
       tree: [
-        { name: "s", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 50 }] },
+        {
+          name: SEEDED_SUITE,
+          status: "pass",
+          children: [{ name: "t1", status: "pass", duration_ms: 50 }],
+        },
       ],
       context: { cycleId },
     });
@@ -391,7 +426,7 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   // ── AC8 — no payload moves ───────────────────────────────────────────────
 
   describe("GREEN-GUARD — every reply()-routed v2 GET keeps its JSON envelope exactly", () => {
-    test("every reply()-routed GET shape — including BOTH arms of the anchored events branch — publishes its measured top-level key set, in order, over the ordinary JSON path", async () => {
+    test("every reply()-routed GET shape — all 16 call sites, including BOTH arms of the anchored events branch and ALL THREE of the event-detail branch — publishes its measured top-level key set, in order, over the ordinary JSON path", async () => {
       // PASSES TODAY (measured against `da33801`) and must keep passing:
       // this CR drops an encoding, never a payload. It fails the moment a
       // handler gains, loses or reorders a top-level field.
@@ -446,10 +481,17 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
     test("GREEN-GUARD — the surviving client-emit oracle still imports the reference decoder from @toon-format/toon, so the move keeps a real consumer", () => {
       // PASSES TODAY and must keep passing: a CR that deleted the library
       // outright would take the only independent check of clients/toon.py
-      // with it. Fails if the oracle's import is dropped.
+      // with it — devDependencies has to stay a real dependency of something.
+      //
+      // The MODULE SPECIFIER is all this asserts, deliberately. The binding
+      // name and the file's prose are not the contract: renaming `decode` to
+      // `decode as toonDecode` keeps the consumer exactly as real, and a
+      // guard that broke on it would be pinning source text. The oracle's
+      // own three tests are the real proof — measured, with the import line
+      // deleted, all three fail with `ReferenceError: decode is not defined`
+      // — so this only has to catch the specifier leaving the file entirely.
       const oracle = readFileSync(join(REPO_ROOT, "tests", "toon-conformance.test.ts"), "utf8");
-      expect(oracle).toContain('import { decode } from "@toon-format/toon";');
-      expect(oracle).toContain("client-emit oracle");
+      expect(oracle).toContain("@toon-format/toon");
     });
 
     test(
