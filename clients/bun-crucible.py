@@ -548,6 +548,19 @@ def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
             + _bun_test_report_flags(junit_path, coverage, coverage_dir), {})
 
 
+def _render_invocation(cmd, report_env=None):
+    """CR-CRU-133 §S3 — the invocation as an operator must TYPE it, which under
+    the env mechanism is not the argv alone: the report path rides an
+    environment overlay THIS client supplied, so a message printing only
+    `bun run test:e2e` hands back a command that writes its report somewhere
+    else under any non-default `--reports` dir. The overlay renders as sorted
+    `VAR=value` prefixes so the string is stable; under the flag default the
+    overlay is empty and the rendering is the argv, unchanged."""
+    prefix = "".join(f"{name}={value} "
+                     for name, value in sorted((report_env or {}).items()))
+    return prefix + " ".join(cmd)
+
+
 def _parse_junit_file(junit_path):
     """Parse a bun JUnit XML file into (summary, tree, files) with per-test leaf
     names. `files` (CR-CRU-047 §S2) is the number of DISTINCT test FILES the run
@@ -1254,6 +1267,7 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
+    report_env = {}
     try:
         if script:
             # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
@@ -1265,7 +1279,10 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             env.update(report_env)
         else:
             cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
-        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
+        # §S3 — the echo names the invocation INCLUDING the overlay this client
+        # supplied, so what is printed is what actually ran.
+        invocation = _render_invocation(cmd, report_env)
+        print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
         # §S2c — capture the run output (failure detail lives only there).
         log_path = getattr(args, "log", None)
         if args.agent and not log_path:
@@ -1326,7 +1343,7 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             if script:
                 starved = (f"declared target `{script}` exited "
                            f"{result.returncode} and wrote no report at "
-                           f"{junit_path} — re-run `{' '.join(cmd)}` in "
+                           f"{junit_path} — re-run `{invocation}` in "
                            f"{package_dir} and make `{script}` write its JUnit "
                            f"XML to that path")
             _emit_axi(verb, False,
