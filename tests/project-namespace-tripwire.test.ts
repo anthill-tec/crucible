@@ -1644,8 +1644,8 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // above read 476 the full regression showed TWO failures: the AC8
 // measurement below, and tests/help-surface-order-independence.test.ts,
 // which spawns a CHILD `bun test` over THIS file (its `HELP_FILE` IS
-// tests/project-namespace-tripwire.test.ts, :65-66 there) and asserts the
-// child reported `failed: []` (:190 there). A stale head here therefore
+// tests/project-namespace-tripwire.test.ts, :90-91 there) and asserts the
+// child reported `failed: []` (:244 there). A stale head here therefore
 // fails there too, at one remove. That file is CORRECT and fires for the
 // right reason; it needed no change and got none.
 //
@@ -1936,10 +1936,22 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // inferred: `deriveQueueStatus` holds at `src/store.ts:5801` and
 // `normalizeTrack` at `:381-384`, both read at the line — `src/store.ts` is
 // untouched by this CR.
+//
+// `clients` 848 -> 858 at CR-CRU-133. `src` and `public` are unchanged — the
+// CR touches no `.ts`/`.js` file. All ten arrive in `clients/bun-crucible.py`
+// (the RED/GREEN/FIX cycle's own lineage comments: §S2's declaration-shape
+// rationale, §S3's remedy/cause composition, and the citations naming
+// CR-CRU-064/065/111 that the new code and tests explain themselves with) and
+// in `tests/client/test_declared_target_report_mechanism.py`'s own module
+// docstring. Measured directly against this file's own `extractCitableText`
+// + `CR_LITERAL` classifier, not estimated: `bun test
+// tests/project-namespace-tripwire.test.ts -t 'never below its develop
+// baseline'` on the pre-fix tree reported `clients: 858` against the
+// then-recorded `848`.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 848 },
+  clients: { exts: [".py"], develop: 601, head: 858 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
