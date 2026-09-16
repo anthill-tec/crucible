@@ -87,6 +87,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const BUN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
 const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
@@ -127,8 +128,8 @@ function startCapturingProxy(targetBaseUrl: string): {
 /**
  * Spawns `uv run <scriptPath> <args>` WITHOUT awaiting completion — hands
  * back the raw `Bun.Subprocess` so callers can poll live agent state
- * concurrently with the run. Strips ambient WORKFLOW_* env; always injects
- * CRUCIBLE_URL.
+ * concurrently with the run. Strips ambient WORKFLOW_* env; DECLARES the board
+ * in the project file the drive resolves (CR-CRU-139 §S2).
  */
 function spawnScript(
   scriptPath: string,
@@ -139,10 +140,11 @@ function spawnScript(
   for (const k of Object.keys(baseEnv)) {
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
+  declareClientBoard(opts.crucibleUrl, opts.cwd, projectDirFromArgs(args));
   return Bun.spawn({
     cmd: ["uv", "run", scriptPath, ...args],
     cwd: opts.cwd,
-    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
+    env: { ...baseEnv, ...(opts.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -166,10 +168,11 @@ function spawnScriptWithClaudecodeUnset(
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
   delete baseEnv.CLAUDECODE;
+  declareClientBoard(opts.crucibleUrl, opts.cwd, projectDirFromArgs(args));
   return Bun.spawn({
     cmd: ["uv", "run", scriptPath, ...args],
     cwd: opts.cwd,
-    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl },
+    env: { ...baseEnv },
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -44,7 +44,7 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { resolveStore } from "./server.ts";
+import { resolveStore, type ResolveDbPathOpts } from "./server.ts";
 
 /**
  * §S1b — one limit as an operator meets it: four fields of documentation and,
@@ -91,7 +91,7 @@ export const SERVER_LIMIT_NAMES: readonly string[] = [
  * independently resolved version, and a table for a limit this side does not
  * enforce is ignored rather than adopted.
  */
-const SHIPPED_DATA_FILE = path.join(import.meta.dir, "crucible.toml");
+export const SHIPPED_DATA_FILE = path.join(import.meta.dir, "crucible.toml");
 
 /**
  * The shipped declaration of one limit, as the data file states it. Every
@@ -154,9 +154,16 @@ function readShipped(): Record<string, LimitDeclaration> {
   return out;
 }
 
-/** The server's own configuration file, beside the database it already resolves. */
-export function serverConfigPath(): string {
-  return path.join(path.dirname(resolveStore().path), "crucible.toml");
+/**
+ * The server's own configuration file, beside the database it already resolves.
+ *
+ * CR-CRU-139 §S1 — the store's own resolver inputs pass straight through, so a
+ * caller holding an INJECTED environment (the pure `resolveListener`) finds the
+ * file beside the store THAT env names, by this one rule rather than a second
+ * copy of it.
+ */
+export function serverConfigPath(opts?: ResolveDbPathOpts): string {
+  return path.join(path.dirname(resolveStore(opts).path), "crucible.toml");
 }
 
 interface ConfigRead {

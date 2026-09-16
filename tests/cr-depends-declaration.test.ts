@@ -44,6 +44,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const PYTHON_CLIENT = join(import.meta.dir, "..", "clients", "python-crucible.py");
 
@@ -549,10 +550,14 @@ describe("CR-CRU-106 §S1/§S2/§S2a — cr-depends: the verb, its gates and its
   async function runClient(args: string[], projectDir: string): Promise<RunResult> {
     const env: Record<string, string | undefined> = { ...process.env };
     for (const k of Object.keys(env)) if (k.startsWith("WORKFLOW_")) delete env[k];
+    // CR-CRU-139 §S2 — the board is DECLARED in the project file this drive
+    // resolves, never exported; the interlock refuses a spawn that would
+    // reach any other board.
+    declareClientBoard(base(), projectDir, projectDirFromArgs(args));
     const proc = Bun.spawn({
       cmd: ["uv", "run", PYTHON_CLIENT, ...args],
       cwd: projectDir,
-      env: { ...env, CRUCIBLE_URL: base() },
+      env: { ...env },
       stdout: "pipe",
       stderr: "pipe",
     });

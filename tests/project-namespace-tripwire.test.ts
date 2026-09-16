@@ -1980,10 +1980,34 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // Measured with this file's own classifier: `bun test
 // tests/project-namespace-tripwire.test.ts -t 'never below its develop
 // baseline'` reported `clients: 861` against the then-recorded `858`.
+//
+// UPDATED 2026-09-16 by CR-CRU-139 C1 (§S1/§S1a). `src/` HEAD moves 724 -> 736:
+// +12 lineage comments in `src/server.ts` and `src/limits.ts`, from the
+// listener becoming configuration (the `[server]` table readers, the pure
+// `resolveListener`, the per-axis rules, the `listener` disclosure block, and
+// the two shared-seam changes in `limits.ts`). `public` (477) and `clients`
+// (862) were re-measured in the SAME run and did not move -- this CR's other
+// half edits `crucible_axi/` and `tests/client/`, neither of which is a
+// classified tree. Measured with this file's own classifier at cycle close-out
+// by the orchestrator, ONCE, as CR-CRU-139's close-out criterion requires:
+// `bun test tests/project-namespace-tripwire.test.ts -t 'never below its
+// develop baseline'` reported `src: 736` against the then-recorded `724`.
+// Re-recording mid-cycle was deliberately refused -- GREEN raised it, and a
+// per-drift re-pin is what turned CR-CRU-138 into three approval round-trips.
+//
+// UPDATED 2026-09-16 by CR-CRU-139 C2 (§S2). `clients/` HEAD moves 862 -> 872:
+// +10 from the board becoming configuration — the `[client]` table commentary in
+// `clients/crucible.toml`, `resolve_base_url`/`shipped_board`/the table-name
+// block in `_crucible_axi.py`, and one `_base_url()` docstring per client.
+// `src` (736) and `public` (477) were re-measured in the SAME run and did not
+// move: C2 touches no `.ts`/`.js` in either tree. Measured by the orchestrator
+// at cycle close-out, ONCE, reconciled against the figure GREEN raised rather
+// than re-derived. GREEN refused to re-record mid-cycle a second time, citing
+// the paragraph above -- so this note is now load-bearing twice over.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 736 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 862 },
+  clients: { exts: [".py"], develop: 601, head: 872 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

@@ -51,6 +51,10 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 
@@ -130,6 +134,20 @@ def _run_main(module, argv):
 # the live instance and never the shared project.
 
 
+def _declare_listener(store_dir, port, host="127.0.0.1"):
+    """Declare the scratch server's listener where the server READS it
+    (CR-CRU-139 §S1a): the `crucible.toml` beside the database it is pointed
+    at, which is exactly where `serverConfigPath()` looks --
+    `dirname(store)/crucible.toml`.
+
+    `$CRUCIBLE_PORT` is RETIRED, so a spawner that still exported it would boot
+    SILENTLY on the shipped default 3849 -- the port a production install owns
+    -- instead of on the free port this fixture allocated.
+    """
+    Path(store_dir, "crucible.toml").write_text(
+        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
+
+
 def _free_port():
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -200,6 +218,11 @@ def setUpModule():
     (Path(_PROJECT_DIR) / ".env").write_text(
         "CRUCIBLE_PROJECT_KEY=gate-release-surface-key\n"
         "CRUCIBLE_PROJECT_NAME=gate-release-surface-project\n")
+    # CR-CRU-139 §S2 — the board is DECLARED in the project file the help
+    # drives run against, never exported. A `--help` never reaches the wire;
+    # one that somehow did refuses instantly instead of touching a live board.
+    declare_and_require_board(_PROJECT_DIR, _UNREACHABLE_CRUCIBLE_URL,
+                              "a help drive")
 
 
 def tearDownModule():
@@ -212,8 +235,6 @@ def _drive_gate_help(client, verb):
     `<verb> --help`, cached per (client, verb) for this process."""
     if (client, verb) not in _HELP_CACHE:
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
         _HELP_CACHE[(client, verb)] = subprocess.run(
             [sys.executable, str(CLIENT_FILES[client]), verb, "--help"],
             cwd=_PROJECT_DIR, env=env, capture_output=True, text=True,
@@ -550,12 +571,24 @@ class ReleaseStampedGateIsRetiredOnInsertTest(unittest.TestCase):
                 "toolchain, not a passing assertion.")
         port = _free_port()
         cls.base = f"http://127.0.0.1:{port}"
+        _declare_listener(cls._tmpdir, port)
         cls._proc = subprocess.Popen(
             [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_PORT": str(port),
-                 "CRUCIBLE_HOST": "127.0.0.1",
+            env={**os.environ,
                  "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            cls._boot()
+        except BaseException:
+            # A child spawned and then abandoned by a FAILING setUpClass is
+            # never torn down (`tearDownClass` does not run when `setUpClass`
+            # raises), and an orphaned server holds its port for as long as it
+            # lives. Kill it on the way out, whatever went wrong.
+            cls._stop_server()
+            raise
+
+    @classmethod
+    def _boot(cls):
         _await_server(cls.base, cls._proc)
 
         project = _http(cls.base, "/api/v2/projects", {"name": "gate-release-e2e"})
@@ -588,17 +621,31 @@ class ReleaseStampedGateIsRetiredOnInsertTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "_proc", None) is not None:
-            cls._proc.terminate()
-            try:
-                cls._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                cls._proc.kill()
+        cls._stop_server()
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
 
+    @classmethod
+    def _stop_server(cls):
+        """Stop the scratch server, from teardown OR from a setUpClass that
+        failed after spawning it. Idempotent, so both callers may run."""
+        proc = getattr(cls, "_proc", None)
+        if proc is None:
+            return
+        cls._proc = None
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
     def _post_gate_through_the_client(self, release):
+        # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own
+        # project file, and the interlock refuses the spawn unless the client
+        # would really resolve it: a gate report is a WRITE, and a drive that
+        # merely stopped steering would land it on the shipped default.
+        declare_and_require_board(self.project_dir, self.base,
+                                  "bun-crucible.py gate-report")
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = self.base
         return subprocess.run(
             [sys.executable, str(CLIENT_FILES["bun"]), "gate-report",
              "--outcome", "passed", "--steps", "review:passed",

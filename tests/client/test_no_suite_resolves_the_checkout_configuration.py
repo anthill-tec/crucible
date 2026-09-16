@@ -43,7 +43,21 @@ filesystem, never asserted about source text:
      source, which is §S1's own rule seen from the test harness's side;
   3. what decides a limit is the fixture's OWN file: a value written into the
      scratch install is the value that resolves, so nothing on the machine
-     running the suite can outvote it.
+     running the suite can outvote it;
+  4. and, since CR-CRU-139 §S2, the same three claims for the BOARD -- the
+     `[client] url` a client POSTS to, which now resolves through this very
+     chain.
+
+The fourth claim is why this guard stopped being a tidiness rule. Resolving the
+wrong `crucible.toml` used to cost a wrong truncation width; after §S2 it costs
+an agent's test run landing on the operator's LIVE development board. The
+checkout's own file is deliberately still UNTRACKED operator state
+(CR-CRU-139 criterion 5, as corrected) precisely so that it cannot become a
+repo-wide default -- and this guard is what makes the isolation a fact instead
+of an intention. Its board half is driven against a REAL operator file, in a
+SURROGATE checkout under the fixture's own temp root, so the hazard is concrete
+on every machine rather than only on one that happens to carry the file.
+Nothing is ever written inside the real checkout.
 
 Every failure names the OFFENDING PATH, because the next person to meet this
 will be looking at a suite that passes for them and fails on the runner, and
@@ -96,6 +110,21 @@ CHECKOUT_CONFIG = REPO_ROOT / CONFIG_NAME
 _SCRATCH_FLEET = (CLIENTS_DIR / "_crucible_axi.py", CLIENTS_DIR / CONFIG_NAME)
 
 CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_rows")
+
+#: CR-CRU-139 §S2 -- the shared module's ONE name for the board resolution,
+#: imported rather than re-spelled (one resolver must not become two names).
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    BOARD_RESOLVER,
+)
+
+#: The board the FIXTURE declares, in its own scratch install: the answer every
+#: board assertion below demands.
+FIXTURE_BOARD = "http://127.0.0.1:38502"
+
+#: The board a SURROGATE checkout declares -- the operator file this guard
+#: exists to stop a suite from obeying. Never reachable, so a fixture that
+#: obeyed it by mistake fails on the value rather than on a timeout.
+DECOY_BOARD = "http://127.0.0.1:38503"
 
 _COUNTER = itertools.count()
 
@@ -212,6 +241,84 @@ class NoSuiteResolvesTheCheckoutConfigurationTest(unittest.TestCase):
                     "a disclosure named %r, inside this checkout: the client "
                     "went looking in a developer's working copy. Line: %r"
                     % (token, line))
+
+    def board(self, axi):
+        """The board a client under test would POST to, read through the real
+        resolver. Fails naming the missing symbol rather than skipping: a guard
+        that quietly stopped checking the board would be worse than one that
+        never checked it, because the board is the datum with consequences."""
+        resolver = getattr(axi, BOARD_RESOLVER, None)
+        self.assertTrue(
+            callable(resolver),
+            "clients/_crucible_axi.py must export `%s()` -- §S2 resolves a "
+            "client's board through THIS chain, so the board is part of what "
+            "this guard has to isolate" % (BOARD_RESOLVER,))
+        return resolver()
+
+    def declare_install_board(self, url):
+        """Declare `url` in the scratch install's own operator file. Written
+        whole rather than appended to: the file is created here, so there is no
+        table to collide with."""
+        Path(self.install_config).write_text(
+            '[client]\nurl = "%s"\n' % (url,), encoding="utf-8")
+
+    def test_the_fixtures_own_file_is_what_decides_the_board(self):
+        """§S2 -- the board half of claim 3, and the one with consequences: a
+        board written into the scratch install is the board that resolves, from
+        a process standing in the CHECKOUT ROOT.
+
+        On this machine that root really does carry an operator file naming the
+        development instance, so this is not a hypothetical: if the chain reads
+        it, this assertion reports the developer's own board and the next agent
+        to run a suite posts its rows there.
+        """
+        self.declare_install_board(FIXTURE_BOARD)
+        os.chdir(REPO_ROOT)
+        axi = self.axi()
+
+        self.assertEqual(
+            FIXTURE_BOARD, self.board(axi),
+            "the scratch install at %s declares the board and the client "
+            "resolved something else. A suite whose fixture cannot decide its "
+            "own board is a suite posting wherever the machine it runs on says"
+            % (self.install_config,))
+        self.assertFalse(
+            _inside_checkout(axi.project_config_path()),
+            "the board resolved from %r, INSIDE this checkout"
+            % (axi.project_config_path(),))
+
+    def test_the_board_is_never_resolved_from_the_directory_the_runner_started_in(self):
+        """§S1's no-cwd rule, for the board, against a REAL operator file.
+
+        A SURROGATE checkout -- a directory carrying its own `crucible.toml`
+        naming a board, stood in as the process's cwd -- makes the hazard
+        concrete without writing a byte inside the real checkout, and makes
+        this assertion mean the same thing on a fresh clone as it does here.
+        The decoy is what a developer's own file IS to a suite: a live board
+        nobody under test named.
+        """
+        surrogate = os.path.join(self.root, "surrogate-checkout")
+        os.makedirs(surrogate, exist_ok=True)
+        Path(surrogate, CONFIG_NAME).write_text(
+            '[client]\nurl = "%s"\n' % (DECOY_BOARD,), encoding="utf-8")
+        self.declare_install_board(FIXTURE_BOARD)
+
+        os.chdir(surrogate)
+        axi = self.axi()
+        resolved = self.board(axi)
+
+        self.assertNotEqual(
+            DECOY_BOARD, resolved,
+            "a client resolved the board declared by the directory the process "
+            "happened to be standing in (%s). The cwd is not a configuration "
+            "source: configuration is a function of the INSTALL, and a board "
+            "resolved from a cwd is a run reported wherever the runner started"
+            % (os.path.join(surrogate, CONFIG_NAME),))
+        self.assertEqual(
+            FIXTURE_BOARD, resolved,
+            "with a decoy beside it, the INSTALL's declaration must still be "
+            "what answers -- not the shipped default either, which would mean "
+            "the fixture's own file had stopped deciding")
 
     def test_the_fixtures_own_file_is_what_decides_a_limit(self):
         """…and the positive half, without which the one above could be

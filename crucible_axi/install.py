@@ -35,7 +35,9 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
+import tomllib
 from pathlib import Path
 
 from crucible_axi import manifest
@@ -303,6 +305,30 @@ def server_config_path() -> str:
     return os.path.join(store_dir(), manifest.CONFIG_FILENAME)
 
 
+def resolved_server_config_path() -> str:
+    """The `crucible.toml` the server this machine RUNS will actually read
+    (CR-CRU-139 §S1a), which is not always the one an install lays down.
+
+    `server_config_path()` answers where an INSTALL puts the file; this answers
+    where a BOOT looks for it, and the two differ whenever the store does. It
+    mirrors `resolveStore` (`src/server.ts:39-79`) rule for rule, since the
+    server reads its configuration from `dirname(store)`:
+    `$CRUCIBLE_DB`, else an ALREADY-EXISTING `<cwd>/data/crucible.db` (adopt
+    only -- what keeps a checkout's own board in use), else the XDG store.
+    A `serve` that wrote the listener anywhere else would be writing a file the
+    server it is about to launch never opens.
+    """
+    from_env = os.environ.get(SERVER_DB_ENV_VAR, "").strip()
+    if from_env:
+        store = from_env
+    else:
+        adopted = os.path.join(os.getcwd(), "data", "crucible.db")
+        store = adopted if os.path.isfile(adopted) else os.path.join(
+            store_dir(), "crucible.db")
+    return os.path.join(os.path.dirname(os.path.abspath(store)),
+                        manifest.CONFIG_FILENAME)
+
+
 # Where `@anthill-tec/crucible-server` ships its own limit declarations inside
 # the published package (its `package.json` `files` list) -- the SOURCE the
 # `[server-config]` stage copies the operator's file from, so the file laid
@@ -332,6 +358,160 @@ def _provisioned_server_config_source() -> str | None:
     return None
 
 
+# CR-CRU-139 §S1a — the bind address to use when the server's own file
+# declares none. It is a FALL-BACK FOR A MISSING DECLARATION, never a
+# fall-back for a port the install could not bind: the two look alike and only
+# one of them is how two instances end up on one port.
+_DEFAULT_LISTENER_HOST = "127.0.0.1"
+
+# Hosts that name "every interface" rather than a reachable address. A client
+# cannot POST to `http://0.0.0.0:<port>`, so the URL written beside such a bind
+# names the loopback the operator can actually reach.
+_UNSPECIFIED_HOSTS = ("0.0.0.0", "::", "")
+
+# The envelope `warnings[]` code an exhausted range fails an install with. A
+# code of its own, not the generic `stage-failed`: `cli` matches on it to decide
+# whether an operator can be ASKED, and a consumer must never have to parse the
+# sentence to tell this failure from any other.
+PORT_RANGE_EXHAUSTED_CODE = "port-range-exhausted"
+
+
+class PortRangeExhausted(RuntimeError):
+    """No port in the range the server's own file declares could be BOUND.
+
+    Carries the operator-facing sentence itself, so the interactive prompt and
+    the non-interactive failure say the SAME thing: automation must never be
+    told less than a person would have been.
+    """
+
+
+def _config_table(path: str | None, name: str) -> dict:
+    """The `[name]` table of the TOML document at `path`, or `{}`.
+
+    A file that is absent, unreadable or malformed answers `{}` — the same
+    answer as one that declares no such table, and for the same reason the
+    clients' own loader degrades rather than raising: an install must not die
+    on a mistyped configuration file, it must fall back to what it ships.
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "rb") as handle:
+            document = tomllib.load(handle)
+    except (OSError, ValueError):
+        return {}
+    table = document.get(name)
+    return table if isinstance(table, dict) else {}
+
+
+def _port_is_bindable(host: str, port: int) -> bool:
+    """Whether `port` can be BOUND on `host` right now.
+
+    Binding, never connecting, and `SO_REUSEADDR` is deliberately NOT set: a
+    refused connection proves only that nothing is listening at this instant,
+    so a connect probe hands out the port of a service that is bound and still
+    starting up. Binding proves the port is ours to take.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _board_url(host: str, port: int) -> str:
+    """The URL a client posts to for a server bound at `host:port`."""
+    if host in _UNSPECIFIED_HOSTS:
+        host = _DEFAULT_LISTENER_HOST
+    if ":" in host:  # a literal IPv6 address needs its brackets in a URL
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
+def _exhausted_range_message(host: str, low: int, high: int,
+                             source: str) -> str:
+    """The ONE sentence an exhausted range is reported with — prompted with
+    interactively, failed with otherwise. Composed once because the two must
+    be the same message: a run that cannot be asked must still be told what a
+    person would have been told.
+
+    The bounds lead it, so even a truncated rendering still names the range.
+    """
+    return (
+        f"no port in the range {low}-{high} can be bound on {host}: every one "
+        f"of them is already occupied on this machine. The install will not "
+        f"listen outside the {low}-{high} that "
+        f"{abbreviate_home(source)} declares, and will not fall back to a "
+        f"default port another instance may already hold. Free one of those "
+        f"ports, or widen {manifest.SERVER_PORT_RANGE_MIN_KEY}/"
+        f"{manifest.SERVER_PORT_RANGE_MAX_KEY} in that file, and run the "
+        f"install again.")
+
+
+def _first_bindable_port(host: str, low: int, high: int, source: str) -> int:
+    """The first port in `low..high` that BINDS on `host`, or raise.
+
+    In declared order, so two machines installing against the same declaration
+    land on the same port whenever it is free — an install is reproducible or
+    it is a lottery.
+    """
+    for port in range(low, high + 1):
+        if _port_is_bindable(host, port):
+            return port
+    raise PortRangeExhausted(
+        _exhausted_range_message(host, low, high, source))
+
+
+def _resolve_listener(destination: str, source: str) -> dict | None:
+    """The listener this machine's server should use, as
+    `{"host", "port", "url"}`, or None when nothing declares one.
+
+    THE decision §S1a exists to make, and it has exactly two branches:
+
+    * a file already at `destination` that NAMES a port DECIDES. It is never
+      re-probed, not even while an instance is listening on the port it names —
+      renumbering a running board orphans every client whose own file names the
+      old port.
+    * otherwise the range is read from the file the install RESOLVED (the
+      template it is about to copy) and probed, first bindable port winning.
+      The bounds are data in that file rather than a constant here, so an
+      operator can narrow them and a test can declare its own.
+
+    The gate is the absence of a CONFIGURED PORT, deliberately, and not the
+    absence of the FILE: a `crucible.toml` that exists but declares no
+    `[server] port` — hand-placed, carried over from an older layout, or
+    written by anything that is not this installer — names nothing to honour,
+    so honouring it means falling through to the template's shipped default.
+    That default is `3849` on a machine whose production instance already holds
+    it, which is the silent fallback §S1a forbids in the one state where it is
+    hardest to notice: the install reports success and the next boot collides.
+
+    A template declaring no range is not an error: nothing is probed and its
+    own `port` is what the copy carries, exactly as before this CR.
+    """
+    declared = _config_table(source, manifest.SERVER_TABLE)
+    configured = (_config_table(destination, manifest.SERVER_TABLE)
+                  if os.path.lexists(destination) else {})
+
+    host = configured.get(manifest.SERVER_HOST_KEY,
+                          declared.get(manifest.SERVER_HOST_KEY))
+    if not isinstance(host, str) or not host:
+        host = _DEFAULT_LISTENER_HOST
+
+    port = configured.get(manifest.SERVER_PORT_KEY)
+    if not isinstance(port, int):
+        low = declared.get(manifest.SERVER_PORT_RANGE_MIN_KEY)
+        high = declared.get(manifest.SERVER_PORT_RANGE_MAX_KEY)
+        if isinstance(low, int) and isinstance(high, int):
+            port = _first_bindable_port(host, low, high, source)
+        else:
+            port = declared.get(manifest.SERVER_PORT_KEY)
+    if not isinstance(port, int):
+        return None
+    return {"host": host, "port": port, "url": _board_url(host, port)}
+
+
 def server_config_plan() -> dict:
     """What `[manifest]` must do about the SERVER's operator-editable file
     (CR-CRU-138 §S2): `{"path", "source", "reason"}`.
@@ -343,6 +523,15 @@ def server_config_plan() -> dict:
     executes it only copies bytes, so `manifest.py` never has to import this
     module back.
 
+    CR-CRU-139 §S1a adds `listener` — `{"host", "port", "url"}`, the connection
+    this machine's install is to be configured with — for the same reason and
+    on the same terms: resolving it means reading the server's declarations and
+    PROBING this machine, which is a decision, and decisions are made here.
+    It is absent when nothing declares a listener at all. Resolving it can
+    raise `PortRangeExhausted`: a range with nothing free in it is not a plan
+    that can be executed at a smaller size, so the install stops rather than
+    landing somewhere nobody declared.
+
     A missing source is `--no-service`, `$CRUCIBLE_NO_SERVICE`, or a board
     running on another host -- one fact (no local server package) with three
     causes, and none of them is an error: the install declines that one file
@@ -352,7 +541,11 @@ def server_config_plan() -> dict:
     destination = server_config_path()
     source = _provisioned_server_config_source()
     if source is not None:
-        return {"path": destination, "source": source, "reason": None}
+        plan = {"path": destination, "source": source, "reason": None}
+        listener = _resolve_listener(destination, source)
+        if listener is not None:
+            plan["listener"] = listener
+        return plan
     return {
         "path": destination,
         "source": None,
@@ -365,6 +558,41 @@ def server_config_plan() -> dict:
             f"board running on another host keeps that file on THAT machine, "
             f"beside its own database."),
     }
+
+
+def write_listener_settings(host: str | None = None,
+                            port: int | None = None) -> dict:
+    """Persist an operator's explicit listener choice into the file the server
+    will read; return `{"path", "settings"}` naming what was written where.
+
+    CR-CRU-139 §S1b -- `crucible-axi serve --host/--port` WRITES rather than
+    exports. The value then lives in the one artifact an operator owns, can
+    diff and can hand to someone else, instead of in a child environment that
+    vanishes with the process and that the server no longer reads at all.
+
+    The write is deliberately NOT recorded as the install's own
+    (`manifest.record_configs`): an operator typed it, so it reads as their
+    edit, and `uninstall --purge` preserves it exactly as it preserves any
+    other. A file that does not exist yet is created from the provisioned
+    template first, so what is left behind is the commented document an
+    operator can read rather than a two-line fragment.
+    """
+    settings = [(key, value) for key, value in
+                ((manifest.SERVER_HOST_KEY, host),
+                 (manifest.SERVER_PORT_KEY, port)) if value is not None]
+    path = resolved_server_config_path()
+    if settings and not os.path.exists(path):
+        source = _provisioned_server_config_source()
+        if source is None:
+            raise FileNotFoundError(
+                f"there is no {manifest.CONFIG_FILENAME} at "
+                f"{abbreviate_home(path)} and no provisioned server to copy "
+                f"one from, so the listener cannot be written where the "
+                f"server would read it. Run `crucible-axi install` first.")
+        manifest.lay_down_config(source, path)
+    for key, value in settings:
+        manifest.apply_setting(path, manifest.SERVER_TABLE, key, value)
+    return {"path": path, "settings": settings}
 
 
 def _installed_server_metadata_candidates() -> list[str]:
@@ -864,18 +1092,25 @@ def _unit_environment() -> list[tuple[str, str]]:
     """The `PATH` the shim needs, plus the `CRUCIBLE_*` knobs to forward, as
     `(name, value)`.
 
-    Only the `CRUCIBLE_*` ones actually SET: `Environment=CRUCIBLE_PORT=` would
-    override the server's own default with nothing, which is worse than not
+    Only the `CRUCIBLE_*` ones actually SET: `Environment=CRUCIBLE_DB=` would
+    override the server's own store rule with nothing, which is worse than not
     forwarding it.
+
+    CR-CRU-139 §S1a — `$CRUCIBLE_DB` is the only one left. The listener was
+    only ever carried because the server had no file to read: the install now
+    writes it into the server's own `crucible.toml` and the server binds what
+    it finds there, so a unit carrying `$CRUCIBLE_HOST`/`$CRUCIBLE_PORT` would
+    be handing it a RETIRED variable. The store path stays because it is how
+    the server FINDS that file (§S3), so it precedes configuration rather than
+    being part of it.
     """
     forwarded = []
     path_value = _unit_path_value()
     if path_value is not None:
         forwarded.append(("PATH", path_value))
-    for name in (SERVER_HOST_ENV_VAR, SERVER_PORT_ENV_VAR, SERVER_DB_ENV_VAR):
-        value = os.environ.get(name, "")
-        if value.strip():
-            forwarded.append((name, value))
+    value = os.environ.get(SERVER_DB_ENV_VAR, "")
+    if value.strip():
+        forwarded.append((SERVER_DB_ENV_VAR, value))
     return forwarded
 
 
@@ -1204,6 +1439,17 @@ def run_install(target_dir, stage_runners=None, force=False,
             result = runner(target_dir, force,
                             **_stage_options(runner, no_bun_bootstrap,
                                              no_service, server_advanced))
+        except PortRangeExhausted as exc:
+            # CR-CRU-139 §S1a -- a failure of its own, reported under its own
+            # code and with its message VERBATIM: `cli` asks the operator with
+            # exactly this sentence when there is one to ask, so a stage-name
+            # prefix here would make the two renderings differ for no reason.
+            ok = False
+            warnings.append({
+                "code": PORT_RANGE_EXHAUSTED_CODE,
+                "detail": str(exc),
+            })
+            break
         except Exception as exc:  # noqa: BLE001 — fail-fast: record + halt
             ok = False
             warnings.append({
@@ -1297,7 +1543,8 @@ def _server_uninstall_stage(target_dir: str, purge: bool) -> dict:
     return {"path": server_path, "converged": False, "bun": bun}
 
 
-def _operator_config_is_untouched(path: str, source: str | None = None) -> bool:
+def _operator_config_is_untouched(path: str, source: str | None = None,
+                                  recorded: str | None = None) -> bool:
     """Whether the laid-down `crucible.toml` at `path` is still exactly the
     bytes the install wrote (CR-CRU-131 §S1c).
 
@@ -1316,11 +1563,28 @@ def _operator_config_is_untouched(path: str, source: str | None = None) -> bool:
     already de-provisioned (the `[server]` stage runs before `[config]`) has
     no source left to compare against, which lands on the same fail-safe
     answer: keep the file.
+
+    CR-CRU-139 §S1a -- `recorded` is the `[manifest]` stage's digest of the
+    bytes it ACTUALLY WROTE here, and it wins when there is one. The question
+    is unchanged ("is this still exactly what the install put here?"); only
+    its baseline moves, from the template to what was written, because an
+    install that writes a probed port into a file it lays down makes that file
+    differ from its template forever. Without this, every machine that ever
+    probed a port would read as operator-edited and CR-CRU-138 §S2/§S3's purge
+    convergence would go false with no operator involved. No recording (an
+    older install, a hand-placed file) still falls back to the template, so
+    the fail-safe direction is untouched.
     """
+    try:
+        written = Path(path).read_bytes()
+    except OSError:
+        return False
+    if recorded is not None:
+        return manifest.config_digest(written) == recorded
     if source is None:
         source = manifest.shipped_config_path()
     try:
-        return Path(path).read_bytes() == Path(source).read_bytes()
+        return written == Path(source).read_bytes()
     except OSError:
         return False
 
@@ -1357,6 +1621,11 @@ def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
     )
     if not purge:
         return {"path": path, "converged": True, "retained": True}
+    # CR-CRU-139 §S1a -- what the install RECORDED writing, read before the
+    # record itself is removed below. It is the baseline for every file the
+    # install authored; a file it has no recording for still answers to the
+    # template it was copied from.
+    recorded = manifest.recorded_config_digests(target_dir)
     removed = False
     if os.path.exists(path):
         os.remove(path)
@@ -1368,13 +1637,22 @@ def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
         # A source that is GONE (the server was de-provisioned by the stage
         # before this one) cannot prove the file is still the install's own,
         # so the file stays: unprovable is treated as edited, never the
-        # reverse.
-        if source is not None and _operator_config_is_untouched(
-                operator_config, source):
+        # reverse. A RECORDING proves it on its own, and outlives the source.
+        digest = recorded.get(operator_config)
+        if (digest is not None or source is not None) \
+                and _operator_config_is_untouched(operator_config, source,
+                                                  recorded=digest):
             os.remove(operator_config)
             removed = True
         else:
             retained.append(operator_config)
+    record_path = manifest.install_record_path(target_dir)
+    if os.path.exists(record_path):
+        # The record describes artifacts this purge has just decided about, so
+        # it is an artifact of the install too: leaving it behind would make a
+        # later re-install inherit provenance for files that no longer exist.
+        os.remove(record_path)
+        removed = True
     result = {"path": path, "converged": not removed}
     if retained:
         result["retained"] = True

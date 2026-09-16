@@ -75,18 +75,58 @@ export const RETIRED_LIMIT_ENV: readonly string[] = [
  * The `CRUCIBLE_*` variables that are NOT limits and are EXPLICITLY OUT OF
  * SCOPE of the retirement (CR-CRU-131 Context; PRD §4.13).
  *
- * They answer *where am I* and *who am I* — the store to open, the port to
- * listen on, the project a client belongs to — and they must be answerable
- * BEFORE any file can be found, because finding the file is what they decide.
+ * They answer *where am I* and *who am I* — the store to open and the project
+ * a client belongs to — and they must be answerable BEFORE any file can be
+ * found, because finding the file is what they decide.
  * A limit is the opposite: it carries a description, a recommendation and a
  * supportable range, and it is only ever needed once the process is already
  * running against a known store. That is the whole distinction, and it is why
  * a scan for retired names must exclude these BY NAME rather than by prefix.
+ *
+ * `CRUCIBLE_PORT` was a third entry here until CR-CRU-139 §S4, and it never
+ * belonged: the listener is not asked BEFORE a file can be found, it is asked
+ * after — by a process that has already opened the file `$CRUCIBLE_DB`
+ * located. It was a connection setting listed among the bootstrap ones, which
+ * is what kept the RUNBOOK documenting a knob `src/server.ts` had stopped
+ * reading; `RETIRED_CONNECTION_ENV` below is where it lives now.
  */
 export const BOOTSTRAP_ENV: readonly string[] = [
   "CRUCIBLE_DB",
-  "CRUCIBLE_PORT",
   "CRUCIBLE_PROJECT_KEY",
+];
+
+/**
+ * The environment variables the CONNECTION retirement removes — the server's
+ * listener and the clients' board, which are declared in a `crucible.toml`
+ * now and read from the environment nowhere.
+ *
+ * A SECOND list beside `RETIRED_LIMIT_ENV` rather than four more entries in
+ * it, because the two retirements differ in a way a shared list would erase:
+ *
+ *   A retired LIMIT variable must VANISH from the shipped tree. A retired
+ *   CONNECTION variable's retirement is RECORDED in the shipped tree.
+ *
+ * `RETIRED_LIMIT_ENV` drives a scan of `src/`, `clients/` and `public/` that
+ * fails on ANY occurrence of a name, prose included
+ * (tests/limits-have-no-environment-layer.test.ts) — a limit variable's whole
+ * defect was that it was a second way to set a number, so naming it at all
+ * teaches a mechanism that must not exist. The connection retirement is the
+ * opposite: the code that stopped reading these SAYS SO where it used to read
+ * them (`src/server.ts:158`, `:368`; `clients/_crucible_axi.py:127`, `:298`,
+ * `:440`, `:441`), because a reader who arrives at the resolver holding an
+ * export in their hand has to be told why it does nothing. Feeding these four
+ * to that scan would convict CR-CRU-139's own lineage prose and leave GREEN a
+ * choice between weakening the scan and deleting the explanation.
+ *
+ * So this list is consumed by the DOCUMENTATION guards — the RUNBOOK must
+ * record each of these as retired and must present none of them as live
+ * configuration — and never by the shipped-tree scan.
+ */
+export const RETIRED_CONNECTION_ENV: readonly string[] = [
+  "CRUCIBLE_PORT",
+  "CRUCIBLE_HOST",
+  "CRUCIBLE_URL",
+  "CRUCIBLE_BASE",
 ];
 
 // ── Fixture plumbing ───────────────────────────────────────────────────────

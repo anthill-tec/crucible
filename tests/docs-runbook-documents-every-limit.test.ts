@@ -85,6 +85,7 @@ import { RETENTION_DISPOSABLE_KINDS, SCHEMA_VERSION, Store } from "../src/store.
 import { retentionDisclosure } from "../src/server.ts";
 import { SERVER_LIMIT_NAMES } from "../src/limits.ts";
 import {
+  RETIRED_CONNECTION_ENV,
   RETIRED_LIMIT_ENV,
   restoreServerLimitsFixture,
   seedProject,
@@ -826,6 +827,246 @@ describe("CR-CRU-131 §S1b — the retired variables are recorded as RETIRED", (
 
   test("and none of them is presented anywhere as live configuration", () => {
     expect(report(liveConfigurationOffenders(text(RUNBOOK), RETIRED_LIMIT_ENV))).toBe("");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-139 §S4 — the connection is documented as CONFIGURATION
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The same two instruments, pointed at the second retirement. Nothing here is
+// a new doc-as-data mechanism: `retirementReport` and
+// `liveConfigurationOffenders` already encode the rule this needs — being
+// named as retired is REQUIRED, being shown as a table row or in an assignment
+// is the defect — and the RUNBOOK already has the section and the sentence
+// form ("### Retired environment variables", `docs/RUNBOOK.md:220-231`).
+//
+// Why this cycle and not later: `docs/RUNBOOK.md:232` states that
+// `CRUCIBLE_PORT` is "untouched and still read", which `src/server.ts:158`
+// contradicts in so many words, and `:520`/`:526`/`:530` hand an operator a
+// table row and two runnable examples for a variable the server stopped
+// reading in C1. An operator who follows them gets a board on the default
+// port and nothing telling them why — the silent failure this CR exists to
+// remove, reached through the documentation instead of the code.
+
+/**
+ * The lines of one top-level table of a toml document — walked rather than
+ * matched, because a bounded-repetition regex over a 100-line file is both
+ * slower and wrong at the last table (which no `^\[` follows).
+ */
+function tomlTable(lines: readonly string[], table: string): string[] {
+  const start = lines.findIndex((line) => line.trim() === `[${table}]`);
+  if (start === -1) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.trimStart().startsWith("["));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/** One scalar field of one top-level table, read from a shipped toml. */
+function tomlField(relPath: string, table: string, field: string): string {
+  const body = tomlTable(text(relPath).split("\n"), table);
+  if (body.length === 0) {
+    throw new Error(`CR-CRU-139 §S4: ${relPath} declares no [${table}] table.`);
+  }
+  const assignment = new RegExp(`^${field}\\s*=\\s*("([^"]*)"|\\S+)\\s*$`);
+  for (const line of body) {
+    const value = assignment.exec(line);
+    if (value !== null) return value[2] ?? value[1]!;
+  }
+  throw new Error(`CR-CRU-139 §S4: ${relPath}'s [${table}] table declares no \`${field}\`.`);
+}
+
+describe("CR-CRU-139 §S4 — the retired CONNECTION variables are recorded as RETIRED", () => {
+  test("every connection variable the code stopped reading is named and told to be gone", () => {
+    expect(RETIRED_CONNECTION_ENV.length).toBeGreaterThan(0);
+    expect(report(retirementReport(text(RUNBOOK), RETIRED_CONNECTION_ENV))).toBe("");
+  });
+
+  test("and none of them is presented anywhere as live configuration", () => {
+    expect(report(liveConfigurationOffenders(text(RUNBOOK), RETIRED_CONNECTION_ENV))).toBe("");
+  });
+
+  test(
+    "the environment section is reduced to the variables that genuinely remain environment-" +
+      "resolved, and claims nothing about the ones that do not",
+    () => {
+      const md = collapse(text(RUNBOOK));
+      // The §S3 pair, still true and still documented — the reduction is a
+      // reduction, not a deletion.
+      expect(md).toContain("CRUCIBLE_DB");
+      expect(md).toContain("CRUCIBLE_PROJECT_KEY");
+      // The exact stale claim at `docs/RUNBOOK.md:232`, by its own words. A
+      // negative on the sentence rather than on the name, because the name
+      // must survive in the retirement record two paragraphs above it.
+      expect(md).not.toMatch(/`CRUCIBLE_DB`,\s*`CRUCIBLE_PORT`\s*and\s*`CRUCIBLE_PROJECT_KEY`\s*are untouched/);
+    },
+  );
+
+  test("`--host` / `--port` are documented as WRITING the file, not as a per-run twin of an export", () => {
+    const md = collapse(text(RUNBOOK));
+    // Wrong in KIND, not only in name: `crucible-axi serve --host/--port`
+    // WRITES the listener into the server's own `crucible.toml` and then boots
+    // it (`crucible_axi/cli.py:355-362`, `crucible_axi/install.py:559`). A
+    // document calling that an alias for an export teaches a model in which
+    // the setting evaporates with the shell — which is the confusion this CR
+    // exists to end, so the stale framing is forbidden by its own words.
+    expect(md).not.toContain("the same two knobs as per-run flags");
+    const flagSentences = sentencesOf(text(RUNBOOK)).filter((sentence) =>
+      sentence.includes("--port"),
+    );
+    expect(flagSentences.length).toBeGreaterThan(0);
+    expect(
+      flagSentences.filter((sentence) => /writ(e|es|ten|ing)/i.test(sentence)),
+      `the RUNBOOK mentions \`--port\` in ${String(flagSentences.length)} sentence(s), none of ` +
+        `which says the flag WRITES the configuration file: ${JSON.stringify(flagSentences)}`,
+    ).not.toEqual([]);
+  });
+
+  test("dev-beside-production is shown as a pair of FILE declarations — the listener and the board", () => {
+    // The two tables an operator edits to stand a second instance beside a
+    // production one, both shown as declarations rather than as exports. The
+    // `liveConfigurationOffenders` test above already forbids the export form;
+    // this is its positive half, because a document can satisfy a negative by
+    // saying nothing at all. Read as TOML TABLES out of the document, by the
+    // same walker the shipped files are read with — so a `[client]` mentioned
+    // in a sentence cannot stand in for one an operator can copy.
+    const lines = text(RUNBOOK).split("\n");
+    expect(
+      tomlTable(lines, "server").filter((line) => /^port\s*=/.test(line)),
+      "the RUNBOOK shows no `[server]` table declaring a `port` — an operator standing a second " +
+        "instance beside a production one has nothing to copy.",
+    ).not.toEqual([]);
+    expect(
+      tomlTable(lines, "client").filter((line) => /^url\s*=/.test(line)),
+      "the RUNBOOK shows no `[client]` table declaring a `url` — the listener moved into a file " +
+        "and the clients' target did not follow it into the documentation.",
+    ).not.toEqual([]);
+  });
+});
+
+describe("CR-CRU-139 §S4 — the connection figures are READ from the shipped files", () => {
+  test("the listener default and the board the document states are the ones the shipped tomls declare", () => {
+    const md = text(RUNBOOK);
+    const host = tomlField(SHIPPED_DATA[0], "server", "host");
+    const port = tomlField(SHIPPED_DATA[0], "server", "port");
+    const board = tomlField(SHIPPED_DATA[1], "client", "url");
+
+    // CR-CRU-134's rule, applied to the connection: the figure a reader meets
+    // in the document and the figure the code falls back to are one datum, so
+    // the document is checked against the FILE and this test spells neither.
+    expect(md).toContain(host);
+    expect(md).toContain(port);
+    expect(md).toContain(board);
+
+    // The half that carries the weight: EVERY connection value the document
+    // SHOWS an operator — a `[server] port` to copy, a `[client] url` to copy —
+    // is checked against the range the server's own file declares. A document
+    // may show a figure other than the shipped default (the two-instance case
+    // is the whole point), but it may not show one this project is not allowed
+    // to occupy, and it may not show none at all: an operator told how to move
+    // the listener and not where the clients post has one side of a two-sided
+    // setting.
+    const lines = md.split("\n");
+    const shown = [
+      ...tomlTable(lines, "server")
+        .map((line) => /^port\s*=\s*(\d+)/.exec(line))
+        .filter((match): match is RegExpExecArray => match !== null)
+        .map((match) => Number(match[1])),
+      ...tomlTable(lines, "client")
+        .map((line) => /^url\s*=\s*"[^"]*:(\d+)"/.exec(line))
+        .filter((match): match is RegExpExecArray => match !== null)
+        .map((match) => Number(match[1])),
+    ];
+    expect(
+      shown.length,
+      `the RUNBOOK shows no connection value an operator can copy — no \`[server] port\` and no ` +
+        `\`[client] url\`. The listener and the board are declared at ${SHIPPED_DATA[0]} and ` +
+        `${SHIPPED_DATA[1]}; a document that moves a setting into a file without showing the ` +
+        `declaration has moved it out of reach instead.`,
+    ).toBeGreaterThanOrEqual(2);
+
+    // The BOUND, so a rewrite cannot satisfy the positive half by printing one
+    // derived figure beside three invented ones. `[server] port_range_min` /
+    // `_max` is the one datum saying which ports this project may occupy, and
+    // the installer probes exactly that range — so a documented example on a
+    // port outside it teaches an instance the installer would never produce.
+    const min = Number(tomlField(SHIPPED_DATA[0], "server", "port_range_min"));
+    const max = Number(tomlField(SHIPPED_DATA[0], "server", "port_range_max"));
+    expect(min).toBeLessThanOrEqual(Number(port));
+    expect(Number(port)).toBeLessThanOrEqual(max);
+    expect(shown.filter((figure) => figure < min || figure > max)).toEqual([]);
+
+    // …and the same bound over the PROSE, where a figure needs no table to be
+    // copied: every four-digit figure in the 3000s this document prints is a
+    // port here, so a 3849 left behind after the range moves is caught rather
+    // than inherited by the reader who copied it.
+    const strays = [...md.matchAll(/\b3\d{3}\b/g)]
+      .map((match) => Number(match[0]))
+      .filter((figure) => figure < min || figure > max);
+    expect(strays).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-139 §S3 — the file a reader edits says why two settings are NOT in it
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// §S3 promised this and nothing shipped it: `grep` across both shipped tomls
+// finds ONE mention of either surviving variable (`src/crucible.toml:16`), and
+// that line explains where the OPERATOR's file is found — not why the store
+// path may not move into it. So a reader who has just learned that the
+// listener lives in this file has nothing telling them the store and the
+// project key do not, and the obvious next CR "finishes the job" by moving a
+// value that cannot move.
+//
+// 🚨 DEVIATION FROM THE SPEC TEXT, recorded rather than taken silently. §S3
+// says "both shipped `crucible.toml` files state that explicitly", which reads
+// as both files explaining both variables. Asserted here as EACH FILE
+// EXPLAINING THE ONE ITS OWN PROCESS READS: the server reads `CRUCIBLE_DB` and
+// never `CRUCIBLE_PROJECT_KEY`; the clients read the project key out of their
+// `.env` and never the store path. Requiring each file to explain the other's
+// variable would put an explanation where the datum is inert, and this repo
+// already forbids exactly that in the file under test —
+// `clients/crucible.toml:40-41`: "documentation must not teach a knob that
+// provably does nothing where it sits". The ownership split is the same one
+// that decides which limits each file declares.
+
+/**
+ * The environment-resolved datum each shipped file's OWN process reads, and
+ * the reason that datum cannot become a line in the file.
+ */
+const SURVIVING_ENV: ReadonlyArray<{ file: string; name: string; why: RegExp }> = [
+  // src/server.ts:66 — the store path is how the server FINDS the file, so it
+  // is answered before any file can be read.
+  { file: SHIPPED_DATA[0], name: "CRUCIBLE_DB", why: /before|precede|finds?|found|discover/i },
+  // clients/*-crucible.py — identity, read from the project `.env`.
+  { file: SHIPPED_DATA[1], name: "CRUCIBLE_PROJECT_KEY", why: /identit|\.env|who\b|precede|before/i },
+];
+
+describe("CR-CRU-139 §S3 — each shipped file says why its surviving variable stays in the environment", () => {
+  for (const { file, name, why } of SURVIVING_ENV) {
+    test(`${file} names ${name} and says why it cannot move into the file`, () => {
+      const sentences = sentencesOf(text(file));
+      const mentions = sentences.filter((sentence) => sentence.includes(name));
+      expect(
+        mentions,
+        `${file} never names ${name}. A reader who has just found \`[server] port\` / ` +
+          `\`[client] url\` in this file is left to conclude that every Crucible setting belongs ` +
+          `here — which is how a later CR "finishes the job" by moving a value that precedes the ` +
+          `file's own discovery.`,
+      ).not.toEqual([]);
+      expect(
+        mentions.filter((sentence) => why.test(sentence)),
+        `${file} names ${name} but never says WHY it stays in the environment: ` +
+          `${JSON.stringify(mentions)}`,
+      ).not.toEqual([]);
+    });
+  }
+
+  test("and neither shipped file offers a retired connection variable as a setting", () => {
+    for (const file of SHIPPED_DATA) {
+      expect(report(liveConfigurationOffenders(text(file), RETIRED_CONNECTION_ENV))).toBe("");
+    }
   });
 });
 

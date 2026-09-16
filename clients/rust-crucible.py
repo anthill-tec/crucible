@@ -46,7 +46,8 @@ Project + Crucible endpoint:
   Reads CRUCIBLE_PROJECT_KEY from <project-dir>/.env.
   Project path resolution: --project-dir > $RUST_CRUCIBLE_PROJECT_DIR > the git repo
   containing the current directory. No project is hardcoded — works in ANY Cargo repo.
-  Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the board the project's `crucible.toml` declares (`[client] url`,
+  shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs (codec junit),
   /api/v2/runs/parsed, /api/v2/runs/compile.
 
@@ -84,7 +85,6 @@ import time
 import tomllib
 import xml.etree.ElementTree as ET
 
-CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 STALE_THRESHOLD_S = 60
 # The STACK this client's runs belong to — the name its sibling clients address
 # it by (`rust-crucible.py`), which is what a gate composes declared suites over
@@ -193,6 +193,21 @@ def _resolve_services(arg_value, project_dir):
     return parsed or None
 
 
+def _base_url():
+    """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
+    USE from the fleet's ONE resolver: the project's own `crucible.toml`
+    (`[client] url`), else the install's, else the distribution's shipped
+    declaration.
+
+    A call rather than the module constant this line used to hold. A constant
+    bound at import was a setting no edit an operator made could reach, and it
+    froze the board for the whole process — so a verb handed a different
+    `--project-dir` posted to the previous one's board. `resolve_base_url()` in
+    `_crucible_axi.py` documents the resolution and the environment channel it
+    retired."""
+    return _axi().resolve_base_url()
+
+
 def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
@@ -206,7 +221,7 @@ def _request(method, path, payload=None, timeout=None):
     the §S2b empty-body correction). The local name is kept deliberately: the
     CR-CRU-030 delegation pattern, addressed unqualified by every call site
     here and by the client test harnesses."""
-    return _axi().http_request(CRUCIBLE_URL, method, path, payload, timeout)
+    return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -287,7 +302,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=CRUCIBLE_URL)
+        base_url=_base_url())
 
 
 def _run_context():
@@ -848,7 +863,7 @@ def cmd_auto_ingest(args):
     # no report at the verb that would produce one.
     ok = bool(resp.get("ok"))
     if not ok:
-        help_steps = _axi().server_unreachable_help("auto-ingest", CRUCIBLE_URL)
+        help_steps = _axi().server_unreachable_help("auto-ingest", _base_url())
     elif result.returncode != 0:
         help_steps = [f"fix the {err_count} compile error(s) just ingested to "
                       f"Crucible, then re-run auto-ingest --agent <agentId>",
@@ -865,7 +880,7 @@ def cmd_auto_ingest(args):
                            cycle_id=_axi().echoed_cycle_id(resp)),
               preflight_warnings if ok
               else preflight_warnings
-              + [_axi().ingest_failed_warning("auto-ingest", CRUCIBLE_URL)],
+              + [_axi().ingest_failed_warning("auto-ingest", _base_url())],
               f"ingest compile: ok={resp.get('ok')} errors={err_count} "
               f"warnings={warn_count} cargo_exit={result.returncode}")
     return 0 if ok else 1
@@ -983,7 +998,7 @@ def _regression_ingest_run(args, preflight_warnings=()):
         )
     result_fields = {
         "run": _run_block(summary, files),
-        "help": _axi().run_help("regression-ingest", ok, failed, CRUCIBLE_URL),
+        "help": _axi().run_help("regression-ingest", ok, failed, _base_url()),
     }
     if coverage:
         result_fields["coverage"] = {
@@ -998,7 +1013,7 @@ def _regression_ingest_run(args, preflight_warnings=()):
                            cycle_id=_axi().echoed_cycle_id(resp)),
               preflight_warnings if ok
               else preflight_warnings + [_axi().ingest_failed_warning(
-                  "regression-ingest", CRUCIBLE_URL)],
+                  "regression-ingest", _base_url())],
               f"regression: ok={resp.get('ok')} "
               f"passed={passed} failed={failed} pending={pending} total={total} "
               f"files={len(files)}{cov_line}")
@@ -1257,7 +1272,7 @@ def cmd_clippy(args):
     if args.agent:
         ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="clippy")
         if ingest_rc != 0:
-            warnings.append(_axi().ingest_failed_warning("clippy", CRUCIBLE_URL))
+            warnings.append(_axi().ingest_failed_warning("clippy", _base_url()))
         rc = ingest_rc
     # §S1 — the lint WARNING count is `lints`, never `warnings`: `emit_axi`
     # unconditionally overwrites `axi["warnings"]` with the STRUCTURED warnings
@@ -1316,7 +1331,7 @@ def _clippy_workspace_gate(project_dir, agent):
     warnings = []
     if agent:
         if _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy") != 0:
-            warnings.append(_axi().ingest_failed_warning("workspace clippy", CRUCIBLE_URL))
+            warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
         print(f"[crucible:clippy-gate] ⛔ ABORT — clippy -D warnings failed:\n{tail}",
@@ -1572,7 +1587,7 @@ def _smoke_test(args, verb):
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         result_fields = {
             "run": _run_block(summary),
-            "help": _axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL),
+            "help": _axi().run_help(verb, ok, summary["failed"], _base_url()),
         }
         err = resp.get("error")
         if err is not None:
@@ -1581,7 +1596,7 @@ def _smoke_test(args, verb):
                   _axi_context(project_dir, agent_id=args.agent,
                                cycle_id=_axi().echoed_cycle_id(resp)),
                   [] if resp.get("ok")
-                  else [_axi().ingest_failed_warning(verb, CRUCIBLE_URL)],
+                  else [_axi().ingest_failed_warning(verb, _base_url())],
                   f"smoke-test: ok={resp.get('ok')} "
                   f"passed={s.get('passed')} failed={s.get('failed')} "
                   f"pending={s.get('pending', 0)} total={s.get('total')}")
@@ -1721,7 +1736,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
         cov_line = f" lines={coverage['lines']['percent']}% funcs={coverage['functions']['percent']}%"
     result_fields = {
         "run": _run_block(summary, files),
-        "help": _axi().run_help(verb, ok, failed, CRUCIBLE_URL),
+        "help": _axi().run_help(verb, ok, failed, _base_url()),
     }
     if coverage:
         result_fields["coverage"] = {
@@ -1734,7 +1749,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     _emit_axi(verb, ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok else [_axi().ingest_failed_warning(verb, CRUCIBLE_URL)],
+              [] if ok else [_axi().ingest_failed_warning(verb, _base_url())],
               f"workspace regression: ok={resp.get('ok')} "
               f"passed={passed} failed={failed} pending={pending} total={total} "
               f"files={len(files)}{cov_line}")
@@ -1925,7 +1940,7 @@ def cmd_pre_merge_gate(args):
         whole_suite=lambda: cmd_workspace_regression(ws_args,
                                                      verb="pre-merge-gate"),
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=CRUCIBLE_URL)
+        crucible_url=_base_url())
 
 
 def cmd_docker_e2e_gate(args):

@@ -108,6 +108,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 AXI_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
@@ -315,8 +319,11 @@ class _DeclaredTargetCase(unittest.TestCase):
         self._saved_env = {key: os.environ.get(key) for key in _ENV_KEYS}
         for key in _ENV_KEYS:
             os.environ.pop(key, None)
-        os.environ["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        os.environ["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # CR-CRU-139 §S2 — the unreachable board is DECLARED in this fixture's
+        # own project file, which is where a client reads its target now, and
+        # the interlock confirms the fleet resolves it before any drive runs.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
         os.environ["CR133_ARGV_LOG"] = self.argv_log
 
     def tearDown(self):

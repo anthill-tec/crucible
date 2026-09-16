@@ -28,7 +28,7 @@
 // and asserts the result is neither the user-level nor the XDG path.
 import { defineConfig, devices } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,20 @@ const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
 // exactly the path rule 3 would have adopted, and `startServer()` creates the
 // `data/` parent itself (`mkdirSync(path.dirname(dbPath), {recursive: true})`).
 const SCRATCH_DB = path.join(SCRATCH_CWD, "data", "crucible.db");
+
+// CR-CRU-139 §S1/§S1b — the LISTENER is declared in the server's own file, not
+// exported at it: `$CRUCIBLE_PORT` is retired and no longer read, so a child
+// left to the environment would fall through to the shipped default and bind
+// :3849 — the port a production install occupies. The server finds this file
+// by the same rule it finds its database (`serverConfigPath()` ->
+// `dirname(CRUCIBLE_DB)/crucible.toml`), so it is written beside SCRATCH_DB
+// and the suite's port stays OWNED by the harness (`E2E_PORT`), declared here
+// exactly once.
+mkdirSync(path.dirname(SCRATCH_DB), { recursive: true });
+writeFileSync(
+  path.join(path.dirname(SCRATCH_DB), "crucible.toml"),
+  `[server]\nhost = "127.0.0.1"\nport = ${String(PORT)}\n`,
+);
 
 // CR-CRU-007 C5b — E2E house style: the E2E layer is proper BDD (Gherkin
 // `.feature` files bound to Playwright via playwright-bdd). `bddgen`
@@ -170,7 +184,7 @@ export default defineConfig({
     // webServerPlugin.js), so CRUCIBLE_DB here OVERRIDES any ambient
     // CRUCIBLE_DB the developer's shell happens to export: the suite cannot
     // be pointed at a real database by accident, only by editing this line.
-    env: { CRUCIBLE_PORT: String(PORT), CRUCIBLE_DB: SCRATCH_DB },
+    env: { CRUCIBLE_DB: SCRATCH_DB },
     port: PORT,
     reuseExistingServer: false,
     timeout: 20_000,

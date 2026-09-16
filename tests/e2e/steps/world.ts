@@ -45,4 +45,10 @@ export const test = base.extend<{ world: World; seededProjectTeardown: void }>({
   ],
 });
 
-export const { Given, When, Then, Step } = createBdd(test);
+// `After` is a SCENARIO-scoped hook (playwright-bdd's own), exported from the
+// one place `createBdd` is called so a step file that needs teardown does not
+// construct a second binding of its own. It runs whether the scenario passed,
+// failed or threw in the middle — which is the property a step file's own
+// `finally` cannot give, because a scenario that dies before that step never
+// reaches it.
+export const { Given, When, Then, Step, After } = createBdd(test);

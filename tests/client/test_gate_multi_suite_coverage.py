@@ -182,6 +182,17 @@ def _load_module(path, name):
 # importing one of its TestCases would run that cycle's suite a second time
 # under this module.
 _MODALITY = _load_module(MODALITY_PATH, "cr112_c1_modality_harness")
+
+#: CR-CRU-139 §S2 -- the fleet's ONE replace-safe `[client] url` writer and the
+#: INTERLOCK that keeps a drive off the production board, taken from the shared
+#: fixture module rather than re-spelled here. A fixture that APPENDED the table
+#: would make its own config unparsable the moment the shipped file carried one
+#: too, and a fixture that checked the resolution its own way would be a second
+#: spelling of a safety device.
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_board,
+    would_resolve,
+)
 _TOON = _MODALITY._TOON
 
 _ModalityCase = _MODALITY._ModalityCase
@@ -502,8 +513,6 @@ class _GateFixtureCase(_ModalityCase):
         self._saved_witness = os.environ.get(_WITNESS_ENV)
         self.addCleanup(self._restore_witness_env)
         os.environ[_WITNESS_ENV] = self.witness_path
-        os.environ["CRUCIBLE_URL"] = self.board.url
-        os.environ["CRUCIBLE_BASE"] = self.board.url
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _BUN_SUITE_JUNIT
         self.write_fixture_project()
 
@@ -526,6 +535,17 @@ class _GateFixtureCase(_ModalityCase):
                    self.tmpdir, CHILD_PYTHON))
 
     def write_fixture_project(self):
+        # CR-CRU-139 §S2 -- the board this drive reports to is DECLARED in the
+        # fixture project's own `crucible.toml`, which is how the gate AND the
+        # sibling client it dispatches (handed the same `--project-dir`) both
+        # resolve it. This replaces the pair of `$CRUCIBLE_URL`/`$CRUCIBLE_BASE`
+        # exports plus the `mock.patch.object(module, "CRUCIBLE_URL", ...)`
+        # this fixture used to need: those variables are retired, and the
+        # constant they bound no longer exists. The declaration is written
+        # through the fleet's own replace-safe writer, so it stays valid once
+        # the shipped `crucible.toml` carries a `[client]` table of its own.
+        declare_board(Path(self.tmpdir) / "crucible.toml", self.board.url)
+
         bun_tests = Path(self.tmpdir, "tests", "unit")
         bun_tests.mkdir(parents=True, exist_ok=True)
         (bun_tests / "probe.test.ts").write_text(_BUN_PROBE_TEST_TS)
@@ -555,6 +575,7 @@ class _GateFixtureCase(_ModalityCase):
         `--skip-check` bypasses the tsc step: the gate's fail-fast check is
         CR-CRU-058's contract and not this CR's subject, and no fixture project
         typechecks."""
+        self.require_the_declared_board_resolves()
         argv = ["pre-merge-gate", "--agent", AGENT,
                 "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
                 "--bun", _fake(FAKE_BUN), "--reports", "reports",
@@ -562,8 +583,7 @@ class _GateFixtureCase(_ModalityCase):
         out_path = os.path.join(self.tmpdir, "gate-stdout.txt")
         err_path = os.path.join(self.tmpdir, "gate-stderr.txt")
         with open(out_path, "w") as out, open(err_path, "w") as err:
-            with mock.patch.object(self.module, "CRUCIBLE_URL", self.board.url), \
-                    mock.patch.object(sys, "argv", ["bun-crucible.py"] + argv), \
+            with mock.patch.object(sys, "argv", ["bun-crucible.py"] + argv), \
                     contextlib.redirect_stdout(out), \
                     contextlib.redirect_stderr(err):
                 try:
@@ -574,6 +594,24 @@ class _GateFixtureCase(_ModalityCase):
                             else (0 if exc.code is None else 1))
         return _Drive(code, Path(out_path).read_text(),
                       Path(err_path).read_text(), self.board.posts())
+
+    def require_the_declared_board_resolves(self):
+        """CR-CRU-139 §S2 -- read the resolution back BEFORE the drive.
+
+        Two jobs, and the second is a safety interlock. It asserts the contract
+        this fixture now depends on (the shared resolver answers the board the
+        project file declares -- §S1b's "still read back, from one place instead
+        of five"), and it does so before anything is spawned: a fleet that has
+        not migrated yet resolves the shipped default, and this suite's drives
+        POST. On the workstation this CR serves, that default is the PRODUCTION
+        board.
+        """
+        ok, reason = would_resolve(AXI_PATH, self.tmpdir, self.board.url)
+        self.assertTrue(
+            ok,
+            f"the gate's drive must resolve the board declared in "
+            f"{self.tmpdir}/crucible.toml, and nothing was spawned because it "
+            f"would not: {reason}")
 
     # ── what the drive is asked ───────────────────────────────────────────
 

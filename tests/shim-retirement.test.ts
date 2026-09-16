@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
 import { settleDom } from "./helpers/dom-settle";
+import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 // ── shared API helpers (real startServer, plain fetch) ──────────────────────
 
@@ -740,10 +741,14 @@ async function runScript(
   for (const k of Object.keys(baseEnv)) {
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
+  // CR-CRU-139 §S2 — the board is DECLARED in the project file this drive
+  // resolves, never exported; the interlock refuses a spawn that would reach
+  // any other board.
+  declareClientBoard(opts.crucibleUrl, opts.cwd, projectDirFromArgs(args));
   const proc = Bun.spawn({
     cmd: ["uv", "run", opts.scriptPath ?? SCRIPT_PATH, ...args],
     cwd: opts.cwd,
-    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
+    env: { ...baseEnv, ...(opts.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",
   });

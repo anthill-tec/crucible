@@ -60,6 +60,7 @@ import { fileURLToPath } from "node:url";
 import type { Server } from "bun";
 import type { Browser, Page } from "playwright";
 import * as AppLogic from "../public/app-logic.mjs";
+import { declaredClientBoard } from "./helpers/client-board.ts";
 
 // ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
 //
@@ -1001,11 +1002,14 @@ const pageEl = (): Page => {
  * function authored would corroborate nothing.
  *
  * The project is named the way every client names it — the repo root's `.env`
- * — and reached at `$CRUCIBLE_URL`, the fleet's own default
- * (`clients/bun-crucible.py:90`). Off this workstation none of that is
- * present: `.env` is ignored (`.gitignore:8`) and the store it serves is
- * never committed, so a STATED skip is the ordinary case and the reading is
- * a bonus wherever it can be taken.
+ * — and reached at the board this checkout DECLARES, asked of the fleet's own
+ * resolver (`[client] url`, CR-CRU-139 §S2). Off this workstation none of that
+ * is present: `.env` is ignored (`.gitignore:8`), the board declaration is
+ * untracked (`.gitignore:10`) and the store it serves is never committed, so
+ * a STATED skip is the ordinary case and the reading is a bonus wherever it
+ * can be taken. An undeclared board skips rather than falling through to the
+ * shipped default, which on a machine carrying a production install is the
+ * production board.
  */
 async function captureLiveDeps(): Promise<string> {
   let key = "";
@@ -1025,7 +1029,9 @@ async function captureLiveDeps(): Promise<string> {
       "be identified"
     );
   }
-  const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+  const board = declaredClientBoard();
+  if ("skip" in board) return board.skip;
+  const base = board.url;
   const payload = async (route: string): Promise<Record<string, unknown>> => {
     const answer = await fetch(`${base}/api/v2/projects/${key}/${route}`);
     if (!answer.ok) throw new Error(`${route} answered HTTP ${answer.status}`);
@@ -1111,7 +1117,9 @@ async function captureLiveDelivered(): Promise<string> {
       "be identified"
     );
   }
-  const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+  const board = declaredClientBoard();
+  if ("skip" in board) return board.skip;
+  const base = board.url;
   let queue: QueueFixture[] = [];
   let releases: ReleaseFixture[] = [];
   try {

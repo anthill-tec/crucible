@@ -71,15 +71,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument(
         "--host",
         default=None,
-        help="host the server binds "
-             f"(overrides ${install.SERVER_HOST_ENV_VAR})",
+        help=f"host the server binds -- WRITTEN into the "
+             f"[{manifest.SERVER_TABLE}] table of the "
+             f"{manifest.CONFIG_FILENAME} the server reads, then served",
     )
     p_serve.add_argument(
         "--port",
         type=int,
         default=None,
-        help="port the server binds "
-             f"(overrides ${install.SERVER_PORT_ENV_VAR})",
+        help=f"port the server binds -- WRITTEN into the "
+             f"[{manifest.SERVER_TABLE}] table of the "
+             f"{manifest.CONFIG_FILENAME} the server reads, then served",
     )
 
     p_uninstall = sub.add_parser(
@@ -100,11 +102,60 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: Answers that make an exhausted-range install PROBE AGAIN (CR-CRU-139 §S1a).
+#: Everything else -- including empty input, EOF and Ctrl-C -- stops, exactly
+#: as the purge prompt's default retains: a question an operator did not answer
+#: is not an instruction.
+_RETRY_ANSWERS = frozenset({"y", "yes", "retry"})
+
+
+def _exhausted_range(warnings) -> str | None:
+    """The message an install failed on an exhausted port range with, or None.
+
+    Matched on the CODE, never on the sentence: the code is the contract and
+    the sentence is what a person reads.
+    """
+    for warning in warnings:
+        if warning.get("code") == install.PORT_RANGE_EXHAUSTED_CODE:
+            return str(warning.get("detail") or "")
+    return None
+
+
+def _retry_exhausted_range(detail: str) -> bool:
+    """ASK the operator, with the failure's own message, whether to probe again
+    (CR-CRU-139 §S1a) -- the install's existing interactive/non-interactive
+    split, applied to a second question.
+
+    Freeing a port is something an operator can do WHILE being asked, from the
+    next terminal, which is the whole reason this stops and asks instead of
+    exiting: the alternative costs them the whole install to retry.
+    """
+    try:
+        answer = input(
+            f"crucible-axi install: {detail}\n"
+            "Probe the range again now? [y/N]: ")
+    except (EOFError, KeyboardInterrupt):
+        # Not consent, and not an instruction. The newline keeps the shell
+        # prompt off the end of the question.
+        print("", file=sys.stderr)
+        return False
+    return answer.strip().lower() in _RETRY_ANSWERS
+
+
 def cmd_install(args) -> int:
-    ok, stages, warnings = install.run_install(
-        args.target_dir, force=args.force,
-        no_bun_bootstrap=args.no_bun_bootstrap,
-        no_service=args.no_service)
+    while True:
+        ok, stages, warnings = install.run_install(
+            args.target_dir, force=args.force,
+            no_bun_bootstrap=args.no_bun_bootstrap,
+            no_service=args.no_service)
+        # CR-CRU-139 §S1a -- an exhausted range STOPS the install and ASKS,
+        # when there is somebody to ask. A non-interactive run is never
+        # prompted (automation would hang on the question) and fails with the
+        # SAME message, so it is never told less than a person would be.
+        detail = _exhausted_range(warnings)
+        if (detail is None or not _stdin_is_interactive()
+                or not _retry_exhausted_range(detail)):
+            break
     axi = _load_client_module("_crucible_axi")
     # The `[server]` stage reports the ABSOLUTE Bun it resolved (CR-CRU-066
     # §S2); it rides along in that stage's envelope row so the operator can see
@@ -274,8 +325,10 @@ def cmd_serve(args) -> int:
 
     Blocking is CORRECT here — that is the whole point of splitting the run out
     of `install`. The child is launched by absolute path with an EXPLICITLY
-    composed environment (`$CRUCIBLE_HOST`/`$CRUCIBLE_PORT`, the `--host`/
-    `--port` flags overriding them), and its exit code is propagated verbatim
+    composed environment carrying NO LISTENER (CR-CRU-139 §S1a/§S1b: the two
+    variables are retired, and `--host`/`--port` are WRITTEN into the
+    `crucible.toml` the child reads instead of exported at it), and its exit
+    code is propagated verbatim
     so a shell — and the systemd `--user` unit the [unit] install stage writes
     (CR-CRU-070) — sees the real failure. No envelope is emitted: stdout
     belongs to the server. A launch that
@@ -299,11 +352,27 @@ def cmd_serve(args) -> int:
     except RuntimeError as exc:
         print(f"crucible-axi serve: {exc}", file=sys.stderr)
         return 1
+    # CR-CRU-139 §S1b -- `--host`/`--port` WRITE the file the server will read
+    # and then boot it, rather than exporting a knob the server no longer
+    # reads. Reported by path and by value: a flag that silently rewrites an
+    # operator's configuration would be worse than one that did nothing.
+    if args.host is not None or args.port is not None:
+        try:
+            written = install.write_listener_settings(host=args.host,
+                                                      port=args.port)
+        except OSError as exc:
+            print(f"crucible-axi serve: {exc}", file=sys.stderr)
+            return 1
+        for key, value in written["settings"]:
+            print(f"crucible-axi serve: wrote [{manifest.SERVER_TABLE}] "
+                  f"{key} = {value} into {written['path']}")
     env = os.environ.copy()
-    if args.host is not None:
-        env[install.SERVER_HOST_ENV_VAR] = args.host
-    if args.port is not None:
-        env[install.SERVER_PORT_ENV_VAR] = str(args.port)
+    # The two RETIRED variables are stripped rather than merely not set: the
+    # child must not inherit an operator's stale export either, or a machine
+    # that once ran with `CRUCIBLE_PORT` set would keep behaving as though the
+    # variable still worked (§S1a).
+    for retired in (install.SERVER_HOST_ENV_VAR, install.SERVER_PORT_ENV_VAR):
+        env.pop(retired, None)
     try:
         returncode = subprocess.run(argv, env=env).returncode
     except KeyboardInterrupt:

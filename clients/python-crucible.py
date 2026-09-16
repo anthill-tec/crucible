@@ -61,7 +61,8 @@ Project + Crucible endpoint:
   Interpreter resolution: --python > $PY_CRUCIBLE_PYTHON > <project-dir>/.venv/bin/python
   (if present) > the interpreter running this script. The venv must have xmlrunner
   (and, for --coverage, coverage.py) plus any imports the code-under-test needs.
-  Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the board the project's `crucible.toml` declares (`[client] url`,
+  shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile,
   /api/v2/projects/<key>/plans, /api/v2/gates, /api/v2/milestones.
 
@@ -83,7 +84,6 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
 # The STACK this client's runs belong to — the server's own `{tier, stack,
 # context}` field (`src/v2.ts`). CR-CRU-112 AC5, measured at cycle 388's RED:
@@ -160,6 +160,21 @@ def _resolve_python(arg_value, project_dir):
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ────
 
 
+def _base_url():
+    """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
+    USE from the fleet's ONE resolver: the project's own `crucible.toml`
+    (`[client] url`), else the install's, else the distribution's shipped
+    declaration.
+
+    A call rather than the module constant this line used to hold. A constant
+    bound at import was a setting no edit an operator made could reach, and it
+    froze the board for the whole process — so a verb handed a different
+    `--project-dir` posted to the previous one's board. `resolve_base_url()` in
+    `_crucible_axi.py` documents the resolution and the environment channel it
+    retired."""
+    return _axi().resolve_base_url()
+
+
 def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
@@ -173,7 +188,7 @@ def _request(method, path, payload=None, timeout=None):
     the §S2b empty-body correction). The local name is kept deliberately: the
     CR-CRU-030 delegation pattern, addressed unqualified by every call site
     here and by the client test harnesses."""
-    return _axi().http_request(CRUCIBLE_URL, method, path, payload, timeout)
+    return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -252,7 +267,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=CRUCIBLE_URL)
+        base_url=_base_url())
 
 
 # ── run context (declared cycle linkage) ────────────────────────────────────
@@ -863,7 +878,7 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                   if verb != "regression" else None)
     _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                      help_steps=help_steps, warnings=preflight_warnings)
@@ -1003,7 +1018,7 @@ def cmd_pre_merge_gate(args):
         verb="pre-merge-gate", dispatch=None,
         whole_suite=lambda: cmd_regression(reg_args, verb="pre-merge-gate"),
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=CRUCIBLE_URL)
+        crucible_url=_base_url())
 
 
 # ── CR-CRU-008/030 — plan verbs ─────────────────────────────────────────────

@@ -121,6 +121,20 @@ def _free_port():
     return port
 
 
+def _declare_listener(store_dir, port, host="127.0.0.1"):
+    """Declare the scratch server's listener where the server READS it
+    (CR-CRU-139 §S1a): the `crucible.toml` beside the database it is pointed
+    at, which is exactly where `serverConfigPath()` looks --
+    `dirname(store)/crucible.toml`.
+
+    `$CRUCIBLE_PORT` is RETIRED, so a spawner that still exported it would boot
+    SILENTLY on the shipped default 3849 -- the port a production install owns
+    -- instead of on the free port this fixture allocated.
+    """
+    Path(store_dir, "crucible.toml").write_text(
+        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
+
+
 def _http(base, path, payload=None):
     """One JSON call against the scratch server. A non-2xx still carries the
     server's structured body, which IS the assertion subject for a refusal."""
@@ -420,12 +434,24 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
                 "This is a missing toolchain, not a passing assertion.")
         port = _free_port()
         cls.base = f"http://127.0.0.1:{port}"
+        _declare_listener(cls._tmpdir, port)
         cls._proc = subprocess.Popen(
             [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_PORT": str(port),
-                 "CRUCIBLE_HOST": "127.0.0.1",
+            env={**os.environ,
                  "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            cls._boot()
+        except BaseException:
+            # A child spawned and then abandoned by a FAILING setUpClass is
+            # never torn down (`tearDownClass` does not run when `setUpClass`
+            # raises), and an orphaned server holds its port for as long as it
+            # lives. Kill it on the way out, whatever went wrong.
+            cls._stop_server()
+            raise
+
+    @classmethod
+    def _boot(cls):
         _await_server(cls.base, cls._proc)
 
         project = _http(cls.base, "/api/v2/projects", {"name": "cr092-scratch"})
@@ -474,13 +500,22 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "_proc", None) is not None:
-            cls._proc.terminate()
-            try:
-                cls._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                cls._proc.kill()
+        cls._stop_server()
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
+
+    @classmethod
+    def _stop_server(cls):
+        """Stop the scratch server, from teardown OR from a setUpClass that
+        failed after spawning it. Idempotent, so both callers may run."""
+        proc = getattr(cls, "_proc", None)
+        if proc is None:
+            return
+        cls._proc = None
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
     def test_the_server_stores_exactly_what_the_helper_produces(self):
         """AC18's core: write path and read path, one rule. A divergence
@@ -1777,7 +1812,13 @@ class NextBlockCitationsTest(unittest.TestCase):
         # loader, adding eight lines ABOVE this block. Measured at BOTH ends
         # after the last production edit, not inferred from the shift. Twelfth
         # time — the CR that shifted the file re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1567, 1588,
+        # Re-pinned 2026-09-17 (CR-CRU-139 C2), 1567-1588 -> 1582-1603: §S2
+        # replaced the module's base-URL constant with the `_base_url()`
+        # point-of-use resolver, adding fourteen lines ABOVE this block and
+        # removing the one-line constant. Measured at BOTH ends after the last
+        # production edit, not inferred from the shift. Thirteenth time — the
+        # CR that shifted the file re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1582, 1603,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

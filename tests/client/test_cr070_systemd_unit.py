@@ -790,22 +790,37 @@ class UnitExecStartComesFromServerLaunchArgvTest(_UnitFixtureCase):
             f"AC1 requires `WantedBy=default.target` -- the only way "
             f"`enable` makes the daemon come up on login; unit={text!r}")
 
-    def test_the_unit_forwards_the_crucible_env_contract_it_cannot_inherit(self):
+    def test_the_unit_forwards_the_store_it_cannot_inherit_and_no_listener(self):
+        """AC1, re-subjected by CR-CRU-139 §S1a -- the rule is unchanged and the
+        list it applies to shrank to ONE.
+
+        "A `--user` unit inherits nothing, so what it NEEDS it must carry" is
+        still exactly why this test exists; `$CRUCIBLE_DB` is now the only
+        thing it needs. The listener is no longer an environment datum at all:
+        the installer writes it into the server's own `crucible.toml`
+        (CR-CRU-139 §S1a) and the server reads it from there, so a unit
+        carrying `Environment=CRUCIBLE_PORT=` would be handing the server a
+        RETIRED variable -- and a retired variable that silently still works is
+        worse than either state.
+        """
         install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
         self._require_unit_runner(
             install, "DEFAULT_STAGE_RUNNERS",
             "there is no unit stage to carry the CRUCIBLE_* contract (AC1)")
         db_path = os.path.join(self.xdg_data, "crucible", "crucible.db")
-        expected = {
+        # All three EXPORTED, so the unit's silence about two of them is a
+        # DECISION rather than an accident of an empty environment.
+        exported = {
             SERVER_HOST_ENV_VAR: "127.0.0.5",
             SERVER_PORT_ENV_VAR: "4711",
             SERVER_DB_ENV_VAR: db_path,
         }
+        retired = (SERVER_HOST_ENV_VAR, SERVER_PORT_ENV_VAR)
         recorder = _SystemctlRecorder(self)
         with mock.patch.object(install, "server_launch_argv",
                                return_value=[self.server_bin]):
             text = self._install_and_read_unit(install, cli, recorder,
-                                               **expected)
+                                               **exported)
         assignments = {}
         for line in text.splitlines():
             stripped = line.strip()
@@ -816,33 +831,42 @@ class UnitExecStartComesFromServerLaunchArgvTest(_UnitFixtureCase):
                 continue
             name, value = payload.split("=", 1)
             assignments[name.strip()] = value.strip().strip('"').strip("'")
-        for name, value in expected.items():
-            self.assertIn(
+        self.assertEqual(
+            assignments.get(SERVER_DB_ENV_VAR), db_path,
+            f"the unit must forward ${SERVER_DB_ENV_VAR} explicitly: a "
+            f"`--user` unit inherits neither the operator's PATH nor their "
+            f"exports, and the store path is how the server FINDS the "
+            f"configuration file it now reads its listener from (AC1, and "
+            f"§S3 of the CR that retires the other two); Environment "
+            f"assignments={assignments!r}")
+        for name in retired:
+            self.assertNotIn(
                 name, assignments,
-                f"the unit must forward ${name} explicitly: a `--user` unit "
-                f"inherits neither the operator's PATH nor their exports, so "
-                f"an un-forwarded knob silently reverts to the default (AC1); "
-                f"Environment assignments={assignments!r}")
-            self.assertEqual(
-                assignments[name], value,
-                f"${name} must be forwarded with the value the install saw "
-                f"({value!r}); Environment assignments={assignments!r}")
+                f"the unit must carry NO ${name}: it only ever carried it "
+                f"because the server had no file to read, and §S1a of this "
+                f"CR retires it -- the install writes the listener into the "
+                f"server's own crucible.toml and the server binds what it "
+                f"finds there; Environment assignments={assignments!r}")
+            self.assertNotIn(
+                f"Environment={name}", text,
+                f"${name} must not appear in the unit AT ALL -- neither with a "
+                f"value nor as the empty assignment the inverse case below "
+                f"forbids (§S1a); unit={text!r}")
 
-        # The inverse: an UNSET knob must not become an empty assignment --
-        # `Environment=CRUCIBLE_PORT=` would override the server's own default
-        # with nothing.
+        # The inverse, for the variable that REMAINS: an UNSET knob must not
+        # become an empty assignment -- `Environment=CRUCIBLE_DB=` would
+        # override the server's own store rule with nothing.
         recorder2 = _SystemctlRecorder(self)
         shutil.rmtree(os.path.join(self.xdg_config, "systemd"),
                       ignore_errors=True)
         with mock.patch.object(install, "server_launch_argv",
                                return_value=[self.server_bin]):
             bare = self._install_and_read_unit(install, cli, recorder2)
-        for name in expected:
-            self.assertNotIn(
-                f"Environment={name}=\n", bare + "\n",
-                f"an UNSET ${name} must not be forwarded as an EMPTY "
-                f"assignment -- that overrides the server's own default with "
-                f"nothing (AC1); unit={bare!r}")
+        self.assertNotIn(
+            f"Environment={SERVER_DB_ENV_VAR}=\n", bare + "\n",
+            f"an UNSET ${SERVER_DB_ENV_VAR} must not be forwarded as an EMPTY "
+            f"assignment -- that overrides the server's own default with "
+            f"nothing (AC1); unit={bare!r}")
 
 
 class UnitMakesBunResolvableToTheLaunchedProcessTest(_UnitFixtureCase):

@@ -116,6 +116,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const PYTHON_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "python-crucible.py");
 const ARDUINO_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "arduino-crucible.py");
@@ -128,10 +129,10 @@ interface RunResult {
 
 /**
  * Spawns `uv run <scriptPath> <args>`. Strips any ambient WORKFLOW_* env so
- * each test controls it explicitly, and always injects CRUCIBLE_URL — the
- * contract under test (both v1 scripts hardcode a base URL; the C4 upgrade
- * must honor $CRUCIBLE_URL so tests can point it at an ephemeral-port test
- * server / capturing proxy instead).
+ * each test controls it explicitly, and DECLARES the board in the project file
+ * the drive resolves (CR-CRU-139 §S2) — a client's target is `[client] url` in
+ * its project's `crucible.toml`, so a test points a drive at its
+ * ephemeral-port server or capturing proxy by writing that file.
  */
 async function runScript(
   scriptPath: string,
@@ -142,10 +143,11 @@ async function runScript(
   for (const k of Object.keys(baseEnv)) {
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
+  declareClientBoard(opts.crucibleUrl, opts.cwd, projectDirFromArgs(args));
   const proc = Bun.spawn({
     cmd: ["uv", "run", scriptPath, ...args],
     cwd: opts.cwd,
-    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
+    env: { ...baseEnv, ...(opts.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",
   });

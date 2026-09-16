@@ -35,7 +35,7 @@
 // CONTROL so a green scan later is the deletion's doing and not a blind
 // matcher's.
 import { describe, test, expect, afterEach } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -143,7 +143,13 @@ const PLANTED_PROVENANCE = [
 // other call site is driven exactly once. See the branching-handler note below.
 const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: string[] }> = [
   { path: () => "/api/v2", keys: ["ok", "service", "version", "projects", "help"] },
-  { path: () => "/api/v2/health", keys: ["ok", "status", "version", "uptime_s", "counts", "store"] },
+  // CR-CRU-139 §S1 — `listener` is emitted LAST, after `store`, at the one
+  // shared `healthPayload` site: the boot's second resolution, disclosed beside
+  // its first so the two health routes cannot drift about either.
+  {
+    path: () => "/api/v2/health",
+    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener"],
+  },
   { path: () => "/api/v2/projects", keys: ["ok", "projects"] },
   { path: () => "/api/v2/plans", keys: ["ok", "plans"] },
   { path: () => "/api/v2/agents", keys: ["ok", "agents"] },
@@ -220,10 +226,18 @@ interface Fixture {
 describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
+  // CR-CRU-139 §S1 — every server this suite SPAWNS, killed unconditionally at
+  // teardown as well as on its own path. A child that outlives its test does
+  // not merely linger: it HOLDS A PORT, and an orphan is how a resolved
+  // listener becomes a bound one nobody is tracking.
+  const spawnedServers: Array<{ kill(): void }> = [];
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    while (spawnedServers.length > 0) {
+      spawnedServers.pop()!.kill();
+    }
     while (scratchDirs.length > 0) {
       rmSync(scratchDirs.pop()!, { recursive: true, force: true });
     }
@@ -529,17 +543,29 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
           install.exitCode === 0 ? "" : install.stderr.toString().slice(-2000),
         ).toBe("");
 
+        // CR-CRU-139 §S1/§S1b — the listener of a server started as a
+        // SUBPROCESS is steered by ITS OWN FILE, never by an export:
+        // `$CRUCIBLE_PORT` is retired and no longer read, so a child left to
+        // the environment would fall through to the shipped default and bind
+        // :3849 — a port reserved on this machine. `serverConfigPath()`
+        // resolves `dirname(CRUCIBLE_DB)/crucible.toml`, which is the staged
+        // tree, and `port = 0` there is the FILE asking the kernel to choose,
+        // so the banner below still reports a real ephemeral port.
+        writeFileSync(
+          join(staged, "crucible.toml"),
+          '[server]\nhost = "127.0.0.1"\nport = 0\n',
+        );
         const proc = Bun.spawn({
           cmd: ["bun", "run", "src/server.ts"],
           cwd: staged,
           env: {
             ...process.env,
-            CRUCIBLE_PORT: "0",
             CRUCIBLE_DB: join(staged, "boot-probe.db"),
           },
           stdout: "pipe",
           stderr: "pipe",
         });
+        spawnedServers.push(proc);
 
         let port = 0;
         let bootFailure = "";

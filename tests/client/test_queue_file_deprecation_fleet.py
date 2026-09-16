@@ -163,12 +163,11 @@ class _WarningAnsweringQueueStub:
         self._thread.start()
 
     def env(self):
-        """The base-URL overrides `drive_verb` needs (arduino accepts
-        `CRUCIBLE_BASE` as its second choice), plus a blanked orchestrator env
-        so an ambient session cannot colour the `context` block."""
-        return {"CRUCIBLE_URL": self.base_url,
-                "CRUCIBLE_BASE": self.base_url,
-                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+        """A blanked orchestrator env so an ambient session cannot colour the
+        `context` block. The BOARD travels as `drive_verb(..., board=…)` now
+        (CR-CRU-139 §S2): it is declared in the drive's own project file and
+        the interlock checks the resolution before the spawn."""
+        return {"WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
 
     def close(self):
         self._httpd.shutdown()
@@ -207,7 +206,8 @@ def _get_drives():
                 result = drive_verb(script_path,
                                     [QUEUE_FILE_VERB, "--project-dir", str(project_dir)],
                                     project_dir, fake_bin_dir,
-                                    extra_env=stub.env())
+                                    extra_env=stub.env(),
+                                    board=stub.base_url)
                 _emits, axi = classify_envelope(result.stdout, toon_module)
                 drives[client_key] = {"result": result, "axi": axi,
                                       "requests": stub.requests[seen:]}

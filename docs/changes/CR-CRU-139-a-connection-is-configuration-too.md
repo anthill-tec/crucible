@@ -94,6 +94,41 @@ choice) wins, then the file, then the shipped default. `$CRUCIBLE_PORT` and `$CR
 "Retired environment variables" section gains them with the same "declare it in the table instead"
 wording. A retired variable that silently still works is worse than either state.
 
+**The listener is RESOLVED BY A PURE FUNCTION and then DISCLOSED, exactly as the store already is
+(user ruling 2026-09-16, option b; contract corrected 2026-09-16 after RED found the first wording
+self-contradictory).** The store's shape is the whole precedent and this copies it rather than
+inventing a sibling: `resolveStore(opts?)` is a PURE exported function with injectable `env`/`cwd`
+returning `{ path, rule }` (`src/server.ts:39-79`), `startServer` calls it, keeps the answer on its
+handle as `storeResolution` (`:94,:218,:291`), and repeats it at ONE shared `healthPayload` site so
+`/api/health` and `/api/v2/health` cannot drift (`:226-245`, CR-CRU-068 §S1).
+
+So the listener gets the same three things:
+
+- **`resolveListener(opts?)`** — a pure exported function, `env` injectable like `resolveStore`'s,
+  returning `{ port, host, portRule, hostRule }`. It reads the file and the shipped default and
+  BINDS NOTHING. This is what makes the shipped-default case provable: call it with no file and no
+  argument and assert `port` is the shipped default with `portRule: "shipped"` — no socket, no
+  flakiness, and `3849` is never bound.
+- **`listenerResolution` on the handle**, the answer `startServer` actually used.
+- **A `listener` block at that same single `healthPayload` site**, so the two health routes cannot
+  disagree.
+
+**Two corrections RED's escalation forced, both of which were defects in my wording, not in its
+reading:**
+
+- **The rule is PER AXIS: `portRule` and `hostRule`, not one `rule` for two values.** Port and host
+  resolve independently, so a single field cannot describe a boot that takes its port from an
+  argument and its host from the file. One `rule` covering two axes was ambiguous the moment the
+  mixed case existed; the store has one axis and needs only one word.
+- **The disclosure describes the RESOLUTION, and it must never contradict the socket.** My first
+  wording asked for `portRule: "shipped"` on a boot that passed a port explicitly — irreconcilable
+  with the vocabulary in the same breath, and the `port: 0` reading that would rescue it is worse:
+  it would have `listenerResolution.port` report `3849` while the server was really on a kernel
+  port, which is a disclosure that lies about where the server listens. The pure function removes
+  the need for the trick entirely. An explicit argument — including `port: 0` — is `explicit`, the
+  same word `resolveStore` already uses for an explicit `dbPath`, and what the handle discloses for
+  a running server always matches the socket it bound.
+
 ### §S1a The INSTALLER writes the connection, so nothing needs an environment
 
 **User ruling 2026-09-16, and it removes the last excuse for the environment layer:** the installer
@@ -101,10 +136,11 @@ already lays `crucible.toml` down (CR-CRU-138 §S2 beside the database, §S4 bes
 is the thing that SETS these values — an operator does not hand-edit a fresh install, and no
 process needs `Environment=CRUCIBLE_PORT=` to be told where to listen.
 
-So `crucible-axi install` accepts the connection settings and WRITES them into the files it lays
-down: the listener into the server's `[server]` table, the board URL into the fleet's
-`[client]` table. An install on a machine that already carries a production instance is
-therefore configured at install time, in the file, once — which is exactly the two-instance
+So `crucible-axi install` DISCOVERS the connection and WRITES it into the files it lays down: the
+listener into the server's `[server]` table, the board URL into the fleet's `[client]` table. It
+takes no connection flags and asks the operator for no number — see the discovery rule below. An
+install on a machine that already carries a production instance is therefore configured at install
+time, in the file, once — which is exactly the two-instance
 scenario above.
 
 **The installer DISCOVERS the port; nobody picks a number (user ruling 2026-09-16).** The shipped
@@ -142,7 +178,7 @@ That is the whole mechanism. Production installs and takes a port; this repo's d
 installs and takes the next free one; neither knows about the other, and both record what they took.
 
 **The install's own write must not read as an operator's edit (user ruling 2026-09-16, option a).**
-`_operator_config_is_untouched` (`crucible_axi/install.py:1300-1326`) decides "did the operator
+`_operator_config_is_untouched` (`crucible_axi/install.py:1546`) decides "did the operator
 change this?" by comparing the file's BYTES against the shipped template, and CR-CRU-138 §S2's
 uninstall/purge convergence depends on that answer. Writing a probed port in would make every
 installed file differ from its template forever — so the install's own value would be
@@ -158,7 +194,7 @@ still preserved. A file with no recording (an older install, a hand-placed file)
 template comparison, so the existing fail-safe direction is untouched.
 
 **Nothing else needs to know the port — including the service.** `_unit_environment()` stops
-forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST` (`crucible_axi/install.py:863-879`): the unit only ever
+forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST` (`crucible_axi/install.py:1091`): the unit only ever
 carried them because the server had no file to read. The unit boots the server, the server reads
 its own `crucible.toml`, and it binds what the install wrote there. No port in the unit, none in
 the bootstrap, none in a skill — one datum, one file.
@@ -244,38 +280,85 @@ discovered later on the wrong dashboard.
 - [ ] `src/crucible.toml` declares `[server]` with `port` and `host`, each with the description /
       default commentary the limits tables carry.
 - [ ] A server booted with a `[server] port` set listens on THAT port, proven by a real request to
-      it; with no file present it listens on the shipped default.
+      it.
+- [ ] With no file present the SHIPPED default is what resolves — asserted on the PURE
+      `resolveListener()` with no file and no argument: `port` equals the shipped file's declared
+      port, `portRule` is `shipped`. No socket is bound, so `3849` is never touched; binding the
+      real default would be flaky on exactly the two-instance machine this CR serves.
+- [ ] `resolveListener(opts?)` is exported and pure, with `env` injectable the way `resolveStore`'s
+      is, and binds nothing — asserted by calling it directly for every layer and by the absence of
+      any listener afterwards.
+- [ ] `portRule` and `hostRule` are PER AXIS and each names the layer that won: `explicit` for an
+      argument (the word `resolveStore` already uses), `file` for a `[server]` table, `shipped` for
+      neither. The MIXED case is asserted explicitly — a port from the argument and a host from the
+      file yields `portRule: "explicit"` with `hostRule: "file"`, which is the case a single `rule`
+      field could not express.
+- [ ] `startServer` discloses `listenerResolution { port, host, portRule, hostRule }` on its handle,
+      and the ONE shared `healthPayload` site carries the same values as a `listener` block — so
+      `/api/health` and `/api/v2/health` cannot drift, the way CR-CRU-068 §S1 already binds the
+      `store` block. Asserted by fetching BOTH routes and comparing them to each other and to the
+      handle.
+- [ ] What a RUNNING server discloses always matches the socket it bound: for every boot in these
+      tests, `listenerResolution.port` equals the handle's real `server.port`. A disclosure that
+      names a port the server is not listening on is the defect this criterion forbids.
 - [ ] An explicit `startServer({ port })` still wins over the file — the test seam is unchanged.
 - [ ] `$CRUCIBLE_PORT` and `$CRUCIBLE_HOST` are no longer read: a server booted with both exported
       to junk values still listens per its file/default. Asserted by an actual boot, not by grep.
-- [ ] `clients/crucible.toml` declares `[client] url`.
-- [ ] With a project-dir `crucible.toml` naming a second board, every one of the five clients posts
-      THERE — asserted by running a verb against a second server on a different port and reading
-      which one recorded the run.
-- [ ] Project dir beats install dir beats shipped default for `url`, by the same chain CR-CRU-138
-      §S1 built (one test, both files present, different values).
-- [ ] `$CRUCIBLE_URL` and `$CRUCIBLE_BASE` are no longer read; a junk export changes nothing.
-- [ ] No client module holds its own base-URL constant: the value resolves from `_crucible_axi.py`
-      alone, and a grep for `CRUCIBLE_URL =` across `clients/` returns nothing.
-- [ ] `CRUCIBLE_DB` and `CRUCIBLE_PROJECT_KEY` still work exactly as today, and both shipped tomls
-      state why they are not in the file.
-- [ ] A verb whose resolved URL is not the shipped default names that URL in its envelope `context`.
-- [ ] `docs/RUNBOOK.md`: the three newly retired variables join "Retired environment variables"
-      with the same wording; the "Environment variables (port / bind / database)" section is
-      corrected to the two that remain; and the dev-beside-production setup is documented as a
-      `[client] url` / `[server] port` pair rather than an export.
-- [ ] `tests/docs-runbook-documents-every-limit.test.ts` still passes, and the new figures are
-      derived from the shipped tomls rather than retyped (CR-CRU-134's rule).
+
+**C2 — a client's board is its project's configuration** (§S2, and every site that steers by the
+retired variables; retire and migrate in ONE cycle, which is the ordering lesson C1 paid for)
+
+- [ ] A checkout whose project-dir `crucible.toml` names a board has every one of the five clients
+      post THERE, for every verb, with nothing exported — proven by running verbs against two live
+      boards and reading which one recorded each run.
+- [ ] Project dir beats install dir beats shipped default, by the chain CR-CRU-138 §S1 already
+      built.
+- [ ] `$CRUCIBLE_URL` and `$CRUCIBLE_BASE` are dead: exported to junk, nothing changes. No client
+      holds its own base-URL constant.
+- [ ] No file under `tests/` steers a client or a server by any of the four retired variables, and
+      the suites that did still prove what they always proved — including the offline-degradation
+      contract (a client formats output with no board reachable) and the two tests that read or
+      patched a client's base-URL constant.
+- [ ] This checkout's `crucible.toml` names the development board and the orchestrator's own verbs
+      reach it with nothing exported — the CR proving itself on its author. The file stays UNTRACKED
+      operator state (`.gitignore:10` unchanged): committing a board URL would make every
+      imperfectly-isolated suite resolve the live development board, which is CR-CRU-138's
+      "no suite resolves the checkout configuration" rule and the reason that guard exists. Corrected
+      2026-09-16 after RED found that "committed", as first written here, contradicted it.
+
+**C4 — the board is named, and the documentation matches** (§S4, docs, close-out)
+
+- [ ] A verb whose resolved board is not the shipped default names that board in its envelope
+      `context`, beside `projectKey`.
+- [ ] `docs/RUNBOOK.md` documents the connection as configuration: the retired variables listed as
+      retired, the environment section reduced to the two that remain (`CRUCIBLE_DB`,
+      `CRUCIBLE_PROJECT_KEY`) with the shipped tomls saying why those two cannot move, and
+      dev-beside-production shown as a pair of file edits rather than exports.
+- [ ] The guards that currently require the retired variables to be documented move with the
+      RUNBOOK in the same cycle and still pin a real rule.
+- [ ] Figures in the docs are derived from the shipped tomls, never retyped (CR-CRU-134's rule).
 
 **§S1a — the installer sets it, so an operator never has to**
 
-- [ ] `crucible-axi install` accepts the connection settings and WRITES them into the files it lays
-      down: the listener into the server file's `[server]` table, the board URL into the fleet's
-      `[client]` table. Asserted by running a real install into a temp target and reading the
-      resulting files, not by reading the installer's own output.
-- [ ] A second install on the same machine, given different settings, produces a second instance
-      whose files name its own port and board — the two-instance scenario, proven end to end: boot
-      both, run a verb against each, and assert each run landed on the board its own file names.
+- [ ] `crucible-axi install` WRITES the discovered connection into the files it lays down: the
+      listener into the server file's `[server]` table, the board URL into the fleet's `[client]`
+      table. Asserted by running a real install into a temp target and reading the resulting files,
+      not by reading the installer's own output. (Corrected 2026-09-16: this criterion first said
+      the install "accepts the connection settings", which the discovery ruling superseded — the
+      install parser deliberately carries no `--host`/`--port`, so VERIFY was right to refuse to
+      tick a criterion whose subject was never built.)
+- [ ] TWO installs on one machine, run with NO knowledge of each other, land on DIFFERENT ports and
+      each records its own: two real installs into two targets with two stores, the first's chosen
+      port held by a live listener across the second, asserting the second takes its own port, the
+      first's file is NOT renumbered, each fleet file's `[client] url` names its own board, and both
+      declared ports carry listening sockets at the same time. This is the scenario the CR exists
+      for, so its COMPOSITION is the criterion — the constituent mechanics passing separately does
+      not discharge it. (Consolidated 2026-09-16: a near-duplicate of this criterion survived the
+      first reword still carrying a "boot both, run a verb against each" leg that no test
+      discharges — the install fixture stubs the `[server]`/`[unit]` stages, so there is no server
+      binary to boot and no board to drive. RE-VERIFY caught the duplicate. The two halves of that
+      leg ARE proven separately: the installer's file composition here, and "a client reaches the
+      board its own file names" against two live boards in the C2 suite.)
 - [ ] The shipped `[server]` table declares the PORT RANGE this project may occupy, documented the
       way the limits are (a sentence plus bounds), so the range is read where it is set.
 - [ ] The installer PROBES that range and writes the first port it can BIND into the file it lays
@@ -300,13 +383,10 @@ discovered later on the wrong dashboard.
 - [ ] The declared range is `3800`–`3899` in the shipped file, and the install's chosen port lies
       inside it — asserted against the FILE's declared bounds, not a retyped pair of numbers
       (CR-CRU-134's rule).
-- [ ] Two installs on one machine, run with no knowledge of each other, land on DIFFERENT ports and
-      each records its own: boot both, run a verb against each, assert each run landed on the board
-      its own file names.
 - [ ] An operator-EDITED connection value SURVIVES a re-install: configuration the operator changed
       is data, not an artifact.
 - [ ] The `[manifest]` stage RECORDS the bytes it wrote for each config file it authored, and
-      `_operator_config_is_untouched` (`crucible_axi/install.py:1300-1326`) compares an authored
+      `_operator_config_is_untouched` (`crucible_axi/install.py:1546`) compares an authored
       file against THAT recording rather than against the shipped template. Asserted three ways, on
       a real install into a temp target: (1) a file the install wrote a probed port into is reported
       UNTOUCHED, so `uninstall --purge` removes it and reports `converged`; (2) the same file after
@@ -316,66 +396,20 @@ discovered later on the wrong dashboard.
 - [ ] CR-CRU-138 §S2/§S3's purge convergence still holds on a machine that probed a port — the
       regression this recording exists to prevent: without it every installed file would read as
       operator-edited forever and `converged` would go false with no operator involved.
-- [ ] `_unit_environment()` (`crucible_axi/install.py:863-879`) no longer forwards `CRUCIBLE_PORT`
-      or `CRUCIBLE_HOST`; the rendered unit carries neither, and the installed server still listens
-      on its configured port — asserted by reading the rendered unit text AND by the server's own
-      `/api/health`.
-
-**§S1b — tests override in-process or with their own file, never the environment**
-
-- [ ] No file under `tests/` sets `CRUCIBLE_URL`, `CRUCIBLE_BASE`, `CRUCIBLE_PORT` or
-      `CRUCIBLE_HOST` in a child environment. The **58 setter sites across 28 files** (measured
-      2026-09-16) migrate to `startServer({ port })` (in-process TS), a `[server] port` file in the
-      subprocess server's own store dir (the five python suites §S1b names), or a `[client] url`
-      file in the fixture's temp root. A repo-wide grep is the assertion.
-- [ ] Each of the five subprocess-server suites — `test_cr092_next_decision_resolver.py`,
-      `test_cycle_add_targets_the_plan_it_means.py`, `test_gate_names_the_release_it_gates.py`,
-      `test_next_lane_carries_release_and_wave.py`, `test_plan_file_names_the_release_it_plans.py`
-      — starts its server on a `_free_port()` declared in the `crucible.toml` beside its own temp
-      database, and the server is proven to listen THERE by a real request.
-- [ ] At least one migrated client test proves it exercises the REAL resolution path: the temp
-      `crucible.toml` it wrote is the file the client reports resolving.
-- [ ] `_UNREACHABLE_CRUCIBLE_URL`-style offline-degradation tests keep working through the file, so
-      the degradation contract (CR-CRU-131: a client still formats output with no board reachable)
-      is unchanged.
-- [ ] The two doc guards that currently REQUIRE the retired variables to be documented are updated
-      to the new reality, not deleted: `tests/docs-db-path-resolution.test.ts:117-122` (the env
-      table listing `CRUCIBLE_PORT`/`CRUCIBLE_HOST`) and
-      `tests/cr009-release-bundle.test.ts:1435-1440` (the RUNBOOK's `CRUCIBLE_PORT=… crucible-axi
-      serve` examples). Each still pins a real rule — that the RUNBOOK documents how to set the
-      listener — and the rule's subject becomes the config file.
-- [ ] `crucible_axi/cli.py`'s `serve` no longer composes `$CRUCIBLE_HOST`/`$CRUCIBLE_PORT` into a
-      child environment (`cli.py:277`); `--host`/`--port` flags, where kept, write to or read from
-      the file rather than exporting.
-
-**§S1b — the four shipped contracts this CR reverses, each re-subjected**
-
-- [ ] `tests/client/test_cr070_systemd_unit.py:793-845` (CR-CRU-070 AC1, "the unit forwards the
-      CRUCIBLE env contract it cannot inherit") becomes a ONE-variable assertion: the rendered unit
-      forwards `CRUCIBLE_DB` and carries no `CRUCIBLE_PORT`/`CRUCIBLE_HOST` at all — neither with a
-      value nor as the empty assignment its own inverse case forbids. The test is re-subjected, not
-      deleted: the rule "a `--user` unit inherits nothing, so what it needs it must carry" still
-      holds, and the store is now the only thing it needs.
-- [ ] `tests/client/test_cr066_serve_and_target_dir.py:354-390`
-      (`ServeEnvironmentForwardingTest`, CR-CRU-066 "AC5 (env)") becomes: `serve` composes NO
-      listener environment for the child, and the child listens per its own configuration file —
-      asserted on the real composed env of the launch call, the same way it asserts forwarding today.
-- [ ] `tests/client/test_cr054_http_core_lift.py:141-145` — which reads each client's base-URL
-      constant back dynamically (`CRUCIBLE_URL`, arduino's `CRUCIBLE`) — reads the resolved value
-      from the shared `_crucible_axi.py` seam instead, and still proves all five clients agree.
-- [ ] `tests/client/test_gate_multi_suite_coverage.py:565`, which redirects the gate by
-      `mock.patch.object(module, "CRUCIBLE_URL", …)`, redirects it through the resolver or a temp
-      `crucible.toml` instead — the fixture still points the gate at its stub board, by the
-      mechanism operators use.
+- [ ] `_unit_environment()` (`crucible_axi/install.py:1091`) no longer forwards `CRUCIBLE_PORT`
+      or `CRUCIBLE_HOST`: the rendered unit carries neither, while `CRUCIBLE_DB` is still forwarded
+      — asserted by reading the rendered unit text under junk exports of both retired names. The
+      companion half — that a server so launched listens on its CONFIGURED port — is discharged by
+      §S1's boot suite against `/api/health`, not here: this fixture stubs the `[server]` and
+      `[unit]` stages and cannot reach a real boot. (Split 2026-09-16: VERIFY found the criterion
+      claimed both halves while only one was asserted, and a half-asserted criterion must not be
+      ticked whole.)
 
 **Close-out**
 
-- [ ] Citations into the files this CR edits are re-verified and re-recorded ONCE, at close-out:
-      76 `path:line` pins across the test tree point into `src/server.ts`, `src/limits.ts`,
-      `clients/_crucible_axi.py`, `crucible_axi/install.py`, `crucible_axi/cli.py` and
-      `crucible_axi/manifest.py` (measured 2026-09-16), and this CR moves lines in all six. One
-      sweep at the end — never a mid-cycle re-pin per drift, which cost CR-CRU-138 three separate
-      approval round-trips.
+- [ ] Citations into the files this CR edits are re-verified and re-recorded ONCE, at close-out —
+      never a mid-cycle re-pin per drift, which cost CR-CRU-138 three approval round-trips.
+      (C1 done: `src` head 724 → 736, measured; `public` and `clients` unmoved.)
 
 ## Non-goals
 

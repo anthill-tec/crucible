@@ -56,8 +56,11 @@
 // supported... Received protocol 'bun:'` in a RED-phase smoke probe. The
 // main suite already avoids this by spawning the server as its OWN `bun
 // run` child process instead of importing it — the same fix applies here.
-// `:memory:` isolation is passed via `CRUCIBLE_DB` (CR-CRU-043), so no
-// scratch-cwd juggling is needed either.
+// `:memory:` isolation is passed via `CRUCIBLE_DB` (CR-CRU-043). A scratch
+// cwd IS carried since CR-CRU-139 §S1 — not for the store, which stays in
+// memory, but because the retired `$CRUCIBLE_PORT` is replaced by a `[server]`
+// table the child reads BESIDE ITS STORE, and for a `:memory:` store that
+// resolves relative to the child's own working directory.
 //
 // Binds the SAME port the main e2e suite uses (39_877 / harness.ts's
 // `E2E_PORT`, once GREEN adds it) because seedProject's §S3 guard is
@@ -69,6 +72,8 @@
 // config fails to even LOAD today (a genuine collection-level RED, sanctioned
 // by the RED-phase rules: "a compile/collection error... counts as RED").
 import { defineConfig } from "@playwright/test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { E2E_PORT } from "../steps/harness.ts";
@@ -76,6 +81,22 @@ import { E2E_PORT } from "../steps/harness.ts";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(HERE, "..", "..", "..");
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
+
+// CR-CRU-139 §S1/§S1b — `$CRUCIBLE_PORT` is RETIRED and no longer read, so the
+// listener of a server started as a subprocess is declared in the server's own
+// `crucible.toml`. A child left to the environment would fall through to the
+// shipped default and bind :3849, the port a production install occupies.
+//
+// `:memory:` stays the store (the isolation this config's header argues for),
+// and `serverConfigPath()` resolves `dirname(":memory:")/crucible.toml` — i.e.
+// `crucible.toml` relative to the CHILD'S CWD — so the scratch cwd this config
+// now sets is what makes the declaration below the file the child reads,
+// rather than the repo's own.
+const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-ephemeral-"));
+writeFileSync(
+  path.join(SCRATCH_CWD, "crucible.toml"),
+  `[server]\nhost = "127.0.0.1"\nport = ${String(E2E_PORT)}\n`,
+);
 
 export default defineConfig({
   testDir: HERE,
@@ -100,7 +121,8 @@ export default defineConfig({
   },
   webServer: {
     command: `bun run ${SERVER_ENTRY}`,
-    env: { CRUCIBLE_PORT: String(E2E_PORT), CRUCIBLE_DB: ":memory:" },
+    cwd: SCRATCH_CWD,
+    env: { CRUCIBLE_DB: ":memory:" },
     port: E2E_PORT,
     reuseExistingServer: false,
     timeout: 20_000,

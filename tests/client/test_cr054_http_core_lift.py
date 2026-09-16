@@ -81,6 +81,12 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
+#: CR-CRU-139 §S2 -- the shared module's ONE name for the board resolution the
+#: five deleted constants collapsed into, imported rather than re-spelled.
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    BOARD_RESOLVER,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
@@ -137,12 +143,30 @@ def _clients_with_marker_in_function(name, marker):
     return offenders
 
 
-def _client_base_url(module):
-    """Each client resolves its base URL from a differently-named module
-    constant (bun/rust/mvn/python: CRUCIBLE_URL; arduino: CRUCIBLE) -- read
-    it back dynamically rather than assume one name, so this test does not
-    itself invent a fleet-wide rename that is out of C2's scope."""
-    return getattr(module, "CRUCIBLE_URL", None) or getattr(module, "CRUCIBLE", None)
+def _resolved_base_url():
+    """The base URL a client's `_request` must send to, read back dynamically
+    -- from the ONE place the fleet now spells it.
+
+    RE-SUBJECTED by CR-CRU-139 §S2. This helper used to read a per-client
+    module constant (`getattr(module, "CRUCIBLE_URL", None) or getattr(module,
+    "CRUCIBLE", None)`), because each client bound its own at import from
+    `$CRUCIBLE_URL`. §S2 deletes all five -- a connection is CONFIGURATION, and
+    a constant bound at import is a setting no edit an operator makes can reach
+    -- and collapses them into `_crucible_axi.resolve_base_url()`, resolved at
+    the point of use from the project's `crucible.toml`.
+
+    The CONTRACT this helper serves is unchanged and is still the point of the
+    assertion below: whatever the fleet resolves, that is where the request
+    goes. Only the place it is read from moved, which is exactly §S1b's
+    "still read back, and still overridable, from one place instead of five".
+    """
+    axi = _load_module_by_path(AXI_MODULE_PATH, "cr054_axi_base_url")
+    resolver = getattr(axi, BOARD_RESOLVER, None)
+    assert callable(resolver), (
+        f"clients/_crucible_axi.py must export `{BOARD_RESOLVER}()` -- "
+        f"§S2 replaced the five per-client base-URL constants with one shared "
+        f"resolver, and this suite reads the value back from it")
+    return resolver()
 
 
 def _fake_response(body_bytes):
@@ -195,7 +219,7 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
-                base_url = _client_base_url(module)
+                base_url = _resolved_base_url()
                 fake = _fake_response(b'{"ok": true, "agent": "A1"}')
                 with mock.patch("urllib.request.urlopen",
                                  return_value=fake) as urlopen_mock:

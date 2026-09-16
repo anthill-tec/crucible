@@ -32,6 +32,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { RETIRED_CONNECTION_ENV } from "./helpers/server-limits-fixture.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -143,10 +144,47 @@ describe("§S5 docs — README quick start", () => {
     expect(readme).toContain("uv");
     expect(readme).toContain("crucible-axi");
   });
+
+  // CR-CRU-139 §S4 — the front page is the one document nobody reads twice.
+  // `README.md:77` tells a first-time operator that `crucible-axi serve`
+  // "honours `CRUCIBLE_HOST` / `CRUCIBLE_PORT`"; it honours neither
+  // (`src/server.ts:158`), and the flags it does honour WRITE the server's
+  // `crucible.toml` rather than pass a per-run value
+  // (`crucible_axi/cli.py:355-362`).
+  //
+  // The README carries NO retirement record, and that is deliberate rather
+  // than an omission: a quick start's job is to be true today, and the record
+  // of what was retired and why belongs in the RUNBOOK's "Retired environment
+  // variables" section, which the C4 retirement guard pins.
+  test("README.md documents the listener by the flags that set it, and names no retired variable", () => {
+    const readme = readText("README.md");
+
+    const stale = RETIRED_CONNECTION_ENV.filter((name) => readme.includes(name));
+    expect(
+      stale,
+      `README.md still tells a first-time operator that the server is configured by ` +
+        `${JSON.stringify(stale)}. Nothing reads them, so the first thing the front page ` +
+        `teaches is a setting that silently does nothing.`,
+    ).toEqual([]);
+
+    // The positive half — the README still says how the listener IS set, so
+    // the fix cannot be deleting the paragraph.
+    expect(readme).toContain("--port");
+    expect(readme).toContain("--host");
+  });
 });
 
 describe("§S5 docs — RUNBOOK", () => {
-  test("docs/RUNBOOK.md exists with start/stop + port/bind config", () => {
+  // RE-SUBJECTED 2026-09-17 by CR-CRU-139 C4 (§S4), not deleted. CR-CRU-009
+  // §S5's rule is "the RUNBOOK tells an operator how to start and stop the
+  // server and HOW ITS LISTENER IS SET, loopback by default". That rule is
+  // unchanged and still load-bearing; only its subject moved. It asserted the
+  // two env var names "read from src/server.ts" — and src/server.ts stopped
+  // reading them in C1 (`:158`), so the assertion had quietly become a
+  // requirement that the RUNBOOK keep documenting a knob that does nothing.
+  // The listener is `[server] host`/`port` in the server's own crucible.toml
+  // now, so that is what the document must carry.
+  test("docs/RUNBOOK.md exists with start/stop + the listener declaration", () => {
     expect(existsSync(join(REPO_ROOT, "docs", "RUNBOOK.md"))).toBe(true);
 
     const runbook = readText(join("docs", "RUNBOOK.md"));
@@ -155,10 +193,14 @@ describe("§S5 docs — RUNBOOK", () => {
     expect(lower).toContain("start");
     expect(lower).toContain("stop");
 
-    // §S1/S2: loopback-only default, CRUCIBLE_PORT / CRUCIBLE_HOST config
-    // (real env var names, read from src/server.ts).
-    expect(runbook).toContain("CRUCIBLE_PORT");
-    expect(runbook).toContain("CRUCIBLE_HOST");
+    // §S1/S2, CR-CRU-139 §S1: the listener is declared, and the default stays
+    // loopback — the security claim this assertion has always protected.
+    // The TABLE, anchored — `[server]` also occurs in prose naming the
+    // install's `[server]` stage, and a document that only mentions the stage
+    // has shown an operator nothing to edit.
+    expect(runbook).toMatch(/^\[server\]$/m);
+    expect(runbook).toMatch(/^host\s*=/m);
+    expect(runbook).toMatch(/^port\s*=/m);
     expect(lower).toMatch(/127\.0\.0\.1|loopback/);
   });
 
@@ -1429,17 +1471,42 @@ describe("CR-CRU-066 §S4/AC6 docs — RUNBOOK reconciled", () => {
     );
   });
 
-  // §S4: keep the env-var examples — reconciled onto the real command, NOT
-  // deleted. Guards against a GREEN that fixes the command by dropping the
-  // documentation the pre-existing §S5 RUNBOOK test relies on.
-  test("docs/RUNBOOK.md keeps its CRUCIBLE_PORT / CRUCIBLE_HOST examples, on `crucible-axi serve`", () => {
-    const commands = shellCommandLines(readText(join("docs", "RUNBOOK.md")));
-    expect(commands.some((line) => /^CRUCIBLE_PORT=\S+\s+crucible-axi serve\b/.test(line))).toBe(
-      true,
-    );
-    expect(commands.some((line) => /^CRUCIBLE_HOST=\S+.*\bcrucible-axi serve\b/.test(line))).toBe(
-      true,
-    );
+  // RE-SUBJECTED 2026-09-17 by CR-CRU-139 C4 (§S4), not deleted. CR-CRU-066
+  // §S4/AC6's rule is an ANTI-DELETION one: the RUNBOOK's documentation of HOW
+  // THE LISTENER IS SET was to be RECONCILED onto the real command
+  // (`crucible-axi serve`) rather than dropped, so that a GREEN cannot fix a
+  // wrong command line by deleting the paragraph the §S5 RUNBOOK test above
+  // depends on. That rule is unchanged and still load-bearing; only its
+  // subject moved, because the form it named stopped working.
+  //
+  // It asserted two `VAR=value crucible-axi serve` invocations. Nothing reads
+  // those variables since C1 (`src/server.ts:158`), and C4's retirement guard
+  // (tests/docs-runbook-documents-every-limit.test.ts) reports a line ASSIGNING
+  // a retired connection variable as presenting it as live configuration — so
+  // the old form required the RUNBOOK to carry the exact line another guard
+  // forbids. Two guards demanding opposite things about one line is why this
+  // moves in the cycle that retires the variables rather than after it.
+  //
+  // The subject is the mechanism that replaced them, and it is a real one:
+  // `crucible-axi serve --host/--port` WRITES the listener into the server's
+  // own `crucible.toml` and then boots it (`crucible_axi/cli.py:355-362`,
+  // `crucible_axi/install.py:559`). So both halves are kept and the
+  // anti-deletion property holds in both directions — the command line that
+  // sets the listener AND the declaration that command writes must each stay
+  // documented, and deleting either fails this test.
+  test("docs/RUNBOOK.md keeps its listener documentation, on `crucible-axi serve` and in the file it writes", () => {
+    const runbook = readText(join("docs", "RUNBOOK.md"));
+    const commands = shellCommandLines(runbook);
+
+    expect(commands.some((line) => /^crucible-axi serve\b.*\s--port\s+\S+/.test(line))).toBe(true);
+    expect(commands.some((line) => /^crucible-axi serve\b.*\s--host\s+\S+/.test(line))).toBe(true);
+
+    // …and the artifact those flags write, which is where the setting LIVES:
+    // an operator who never types the flags still has to be shown the table
+    // they produce, or the documentation stops at the gesture.
+    expect(runbook).toMatch(/^\[server\]$/m);
+    expect(runbook).toMatch(/^host\s*=/m);
+    expect(runbook).toMatch(/^port\s*=/m);
   });
 
   // §S4: "note Bun is the runtime and is guaranteed by `crucible-axi install`".
