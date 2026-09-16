@@ -49,7 +49,10 @@ One narrow class of setter survives, in an allow-list carrying a REASON per
 file: a test that exports a retired variable to JUNK precisely to prove that
 exporting it changes nothing. Deleting those would delete the proof that the
 retirement happened. The allow-list is asserted to be small, and every path in
-it is asserted to exist, so it cannot rot into a blanket exemption.
+it is asserted to exist, so it cannot rot into a blanket exemption. It also
+subtracts SHAPES rather than files: an allow-listed suite that READ a retired
+name would still be reported, because nothing about proving an export lands
+nowhere requires the same file to obey one.
 
 ── Why a detector rather than a grep ────────────────────────────────
 
@@ -107,6 +110,11 @@ ENVIRONMENT_RESOLVED_STILL = ("CRUCIBLE_DB", "CRUCIBLE_PROJECT_KEY")
 #: The narrow exemption: a suite whose SUBJECT is that exporting a retired
 #: variable changes nothing. Each entry states why, because an allow-list
 #: without a reason becomes a place to put anything inconvenient.
+#:
+#: The exemption is over SHAPES, not over files -- see `_OBEYING_SHAPES` below.
+#: What these suites need exempting is the EXPORT they perform in order to
+#: prove it lands nowhere; nothing in that claim needs them to be allowed to
+#: OBEY a retired name as well.
 DEADNESS_PROOFS = {
     "tests/client/test_cr066_serve_and_target_dir.py":
         "§S1b re-subject -- exports junk CRUCIBLE_HOST/PORT to prove `serve` "
@@ -187,6 +195,21 @@ _TS_READS = (
      re.compile(r"Bun\.env\.(?P<name>" + "|".join(RETIRED_VARIABLES)
                 + r")\b")),
 )
+
+#: The shapes `DEADNESS_PROOFS` does NOT excuse: the OBEYING half, derived
+#: from `_TS_READS` so a read shape added later is enforced by construction.
+#:
+#: A deadness proof's subject is an EXPORT that lands nowhere, so its exports
+#: are exempt. Its reads are not. Nothing about proving an export is dead
+#: requires the same file to resolve a board THROUGH one of these names, and
+#: `process.env.CRUCIBLE_URL ?? "http://localhost:3849"` written inside an
+#: allow-listed file lands on the production board exactly as it would
+#: anywhere else. Exempting the FILE would hide that, and the rot-guards below
+#: would not catch it: they ask only that the file still carries a setter and
+#: still says "retired", both of which would still be true. A guard whose
+#: scope is narrower than the criterion it certifies certifies rather than
+#: protects, so the allow-list subtracts SHAPES and never a file.
+_OBEYING_SHAPES = frozenset(shape for shape, _ in _TS_READS)
 
 
 class _Setter:
@@ -343,8 +366,23 @@ def _setters_for(path, relative=None):
     return typescript_setters(source, relative)
 
 
+def enforced_sites(relative, sites):
+    """The sites in ONE file that the criterion still holds against, after the
+    allow-list has been applied.
+
+    For a file nobody exempted, that is all of them. For a DEADNESS PROOF it is
+    the OBEYING half only: the export is the suite's subject and is excused,
+    the read is not excused anywhere, by anyone. Every allow-listed file is
+    still opened and still scanned -- the exemption subtracts shapes from the
+    verdict, it does not stop the guard from looking.
+    """
+    if relative not in DEADNESS_PROOFS:
+        return list(sites)
+    return [site for site in sites if site.shape in _OBEYING_SHAPES]
+
+
 def _scan_tree():
-    """Every steering site under `tests/`, allow-listed entries removed.
+    """Every steering site under `tests/`, allow-listed SHAPES removed.
 
     `__pycache__` is skipped: a stale `.pyc` is a build artefact, and its
     bytecode still carries the string constants of a source that has already
@@ -359,10 +397,8 @@ def _scan_tree():
         if suffix not in _PY_SUFFIXES + _TS_SUFFIXES:
             continue
         relative = path.relative_to(REPO_ROOT).as_posix()
-        if relative in DEADNESS_PROOFS:
-            continue
         scanned += 1
-        offenders += _setters_for(path, relative)
+        offenders += enforced_sites(relative, _setters_for(path, relative))
     return scanned, offenders
 
 
@@ -597,3 +633,44 @@ class NoTestSteersAClientOrAServerByARetiredVariableTest(unittest.TestCase):
                     "retired", source.lower(),
                     f"{relative} must say, in its own text, that the variable "
                     f"it exports is retired -- that claim is the exemption")
+
+    def test_the_exemption_excuses_the_export_and_never_the_read(self):
+        """The SCOPE of the allow-list, asserted on both sides.
+
+        A deadness proof is exempt because its EXPORT is its subject. That is
+        not a reason to make it the one place in the tree where a client may be
+        pointed at the shipped default by a READ of a dead name, and the two
+        rot-guards above cannot notice if it becomes one: they ask only that
+        the file still sets a retired variable and still says "retired", and a
+        file that had grown such a read would still do both. An exemption wider
+        than its reason certifies what it does not check, so the obeying half
+        stays enforced inside an allow-listed file, and the whole detector
+        stays in force outside one.
+        """
+        relative = sorted(
+            name for name in DEADNESS_PROOFS if name.endswith(".ts"))[0]
+        source = ('process.env.CRUCIBLE_PORT = "9999";\n'
+                  'const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";\n')
+        sites = typescript_setters(source, relative)
+        self.assertEqual(
+            [s.line for s in sites], [1, 2],
+            f"the detector must see both halves before the allow-list is "
+            f"applied to them; saw {sites!r}")
+
+        self.assertEqual(
+            [(s.line, s.name, s.shape)
+             for s in enforced_sites(relative, sites)],
+            [(2, "CRUCIBLE_URL", "read with a `??` fallback")],
+            f"inside {relative} the exemption must excuse the export it is "
+            f"granted for and keep reporting a read that resolves a board "
+            f"through a dead name -- that read lands on the shipped default "
+            f"there exactly as it would in any other file")
+
+        ordinary = "tests/an-ordinary-suite.test.ts"
+        self.assertNotIn(ordinary, DEADNESS_PROOFS)
+        self.assertEqual(
+            [(s.line, s.shape)
+             for s in enforced_sites(ordinary, typescript_setters(source,
+                                                                 ordinary))],
+            [(1, "assignment"), (2, "read with a `??` fallback")],
+            "outside the allow-list nothing is subtracted at all")
