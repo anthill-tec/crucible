@@ -50,7 +50,16 @@ name: Release — publish crucible-axi (PyPI) + server (npm)
 
 on:
   push:
-    branches: [develop, master]   # continuous build; master push drives create-release
+    # `release/**` alongside them because the release branch was the ONE branch
+    # CI never ran on: pushes to it matched no trigger, so the branch that must
+    # be green before shipping was the only one nothing verified. Found on the
+    # 0.2.0 release — two real failures (a test reading the ambient working
+    # directory's config, and a junit `classname` parsed by a guessed escape)
+    # sat red on this branch and were seen only because a stray PR happened to
+    # fire the pull_request trigger. None of the publish jobs keys off `push`
+    # to a release branch (create-release needs master, the two real publishes
+    # need the `release` event), so this adds verification and no publish path.
+    branches: [develop, master, "release/**"]
   pull_request:                   # packaging breakage surfaces on PRs, not on release day
   release:
     types: [published]
