@@ -351,16 +351,28 @@ class ServeAbsolutePathLaunchTest(_ServeFixtureCase):
             f"`latest`); argv={argv}")
 
 
-class ServeEnvironmentForwardingTest(_ServeFixtureCase):
-    """AC5 (env) -- `CRUCIBLE_HOST`/`CRUCIBLE_PORT` are forwarded to the child
-    through an EXPLICIT env mapping on the launch call."""
+class ServeComposesNoListenerEnvironmentTest(_ServeFixtureCase):
+    """AC5 (env), re-subjected by CR-CRU-139 §S1a -- `serve` still composes the
+    child's environment EXPLICITLY, and composes NO LISTENER into it.
 
-    def test_serve_forwards_crucible_host_and_port_to_the_child_env(self):
+    The child listens per its OWN configuration file: the installer writes the
+    resolved port into the server's `crucible.toml` beside its database, and
+    `$CRUCIBLE_HOST`/`$CRUCIBLE_PORT` are retired -- so a `serve` that handed
+    them down would be handing the server a variable it no longer reads, on a
+    launch path whose whole job is to be the one an operator and a systemd unit
+    both take. `$CRUCIBLE_DB` still reaches the child (§S3): it is how the
+    server FINDS the file it reads that listener from.
+    """
+
+    def test_serve_composes_no_listener_environment_and_still_hands_down_the_store(self):
         install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
         self._make_executable(self.server_bin)
-        host, port = "127.0.0.9", "4871"
-        with _patched_env(**self._serve_env(CRUCIBLE_HOST=host,
-                                            CRUCIBLE_PORT=port)), \
+        db_path = os.path.join(self.bun_root, "store", "crucible.db")
+        # The two retired knobs EXPORTED, so their absence from the child is a
+        # DECISION rather than an accident of an empty environment.
+        with _patched_env(**self._serve_env(CRUCIBLE_HOST="127.0.0.9",
+                                            CRUCIBLE_PORT="4871",
+                                            CRUCIBLE_DB=db_path)), \
                 mock.patch("subprocess.run",
                            side_effect=_run_side_effect(0)) as mock_run, \
                 mock.patch("shutil.which",
@@ -380,14 +392,18 @@ class ServeEnvironmentForwardingTest(_ServeFixtureCase):
             f"the systemd `--user` follow-up this CR delivers `serve` for gets "
             f"neither the operator's PATH nor their exports; call="
             f"{launches[-1]}")
+        for name in (install.SERVER_HOST_ENV_VAR, install.SERVER_PORT_ENV_VAR):
+            self.assertNotIn(
+                name, child_env,
+                f"`serve` must compose NO listener environment for the child: "
+                f"${name} is RETIRED (§S1a) and the child listens "
+                f"per the `[server]` table of its own crucible.toml, which the "
+                f"install wrote. env keys={sorted(child_env)}")
         self.assertEqual(
-            child_env.get("CRUCIBLE_HOST"), host,
-            f"CRUCIBLE_HOST must reach the child (§S3 AC5); env keys="
-            f"{sorted(child_env)}")
-        self.assertEqual(
-            child_env.get("CRUCIBLE_PORT"), port,
-            f"CRUCIBLE_PORT must reach the child (§S3 AC5); env keys="
-            f"{sorted(child_env)}")
+            child_env.get(install.SERVER_DB_ENV_VAR), db_path,
+            f"${install.SERVER_DB_ENV_VAR} must still reach the child (§S3) -- "
+            f"it is how the server finds the store, and therefore the "
+            f"configuration file beside it; env keys={sorted(child_env)}")
 
 
 class ServeExitCodePassthroughTest(_ServeFixtureCase):
