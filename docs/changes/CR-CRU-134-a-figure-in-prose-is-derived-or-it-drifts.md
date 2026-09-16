@@ -37,8 +37,10 @@ the pattern CR-CRU-131 already demonstrates in this very document.
 
 A guard reads the store's current schema version from the source of truth and fails if the RUNBOOK's
 examples disagree — extending `tests/docs-runbook-documents-every-limit.test.ts`, which already
-parses this document and already derives its expectations, rather than adding a second walker (the
-"no seventh walker" discipline CR-CRU-128 §S2 established).
+parses this document and already derives its expectations, rather than adding a second walker. It is
+the only test in the tree that parses `docs/RUNBOOK.md` as structured data (verified by grep), so
+extending it is the same walker-reuse discipline CR-CRU-128 §S2 applied to a differently-shaped
+scan — not a claim that CR-128 itself governs markdown documentation walkers.
 
 ### §S2 The migration example describes a migration that exists
 
