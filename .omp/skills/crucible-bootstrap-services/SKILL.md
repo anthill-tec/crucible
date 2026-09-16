@@ -5,7 +5,7 @@ description: "Crucible project service lifecycle for the Mainline orchestrator �
 
 # Crucible — service lifecycle (bootstrap restore / shutdown teardown)
 
-Run this as part of `/bootstrap mainline` for `~/Documents/data_projects/crucible`, after the role rules are loaded and BEFORE the status report to the user. Hub-supervised processes and relay tab handles die with every omp restart, so all of it is re-done each run. Sandesh notifier: retired for this project — never launch it.
+Run this as part of `/bootstrap mainline` for `~/Documents/data_projects/crucible`, after the role rules are loaded and BEFORE the status report to the user. Hub-supervised processes and relay tab handles die with every omp restart, so all of it is re-done each run. The Sandesh notifier is part of the restore — see step 6, and read its correction before deciding anything about it.
 
 ## 1. Board server (`:3849`)
 
@@ -106,6 +106,36 @@ npx -y lavish-axi poll .lavish/crucible-v2-design.html --agent-reply "<one-line 
 ```
 As a tracked async bash job (`async: true`, `timeout: 0`). Exactly one poll process (one-listener invariant; `pgrep -af 'lavish-axi poll'` must show none before arming). Re-arm on the same artifact after every fetch; never truncate its output.
 
+## 6. Sandesh notifier
+
+```
+sandesh addressbook --project Crucible        # who can address me?
+sandesh projects                              # CROSS-PROJECT grant per project
+sandesh register --project Crucible --as 'Mainline - Crucible'   # only if inactive
+hub start name=sandesh-notify-crucible application=sandesh \
+     args=[notify, --project, Crucible, --to, "Mainline - Crucible", --timeout, 14400]
+```
+
+**CORRECTED 2026-09-16. This section previously read "retired for this project — never launch it",
+and that was wrong on both the fact and the framing.**
+
+- **Wrong on fact.** The 2026-09-03 reasoning was "the addressbook holds only me, cross-project
+  sending needs a CLI-only admin grant, and none exists, so the inbox has no possible sender."
+  Measured 2026-09-16: `sandesh projects` shows **both `Crucible` and `ModelB` with
+  `CROSS-PROJECT ✓`** — the grant exists — and `Mainline - ModelB` is **live**. A notifier started
+  that day woke within *seconds* on real mail (#1370, #1371) carrying a direct request. A
+  single-participant roster does NOT mean a silent inbox once a cross-project peer is granted.
+- **Wrong on framing.** It was written as a standing prohibition and later quoted to the user as
+  *their* rule when declining to start the watcher. It was self-authored. A note written here
+  carries no authority over the user's choices and must never be presented as their decision.
+
+So: **check, then act.** Launch the notifier when anyone can address this project — a Track on the
+roster, or a cross-project peer with `CROSS-PROJECT ✓` (today: ModelB). Skip it and SAY SO only
+when nothing can. The real 2026-09-03 cost was operational, not strategic: the watcher hit its
+`--timeout 3600` ceiling and was relaunched five times in one day, and its log spam burned ~4,000
+characters of context. Both are fixed by `--timeout 14400` and `hub start` (tracked, its output in
+`hub logs`, not the transcript) — not by refusing to run it.
+
 ## Then
 
 Report to the user per the bootstrap skill: services (board pid/health, sessions, tabs, poll), queue state from the client verbs (`status`, `queue`, `next`), carried todos. Do not dispatch.
@@ -142,6 +172,22 @@ await browser.close({ all: true });                           // then drop the h
 ```
 `browser.close` alone never closes a relay page (docs: "Connected and relay pages remain open"), so `page.close()` inside `tab.run` is the step that removes the tab from the omp group. Verify with `GET http://127.0.0.1:9224/json/list` — no `127.0.0.1:4387` or `127.0.0.1:3849` pages remain.
 
+**Close by URL, not by held handle, and never by assumption.** Handles go stale across an omp
+restart and a dead handle falls back to the user's visible tab. Snapshot `/json/list` first, select
+ONLY pages matching `127.0.0.1:(3849|4387)` (plus anything this session itself opened, e.g. a
+release-checking `npmjs.com/package/@anthill-tec` or `github.com/anthill-tec/crucible/actions`
+tab), then attach a read-only anchor (`target` + NO `url`) and close those URLs through its
+Puppeteer connection. Re-snapshot and prove the delta: the count drops by exactly the number
+closed, and **zero baseline URLs of the user's are gone**.
+
+**If relay CONTROL fails, stop and say so.** Observed 2026-09-16 at shutdown: `/json/list` answered
+normally (39 pages) while every attach died with
+`Protocol error (Network.enable): extension rpc 'send' timed out after 20000ms`. The extension half
+is the user's. Retry ONCE after `browser.close({all:true})`; if it still fails, release the handles,
+report the tabs as "left open, yours to close" naming their URLs, and continue the teardown. Do NOT
+restart the relay verbose and retry — that escalation is what hijacked a user tab once before.
+
+
 ## 4. Orchestrator registration
 
 ```
@@ -159,4 +205,24 @@ State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exit
 nothing, and 9224 has no listener. The relay is stopped AFTER the tabs are closed — closing a tab
 needs the relay alive.
 
-Then the shutdown report names each of the five as down/closed, with the evidence (`json/list` count, `hub ps` line).
+## 6. Sandesh notifier — the FINAL action, and it is NOT relaunched
+
+```
+hub stop name=sandesh-notify-crucible                       # only the one THIS session owns
+sandesh unregister --project Crucible --as 'Mainline - Crucible' --addr 'Mainline - Crucible'
+```
+
+This is the single documented override of the relaunch-on-exit prime directive, and it applies
+ONLY here, at a confirmed shutdown's last step. Keep the notifier alive through the whole teardown
+— it is how a late emergency-stop or a peer's last message reaches you.
+
+- `unregister` needs **BOTH** `--as` and `--addr`; with `--addr` alone it fails
+  `pass --as '<your address>'`. The roster then reads `inactive / ○ offline`.
+- **Kill only the process you own.** `pgrep -af 'sandesh notify'` on this host also matches
+  **ModelB's** watcher (`--to Mainline - ModelB --project ModelB`) — measured 2026-09-16. A
+  machine-wide `pkill sandesh` takes down another orchestrator's channel. Stop it by its `hub`
+  name, and if you must match by pattern, match your own exact address.
+
+Then the shutdown report names each of the SIX as down/closed/left-open, with the evidence
+(`json/list` count, `hub ps` line, roster state) — and where a step could not complete, says so
+plainly and hands it back to the user rather than reporting it as done.
