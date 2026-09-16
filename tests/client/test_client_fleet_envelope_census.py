@@ -71,6 +71,7 @@ import http.server
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -78,6 +79,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -469,6 +471,123 @@ def build_argv(verb_name, subparser, project_dir):
             argv += [flag, _dummy_value_for(action)]
     argv += positionals
     return argv
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# CR-CRU-139 §S2 -- the BOARD a fixture points a client at, and the INTERLOCK
+# that keeps a drive off the production board.
+# ════════════════════════════════════════════════════════════════════════════
+#
+# A client's target board stopped being an environment variable and became
+# `[client] url` in the project's own `crucible.toml`, resolved through the
+# CR-CRU-138 §S1 chain by the ONE shared resolver named below. These helpers
+# are the FIXTURE side of that, lifted into the module the client suites
+# already import their fixtures from rather than re-spelled per suite.
+#
+# THE INTERLOCK IS A SAFETY DEVICE, NOT CEREMONY -- read this before removing
+# it. A suite that used to aim `$CRUCIBLE_URL` at its own stub board and simply
+# drops the export does not fail: it silently stops steering, and the drive
+# resolves the SHIPPED default, `http://localhost:3849`. On the two-instance
+# workstation this CR serves that address belongs to the PRODUCTION install,
+# and the verbs these suites drive (`register`, `unregister`, a gate seal) are
+# WRITES -- so the failure mode is not a red test, it is somebody else's board
+# carrying this suite's rows. CR-CRU-139 C1 met the same hazard on the server
+# side and discovered it by BINDING the port. `would_resolve` cannot: it asks
+# the shared module IN PROCESS, over no socket, which board it WOULD resolve
+# for a given project directory, and a fixture that spawns only when the answer
+# is its own board can never address a packet anywhere else.
+
+#: The shared module's ONE name for this resolution -- the sibling of the
+#: `resolve_limit()` it already exports. Held here so that no suite spells it a
+#: second way, which is how one resolver becomes two.
+BOARD_RESOLVER = "resolve_base_url"
+
+#: The board the fleet has always defaulted to, and therefore what a drive
+#: lands on when nothing declares one. Named so a refusal can say what it
+#: avoided rather than only that it refused.
+SHIPPED_DEFAULT_BOARD = "http://localhost:3849"
+
+_CLIENT_TABLE = re.compile(r"(?ms)^\[client\][^\[]*")
+
+
+def declare_board(config_path, url):
+    """Declare `url` as the `[client]` board in the `crucible.toml` at
+    `config_path`, REPLACING any table already there.
+
+    Replace rather than append, deliberately: the shipped `clients/crucible.toml`
+    carries a `[client]` table of its own, and a fixture that appended a second
+    one to a COPY of that file would make its own configuration unparsable
+    (`Cannot declare ... twice`). Correct before and after that table lands,
+    which is the only kind of writer a migrating suite can use.
+    """
+    path = Path(config_path)
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    text = _CLIENT_TABLE.sub("", text).rstrip("\n")
+    path.write_text(f'{text}\n\n[client]\nurl = "{url}"\n', encoding="utf-8")
+    return path
+
+
+def declared_board(config_path):
+    """The `[client] url` a `crucible.toml` declares, or None."""
+    with open(config_path, "rb") as handle:
+        parsed = tomllib.load(handle)
+    table = parsed.get("client")
+    return table.get("url") if isinstance(table, dict) else None
+
+
+def would_resolve(axi_path, project_dir, expected):
+    """The INTERLOCK: `(ok, reason)` for "is it safe to spawn a client in
+    `project_dir`, and would it resolve the board this fixture is listening
+    on?"
+
+    Asked of the SAME shared module the drive will load -- pass the scratch
+    fleet's copy when driving one, since the install and package-data layers
+    are derived from that module's own location -- bound to the same project
+    directory, in process and over no socket. `ok` is False, with a reason a
+    failure message can print, for every case that would post somewhere else,
+    including the one that matters most: no resolver at all, and therefore the
+    shipped default.
+    """
+    module = _load_module(axi_path, "census_board_interlock")
+    resolver = getattr(module, BOARD_RESOLVER, None)
+    if not callable(resolver):
+        return False, (f"{Path(axi_path).parent.name}/_crucible_axi.py exports "
+                       f"no callable `{BOARD_RESOLVER}()`, so the fleet still "
+                       f"resolves its module constant "
+                       f"({SHIPPED_DEFAULT_BOARD})")
+    module.bind_project_dir(str(project_dir))
+    try:
+        actual = resolver()
+    except Exception as exc:  # a resolver that raises is not one to drive
+        return False, f"`{BOARD_RESOLVER}()` raised {exc!r}"
+    finally:
+        module.bind_project_dir(None)
+    if actual != expected:
+        return False, (f"`{BOARD_RESOLVER}()` answers {actual!r} for this "
+                       f"project directory, not the declared {expected!r}")
+    return True, None
+
+
+class BoardInterlockCase(unittest.TestCase):
+    """The one place a drive REFUSED by `would_resolve` becomes a failure.
+
+    Without it the refusal would be indistinguishable from a passing test: a
+    drive that never happened records nothing on any board, and an assertion
+    of the form "the wrong board saw nothing" would be satisfied by the
+    silence. So every assertion about a drive goes through `driven()` first,
+    and a refused drive fails naming what the fixture declined to post to.
+    """
+
+    def driven(self, label, record):
+        if record["blocked"]:
+            self.fail(
+                f"{label} was NOT DRIVEN: the interlock refused to spawn a "
+                f"client that would post somewhere this fixture is not "
+                f"listening — {record['blocked']}. Until the board is resolved "
+                f"from configuration, a drive lands on "
+                f"{SHIPPED_DEFAULT_BOARD}, which on this machine is the "
+                f"PRODUCTION install, and these verbs are writes.")
+        return record
 
 
 def drive_verb(script_path, argv, project_dir, fake_bin_dir, timeout=20,
