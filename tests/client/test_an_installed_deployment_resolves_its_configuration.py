@@ -1585,10 +1585,12 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
         self.install_once()
         self.require_fleet_config()
 
+        asserted = 0
         for purge in (False, True):
             self.uninstall_once(purge=purge)
             if not os.path.isfile(self.installed_axi):
                 continue
+            asserted += 1
             self.assertTrue(
                 os.path.isfile(self.fleet_config),
                 "§S4: `uninstall%s` left %s installed with no `%s` beside it. A "
@@ -1596,6 +1598,19 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
                 "worse than an absent one: every client verb RAISES instead of "
                 "degrading, which is the reported defect exactly"
                 % (" --purge" if purge else "", self.installed_axi, CONFIG_NAME))
+
+        # The loop's `continue` is the only way its assertion can be skipped, so
+        # the COUNT is asserted too: there is no `[fleet]` uninstall inverse
+        # today, so the module survives BOTH passes and the invariant is checked
+        # twice. If a later CR builds one, this fails loudly and is re-decided --
+        # rather than passing vacuously with nothing checked, which is how a
+        # guard quietly becomes decoration.
+        self.assertEqual(
+            2, asserted,
+            "the invariant must have been CHECKED on both the plain uninstall "
+            "and the purge; it ran %d time(s), so an uninstall removed %s and "
+            "this guard stopped guarding anything"
+            % (asserted, self.installed_axi))
 
         # …and the purge really ran, so the loop above was not vacuous: an
         # UNTOUCHED operator file is an artifact like any other and `--purge`
@@ -1608,8 +1623,8 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
 
     def test_a_reinstall_replaces_the_fleet_copy_wholesale_while_the_operators_edit_survives(self):
         """Two files, two opposite rules, in ONE run -- because the defect was
-        that one file carried both. Package data is REPLACED, like the other
-        eight files `[fleet]` copies; the operator's configuration SURVIVES
+        that one file carried both. Package data is REPLACED, like every other
+        file `[fleet]` copies; the operator's configuration SURVIVES
         (the existing `_operator_config_is_untouched` rule,
         crucible_axi/install.py:1170-1186, unchanged)."""
         self.install_once()

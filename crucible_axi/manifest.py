@@ -10,7 +10,7 @@ byte-matches what a fresh build would write.
 CR-CRU-090 §S2 also makes this module the home of `source_clients_dir()` — THE
 single resolver for the SOURCE client-fleet directory, which both
 `crucible_axi/cli.py` (loading the shared envelope/codec by path) and
-`install.run_fleet_stage` (copying the eight fleet files) call. It lives HERE
+`install.run_fleet_stage` (copying the packaged fleet files) call. It lives HERE
 because `cli` imports `install`, so `install` importing `cli` back would be
 circular; `manifest` is imported by both, so neither has to import the other.
 """
@@ -81,7 +81,7 @@ def shipped_config_path() -> str:
 
     Resolved from `_CLIENTS_CANDIDATES` DIRECTLY rather than through
     `source_clients_dir()`, and the distinction is real rather than stylistic:
-    that function answers "where is the SOURCE FLEET" — the eight files
+    that function answers "where is the SOURCE FLEET" — the packaged files
     `install.run_fleet_stage` copies — while this is the package's own data,
     consumed by a different stage and laid down at a different path. Pointing
     the fleet source elsewhere must not decide where the shipped declarations

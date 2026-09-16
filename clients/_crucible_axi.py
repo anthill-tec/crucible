@@ -130,12 +130,21 @@ CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
 #: code falls back to with nothing saying so.
 #:
 #: TWO candidates, because this module ships in two shapes. Beside it is where
-#: the data sits in the checkout (`clients/`) and in the wheel
-#: (`crucible_axi/clients/`). The installer lays the fleet down under
-#: `<target-dir>/clients/` and the declarations one level up at
-#: `<target-dir>/crucible.toml` -- the operator-editable copy it writes there --
-#: so a LAID-DOWN fleet finds them at the parent. The list is ordered so the
-#: package's own data always wins where it is present.
+#: the data sits in the checkout (`clients/`), in the wheel
+#: (`crucible_axi/clients/`) and -- since CR-CRU-138 §S4 -- in an INSTALL, where
+#: the `[fleet]` stage lays the distribution's own `crucible.toml` down at
+#: `<install>/clients/crucible.toml`, beside this file, as package data.
+#:
+#: The SECOND candidate, the parent `<install>/crucible.toml`, is the OPERATOR's
+#: editable file, and resolving it as package data is the DEFECT §S4 closed: one
+#: path was serving two incompatible jobs, so an operator editing "their" file
+#: was also editing what this module treats as the build's recommendations, and
+#: purging it made every verb raise instead of degrading. It is kept ONLY as a
+#: fallback for a pre-0.2.1 install whose fleet carries no copy yet -- removing
+#: it would turn "upgraded the package but has not re-run the install" into that
+#: same crash. Do not read it as the intended resolution, and do not delete it
+#: as dead: it expires when no 0.2.0-shaped install remains. The list is ordered
+#: so the package's own data always wins where it is present.
 _SHIPPED_DATA_FILENAME = "crucible.toml"
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 

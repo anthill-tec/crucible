@@ -115,10 +115,20 @@ resolved on boot (see "Database path" above). With the store at
 `~/.local/share/crucible/crucible.db` the file is
 `~/.local/share/crucible/crucible.toml`, and `GET /api/health` names the store
 this process opened, which is how you confirm the directory before editing.
+
+**You do not have to create it.** When the installer provisions the server on
+this machine it lays that operator-editable file down for you, and the
+`[manifest]` row of the install output names the path it wrote — or, when no
+server is provisioned here, states that it wrote nothing and why. An operator
+who reads the install output therefore knows which file to edit without
+guessing.
+
 When the board runs on another machine, that file lives on THAT machine — these
-three limits cannot be set from a project checkout. The distribution's own
-copy, `src/crucible.toml`, is package data replaced wholesale on upgrade and is
+three limits cannot be set from a project checkout, and an install here writes
+nothing for a board over there. The distribution's own copy,
+`src/crucible.toml`, is package data replaced wholesale on upgrade and is
 **not** the file you edit.
+
 
 | Limit | Description | Recommended | Min | Max |
 |---|---|---|---|---|
@@ -128,14 +138,30 @@ copy, `src/crucible.toml`, is package data replaced wholesale on upgrade and is
 
 ### The project's limits — in the project directory
 
-A client reads the `crucible.toml` in the **project directory** it is working
-in, beside the `.env` the clients already read, and it reads it on every call.
-These three bound what a client PRINTS, so they belong to the machine reading
-the output. On a fleet whose board is on a different machine, widening a
-display width over there changes nothing — edit the file in your own project
-directory. The distribution's own copy, `clients/crucible.toml`, is package
-data; the installer also lays an operator-editable copy down at the target
-directory.
+A client reads its configuration on every call, from the **first readable file**
+of an ordered chain. These three bound what a client PRINTS, so they belong to
+the machine reading the output: on a fleet whose board is on a different
+machine, widening a display width over there changes nothing.
+
+1. **`<project directory>/crucible.toml`** — beside the `.env` the clients
+   already read. FIRST, and it OVERRIDES everything below it. This is where you
+   set a limit for one project.
+2. **`<install dir>/crucible.toml`** — the operator-editable file the installer
+   lays down (`~/.crucible/crucible.toml` by default). Set a limit here to move
+   it for every project on this machine that does not override it. A client
+   finds this path from its OWN location, not from the directory you happen to
+   be standing in.
+3. **`<install dir>/clients/crucible.toml`** — the distribution's own shipped
+   declarations, laid down beside the client code as package data and replaced
+   wholesale on upgrade. The last resort, and **not** a file you edit.
+
+So with both a project file and an installed file present, the **project
+directory's file decides**. There is no working-directory fallback: running a
+client from an unrelated directory resolves the same configuration as running it
+from anywhere else. When nothing readable is found, the client warns and names
+every path it tried, in this order, then runs every limit at the value the build
+recommends.
+
 
 | Limit | Description | Recommended | Min | Max |
 |---|---|---|---|---|
@@ -327,6 +353,29 @@ provisioned server move in lockstep; on an already-current machine it reports
 - A systemd `--user` unit is refreshed by the same run, so the daemon is the new
   version rather than a new binary behind an old process.
 
+### Upgrading TO 0.2.1 — re-run the install, do not stop at the package
+
+0.2.1 fixes an install that resolved no operator configuration at all, and part
+of that fix is a file the **install** lays down: the distribution's own
+declarations at `<install dir>/clients/crucible.toml`, plus the server's
+operator-editable file beside its database. Upgrading only the package —
+`uv tool upgrade` or `pip install -U crucible-axi` — moves the code and lays
+down **neither**, because the `[fleet]` and `[manifest]` stages are what write
+them.
+
+So on a machine carrying a 0.2.0 install, run the install one-liner above (or
+`crucible-axi install`) after upgrading. Until you do:
+
+- a client still resolves configuration from the operator file at
+  `<install dir>/crucible.toml` rather than from the shipped declarations, which
+  is the aliasing 0.2.1 removes; and
+- if that operator file was ever purged, every client verb fails with
+  `RuntimeError: no shipped limit defaults found at …` rather than degrading to
+  the recommended values. Re-running the install repairs it.
+
+Nothing is lost by re-running: an operator-EDITED `crucible.toml` survives, and
+the stages report `converged` when there is nothing to do.
+
 ## Run as a service (systemd `--user`)
 
 `crucible-axi install` provisions `~/.config/systemd/user/crucible-server.service`
@@ -396,11 +445,20 @@ files, and two of its stages would otherwise run `bun add -g` and
 resolve path is
 `tests/client/test_an_installed_deployment_resolves_its_configuration.py`.
 
-They are safe to run directly — each pins `$HOME`, `$XDG_DATA_HOME`,
-`$XDG_CONFIG_HOME` and `$BUN_INSTALL` into a temporary root, stubs those two
-stages, and asserts afterwards that this machine's real `~/.crucible`,
-`~/.local/share/crucible` and `~/.config/systemd/user` did not move. That is
-what CI runs:
+They are safe to run directly, and safer still under `bwrap` — the script below
+passes `--dev-bind / /`, `--tmpfs "$HOME"`, a read-only re-exposure of bun,
+`--tmpfs /run/user/<uid>`, `--unshare-user`, `--unshare-pid` and
+`--unshare-net`, so an escaped write lands on memory and nothing reaches a
+board, PyPI or npm:
+
+```sh
+scripts/sandboxed-install-tests.sh              # the install-touching suites
+```
+
+Run directly, each suite pins `$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and
+`$BUN_INSTALL` into a temporary root, stubs those two stages, and asserts
+afterwards that this machine's real `~/.crucible`, `~/.local/share/crucible` and
+`~/.config/systemd/user` did not move. That is what CI runs:
 
 ```sh
 python3 -m unittest discover -s tests/client -t .
@@ -408,33 +466,42 @@ python3 -m unittest discover -s tests/client -t .
 
 Those two layers protect you from code that plays by the rules. A hardcoded
 path, an `expanduser` evaluated before the environment is patched, or a
-subprocess handed a stale environment would escape them. To close that last
-gap, run the same suites under a kernel-level sandbox where `$HOME` is replaced
-by a tmpfs and there is no network, so an escaped write evaporates instead of
-landing in your home directory:
+subprocess handed a stale environment would escape them — which is what the
+kernel-level sandbox above is for. Its other invocations:
 
 ```sh
-scripts/sandboxed-install-tests.sh                    # every tests/client suite
-scripts/sandboxed-install-tests.sh -k an_installed_deployment
+scripts/sandboxed-install-tests.sh              # the install-touching suites
+scripts/sandboxed-install-tests.sh -k pattern   # your own narrowing
+scripts/sandboxed-install-tests.sh -k ''        # the whole directory
 ```
 
-That script is the documented command, and this is the isolation it passes — if
-you run `bwrap` by hand instead, pass the same flags, because each one carries
-its own guarantee:
+**The bare command is narrow on purpose.** `--unshare-net` is part of the
+isolation, and several suites under `tests/client/` legitimately reach the
+network (`python -m build --wheel` resolves pypi.org; the uv, cargo and docker
+gates reach their own registries). Wrapping the whole directory therefore
+reports dozens of failures that say nothing about the code, so with no arguments
+the script targets the install-touching suites — which is what the sandbox
+exists for. `-k ''` widens to everything, and those network-dependent suites
+will fail when you do.
 
-```sh
-bwrap --dev-bind / / --tmpfs "$HOME" --tmpfs /run/user/"$(id -u)" \
-      --unshare-user --unshare-pid --unshare-net \
-      python3 -m unittest discover -s tests/client -t .
-```
+The script is the documented command; read it for the exact invocation. Each
+part of its isolation carries its own guarantee:
 
-- `--dev-bind / /` keeps the toolchain (`python3`, `uv`, `bun`) reachable.
+- `--dev-bind / /` keeps the toolchain (`python3`, `uv`) reachable.
 - `--tmpfs "$HOME"` shadows your real home, so a write that ignored every
   environment variable lands on memory and evaporates.
+- bun lives under `$HOME/.bun`, which that tmpfs hides, so it is re-exposed
+  OUTSIDE `$HOME` with `--ro-bind` and `--setenv BUN_INSTALL`: suites resolve
+  the binary, and no run can write into your real bun prefix.
+- `--bind` on the checkout keeps it writable, because the suites read the repo's
+  own files and the runner writes caches.
 - `--tmpfs /run/user/<uid>` removes the session bus, so a stray
   `systemctl --user` fails loudly instead of touching your real session.
 - `--unshare-user` and `--unshare-pid` drop privileges and stray processes;
   `--unshare-net` means nothing can reach a board, PyPI or npm.
+- It sets **no** `CRUCIBLE_*` variables: the suites own their own stubbing, and
+  a sandbox that overrode them would make a suite fail for a reason unrelated to
+  the code.
 
 It needs `bubblewrap` (`bwrap`) and refuses to run unsandboxed if it is absent,
 rather than handing you a false assurance. It is deliberately **not** part of

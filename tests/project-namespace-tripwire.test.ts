@@ -1949,9 +1949,15 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // baseline'` on the pre-fix tree reported `clients: 858` against the
 // then-recorded `848`.
 // UPDATED 2026-09-16 by CR-CRU-138 §S1 — this hotfix's own close-out step,
-// taken ONCE at the end and MEASURED, not transcribed. `clients` 858 -> 861
-// (+3). All three land in `clients/_crucible_axi.py`, which is the only
-// production file §S1 touches: the section banner and the paragraph explaining
+// taken ONCE at the end and MEASURED, not transcribed. `clients` 858 -> 862
+// (+4): +3 for §S1 itself, then +1 in VERIFY's fix round, where the
+// `_SHIPPED_DATA_CANDIDATES` comment stopped documenting §S4's defect as the
+// intended design and had to name the CR that closed it. Re-measured after that
+// edit rather than left at the mid-cycle figure — the drift this table exists to
+// catch is exactly a count recorded before the last prose change.
+//
+// All of them land in `clients/_crucible_axi.py`, the only production file §S1
+// touches: the section banner and the paragraph explaining
 // why the configuration chain is derived from the running module's own location
 // rather than from `os.getcwd()`, and the note on `_limits_unreadable` naming
 // every candidate it tried. `src` and `public` are untouched by this CR and
@@ -1977,7 +1983,7 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 861 },
+  clients: { exts: [".py"], develop: 601, head: 862 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
