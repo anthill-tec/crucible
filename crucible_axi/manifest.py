@@ -140,8 +140,8 @@ def _package_version() -> str:
 def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
     """Build the discovery manifest for clients laid down under `install_dir`.
 
-    Returns a dict with the top-level keys `version`, `clients`, `status` and
-    `config`, plus `server_config` when the install laid
+    Returns a dict with the top-level keys `version`, `clients`, `status`,
+    `config` and `shipped_config`, plus `server_config` when the install laid
     the server's file down. `clients` maps each of the five stacks to its
     installed client path under `install_dir`; `status` references the
     STATUS-CONTRACT; `config` is the operator-editable configuration the
@@ -150,6 +150,13 @@ def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
     file it is meant to edit). `config` names the ARTIFACT, not its payload:
     limits are what happens to be in that file today, and anything that
     legitimately joins it later costs no consumer a rename.
+
+    CR-CRU-138 §S4 — `shipped_config` is the FLEET's own copy of the
+    distribution's declarations, beside the module that reads them. It is
+    package data rather than configuration, so it keeps a key of its own: one
+    file doing both jobs is precisely the aliasing that made an operator's
+    edits redefine the build's recommendations, and made an ordinary purge
+    leave every client verb raising.
 
     CR-CRU-138 §S2 — `server_config` is the SERVER's operator-editable file,
     beside the server's own database. It is declared ONLY when a path is
@@ -168,6 +175,7 @@ def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
         "clients": clients,
         "status": os.path.join(clients_dir, "STATUS-CONTRACT.md"),
         "config": operator_config_path(install_dir),
+        "shipped_config": os.path.join(clients_dir, CONFIG_FILENAME),
     }
     if server_config:
         document["server_config"] = server_config

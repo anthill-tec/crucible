@@ -215,6 +215,15 @@ STORE_DIR_NAME = "crucible"
 # which the five load BY FILE PATH from their OWN directory, so a clients-only
 # copy lays down five UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
 # `manifest.build_manifest` publishes as `status`.
+# CR-CRU-138 §S4 — and `crucible.toml`, the distribution's own limit
+# declarations, which belong to this list for exactly the reason `toon.py`
+# does: `_crucible_axi.py` reads it BY FILE PATH from its own directory, and
+# an install that omits it lays down a module whose every verb raises
+# `no shipped limit defaults found`. It is PACKAGE DATA — replaced wholesale
+# on upgrade like the other eight, never merged, never preserved — which is
+# what stops it aliasing the OPERATOR's editable file at `<target-dir>`: that
+# aliasing is what let an operator's edit redefine the build's own
+# recommendations, and what made an ordinary purge crash every verb.
 FLEET_FILES = (
     "bun-crucible.py",
     "python-crucible.py",
@@ -224,6 +233,7 @@ FLEET_FILES = (
     "_crucible_axi.py",
     "toon.py",
     "STATUS-CONTRACT.md",
+    manifest.CONFIG_FILENAME,
 )
 
 # The directory the fleet lands in, under `--target-dir`. `manifest` anchors
