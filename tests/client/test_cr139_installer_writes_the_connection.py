@@ -243,11 +243,42 @@ def _claim_consecutive_ports(count, attempts=64):
         "shipped 3800-3899 one carries a live board" % (count, attempts))
 
 
+def _without_server_table(text):
+    """`text` with any `[server]` table removed, stripped on TABLE-HEADER
+    boundaries (the header, up to the next header of any depth).
+
+    §S1 now SHIPS a `[server]` table in `src/crucible.toml`, and this fixture
+    needs its OWN bounds in the provisioned template -- that is the whole point
+    of `TheRangeIsReadFromTheResolvedServerConfigFileTest`: the installer must
+    probe the range the RESOLVED file declares rather than a constant. So the
+    template REPLACES the shipped table instead of appending a second one,
+    which is not merely untidy but invalid TOML (`Cannot declare ('server',)
+    twice`) and would leave every read-back helper below answering `{}`.
+
+    Boundaries rather than a truncate because the shipped table sits BEFORE the
+    `[limits.*]` tables: cutting to the end of the file would silently drop the
+    limit declarations and leave this suite testing a template that no longer
+    resembles the product.
+    """
+    kept, skipping = [], False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped == "[%s]" % (SERVER_TABLE,):
+            skipping = True
+            continue
+        if skipping:
+            if stripped.startswith("[") and stripped.endswith("]"):
+                skipping = False
+            else:
+                continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _server_table_text(*, host, port, range_min, range_max):
     """A `[server]` table for a provisioned template, in the shipped file's own
-    commented style. The fixture writes it because §S1 (the server half of this
-    cycle) has not landed yet; the KEYS are the ones that suite pins, so one
-    GREEN satisfies both."""
+    commented style, REPLACING the shipped one (see `_without_server_table`);
+    the KEYS are the ones the §S1 suite pins, so one GREEN satisfies both."""
     return (
         "\n[server]\n"
         "# The address this server binds. Loopback keeps a board private to\n"
@@ -373,9 +404,19 @@ class _InstallerConnectionCase(unittest.TestCase):
             range_min, range_max = SHIPPED_RANGE_MIN, SHIPPED_RANGE_MAX
         package = self.install._provisioned_server_package_dir()
         os.makedirs(os.path.join(package, "src"), exist_ok=True)
-        text = SHIPPED_SERVER_DATA.read_text(encoding="utf-8")
+        text = _without_server_table(
+            SHIPPED_SERVER_DATA.read_text(encoding="utf-8"))
         text += _server_table_text(host=host, port=port, range_min=range_min,
                                    range_max=range_max)
+        try:
+            tomllib.loads(text)
+        except tomllib.TOMLDecodeError as error:
+            self.fail(
+                "fixture sanity: the provisioned template this test composed "
+                "does not PARSE (%s), so every bound and port below would be "
+                "read back as absent rather than wrong. The shipped %s and "
+                "`_server_table_text` must compose into one valid document"
+                % (error, SHIPPED_SERVER_DATA))
         self.template = os.path.join(package, "src", CONFIG_NAME)
         Path(self.template).write_text(text, encoding="utf-8")
         Path(package, "package.json").write_text(

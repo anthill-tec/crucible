@@ -135,12 +135,21 @@ def _ensure_repo_root_on_path():
 
 def _import_fresh(*module_names):
     """Import the named `crucible_axi` modules from the repo-root checkout,
-    dropping any already-imported copy first so the module-level `STAGE_ORDER`
-    and `DEFAULT_STAGE_RUNNERS` read here are this tree's, never an installed
-    wheel's."""
+    purging the WHOLE package first so the module-level `STAGE_ORDER` and
+    `DEFAULT_STAGE_RUNNERS` read here are this tree's, never an installed
+    wheel's.
+
+    The whole package, not only the names asked for (and the same rule
+    `test_cr070_systemd_unit._import_fresh` already states): dropping
+    `crucible_axi.install` alone leaves a `crucible_axi.cli` in `sys.modules`
+    still bound to the DISCARDED install module, so a later suite that patches
+    `install.DEFAULT_STAGE_RUNNERS` patches one dict while `cli.cmd_install`
+    reads another -- and its stage doubles silently do not apply.
+    """
     _ensure_repo_root_on_path()
-    for name in module_names:
-        sys.modules.pop(name, None)
+    for name in list(sys.modules):
+        if name == "crucible_axi" or name.startswith("crucible_axi."):
+            del sys.modules[name]
     return tuple(importlib.import_module(name) for name in module_names)
 
 

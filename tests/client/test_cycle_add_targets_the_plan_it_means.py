@@ -93,6 +93,7 @@ from tests.client.test_plan_file_names_the_release_it_plans import (
     REPO_ROOT,
     _UNREACHABLE_CRUCIBLE_URL,
     _await_server,
+    _declare_listener,
     _free_port,
     _functions_handed_the_parser,
     _http,
@@ -812,12 +813,24 @@ class _ScratchBoardTestBase(unittest.TestCase):
                 "toolchain, not a passing assertion.")
         port = _free_port()
         cls.base = f"http://127.0.0.1:{port}"
+        _declare_listener(cls._tmpdir, port)
         cls._proc = subprocess.Popen(
             [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_PORT": str(port),
-                 "CRUCIBLE_HOST": "127.0.0.1",
+            env={**os.environ,
                  "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            cls._boot()
+        except BaseException:
+            # A child spawned and then abandoned by a FAILING setUpClass is
+            # never torn down (`tearDownClass` does not run when `setUpClass`
+            # raises), and an orphaned server holds its port for as long as it
+            # lives. Kill it on the way out, whatever went wrong.
+            cls._stop_server()
+            raise
+
+    @classmethod
+    def _boot(cls):
         _await_server(cls.base, cls._proc)
 
         project = _http(cls.base, "/api/v2/projects",
@@ -837,13 +850,22 @@ class _ScratchBoardTestBase(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "_proc", None) is not None:
-            cls._proc.terminate()
-            try:
-                cls._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                cls._proc.kill()
+        cls._stop_server()
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
+
+    @classmethod
+    def _stop_server(cls):
+        """Stop the scratch server, from teardown OR from a setUpClass that
+        failed after spawning it. Idempotent, so both callers may run."""
+        proc = getattr(cls, "_proc", None)
+        if proc is None:
+            return
+        cls._proc = None
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
     def _client(self, *argv):
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
