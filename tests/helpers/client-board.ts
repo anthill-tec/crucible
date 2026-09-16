@@ -106,6 +106,20 @@ export type DeclaredBoard = { url: string } | { skip: string };
  * VACUOUSLY, having quietly stopped measuring anything. So an undeclared board
  * is a STATED skip and never a request — the shipped default is named in the
  * refusal, not fetched.
+ *
+ * THE TRADE, STATED: "nothing is declared" is decided by comparing the
+ * resolver's answer against `SHIPPED_DEFAULT_BOARD`, not by asking whether
+ * anything is listening there. So an operator on a single-instance install at
+ * the default port, who has legitimately and deliberately declared
+ * `http://localhost:3849` as their board, is treated here as having declared
+ * nothing, and loses the four live-board censuses that call this: they SKIP,
+ * with the reason printed, rather than running against the board they meant.
+ * That is the deliberate side to fail on. The alternative — distinguishing the
+ * two cases by connectivity — means fetching the reserved port to find out,
+ * which is the exact accident §S2 exists to make impossible, and it would fail
+ * OPEN on the machine that carries a production install (where something is
+ * always listening there). A census that announces why it did not run costs a
+ * measurement; one that quietly reads production costs the board.
  */
 export function declaredClientBoard(dir: string = REPO_ROOT): DeclaredBoard {
   const key = resolve(dir);
