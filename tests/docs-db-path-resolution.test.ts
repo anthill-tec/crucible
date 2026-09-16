@@ -21,6 +21,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { RETIRED_CONNECTION_ENV } from "./helpers/server-limits-fixture.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -114,13 +115,43 @@ describe("§S4 RUNBOOK — database path resolution order", () => {
     expect(runbook).toContain("CRUCIBLE_DB");
   });
 
-  test("environment-variable table lists CRUCIBLE_DB alongside CRUCIBLE_PORT and CRUCIBLE_HOST", () => {
+  // RE-SUBJECTED 2026-09-17 by CR-CRU-139 C4 (§S4), not deleted. The rule this
+  // test has always pinned is "the environment-variable table an operator
+  // reads lists the variables the server really is configured by, and
+  // `CRUCIBLE_DB` is one of them" (CR-CRU-043 §S4). That rule still holds; its
+  // SUBJECT moved. It used to LOCATE the table by `CRUCIBLE_PORT` and require
+  // `CRUCIBLE_PORT`/`CRUCIBLE_HOST` beside `CRUCIBLE_DB` — and since C1 the
+  // server reads neither (`src/server.ts:158`), so the old form required the
+  // RUNBOOK to keep documenting two dead knobs, and the C4 retirement guard
+  // (tests/docs-runbook-documents-every-limit.test.ts) reports the very rows
+  // it demanded as "presented as a configuration table row". Two guards
+  // demanding opposite things about one line is why the re-subject happens in
+  // the cycle that retires them rather than after it.
+  //
+  // The table is now located by `CRUCIBLE_DB` — this file's own subject, and a
+  // variable that is still read (`src/server.ts:66`) — and its membership is
+  // pinned in BOTH directions, which the old form never did: the two
+  // environment-resolved survivors are present, and no retired connection
+  // variable is.
+  test("the environment-variable table lists the variables that are still read, and no retired one", () => {
     const runbook = readText(join("docs", "RUNBOOK.md"));
-    const table = extractTableContaining(runbook, "CRUCIBLE_PORT");
+    const table = extractTableContaining(runbook, "CRUCIBLE_DB");
 
-    expect(table).toContain("CRUCIBLE_PORT");
-    expect(table).toContain("CRUCIBLE_HOST");
+    // §S3 — the two that genuinely precede configuration discovery: the store
+    // path is how the server FINDS its file, the project key is identity.
     expect(table).toContain("CRUCIBLE_DB");
+    expect(table).toContain("CRUCIBLE_PROJECT_KEY");
+
+    // …and the connection is NOT an environment variable any more. Read off
+    // the one shared retirement vocabulary rather than spelled here, so a
+    // fifth retirement is covered by this guard the day it lands.
+    const survivors = RETIRED_CONNECTION_ENV.filter((name) => table.includes(name));
+    expect(
+      survivors,
+      `the RUNBOOK's environment-variable table still offers ${JSON.stringify(survivors)} as a ` +
+        `way to configure the server. Nothing reads them: the listener is \`[server]\` in the ` +
+        `server's own crucible.toml and the board is \`[client] url\` in the project's.`,
+    ).toEqual([]);
   });
 });
 
