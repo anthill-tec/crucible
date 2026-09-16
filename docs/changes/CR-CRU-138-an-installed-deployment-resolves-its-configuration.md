@@ -89,7 +89,21 @@ client file:
 - an operator-EDITED file survives reinstall and purge; an untouched byte-identical copy may be
   removed (the existing `_operator_config_is_untouched` rule, reused, not reimplemented);
 - when the server is **not** provisioned locally (`--no-service`, or a board on another host) the
-  stage is skipped and **says so** — a silent skip is how the first hole stayed invisible.
+  lay-down is skipped and **says so** — a silent skip is how the first hole stayed invisible.
+
+**It is NOT a new install stage.** Configuration lay-down already lives in `[manifest]`:
+`manifest.run_manifest_stage` calls `lay_down_operator_config` (`crucible_axi/manifest.py:183,97-108`)
+for the client file, and that same stage writes the manifest which must now declare this one. So the
+server file is laid down there too, and the skip reason is reported as that stage's own
+stage-specific output — a mechanism `run_install` already carries (`install.py:1045-1050`, where the
+`[server]` stage reports its resolved absolute `bun` path, CR-CRU-066 §S2).
+
+`STAGE_ORDER` therefore stays `("server", "fleet", "manifest", "unit")`. A hotfix does not change
+the install's public stage vocabulary, and the two exact-tuple pins that vocabulary has earned —
+`tests/client/test_crucible_axi_stages.py:701` and `tests/client/test_cr090_fleet_stage.py:109` —
+stay untouched, which is a feature: they are doing their job. A stage cannot honestly report
+`skipped` while it also wrote the manifest and the client config, so the reason belongs in the
+stage's reported output rather than in a stage row invented to carry it.
 
 ### §S3 A test installs, then resolves
 
