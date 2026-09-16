@@ -335,6 +335,19 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   // the PURE resolver that binds nothing.
   const resolvedListener = resolveListener({ port: opts?.port, hostname: opts?.hostname });
 
+  // What is DISCLOSED is the socket that was actually BOUND: the rules name the
+  // layer that decided, but `port: 0` means the KERNEL — not the resolver — had
+  // the last word, and a disclosure naming `0` would be one nobody could
+  // connect to. It starts as what the layers decided and is corrected to the
+  // real socket the moment `Bun.serve` returns one, a few lines below.
+  //
+  // Declared HERE, beside `storeResolution` and BEFORE the payload that reads
+  // it, for the same reason `storeResolution` is: a binding introduced after
+  // `healthPayload` would leave the payload closing over its own temporal dead
+  // zone — correct only for as long as nothing ever calls it during boot, which
+  // is a property of the call sites rather than of this code.
+  let listenerResolution: ListenerResolution = resolvedListener;
+
   // Shared by GET /api/health and GET /api/v2/health (§S1 health parity).
   const healthPayload = () => ({
     ok: true,
@@ -404,11 +417,10 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     },
   });
 
-  // CR-CRU-139 §S1 — what is DISCLOSED is the socket that was actually bound:
-  // the rules name the layer that decided, but `port: 0` means the kernel — not
-  // the resolver — had the last word, and a disclosure that named `0` would be
-  // a disclosure nobody could connect to.
-  const listenerResolution: ListenerResolution = {
+  // CR-CRU-139 §S1 — the correction promised above: the bound socket replaces
+  // whatever the layers proposed, so `port: 0` is disclosed as the port the
+  // kernel chose rather than as the request that was made for it.
+  listenerResolution = {
     ...resolvedListener,
     port: typeof server.port === "number" ? server.port : resolvedListener.port,
     host:
