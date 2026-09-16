@@ -58,17 +58,17 @@ or explicitly marked as an illustration that no guard checks.
 
 | figure | lines | source | verdict | this CR |
 |---|---|---|---|---|
-| 18 limits-table figures | 124-126, 139-141 | `src/crucible.toml`, `clients/crucible.toml` | derived | already guarded (CR-CRU-131 §S1b) |
+| 18 limits-table figures | 125-127, 142-144 | `src/crucible.toml`, `clients/crucible.toml` | derived | already guarded (CR-CRU-131 §S1b) |
 | `schemaVersion:5` / `schema v5` / `v0 -> v5` | 260, 281, 282 | `SCHEMA_VERSION` (`src/store.ts:2068`) | derived | **this CR — §S1/§S2** |
 | `3849` (port) | 32, 233, 258, 400, 410 | `src/server.ts:249` `?? 3849` | derived | deferred — one value, five sites, highest-value remaining finding |
-| `127.0.0.1` (host) | 394, 401, 413, 416 | `src/server.ts:252` `?? "127.0.0.1"` | derived | deferred — same shape as the port |
+| `127.0.0.1` (host) | 233, 258, 394, 401, 413, 416 | `src/server.ts:252` `?? "127.0.0.1"` | derived | deferred — same shape as the port |
 | `300000` ms (liveness) | 178-179 | `DEFAULT_LIVENESS.tombstoneAfterMs` (`src/types.ts:11`) | derived | deferred |
 | `100` (error_detail_chars floor) | 180-184 | `clients/crucible.toml:59 min` | derived | deferred |
 | `60000`/`86400000`/`1800000` (run_abandon_ms example) | 170 | `src/crucible.toml` run_abandon_ms min/max/recommended | derived | deferred |
 | `30000` (refused value in the same example) | 170 | none — invented for the example | marked | deferred (mark alongside the trio above) |
 | `{"retention": 5000}` | 234 | coincides with `retention.recommended` | marked | deferred — mark explicitly so a future `recommended` change doesn't silently orphan the example |
 | `value = 40` | 155 | none — an operator's edit | marked | out of scope, already an illustration |
-| `2 project(s) (alpha, beta)` | 246 | already derived from `retentionDisclosure()` (CR-CRU-131) | marked | out of scope, already an illustration |
+| `2 project(s) (alpha, beta)` | 248 | already derived from `retentionDisclosure()` (CR-CRU-131) | marked | out of scope, already an illustration |
 | epochs `1737600000000` / `1787213052079` | 86, 282 | `Date.now()` | marked | out of scope, already an illustration |
 | `uv 0.11.8` | 324 | external tool version | marked | out of scope — non-goal (external tool, not this repo) |
 | `status=127` | 350 | POSIX/systemd convention | marked | out of scope — not a project figure |
@@ -76,12 +76,13 @@ or explicitly marked as an illustration that no guard checks.
 
 **Ruling:** this CR's own Problem statement is "the same defect CR-CRU-131 just fixed, one document
 over," found "by accident, during a CR about a different section" — exactly the situation now
-recurring with the six additional derivable figures above. Per this project's own repeated
-convention (patch CR over inline scope edits; a finding discovered mid-CR is recorded, not
-absorbed), this CR implements only the schema figures §S1/§S2 name. The six deferred rows are
-recorded here as AC5's discharge and filed to the Deferred register for a future patch CR — most
-valuably the port/host pair (one value each, five and four sites respectively) and the
-`run_abandon_ms` trio inside the already-fenced example at line 170.
+recurring with the six additional derivable-or-markable figures above (five numeric plus the
+string-shaped `PATH`). Per this project's own repeated convention (patch CR over inline scope
+edits; a finding discovered mid-CR is recorded, not absorbed), this CR implements only the schema
+figures §S1/§S2 name. The six deferred rows are recorded here as AC5's discharge and filed to the
+Deferred register for a future patch CR — most valuably the port/host pair (one value each, five
+and six sites respectively) and the `run_abandon_ms` trio inside the already-fenced example at
+line 170.
 
 ## Acceptance criteria
 
