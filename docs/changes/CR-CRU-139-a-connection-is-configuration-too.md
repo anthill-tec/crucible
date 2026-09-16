@@ -94,6 +94,69 @@ choice) wins, then the file, then the shipped default. `$CRUCIBLE_PORT` and `$CR
 "Retired environment variables" section gains them with the same "declare it in the table instead"
 wording. A retired variable that silently still works is worse than either state.
 
+### §S1a The INSTALLER writes the connection, so nothing needs an environment
+
+**User ruling 2026-09-16, and it removes the last excuse for the environment layer:** the installer
+already lays `crucible.toml` down (CR-CRU-138 §S2 beside the database, §S4 beside the fleet), so it
+is the thing that SETS these values — an operator does not hand-edit a fresh install, and no
+process needs `Environment=CRUCIBLE_PORT=` to be told where to listen.
+
+So `crucible-axi install` accepts the connection settings and WRITES them into the files it lays
+down: the listener into the server's `[server]` table, the board URL into the fleet's
+`[client]` table. An install on a machine that already carries a production instance is
+therefore configured at install time, in the file, once — which is exactly the two-instance
+scenario above.
+
+**The installer DISCOVERS the port; it does not ask a human to pick one (user ruling
+2026-09-16).** The shipped `[server]` table declares a RANGE this project is willing to occupy —
+the same `description`/`min`/`max` shape the limits already use, so the range is documented where
+it is set. At install time the installer PROBES that range on the machine it is running on, takes
+the first port it can actually BIND, and writes that concrete port into the file it lays down. The
+client file's `[client] url` is written from the same resolved value, so the two halves of one
+install cannot disagree.
+
+Three properties this must have, each a way the naive version fails:
+
+- **Probe by BINDING, not by connecting.** A refused connection proves only that nothing is
+  listening *right now*; binding proves the port is available to us, and closing the probe socket
+  immediately before the server claims it is the standard accept-then-release window. A probe that
+  merely fails to connect will happily hand out a port another service has reserved.
+- **Idempotent across re-installs.** A re-install must KEEP the port already written — an install
+  that renumbers a running instance breaks every client whose file names the old one, and breaks
+  the systemd unit's health. Re-probe only when the configured port is unavailable AND not held by
+  our own server.
+- **Exhaustion is an error, never a silent fallback.** If no port in the declared range can be
+  bound, the install FAILS naming the range and what it found, rather than drifting outside the
+  range or falling back to the shipped default. A silent fallback is how two instances end up on
+  one port.
+
+This is what makes the two-instance story require no coordination: production installs and takes a
+port; this repo's development instance installs and takes the next free one; neither knows about
+the other, and both record what they took.
+
+**`_unit_environment()` stops forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST`** (`crucible_axi/install.py:863-879`).
+The unit needed them only because the server had no file to read; with §S1 it does, and the
+forwarding becomes a second place the same datum can be set — the defect, not the feature. The
+unit keeps forwarding nothing but `PATH`, and `CRUCIBLE_DB` per §S3.
+
+### §S1b A test overrides in-process or with its own file — never through the environment
+
+Tests are not production, and they do not need an environment layer to redirect a client: today
+~89 call sites across `tests/` inject `CRUCIBLE_URL` to point a client at an ephemeral-port
+server, and every one of those fixtures ALREADY owns a temp root and writes files into it.
+
+Two mechanisms replace it, both stronger than an export:
+
+- **In-process** — `startServer({ port })` already wins over everything (`src/server.ts:249`), and
+  stays the server-side seam. A test naming its own port is explicit, local and unambiguous.
+- **Its own config file** — a client test writes a `crucible.toml` carrying `[client] url` into the
+  temp project (or install) root its fixture already creates, and the CR-CRU-138 §S1 chain resolves
+  it. This has a property the export never had: the test exercises the REAL resolution path, so it
+  proves the mechanism operators use rather than a bypass only tests can reach.
+
+Migrating those call sites is the bulk of this CR's work and is deliberate: it is the difference
+between configuration that is tested and configuration that is merely shipped.
+
 ### §S2 A client's target board is declared in its own `crucible.toml`
 
 `clients/crucible.toml` gains a `[client]` table carrying `url`, resolved through the CR-CRU-138
@@ -152,6 +215,61 @@ discovered later on the wrong dashboard.
       `[client] url` / `[server] port` pair rather than an export.
 - [ ] `tests/docs-runbook-documents-every-limit.test.ts` still passes, and the new figures are
       derived from the shipped tomls rather than retyped (CR-CRU-134's rule).
+
+**§S1a — the installer sets it, so an operator never has to**
+
+- [ ] `crucible-axi install` accepts the connection settings and WRITES them into the files it lays
+      down: the listener into the server file's `[server]` table, the board URL into the fleet's
+      `[client]` table. Asserted by running a real install into a temp target and reading the
+      resulting files, not by reading the installer's own output.
+- [ ] A second install on the same machine, given different settings, produces a second instance
+      whose files name its own port and board — the two-instance scenario, proven end to end: boot
+      both, run a verb against each, and assert each run landed on the board its own file names.
+- [ ] The shipped `[server]` table declares the PORT RANGE this project may occupy, documented the
+      way the limits are (a sentence plus bounds), so the range is read where it is set.
+- [ ] The installer PROBES that range and writes the first port it can BIND into the file it lays
+      down; the fleet's `[client] url` is written from the SAME resolved value, so one install's two
+      files cannot disagree. Asserted by reading both files after a real install.
+- [ ] The probe binds rather than connects: with a listener occupying the first port of the range,
+      the install takes the NEXT one — and with a socket bound but not listening on it, the install
+      still skips it. A connect-based probe passes the first case and fails the second, so both are
+      asserted.
+- [ ] A RE-INSTALL keeps the port already written, even while the instance is running on it: the
+      file is unchanged and no client is orphaned. Re-probing happens only when the configured port
+      cannot be bound and is not held by our own server.
+- [ ] Range exhaustion FAILS the install, naming the range and what it found — it never drifts
+      outside the range and never falls back to the shipped default. Asserted by occupying every
+      port of a narrow test range.
+- [ ] Two installs on one machine, run with no knowledge of each other, land on DIFFERENT ports and
+      each records its own: boot both, run a verb against each, assert each run landed on the board
+      its own file names.
+- [ ] An operator-EDITED connection value SURVIVES a re-install (the `_operator_config_is_untouched`
+      rule, unchanged — configuration the operator changed is data, not an artifact).
+- [ ] `_unit_environment()` (`crucible_axi/install.py:863-879`) no longer forwards `CRUCIBLE_PORT`
+      or `CRUCIBLE_HOST`; the rendered unit carries neither, and the installed server still listens
+      on its configured port — asserted by reading the rendered unit text AND by the server's own
+      `/api/health`.
+
+**§S1b — tests override in-process or with their own file, never the environment**
+
+- [ ] No file under `tests/` sets `CRUCIBLE_URL`, `CRUCIBLE_BASE`, `CRUCIBLE_PORT` or
+      `CRUCIBLE_HOST` in a child environment. The ~89 current call sites migrate to either
+      `startServer({ port })` (server side) or a `crucible.toml` written into the fixture's own temp
+      root (client side). A repo-wide grep is the assertion.
+- [ ] At least one migrated client test proves it exercises the REAL resolution path: the temp
+      `crucible.toml` it wrote is the file the client reports resolving.
+- [ ] `_UNREACHABLE_CRUCIBLE_URL`-style offline-degradation tests keep working through the file, so
+      the degradation contract (CR-CRU-131: a client still formats output with no board reachable)
+      is unchanged.
+- [ ] The two doc guards that currently REQUIRE the retired variables to be documented are updated
+      to the new reality, not deleted: `tests/docs-db-path-resolution.test.ts:117-122` (the env
+      table listing `CRUCIBLE_PORT`/`CRUCIBLE_HOST`) and
+      `tests/cr009-release-bundle.test.ts:1435-1440` (the RUNBOOK's `CRUCIBLE_PORT=… crucible-axi
+      serve` examples). Each still pins a real rule — that the RUNBOOK documents how to set the
+      listener — and the rule's subject becomes the config file.
+- [ ] `crucible_axi/cli.py`'s `serve` no longer composes `$CRUCIBLE_HOST`/`$CRUCIBLE_PORT` into a
+      child environment (`cli.py:277`); `--host`/`--port` flags, where kept, write to or read from
+      the file rather than exporting.
 
 ## Non-goals
 
