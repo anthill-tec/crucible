@@ -152,6 +152,17 @@ BUN_CLIENT_PATH = CLIENTS_DIR / "bun-crucible.py"
 #: The fleet's OWN TOON decoder, so an envelope a real run emitted is read the
 #: way its consumers read it rather than pattern-matched out of stdout.
 TOON_MODULE_PATH = CLIENTS_DIR / "toon.py"
+#: The distribution's own limit declarations -- package data, copied into the
+#: fixture's scratch fleet beside the module that reads it (see `setUp`).
+SHIPPED_DATA_PATH = CLIENTS_DIR / "crucible.toml"
+
+#: The files the fixture's scratch fleet carries: the shared module under test,
+#: the client whose REAL entry point some cases drive, the codec that client
+#: loads BY FILE PATH from its own directory, and the shipped package data the
+#: loader falls back to. A clients-only copy lays down a module that cannot
+#: resolve anything.
+_SCRATCH_FLEET = (AXI_MODULE_PATH, BUN_CLIENT_PATH, TOON_MODULE_PATH,
+                  SHIPPED_DATA_PATH)
 
 #: The four fields §S1b requires of every limit -- DOCUMENTATION, all of it.
 #: A vocabulary, not a limit. `value` is deliberately NOT one of them: it is
@@ -288,6 +299,31 @@ class _ClientLimitsTestCase(unittest.TestCase):
         # it is on another machine; here it merely is not the project dir.
         self.server_dir = tempfile.mkdtemp(prefix="crucible-server-limits-")
 
+        # CR-CRU-138 §S1 -- the fleet is COPIED into a scratch install, and the
+        # module under test is loaded from THERE rather than from the checkout.
+        #
+        # The chain derives a client's install dir from the running module's
+        # own location, so a module executed out of `<checkout>/clients/` makes
+        # `<checkout>/crucible.toml` an operator candidate. That file is
+        # gitignored OPERATOR state (.gitignore:10): it exists on a developer's
+        # machine and does NOT exist on a fresh clone or a CI runner, so a
+        # fixture loading the checkout's copy is green here and red there --
+        # the precise hazard CR-CRU-131 §S1c argued for the SERVER and
+        # `tests/no-suite-resolves-the-repo-configuration.test.ts` enforces on
+        # that side. The package data travels with the copy, at
+        # `<clients>/crucible.toml`, because a module without its declarations
+        # can resolve nothing; the scratch install's own
+        # `<install>/crucible.toml` is deliberately NOT created, so a test that
+        # wants one writes it and a test that wants none really has none.
+        self.install_dir = tempfile.mkdtemp(prefix="crucible-install-limits-")
+        self.fleet_dir = os.path.join(self.install_dir, "clients")
+        os.makedirs(self.fleet_dir, exist_ok=True)
+        for source in _SCRATCH_FLEET:
+            shutil.copyfile(source, os.path.join(self.fleet_dir, source.name))
+        self.axi_path = os.path.join(self.fleet_dir, AXI_MODULE_PATH.name)
+        self.bun_client_path = os.path.join(self.fleet_dir, BUN_CLIENT_PATH.name)
+        self.toon_path = os.path.join(self.fleet_dir, TOON_MODULE_PATH.name)
+
         self._saved_env = {k: os.environ.get(k)
                            for k in _RETIRED_LIMIT_ENV + ("CRUCIBLE_DB",
                                                           "BUN_CRUCIBLE_PROJECT_DIR")}
@@ -296,7 +332,7 @@ class _ClientLimitsTestCase(unittest.TestCase):
         os.environ["CRUCIBLE_DB"] = os.path.join(self.server_dir, "crucible.db")
 
         self.axi = _load_module_by_path(
-            AXI_MODULE_PATH, "crucible_axi_limits_%d" % next(_COUNTER))
+            self.axi_path, "crucible_axi_limits_%d" % next(_COUNTER))
         _seam(self.axi, "bind_project_dir")(self.project_dir)
 
     def tearDown(self):
@@ -307,6 +343,7 @@ class _ClientLimitsTestCase(unittest.TestCase):
                 os.environ[k] = v
         shutil.rmtree(self.project_dir, ignore_errors=True)
         shutil.rmtree(self.server_dir, ignore_errors=True)
+        shutil.rmtree(self.install_dir, ignore_errors=True)
 
     # -- fixtures -----------------------------------------------------------
 
@@ -784,7 +821,22 @@ class ClientLimitRangeTest(_ClientLimitsTestCase):
 class ClientLimitOwnershipTest(_ClientLimitsTestCase):
 
     def test_the_clients_crucible_toml_sits_beside_the_env_it_already_reads(self):
+        """§S1b, and still true under CR-CRU-138 §S1: a PROJECT's own file sits
+        beside the `.env` the clients already read, and it stays FIRST in the
+        resolution chain -- a machine carrying several projects needs the one it
+        is working in to decide.
+
+        What this no longer says is that the project's is the ONLY path a
+        client would ever look at. With no readable file there, an installed
+        client falls through to the configuration the installer laid down at
+        the install root; that half is asserted end-to-end in
+        tests/client/test_an_installed_deployment_resolves_its_configuration.py,
+        which installs and then resolves. So the file is written HERE before
+        the path is asserted: the claim is about PRECEDENCE among readable
+        files, not about there being one candidate.
+        """
         self.assertTrue((Path(self.project_dir) / ".env").exists())
+        self.write_raw("# the project's own configuration\n")
         self.assertEqual(os.path.join(self.project_dir, "crucible.toml"),
                          _seam(self.axi, "project_config_path")())
 
@@ -875,7 +927,7 @@ class ClientLimitOwnershipTest(_ClientLimitsTestCase):
             {"truncate_field_chars": _declare(shipped, shipped["min"])})
 
         client = _load_module_by_path(
-            BUN_CLIENT_PATH, "bun_crucible_limits_%d" % next(_COUNTER))
+            self.bun_client_path, "bun_crucible_limits_%d" % next(_COUNTER))
         plans = {"ok": True, "plans": [
             {"planId": "plan-1", "cr": "CR-SHIPPED-001", "wave": "6",
              "status": "open", "cycles": []},
@@ -1115,13 +1167,13 @@ class ClientLimitDisclosureReachesTheEnvelopeTest(_ClientLimitsTestCase):
         """The `warnings[]` a REAL run of `<verb>` emitted, decoded off the
         TOON envelope on stdout with the fleet's own decoder."""
         client = _load_module_by_path(
-            BUN_CLIENT_PATH, "bun_crucible_disclosure_%d" % next(_COUNTER))
+            self.bun_client_path, "bun_crucible_disclosure_%d" % next(_COUNTER))
         with mock.patch.object(client, "_get", return_value=self.PLANS):
             code, out, err = _run_main(
                 client, [verb, "--project-dir", self.project_dir])
         self.assertEqual(0, code, "stdout=%r stderr=%r" % (out, err))
         envelope = _load_module_by_path(
-            TOON_MODULE_PATH, "crucible_toon_%d" % next(_COUNTER)).decode(out)
+            self.toon_path, "crucible_toon_%d" % next(_COUNTER)).decode(out)
         self.assertIn("axi", envelope, "the verb emitted no envelope: %r" % (out,))
         return envelope["axi"].get("warnings") or []
 
@@ -1212,7 +1264,7 @@ class ClientLimitDisclosureReachesTheEnvelopeTest(_ClientLimitsTestCase):
         with contextlib.redirect_stdout(stdout):
             emit("status", True, {}, {"projectKey": self.PROJECT_KEY}, [carried])
         warnings = _load_module_by_path(
-            TOON_MODULE_PATH,
+            self.toon_path,
             "crucible_toon_%d" % next(_COUNTER)).decode(stdout.getvalue())["axi"]["warnings"]
 
         self.assertEqual(carried, warnings[0])

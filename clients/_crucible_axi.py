@@ -67,8 +67,9 @@ def _toon():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CR-CRU-131 §S1/§S1b — the CLIENT's limits are CONFIGURATION, resolved from
-# the PROJECT's `crucible.toml` at the POINT OF USE.
+# CR-CRU-131 §S1/§S1b, CR-CRU-138 §S1 — the CLIENT's limits are CONFIGURATION,
+# resolved at the POINT OF USE from the PROJECT's `crucible.toml`, else the
+# INSTALL's.
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # A limit is configuration, never a constant compiled into source (PRD §4.13,
@@ -84,6 +85,15 @@ def _toon():
 # in `src/limits.ts`. Neither process reads the other's file: one schema, one
 # loader shape, two locations. Built ONCE here, where all five clients inherit
 # it (the shared-module discipline CR-CRU-030 established).
+#
+# CR-CRU-138 §S1 — a client is not always INSIDE a project. An operator who
+# installed the fleet and edited the `crucible.toml` the installer laid down at
+# the install root was editing a knob nothing read, because the only path this
+# module knew was the project's, falling back to the process cwd. So the
+# project's file is now the FIRST of an ordered chain and the install's is what
+# it falls through to, and the cwd fallback is gone: configuration is a
+# function of where a client is INSTALLED, never of where its operator was
+# standing when they ran it.
 #
 # The four fields are DOCUMENTATION; `value` is the operator's SETTING.
 # `description`, `recommended`, `min` and `max` are immutable; an operator who
@@ -120,18 +130,37 @@ CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
 #: code falls back to with nothing saying so.
 #:
 #: TWO candidates, because this module ships in two shapes. Beside it is where
-#: the data sits in the checkout (`clients/`) and in the wheel
-#: (`crucible_axi/clients/`). The installer lays the fleet down under
-#: `<target-dir>/clients/` and the declarations one level up at
-#: `<target-dir>/crucible.toml` -- the operator-editable copy it writes there --
-#: so a LAID-DOWN fleet finds them at the parent. The list is ordered so the
-#: package's own data always wins where it is present.
+#: the data sits in the checkout (`clients/`), in the wheel
+#: (`crucible_axi/clients/`) and -- since CR-CRU-138 §S4 -- in an INSTALL, where
+#: the `[fleet]` stage lays the distribution's own `crucible.toml` down at
+#: `<install>/clients/crucible.toml`, beside this file, as package data.
+#:
+#: The SECOND candidate, the parent `<install>/crucible.toml`, is the OPERATOR's
+#: editable file, and resolving it as package data is the DEFECT §S4 closed: one
+#: path was serving two incompatible jobs, so an operator editing "their" file
+#: was also editing what this module treats as the build's recommendations, and
+#: purging it made every verb raise instead of degrading. It is kept ONLY as a
+#: fallback for a pre-0.2.1 install whose fleet carries no copy yet -- removing
+#: it would turn "upgraded the package but has not re-run the install" into that
+#: same crash. Do not read it as the intended resolution, and do not delete it
+#: as dead: it expires when no 0.2.0-shaped install remains. The list is ordered
+#: so the package's own data always wins where it is present.
 _SHIPPED_DATA_FILENAME = "crucible.toml"
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+#: §S1 -- the INSTALL this client belongs to, derived from the module's OWN
+#: location: an installed client lives at `<install dir>/clients/_crucible_axi.py`,
+#: so the parent of this module's directory is the install root. Derived rather
+#: than configured, because an install that has to be TOLD where it is has two
+#: answers to the question -- and a configuration seam resolved from the
+#: environment is exactly what CR-CRU-131 removed. A client run out of a
+#: checkout resolves the checkout root by the same rule, which is where a
+#: developer's own `crucible.toml` already sits.
+_INSTALL_DIR = os.path.dirname(_MODULE_DIR)
+
 _SHIPPED_DATA_CANDIDATES = (
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 _SHIPPED_DATA_FILENAME),
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                 _SHIPPED_DATA_FILENAME),
+    os.path.join(_MODULE_DIR, _SHIPPED_DATA_FILENAME),
+    os.path.join(_INSTALL_DIR, _SHIPPED_DATA_FILENAME),
 )
 
 #: The four fields a shipped limit is DOCUMENTED with. A declaration missing
@@ -151,11 +180,42 @@ def bind_project_dir(project_dir):
     _PROJECT_DIR = str(project_dir) if project_dir else None
 
 
+def _project_config_candidates():
+    """§S1 -- every `crucible.toml` a client will consult, in PRECEDENCE order.
+
+    The PROJECT's own file first, beside the `.env` the clients already read: a
+    machine carrying several projects needs the one it is working in to decide.
+    Then the INSTALL's, which is the file the installer lays down and the only
+    configuration an operator who is not standing inside a project has.
+
+    Never the server's: the board may be on another host, and its config
+    directory simply is not on this filesystem.
+
+    There is deliberately no cwd here. Configuration resolved from the
+    directory an operator happened to be standing in is configuration nobody
+    can predict -- it is why a bootstrap run from `$HOME` reported reading
+    `$HOME/crucible.toml`, a file that had never existed.
+
+    A client run INSIDE its own install would name one path twice, so the
+    chain is deduplicated: a candidate list that repeats itself is a warning
+    an operator has to read twice to learn one thing."""
+    candidates = []
+    if _PROJECT_DIR:
+        candidates.append(os.path.join(_PROJECT_DIR, _SHIPPED_DATA_FILENAME))
+    installed = os.path.join(_INSTALL_DIR, _SHIPPED_DATA_FILENAME)
+    if installed not in candidates:
+        candidates.append(installed)
+    return tuple(candidates)
+
+
 def project_config_path():
-    """§S1b -- the PROJECT's own configuration file, beside the `.env` the
-    clients already read. Never the server's: the board may be on another
-    host, and its config directory simply is not on this filesystem."""
-    return os.path.join(_PROJECT_DIR or os.getcwd(), "crucible.toml")
+    """§S1 -- the file a client's limits actually resolve FROM: the first
+    candidate in the chain that READS.
+
+    With nothing readable anywhere it answers the first candidate, which is the
+    file an operator should create -- a resolver that answered with nothing
+    would leave the disclosure below unable to say where to start."""
+    return _read_project_config()[0]
 
 
 def shipped_data_path():
@@ -222,21 +282,28 @@ def shipped_limits():
 
 
 def _read_project_config():
-    """One read of the file, at the point of use -- never cached.
+    """One walk of the chain, at the point of use -- never cached.
 
-    Returns `(path, tables)`, where `tables` is None when the file is ABSENT or
-    does not parse. `tomllib` is stdlib (3.11+; this repo runs 3.14) and
-    already in the tree at `clients/rust-crucible.py`."""
-    path = project_config_path()
-    try:
-        with open(path, "rb") as fh:
-            parsed = tomllib.load(fh)
-    except (OSError, ValueError):
-        # ValueError covers tomllib.TOMLDecodeError; a malformed file must
-        # DEGRADE, never take a client's verb down with it.
-        return path, None
-    tables = parsed.get("limits")
-    return path, tables if isinstance(tables, dict) else {}
+    Returns `(path, tables)` for the FIRST candidate that read: a file that is
+    absent or does not parse is not an answer, so the chain carries on past it
+    rather than degrading on the spot. `tables` is None only when NONE of the
+    candidates read, and `path` is then the first of them -- the file an
+    operator should create.
+
+    `tomllib` is stdlib (3.11+; this repo runs 3.14) and already in the tree at
+    `clients/rust-crucible.py`."""
+    candidates = _project_config_candidates()
+    for path in candidates:
+        try:
+            with open(path, "rb") as fh:
+                parsed = tomllib.load(fh)
+        except (OSError, ValueError):
+            # ValueError covers tomllib.TOMLDecodeError; a malformed file must
+            # DEGRADE, never take a client's verb down with it.
+            continue
+        tables = parsed.get("limits")
+        return path, tables if isinstance(tables, dict) else {}
+    return candidates[0], None
 
 
 def _declared_limit(shipped, table):
@@ -270,13 +337,17 @@ def _limit_refusal(name, declaration, path):
                declaration["max"], name, declaration["recommended"]))
 
 
-def _limits_unreadable(path):
-    """Named by PATH: told only that "a config file is broken", on a machine
-    carrying two of them, an operator learns nothing."""
-    return ("[crucible] WARNING: no readable configuration at %s — it is "
-            "absent or does not parse, so every bound this client enforces "
-            "runs at the value the build recommends. Create the file (or "
-            "correct its TOML) to configure them." % path)
+def _limits_unreadable(candidates):
+    """Named by EVERY PATH TRIED, in precedence order: told only that "a config
+    file is broken", on a machine carrying several of them, an operator learns
+    nothing -- and told about ONE path they never chose, they learn worse than
+    nothing. The order is the answer to "which file would have won", so the
+    first name is the one to create."""
+    return ("[crucible] WARNING: no readable configuration. Tried, in "
+            "precedence order: %s — none of them reads (absent, or does not "
+            "parse), so every bound this client enforces runs at the value the "
+            "build recommends. Create the first of them (or correct its TOML) "
+            "to configure them." % (", ".join(candidates),))
 
 
 def _effective_limit(name, declaration, path):
@@ -324,7 +395,7 @@ def limit_disclosures():
     disclosure that had to be drained is a disclosure that can be missed."""
     path, tables = _read_project_config()
     if tables is None:
-        return [_limits_unreadable(path)]
+        return [_limits_unreadable(_project_config_candidates())]
     lines = []
     shipped = shipped_limits()
     for name in CLIENT_LIMIT_NAMES:

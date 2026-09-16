@@ -17,6 +17,13 @@ against a TEMPORARY target directory:
        does nothing where it sits contradicts, in documentation, the ownership
        negatives C1 asserts in tests -- and the tests are the behaviour.
        The `[fleet]`/`[manifest]` stage ordering is unchanged.
+       `<target-dir>` is the INSTALL ROOT, which CR-CRU-138 §S1 makes the
+       second step of the client's own resolution chain: an installed client
+       lives at `<install dir>/clients/_crucible_axi.py` and derives that root
+       from its own location, so the path asserted here is the path an
+       installed deployment READS. This file still asserts only the WRITE
+       side; the pair is asserted together, by installing and then resolving,
+       in tests/client/test_an_installed_deployment_resolves_its_configuration.py.
     2. MANIFEST -- the laid-down file is declared in `crucible-clients.json`
        like everything else the installer writes, and the declared path exists.
     3. UNINSTALL RESPECTS AN EDIT -- an artifact is replaceable; an operator's
@@ -160,7 +167,9 @@ class _InstallerFixtureCase(unittest.TestCase):
             "`crucible.toml` at the target directory -- it already has a "
             "[config] stage and already writes one file there. Without it an "
             "installed deployment ships defaults the operator has no way to "
-            "override at the path they would look. `%s` holds: %r"
+            "override at the path they would look -- and, since the chain "
+            "landed, at the path an installed client RESOLVES: the install root "
+            "it derives from its own location. `%s` holds: %r"
             % (self.target_dir,
                sorted(os.listdir(self.target_dir))
                if os.path.isdir(self.target_dir) else None))
@@ -222,9 +231,16 @@ class TheInstallerLaysDownAnEditableConfigTest(_InstallerFixtureCase):
 
     def test_the_laid_down_file_carries_no_limit_this_side_does_not_enforce(self):
         """OWNERSHIP, in the documentation as well as in the code: a SERVER
-        limit in a file laid down in a project directory is inert, and C1
+        limit in the file laid down at the install root is inert, and C1
         asserts exactly that in tests. Documentation must not teach against the
-        tests."""
+        tests.
+
+        The server's own three are not unreachable, they are laid down
+        ELSEWHERE -- beside the server's database, by CR-CRU-138 §S2, from the
+        server's own package data. The two templates stay disjoint by design
+        (version skew across two independently installable packages), which is
+        exactly what this test keeps true from the client side.
+        """
         self.install_once()
         text = self.require_config()
 
@@ -232,10 +248,11 @@ class TheInstallerLaysDownAnEditableConfigTest(_InstallerFixtureCase):
                     if re.search(r"(?m)^\s*\[limits\.%s\]" % (name,), text)]
         self.assertEqual(
             declared, [],
-            "the laid-down project file declares SERVER limit table(s) %r. No "
-            "client reads them and the server never reads this file, so an "
-            "operator who set one would be editing a knob that provably does "
-            "nothing where it sits" % (declared,))
+            "the file laid down at the install root declares SERVER limit "
+            "table(s) %r. No client reads them and the server reads its OWN "
+            "file beside its database, never this one, so an operator who set "
+            "one would be editing a knob that provably does nothing where it "
+            "sits" % (declared,))
 
 
 class TheManifestDeclaresTheLaidDownFileTest(_InstallerFixtureCase):
