@@ -239,9 +239,18 @@ which is what its own docstring already promises.
 - [ ] **§S4** Editing `<install>/crucible.toml` changes the RESOLVED value but leaves every limit's
       `recommended`, `min` and `max` reading as the shipped declarations — the operator file cannot
       redefine the build's own recommendation.
-- [ ] **§S4** The manifest declares the shipped `clients/crucible.toml` as FLEET content, distinct
-      from the operator `"config"` key, and a plain (non-purge) uninstall removes the fleet copy
-      while keeping the operator file.
+- [ ] **§S4** The manifest declares the shipped `clients/crucible.toml` as FLEET content, under a key
+      distinct from the operator `"config"` key.
+- [ ] **§S4** The fleet copy shares the FLEET's lifecycle, not configuration's — corrected from this
+      AC's first draft, which required a plain uninstall to remove it. That was wrong: install
+      stages are `(server, fleet, manifest, unit)` and uninstall stages are
+      `(unit, server, config, store)`, so there is **no fleet inverse** and the installed
+      `_crucible_axi.py` is never removed by any uninstall. Deleting its `crucible.toml` while
+      leaving the module beside it would manufacture precisely the `RuntimeError` state §S4 exists
+      to end. So: **no uninstall path may leave `_crucible_axi.py` present without its shipped
+      `crucible.toml`.** Assert that invariant directly — after a plain uninstall AND after a purge,
+      if the module is still installed then the shipped data beside it is too. Building a `[fleet]`
+      uninstall inverse is out of scope for a hotfix.
 - [ ] **§S4** A reinstall replaces the fleet's `clients/crucible.toml` wholesale even when it was
       modified — it is package data, not operator state — while an edited `<install>/crucible.toml`
       still survives (the existing `_operator_config_is_untouched` rule, unchanged).
