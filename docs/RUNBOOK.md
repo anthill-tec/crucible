@@ -392,11 +392,15 @@ with no subprocess, so re-running is indistinguishable from running once.
 
 The python suites under `tests/client/` drive the **real** installer: it writes
 files, and two of its stages would otherwise run `bun add -g` and
-`systemctl --user enable --now`. They are safe to run directly — each pins
-`$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$BUN_INSTALL` into a
-temporary root, stubs those two stages, and asserts afterwards that this
-machine's real `~/.crucible`, `~/.local/share/crucible` and
-`~/.config/systemd/user` did not move. That is what CI runs:
+`systemctl --user enable --now`. The suite that exercises the whole install-then-
+resolve path is
+`tests/client/test_an_installed_deployment_resolves_its_configuration.py`.
+
+They are safe to run directly — each pins `$HOME`, `$XDG_DATA_HOME`,
+`$XDG_CONFIG_HOME` and `$BUN_INSTALL` into a temporary root, stubs those two
+stages, and asserts afterwards that this machine's real `~/.crucible`,
+`~/.local/share/crucible` and `~/.config/systemd/user` did not move. That is
+what CI runs:
 
 ```sh
 python3 -m unittest discover -s tests/client -t .
@@ -410,8 +414,27 @@ by a tmpfs and there is no network, so an escaped write evaporates instead of
 landing in your home directory:
 
 ```sh
-scripts/sandboxed-install-tests.sh
+scripts/sandboxed-install-tests.sh                    # every tests/client suite
+scripts/sandboxed-install-tests.sh -k an_installed_deployment
 ```
+
+That script is the documented command, and this is the isolation it passes — if
+you run `bwrap` by hand instead, pass the same flags, because each one carries
+its own guarantee:
+
+```sh
+bwrap --dev-bind / / --tmpfs "$HOME" --tmpfs /run/user/"$(id -u)" \
+      --unshare-user --unshare-pid --unshare-net \
+      python3 -m unittest discover -s tests/client -t .
+```
+
+- `--dev-bind / /` keeps the toolchain (`python3`, `uv`, `bun`) reachable.
+- `--tmpfs "$HOME"` shadows your real home, so a write that ignored every
+  environment variable lands on memory and evaporates.
+- `--tmpfs /run/user/<uid>` removes the session bus, so a stray
+  `systemctl --user` fails loudly instead of touching your real session.
+- `--unshare-user` and `--unshare-pid` drop privileges and stray processes;
+  `--unshare-net` means nothing can reach a board, PyPI or npm.
 
 It needs `bubblewrap` (`bwrap`) and refuses to run unsandboxed if it is absent,
 rather than handing you a false assurance. It is deliberately **not** part of
