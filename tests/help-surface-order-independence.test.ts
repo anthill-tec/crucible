@@ -79,9 +79,7 @@
 // run.
 //
 // WHAT IT DOES NOT PIN IS THE ESCAPING DEPTH, and that line is drawn from two
-// measured reports rather than from one runner's habit. CI installs
-// `oven-sh/setup-bun@v2` UNPINNED, so the runner that writes the report there
-// is NOT the 1.3.14 these budgets were measured against, and the two disagree
+// measured reports rather than from one runner's habit. The two runners disagree
 // about `classname` alone: 1.3.14 joins already-escaped describe names with the
 // literal text " &gt; " and escapes that whole string AGAIN when it writes the
 // attribute (`… &amp;gt; tests/…`), while 1.4.2 — the Rust rewrite, whose own
@@ -90,8 +88,18 @@
 // the `name` attribute's single escaping are identical underneath. So the
 // attribution below decodes the attribute and splits on that shared separator
 // instead of hand-matching one runner's escaping, which is the whole of
-// CR-CRU-136: the same run that passes here reported `helpTestRan: false` on
+// CR-CRU-136: the same run that passed locally reported `helpTestRan: false` on
 // CI, with order, counts and failures all correct.
+//
+// HOW THAT DIVERGENCE REACHED CI AT ALL, and what closed it: `setup-bun@v2` was
+// UNPINNED in .github/workflows/release.yml, so CI silently ran whatever bun was
+// latest while these budgets were measured against 1.3.14 — every duration below
+// was therefore unpinned on the one machine that gates the release. CR-CRU-136
+// pins all four `setup-bun` steps to the version this suite is measured against
+// (1.4.2, adopted locally in the same change so the two agree), which is why the
+// paragraph above can call the escaping depth DELIBERATELY unpinned: the decode
+// makes it not matter, and the pin makes a runner change a deliberate commit that
+// re-runs these budgets rather than a silent drift.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

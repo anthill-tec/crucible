@@ -98,6 +98,16 @@ jobs:
         with:
           fetch-depth: 0          # a pinned pre-CR baseline is read with `git show`
       - uses: oven-sh/setup-bun@v2
+        with:
+          # CR-CRU-136 -- setup-bun with no `bun-version` installs LATEST, so every
+          # timing budget and reporter-format assumption in the suite (most sharply
+          # tests/help-surface-order-independence.test.ts) silently re-opened on every
+          # run. It bit exactly that way: local 1.3.14 double-escaped the junit
+          # `classname` attribute, CI's newer bun single-escapes it (Zig -> Rust test
+          # runner rewrite), and a guard parsing the escaped form went red on CI alone.
+          # Pinned to the version the suite is actually measured against; a bump is a
+          # deliberate commit that re-runs those budgets, never a silent drift.
+          bun-version: "1.4.2"
       # CR-CRU-063 §S1 — uv, not just bun. tests/clients-bun-crucible.test.ts:83
       # spawns the client fleet as ["uv", "run", SCRIPT_PATH, …] (PEP 723,
       # CR-CRU-046 §S3); oven-sh/setup-bun provides bun, not uv. Without this
@@ -169,6 +179,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2" # CR-CRU-136 -- see test-bun; one bun for the whole workflow
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Install Playwright browsers
@@ -328,6 +340,8 @@ jobs:
         with:
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2" # CR-CRU-136 -- see test-bun; one bun for the whole workflow
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -374,6 +388,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2" # CR-CRU-136 -- see test-bun; one bun for the whole workflow
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
