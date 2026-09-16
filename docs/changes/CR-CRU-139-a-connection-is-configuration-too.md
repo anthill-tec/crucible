@@ -94,6 +94,21 @@ choice) wins, then the file, then the shipped default. `$CRUCIBLE_PORT` and `$CR
 "Retired environment variables" section gains them with the same "declare it in the table instead"
 wording. A retired variable that silently still works is worse than either state.
 
+**The resolved listener is DISCLOSED, exactly as the store already is (user ruling 2026-09-16).**
+`startServer` returns `storeResolution` on its handle and repeats it at ONE shared `healthPayload`
+site so `/api/health` and `/api/v2/health` cannot drift (`src/server.ts:218,241-242,291`,
+CR-CRU-068 §S1). The listener gains the same two disclosures and nothing new: a
+`listenerResolution { port, host, rule }` on the handle, and a `listener { port, host, rule }` block
+in that same payload, where `rule` names WHICH layer won — `opts`, `file` or `shipped`.
+
+This exists because of a gap RED measured rather than for symmetry. Proving "with no file present
+it listens on the shipped default" by a real bind means binding `3849` — which is precisely the
+port a production instance holds on the two-instance machine this CR exists to serve, so the test
+would be flaky exactly where the mechanism is working. With the disclosure, every step of the
+precedence chain is observable at the seam operators already read, no reserved port is bound, and
+the installer's own "the installed server still listens on its configured port" criterion is
+answered from the same field instead of a second mechanism.
+
 ### §S1a The INSTALLER writes the connection, so nothing needs an environment
 
 **User ruling 2026-09-16, and it removes the last excuse for the environment layer:** the installer
@@ -244,7 +259,19 @@ discovered later on the wrong dashboard.
 - [ ] `src/crucible.toml` declares `[server]` with `port` and `host`, each with the description /
       default commentary the limits tables carry.
 - [ ] A server booted with a `[server] port` set listens on THAT port, proven by a real request to
-      it; with no file present it listens on the shipped default.
+      it.
+- [ ] With no file present the server listens on the SHIPPED default. Proven through the disclosure
+      rather than by binding `3849`: `listenerResolution.port` equals the shipped file's declared
+      port and `listenerResolution.rule` is `shipped`, on a real boot whose actual listener is a
+      self-allocated port supplied via `opts`. Binding the real default would be flaky on exactly
+      the two-instance machine this CR serves, which is why the disclosure exists.
+- [ ] `startServer` discloses `listenerResolution { port, host, rule }` on its handle, and the ONE
+      shared `healthPayload` site carries the same values as a `listener` block — so `/api/health`
+      and `/api/v2/health` cannot drift, the way CR-CRU-068 §S1 already binds the `store` block.
+      Asserted by fetching BOTH routes and comparing them to each other and to the handle.
+- [ ] `listenerResolution.rule` names which layer won, across all three: `opts` for an explicit
+      argument, `file` for a `[server]` table, `shipped` for neither — one boot per rule, each
+      asserted against the file it was given.
 - [ ] An explicit `startServer({ port })` still wins over the file — the test seam is unchanged.
 - [ ] `$CRUCIBLE_PORT` and `$CRUCIBLE_HOST` are no longer read: a server booted with both exported
       to junk values still listens per its file/default. Asserted by an actual boot, not by grep.
