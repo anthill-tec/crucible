@@ -190,6 +190,17 @@ green test for the second time.
       script is documented in the RUNBOOK beside the suite it wraps, and a test asserts the
       documented command matches the script's own contents so the two cannot drift (CR-CRU-134's
       derivation rule).
+- [ ] `docs/RUNBOOK.md` "The project's limits" (§129-138) states the resolution CHAIN and its order,
+      replacing the current sentence that mentions the laid-down copy without saying which file
+      actually wins. An operator reading it must be able to tell which of two present files decides
+      a limit.
+- [ ] `docs/RUNBOOK.md` "The server's limits" (§111-121) states that the installer lays the
+      operator-editable file down beside the database, rather than implying the operator must create
+      it. The existing correct warnings — that a remote board's file lives on THAT machine, and that
+      `src/crucible.toml` is package data replaced on upgrade — are preserved.
+- [ ] The RUNBOOK's limit TABLES stay derived, not retyped: `tests/docs-runbook-documents-every-limit.test.ts`
+      continues to pass unchanged (CR-CRU-134's rule). If this CR's edits break it, the edit is
+      wrong, not the test.
 
 ## Non-goals
 

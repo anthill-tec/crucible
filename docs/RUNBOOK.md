@@ -388,6 +388,36 @@ database), and an interactive one asks once — naming both paths and the store'
 size — and keeps them on empty input, EOF, or Ctrl-C. Absent artifacts converge
 with no subprocess, so re-running is indistinguishable from running once.
 
+## Running the install suites without touching this machine
+
+The python suites under `tests/client/` drive the **real** installer: it writes
+files, and two of its stages would otherwise run `bun add -g` and
+`systemctl --user enable --now`. They are safe to run directly — each pins
+`$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$BUN_INSTALL` into a
+temporary root, stubs those two stages, and asserts afterwards that this
+machine's real `~/.crucible`, `~/.local/share/crucible` and
+`~/.config/systemd/user` did not move. That is what CI runs:
+
+```sh
+python3 -m unittest discover -s tests/client -t .
+```
+
+Those two layers protect you from code that plays by the rules. A hardcoded
+path, an `expanduser` evaluated before the environment is patched, or a
+subprocess handed a stale environment would escape them. To close that last
+gap, run the same suites under a kernel-level sandbox where `$HOME` is replaced
+by a tmpfs and there is no network, so an escaped write evaporates instead of
+landing in your home directory:
+
+```sh
+scripts/sandboxed-install-tests.sh
+```
+
+It needs `bubblewrap` (`bwrap`) and refuses to run unsandboxed if it is absent,
+rather than handing you a false assurance. It is deliberately **not** part of
+CI: `bwrap` is not guaranteed on a runner, and a runner's `$HOME` dies with the
+container anyway — the value of this script is protecting a real workstation.
+
 ## Environment variables (port / bind / database)
 
 The server is **loopback-only by default** — the API is unauthenticated and
