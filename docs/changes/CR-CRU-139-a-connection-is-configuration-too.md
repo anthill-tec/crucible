@@ -353,7 +353,12 @@ retired variables; retire and migrate in ONE cycle, which is the ordering lesson
       first's file is NOT renumbered, each fleet file's `[client] url` names its own board, and both
       declared ports carry listening sockets at the same time. This is the scenario the CR exists
       for, so its COMPOSITION is the criterion — the constituent mechanics passing separately does
-      not discharge it.
+      not discharge it. (Consolidated 2026-09-16: a near-duplicate of this criterion survived the
+      first reword still carrying a "boot both, run a verb against each" leg that no test
+      discharges — the install fixture stubs the `[server]`/`[unit]` stages, so there is no server
+      binary to boot and no board to drive. RE-VERIFY caught the duplicate. The two halves of that
+      leg ARE proven separately: the installer's file composition here, and "a client reaches the
+      board its own file names" against two live boards in the C2 suite.)
 - [ ] The shipped `[server]` table declares the PORT RANGE this project may occupy, documented the
       way the limits are (a sentence plus bounds), so the range is read where it is set.
 - [ ] The installer PROBES that range and writes the first port it can BIND into the file it lays
@@ -378,9 +383,6 @@ retired variables; retire and migrate in ONE cycle, which is the ordering lesson
 - [ ] The declared range is `3800`–`3899` in the shipped file, and the install's chosen port lies
       inside it — asserted against the FILE's declared bounds, not a retyped pair of numbers
       (CR-CRU-134's rule).
-- [ ] Two installs on one machine, run with no knowledge of each other, land on DIFFERENT ports and
-      each records its own: boot both, run a verb against each, assert each run landed on the board
-      its own file names.
 - [ ] An operator-EDITED connection value SURVIVES a re-install: configuration the operator changed
       is data, not an artifact.
 - [ ] The `[manifest]` stage RECORDS the bytes it wrote for each config file it authored, and
