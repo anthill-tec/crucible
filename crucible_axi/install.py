@@ -469,13 +469,23 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
 
     THE decision §S1a exists to make, and it has exactly two branches:
 
-    * a file already at `destination` DECIDES. It is never re-probed, not even
-      while an instance is listening on the port it names — renumbering a
-      running board orphans every client whose own file names the old port.
+    * a file already at `destination` that NAMES a port DECIDES. It is never
+      re-probed, not even while an instance is listening on the port it names —
+      renumbering a running board orphans every client whose own file names the
+      old port.
     * otherwise the range is read from the file the install RESOLVED (the
       template it is about to copy) and probed, first bindable port winning.
       The bounds are data in that file rather than a constant here, so an
       operator can narrow them and a test can declare its own.
+
+    The gate is the absence of a CONFIGURED PORT, deliberately, and not the
+    absence of the FILE: a `crucible.toml` that exists but declares no
+    `[server] port` — hand-placed, carried over from an older layout, or
+    written by anything that is not this installer — names nothing to honour,
+    so honouring it means falling through to the template's shipped default.
+    That default is `3849` on a machine whose production instance already holds
+    it, which is the silent fallback §S1a forbids in the one state where it is
+    hardest to notice: the install reports success and the next boot collides.
 
     A template declaring no range is not an error: nothing is probed and its
     own `port` is what the copy carries, exactly as before this CR.
@@ -493,8 +503,7 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
     if not isinstance(port, int):
         low = declared.get(manifest.SERVER_PORT_RANGE_MIN_KEY)
         high = declared.get(manifest.SERVER_PORT_RANGE_MAX_KEY)
-        if not os.path.lexists(destination) and isinstance(low, int) \
-                and isinstance(high, int):
+        if isinstance(low, int) and isinstance(high, int):
             port = _first_bindable_port(host, low, high, source)
         else:
             port = declared.get(manifest.SERVER_PORT_KEY)

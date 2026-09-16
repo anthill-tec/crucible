@@ -41,7 +41,7 @@ already names, even while an instance is listening on it. Renumbering a running
 instance orphans every client whose file names the old port.
 
 `TheManifestRecordsTheBytesTheInstallWroteTest` -- the ruling that makes the
-write safe. `_operator_config_is_untouched` (crucible_axi/install.py:1300-1326)
+write safe. `_operator_config_is_untouched` (crucible_axi/install.py:1546-1589)
 compares a file the install AUTHORED against the `[manifest]` stage's recording
 of what it wrote, not against the shipped template: without that, every machine
 that ever probed a port would read as operator-edited forever and CR-CRU-138
@@ -50,7 +50,7 @@ with NO recording (an older install, or one placed by hand) still falls back to
 the template comparison, so the fail-safe direction is unchanged.
 
 `TheUnitCarriesNoListenerEnvironmentTest` -- `_unit_environment()`
-(install.py:863-879) stops forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST`; the unit
+(install.py:1091-1114) stops forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST`; the unit
 boots the server and the server reads its own file. `CRUCIBLE_DB` STAYS (§S3 --
 the store path is how the server FINDS that file, so it precedes it).
 
@@ -493,6 +493,35 @@ class _InstallerConnectionCase(unittest.TestCase):
                % (warnings, stages))
         return stages
 
+    #: What an operator leaves behind in a file they edited by hand. Its
+    #: survival is how a test tells "the operator's file was honoured" from
+    #: "the file was rebuilt and happened to end up with the same number".
+    OPERATOR_MARKER = "# an operator moved this board"
+
+    def edit_server_port(self, port):
+        """Rewrite `[server] port` in the server's own file the way an operator
+        does: open it, change that one line, leave a note. A plain text edit on
+        purpose -- using the installer's own writer to stage the edit would
+        make this test's setup share a fate with the code it is measuring."""
+        text = Path(self.server_config).read_text(encoding="utf-8")
+        edited, found = [], False
+        for line in text.split("\n"):
+            if not found and line.strip().startswith("%s =" % (PORT_KEY,)):
+                edited.append(self.OPERATOR_MARKER)
+                edited.append("%s = %d" % (PORT_KEY, port))
+                found = True
+                continue
+            edited.append(line)
+        self.assertTrue(
+            found,
+            "fixture sanity: %s declares no `%s = ...` line for an operator to "
+            "edit, so this test cannot stage the state it is about; the file "
+            "reads %r" % (self.server_config, PORT_KEY, text))
+        Path(self.server_config).write_text("\n".join(edited), encoding="utf-8")
+        self.assertEqual(
+            port, _table(self.server_config, SERVER_TABLE).get(PORT_KEY),
+            "fixture sanity: the edited file must PARSE and name %d" % (port,))
+
     def reset_written_state(self):
         """Everything an install WROTE, removed -- the provisioned server (and
         so the template declaring the range) left exactly where it was. Lets one
@@ -915,6 +944,250 @@ class AConfiguredPortIsNeverReProbedTest(_InstallerConnectionCase):
             "§S1a: the client file must keep naming the same board across a "
             "re-install, for the same reason the server file does")
 
+    def test_an_operator_edited_port_is_read_back_unchanged_after_a_reinstall(self):
+        """AC: an operator-EDITED connection value SURVIVES a re-install.
+
+        The sibling case above proves the INSTALL's own value survives, by byte
+        identity -- which is also what a re-install that simply never looked at
+        the file would produce. This one moves the value to somewhere no probe
+        of this machine could ever have produced: a port OUTSIDE the range the
+        file itself declares. Reading that number back is the only observation
+        that separates "the operator's choice is honoured" from "the file
+        happened not to be touched", and it is the state an operator lands in
+        the moment they move a board off the port the install picked.
+        """
+        ports = self.declare_range(width=2)
+        self.install_once()
+        chosen = self.written_listener()
+        operators_port = self.consecutive_ports(1)[0]
+        low, high = _declared_range(self.server_config)
+        self.assertFalse(
+            low <= operators_port <= high,
+            "fixture sanity: the operator's port (%d) must lie OUTSIDE the "
+            "declared range %d-%d, or a re-install that re-probed could land "
+            "on it by coincidence and this assertion would prove nothing"
+            % (operators_port, low, high))
+        self.edit_server_port(operators_port)
+
+        self.install_once(force=True)
+
+        self.assertEqual(
+            operators_port, self.written_listener(),
+            "§S1a: the operator edited `[%s] %s` from the install's own %d to "
+            "%d, and a re-install must read THAT back. It answered %d -- an "
+            "upgrade that resets the connection is the defect the "
+            "operator-editable file exists to prevent, and it is silent: the "
+            "board simply stops being where its operator put it"
+            % (SERVER_TABLE, PORT_KEY, chosen, operators_port,
+               self.written_listener()))
+        self.assertIn(
+            self.OPERATOR_MARKER,
+            Path(self.server_config).read_text(encoding="utf-8"),
+            "§S1a: the operator's own comment is gone from %s, so the file "
+            "was rewritten rather than honoured -- a value that survives "
+            "because the whole file was reconstructed around it is a "
+            "coincidence, not the rule" % (self.server_config,))
+
+    def test_a_file_that_exists_but_names_no_port_is_probed_not_defaulted(self):
+        """AC, the same rule read at its own boundary: "if the file already
+        names one, the install USES it". What decides is a CONFIGURED PORT, and
+        never the mere PRESENCE of a file.
+
+        A `crucible.toml` that exists and declares no `[%s] %s` -- placed by
+        hand, or carried over from a layout that predates this CR -- names
+        nothing to honour. An install that skipped the probe for it would fall
+        through to the template's shipped `port`, which is `3849`: the address
+        a production instance holds on the two-instance machine this CR serves.
+        That is the silent fallback §S1a forbids, arriving in the one state
+        where nobody would look for it, because the install reports success.
+        """ % (SERVER_TABLE, PORT_KEY)
+        ports = self.declare_range(width=2)
+        shipped_default = _table(self.template, SERVER_TABLE)[PORT_KEY]
+        os.makedirs(self.store_dir, exist_ok=True)
+        Path(self.server_config).write_text(
+            "# placed by hand: limits only, and no connection at all\n"
+            "[limits.roadmap_list_rows]\nvalue = 5\n", encoding="utf-8")
+
+        self.install_once()
+
+        url_port = _url_port(self.written_url())
+        self.assertNotEqual(
+            shipped_default, url_port,
+            "§S1a: the server's file exists but declares no `[%s] %s`, so "
+            "there was nothing to honour and the install must PROBE. It wrote "
+            "the template's shipped default (%d) into %s instead -- the "
+            "production board's own address on this machine, written by an "
+            "install that then reported success"
+            % (SERVER_TABLE, PORT_KEY, shipped_default, self.install_config))
+        self.assertIn(
+            url_port, ports,
+            "§S1a: the install must take a port out of the range its resolved "
+            "template declares (%r); the client file names %r"
+            % (ports, self.written_url()))
+
+
+# ===========================================================================
+# Two instances on one machine -- the scenario the whole CR exists for
+# ===========================================================================
+
+class TwoInstancesOnOneMachineEachGetTheirOwnConnectionTest(
+        _InstallerConnectionCase):
+    """§S1a's stated scenario, composed rather than approximated: TWO real
+    installs, into TWO target directories with TWO store directories, the first
+    one's chosen port held by a live listener while the second runs.
+
+    Every other case in this file drives ONE install into ONE target, which can
+    show that a port was probed but not that two instances END UP apart: a
+    second install that renumbered the first, or that wrote its own port into
+    the first's client file, would pass all of them.
+
+    WHAT THIS FIXTURE CANNOT REACH, stated rather than quietly dropped: the
+    literal "boot both and run a verb against each" leg. `[server]` and `[unit]`
+    are stubbed here in both directions -- no `bun add -g`, no `systemctl` --
+    so there is no server binary on this machine to boot and no board to run a
+    verb against, and faking one would assert about the fake. The strongest
+    reachable form is asserted instead, and it is a real one: both installs are
+    the REAL staged installer, the first instance's port is held by a REAL
+    listening socket for the whole of the second install, every port and URL is
+    read back off the four files on disk, and at the end a real socket is bound
+    on each instance's declared port AT THE SAME TIME -- two live listeners,
+    one per instance, each on the port its own file names. A booted server adds
+    the `Bun.serve` call over that; the two suites that do boot one are
+    `tests/server-listener-is-configuration.test.ts` (the server obeys its
+    file) and `tests/client/test_a_clients_board_is_its_projects_configuration.py`
+    (a client obeys its project's).
+    """
+
+    def repoint_to_a_second_slot(self, name):
+        """Move `$XDG_DATA_HOME` and the target dir to a SECOND per-instance
+        slot inside this test's own root, and re-derive every path from the
+        installer's own rules -- `store_dir()` reads the environment at call
+        time, which is exactly how a second instance on one machine is given
+        its own store. `$BUN_INSTALL` deliberately does NOT move: both installs
+        resolve the SAME provisioned template, because they are two instances
+        of one product rather than two products.
+        """
+        os.environ["XDG_DATA_HOME"] = os.path.join(self.root, "xdg-data-" + name)
+        os.makedirs(os.environ["XDG_DATA_HOME"], exist_ok=True)
+        self.store_dir = self.install.store_dir()
+        os.environ["CRUCIBLE_DB"] = os.path.join(self.store_dir, "crucible.db")
+        self.server_config = os.path.join(self.store_dir, CONFIG_NAME)
+        self.target_dir = os.path.join(self.root, "target-" + name)
+        self.install_config = os.path.join(self.target_dir, CONFIG_NAME)
+        self.assertEqual(
+            self.root, os.path.commonpath([self.root, self.store_dir]),
+            "fixture sanity: the second instance's store (%s) must fall inside "
+            "this test's own root (%s)" % (self.store_dir, self.root))
+
+    def instance(self):
+        """What one completed install left behind, read off its own two files:
+        `{"port", "url", "server_config", "install_config"}`."""
+        return {"port": self.written_listener(), "url": self.written_url(),
+                "server_config": self.server_config,
+                "install_config": self.install_config}
+
+    def named_port(self, instance):
+        return _table(instance["server_config"], SERVER_TABLE).get(PORT_KEY)
+
+    def named_url(self, instance):
+        return _table(instance["install_config"], CLIENT_TABLE).get(URL_KEY)
+
+    def test_a_second_install_beside_a_live_first_one_lands_on_its_own_port(self):
+        """AC: two instances on one machine, each configured with its own
+        connection, with nothing exported. The first is SERVING on the port it
+        was given while the second install runs -- the state an operator is
+        really in, and the state in which the old export-driven install put the
+        second instance's clients onto the first instance's board."""
+        ports = self.declare_range(width=2)
+        self.install_once()
+        first = self.instance()
+        self.occupy(first["port"], listening=True)
+
+        self.repoint_to_a_second_slot("b")
+        self.install_once()
+        second = self.instance()
+
+        self.assertNotEqual(
+            first["server_config"], second["server_config"],
+            "fixture sanity: the two instances must own SEPARATE server files")
+        self.assertNotEqual(
+            first["port"], second["port"],
+            "§S1a: both installs were configured with port %d. A second "
+            "instance on the first one's port is the collision this CR "
+            "exists to prevent: the first was LISTENING throughout the second "
+            "install, out of the declared range %r" % (first["port"], ports))
+        self.assertEqual(
+            ports[1], second["port"],
+            "§S1a: the range is %r and %d is held by a live listener, so the "
+            "second install takes %d; it took %d"
+            % (ports, first["port"], ports[1], second["port"]))
+        self.assertEqual(
+            first["port"], self.named_port(first),
+            "§S1a: the second install RENUMBERED the first instance's server "
+            "file -- %s now names %r, not the %d it was configured with. Every "
+            "client of that board still names the old port"
+            % (first["server_config"], self.named_port(first), first["port"]))
+
+    def test_each_instances_client_file_names_that_instances_own_board(self):
+        """AC: each install's `[client] url` names ITS OWN board. Asserted
+        across BOTH instances after both installs have run, because the failure
+        this guards is not a wrong URL in isolation -- it is two client files
+        that agree, which is exactly what an export produced."""
+        self.declare_range(width=2)
+        self.install_once()
+        first = self.instance()
+        self.occupy(first["port"], listening=True)
+
+        self.repoint_to_a_second_slot("b")
+        self.install_once()
+        second = self.instance()
+
+        for label, instance in (("first", first), ("second", second)):
+            with self.subTest(instance=label):
+                self.assertEqual(
+                    self.named_port(instance), _url_port(self.named_url(instance)),
+                    "§S1a: the %s instance's two files disagree -- its server "
+                    "file (%s) names port %r while its client file (%s) posts "
+                    "to %r"
+                    % (label, instance["server_config"],
+                       self.named_port(instance), instance["install_config"],
+                       self.named_url(instance)))
+        self.assertNotEqual(
+            self.named_url(first), self.named_url(second),
+            "§S1a: both instances' clients post to %r. A client laid down "
+            "beside the second instance reporting into the first one's board "
+            "IS the accident this CR removes -- silent, because that URL "
+            "answers" % (self.named_url(first),))
+
+    def test_both_instances_declared_ports_can_be_listened_on_at_once(self):
+        """The composition's payload, at the strongest form this fixture can
+        reach (see the class docstring): two REAL listening sockets, one on
+        each instance's declared port, open AT THE SAME TIME. Two files naming
+        two numbers is only a promise; two live sockets is the promise kept.
+        """
+        self.declare_range(width=2)
+        self.install_once()
+        first = self.instance()
+        held = self.occupy(first["port"], listening=True)
+
+        self.repoint_to_a_second_slot("b")
+        self.install_once()
+        second = self.instance()
+
+        self.assertEqual(
+            first["port"], held.getsockname()[1],
+            "fixture sanity: the socket held across the second install must be "
+            "the first instance's own port")
+        try:
+            self.occupy(second["port"], listening=True)
+        except OSError as error:
+            self.fail(
+                "§S1a: the two instances cannot both listen. The first holds "
+                "%d and the second was configured with %d, which will not bind "
+                "(%s) -- so the second board this machine was meant to carry "
+                "does not come up, and the install that configured it reported "
+                "success" % (first["port"], second["port"], error))
+
 
 # ===========================================================================
 # The manifest records what the install wrote
@@ -1103,7 +1376,7 @@ class TheUnitCarriesNoListenerEnvironmentTest(_InstallerConnectionCase):
         return found
 
     def test_the_rendered_unit_forwards_the_store_and_carries_no_listener_variables(self):
-        """AC: `_unit_environment()` (install.py:863-879) no longer forwards
+        """AC: `_unit_environment()` (install.py:1091-1114) no longer forwards
         `CRUCIBLE_PORT`/`CRUCIBLE_HOST`; `CRUCIBLE_DB` keeps being forwarded
         (§S3 -- the store path is how the server FINDS its file, so it precedes
         configuration discovery). The unit boots the server, the server reads
