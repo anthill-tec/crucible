@@ -239,6 +239,18 @@ describe("§S1 install.sh bootstrap", () => {
 // unscoped `"crucible"`, with no `publishConfig` and no `files` whitelist —
 // every assertion below is expected to FAIL against that state.
 
+// WHY THE TWO `npm pack` TESTS CARRY AN EXPLICIT TIMEOUT. `npm pack` is a real
+// npm invocation, and the FIRST one in a process pays npm's cold start —
+// reading its own config, resolving the cache. Measured on GitHub Actions,
+// 0.2.0's release branch (run 35077837163): the first of the two took 5101ms
+// and blew bun's 5000ms default while the second, warm, took 2476ms and passed
+// — so the pair failed on the runner and passed locally purely on machine
+// speed. The budget is generous because it is NOT a performance assertion:
+// nothing here claims npm is fast, only that the tarball has the right
+// contents, and a bound tight enough to double as a speed check is a bound
+// that reddens a release branch for the machine it ran on.
+const NPM_PACK_TIMEOUT_MS = 60_000;
+
 /**
  * Runs `npm pack --dry-run --json` against the real repo package.json and
  * returns the flat list of file paths npm would actually publish. Exercises
@@ -311,7 +323,7 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
     // sprawling everything-goes tarball" — file count should be small
     // (a curated whitelist, not the whole repo).
     expect(files.length).toBeLessThan(200);
-  });
+  }, NPM_PACK_TIMEOUT_MS);
 
   test("published tarball excludes repo working state (tests/, data/, crucible.db, coverage/, test-reports/, test-results/, .features-gen/)", () => {
     const files = npmPackDryRunFiles();
@@ -333,7 +345,7 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
       const leaked = files.filter((f) => f === forbidden || f.startsWith(forbidden));
       expect(leaked).toEqual([]);
     }
-  });
+  }, NPM_PACK_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------
