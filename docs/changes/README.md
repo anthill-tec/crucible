@@ -143,6 +143,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-09-16 — **six more retyped figures in `docs/RUNBOOK.md`, beyond the schema version CR-CRU-134
+  fixed** (candidate patch CR, found by CR-CRU-134's §S3 census). Highest-value: the port `3849`
+  (5 sites) and host `127.0.0.1` (4 sites) are both retyped from `src/server.ts:249,252`'s `??`
+  fallbacks; also the liveness tombstone `300000` (`src/types.ts:11`), the `error_detail_chars`
+  floor `100`, and the `run_abandon_ms` min/max/recommended trio inside the fenced warning example
+  at line 170 (plus its invented `30000` refused-value needs marking as illustrative once the trio
+  around it is derived). All follow the exact pattern CR-CRU-134 fixed for schema figures — extend
+  `tests/docs-runbook-documents-every-limit.test.ts` further, never a new walker. Full table with
+  every figure in the document and its verdict (derived/marked/out-of-scope) is in CR-CRU-134 §S3.
 - 2026-09-13 — **the cycle-kind mandate is enforced only in the clients; the ROUTE still accepts a
   kindless cycle** (candidate CR, split off `CR-CRU-127` by user ruling at gap-analysis time, not
   discovered later). CR-127 makes `plan-file` refuse a cycle with no declared kind client-side and
