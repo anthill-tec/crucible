@@ -33,12 +33,29 @@ set -euo pipefail
 EXIT_SUCCESS=0
 EXIT_ERROR=1
 EXIT_USAGE=2
+# CR-CRU-086 §S2 — the client's REFUSED-repair status (its EXIT_REPAIR_REFUSED):
+# it wrote nothing, on purpose, and said why. Neither recorded nor failed.
+EXIT_REFUSED=3
+# CR-CRU-130 §S2 — the ceremony could not DATE the release it is reporting, so
+# it reported nothing. Its own code, because it is neither a transport failure
+# nor a server refusal: nothing was even attempted, and the remedy is a git
+# one. See `emit_release_milestone`.
+EXIT_UNDATED=4
 
 # Script variables (set via argument parsing)
 SUBCOMMAND=""
 VERSION=""
 DRY_RUN=false
 VERBOSE=false
+# CR-CRU-080 §S1 — the ceremony's Crucible identity, from `--agent <id>`. Empty
+# means "not given on the command line"; ceremony_agent() then falls back to
+# $CRUCIBLE_AGENT.
+AGENT=""
+# CR-CRU-081 §S3 — the OPT-IN provenance repair, from `--repair-provenance`.
+# Default false, and there is deliberately no environment fallback: a release
+# record that CR-CRU-080 §S3 made immutable may only be corrected because this
+# run's own command line asked for it.
+REPAIR_PROVENANCE=false
 
 # ============================================================================
 # Helper Functions
@@ -65,7 +82,7 @@ debug() {
 # Show usage information (to stdout)
 usage() {
     cat <<'EOF'
-Usage: release.sh <subcommand> [args] [--dry-run] [--verbose] [-h|--help]
+Usage: release.sh <subcommand> [args] [--agent <agentId>] [--dry-run] [--verbose] [-h|--help]
 
 Branch-gated release driver for Crucible.
 
@@ -81,16 +98,43 @@ Subcommands:
                     Runs: gh workflow run release.yml --ref <branch>
 
   finish <X.Y.Z>    Align package.json to X.Y.Z (committing it, so it lands on
-                    the merge — no separate set-version run is needed), run both
-                    preflight guards (manifest version, tag prefix), then finish
-                    the git-flow release/hotfix and push master + develop +
-                    tags. Allowed only on release/* or hotfix/*.
+                    the merge — no separate set-version run is needed), run the
+                    preflight guards (ceremony identity, manifest version, tag
+                    prefix), then finish the git-flow release/hotfix and push
+                    master + develop + tags. Allowed only on release/* or
+                    hotfix/*.
 
   status            Print the current branch and the derived version
                     (git describe --tags). Tags are bare SemVer (X.Y.Z).
                     Exit 0.
 
+  backfill-releases
+                    Retroactively record every already-shipped release as a
+                    `release` milestone in Crucible, from the repo's bare-SemVer
+                    tags (git tag + git rev-list -1 <tag>). Prints a per-tag
+                    result and a final `N/M recorded` tally, and warns-not-fails
+                    on a reporting error. Idempotent: the server collapses a
+                    repeated (type, label, commit) release onto the row it
+                    already holds (CR-CRU-080 §S3). Exit 0.
+                    Add --repair-provenance to CORRECT the records already
+                    held instead of replaying them (CR-CRU-081 §S3).
+
 Options:
+  --agent <agentId> The Crucible identity the release report is attributed to.
+                    Falls back to $CRUCIBLE_AGENT when the flag is absent; the
+                    flag wins when both are present. REQUIRED for `finish` and
+                    `backfill-releases` — both refuse at preflight without one,
+                    because the client has no identity fallback (CR-CRU-057) and
+                    a report with no identity silently records nothing.
+  --repair-provenance
+                    Re-derive an already-recorded release's provenance
+                    (`releasedAt` + the CR ids it shipped) from the repo's
+                    CURRENT ancestry, instead of replaying the record the
+                    server holds. Opt-in and non-default, because CR-CRU-080
+                    §S3 made release records immutable: version, commit and the
+                    row itself are never touched, and a repair changes nothing
+                    when the stored provenance is already correct
+                    (CR-CRU-081 §S3).
   --dry-run         Print the commands that would run without executing them.
                     Preflight guards still run and still refuse.
   --verbose         Print debug output.
@@ -242,6 +286,30 @@ guard_tag_prefix() {
     fi
 }
 
+# Guard (c) (CR-CRU-080 §S1/§S2): the ceremony's Crucible identity, resolved
+# EXPLICITLY — `--agent <id>` first, then the documented $CRUCIBLE_AGENT. There
+# is deliberately no third source: $WORKFLOW_ROLE carries the track lane rather
+# than an identity, and a filename- or role-derived default would plant a
+# phantom row on the agent rail (CR-CRU-057). Echoes the identity, or nothing.
+ceremony_agent() {
+    if [ -n "$AGENT" ]; then
+        echo "$AGENT"
+        return 0
+    fi
+    echo "${CRUCIBLE_AGENT:-}"
+}
+
+# An absent identity is a PREFLIGHT refusal, not a warning after the fact: the
+# client requires `--agent` and has no fallback, so a ceremony without one
+# publishes a tag Crucible never learns about. Refusing here means the operator
+# finds out BEFORE the tag exists, when it is still free to fix.
+guard_agent_identity() {
+    if [ -n "$(ceremony_agent)" ]; then
+        return 0
+    fi
+    error "no Crucible identity for the release report — pass --agent <agentId> or set \$CRUCIBLE_AGENT. There is no fallback and no default (CR-CRU-057), and a release reported without one records nothing." "$EXIT_ERROR"
+}
+
 # ============================================================================
 # Subcommand implementations
 # ============================================================================
@@ -294,6 +362,553 @@ cmd_checkpoint() {
     gh workflow run release.yml --ref "$branch"
 }
 
+# CR-CRU-074 §S2 — report the shipped release to Crucible, through the repo
+# client (never a bare curl). Called ONLY after `git push … --tags` has
+# published the tag, so a recorded release always corresponds to a tag the
+# remote actually received. The version is the TAG's bare SemVer and the commit
+# is the tagged sha — never a value guessed from the CLI argument. A reporting
+# failure (including an absent/malformed tag) must NOT fail the release, since
+# the tag is already public: warn, naming the version, and return success.
+report_release() {
+    local tag prefix version sha
+
+    if ! tag="$(git describe --tags --abbrev=0 2>/dev/null)" || [ -z "$tag" ]; then
+        info "WARN: could not read the release tag; release $VERSION was NOT reported to Crucible"
+        return "$EXIT_SUCCESS"
+    fi
+
+    # Strip the git-flow versiontag prefix (guarded to empty) to get bare SemVer.
+    prefix="$(git config --get gitflow.prefix.versiontag 2>/dev/null || true)"
+    version="${tag#"$prefix"}"
+
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        info "WARN: release tag '$tag' is not bare SemVer; release $VERSION was NOT reported to Crucible"
+        return "$EXIT_SUCCESS"
+    fi
+
+    if ! sha="$(git rev-list -n 1 "$tag" 2>/dev/null)" || [ -z "$sha" ]; then
+        info "WARN: could not resolve the commit for tag '$tag'; release $version was NOT reported to Crucible"
+        return "$EXIT_SUCCESS"
+    fi
+
+    # CR-CRU-080 §S2/AC3 — non-fatal AFTER publication: the tag is already
+    # public, so a transport failure warns (with its recovery command, printed
+    # by the reporter) and the ceremony still exits successfully.
+    #
+    # CR-CRU-130 §S2 — with ONE exception, and it is not a hole in that rule.
+    # The tolerance exists so a REPORTING failure cannot unpublish a release;
+    # it does not exist so a DEGRADED RECORD can pass for a good one. A release
+    # the ceremony could not date was never sent, and the store holding no
+    # record is recoverable while a store holding an undated one is not — the
+    # date is gone the moment nobody is told. So that status alone survives the
+    # `|| true` and the ceremony exits non-zero, having published the tag and
+    # named the remedy.
+    local reported=0
+    emit_release_milestone "$version" "$sha" || reported=$?
+    # CR-CRU-081 §S2 — same tally on the live path: an incomplete `crs` must be
+    # visible at the moment it is produced, not only in a backfill.
+    report_unplaceable_crs
+    if [ "$reported" -eq "$EXIT_UNDATED" ]; then
+        return "$EXIT_ERROR"
+    fi
+    return "$EXIT_SUCCESS"
+}
+
+# CR-CRU-080 §S4 — WHEN a release shipped: the commit date of the commit its tag
+# points at, in epoch SECONDS (git's `%ct`). This is deliberately NOT the ingest
+# time Crucible stamps when the report lands — that is when the release was
+# RECORDED, which is why the three hand-backfilled releases all claimed the
+# backfill's own minute while their tags were days older. Empty when git cannot
+# answer, in which case nothing is reported rather than a guessed date.
+release_ship_date() {
+    git log -1 --format=%ct "$1" 2>/dev/null || true
+}
+
+# CR-CRU-084 §S1/AC1 — WHAT a release delivers: the two artifacts every
+# Crucible release publishes, as the client's `registry:name:version` entries.
+#
+# The coordinates live HERE and only here — the registries and the two package
+# names are fixed properties of this project, not something to discover. The
+# ceremony DECLARES them: it never asks PyPI, npm or CI whether a publish
+# happened (§S1 Non-goals — at `finish` no artifact exists yet, the publish
+# jobs run afterwards, and the gate ladder before `finish` is the assurance).
+#
+# AC2 is structural rather than compared: both entries are stamped with the
+# caller's `$1`, which is the TAG's bare SemVer the release record itself is
+# built from, so a per-artifact version has no second input to diverge from.
+release_packages() {
+    local version="$1"
+    printf 'pypi:crucible-axi:%s,npm:@anthill-tec/crucible-server:%s' \
+        "$version" "$version"
+}
+
+# CR-CRU-081 §S1 — the release tags in ship order: bare SemVer only (a
+# v-prefixed or non-release tag is never a release), version-sorted, so
+# "the EARLIEST tag containing a commit" is well defined.
+release_tags() {
+    git tag 2>/dev/null \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -V || true
+}
+
+# CR-CRU-081 §S1 — the CR → landing-sha map the project ALREADY keeps: every
+# CLOSED plan's `merge.commit`, read through the client's existing `plans` verb
+# (its `mergeCommit` column). One line per closed plan, `<cr> <sha>`, with the
+# sha absent when the plan recorded none. No new read surface, no DB access,
+# and — the whole point of CR-CRU-081 — no prose parsed.
+#
+# Tolerant by construction: an unreachable or failing client yields NO lines, so
+# provenance is simply omitted rather than invented. A release is published
+# before it is reported and must never fail on its own provenance.
+plan_merge_map() {
+    local client
+    client="$(repo_root)/clients/python-crucible.py"
+
+    python3 "$client" plans --fields mergeCommit 2>/dev/null \
+        | awk '
+            /^[[:space:]]*plans\[[0-9]+\]\{/ {
+                header = $0
+                sub(/^[^{]*\{/, "", header)
+                sub(/\}.*$/, "", header)
+                cols = split(header, name, ",")
+                for (i = 1; i <= cols; i++) col[name[i]] = i
+                next
+            }
+            cols > 0 {
+                row = $0
+                gsub(/"/, "", row)
+                if (split(row, v, ",") < cols) next
+                cr = v[col["cr"]]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+                if (cr !~ /^CR-[A-Z]+-[0-9]+$/) next
+                if (v[col["status"]] != "closed") next
+                sha = v[col["mergeCommit"]]
+                print cr, (sha == "null" ? "" : sha)
+            }' \
+        | sort -u || true
+}
+
+# CR-CRU-081 §S1 — the EARLIEST bare-SemVer tag whose history contains `sha`
+# (`git merge-base --is-ancestor`, the ancestry primitive itself), or EMPTY when
+# no tag contains it. Empty is not a gap: it is a CR that landed after the
+# newest tag and has simply not shipped yet.
+earliest_tag_containing() {
+    local sha="$1" tag
+
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        if git merge-base --is-ancestor "$sha" "$tag" >/dev/null 2>&1; then
+            printf '%s\n' "$tag"
+            return "$EXIT_SUCCESS"
+        fi
+    done < <(release_tags)
+
+    return "$EXIT_SUCCESS"
+}
+
+# CR-CRU-081 §S1 — WHAT a release shipped: every CR whose RECORDED landing
+# commit is an ancestor of this tag and of no earlier one, comma-separated for
+# the client's `--crs`.
+#
+# This replaces CR-CRU-080 §S4's scan of MERGE-COMMIT SUBJECTS, which silently
+# dropped every CR that landed by fast-forward or squash (measured: CR-CRU-021
+# and CR-CRU-023 shipped in 0.1.0 and appeared in no release's `crs`). Ancestry
+# is exact and text-independent (AC6): nothing here reads a commit message.
+#
+# Attributing to the EARLIEST containing tag keeps the per-release sets a
+# partition (CR-080 AC10), which holds even when the tags are not one straight
+# ancestry chain.
+#
+# Git is still the half only the repo can answer; which of these ids the project
+# actually REGISTERED is the queue's half, intersected in the client on this
+# side of the wire, so git never enters the server's path.
+release_crs() {
+    local version="$1" cr sha
+    local -a shipped=()
+
+    while read -r cr sha; do
+        [ -n "$sha" ] || continue
+        if [ "$(earliest_tag_containing "$sha")" = "$version" ]; then
+            shipped+=("$cr")
+        fi
+    done < <(plan_merge_map)
+
+    [ "${#shipped[@]}" -gt 0 ] || return "$EXIT_SUCCESS"
+    printf '%s\n' "${shipped[@]}" | sort -u | paste -sd, - || true
+}
+
+# CR-CRU-081 §S2 — the project's registered CR QUEUE and its `cr-merged` landing
+# markers, read through the client's `queue` verb (one call, both sources). The
+# queue is what says which CR ids the project ever filed; the two landing
+# sources together say which of them Crucible knows the landing of.
+#
+# Tolerant exactly as `plan_merge_map` is: an unreachable or failing client
+# yields NO output, so the ceremony reports what it can rather than failing on
+# its own reporting — a published release must never be blocked by a gap in the
+# report about it.
+queue_read() {
+    python3 "$(repo_root)/clients/python-crucible.py" queue 2>/dev/null || true
+}
+
+# The CR ids the queue holds, one per line, from a `queue` envelope on stdin.
+queued_crs() {
+    awk '
+        /^[[:space:]]*queue\[[0-9]+\]\{/ {
+            header = $0
+            sub(/^[^{]*\{/, "", header)
+            sub(/\}.*$/, "", header)
+            cols = split(header, name, ",")
+            for (i = 1; i <= cols; i++) col[name[i]] = i
+            next
+        }
+        cols > 0 {
+            row = $0
+            gsub(/"/, "", row)
+            if (split(row, v, ",") < cols) next
+            cr = v[col["cr"]]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+            if (cr ~ /^CR-[A-Z]+-[0-9]+$/) print cr
+        }' | sort -u || true
+}
+
+# The CR ids a `cr-merged` milestone covers — the SECOND landing source — from
+# the same envelope, one per line.
+cr_merged_crs() {
+    awk -F': ' '/^[[:space:]]*crMerged\[[0-9]+\]:/ {
+            gsub(/,/, "\n", $2)
+            print $2
+        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+}
+
+# CR-CRU-129 §S4 — the CR ids some STORED release record NAMES while Crucible
+# holds no plan that is evidence of work, from the same `queue` envelope, one
+# per line. This is a DIRECT read of stored release membership: the board
+# derives `COMPLETED_UNTRACKED` from `listReleases(...).crs` itself (src/store.ts,
+# `statusFor` — "no plan at all, or only abandoned ones, and some release's
+# `crs` names it"), so the ceremony asks the store what it holds rather than
+# inferring it from what this run happened to be refused.
+#
+# That difference is the whole point. The evidence used to be the ids the
+# SERVER refused to let a replay drop, which is populated ONLY by a 409 — and
+# `cmd_finish` replays just the NEW label while the shrink guard is scoped per
+# label, so on the live `finish` path nothing could ever be refused and every
+# unplaceable CR was reported as "nothing is lost", including a genuinely
+# evicted one. A read of the records themselves answers on every path.
+#
+# The predicate is exact, and the report's wording is held to it: a CR is in
+# here iff a stored release names it AND Crucible holds no plan that is
+# evidence of work. A CR with an OPEN plan is therefore never in here — it is
+# in-flight work rather than a record whose landing evidence is gone — which is
+# why the never-landed line claims only "no stored release record names them as
+# shipped-without-one" rather than "no release record names them".
+#
+# Tolerant like every other reader here: no envelope, no ids, and the caller
+# reports the class it can still tell.
+release_named_crs() {
+    awk '
+        /^[[:space:]]*queue\[[0-9]+\]\{/ {
+            header = $0
+            sub(/^[^{]*\{/, "", header)
+            sub(/\}.*$/, "", header)
+            cols = split(header, name, ",")
+            for (i = 1; i <= cols; i++) col[name[i]] = i
+            next
+        }
+        cols > 0 {
+            row = $0
+            gsub(/"/, "", row)
+            if (split(row, v, ",") < cols) next
+            cr = v[col["cr"]]
+            status = v[col["status"]]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
+            if (cr ~ /^CR-[A-Z]+-[0-9]+$/ && status == "COMPLETED_UNTRACKED") print cr
+        }' | sort -u || true
+}
+
+# CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
+# distinct classes §S2 defines, so "tracked, but the landing sha is missing" is
+# never read as "Crucible has no record of this CR landing at all":
+#
+#   1. a plan that is CLOSED (the CR landed) yet records no merge commit, so
+#      there is no sha to test ancestry against;
+#   2. a CR the project QUEUED for which no landing record exists at any source
+#      — no closed plan, and no `cr-merged` milestone either. This is the class
+#      that was invisible: ancestry cannot place such a CR and nothing reported
+#      it, so 0.1.0's provenance shrank from 58 CRs to 51 in total silence.
+#
+# CR-CRU-129 §S4 — and class 2 is itself TWO facts that demand opposite
+# responses, reported apart because the 2026-09-13 run printed `15 unplaceable`
+# over both and neither could be acted on:
+#
+#   2a. the landing evidence was EVICTED — a stored release record NAMES the
+#       CR, so it demonstrably shipped, yet nothing survives to say where. That
+#       is DATA LOSS: something Crucible held is gone, and the ids are worth
+#       chasing back into the store.
+#   2b. the CR NEVER landed — no record names it anywhere. Nothing is lost,
+#       because nothing was ever recorded; it is simply queued work.
+#
+# The evidence for 2a is `release_named_crs`: a DIRECT read of what the stored
+# release records name, taken from the same `queue` envelope this function
+# already fetches. It answers on EVERY path, which the previous evidence did
+# not — that was the set of ids a replay had been refused, populated only by a
+# 409, and `cmd_finish` replays only the NEW label against a guard scoped per
+# label, so on the live `finish` path the partition was inert and every
+# unplaceable CR was reported as "nothing is lost" whether or not a record
+# named it. A report that claims more than it verified is worse than a silent
+# one, so the claim is now made against the records themselves.
+#
+# Each class is counted and described SEPARATELY, on its own line, with disjoint
+# id sets — one shared total would re-create exactly the confusion §S2 names.
+#
+# Reporting places nothing: a named CR stays absent from every release's `crs`,
+# because Crucible genuinely does not know where it landed and inventing a
+# placement would be fabrication.
+#
+# A CR whose sha IS recorded but precedes no tag is in NEITHER class: it landed
+# after the newest tag, which is placement, not a gap.
+report_unplaceable_crs() {
+    local cr sha queue_out tracked="" merged="" named=""
+    local -a missing_sha=() evicted=() never_landed=()
+
+    while read -r cr sha; do
+        [ -n "$cr" ] || continue
+        tracked="$tracked $cr"
+        [ -n "$sha" ] || missing_sha+=("$cr")
+    done < <(plan_merge_map)
+
+    queue_out="$(queue_read)"
+    merged=" $(printf '%s\n' "$queue_out" | cr_merged_crs | paste -sd' ' -) "
+    named=" $(printf '%s\n' "$queue_out" | release_named_crs | paste -sd' ' -) "
+    while IFS= read -r cr; do
+        [ -n "$cr" ] || continue
+        [[ " $tracked " != *" $cr "* ]] || continue
+        [[ "$merged" != *" $cr "* ]] || continue
+        # CR-CRU-129 §S4 — class 2 splits on ONE question: does a stored
+        # release record NAME this CR? If it does, the CR demonstrably shipped
+        # and only the evidence of WHERE is gone — data loss, and the class
+        # this project's own 0.1.0 lost nine CRs to. If no record names it,
+        # nothing was lost because nothing was ever recorded.
+        if [[ "$named" == *" $cr "* ]]; then
+            evicted+=("$cr")
+        else
+            never_landed+=("$cr")
+        fi
+    done < <(printf '%s\n' "$queue_out" | queued_crs)
+
+    if [ "${#missing_sha[@]}" -gt 0 ]; then
+        info "provenance: ${#missing_sha[@]} unplaceable CR(s) — tracked, but the landing sha is missing: the plan is closed and records no merge commit, so there is no commit to test ancestry against: ${missing_sha[*]}"
+    fi
+    if [ "${#evicted[@]}" -gt 0 ]; then
+        info "provenance: ${#evicted[@]} unplaceable queued CR(s) — landing evidence EVICTED: a stored release record NAMES them, so they shipped, yet no landing record survives at any source (no closed plan, no cr-merged record). This is DATA LOSS, not a gap: ${evicted[*]}"
+    fi
+    if [ "${#never_landed[@]}" -gt 0 ]; then
+        info "provenance: ${#never_landed[@]} unplaceable queued CR(s) — NEVER landed: Crucible holds no landing record for them at any source (no closed plan, no cr-merged record) and no stored release record names them as shipped-without-one, so nothing is lost: ${never_landed[*]}"
+    fi
+}
+
+# The SINGLE release-report path: report one (version, sha) pair as a `release`
+# milestone through the repo client (never a bare curl), declaring the
+# ceremony's identity (CR-CRU-080 §S1) — the client requires it and has no
+# fallback, so a report without one posts nothing.
+#
+# Idempotent: the server collapses a repeated (type, label, commit) release onto
+# the row it already holds (CR-CRU-080 §S3). It did NOT do so before — the
+# comment that used to claim it here was false, and a re-run of the backfill
+# duplicated every release.
+#
+# CR-CRU-080 §S4 — the SAME single path also carries the release's provenance:
+# when it shipped and what it shipped, each reported only when git actually
+# answered, so an unanswerable field is omitted rather than invented.
+#
+# Returns non-zero when the report failed, having printed the warning AND the
+# single-line recovery command carrying the tag's sha (and its provenance, so
+# the recovery records the same release, not a poorer one). Whether that is
+# fatal is the CALLER's call, and CR-CRU-130 §S2 gave that call ONE exception
+# which is named HERE, beside the status that raises it, so the two halves of
+# the rule cannot be read apart:
+#   - an ORDINARY report failure is not fatal after publication (report_release
+#     swallows it), while the backfill counts it into its tally;
+#   - EXIT_UNDATED is the exception: report_release converts it to EXIT_ERROR.
+#     The tolerance exists so a REPORTING failure cannot unpublish a release;
+#     it does not exist so a DEGRADED RECORD can pass for a good one. A store
+#     holding NO record for this release is recoverable, while a store holding
+#     an UNDATED one is not — the ship date is gone the moment nobody is told.
+#
+# CR-CRU-081 §S3 — the SAME single path also carries the OPT-IN repair. With
+# --repair-provenance the client is told to CORRECT the record the server
+# already holds for this (type, label, commit) — re-deriving `releasedAt` and
+# `crs` from what this run just computed — instead of replaying it. Without
+# the flag the argv is byte-identical to the pre-081 one, so the ordinary
+# re-run remains CR-CRU-080 §S3's replay and cannot rewrite a release.
+#
+# CR-CRU-084 §S1 — and the SAME single path also carries WHAT the release
+# DELIVERED: the declared package pair, needing no git answer because it is
+# derived from the version this reporter was already given (AC2). Both callers
+# — the live `finish` and §S4's backfill — reach it here, so there is one
+# reporter and never a second mechanism. It is scoped to the RECORDING path;
+# the body says why.
+emit_release_milestone() {
+    local version="$1" sha="$2" client agent ship_date crs packages shown=""
+    local -a provenance=()
+
+    agent="$(ceremony_agent)"
+    client="$(repo_root)/clients/python-crucible.py"
+
+    # CR-CRU-130 §S2 — A RELEASE THIS CEREMONY CANNOT DATE IS NOT REPORTED, and
+    # the ceremony says so instead of posting a poorer record in silence.
+    #
+    # `release_ship_date` prints NOTHING and exits 0 whenever git cannot answer
+    # for this sha — a shallow clone, or a tag object the local repo never
+    # fetched. Until this CR the date was simply dropped from the argv and the
+    # release was recorded without it, which is the class of silence §S2 exists
+    # to end: the store then holds a release whose ship date nobody will ever
+    # recover, and the operator is told the ceremony succeeded. The remedy is a
+    # git one and it is named, so the recovery command below records the SAME
+    # release rather than a poorer one.
+    ship_date="$(release_ship_date "$sha")"
+    if [ -z "$ship_date" ]; then
+        info "FAILED: release $version is NOT recorded in Crucible — git could not date $sha"
+        info "  \`git log -1 --format=%ct $sha\` answered nothing: the commit is most likely absent"
+        info "  from this clone (a shallow clone, or a tag object that was never fetched)."
+        info "  remedy: \`git fetch --tags --unshallow\` (or \`--depth=<n>\`) and re-run, or record it"
+        info "  directly once the date is known:"
+        info "  python3 $client milestone --type release --label $version --commit $sha --agent $agent --released-at <epoch-seconds>"
+        return "$EXIT_UNDATED"
+    fi
+    provenance+=(--released-at "$ship_date")
+    shown="$shown --released-at $ship_date"
+    crs="$(release_crs "$version")"
+    if [ -n "$crs" ]; then
+        provenance+=(--crs "$crs")
+        shown="$shown --crs $crs"
+    fi
+    # CR-CRU-084 §S1/AC1 — WHAT this release delivered, declared on the
+    # RECORDING path and deliberately NOT on the repair path.
+    #
+    # A repair CORRECTS an already-recorded release, and the pair is a
+    # DECLARATION made when the release was recorded — not something
+    # re-derivable afterwards. 0.1.0 is the proof: it delivered PyPI only (its
+    # npm publish failed), a historical fact `release_packages` cannot know.
+    # Re-declaring the constant pair on every repair would overwrite that
+    # per-release correction with a wrong one; it would also hand CR-CRU-086's
+    # refusal something to write, so a repair whose CR derivation came back
+    # EMPTY would stop refusing and start rewriting the release. §S4's
+    # corrections are made per release through the client's OWN repair path,
+    # which carries `--packages` for exactly that (the refusal narrowed to
+    # "nothing at all to write" so they can).
+    if [ "$REPAIR_PROVENANCE" != true ]; then
+        packages="$(release_packages "$version")"
+        provenance+=(--packages "$packages")
+        shown="$shown --packages $packages"
+    fi
+    if [ "$REPAIR_PROVENANCE" = true ]; then
+        provenance+=(--repair-provenance)
+        shown="$shown --repair-provenance"
+    fi
+
+    # The client's ENVELOPE is captured and re-printed verbatim on the same
+    # channel it was written to, so nothing an operator or a machine caller
+    # used to read is lost. The interactive stderr line is never intercepted.
+    local status=0 answer=""
+    answer="$(python3 "$client" milestone --type release --label "$version" \
+        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"})" || status=$?
+    [ -z "$answer" ] || printf '%s\n' "$answer"
+    case "$status" in
+        "$EXIT_SUCCESS")
+            return "$EXIT_SUCCESS"
+            ;;
+        # CR-CRU-086 §S2 — a refusal is not a failed report: the client has
+        # already named the release and the reason on the interactive channel,
+        # and a "recover with" line would invite the caller to re-run the very
+        # write that was refused. Passed through for the caller to tally.
+        #
+        # CR-CRU-129 §S4 — nothing is accumulated here. The ids a refusal
+        # declined to drop are a SUBSET of what `release_named_crs` reads
+        # straight off the stored records, and reading them here would make the
+        # unplaceable partition depend on whether this run happened to be
+        # refused — which on the `finish` path it never is.
+        "$EXIT_REFUSED")
+            return "$EXIT_REFUSED"
+            ;;
+    esac
+
+    info "WARN: release $version is NOT recorded in Crucible; the release itself is published and complete"
+    info "  recover with: python3 $client milestone --type release --label $version --commit $sha --agent $agent$shown"
+    return "$EXIT_ERROR"
+}
+
+# CR-CRU-074 §S4 — retroactively record the releases that already shipped, so
+# the board is not permanently missing its own history. Enumerate the repo's
+# tags (`git tag`), keep ONLY bare SemVer (X.Y.Z) — a v-prefixed or non-release
+# tag is never a release — and report each as a `release` milestone through the
+# SAME path §S2 built (emit_release_milestone → the repo client), with the
+# commit resolved from `git rev-list -n 1 <tag>`, never a guessed value or a
+# gate's intent text.
+#
+# CR-CRU-080 §S1/§S3 — the identity is a PREFLIGHT: a backfill with none cannot
+# spend one client call per tag discovering that it has no identity, so it
+# refuses before the first. Idempotent through the SERVER's dedup on
+# (type, label, commit), so a re-run converges on the rows already held rather
+# than duplicating each release. Every tag gets a named result, and the run ends
+# with an `N/M recorded` tally naming whatever did not land — a partial failure
+# has to be readable in the exit summary, not only mid-log. Reporting stays
+# warns-not-fails, so the exit is 0 even with a failed tag or no SemVer tags.
+cmd_backfill_releases() {
+    local tags tag sha status total=0 recorded=0
+    local -a failed=() refused=()
+
+    guard_agent_identity
+
+    tags="$(git tag)"
+    for tag in $tags; do
+        if ! printf '%s' "$tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            continue
+        fi
+        total=$((total + 1))
+        if ! sha="$(git rev-list -n 1 "$tag" 2>/dev/null)" || [ -z "$sha" ]; then
+            info "  $tag: NOT backfilled — could not resolve the tag's commit"
+            failed+=("$tag")
+            continue
+        fi
+        status=0
+        emit_release_milestone "$tag" "$sha" || status=$?
+        if [ "$status" -eq "$EXIT_SUCCESS" ]; then
+            info "  $tag: recorded ($sha)"
+            recorded=$((recorded + 1))
+        elif [ "$status" -eq "$EXIT_REFUSED" ]; then
+            # CR-CRU-086 §S2 — REFUSED, not recorded and not failed: the
+            # report wrote nothing and the client said why. Named here too, so
+            # the tally below is never read as "recorded".
+            #
+            # CR-CRU-129 §S4 — both refusals land here, and neither is a
+            # repair-only condition any more: a repair that could not compute
+            # this release's provenance, and a REPLAY the server declined
+            # because it would have dropped CRs the stored record holds.
+            info "  $tag: REFUSED — nothing was written (reason above)"
+            refused+=("$tag")
+        else
+            failed+=("$tag")
+        fi
+    done
+
+    # CR-CRU-081 §S2 — the provenance gap, once per ceremony run: whatever
+    # ancestry could not place is named here rather than left invisible.
+    report_unplaceable_crs
+
+    local tally="backfill-releases: $recorded/$total recorded"
+    if [ "${#refused[@]}" -gt 0 ]; then
+        tally="$tally; REFUSED (nothing written): ${refused[*]}"
+    fi
+    if [ "${#failed[@]}" -eq 0 ]; then
+        info "$tally"
+    else
+        info "$tally; NOT recorded: ${failed[*]}"
+    fi
+
+    return "$EXIT_SUCCESS"
+}
+
 cmd_finish() {
     local branch
     branch="$(require_release_branch)"
@@ -301,6 +916,12 @@ cmd_finish() {
     if [ -z "$VERSION" ]; then
         error "finish requires a version: release.sh finish <X.Y.Z>" "$EXIT_USAGE"
     fi
+
+    # CR-CRU-080 §S2/AC2 — the identity guard runs FIRST, before the manifest
+    # is even aligned: a ceremony that cannot report must refuse to start, so
+    # the operator learns while the tag does not yet exist. Everything after
+    # this point either publishes or is a local, revertible commit.
+    guard_agent_identity
 
     # CR-CRU-061 §S7 — align the manifest to the finish version OURSELVES, so a
     # release is ONE command. This write + commit is REAL even under --dry-run:
@@ -335,6 +956,9 @@ cmd_finish() {
     GIT_MERGE_AUTOEDIT=no git flow "$kind" finish -m "Release $VERSION" "$VERSION"
     debug "pushing: $push_cmd"
     git push origin master develop --tags
+
+    # CR-CRU-074 §S2 — the tag is now published; record the release.
+    report_release
 }
 
 cmd_status() {
@@ -361,12 +985,36 @@ while [ $# -gt 0 ]; do
             usage
             exit "$EXIT_SUCCESS"
             ;;
+        # CR-CRU-080 §S1 — the explicit identity source; wins over
+        # $CRUCIBLE_AGENT (see ceremony_agent).
+        --agent)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                echo "ERROR: --agent requires an agentId" >&2
+                exit "$EXIT_USAGE"
+            fi
+            AGENT="$2"
+            shift 2
+            ;;
+        --agent=*)
+            AGENT="${1#--agent=}"
+            if [ -z "$AGENT" ]; then
+                echo "ERROR: --agent requires an agentId" >&2
+                exit "$EXIT_USAGE"
+            fi
+            shift
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
             ;;
         --verbose)
             VERBOSE=true
+            shift
+            ;;
+        # CR-CRU-081 §S3 — the opt-in correction switch (see
+        # emit_release_milestone); absent, every re-post stays the replay.
+        --repair-provenance)
+            REPAIR_PROVENANCE=true
             shift
             ;;
         -*)
@@ -410,6 +1058,9 @@ case "$SUBCOMMAND" in
         ;;
     status)
         cmd_status
+        ;;
+    backfill-releases)
+        cmd_backfill_releases
         ;;
     *)
         echo "ERROR: unknown subcommand: $SUBCOMMAND" >&2

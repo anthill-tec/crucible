@@ -81,10 +81,15 @@ import signal
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 STALE_THRESHOLD_S = 60
+# The STACK this client's runs belong to — the name its sibling clients address
+# it by (`rust-crucible.py`), which is what a gate composes declared suites over
+# (CR-CRU-112 §S1).
+_STACK = "rust"
 
 # Parallel rustc cap for the FULL-workspace `--all-features` compiles (smoke-test,
 # workspace-regression, pre-merge-gate, workspace clippy gate). Per-crate / `-p`-scoped
@@ -121,16 +126,24 @@ def _resolve_project_dir(arg_value):
     git repository containing the current directory (`git rev-parse --show-toplevel`),
     falling back to the current directory when not inside a git repo. The `.env` holding
     CRUCIBLE_PROJECT_KEY must live at that resolved root.
+
+    CR-CRU-131 §S1b — the resolved root is BOUND into the shared module, which reads
+    this project's `crucible.toml` beside that `.env` for the three display limits.
+    Bound HERE, on the client's own boot path, because project-dir resolution stays
+    client-specific and the shared module takes it ALREADY RESOLVED.
     """
     if arg_value:
-        return arg_value
-    env_value = os.environ.get("RUST_CRUCIBLE_PROJECT_DIR")
-    if env_value:
-        return env_value
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else os.getcwd()
+        root = arg_value
+    elif (env_value := os.environ.get("RUST_CRUCIBLE_PROJECT_DIR")):
+        root = env_value
+    else:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+        )
+        root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
+                else os.getcwd())
+    _axi().bind_project_dir(root)
+    return root
 
 
 def _read_env(project_dir):
@@ -306,7 +319,7 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, project_dir, agent):
+def _emit_ingest_axi(verb, resp, project_dir, agent, warnings=None):
     """Emit the §S1 envelope for an ingest verb:
     run{passed,failed,pending,total} (from the SERVER-parsed response).
     CR-CRU-050 §S2 — the server's junit codec already classifies `<skipped/>`
@@ -316,7 +329,9 @@ def _emit_ingest_axi(verb, resp, project_dir, agent):
     the envelope context ECHOES the attachment the SERVER reported
     (`context.cycleId` on the ingest response), so the agent sees which cycle
     absorbed its evidence without a second `GET /api/v2/events`; absent → the
-    key is omitted."""
+    key is omitted. CR-CRU-094 §S3 — `warnings` carries the run's pre-flight
+    finding onto the envelope, so the stderr line and `warnings[]` say the
+    same thing."""
     s = resp.get("run", {}) or {}
     run = {"passed": s.get("passed"), "failed": s.get("failed"),
            "pending": s.get("pending", 0), "total": s.get("total")}
@@ -326,7 +341,7 @@ def _emit_ingest_axi(verb, resp, project_dir, agent):
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 def _clippy_help(ok, errors, lints, scope):
@@ -774,15 +789,27 @@ def _clean_stale_junit(project_dir, profile=None):
 def cmd_auto_ingest(args):
     """Detect: junit XML present → ingest tests. Absent → cargo check stderr → ingest compile."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is
+    # the furthest of any from the run that produced the report, so an
+    # unattributed store here is the hardest to notice. Best-effort, on both
+    # channels, before either ingest branch below POSTs.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     _clean_stale_junit(project_dir)
     ci = f"{project_dir}/target/nextest/ci/junit.xml"
     default = f"{project_dir}/target/nextest/default/junit.xml"
     junit_path = ci if os.path.exists(ci) else (default if os.path.exists(default) else None)
 
     if junit_path:
-        resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
+        # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests whatever junit
+        # an earlier run left in `target/nextest/<profile>/`, so it cannot know
+        # that run's tier by construction and states none.
+        resp = _ingest_junit_axi(project_dir, args.agent, junit_path,
                                  context=_run_context())
-        _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent)
+        _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
+                         preflight_warnings)
         s = resp.get("run", {}) or {}
         return 0 if (resp.get("ok") and (s.get("failed") or 0) == 0) else 1
 
@@ -803,7 +830,7 @@ def cmd_auto_ingest(args):
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     # CR-CRU-058 §S1/§S3 — this branch used to end in TWO unguarded stdout
     # prints and no emitter at all: the last path in the fleet putting a
     # `[crucible] …` human line on the machine channel, and the only outcome of
@@ -836,8 +863,9 @@ def cmd_auto_ingest(args):
     _emit_axi("auto-ingest", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok
-              else [_axi().ingest_failed_warning("auto-ingest", CRUCIBLE_URL)],
+              preflight_warnings if ok
+              else preflight_warnings
+              + [_axi().ingest_failed_warning("auto-ingest", CRUCIBLE_URL)],
               f"ingest compile: ok={resp.get('ok')} errors={err_count} "
               f"warnings={warn_count} cargo_exit={result.returncode}")
     return 0 if ok else 1
@@ -853,17 +881,30 @@ def cmd_regression_ingest(args):
     project_dir = _resolve_project_dir(args.project_dir)
     identity = None
     try:
+        preflight_warnings = []
         if getattr(args, "agent", None):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
-        return _regression_ingest_run(args)
+            # CR-CRU-094 §S3 — the pre-flight attribution check, before this
+            # (far longer) coverage sweep burns its minutes and while `--cycle`
+            # can still be supplied. Best-effort; never delays the run.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), args.agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
+        return _regression_ingest_run(args, preflight_warnings)
     finally:
         _close_gate_identity(project_dir, identity)
 
 
-def _regression_ingest_run(args):
-    """Full regression: cargo clean → llvm-cov nextest → parse junit + lcov → /api/v2/runs/parsed."""
+def _regression_ingest_run(args, preflight_warnings=()):
+    """Full regression: cargo clean → llvm-cov nextest → parse junit + lcov → /api/v2/runs/parsed.
+
+    CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight finding,
+    decided BEFORE the sweep started; it rides every envelope this body can
+    emit, ahead of whatever the run itself discovers."""
+    preflight_warnings = list(preflight_warnings)
     project_dir = _resolve_project_dir(args.project_dir)
     crates = [c.strip() for c in args.crates.split(",") if c.strip()]
 
@@ -892,7 +933,8 @@ def _regression_ingest_run(args):
                   {"help": _axi().no_report_help("regression-ingest",
                                                  "junit.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
-                  [_axi().no_report_warning(
+                  preflight_warnings
+                  + [_axi().no_report_warning(
                       "regression-ingest", "junit.xml", result.returncode,
                       result.stderr or result.stdout or "")],
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
@@ -931,7 +973,7 @@ def _regression_ingest_run(args):
     if raw:
         payload["raw"] = raw
 
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
@@ -954,7 +996,8 @@ def _regression_ingest_run(args):
     _emit_axi("regression-ingest", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok else [_axi().ingest_failed_warning(
+              preflight_warnings if ok
+              else preflight_warnings + [_axi().ingest_failed_warning(
                   "regression-ingest", CRUCIBLE_URL)],
               f"regression: ok={resp.get('ok')} "
               f"passed={passed} failed={failed} pending={pending} total={total} "
@@ -989,7 +1032,7 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
         payload["tier"] = tier
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
     s = resp.get("run", {}) or {}
     print(
         f"ingest junit: ok={resp.get('ok')} "
@@ -1014,7 +1057,7 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(
         f"ingest compile ({kind}): ok={resp.get('ok')} "
         f"errors={err_count} warnings={warn_count}",
@@ -1023,49 +1066,133 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     return 0 if resp.get("ok") else 1
 
 
-def cmd_test(args):
-    """cargo nextest run -p <crate> [--features ...] [--filter EXPR] -P <profile>.
-    If --agent passed, also auto-ingest junit afterwards."""
+def cmd_test(args, tier=None, select=(), profile=None):
+    """cargo nextest run -p <crate> [target selection] [--features ...]
+    [--filter EXPR] -P <profile>. If --agent passed, also auto-ingest junit
+    afterwards.
+
+    §S6 — `profile` is a DECLARED nextest profile detected for a tier verb; it
+    overrides `--profile` because on a declared cell the profile IS the
+    declaration (`.config/nextest.toml`), not a call-site choice.
+
+    CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
+    that can state one is a §S1 tier VERB, which passes it here as a parameter the
+    way mvn's `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
+    `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A crate, a
+    filter expression and a nextest profile say nothing about the dependency the
+    selected tests take, so absent a stated tier this run claims none and the
+    server applies its own documented default.
+
+    CR-CRU-111 §S3/AC6 — `select` is cargo's OWN target selection for the tier
+    the caller named (`--lib` for `unit`, `--tests`/`--test <t>` for
+    `integration`), passed by the tier verb rather than flagged here: which
+    cargo targets a tier means is a property of the tier, not of the call.
+    `--crate` stays OPTIONAL for those verbs — absent one the run is
+    `--workspace`, cargo's own way to say "every crate" — so a tier verb never
+    fails on argparse where cargo itself would have run."""
     project_dir = _resolve_project_dir(args.project_dir)
-    _clean_stale_junit(project_dir, args.profile)
-    cmd = ["cargo", "nextest", "run", "-p", args.crate, "-P", args.profile]
+    # §S1's one-document rule, as `_smoke_test` already applies it: a tier verb
+    # runs THIS body, so the envelope must carry the verb the caller actually
+    # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
+    verb = tier or "test"
+    profile = profile or args.profile
+    _clean_stale_junit(project_dir, profile)
+    crate_selection = ["-p", args.crate] if args.crate else ["--workspace"]
+    cmd = (["cargo", "nextest", "run"] + crate_selection + list(select)
+           + ["-P", profile])
     if args.features:
         cmd += ["--features", args.features]
     if args.no_fail_fast:
         cmd += ["--no-fail-fast"]
-    if args.test:
+    if getattr(args, "test", None):
         cmd += ["--test", args.test]
     if args.filter:
         cmd += ["-E", args.filter]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    # CR-CRU-094 §S3 — PRE-FLIGHT, before nextest spawns and while `--cycle`
+    # can still be supplied: ask the board whether this agent is bound and say
+    # so on both channels if it is not. Best-effort — a failed lookup warns
+    # about nothing and never delays the run. One implementation, shared.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
-    result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
+    # run that spends its wall clock waiting says so in its own envelope. The
+    # other tiers run this same body and are left alone, because the shared
+    # check is scoped to `unit` by the tier it is handed.
+    with _axi().ChildRunTiming() as timing:
+        result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
         # Test may have failed; ingest result regardless (junit captures fail state).
         # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml.
-        junit_path = _resolve_junit_path(project_dir, args.profile)
+        junit_path = _resolve_junit_path(project_dir, profile)
         if junit_path:
-            resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
+            resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context())
-            _emit_ingest_axi("test", resp, project_dir, args.agent)
+            _emit_ingest_axi(verb, resp, project_dir, args.agent,
+                             list(preflight_warnings)
+                             + _axi().unit_run_wall_vs_cpu_warnings(
+                                 tier, "rust", timing))
             s = resp.get("run", {}) or {}
             if (s.get("failed") or 0) > 0:
                 return 1
             return 0 if resp.get("ok") else 1
         # If tests didn't even compile, capture cargo check stderr → ingest compile
         # and emit an ok:false test envelope (no junit run to report).
-        check_cmd = ["cargo", "check", "-p", args.crate, "--tests"]
+        check_cmd = ["cargo", "check"] + crate_selection + ["--tests"]
         if args.features:
             check_cmd += ["--features", args.features]
         check_result = subprocess.run(check_cmd, capture_output=True, text=True,
                                       cwd=project_dir, env=env)
         _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr, kind="test-compile")
-        _emit_axi("test", False, {"help": _axi().HELP_STEPS["test"]},
-                  _axi_context(project_dir, agent_id=args.agent), [])
+        _emit_axi(verb, False, {"help": _axi().HELP_STEPS["test"]},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  preflight_warnings)
         return result.returncode or 1
     return result.returncode
+
+
+# ── CR-CRU-111 §S3/AC6 — cargo's own tier split, reachable from a tier verb ─
+#
+# Cargo makes the split itself: `--lib` compiles and runs the in-crate `#[test]`
+# functions, `tests/*.rs` are separate integration TARGETS selected by
+# `--tests`/`--test <name>`, and nextest PROFILES (`.config/nextest.toml`) carve
+# out the docker-infra tier. Before this the split was real in the toolchain and
+# unreachable from the client: `--lib` appeared nowhere in this file, and
+# `--test` shipped only on the untiered `test` verb. These three verbs are that
+# reach — no project declaration is asked for, because asking would invent a
+# second description of a distinction cargo already makes.
+
+
+def cmd_unit(args):
+    """UNIT tier — cargo's in-crate `--lib` target.
+
+    `--lib` is cargo's OWN unit selection, and it is the whole point of the
+    cell: a run over the crate's every target would sweep in `tests/`, whose
+    integration targets are by definition not `unit`."""
+    return cmd_test(args, tier="unit", select=["--lib"])
+
+
+def cmd_integration(args):
+    """INTEGRATION tier — cargo's `tests/` targets.
+
+    `--test <name>` selects ONE of them (the flag this verb carries); with none
+    named the cell is every integration target, which cargo spells `--tests`."""
+    select = [] if args.test else ["--tests"]
+    return cmd_test(args, tier="integration", select=select)
+
+
+def cmd_e2e(args):
+    """E2E tier — the nextest PROFILE that carves this tier out
+    (`.config/nextest.toml`), `--profile e2e` by default here.
+
+    The profile is the selection: it is where a project states which tests need
+    the assembled system, and `-P` is how cargo-nextest is told."""
+    return cmd_test(args, tier="e2e")
 
 
 def cmd_check(args):
@@ -1078,6 +1205,13 @@ def cmd_check(args):
         cmd += ["--features", args.features]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    # CR-CRU-094 §S3 — `check` INGESTS the rustc errors on a failing compile,
+    # so it is one of the five ingesting verbs the pre-flight covers; asked
+    # before cargo spawns, while `--cycle` can still be supplied.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir, env=env)
     err_count = result.stderr.count("error[E") + result.stderr.count("error: ")
@@ -1092,7 +1226,8 @@ def cmd_check(args):
     legacy = f"check: ok={ok} exit={result.returncode}"
     _emit_axi("check", ok,
               {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+              _axi_context(project_dir, agent_id=args.agent),
+              preflight_warnings, legacy)
     return 0 if ok else (result.returncode or 1)
 
 
@@ -1300,6 +1435,22 @@ def cmd_smoke_test(args):
     return _smoke_test(args, "smoke-test")
 
 
+def _smoke_run_tier(verb, profile):
+    """CR-CRU-111 §S3/AC12 (PURE) — the tier a smoke drive of this client ran,
+    from the two facts that decide it: which verb drove it, and which nextest
+    profile it ran under.
+
+    `docker-e2e-gate` brings a compose stack up and runs the docker-infra
+    profile against it, and `smoke-test --profile e2e` is that same run — the
+    profile's name, the verb's name and a live service all agree, so both are
+    `e2e`. The default drive (`-P ci`) is `cargo nextest run --workspace`,
+    which covers every crate's `tests/` integration targets: it takes real
+    dependencies, so it is `integration` and on no reading a `unit` run. Before
+    this these bodies sent no tier at all and the server's `?? unit` default
+    recorded the docker e2e gate as a unit run."""
+    return "e2e" if verb == "docker-e2e-gate" or profile == "e2e" else "integration"
+
+
 def _smoke_test(args, verb):
     """The smoke run body, shared by `smoke-test` and its thin wrapper
     `docker-e2e-gate` (CR-CRU-058 §S1): `verb` names the envelope this run
@@ -1402,11 +1553,15 @@ def _smoke_test(args, verb):
             "codec": "junit",
             "dataPath": junit_path,
             "agentId": args.agent,
+            # CR-CRU-111 §S3/AC12 — this run EARNS its tier: it is stated by
+            # the verb the caller drove and the profile it ran under, never
+            # assumed from a path.
+            "tier": _smoke_run_tier(verb, args.profile),
         }
         context = _run_context()
         if context:
             payload["context"] = context
-        resp = _post("/api/v2/runs", payload)
+        resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
         s = resp.get("run", {})
         # The `run:` block is parsed CLIENT-side: the ingest response carries no
         # counts when the server could not be reached, and an envelope that
@@ -1549,11 +1704,17 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     }
     if coverage:
         payload["coverage"] = coverage
+    # §S6 ruling 3 — this body runs the WHOLE workspace under nextest, which is
+    # what `regression` means, and it was the one regression path that stated
+    # nothing at all and let the server's default apply. Classification is by
+    # the tier of the RUN, never by the enclosing verb's name, so a gate verb
+    # that drives this body ingests a regression too.
+    payload["tier"] = "regression"
     context = _run_context()
     if context:
         payload["context"] = context
 
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
@@ -1748,9 +1909,23 @@ def cmd_pre_merge_gate(args):
         min_free_g=getattr(args, "min_free_g", 80),
         keep_target=getattr(args, "keep_target", False),
     )
-    # §S1 — the regression body emits under THIS gate's verb, so the gate puts
-    # exactly one envelope on stdout under the name the caller invoked.
-    return cmd_workspace_regression(ws_args, verb="pre-merge-gate")
+    # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own workspace regression
+    # always runs, and every declared profile it covers is a SUBSET of that run
+    # rather than a replacement for it, so the gate's `suites[]` names them
+    # beside it.
+    # §S1 (CR-CRU-058) — that body emits under THIS gate's verb, so the gate
+    # puts exactly one envelope on stdout under the name the caller invoked.
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+        verb="pre-merge-gate",
+        # A `.config/nextest.toml` profile declaration is a NAME and carries no
+        # command, so it can name no other stack: every suite declared here is
+        # this client's own, and there is nothing to dispatch.
+        dispatch=None,
+        whole_suite=lambda: cmd_workspace_regression(ws_args,
+                                                     verb="pre-merge-gate"),
+        context=_axi_context(project_dir, agent_id=args.agent),
+        crucible_url=CRUCIBLE_URL)
 
 
 def cmd_docker_e2e_gate(args):
@@ -1904,8 +2079,81 @@ def cmd_abort(args):
 def cmd_status(args):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastRunCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_queue(args):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the registered CR
+    queue (GET …/queue) plus the CR ids a `cr-merged` milestone covers, the two
+    landing-record sources the release ceremony's provenance needs. Delegates
+    to the shared implementation."""
+    return _axi().cmd_queue(args, _resolve_project_dir(args.project_dir), _ops())
+
+# ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
+#
+# The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
+# what lives here is the `queue-file` shape and nothing more. §S9: the client
+# half owns argument parsing, the asking, exit codes and the envelope — never
+# a business rule, so every one of these bodies is a single delegating call.
+
+
+def cmd_release_propose(args):
+    """§S3 — record or REVISE a proposed release → POST …/release-proposals.
+    Delegates to the shared implementation."""
+    return _axi().cmd_release_propose(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_plan(args):
+    """§S3/§S6 — declare one CR's release, wave and title → POST …/queue/plan;
+    with either undeclared the client ASKS instead of guessing. Delegates to
+    the shared implementation."""
+    return _axi().cmd_cr_plan(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_wave_sequence(args):
+    """§S4 — author a whole wave's order in ONE call → POST …/queue/sequence.
+    Delegates to the shared implementation."""
+    return _axi().cmd_wave_sequence(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_depends(args):
+    """CR-CRU-106 §S1 — declare one CR's COMPLETE dependency set → POST
+    …/queue/depends; with `--on` undeclared the client ASKS instead of
+    guessing. Delegates to the shared implementation."""
+    return _axi().cmd_cr_depends(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_supersede(args):
+    """§S3 — record that a CR's work moves to a successor → POST
+    …/queue/<cr>/supersede. Delegates to the shared implementation."""
+    return _axi().cmd_cr_supersede(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_void(args):
+    """§S3 — record that a CR's work is not happening → POST
+    …/queue/<cr>/void. Delegates to the shared implementation."""
+    return _axi().cmd_cr_void(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+# ── CR-CRU-092 §S6/§S9 — `next`: one thin delegator ────────────────────────
+
+
+def cmd_next(args):
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
+    Delegates to the shared implementation."""
+    return _axi().cmd_next(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+# ── CR-CRU-075 §S1 — `queue-file`: one thin delegator ──────────────────────
+
+
+def cmd_queue_file(args):
+    """§S2 — parse docs/changes/README.md (or --from-file) into queue entries
+    and POST the full set to /api/v2/projects/<key>/queue. Delegates to the
+    shared implementation."""
+    return _axi().cmd_queue_file(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ───────────────────────────
@@ -1925,19 +2173,29 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _post_gate(project_dir, agent_id, gate, context=None):
-    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+def _post_gate(project_dir, agent_id, gate, context=None, release=None):
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
+    `release` is the label of the release the gate gates; it rides on to the
+    builder untouched and reaches the wire as the event's top-level
+    `version`."""
     return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
-                            context)
+                            context, release)
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
-                    context=None):
+                    context=None, released_at=None, crs=None, packages=None,
+                    repair_provenance=False):
     """POST a workflow milestone (CR-CRU-054 §S2 — delegates to the shared
-    builder)."""
+    builder). CR-CRU-080 §S4 — `released_at`/`crs` carry a release's
+    provenance through the same builder. CR-CRU-081 §S3 —
+    `repair_provenance` carries the opt-in that CORRECTS an already-recorded
+    release instead of replaying it. CR-CRU-084 §S1 — `packages` carries the
+    artifacts that release delivered."""
     return _axi().post_milestone(_project_key(project_dir), agent_id, mtype,
                                  _post, label=label, commit=commit,
-                                 context=context)
+                                 context=context, released_at=released_at,
+                                 crs=crs, packages=packages,
+                                 repair_provenance=repair_provenance)
 
 
 def cmd_gate_report(args):
@@ -2019,8 +2277,198 @@ def _add_log_arg(p):
     )
 
 
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. Cargo's own split covers
+# `unit`/`integration`/`e2e`; nothing in cargo describes a MODULE boundary or a
+# BDD form, so those cells are DECLARED, and the surface a cargo project has
+# for naming a run of its own is a nextest profile.
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    siblings (`unit`/`integration`/`e2e`) already take, so the instruction a
+    refusal gives can actually be typed (AC14b).
+
+    `--profile` is deliberately NOT here where those three carry it: on a
+    declared cell the profile IS the declaration, read from
+    `.config/nextest.toml` by the tier's own name, and a flag that could point
+    somewhere else would be a second source of truth for the one fact this
+    cell exists to detect."""
+    _add_cargo_tier_run_args(p)
+
+
+# §S6 ruling 5 — the report half of rust's ONE declaration template, named
+# once so the lookup below and the refusal's own example cannot drift apart.
+#
+# A bare `[profile.<tier>]` is only HALF a declaration: nextest runs it happily
+# and writes no report at all, because it emits JUnit only where the profile
+# carries its own `[profile.<tier>.junit]` sub-table (or inherits
+# `[profile.default.junit]` — the one profile every other inherits from; a `ci`
+# sibling's junit confers nothing on a new profile). Declaring only the profile
+# therefore runs the tests and leaves nothing to ingest: the run falls through
+# to the compile path and the envelope states no tier — an instruction that
+# changes nothing when followed, which is the defect §S6 exists to remove.
+#
+# The file name is pinned, not merely required to exist, because
+# `_resolve_junit_path` reads exactly this name back out of
+# `target/nextest/<profile>/`: a profile pointing its report somewhere else is
+# as unreachable-past as one declaring no report.
+_DECLARED_NEXTEST_JUNIT_FILE = "junit.xml"
+
+
+def _read_declared_nextest_profile(args, target):
+    """§S6, cargo's READ — a profile in `.config/nextest.toml` whose name IS
+    the tier, WITH the junit sub-table that makes nextest write a report for
+    it. Parsed as TOML rather than pattern-matched, so a profile named in a
+    comment is not a declaration.
+
+    Both halves are the ONE declaration (see `_DECLARED_NEXTEST_JUNIT_FILE`):
+    a profile that produces no ingestable report is an INCOMPLETE declaration,
+    and it is refused as such — with the specific reason on stderr, so a
+    caller who wrote half of it is told which half is missing rather than
+    reading the same 'nothing is declared' refusal over a file they can see
+    their profile in."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    config = os.path.join(project_dir, ".config", "nextest.toml")
+    try:
+        with open(config, "rb") as handle:
+            profiles = (tomllib.load(handle) or {}).get("profile") or {}
+    except OSError:
+        return None
+    except tomllib.TOMLDecodeError as error:
+        print(f"[crucible] WARN: {config} does not parse ({error}) — no "
+              f"declared tier profile can be read from it", file=sys.stderr)
+        return None
+    profile = profiles.get(target)
+    if not isinstance(profile, dict):
+        return None
+    junit = profile.get("junit")
+    if not isinstance(junit, dict):
+        junit = (profiles.get("default") or {}).get("junit")
+    path = junit.get("path") if isinstance(junit, dict) else None
+    if path != _DECLARED_NEXTEST_JUNIT_FILE:
+        why = (f"points its report at {path!r}, which is not the "
+               f"`{_DECLARED_NEXTEST_JUNIT_FILE}` this client reads back from "
+               f"target/nextest/{target}/" if path else
+               "declares no junit report, so nextest runs it and writes "
+               "nothing to ingest")
+        print(f"[crucible] WARN: `[profile.{target}]` in {config} {why} — an "
+              f"INCOMPLETE declaration; add `[profile.{target}.junit]` with "
+              f"`path = \"{_DECLARED_NEXTEST_JUNIT_FILE}\"`", file=sys.stderr)
+        return None
+    return target
+
+
+def _run_declared_nextest_profile(args, tier, profile):
+    """§S6, cargo's RUN — nextest under that profile, ingested under the tier of
+    the VERB that asked for it. The profile is the selection: it is where a
+    project states which tests a tier means, and `-P` is how nextest is told."""
+    return cmd_test(args, tier=tier, profile=profile)
+
+
+def cmd_regression(args):
+    """§S6 ruling 3 — REGRESSION tier: this client's own workspace regression.
+
+    It is not a declared cell and never was: the target exists in the client
+    already (`cargo llvm-cov nextest --workspace`, disk-guarded and
+    gate-locked exactly as the orchestrator's own verb runs it), so refusing
+    the cell was the client declining work it demonstrably does. The tier verb
+    reports `regression` whichever of this client's two regression bodies runs
+    it."""
+    return cmd_workspace_regression(args, verb="regression")
+
+
+def _add_regression_tier_args(p):
+    """§S1/AC5 — `regression`'s own flags: the surface of the
+    `workspace-regression` verb whose body it runs, minus the project-dir flag
+    the shared registration already applies to all six."""
+    p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
+    p.add_argument("--all-features", action="store_true",
+                   help="Pass --all-features (recommended for the canonical pre-merge gate)")
+    p.add_argument("--features",
+                   help="Specific --features set (mutually exclusive with --all-features)")
+    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+    p.add_argument("--lcov-output", default="target/lcov.info",
+                   help="lcov output path relative to project root (default: target/lcov.info)")
+    p.add_argument("--ignore-run-fail", action="store_true", default=True,
+                   help="Pass --ignore-run-fail to llvm-cov so coverage is published "
+                        "even on test failures")
+    p.add_argument("--min-free-g", type=int, default=80,
+                   help="Disk-guard floor in GB: after the pre-run clean, hard-abort if "
+                        "free /home is still below this (default: 80).")
+    p.add_argument("--keep-target", action="store_true",
+                   help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).")
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="<tier>",
+    names=("a profile for it in `.config/nextest.toml` WITH the junit "
+           "sub-table that makes nextest write a report for it: "
+           "`[profile.<target>]` `[profile.<target>.junit]` "
+           f'`path = "{_DECLARED_NEXTEST_JUNIT_FILE}"`, run by '
+           "`cargo nextest run -P <target>`"),
+    read=_read_declared_nextest_profile,
+    run=_run_declared_nextest_profile,
+    add_args=(_add_declared_tier_args,),
+    # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
+    # vocabulary itself, so the enumeration is the lookup above asked for each
+    # tier: the same parse (junit sub-table completeness included), without the
+    # single-name filter.
+    suites=_axi().template_declared_suites,
+)
+
+
+# ── CR-CRU-111 §S3/AC6 — the tier verbs' own flags ────────────────────────
+#
+# What a run of a tier needs, minus the target selection: that is the TIER's
+# property and the verb supplies it (`--lib`, `--tests`, `-P <profile>`), never
+# a flag. `--crate` is OPTIONAL here where the untiered `test` verb requires it
+# — absent one the run is the workspace, which is what a tier means when the
+# caller names no crate.
+def _add_cargo_tier_run_args(p):
+    p.add_argument("--crate", help="Cargo package to scope to (`-p`); default: the whole workspace")
+    p.add_argument("--features", help="Comma-separated feature flags")
+    p.add_argument("--filter", help="Nextest -E filter expression")
+    p.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
+    p.add_argument("--agent", help="If set, auto-ingest junit after the run")
+    _add_gate_cycle_arg(p)
+    _add_log_arg(p)
+
+
+def _add_unit_tier_args(p):
+    _add_cargo_tier_run_args(p)
+    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+
+
+def _add_integration_tier_args(p):
+    _add_cargo_tier_run_args(p)
+    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+    p.add_argument("--test",
+                   help="A single `tests/<name>.rs` integration target (cargo --test <name>); "
+                        "default: every integration target (cargo --tests)")
+
+
+def _add_e2e_tier_args(p):
+    _add_cargo_tier_run_args(p)
+    p.add_argument("--profile", default="e2e",
+                   help="Nextest profile carving out this tier (default: e2e)")
+
+
+# CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
+# `__doc__`. The module docstring is this client's design record: it cites the
+# CRs that shaped it, and argparse printed all of it to every user of every
+# project. The docstring stays exactly as it is (AC8 — provenance intact);
+# what the CLI RENDERS states the tool's behaviour and names no backlog.
+_CLI_DESCRIPTION = (
+    "Rust + Cargo Crucible CLI — one entry point for the orchestrator and for the "
+    "rust-{red,green,fix,verify} agent lifecycle, and for running Cargo targets "
+    "(nextest, check, clippy, llvm-cov) with the result ingested to Crucible.\n\n"
+    "Tool-specific (Cargo / Nextest / JUnit-XML / llvm-cov / Clippy), never "
+    "project-specific: the project path is parameterizable. Run `<verb> --help` "
+    "for a verb's own flags."
+)
+
+
 def main():
-    p = argparse.ArgumentParser(prog="rust-crucible", description=__doc__)
+    p = argparse.ArgumentParser(prog="rust-crucible", description=_CLI_DESCRIPTION)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard (below), never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
@@ -2033,7 +2481,7 @@ def main():
     r.add_argument(
         "--agent",
         help="Agent id — a free-form identifier. REQUIRED, but enforced at RUNTIME "
-             "by the §S5 hard stop (CR-CRU-054 §S2b) so a missing id yields the "
+             "by the §S5 hard stop so a missing id yields the "
              "ok:false AXI envelope, not a bare argparse usage error. "
              "The role is declared by --role and "
              "is never inferred from the agentId's shape; any CR-<PROJ>-NNN-<cycle>-<ROLE> "
@@ -2066,9 +2514,13 @@ def main():
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", help="Unregister an agent")
+    # CR-CRU-054 §S2b — the same runtime hard stop `register` uses: --agent is
+    # NOT argparse-required, so the refusal arrives as the §S5 structured
+    # envelope. Lineage lives here rather than in the help line, which every
+    # project's users read (CR-CRU-097 §S2/AC2).
     u.add_argument("--agent",
                    help="Agent id — REQUIRED, but enforced at RUNTIME by the §S5 "
-                        "hard stop (CR-CRU-054 §S2b) so a missing id yields "
+                        "hard stop so a missing id yields "
                         "the ok:false AXI envelope, not a bare argparse "
                         "usage error.")
     _add_project_dir_arg(u)
@@ -2078,7 +2530,11 @@ def main():
         "auto-ingest",
         help="Ingest only: junit if present, else `cargo check` stderr as compile errors.",
     )
-    a.add_argument("--agent", required=True)
+    a.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     a.add_argument("--crate", required=True, help="Crate name (for compile fallback)")
     a.add_argument(
         "--features",
@@ -2091,7 +2547,11 @@ def main():
         "regression-ingest",
         help="Per-crate coverage regression: clean + llvm-cov nextest + ingest parsed.",
     )
-    g.add_argument("--agent", required=True)
+    g.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     g.add_argument(
         "--crates",
         required=True,
@@ -2108,7 +2568,9 @@ def main():
         "test",
         help="cargo nextest run -p <crate>. With --agent: also ingest junit afterwards.",
     )
-    t.add_argument("--crate", required=True)
+    t.add_argument("--crate", required=True,
+                   help="Cargo package to run (`-p`); required — this verb never falls back "
+                        "to the whole workspace")
     t.add_argument("--features", help="Comma-separated feature flags")
     t.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
     t.add_argument("--test", help="Single test binary, e.g. window_pipeline_e2e")
@@ -2123,7 +2585,9 @@ def main():
         "check",
         help="cargo check -p <crate>. With --agent: ingest stderr as rustc compile errors.",
     )
-    c.add_argument("--crate", required=True)
+    c.add_argument("--crate", required=True,
+                   help="Cargo package to check (`-p`); required — this verb never falls back "
+                        "to the whole workspace")
     c.add_argument("--features", help="Comma-separated feature flags")
     c.add_argument("--tests", action="store_true", help="Add --tests flag (check tests too)")
     c.add_argument("--agent", help="If set, ingest stderr as compile errors")
@@ -2134,7 +2598,9 @@ def main():
         "clippy",
         help="cargo clippy -p <crate>. With --agent: ingest stderr as compile errors.",
     )
-    cl.add_argument("--crate", required=True)
+    cl.add_argument("--crate", required=True,
+                    help="Cargo package to lint (`-p`); required — this verb never falls back "
+                         "to the whole workspace")
     cl.add_argument("--features", help="Comma-separated feature flags")
     cl.add_argument("--tests", action="store_true", help="Add --tests flag (lint tests too)")
     cl.add_argument(
@@ -2294,12 +2760,16 @@ def main():
         "--keep-target", action="store_true",
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
+    # The zero-warning baseline this gate defends was established by
+    # CR-NAI-305 (2026-06-05) on the workspace this client was written
+    # against. That is lineage for a maintainer; it moved out of the printed
+    # help (CR-CRU-097 §S2/AC2) because a help line naming another project's
+    # backlog teaches every user of this client the wrong thing.
     pmg.add_argument(
         "--skip-clippy", action="store_true",
         help="Bypass the fail-fast clippy gate. By DEFAULT the gate runs `clippy --workspace "
              "--all-targets --all-features -- -D warnings` BEFORE the coverage regression and "
-             "aborts on any lint (the workspace was cleaned to zero -D warnings by CR-NAI-305, "
-             "2026-06-05). Pass this only for a deliberate bypass.",
+             "aborts on any lint. Pass this only for a deliberate bypass.",
     )
     _add_project_dir_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
@@ -2347,15 +2817,23 @@ def main():
     pf = sub.add_parser("plan-file",
                         help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
                              "Requires --agent <registered id> (§S2b).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-NAI-203.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
-    pf.add_argument("--cycles", required=True,
-                    help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--cycle", action="append",
+                    help="One cycle label, never split; repeat --cycle per cycle.")
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     _add_workflow_agent_arg(
         pf, extra=" The registered id is also stored as the plan's orchestrator "
                   "(the free-text --orchestrator label is retired).")
     pf.add_argument("--wave",
                     help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _axi().add_plan_file_release_arg(pf)
     _add_project_dir_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
 
@@ -2400,6 +2878,7 @@ def main():
                               "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _axi().add_cycle_add_target_args(cad)
     _add_workflow_agent_arg(cad)
     _add_project_dir_arg(cad)
     cad.set_defaults(func=cmd_cycle_add)
@@ -2434,12 +2913,82 @@ def main():
     for _name in ("status", "plans"):
         sv = sub.add_parser(_name,
                             help="Read the plan queue (GET …/plans) as a TOON-AXI table "
-                                 "+ lastRunCr. Read-only; `plans` is an alias of `status`.")
+                                 "+ lastClosedCr (the last CR to close). Read-only; "
+                                 "`plans` is an alias of `status`.")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10).")
         _add_project_dir_arg(sv)
         sv.set_defaults(func=cmd_status)
+
+    # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
+    qv = sub.add_parser("queue",
+                        help="Read the registered CR queue (GET …/queue) plus the "
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+    _add_project_dir_arg(qv)
+    qv.set_defaults(func=cmd_queue)
+
+    # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
+    # subparsers are built by the SHARED registrar so the five clients cannot
+    # drift into five different flag surfaces for one verb.
+    _axi().add_roadmap_verbs(
+        sub,
+        {"release-propose": cmd_release_propose, "cr-plan": cmd_cr_plan,
+          "wave-sequence": cmd_wave_sequence, "cr-supersede": cmd_cr_supersede,
+          "cr-void": cmd_cr_void},
+        add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
+
+    # ── CR-CRU-106 §S1 — the DEPENDENCY axis, its own verb and its own
+    # registrar (`add_roadmap_verbs`' contract is CR-CRU-091's frozen five).
+    _axi().add_cr_depends_verb(
+        sub, cmd_cr_depends,
+        add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
+
+    # ── CR-CRU-092 §S6 — the roadmap READ verb. Its subparser is built by the
+    # SHARED registrar for the same reason; only `--project-dir` is this
+    # client's own. No --agent: `next` is read-only (§S4).
+    _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
+
+    # ── CR-CRU-075 §S1 — the queue REGISTRATION verb through the shared
+    # registrar, so five clients cannot fork one verb's flag surface. No
+    # --agent: it registers a PROJECT's queue, not an agent's work.
+    _axi().add_queue_file_verb(sub, cmd_queue_file,
+                               add_args=(_add_project_dir_arg,))
+
+    # ── CR-CRU-111 §S1/§S3 — the SIX tier verbs, from the fleet's own
+    # registrar. rust is the one client with no pre-existing tier-named verb,
+    # so nothing migrates here. Cargo splits three of them itself (`--lib`,
+    # the `tests/` targets, a nextest profile) and those three RUN; `regression`
+    # runs the workspace regression this client already ships (§S6 ruling 3);
+    # `module` and `bdd` are cells cargo describes no distinction for, so they
+    # DETECT a declared nextest profile and refuse only while there is none. A `dict(...)`
+    # rather than a `{...}` literal, deliberately: a client dict keyed by tier
+    # NAMES would be the second copy of the vocabulary AC10 forbids.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(unit=tier_verb(
+                 cmd_unit,
+                 "Runs `cargo nextest run --lib` — cargo's own in-crate unit "
+                 "target — and ingests junit.",
+                 (_add_unit_tier_args,)),
+             integration=tier_verb(
+                 cmd_integration,
+                 "Runs cargo's `tests/` integration targets "
+                 "(`--test <name>`, else `--tests`) and ingests junit.",
+                 (_add_integration_tier_args,)),
+             e2e=tier_verb(
+                 cmd_e2e,
+                 "Runs the nextest profile that carves out this tier "
+                 "(`-P e2e`) and ingests junit.",
+                 (_add_e2e_tier_args,)),
+             regression=tier_verb(
+                 cmd_regression,
+                 "Runs the workspace coverage regression "
+                 "(`cargo llvm-cov nextest --workspace`) and ingests it.",
+                 (_add_regression_tier_args,))),
+        declares=_TIER_DECLARATION_SURFACE,
+        add_args=(_add_project_dir_arg,))
 
     gr = sub.add_parser("gate-run",
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
@@ -2455,6 +3004,7 @@ def main():
                           "git-flow project that merges directly has no PR for it "
                           "to watch — without --skip the gate blocks until "
                           "ci_timeout.")
+    _axi().add_gate_release_arg(gr)
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
@@ -2469,15 +3019,58 @@ def main():
                          "the verb fails; there is no fallback.")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
+    _axi().add_gate_release_arg(grp)
     _add_project_dir_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type. The vocabulary is this project's own, not this "
+                         "CLI's: PATCH /api/v2/projects/<key> {milestoneTypes: [...]} "
+                         "declares it, GET /api/v2/projects reads back what this project "
+                         "declared, and a refused milestone names the live accepted set "
+                         "back to you.")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")
+    # CR-CRU-080 §S4 — a release's provenance, computed by the ceremony (the
+    # only actor standing in the repo with git in reach).
+    ms.add_argument("--released-at", dest="released_at", type=int,
+                    help="Release SHIP date: the tag's own commit date in epoch "
+                         "SECONDS (`git log -1 --format=%%ct <tag>`), which is "
+                         "when the release shipped rather than when it was "
+                         "recorded (§S4).")
+    ms.add_argument("--crs",
+                    help="Comma-separated CR ids the release shipped (the merges "
+                         "in its tag range). Only the ids the project's "
+                         "registered queue holds are recorded (§S4).")
+    # CR-CRU-084 §S1 — WHAT the release delivered, declared by the ceremony:
+    # Crucible never verifies a publish, so the pair is a DECLARATION (§S1
+    # Non-goals). Absent means "this ceremony said nothing" and the key never
+    # reaches the wire; on a RECORDING, `--packages ""` means "this release
+    # delivered none", which is a different and recordable fact (§S3/AC4). On
+    # `--repair-provenance` the empty value writes NOTHING instead: an empty
+    # derivation never overwrites a stored set, and a repair left with nothing
+    # to write is REFUSED (CR-CRU-086 §S2).
+    ms.add_argument("--packages",
+                    help="Comma-separated `registry:name:version` entries the "
+                         "release DELIVERED, e.g. `pypi:crucible-axi:0.4.0,"
+                         "npm:@anthill-tec/crucible-server:0.4.0`. Pass an "
+                         "empty string to record that it delivered none "
+                         "(§S1/§S3) — on a recording only: with "
+                         "--repair-provenance an empty value writes nothing "
+                         "(it never overwrites a stored set) and the repair is "
+                         "REFUSED.")
+    # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
+    # re-post of an already-recorded release is the server's dedup replay
+    # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to
+    # rewrite release history by accident.
+    ms.add_argument("--repair-provenance", dest="repair_provenance",
+                    action="store_true",
+                    help="RE-DERIVE an already-recorded release's provenance "
+                         "from this post's --released-at/--crs instead of "
+                         "replaying it. Opt-in and non-default; the release's "
+                         "version, commit and row are never touched (§S3).")
     ms.add_argument("--agent", help="Agent id — REQUIRED (§S5): the identity is declared or "
                          "the verb fails; there is no fallback.")
     _add_project_dir_arg(ms)

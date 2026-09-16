@@ -120,6 +120,27 @@ def _open_plans_response(plans):
     return {"ok": True, "plans": plans}
 
 
+def _plans_gets(get_mock):
+    """The GET paths this run issued against the PLANS surface.
+
+    CR-CRU-056 §S3's contract is that the client-side attach RESOLVER is gone:
+    no plans lookup picks a cycle, and the ingest body carries no cycleId.
+    That is what the assertions below pin. They used to spell it
+    `get_mock.assert_not_called()` -- "no GET at all" -- which pins the
+    TRANSPORT rather than the contract, and CR-CRU-094 §S3 makes the
+    difference load-bearing: pre-flight reads the caller's OWN binding
+    (`GET /api/v2/agents?project=<key>` -> `boundCycleId`) to answer "am I
+    bound?", which resolves nothing and attaches nothing. Forbidding that read
+    would guarantee nothing extra while forbidding the CR the spec mandates.
+    """
+    paths = []
+    for call in get_mock.call_args_list:
+        args, kwargs = call
+        path = args[0] if args else kwargs.get("path")
+        paths.append(str(path))
+    return [p for p in paths if "/plans" in p]
+
+
 def _post_call_for_path(post_mock, path):
     """The first recorded `_post(path, payload)` call matching `path`
     exactly, as a `unittest.mock.call` object, or None. Needed because
@@ -286,7 +307,10 @@ class IngestNeverResolvesClientSideCycleTest(_BaseAutoAttachTest):
              mock.patch.object(self.module, "_get") as get_mock:
             code, out, _err = self._run_test_verb()
         self.assertEqual(code, 0, f"stdout={out!r}")
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
         self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}) or {})
@@ -298,7 +322,10 @@ class IngestNeverResolvesClientSideCycleTest(_BaseAutoAttachTest):
              mock.patch.object(self.module, "_get") as get_mock:
             code, out, _err = self._run_regression_verb()
         self.assertEqual(code, 0, f"stdout={out!r}")
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
         self.assertIsNotNone(ingest_call)
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}) or {})
@@ -308,7 +335,10 @@ class IngestNeverResolvesClientSideCycleTest(_BaseAutoAttachTest):
              mock.patch.object(self.module, "_get") as get_mock:
             code, out, _err = self._run_auto_ingest_verb()
         self.assertEqual(code, 0, f"stdout={out!r}")
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
         self.assertIsNotNone(ingest_call)
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}) or {})

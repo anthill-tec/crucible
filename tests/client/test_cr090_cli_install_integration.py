@@ -44,13 +44,16 @@ The six guards, each an entry-point observation:
   independent of filesystem clock resolution. Kept light on purpose: cycle 264
   owns the deep convergence contract; this is only its entry-point echo.
 
-The `[server]` stage is ALWAYS stubbed, via
-`mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, ...)`: the real one runs
-`bun add -g` and provisions GLOBALLY. The `fleet` and `manifest` stages are
-REAL -- that is the entire point of AC8.
+The `[server]` and `[unit]` stages are ALWAYS stubbed, via
+`mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, ...)`: the real `[server]` runs
+`bun add -g` and provisions GLOBALLY, and the real `[unit]` (CR-CRU-070) writes
+a systemd `--user` unit and drives `systemctl --user enable --now` against the
+OPERATOR'S user manager. The `fleet` and `manifest` stages are REAL -- that is
+the entire point of AC8.
 
 Every test owns a `tempfile.mkdtemp` scratch target and a scratch `$HOME`,
-both under `/tmp`, and removes them. Nothing is written inside the repo.
+both under `/tmp`, and removes them. Nothing is written inside the repo, into
+`~/.crucible`, or into the operator's systemd unit directory.
 """
 
 import contextlib
@@ -86,6 +89,13 @@ CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
 FLEET_STAGE_NAME = "fleet"
 MANIFEST_STAGE_NAME = "manifest"
 SERVER_STAGE_NAME = "server"
+# CR-CRU-069/070 -- the develop-side install grew a fourth stage, `[unit]`,
+# which writes a systemd `--user` unit and drives `systemctl --user enable
+# --now`. Every default-table run below therefore stubs it as well as
+# `[server]`: an unsandboxed `[unit]` reaches the OPERATOR'S real user manager
+# (pinning `$HOME` alone does not stop it -- `$XDG_CONFIG_HOME` is the other
+# unit-dir resolution rule, and `systemctl` is resolved off PATH).
+UNIT_STAGE_NAME = "unit"
 CLIENTS_DIRNAME = "clients"
 MANIFEST_FILENAME = "crucible-clients.json"
 
@@ -125,6 +135,14 @@ def _fast_provision_server_stage(target_dir, force):
     return {"path": os.path.join(target_dir, "server"), "converged": False}
 
 
+def _fast_unit_stage(target_dir, force):
+    """A `[unit]` stage double that provisions NOTHING: no unit file, no
+    `systemctl`, no user manager. Matches the `(target_dir, force)` runner
+    protocol, so `_stage_options` injects nothing extra."""
+    return {"path": os.path.join(target_dir, UNIT_STAGE_NAME),
+            "converged": False}
+
+
 def _parse_stage_rows(stdout: str) -> list[tuple[str, str]]:
     """The `stages[N]{name,path}` rows of a printed TOON-AXI install envelope,
     IN PRINTED ORDER, as `(name, path)` pairs.
@@ -154,7 +172,8 @@ def _parse_stage_rows(stdout: str) -> list[tuple[str, str]]:
 
 class _CliInstallCase(unittest.TestCase):
     """Shared fixture: a throwaway target dir, a pinned throwaway `$HOME`, the
-    `[server]` stage stubbed, and every invocation made through `cli.main`."""
+    `[server]` and `[unit]` stages stubbed, and every invocation made through
+    `cli.main`."""
 
     def setUp(self):
         self.install, self.manifest, self.cli = _import_fresh(
@@ -185,14 +204,18 @@ class _CliInstallCase(unittest.TestCase):
     def run_cli_install(self, *extra_argv) -> tuple[int, str]:
         """Drive the PRODUCTION entry point and return `(exit_code, stdout)`.
 
-        Only the `[server]` stage is stubbed -- `fleet` and `manifest` are the
-        real runners. Stdout is captured so the envelope does not pollute the
-        test runner's output and can be quoted in failure messages.
+        The `[server]` and `[unit]` stages are stubbed -- `fleet` and
+        `manifest` are the real runners, which is the entire point of AC8.
+        `[unit]` is a double and not merely env-sandboxed because it is the one
+        stage that hands work to the operator's own systemd user manager, and a
+        test must never reach it. Stdout is captured so the envelope does not
+        pollute the test runner's output and can be quoted in failure messages.
         """
         argv = ["install", "--target-dir", self.target, *extra_argv]
         buffer = io.StringIO()
         with mock.patch.dict(self.install.DEFAULT_STAGE_RUNNERS,
-                             {SERVER_STAGE_NAME: _fast_provision_server_stage}):
+                             {SERVER_STAGE_NAME: _fast_provision_server_stage,
+                              UNIT_STAGE_NAME: _fast_unit_stage}):
             with contextlib.redirect_stdout(buffer):
                 code = self.cli.main(argv)
         return code, buffer.getvalue()
@@ -235,7 +258,8 @@ class _CliInstallCase(unittest.TestCase):
             0, code,
             f"AC8 -- `crucible-axi install --target-dir <scratch>"
             f"{argv_note}` must exit 0 through cli.main with only the "
-            f"[server] stage stubbed; got {code}. envelope:\n{stdout}")
+            f"[server] and [unit] stages stubbed; got {code}. "
+            f"envelope:\n{stdout}")
 
 
 class CliMainInstallWiringTest(_CliInstallCase):

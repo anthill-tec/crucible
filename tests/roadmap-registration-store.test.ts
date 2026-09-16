@@ -1,0 +1,708 @@
+// CR-CRU-091 — roadmap registration is declared: the STORAGE half (cycle C1).
+//
+// Covers §S1 (a proposed release is its own record kind) and §S2 (`queue_entries`
+// carries the declaration, and the read publishes it) at the Store boundary.
+// The five REST routes (§S8), the role gate (§S3), the client verbs and
+// `public/app-logic.mjs` are cycles C2/C3/C4 and are NOT touched here.
+//
+// ── What is broken today ───────────────────────────────────────────────────
+//
+// `queue_entries` has eight columns (src/store.ts:1146-1156) and none of them
+// can hold a declared release, a declared track or a lifecycle disposition, so
+// the containment model release ⊃ wave ⊃ CR is undeclarable. `listQueue`'s
+// projection (src/store.ts:3094-3104) omits the `seq` the column already
+// stores, which is why the renderer re-derives it from the array index
+// (public/app-logic.mjs:859). `replaceQueue` (src/store.ts:3032) DELETEs a
+// project's rows and re-INSERTs the posted set, so any declaration it was not
+// handed is destroyed. And `recordMilestoneEvent` (src/store.ts:1709) has no
+// notion of a PROPOSED release: `targetAt` cannot be carried and a shipped
+// release cannot consume the proposal it fulfils.
+//
+// ── The seams GREEN must expose (this suite is written against them) ───────
+//
+//   // src/store.ts
+//   export function normalizeTrack(value: string): string | null;
+//     // "2" | "track-2" | "Track 2" -> "track-2"; null when the value carries
+//     // NO integer (the caller names the field; the write refuses).
+//   class Store {
+//     listReleaseProposals(projectKey: string): RunEvent[];  // LIVE, version-ordered
+//   }
+//   MIGRATION_BODIES gains ONE appended step (queue_entries: release, track,
+//   lifecycle_json): the body at chain position 7, advancing 7 -> 8. Because
+//   SCHEMA_VERSION === MIGRATIONS.length, every LATER CR that appends a body
+//   moves the chain's END (CR-CRU-094 §S1 already has) — this CR's own
+//   position does not move, and the assertions below are written about that
+//   position, never about the total.
+//
+//   // src/types.ts
+//   QueueEntry     gains seq (ALWAYS), release?, track?, lifecycle?
+//   QueueEntryInput gains release?, track?, seq?, lifecycle?
+//   RunEvent       gains targetAt? (epoch SECONDS, beside releasedAt)
+//   QueueStatus    is UNCHANGED — §S2's second-axis rule.
+//
+// Every store here is `:memory:` or an mkdtempSync scratch file. The live
+// data/crucible.db is never opened.
+import { describe, test, expect, afterEach } from "bun:test";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Database } from "bun:sqlite";
+import * as storeModule from "../src/store.ts";
+import { Store, MIGRATIONS, SCHEMA_VERSION, waveSeqBase } from "../src/store.ts";
+import type { QueueEntryInput } from "../src/store.ts";
+import type { QueueEntry, QueueStatus, RunEvent } from "../src/types.ts";
+
+// ── scratch dirs ───────────────────────────────────────────────────────────
+
+const scratchDirs: string[] = [];
+
+function tmpDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "cru091-"));
+  scratchDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (scratchDirs.length > 0) {
+    rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+  }
+});
+
+// ── seam accessors: each fails naming the MISSING CONTRACT, not a TypeError ─
+
+/** §S2 — the ONE normaliser that makes `2` and `track-2` the same lane. */
+function normalizeTrack(value: string): string | null {
+  const mod = storeModule as { normalizeTrack?: unknown };
+  if (typeof mod.normalizeTrack !== "function") {
+    throw new Error(
+      "CR-CRU-091 §S2: src/store.ts exports no `normalizeTrack` — nothing normalises `--track` " +
+        "to the PRD's locked wire format `track-<n>`, so two clients writing `2` and `track-2` " +
+        "produce two lanes for one track.",
+    );
+  }
+  return (mod.normalizeTrack as (value: string) => string | null)(value);
+}
+
+// The `listReleaseProposals` accessor that stood here went with the five cases
+// CR-CRU-130 §S2 deleted below: it existed only to reach that read from this
+// file, and no case here calls it any more. The read itself is very much alive
+// — it is the UNDELIVERED half of the release records now — and is exercised
+// in `tests/release-before-and-after-delivery.test.ts` and
+// `tests/undelivered-release-is-the-plannable-target.test.ts`.
+
+/**
+ * §S2 — THIS CR's own migration body, found by what it declares. Never by
+ * index and never by `SCHEMA_VERSION - 1`: both of those are claims about the
+ * chain's END, which every LATER appended body moves, and the position of this
+ * body is not theirs to move.
+ */
+function declarationStep(): (typeof MIGRATIONS)[number] {
+  const owned = MIGRATIONS.filter((step) => (step.description ?? "").includes("CR-091 §S2"));
+  if (owned.length !== 1) {
+    throw new Error(
+      `CR-CRU-091 §S2: expected exactly ONE declaration body in the ${MIGRATIONS.length}-step ` +
+        `migration chain, found ${owned.length} — nothing retrofits queue_entries with ` +
+        `release / track / lifecycle_json`,
+    );
+  }
+  return owned[0] as (typeof MIGRATIONS)[number];
+}
+
+// ── raw-sqlite helpers (never a Store — these must not migrate anything) ───
+
+function columnsOf(dbPath: string, table: string): string[] {
+  const db = new Database(dbPath);
+  try {
+    return db
+      .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+      .all()
+      .map((row) => row.name);
+  } finally {
+    db.close();
+  }
+}
+
+function userVersion(dbPath: string): number {
+  const db = new Database(dbPath);
+  try {
+    return db.query<{ user_version: number }, []>(`PRAGMA user_version`).get()!.user_version;
+  } finally {
+    db.close();
+  }
+}
+
+interface StoredDeclaration {
+  cr: string;
+  wave: string;
+  title: string | null;
+  seq: number;
+  release: string | null;
+  track: string | null;
+  lifecycle_json: string | null;
+}
+
+function storedRows(dbPath: string): StoredDeclaration[] {
+  const db = new Database(dbPath);
+  try {
+    return db
+      .query<StoredDeclaration, []>(
+        `SELECT cr, wave, title, seq, release, track, lifecycle_json
+           FROM queue_entries ORDER BY seq ASC`,
+      )
+      .all();
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * A store shaped exactly like the version JUST BEFORE this CR's step: the
+ * `queue_entries` table in its pre-091 eight-column shape, carrying rows, and
+ * stamped at THIS body's own `from` — not at `SCHEMA_VERSION - 1`, which names
+ * the step before whichever body happens to be last today and would leave the
+ * fixture stamped PAST this one, so the runner would skip it. Every OTHER
+ * chain step guards on `tableExists`, so on this fixture the ONLY unsatisfied
+ * step in the chain is the one this CR appends — which is how the suite
+ * identifies it BY EFFECT rather than by index.
+ */
+function makePreDeclarationStore(dir: string): string {
+  const dbPath = join(dir, "crucible.db");
+  const db = new Database(dbPath, { create: true });
+  try {
+    db.exec("PRAGMA journal_mode = DELETE;");
+    db.exec(`
+      CREATE TABLE queue_entries (
+        project_key TEXT NOT NULL,
+        cr TEXT NOT NULL,
+        title TEXT,
+        wave TEXT NOT NULL,
+        depends_on_json TEXT NOT NULL,
+        size TEXT,
+        filed_at INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        PRIMARY KEY (project_key, cr)
+      );
+    `);
+    const insert = db.query(
+      `INSERT INTO queue_entries
+         (project_key, cr, title, wave, depends_on_json, size, filed_at, seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(PRE_KEY, "CR-CRU-014", "queue registration", "1", "[]", "M", 1_700_000_000_000, 10);
+    insert.run(PRE_KEY, "CR-CRU-078", "roadmap surface", "5", '["CR-CRU-091"]', "L", 1_700_000_000_001, 20);
+    db.exec(`PRAGMA user_version = ${declarationStep().from};`);
+  } finally {
+    db.close();
+  }
+  return dbPath;
+}
+
+const PRE_KEY = "pre-091-project";
+
+// ── Store fixtures ─────────────────────────────────────────────────────────
+
+function seedProject(store: Store): string {
+  const key = crypto.randomUUID();
+  store.addProject({ key, name: "roadmap", type: "backend", sutRoot: "/tmp" });
+  return key;
+}
+
+function entryOf(entries: QueueEntry[], cr: string): QueueEntry {
+  const found = entries.find((entry) => entry.cr === cr);
+  if (found === undefined) {
+    throw new Error(`CR-CRU-091: ${cr} is absent from the queue read (${entries.length} entries)`);
+  }
+  return found;
+}
+
+const A = "CR-CRU-A01";
+const B = "CR-CRU-B02";
+const C = "CR-CRU-C03";
+
+/** The three declared entries AC5 re-posts undeclared. */
+function threeDeclared(): QueueEntryInput[] {
+  return [
+    {
+      cr: A,
+      title: "first",
+      wave: "5",
+      dependsOn: [],
+      release: "0.2.0",
+      track: "2",
+      seq: 10,
+    },
+    {
+      cr: B,
+      title: "second",
+      wave: "5",
+      dependsOn: [A],
+      release: "0.2.0",
+      track: "2",
+      seq: 20,
+    },
+    {
+      cr: C,
+      title: "third",
+      wave: "6",
+      dependsOn: [],
+      release: "0.3.0",
+      track: "track-3",
+      seq: 30,
+      lifecycle: { state: "SUPERSEDED", by: "CR-CRU-088", at: 1_787_149_125_000 },
+    },
+  ];
+}
+
+/** The same three CRs, re-posted by `queue-file` with NO declaration at all. */
+function threeUndeclared(): QueueEntryInput[] {
+  return [
+    { cr: A, title: "first", wave: "5", dependsOn: [] },
+    { cr: B, title: "second", wave: "5", dependsOn: [A] },
+    { cr: C, title: "third", wave: "6", dependsOn: [] },
+  ];
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("CR-CRU-091 §S2 — the migration adds the three declaration columns", () => {
+  test("this CR's body advanced the chain by exactly one AT ITS OWN POSITION, and SCHEMA_VERSION is still MIGRATIONS.length", () => {
+    // This once also read `toBe(8)` — a literal total as a tripwire. The total
+    // is not this CR's to assert: CR-CRU-094 §S1 appended a body and the pin
+    // fired for a step that has nothing to do with the declaration columns.
+    // What §S2 genuinely claims is that its ONE body advanced the chain by
+    // exactly one at the position it occupies, and that the derived mechanism
+    // (SCHEMA_VERSION === MIGRATIONS.length, every step contiguous) still
+    // holds — so a hand-edited version, a gap or a reordered chain fails here.
+    expect(SCHEMA_VERSION).toBe(MIGRATIONS.length);
+    MIGRATIONS.forEach((step, index) => {
+      expect(step.from).toBe(index);
+      expect(step.to).toBe(index + 1);
+    });
+    // §S2's own body: present exactly once, one version wide, and sitting at
+    // the position its own `from` names.
+    const step = declarationStep();
+    expect(MIGRATIONS.indexOf(step)).toBe(step.from);
+    expect(step.to).toBe(step.from + 1);
+    // …and inside the chain this build writes, never dangling past its end.
+    expect(step.to).toBeLessThanOrEqual(SCHEMA_VERSION);
+  });
+
+  test(
+    "a PRE-migration store gains release/track/lifecycle_json, loses no queue row, reports the " +
+      "new SCHEMA_VERSION, and the appended step's satisfiedBy then returns true",
+    () => {
+      const dir = tmpDir();
+      const dbPath = makePreDeclarationStore(dir);
+
+      // Before: the store sits at THIS body's `from` (the version just before
+      // it ran) and the three columns are absent.
+      const step = declarationStep();
+      expect(userVersion(dbPath)).toBe(step.from);
+      const before = columnsOf(dbPath, "queue_entries");
+      expect(before).not.toContain("release");
+      expect(before).not.toContain("track");
+      expect(before).not.toContain("lifecycle_json");
+
+      // The step is identified BY EFFECT: on this fixture it reports itself
+      // UNSATISFIED, while every step BEFORE it in the chain reports satisfied
+      // — which is what makes this fixture sit exactly at its `from`.
+      //
+      // CR-CRU-129 §S1 — this used to assert that EXACTLY ONE step in the
+      // WHOLE chain was unsatisfied. That is an incidental over-pin on chain
+      // state: any LATER step appended by any future CR that introduces a
+      // table this pre-091 fixture predates makes the count 2, then 3, forever,
+      // for reasons CR-091 has no stake in. It is re-targeted at the step this
+      // test is actually about, so the next migration does not break it again.
+      const probe = new Database(dbPath);
+      const satisfaction = MIGRATIONS.map((body) => body.satisfiedBy?.(probe));
+      probe.close();
+      const index = MIGRATIONS.indexOf(step);
+      expect(index).toBeGreaterThanOrEqual(0);
+      // THIS body is the one that has work to do here...
+      expect(satisfaction[index]).toBe(false);
+      // ...and nothing before it does, so the fixture is at this body's `from`
+      // by EFFECT and not only by its stamp. (A step that declares no
+      // `satisfiedBy` answers undefined and makes no claim either way.)
+      expect(satisfaction.slice(0, index).filter((answer) => answer === false)).toEqual([]);
+
+      const store = Store.open(dbPath);
+
+      expect(store.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(userVersion(dbPath)).toBe(SCHEMA_VERSION);
+      expect(columnsOf(dbPath, "queue_entries")).toEqual(
+        expect.arrayContaining(["release", "track", "lifecycle_json"]),
+      );
+      // Lossless: both rows survive with their stored seq and wave.
+      expect(storedRows(dbPath).map((row) => [row.cr, row.seq, row.wave])).toEqual([
+        ["CR-CRU-014", 10, "1"],
+        ["CR-CRU-078", 20, "5"],
+      ]);
+      // Retrofitted rows declare nothing — NULL, never a fabricated default.
+      expect(storedRows(dbPath).map((row) => row.release)).toEqual([null, null]);
+      expect(storedRows(dbPath).map((row) => row.track)).toEqual([null, null]);
+      expect(storedRows(dbPath).map((row) => row.lifecycle_json)).toEqual([null, null]);
+
+      // The probe the baseline path relies on now answers for this store.
+      const after = new Database(dbPath);
+      const satisfied = step.satisfiedBy?.(after);
+      after.close();
+      expect(satisfied).toBe(true);
+
+      // A pre-upgrade recovery point was written before the first mutation.
+      expect(store.migration).not.toBeNull();
+      expect(store.migration?.from).toBe(step.from);
+      expect(store.migration?.to).toBe(SCHEMA_VERSION);
+      expect(readdirSync(dir).filter((f) => /\.pre-upgrade-\d+$/.test(f)).length).toBe(1);
+    },
+  );
+
+  test("a FRESH store never runs the retrofit yet already carries the three columns", () => {
+    const dir = tmpDir();
+    const dbPath = join(dir, "fresh.db");
+
+    const store = Store.open(dbPath);
+
+    // Nothing migrated: the base CREATE TABLE wrote the current shape whole.
+    expect(store.migration).toBeNull();
+    expect(readdirSync(dir).filter((f) => /\.pre-upgrade-\d+$/.test(f))).toEqual([]);
+    expect(store.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(columnsOf(dbPath, "queue_entries")).toEqual(
+      expect.arrayContaining(["release", "track", "lifecycle_json"]),
+    );
+  });
+});
+
+describe("CR-CRU-091 §S2 — `track` is stored in ONE format, `track-<n>`", () => {
+  test("2, track-2 and Track 2 all normalise to the identical value `track-2`", () => {
+    expect(normalizeTrack("2")).toBe("track-2");
+    expect(normalizeTrack("track-2")).toBe("track-2");
+    expect(normalizeTrack("Track 2")).toBe("track-2");
+    // Multi-digit lanes are lanes too (a single-digit regex fails here).
+    expect(normalizeTrack("Track 10")).toBe("track-10");
+    expect(normalizeTrack("track-10")).toBe("track-10");
+  });
+
+  test("the three spellings produce ONE distinct stored track value across three writes", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+
+    for (const [index, spelling] of ["2", "track-2", "Track 2"].entries()) {
+      store.replaceQueue(key, [
+        { cr: `CR-CRU-T${index}`, wave: "5", dependsOn: [], track: spelling },
+      ]);
+      // Each write is a full replace, so read it back before the next one.
+      expect(entryOf(store.listQueue(key), `CR-CRU-T${index}`).track).toBe("track-2");
+    }
+
+    store.replaceQueue(key, [
+      { cr: A, wave: "5", dependsOn: [], track: "2" },
+      { cr: B, wave: "5", dependsOn: [], track: "track-2" },
+      { cr: C, wave: "5", dependsOn: [], track: "Track 2" },
+    ]);
+    const tracks = new Set(store.listQueue(key).map((entry) => entry.track));
+    expect([...tracks]).toEqual(["track-2"]);
+  });
+
+  test("a value carrying no integer is refused BY NAME and nothing is written", () => {
+    // The pure normaliser answers "not a lane" without throwing, so the route
+    // half (§S8) can 400 naming the field...
+    expect(normalizeTrack("main")).toBeNull();
+    expect(normalizeTrack("")).toBeNull();
+
+    // ...and the WRITE refuses rather than storing the caller's spelling.
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, [{ cr: A, wave: "5", dependsOn: [] }]);
+
+    let message = "";
+    try {
+      store.replaceQueue(key, [
+        { cr: B, wave: "5", dependsOn: [], track: "main" },
+      ]);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("track");
+    expect(message).toContain("main");
+
+    // Refusal is not a partial write: the prior queue is intact and untouched.
+    expect(store.listQueue(key).map((entry) => entry.cr)).toEqual([A]);
+  });
+});
+
+describe("CR-CRU-091 §S2 — the read publishes the declaration", () => {
+  test("`seq` is published on EVERY entry, verbatim from the column, never the array index", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, threeDeclared());
+
+    const entries = store.listQueue(key);
+
+    // The fixture AC18 pins: stored 10, 20, 30 — the index derivation yields
+    // 0, 1, 2 and fails here.
+    expect(entries.map((entry) => entry.seq)).toEqual([10, 20, 30]);
+    entries.forEach((entry, index) => {
+      expect(entry.seq).not.toBe(index);
+      expect(typeof entry.seq).toBe("number");
+    });
+  });
+
+  test("`release`/`track` are OMITTED (not null) for an entry declaring neither", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, [
+      { cr: A, title: "undeclared", wave: "5", dependsOn: [] },
+      { cr: B, wave: "5", dependsOn: [], release: "0.2.0", track: "Track 2" },
+    ]);
+
+    const undeclaredEntry = entryOf(store.listQueue(key), A);
+    expect("release" in undeclaredEntry).toBe(false);
+    expect("track" in undeclaredEntry).toBe(false);
+    expect("lifecycle" in undeclaredEntry).toBe(false);
+    // ...and seq is NOT conditional: it is always published.
+    expect("seq" in undeclaredEntry).toBe(true);
+
+    const declaredEntry = entryOf(store.listQueue(key), B);
+    expect(declaredEntry.release).toBe("0.2.0");
+    expect(declaredEntry.track).toBe("track-2");
+  });
+
+  test("`lifecycle` is projected as the PARSED object, never the raw JSON string", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, [
+      {
+        cr: A,
+        wave: "5",
+        dependsOn: [],
+        lifecycle: { state: "SUPERSEDED", by: "CR-CRU-088", at: 1_787_149_125_000 },
+      },
+      {
+        cr: B,
+        wave: "5",
+        dependsOn: [],
+        lifecycle: { state: "VOID", reason: "folded into CR-CRU-091", at: 1_787_149_126_000 },
+      },
+    ]);
+
+    const entries = store.listQueue(key);
+    expect(entryOf(entries, A).lifecycle).toEqual({
+      state: "SUPERSEDED",
+      by: "CR-CRU-088",
+      at: 1_787_149_125_000,
+    });
+    expect(entryOf(entries, B).lifecycle).toEqual({
+      state: "VOID",
+      reason: "folded into CR-CRU-091",
+      at: 1_787_149_126_000,
+    });
+    expect(typeof entryOf(entries, A).lifecycle).toBe("object");
+  });
+});
+
+describe("CR-CRU-091 §S2 — `lifecycle` is a SECOND AXIS, never folded into `status`", () => {
+  test("a SUPERSEDED entry whose plan is OPEN still derives IN_PROGRESS", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, [
+      {
+        cr: A,
+        wave: "5",
+        dependsOn: [],
+        lifecycle: { state: "SUPERSEDED", by: "CR-CRU-088", at: 1_787_149_125_000 },
+      },
+      {
+        cr: B,
+        wave: "5",
+        dependsOn: [],
+        lifecycle: { state: "VOID", reason: "not happening", at: 1_787_149_125_000 },
+      },
+    ]);
+    const filed = store.filePlan(key, { cr: A, cycles: [{ label: "C1", kind: "red-green" }] });
+    expect("error" in filed).toBe(false);
+
+    const superseded = entryOf(store.listQueue(key), A);
+    // The work IS happening — that is true, and lifecycle does not override it.
+    expect(superseded.status).toBe("IN_PROGRESS");
+    expect(superseded.lifecycle?.state).toBe("SUPERSEDED");
+    // The VOID entry has no plan, so its OWN axis still reads PENDING.
+    const voided = entryOf(store.listQueue(key), B);
+    expect(voided.status).toBe("PENDING");
+    expect(voided.lifecycle?.state).toBe("VOID");
+  });
+
+  test("QueueStatus gains NO member — the four derived values are exactly PENDING/IN_PROGRESS/COMPLETED/COMPLETED_UNTRACKED", () => {
+    // An exhaustive record: adding a member to QueueStatus makes this fail to
+    // compile (missing key), and removing one fails at runtime below.
+    const members: Record<QueueStatus, true> = {
+      PENDING: true,
+      IN_PROGRESS: true,
+      COMPLETED: true,
+      COMPLETED_UNTRACKED: true,
+    };
+    expect(Object.keys(members).sort()).toEqual([
+      "COMPLETED",
+      "COMPLETED_UNTRACKED",
+      "IN_PROGRESS",
+      "PENDING",
+    ]);
+
+    // @ts-expect-error — §S2: SUPERSEDED is a LIFECYCLE state. If this stops
+    // being a type error, the two axes have been collapsed into one.
+    const notAStatus: QueueStatus = "SUPERSEDED";
+    expect(members[notAStatus]).toBeUndefined();
+  });
+});
+
+describe("CR-CRU-091 §S2 — a full replace does not erase a declaration", () => {
+  test("re-posting the same CR ids with NO declaration preserves release, track, seq and lifecycle", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, threeDeclared());
+    const before = store.listQueue(key);
+
+    // The `queue-file` bulk bootstrap: same ids, no declaration in sight.
+    store.replaceQueue(key, threeUndeclared());
+
+    const after = store.listQueue(key);
+    expect(after.map((entry) => entry.cr)).toEqual([A, B, C]);
+    for (const cr of [A, B, C]) {
+      const kept = entryOf(after, cr);
+      const original = entryOf(before, cr);
+      expect({
+        cr,
+        release: kept.release,
+        track: kept.track,
+        seq: kept.seq,
+        lifecycle: kept.lifecycle,
+      }).toEqual({
+        cr,
+        release: original.release,
+        track: original.track,
+        seq: original.seq,
+        lifecycle: original.lifecycle,
+      });
+    }
+    // Sanity: the carried values are the DECLARED ones, not defaults.
+    expect(entryOf(after, A).release).toBe("0.2.0");
+    expect(entryOf(after, A).track).toBe("track-2");
+    expect(entryOf(after, A).seq).toBe(10);
+    expect(entryOf(after, C).lifecycle).toEqual({
+      state: "SUPERSEDED",
+      by: "CR-CRU-088",
+      at: 1_787_149_125_000,
+    });
+  });
+
+  test("a posted declaration OVERRIDES the snapshot, field by field", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, threeDeclared());
+
+    store.replaceQueue(key, [
+      // A re-declares everything...
+      {
+        cr: A,
+        title: "first",
+        wave: "6",
+        dependsOn: [],
+        release: "0.3.0",
+        track: "Track 7",
+        seq: 99,
+        lifecycle: { state: "VOID", reason: "replanned", at: 1_787_149_200_000 },
+      },
+      // ...B declares one field only, and keeps the rest of its snapshot.
+      { cr: B, title: "second", wave: "5", dependsOn: [A], release: "0.4.0" },
+      { cr: C, title: "third", wave: "6", dependsOn: [] },
+    ]);
+
+    const after = store.listQueue(key);
+    const overridden = entryOf(after, A);
+    expect(overridden.release).toBe("0.3.0");
+    expect(overridden.track).toBe("track-7");
+    expect(overridden.seq).toBe(99);
+    expect(overridden.lifecycle).toEqual({
+      state: "VOID",
+      reason: "replanned",
+      at: 1_787_149_200_000,
+    });
+    // Posted non-declaration data is the POST's, as it always was.
+    expect(overridden.wave).toBe("6");
+
+    const partial = entryOf(after, B);
+    expect(partial.release).toBe("0.4.0");
+    expect(partial.track).toBe("track-2");
+    expect(partial.seq).toBe(20);
+  });
+
+  test("a CR absent from the posted set is STILL dropped, and the survivors keep their declarations", () => {
+    const store = new Store(":memory:");
+    const key = seedProject(store);
+    store.replaceQueue(key, threeDeclared());
+
+    store.replaceQueue(key, threeUndeclared().filter((entry) => entry.cr !== C));
+
+    const after = store.listQueue(key);
+    expect(after.map((entry) => entry.cr)).toEqual([A, B]);
+    expect(entryOf(after, A).release).toBe("0.2.0");
+    expect(entryOf(after, B).seq).toBe(20);
+  });
+
+  test(
+    "a CR the store never held takes the posted order as its RELATIVE order inside its own " +
+      "wave block (CR-CRU-095 §S3/AC12: base + position within the wave, never the array index)",
+    () => {
+      const store = new Store(":memory:");
+      const key = seedProject(store);
+
+      store.replaceQueue(key, threeUndeclared());
+
+      // No snapshot, no declaration: the post's own order still stands, but as
+      // the next free slot of each row's wave block — A and B are wave 5's
+      // first and second members, C is wave 6's first. CR-CRU-091 wrote the
+      // array index (0, 1, 2) here; CR-CRU-095 §S3 retired that scale.
+      expect(store.listQueue(key).map((entry) => [entry.cr, entry.seq])).toEqual([
+        [A, waveSeqBase("5") + 1],
+        [B, waveSeqBase("5") + 2],
+        [C, waveSeqBase("6") + 1],
+      ]);
+    },
+  );
+});
+
+// DELETED WHOLE by CR-CRU-130 §S2: `describe("CR-CRU-091 §S1 — a proposed
+// release is its own record kind")`, all five cases.
+//
+// Their SUBJECT was the two-type model itself, and §S2 retires it: a proposed
+// release is not a record kind, it is a `release` milestone carrying a
+// `targetAt` and no `deliveredAt`, and shipping it sets that date on the SAME
+// record. Deleted rather than inverted, each naming the claim it made:
+//
+//   1. "`targetAt` is accepted for a release-proposal and round-trips as epoch
+//      SECONDS" — the superseded claim is that the type accepting a target is
+//      `release-proposal`. CR-CRU-130 §S1 already made both dates first-class
+//      on EVERY type, and `tests/milestone-dates-are-first-class.test.ts`
+//      asserts the round-trip per type rather than for this one.
+//   2. "a proposal with ZERO CRs and NO target is legal" — same superseded
+//      premise; absence as a real state is now asserted for every type in that
+//      same file, and for an undelivered `release` specifically in
+//      `tests/release-before-and-after-delivery.test.ts`.
+//   3. "a proposal is invisible to `listReleases`, and proposals order among
+//      themselves by version" — the invisibility was derived from the TYPE
+//      NAME, which is exactly what §S2 replaces with delivery. Both halves
+//      survive, re-derived: the two reads split by `deliveredAt` and the
+//      VERSION-ascending order are asserted together in
+//      `tests/release-before-and-after-delivery.test.ts`'s wire-shape case,
+//      against this project's real population and a scrambled arrival order.
+//   4. "a non-semver label orders DETERMINISTICALLY rather than throwing" —
+//      the comparator is untouched by this CR, but the case can only state its
+//      claim by writing four `release-proposal` records, so its fixture is the
+//      retired model. The comparator's own unit coverage stands
+//      (`compareVersionLabels`, and the ordering case named above).
+//   5. "a shipped release CONSUMES the proposal it fulfils" — THE claim §S2
+//      removes. There is nothing to consume: the release and the proposal are
+//      one row, so the case's central assertion (a retired predecessor beside
+//      a new release record) asserts the pair this CR exists to abolish. Its
+//      one still-true half — a release retires its GATE, and touches no other
+//      label — is asserted in `tests/release-before-and-after-delivery.test
+//      .ts` case 2, where it guards the removal of the other stamp.

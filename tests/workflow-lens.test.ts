@@ -46,6 +46,8 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
+import type { LensRunLike } from "../public/app-logic.mjs";
+import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -160,9 +162,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {
@@ -952,5 +952,678 @@ describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header supp
     for (const h of headers) {
       expect((h.textContent ?? "").trim().length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ── CR-CRU-117 §S1 — an in-flight gate is not a verdict ──────────────────
+// Spec: docs/changes/CR-CRU-117-an-in-flight-gate-is-not-a-seal.md, the
+// "§S1 — an in-flight gate is not a verdict" acceptance criteria. The mark's
+// SHAPE was settled 2026-09-10, before any RED, in
+// docs/research/DN-crucible-wave-track-release.md (drift section D3): it
+// rides as a key INSIDE the `gate` object the client already builds
+// (`gate.inFlight`), NOT as a top-level field beside `version` and NOT as a
+// fifth outcome-vocabulary member — because `Store.recordGateEvent(gate:
+// unknown, …)` (src/store.ts ~L2049) stores the gate object VERBATIM and
+// `handleGates` (src/v2.ts ~L1179) validates only `intent`, `outcome` and
+// steps-is-an-array, so an in-gate key reaches both readers with zero
+// server change.
+//
+// Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
+//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs ~L794) is
+//     built from EVERY `kind:"gate"` event whose `gate.outcome` is `passed`
+//     or `checks-passed`, keyed by `context.wave`. It reads nothing else off
+//     the gate — no in-flight mark exists anywhere in the codebase yet — so
+//     an interim `checks-passed` ladder gates its wave about two seconds
+//     into a run, and the Set is never subtracted from (~L977 is its only
+//     consumer, turning membership into `{ label: "gated" }`).
+// Every assertion below pinning an in-flight gate as NON-gating is therefore
+// genuine RED. The true-positive bounds beside them hold against current
+// production and are asserted anyway — they are the anti-vacuity twins the
+// criteria explicitly demand, and they are placed FIRST so the assertion
+// that actually throws is the new pin (same convention as the §S6
+// outcome-vocabulary test in tests/workflow-gate-widget.test.ts).
+//
+// The nine-row ladder below is the REAL shape, captured from `no-mistakes`
+// v1.70.1 on this machine 2026-09-10 — the same capture
+// tests/client/test_a_run_still_going_is_never_sealed.py drives. The tool
+// version is NAMED because the coupling is load-bearing (§S3's second
+// criterion): if the tool gains or loses a pipeline step, a nine-row
+// assertion goes red for a tool-version reason with no defect behind it.
+describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowLens)", () => {
+  // The mark's key, named once. Assertions below test it BY KEY
+  // (`hasOwnProperty`), never by inference from step count or `push`.
+  const IN_FLIGHT_KEY = "inFlight";
+  // The label a wave carries when nothing has sealed it: all lanes closed,
+  // no later wave open, no qualifying gate (public/app-logic.mjs ~L979).
+  const UNGATED_LABEL = "lanes complete · awaiting review";
+  // `no-mistakes` v1.70.1's pipeline, in order — the nine rows `axi status`
+  // always emits, unrun ones included.
+  const NINE_STEP_NAMES = [
+    "intent",
+    "rebase",
+    "review",
+    "test",
+    "document",
+    "lint",
+    "push",
+    "pr",
+    "ci",
+  ];
+
+  interface LensGateStep {
+    name: string;
+    status: string;
+  }
+  interface LensGateEventFixture {
+    id: string;
+    projectKey: string;
+    agentId: string;
+    kind: "gate";
+    codec: "no-mistakes";
+    timestamp: number;
+    version?: string;
+    context: { wave: string };
+    gate: {
+      intent: string;
+      outcome: "checks-passed" | "passed" | "failed" | "cancelled";
+      steps: LensGateStep[];
+      push?: { commit: string; remote: string };
+      inFlight?: boolean;
+    };
+  }
+
+  // Mid-run: two steps done, `review` still running, the remaining six
+  // `pending` — nine rows, exactly what the tool emits while a run is going.
+  function inFlightLadder(): LensGateStep[] {
+    return NINE_STEP_NAMES.map((name, i) => ({
+      name,
+      status: i < 2 ? "passed" : i === 2 ? "running" : "pending",
+    }));
+  }
+  function sealedLadder(): LensGateStep[] {
+    return NINE_STEP_NAMES.map((name) => ({ name, status: "passed" }));
+  }
+
+  function gateEvent(o: {
+    id: string;
+    wave: string;
+    timestamp: number;
+    outcome: LensGateEventFixture["gate"]["outcome"];
+    steps: LensGateStep[];
+    inFlight?: boolean;
+    push?: { commit: string; remote: string };
+    version?: string;
+  }): LensGateEventFixture {
+    return {
+      id: o.id,
+      projectKey: "cru117-lens",
+      agentId: "orchestrator-mainline",
+      kind: "gate",
+      codec: "no-mistakes",
+      timestamp: o.timestamp,
+      // The CLIENT stamps the wave; the server never does. A wave-less
+      // fixture would prove nothing about this exclusion, because the label
+      // would be missing from the gated set for an unrelated reason.
+      context: { wave: o.wave },
+      ...(o.version !== undefined ? { version: o.version } : {}),
+      gate: {
+        intent: `wave ${o.wave} no-mistakes gate`,
+        outcome: o.outcome,
+        steps: o.steps,
+        ...(o.push !== undefined ? { push: o.push } : {}),
+        ...(o.inFlight !== undefined ? { [IN_FLIGHT_KEY]: o.inFlight } : {}),
+      },
+    };
+  }
+
+  function closedPlanForWave(wave: string) {
+    const planId = 117_000 + Number(wave);
+    return {
+      planId,
+      cr: `CR-117-W${wave}`,
+      status: "closed" as const,
+      wave,
+      merge: { commit: "a5ad013" },
+      cycles: [{ id: planId * 10, label: "c1", status: "done" as const }],
+    };
+  }
+
+  // `gatedWaveLabels` is module-internal; its ONLY observable form is the
+  // wave-boundary label the lens publishes, so membership is read here as
+  // `state.label === "gated"`. One wave per call — a second declared wave
+  // would trip the (unrelated) superseded detection at ~L961.
+  function waveLabel(wave: string, events: LensGateEventFixture[]): string {
+    const result = AppLogic.workflowLens({
+      plans: [closedPlanForWave(wave)],
+      // `LensRunLike` requires `failed`, a test COUNT — the shape of an
+      // INGEST run. A gate event carries no counts at all; its verdict is
+      // `gate.outcome`, which is why the fixture above declares none and why
+      // widening it with a `failed: 0` would put a lie about the wire shape
+      // into the fixture this suite reasons from. Loosening `LensRunLike`
+      // instead would weaken the type for every other caller of the lens, so
+      // the mismatch is absorbed HERE, at the one boundary that has it — the
+      // same move `result.waves` makes on the line below.
+      events: events as unknown as LensRunLike[],
+    });
+    const waves = result.waves as Array<{ wave: string; state: { label: string } }>;
+    const node = waves.find((w) => w.wave === wave);
+    expect(node).toBeDefined();
+    return node!.state.label;
+  }
+
+  // AC1 — the mark is EXPLICIT DATA on the event, asserted by key; the
+  // exclusion must not be a heuristic, because both candidate heuristics are
+  // ones this defect already proved unreliable (the tool always emits nine
+  // rows, and `push` is absent from plenty of legitimate seals).
+  test("the exclusion keys on the in-flight MARK, never on a heuristic: a nine-row marked ladder that even carries a `push` block does NOT gate its wave, while an unmarked two-row seal with no `push` does", () => {
+    const marked = gateEvent({
+      id: "evt-117-marked-nine-row",
+      wave: "6",
+      timestamp: 1_757_500_000_000,
+      outcome: "checks-passed",
+      steps: inFlightLadder(),
+      inFlight: true,
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+    });
+
+    // The mark is present BY KEY on the gate object the client posts.
+    expect(Object.prototype.hasOwnProperty.call(marked.gate, IN_FLIGHT_KEY)).toBe(true);
+    expect(marked.gate.inFlight).toBe(true);
+    // Both heuristics say "sealed" about this event: nine rows, and a push.
+    expect(marked.gate.steps.length).toBe(9);
+    expect(marked.gate.push).toBeDefined();
+    // It must still not gate — only the mark decides.
+    expect(waveLabel("6", [marked])).toBe(UNGATED_LABEL);
+
+    // The converse bound: a REAL seal that both heuristics would misread as
+    // interim — two rows, no `push` — still gates.
+    const shortSeal = gateEvent({
+      id: "evt-117-seal-two-row",
+      wave: "6",
+      timestamp: 1_757_500_600_000,
+      outcome: "passed",
+      steps: [
+        { name: "intent", status: "passed" },
+        { name: "review", status: "passed" },
+      ],
+    });
+    expect(Object.prototype.hasOwnProperty.call(shortSeal.gate, IN_FLIGHT_KEY)).toBe(false);
+    expect(shortSeal.gate.push).toBeUndefined();
+    expect(waveLabel("6", [shortSeal])).toBe("gated");
+  });
+
+  // AC2 — the twin, on ONE wave label: the seal is what gates it, and the
+  // in-flight gate contributes nothing in either direction.
+  test("two gates on the SAME `context.wave` — one in-flight, one sealed `passed`: the wave is gated by the seal alone and stays gated with both on the board, but is NOT gated when only the in-flight gate is posted", () => {
+    const inFlight = gateEvent({
+      id: "evt-117-twin-inflight",
+      wave: "6",
+      timestamp: 1_757_501_000_000,
+      outcome: "checks-passed",
+      steps: inFlightLadder(),
+      inFlight: true,
+    });
+    const seal = gateEvent({
+      id: "evt-117-twin-seal",
+      wave: "6",
+      timestamp: 1_757_502_400_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+    });
+
+    // Same wave, stamped explicitly on BOTH — the mark is the only
+    // difference between them.
+    expect(inFlight.context.wave).toBe("6");
+    expect(seal.context.wave).toBe(inFlight.context.wave);
+
+    // Anti-vacuity twin: the seal alone gates the label.
+    expect(waveLabel("6", [seal])).toBe("gated");
+    // Both on the board: still gated — the seal did it, the interim neither
+    // caused nor undid it.
+    expect(waveLabel("6", [inFlight, seal])).toBe("gated");
+    // The pin: the in-flight gate alone leaves the wave un-gated.
+    expect(waveLabel("6", [inFlight])).toBe(UNGATED_LABEL);
+  });
+
+  // AC3 — the narrowing loses no true positive. Old gate events carry no
+  // mark and must keep reading exactly as they do today (Risk section:
+  // "they are seals, correctly").
+  test("a wave gated by a REAL seal is still gated: unmarked `passed` and `checks-passed` gates both gate it, while the IDENTICAL `checks-passed` nine-row ladder carrying the mark does not", () => {
+    const passedSeal = gateEvent({
+      id: "evt-117-truepos-passed",
+      wave: "6",
+      timestamp: 1_757_503_000_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+    });
+    expect(waveLabel("6", [passedSeal])).toBe("gated");
+
+    // A legacy pre-CR-117 gate: `checks-passed`, no mark at all — a seal.
+    const checksPassedSeal = gateEvent({
+      id: "evt-117-truepos-checks",
+      wave: "6",
+      timestamp: 1_757_503_100_000,
+      outcome: "checks-passed",
+      steps: sealedLadder(),
+    });
+    expect(
+      Object.prototype.hasOwnProperty.call(checksPassedSeal.gate, IN_FLIGHT_KEY),
+    ).toBe(false);
+    expect(waveLabel("6", [checksPassedSeal])).toBe("gated");
+
+    // The discriminator: same outcome, same nine-row ladder, mark added.
+    const markedTwin = gateEvent({
+      id: "evt-117-truepos-marked-twin",
+      wave: "6",
+      timestamp: 1_757_503_200_000,
+      outcome: "checks-passed",
+      steps: sealedLadder(),
+      inFlight: true,
+    });
+    expect(waveLabel("6", [markedTwin])).toBe(UNGATED_LABEL);
+  });
+
+  // AC6 — an in-flight gate carries NO `version`. A version-stamped gate is
+  // retention-protected (`LIVE_GATE`, src/store.ts ~L2969, keyed on
+  // `json_extract(payload,'$.version') IS NOT NULL`), so stamping every
+  // interim snapshot would leave a run's worth of unprunable gates behind
+  // for one release — and the seal restates the release anyway.
+  test("an in-flight gate carries no `version` key at all while the same run's SEAL carries it — and version-absence is NOT the mark: an unmarked, version-less seal still gates, the version-less in-flight gate does not", () => {
+    const interim = gateEvent({
+      id: "evt-117-version-interim",
+      wave: "6",
+      timestamp: 1_757_504_000_000,
+      outcome: "checks-passed",
+      steps: inFlightLadder(),
+      inFlight: true,
+    });
+    const seal = gateEvent({
+      id: "evt-117-version-seal",
+      wave: "6",
+      timestamp: 1_757_505_400_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+      push: { commit: "a5ad013", remote: "origin/release/0.2.0" },
+      version: "0.2.0",
+    });
+
+    // Key ABSENCE, not null and not empty — `version` is a top-level sibling
+    // of `gate` (src/v2.ts ~L1216), so neither place may carry one.
+    expect(Object.prototype.hasOwnProperty.call(interim, "version")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(interim.gate, "version")).toBe(false);
+    // The same run's seal DOES state it.
+    expect(Object.prototype.hasOwnProperty.call(seal, "version")).toBe(true);
+    expect(seal.version).toBe("0.2.0");
+
+    // Bound: version-absence is not what makes a gate interim — a seal that
+    // stamps no release still gates its wave.
+    const versionlessSeal = gateEvent({
+      id: "evt-117-version-less-seal",
+      wave: "6",
+      timestamp: 1_757_505_500_000,
+      outcome: "passed",
+      steps: sealedLadder(),
+    });
+    expect(Object.prototype.hasOwnProperty.call(versionlessSeal, "version")).toBe(false);
+    expect(waveLabel("6", [versionlessSeal])).toBe("gated");
+
+    // The pin: the version-less INTERIM gate does not gate...
+    expect(waveLabel("6", [interim])).toBe(UNGATED_LABEL);
+    // ...and its run's own seal, arriving after it, does.
+    expect(waveLabel("6", [interim, seal])).toBe("gated");
+  });
+});
+
+// ── CR-CRU-125 §S1 — History excludes a CR that is LIVE, not merely an ────
+// open plan RECORD
+//
+// Spec: docs/changes/CR-CRU-125-history-narrates-a-cr-that-is-still-live.md
+// (§S1 acceptance criteria, as corrected by its 2026-09-13 gap analysis).
+//
+// Observed live on the board 2026-09-12: `CR-CRU-122` held plan 129
+// (`aborted`) beside plan 131 (`open`), and `workflowLens`'s History filter
+// (`public/app-logic.mjs:934` — `wave.crs.filter((c) => c.status !== "open")`)
+// excludes open plan RECORDS, not a CR that HAS an open plan. So the aborted
+// plan's node survived into History and narrated a mid-flight CR as
+// `0/2 cycles` with a ✗ failed and a ⊘ skipped cycle, while the Active panel
+// showed the very same CR running. §S1 re-keys the filter on the CR, derived
+// GLOBALLY off the raw `plans` input (the `declaredWaveLabels` precedent at
+// `:927`), and applies to INFERRED nodes too — they carry no `status` at all
+// (`:898-918`), so a status-keyed filter can never reach them.
+//
+// Typing note: `Plan.status` has included `"aborted"` since CR-CRU-024 §S6
+// (src/types.ts:346), and CR-CRU-125 widened the lens's published declaration
+// to match it (public/app-logic.d.mts:415, and `LensCrNode.status` at :458),
+// so the plan fixtures below pass unconverted. The remaining `events` cast is
+// the `LensRunLike` absorption this file already makes in the CR-CRU-117
+// block above.
+describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowLens)", () => {
+  interface AbortAwareCycleFixture {
+    id: number;
+    label: string;
+    status: "pending" | "active" | "done" | "skipped" | "failed";
+  }
+  interface AbortAwarePlanFixture {
+    planId: number;
+    cr: string;
+    status: "open" | "closed" | "aborted";
+    wave?: string;
+    closedAt?: number;
+    merge?: { commit: string };
+    cycles: AbortAwareCycleFixture[];
+  }
+  // The node shape the lens PUBLISHES, read back for assertions (`status` is
+  // widened to `string | undefined`: declared nodes pass `plan.status`
+  // through verbatim, inferred nodes carry no `status` key at all).
+  interface LensCrNodeRead {
+    cr: string;
+    source: "declared" | "inferred";
+    status?: string;
+    closedAt?: number;
+    merge?: { commit: string };
+    cycles: Array<{ label: string; status: string }>;
+    rollup: { done: number; total: number };
+  }
+  interface LensWaveRead {
+    wave: string;
+    crs: LensCrNodeRead[];
+    tracks: Array<{ track: string; crs: LensCrNodeRead[] }> | null;
+    state: { label: string; chips: string[] } | null;
+  }
+
+  function lensWaves(
+    plans: AbortAwarePlanFixture[],
+    events: EventFixture[] = [],
+  ): LensWaveRead[] {
+    const result = AppLogic.workflowLens({
+      plans,
+      events: events as unknown as LensRunLike[],
+    });
+    return result.waves as unknown as LensWaveRead[];
+  }
+
+  // EVERY CR node History publishes, wave level and track level alike — a
+  // filter that merely relocated a node into a track group would not escape
+  // this reader.
+  function historyNodes(waves: LensWaveRead[]): LensCrNodeRead[] {
+    return waves.flatMap((w) => [...w.crs, ...(w.tracks ?? []).flatMap((t) => t.crs)]);
+  }
+
+  // CR-CRU-122's exact live shape: plan 129 aborted (cycles 426 failed / 427
+  // skipped), plan 131 open (cycles 430 done / 431 active).
+  const LIVE_CR = "CR-CRU-LENS-LIVE";
+  function abortedAttempt(wave: string): AbortAwarePlanFixture {
+    return {
+      planId: 129,
+      cr: LIVE_CR,
+      status: "aborted",
+      wave,
+      cycles: [
+        { id: 426, label: "c1 red-green", status: "failed" },
+        { id: 427, label: "c2 verify", status: "skipped" },
+      ],
+    };
+  }
+  function liveAttempt(wave: string): AbortAwarePlanFixture {
+    return {
+      planId: 131,
+      cr: LIVE_CR,
+      status: "open",
+      wave,
+      cycles: [
+        { id: 430, label: "c1 red-green", status: "done" },
+        { id: 431, label: "c2 verify", status: "active" },
+      ],
+    };
+  }
+
+  // AC1 — the defect itself.
+  test("CR-CRU-125 AC1 — a CR holding an `aborted` plan BESIDE an `open` one (CR-CRU-122's plans 129 + 131) publishes NO History CR node at all, while a genuinely closed CR in the same wave keeps its own node intact", () => {
+    const closedNeighbour: AbortAwarePlanFixture = {
+      planId: 128,
+      cr: "CR-CRU-LENS-SEALED",
+      status: "closed",
+      wave: "6",
+      closedAt: 1_757_000_000_000,
+      merge: { commit: "deadbee" },
+      cycles: [{ id: 425, label: "c1 red-green", status: "done" }],
+    };
+
+    const nodes = historyNodes(
+      lensWaves([abortedAttempt("6"), liveAttempt("6"), closedNeighbour]),
+    );
+
+    // THE PIN: the live CR is narrated by History zero times — its aborted
+    // attempt included.
+    expect(nodes.filter((n) => n.cr === LIVE_CR).length).toBe(0);
+
+    // BOUND — the fix is not "empty History": the sealed CR beside it keeps
+    // exactly one node, status and merge seal intact.
+    const sealed = nodes.filter((n) => n.cr === "CR-CRU-LENS-SEALED");
+    expect(sealed.length).toBe(1);
+    expect(sealed[0]!.status).toBe("closed");
+    expect(sealed[0]!.merge).toEqual({ commit: "deadbee" });
+    expect(sealed[0]!.rollup).toEqual({ done: 1, total: 1 });
+
+    // The MISREPORT is what the user actually saw: no History node anywhere
+    // carries the aborted attempt's `0/2 cycles` failed+skipped rollup.
+    expect(nodes.some((n) => n.rollup.done === 0 && n.rollup.total === 2)).toBe(false);
+    expect(nodes.flatMap((n) => n.cycles).some((c) => c.status === "skipped")).toBe(false);
+  });
+
+  // AC1, globality clause — §S1: the live-CR set is derived from the RAW
+  // `plans` input BEFORE the per-wave loop, because a re-filed plan takes its
+  // `--wave` from the caller and need not share the aborted plan's wave. A
+  // wave-local implementation satisfies the test above and fails this one.
+  test("CR-CRU-125 AC1 (globality) — the aborted plan in wave 5 is dropped even though the CR's OPEN plan was re-filed into wave 6: liveness is computed off the raw plans list, not per wave", () => {
+    const waves = lensWaves([abortedAttempt("5"), liveAttempt("6")]);
+    const nodes = historyNodes(waves);
+
+    expect(nodes.filter((n) => n.cr === LIVE_CR).length).toBe(0);
+    // Neither wave has any remaining visible material, so neither renders
+    // (the §S2/CR-CRU-021 ghost-header rule, `public/app-logic.mjs:996-998`).
+    expect(waves.find((w) => w.wave === "5")).toBeUndefined();
+    expect(waves.find((w) => w.wave === "6")).toBeUndefined();
+  });
+
+  // AC3 — the anti-over-reach pin the Risk section relies on, ORDER included
+  // (gap analysis DRIFT-5): the `closedAt`-bearing node first (closedAt
+  // descending), then the `closedAt`-less ones in filing order via the stable
+  // sort at `public/app-logic.mjs:938`.
+  test("CR-CRU-125 AC3 — a CR with an `aborted` plan and a `closed` plan and NO open plan keeps EVERY node (all three attempts here), ordered exactly as today: the `closedAt`-bearing node first, the `closedAt`-less ones in filing order", () => {
+    const cr = "CR-CRU-LENS-MULTI";
+    const firstAttempt: AbortAwarePlanFixture = {
+      planId: 140,
+      cr,
+      status: "aborted",
+      wave: "5",
+      cycles: [{ id: 500, label: "attempt-1", status: "failed" }],
+    };
+    const sealedAttempt: AbortAwarePlanFixture = {
+      planId: 141,
+      cr,
+      status: "closed",
+      wave: "5",
+      closedAt: 1_757_100_000_000,
+      merge: { commit: "abc1234" },
+      cycles: [{ id: 501, label: "attempt-2", status: "done" }],
+    };
+    const thirdAttempt: AbortAwarePlanFixture = {
+      planId: 142,
+      cr,
+      status: "aborted",
+      wave: "5",
+      cycles: [{ id: 502, label: "attempt-3", status: "failed" }],
+    };
+
+    const nodes = historyNodes(lensWaves([firstAttempt, sealedAttempt, thirdAttempt])).filter(
+      (n) => n.cr === cr,
+    );
+
+    expect(nodes.length).toBe(3);
+    // The ORDER clause, asserted as the published SEQUENCE — not a set.
+    expect(nodes.map((n) => n.cycles[0]!.label)).toEqual([
+      "attempt-2",
+      "attempt-1",
+      "attempt-3",
+    ]);
+    expect(nodes.map((n) => n.status)).toEqual(["closed", "aborted", "aborted"]);
+    expect(nodes[0]!.merge).toEqual({ commit: "abc1234" });
+  });
+
+  // AC4 — the ordinary case, untouched.
+  test("CR-CRU-125 AC4 — a CR whose only plan is `closed` renders in History exactly as today: one wave, one node, its status, merge seal, rollup and cycle list unchanged", () => {
+    const waves = lensWaves([
+      {
+        planId: 150,
+        cr: "CR-CRU-LENS-PLAIN",
+        status: "closed",
+        wave: "3",
+        closedAt: 1_757_200_000_000,
+        merge: { commit: "cafe123" },
+        cycles: [
+          { id: 510, label: "c1 red-green", status: "done" },
+          { id: 511, label: "c2 verify", status: "done" },
+        ],
+      },
+    ]);
+
+    expect(waves.length).toBe(1);
+    expect(waves[0]!.wave).toBe("3");
+    expect(waves[0]!.crs.length).toBe(1);
+    const node = waves[0]!.crs[0]!;
+    expect(node.cr).toBe("CR-CRU-LENS-PLAIN");
+    expect(node.source).toBe("declared");
+    expect(node.status).toBe("closed");
+    expect(node.merge).toEqual({ commit: "cafe123" });
+    expect(node.rollup).toEqual({ done: 2, total: 2 });
+    expect(node.cycles.map((c) => c.label)).toEqual(["c1 red-green", "c2 verify"]);
+  });
+
+  // AC5 — abandoned and NOT resumed (gap analysis DRIFT-9: zero `aborted`
+  // pins exist in this suite today). The CR is not live, so nothing about it
+  // may be swept away with the live ones.
+  test("CR-CRU-125 AC5 — a CR whose ONLY plan is `aborted` (never re-filed, so no open plan names it) still renders its History node, with its cycles and its 0-of-2 failed/skipped rollup intact", () => {
+    const waves = lensWaves([
+      {
+        planId: 160,
+        cr: "CR-CRU-LENS-ABANDONED",
+        status: "aborted",
+        wave: "4",
+        cycles: [
+          { id: 520, label: "c1 red-green", status: "failed" },
+          { id: 521, label: "c2 verify", status: "skipped" },
+        ],
+      },
+    ]);
+    const nodes = historyNodes(waves);
+
+    expect(nodes.length).toBe(1);
+    expect(nodes[0]!.cr).toBe("CR-CRU-LENS-ABANDONED");
+    expect(nodes[0]!.status).toBe("aborted");
+    expect(nodes[0]!.rollup).toEqual({ done: 0, total: 2 });
+    expect(nodes[0]!.cycles.map((c) => c.status)).toEqual(["failed", "skipped"]);
+    // ...and its wave still renders rather than being dropped as empty.
+    expect(waves.map((w) => w.wave)).toEqual(["4"]);
+  });
+
+  // AC6 — the INFERRED variant (gap analysis DRIFT-4). An inferred node is
+  // built from an UNLINKED run's `context.wave` + agent stem
+  // (`public/app-logic.mjs:882-918`) and carries NO `status` key, so today's
+  // `c.status !== "open"` keeps every one of them.
+  test("CR-CRU-125 AC6 — an INFERRED node whose agent stem names a live CR is dropped from History too, while an inferred node for an unrelated CR in the same wave survives", () => {
+    const key = "cru125-lens";
+    const t0 = 1_757_300_000_000;
+    const livePlan: AbortAwarePlanFixture = {
+      planId: 170,
+      cr: "CR-CRU-LENS-INF-LIVE",
+      status: "open",
+      wave: "7",
+      cycles: [{ id: 530, label: "c1 red-green", status: "active" }],
+    };
+    // Unlinked (no `context.cycleId`) → the inferred path. The stem is the
+    // agent id minus its `-RED`/`-GREEN`/`-FIX` suffix
+    // (`public/app-logic.mjs:687`), so this run's node names the live CR.
+    const liveCrRun = runEvent({
+      id: "evt-125-inferred-live",
+      projectKey: key,
+      agentId: "CR-CRU-LENS-INF-LIVE-RED",
+      timestamp: t0,
+      total: 4,
+      passed: 2,
+      failed: 2,
+      context: { wave: "7", cycle: "c1 red-green" },
+    });
+    const otherCrRun = runEvent({
+      id: "evt-125-inferred-other",
+      projectKey: key,
+      agentId: "CR-CRU-LENS-INF-OTHER-GREEN",
+      timestamp: t0 + 1000,
+      context: { wave: "7", cycle: "c1 red-green" },
+    });
+
+    const nodes = historyNodes(lensWaves([livePlan], [liveCrRun, otherCrRun]));
+
+    // THE PIN — the inferred node for the live CR is gone.
+    expect(nodes.filter((n) => n.cr === "CR-CRU-LENS-INF-LIVE").length).toBe(0);
+    // BOUND — the CR-keyed filter is not "drop every inferred node": the
+    // unrelated stem's node survives, inferred and status-less as it is.
+    const survivor = nodes.filter((n) => n.cr === "CR-CRU-LENS-INF-OTHER");
+    expect(survivor.length).toBe(1);
+    expect(survivor[0]!.source).toBe("inferred");
+    expect(survivor[0]!.status).toBeUndefined();
+    // ...and the live CR's run is not absorbed into the survivor's node.
+    expect(survivor[0]!.rollup).toEqual({ done: 1, total: 1 });
+  });
+
+  // AC7 — the second half of DRIFT-4: an inferred node for a CR with NO open
+  // plan is untouched, whether or not that CR declares any plan at all.
+  test("CR-CRU-125 AC7 — an inferred node whose stem names a CR with NO open plan is untouched: the stem of a CLOSED-plan CR and a stem declaring no plan at all both keep their History nodes", () => {
+    const key = "cru125-lens";
+    const t0 = 1_757_400_000_000;
+    const closedPlan: AbortAwarePlanFixture = {
+      planId: 180,
+      cr: "CR-CRU-LENS-INF-SEALED",
+      status: "closed",
+      wave: "2",
+      closedAt: t0,
+      merge: { commit: "beef456" },
+      cycles: [{ id: 540, label: "c1 red-green", status: "done" }],
+    };
+    // An unlinked run for the SAME cr as the closed plan — an inferred node
+    // beside a declared one.
+    const sealedCrRun = runEvent({
+      id: "evt-125-inferred-sealed",
+      projectKey: key,
+      agentId: "CR-CRU-LENS-INF-SEALED-GREEN",
+      timestamp: t0 + 1000,
+      context: { wave: "2", cycle: "stray-cycle" },
+    });
+    // ...and one for a CR that declares no plan whatsoever.
+    const undeclaredCrRun = runEvent({
+      id: "evt-125-inferred-undeclared",
+      projectKey: key,
+      agentId: "CR-CRU-LENS-INF-UNDECLARED-RED",
+      timestamp: t0 + 2000,
+      context: { wave: "2", cycle: "stray-cycle" },
+    });
+
+    const nodes = historyNodes(lensWaves([closedPlan], [sealedCrRun, undeclaredCrRun]));
+
+    const inferredSealed = nodes.filter(
+      (n) => n.cr === "CR-CRU-LENS-INF-SEALED" && n.source === "inferred",
+    );
+    expect(inferredSealed.length).toBe(1);
+    expect(inferredSealed[0]!.cycles.map((c) => c.label)).toEqual(["stray-cycle"]);
+
+    const inferredUndeclared = nodes.filter((n) => n.cr === "CR-CRU-LENS-INF-UNDECLARED");
+    expect(inferredUndeclared.length).toBe(1);
+    expect(inferredUndeclared[0]!.source).toBe("inferred");
+
+    // The declared node for the sealed CR is still there beside its inferred
+    // one — three nodes total, nothing swept.
+    expect(nodes.length).toBe(3);
   });
 });

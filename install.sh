@@ -17,23 +17,65 @@
 # target dir, and writes the client discovery manifest naming those paths
 # (the `server`, `fleet` and `manifest` stages, in that order) — see §S2.
 #
-# Re-running this script is safe (idempotent): uv and the tool install both
-# converge, and `crucible-axi install` is itself idempotent.
+# Re-running this script is also how you UPGRADE (CR-CRU-072): an existing
+# install is advanced with `uv tool upgrade` — uv's `install` alone no-ops over
+# one — and the staged install then follows so the server half matches the CLI.
+# On a fully-current machine it converges with no reinstall and no re-provision.
 #
 # Skip the staged install with `--no-install`, or `CRUCIBLE_NO_INSTALL=1`:
 #   curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh -s -- --no-install
+#
+# TEARDOWN — the exact inverse, along the same path (CR-CRU-069):
+#   curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh -s -- --uninstall
+# `crucible-axi uninstall` reverses the stages it owns (program artifacts only;
+# the store and config survive), and `uv tool uninstall` runs LAST because a
+# running tool cannot remove itself. Add `--purge` to also destroy the store and
+# config — nothing else deletes them.
 
 set -eu
 
 # --- args / flags -----------------------------------------------------------
 run_install="${CRUCIBLE_NO_INSTALL:+0}"
 run_install="${run_install:-1}"
+mode=install
+purge=0
 for arg in "$@"; do
   case "$arg" in
     --no-install) run_install=0 ;;
+    --uninstall) mode=uninstall ;;
+    --purge) purge=1 ;;
     *) echo "install.sh: ignoring unknown argument '$arg'" >&2 ;;
   esac
 done
+
+# --- teardown (inverse of everything below) ---------------------------------
+if [ "$mode" = uninstall ]; then
+  echo "==> Crucible teardown starting"
+  if command -v crucible-axi >/dev/null 2>&1; then
+    if [ "$purge" = 1 ]; then
+      echo "==> Reversing staged install: crucible-axi uninstall --purge"
+      crucible-axi uninstall --purge
+    else
+      echo "==> Reversing staged install: crucible-axi uninstall"
+      crucible-axi uninstall
+    fi
+  else
+    # A partially-uninstalled machine still converges: with the verb already
+    # gone there are no stages left for it to reverse.
+    echo "==> crucible-axi not present — skipping the staged teardown"
+  fi
+  # LAST: the tool that ran the verb. Tolerated when already absent so a
+  # re-run of this teardown is indistinguishable from one run.
+  if command -v uv >/dev/null 2>&1; then
+    echo "==> Removing the crucible-axi tool: uv tool uninstall crucible-axi"
+    uv tool uninstall crucible-axi || true
+  else
+    echo "==> uv not present — nothing to remove"
+  fi
+  echo "==> Crucible teardown complete (Bun left installed; the store and"
+  echo "    config are kept unless --purge was passed)"
+  exit 0
+fi
 
 echo "==> Crucible bootstrap starting"
 
@@ -53,10 +95,51 @@ else
   echo "==> uv installed ($(uv --version 2>/dev/null || echo uv))"
 fi
 
-# --- 2. install the crucible-axi primary orchestrator (PyPI) ----------------
-echo "==> Installing crucible-axi (PyPI primary orchestrator) via uv"
-uv tool install crucible-axi
-echo "==> crucible-axi installed"
+# --- 2. install OR upgrade the crucible-axi primary orchestrator (PyPI) -----
+# uv's `install` does NOT advance an already-installed tool — it reports
+# "Checked 1 package" and leaves the old version in place, which stranded every
+# existing user on a stale CLI (CR-CRU-072). Advancing is `uv tool upgrade`.
+# Version selection stays uv's job: no version specifier appears here.
+
+# The version uv currently has installed, or empty when the tool is absent.
+axi_version() {
+  uv tool list 2>/dev/null | awk '$1 == "crucible-axi" { v = $2; sub(/^v/, "", v); print v; exit }'
+}
+
+axi_before="$(axi_version || true)"
+advanced=0
+
+if [ -n "$axi_before" ]; then
+  echo "==> crucible-axi already installed ($axi_before) — asking uv for the latest release"
+  # `uv tool install --upgrade`, NOT `uv tool upgrade`: the latter resolves
+  # WITHIN the constraint the tool was installed under, so a tool installed as
+  # `crucible-axi==X` reports "already current" forever and never advances
+  # (measured against real uv 0.11.8: seeded 0.1.1, `uv tool upgrade` left it
+  # at 0.1.1; `--upgrade` moved it to 0.1.2). `--upgrade` ignores that pin,
+  # which is the only form that advances BOTH a pinned and an unpinned
+  # install. Version selection is still entirely uv's: no specifier here.
+  uv tool install --upgrade crucible-axi
+  axi_after="$(axi_version || true)"
+  if [ "$axi_after" = "$axi_before" ]; then
+    echo "==> crucible-axi already current: $axi_before"
+  else
+    echo "==> crucible-axi upgraded: $axi_before -> ${axi_after:-unknown}"
+    advanced=1
+  fi
+else
+  echo "==> Installing crucible-axi (PyPI primary orchestrator) via uv"
+  uv tool install crucible-axi
+  axi_after="$(axi_version || true)"
+  echo "==> crucible-axi installed${axi_after:+ ($axi_after)}"
+  advanced=1
+fi
+
+# Nothing moved: converge silently rather than re-provisioning, and never claim
+# a bootstrap completed over work that did not happen (AC3/AC6).
+if [ "$advanced" = 0 ]; then
+  echo "==> Nothing to do — the CLI and its staged install are already converged"
+  exit 0
+fi
 
 # --- 3. run the staged sub-installers (§S2) ---------------------------------
 if [ "$run_install" = "1" ]; then

@@ -1,6 +1,6 @@
 {
   "name": "@anthill-tec/crucible-server",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/anthill-tec/crucible.git"
@@ -12,6 +12,7 @@
   "files": [
     "bin/",
     "src/",
+    "src/crucible.toml",
     "public/"
   ],
   "bin": {
@@ -22,18 +23,26 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:unit": "bun scripts/run-test-target.ts unit",
+    "test:integration": "bun scripts/run-test-target.ts integration",
+    "test:client": "python3 -m unittest discover -s tests/client -t .",
+    "test:regression": "bun scripts/run-test-target.ts regression",
     "test:e2e": "bunx bddgen && bunx playwright test",
     "start": "bun run src/server.ts"
+  },
+  "crucible": {
+    "reportPath": {
+      "test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"
+    }
   },
   "devDependencies": {
     "@cucumber/gherkin": "^41.0.0",
     "@happy-dom/global-registrator": "^20.10.6",
     "@playwright/test": "^1.61.1",
+    "@toon-format/toon": "^4.1.0",
     "bun-types": "^1.3.14",
     "happy-dom": "^20.10.6",
     "playwright-bdd": "^9.2.0"
   },
-  "dependencies": {
-    "@toon-format/toon": "^4.1.0"
-  }
+  "dependencies": {}
 }

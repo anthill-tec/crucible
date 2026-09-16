@@ -1,26 +1,40 @@
-// CR-CRU-021 §S1 — Workflow becomes the primary workspace tab: L.workspaceTabs
-// order flips to Workflow-first (`Workflow · Runs · Coverage · Compile ·
-// BDD`), and the workspace's default active tab on entry (badge click AND
-// cold `/p/<key>` load) becomes "Workflow" instead of "Runs". The one-rule,
-// tabs-hide, and back-chip naming stay order-agnostic; cold
-// `/p/<key>/run/<id>` detail loads keep their existing "close lands on the
-// pane that hosted the detail" behavior — now Workflow by default for
-// tab-less cold loads.
+// CR-CRU-076 §S1 — Roadmap LEADS the workspace tab band: L.workspaceTabs
+// order becomes ["Roadmap","Workflow","Runs","Coverage","Compile","BDD"].
+//
+// SUPERSESSION (deliberate, and only this one AC): CR-CRU-076 SUPERSEDES
+// CR-CRU-021 §S1 AC1 ("L.workspaceTabs order flips to Workflow-first").
+// WHY: the roadmap is the ORIGIN document — every project starts with
+// roadmap creation, the CR backlog registered up front at design time
+// (CR-CRU-014 §S2 `queue-file` is a design-phase orchestrator action) —
+// while Workflow is the RUNTIME representation of the activities tied to a
+// roadmap CR as they execute. Execution is downstream of the origin
+// document, so the origin document leads the band. CR-CRU-021 PREDATED the
+// Roadmap tab entirely (CR-CRU-014 added it later, at position five), so its
+// ordering was decided in a world with no roadmap surface competing for
+// first place.
+//
+// NOT superseded: CR-CRU-021 §S1 AC2 — "entering a workspace defaults to the
+// Workflow pane" — is a SEPARATE, BEHAVIOURAL contract and stands untouched.
+// Re-ordering a band is presentation; changing what loads on arrival is
+// behaviour. The landing pane is hard-coded "Workflow" (public/app.js:119,
+// 2386, 2563), never derived from TAB_NAMES[0], so the §S1 AC2 and §S1 AC3
+// blocks below are UNCHANGED by this CR and must stay green as-is.
 //
 // Drives the REAL production public/app.js shell inside a happy-dom window —
 // same harness pattern as tests/inpane-drill-in.test.ts: real VanJS/VanX
 // vendor bundles, real public/app-logic.mjs, real public/app.js; `fetch` is
 // scripted.
 //
-// RED phase: expected to fail against the CURRENT code —
-// public/app-logic.mjs:64 TAB_NAMES is ["Runs","Workflow",...] (Runs first);
-// public/app.js:27/68 default `workspaceTab` to "Runs".
+// RED phase (CR-CRU-076): the AC1 block below is expected to FAIL against
+// the CURRENT code — public/app-logic.mjs TAB_NAMES is still
+// ["Workflow","Runs","Coverage","Compile","Roadmap","BDD"] (Roadmap fifth).
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { workspaceTabs } from "../public/app-logic.mjs";
+import { settleDom } from "./helpers/dom-settle";
 
 interface TabShape {
   name: string;
@@ -30,14 +44,21 @@ interface TabShape {
 
 // ─────────────────────────────────────────────────────────────────────────
 // AC1 (pure) — L.workspaceTabs returns names exactly
-// ["Workflow","Runs","Coverage","Compile","BDD"] for both project types;
-// existing enable/disable semantics untouched.
+// ["Roadmap","Workflow","Runs","Coverage","Compile","BDD"] for both project
+// types; existing enable/disable semantics untouched.
 // ─────────────────────────────────────────────────────────────────────────
 
-describe("§S1 AC1 — L.workspaceTabs order flips to Workflow-first (both project types)", () => {
-  test("backend project: exact order [Workflow, Runs, Coverage, Compile, BDD]", () => {
+// SANCTIONED RE-TARGET (CR-CRU-076 §S1/§S2, AC1): Roadmap moves from fifth
+// to FIRST for both project types. This block was CR-CRU-021 §S1 AC1's
+// Workflow-first order contract; CR-CRU-076 supersedes that AC (rationale in
+// the file header: roadmap is the origin document, CR-021 predated the tab).
+// No assertion is weakened — still an exact-array match, both project types.
+// Was: ["Workflow","Runs","Coverage","Compile","Roadmap","BDD"].
+describe("§S1 AC1 — L.workspaceTabs order flips to Roadmap-first (both project types; supersedes CR-CRU-021 §S1 AC1)", () => {
+  test("backend project: exact order [Roadmap, Workflow, Runs, Coverage, Compile, BDD]", () => {
     const tabs = workspaceTabs({ type: "backend" });
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
+      "Roadmap",
       "Workflow",
       "Runs",
       "Coverage",
@@ -46,9 +67,10 @@ describe("§S1 AC1 — L.workspaceTabs order flips to Workflow-first (both proje
     ]);
   });
 
-  test("frontend project: exact same order (Workflow-first is order-agnostic to project type)", () => {
+  test("frontend project: exact same order (Roadmap-first is order-agnostic to project type)", () => {
     const tabs = workspaceTabs({ type: "frontend" });
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
+      "Roadmap",
       "Workflow",
       "Runs",
       "Coverage",
@@ -213,9 +235,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

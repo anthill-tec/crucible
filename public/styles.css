@@ -230,6 +230,56 @@ body {
 /* CR-CRU-029 §S1 — the right rail keeps being its own vertical scroller
    (unchanged from CR-016). */
 .app-pane { overflow-y: auto; }
+/* CR-CRU-093 §S2 — the rail's header row: the section title that already
+   headed the pane, plus the collapse control, which lives ON the pane so the
+   collapsed sliver keeps it on screen (design §14.1). */
+.app-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app-rail-toggle {
+  flex: 0 0 auto;
+  font: 600 11px var(--mono);
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.app-rail-toggle:hover { color: var(--heat); border-color: var(--heat); }
+/* CR-CRU-093 §S2/AC1 — collapsed, the rail's GRID COLUMN narrows to the 34px
+   sliver measured on the live board (design §14.1: pane 394px → 34px, view
+   1025px → 1385px, a 1.351× gain against AC1's 1.30× floor), and the pane
+   keeps only its header row — the re-open button above the rotated
+   `Project · Vitals` label. Track sizing lives on the grid container, so the
+   pane's own modifier reaches it through `:has()` (the idiom `.app-main`
+   already uses above). `.app-pane`'s vertical scroller and the 660px
+   `.app-pane-content > *` floor are untouched: this is a column width, not a
+   content change. */
+.app-workspace-body:has(> .app-pane-collapsed) {
+  grid-template-columns: minmax(0, 2.6fr) 34px;
+}
+.app-pane-collapsed {
+  padding: 8px 4px;
+  overflow-x: hidden;
+}
+.app-pane-collapsed > *:not(.app-pane-head) { display: none; }
+.app-pane-collapsed .app-pane-head {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 10px;
+}
+.app-rail-sliver-label {
+  writing-mode: vertical-rl;
+  font: 600 10px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ember);
+  white-space: nowrap;
+}
 /* CR-CRU-029 §S1 (mechanism a) — a central pane is a HEIGHT-BOUNDED,
    NON-scrolling flex column: it delegates BOTH scroll axes to its
    `.app-pane-content` child so that child stays viewport-sized and both
@@ -337,6 +387,11 @@ body {
   color: var(--ember);
   margin: 2px 0 8px;
 }
+/* CR-CRU-093 §S2 — collapsed, the sliver carries the re-open button and the
+   rotated `Project · Vitals` label ONLY (design §14.1), so the row's title
+   stands down. Stated beside the rule it modifies, and after it, so the base
+   rule stays the first `.app-pane-section-title` declaration in this file. */
+.app-pane-collapsed .app-pane-section-title { display: none; }
 /* §S5.2 (d)/(e) — F8 vitals card anatomy: dim uppercase label ABOVE a
    bright 600-weight value line. */
 .app-vitals-label {
@@ -1010,3 +1065,726 @@ body {
 }
 .app-milestone-glyph { color: var(--heat); }
 .app-milestone-type { color: var(--ink-dim); }
+
+/* ── CR-CRU-017 §S3 — the run lifecycle's two extra card presentations ─────
+   A FOURTH and FIFTH face beside pass/fail/pending: a run that is still
+   RUNNING, and a run that was ABORTED (ended for non-test reasons — never a
+   plan's abort, §S2). Neither borrows the pass/fail palette. */
+
+/* Running: pulsing ember edge, and — the user rule — the DEFAULT cursor with
+   no hover affordance, because a running card has no drill-in to offer until
+   it resolves. This overrides `.app-evt`'s pointer above, so the rule holds
+   for the running card wherever `.app-evt` is reused. */
+.app-evt-running {
+  cursor: default;
+  border-color: rgba(251, 146, 60, 0.45);
+  animation: app-run-pulse 1.6s ease-in-out infinite;
+}
+.app-evt-running:hover {
+  border-color: rgba(251, 146, 60, 0.45);
+  background: var(--bg);
+}
+.app-running-label {
+  color: var(--ember);
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.06em;
+}
+.app-running-elapsed {
+  color: var(--heat);
+  font: 600 9.5px var(--mono);
+}
+@keyframes app-run-pulse {
+  0%,
+  100% { border-color: rgba(251, 146, 60, 0.45); }
+  50% { border-color: rgba(251, 146, 60, 0.9); }
+}
+
+/* CR-CRU-122 §S1 — the shared loading spinner: a small ring whose one lit arc
+   circles while a user-initiated backend wait is in flight. It follows the
+   `app-run-pulse` convention above (a semantic class driving its own
+   keyframes, no asset and no dependency) rather than reusing it — a pulse
+   says "this is happening live", a spinner says "wait, this is loading". Sized
+   to sit inline beside a chip's label without moving the row. */
+.app-spinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--ember);
+  border-radius: 50%;
+  animation: app-spin 0.7s linear infinite;
+}
+@keyframes app-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Aborted: struck through and greyed — legible as "this run does not count"
+   without reading a word of it. Clickable (its drill-in carries the reason),
+   so the pointer cursor `.app-evt` already sets is correct here. */
+.app-evt-aborted {
+  text-decoration: line-through;
+  opacity: 0.55;
+  border-style: dashed;
+  color: var(--ink-faint);
+}
+.app-evt-aborted:hover { opacity: 0.8; }
+.app-abort-reason {
+  text-decoration: none;
+  color: var(--ink-dim);
+  border-color: var(--line);
+  white-space: nowrap;
+}
+.app-drillin-abort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+/* The open span's running entry: same inline flow, no click affordance. */
+.app-inline-run-running { cursor: default; }
+.app-inline-run-running:hover { color: var(--ink); }
+
+/* CR-CRU-078 §S1/§S2 — the roadmap's three zones stack in one pane (the
+   table|graph view toggle is retired), and zone 1 is the PAGED release strip.
+
+   C5 (AC21–AC26) landed the VISUAL CONTRACT on top of that structure. The
+   binding source is, in the order the DN itself declares:
+     docs/research/DN-crucible-roadmap-view.md §"Visual contract (approved
+       2026-08-28) — BINDING on implementation";
+     .lavish/crucible-workflow-flowchart.html §1–§8/§14, the richer reference
+       where present (it is gitignored, so the DN section governs when it is
+       not).
+   Shape says what a thing IS, colour says WHERE IT STANDS, and the two are
+   independent channels. No element relies on colour alone: every status is
+   ALSO written as text, so the board survives a greyscale screenshot. Motion
+   means LIVE and nothing else. Every colour here is one of the app's declared
+   tokens (`--pass`, `--ember`, `--heat`, `--ink-dim`, `--line`); C5 invented
+   no hex value, and the one animation is the app's established
+   `app-run-pulse`, not a third motion vocabulary.
+
+   Asserted by tests/roadmap-visual-grammar.test.ts, which measures this
+   stylesheet in headless Chromium — geometry and computed style, never class
+   names.
+
+   The window size is MEASURED from the track's box divided by the gate pitch,
+   so the pitch is declared HERE — the stylesheet owns it — and a gate cell IS
+   exactly one pitch wide: a FIXED flex basis, never a growing one, or the
+   measurement and the drawing would disagree and AC3 would fail on a partial
+   gate. */
+.app-roadmap-zones {
+  /* AC21 — the DIAMOND's side, shared by zone 1's gates and zone 2's, because
+     they draw the same release and must draw it the same size. A square
+     rotated 45° occupies its DIAGONAL, side × √2 ≈ 107.5px: that has to fit
+     inside a gate cell's 120px content box (pitch 132px less its 6px sides),
+     and the ~15.8px the shape hangs ABOVE and BELOW its 76px layout box is
+     what `--app-gate-overhang` reserves. Too small an overhang and the date
+     caption is drawn inside the diamond; too large a side and adjacent
+     diamonds interlock. */
+  --app-gate-side: 76px;
+  --app-gate-overhang: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* AC25 — the three zones are three CARDS, so each is identifiable as one
+   thing at a glance and their vertical order reads as an order. */
+.app-roadmap-strip,
+.app-roadmap-flow,
+.app-roadmap-table {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.app-roadmap-strip {
+  --app-strip-gate-pitch: 132px;
+  --app-strip-tag-slot: 96px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+}
+/* AC21 — a terminal is a STADIUM: `border-radius` past the half-height is
+   what makes both ends semicircular, and the padding keeps it wider than it
+   is tall so it reads as a pill rather than a circle. */
+.app-strip-terminal {
+  flex: 0 0 auto;
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+/* The tag SLOT is reserved on both sides whether or not a tag is in it: the
+   window is measured from the track, so a tag appearing must not change the
+   track's width — that feedback loop would oscillate the hidden counts. */
+.app-strip-rail {
+  flex: 0 0 var(--app-strip-tag-slot);
+  display: flex;
+  align-items: center;
+}
+.app-strip-rail.later { justify-content: flex-end; }
+.app-strip-tag {
+  font: 600 10px/1.4 var(--mono);
+  color: var(--ink-2, var(--ink));
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.app-strip-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The window sits CENTRED in its track, so the strip reads as one sequence
+   `Start → ◇release … → End` rather than as gates crowding the left edge.
+   Safe against the measurement: the window is floor(track / pitch) gates, so
+   its total width never exceeds the track and centring can never clip a gate.
+   The design artifact's own `.striprail .flow { justify-content: center }`. */
+.app-strip-gates {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+}
+/* The gate CELL is one pitch wide and stacks its shape over its date. The
+   padding-top and the gap are the diamond's overhang (see
+   `--app-gate-overhang`): without them the rotated corner is clipped by the
+   track's overflow above, and the caption is drawn inside the shape below. */
+.app-strip-gate {
+  flex: 0 0 var(--app-strip-gate-pitch);
+  box-sizing: border-box;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--app-gate-overhang);
+  padding: var(--app-gate-overhang) 6px 4px;
+  text-align: center;
+  /* AC22 — a release not in focus is DIMMED, and dimming is a LUMINANCE
+     channel: it survives a greyscale screenshot, so it is not a second colour
+     doing colour's job twice. */
+  opacity: 0.5;
+}
+.app-strip-gate.on { opacity: 1; }
+/* AC21/AC22 — the DIAMOND itself: a square turned 45°, amber, and dashed when
+   the release is only PROPOSED. Shape carries shipped-vs-proposed and colour
+   carries "this is a release", so neither channel repeats the other. */
+.app-strip-gate-version,
+.app-flow-gate-version {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--app-gate-side);
+  height: var(--app-gate-side);
+  border: 2px solid var(--heat);
+  border-radius: 2px;
+  background: rgba(255, 179, 71, 0.06);
+  transform: rotate(45deg);
+}
+.app-strip-gate-label,
+.app-flow-gate-label {
+  transform: rotate(-45deg);
+  font: 600 11px/1.35 var(--mono);
+  color: var(--heat);
+  white-space: nowrap;
+}
+.app-strip-gate.proposed .app-strip-gate-version,
+.app-flow-gate.proposed .app-flow-gate-version { border-style: dashed; }
+/* The focused release keeps the amber the DN gives every release and gains an
+   ember RING — the design artifact's own focus glow. The border is NOT
+   recoloured: "a release is amber" is the colour rule, and focus already has
+   two channels of its own (the ring, and the opacity above). */
+.app-strip-gate.on .app-strip-gate-version,
+.app-flow-gate-version { box-shadow: 0 0 0 3px rgba(255, 122, 26, 0.28); }
+.app-strip-gate-date {
+  display: block;
+  font: 400 10px/1.4 var(--mono);
+  color: var(--ink-dim);
+}
+/* The pitch PROBE: out of flow, so it takes no width from the track it is
+   measured inside, but still LAID OUT — `display: none` would measure 0. */
+.app-strip-ruler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 0;
+  width: var(--app-strip-gate-pitch);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* CR-CRU-078 §S4 — ZONE 2: the focused release's flowchart. Plain DOM, laid
+   out by containment (release ⊃ wave ⊃ CR) and the authored order alone — no
+   layout engine, no crossing heuristic, no compound-graph library (AC26), and
+   no DEPENDENCY edge: CR-CRU-078 AC20 forbade the dagre relationship web,
+   never a line as such. CR-CRU-096 AC20a records the distinction, because
+   CR-CRU-096's own AC20 REQUIRES the axis connectors below
+   (`.app-flow-connector`) — dependencies still draw nothing. C5 added the
+   shape grammar, the colour semantics and the one motion rule to that
+   structure without touching it.
+
+   CR-CRU-096 §S6/AC20 — and the four stages lie on ONE HORIZONTAL AXIS,
+   matching zone 1's spine (`.app-roadmap-strip` above: `display: flex` with
+   no `flex-direction`, so the default `row`, plus `align-items: center`).
+   The `column` that stood here was a CONSEQUENCE of the uncapped chip grid
+   §S5 removed, not a choice: a 1082px wave box could not sit beside the
+   terminals and the gate, and a 300px trimmed one can. */
+.app-roadmap-flow {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+}
+/* CR-CRU-096 §S6/§S8 — the connector, the approved artifact's own `.arrow`:
+   a 2px LINE in the existing `--line` token with a CSS-triangle head in
+   `::after`. No new shape and no new colour — it is not a rectangle, so it
+   cannot read as a CR, and it takes no `cursor` because it is not a control.
+   `flex: 0 0 24px` is the artifact's own width, and the three of them are
+   what §S6's 596px horizontal budget already counts. */
+.app-flow-connector {
+  flex: 0 0 24px;
+  height: 2px;
+  background: var(--line);
+  position: relative;
+}
+.app-flow-connector::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -4px;
+  border: 5px solid transparent;
+  border-left-color: var(--line);
+}
+/* CR-CRU-103 §S2/AC4 — the approved artifact's own `.term`: a 52×52 box under
+   the `999px` radius this rule ALREADY carried, which is a circle. The radius
+   was never the defect; the BOX was — 56×22 reads as a lozenge whatever
+   radius it takes, because a fully rounded box is only a circle when it is
+   square. So the side and the 2px border are the design's, the box CENTRES
+   its word instead of padding out to a size, and `box-sizing: border-box`
+   keeps the 52px a box figure the way the strip's own gate cell does
+   (`:1185`). The border COLOUR stays the app's `--line` token: the artifact's
+   `#4a5160` is no token of this app's, and colour is the CR's non-goal. */
+.app-flow-terminal {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border: 2px solid var(--line);
+  border-radius: 999px;
+}
+/* CR-CRU-096 §S6/AC19c — the wave boxes lie ALONG the axis, not across it: a
+   `.app-flow-waves { flex-direction: column }` stood below this rule and
+   stacked a multi-wave release vertically INSIDE a horizontal spine. §S5
+   calls a multi-wave release "the case that WIDENS this zone" and §S6 states
+   its budget per wave box — a per-box budget is only a budget if the boxes
+   share the axis. So the default `row` stands for both containers.
+
+   What a release TOO WIDE for one line should do is UNRULED. `AC19d`, which
+   answered that case by declaring a wrap the intended degradation, is
+   RETIRED — an answer invented without asking, to a widening that was itself
+   caused by rendering full ids; the bare annotation removes the cause. The
+   question is left OPEN for the user to decide, and nothing asserts a
+   behaviour for it: this comment neither endorses the `flex-wrap` below nor
+   argues against it. */
+.app-flow-waves,
+.app-flow-packages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* CR-CRU-096 §S5/AC8 — ONE CR PER FULL-WIDTH ROW, which is the approved
+   artifact's own `.crs { display:flex; flex-direction:column; gap:4px }`. The
+   wrapped chip grid this body used to be was the drift: a wrapping ROW flex
+   packs as many CRs per line as fit, which is an inventory, not a queue.
+   AC18a — the loose group (members declaring no wave) takes the same
+   arrangement: grammar applies everywhere, only the trim needs a header. */
+.app-flow-wave-body,
+.app-flow-loose {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* AC21 — a wave is a BOX containing its CRs: an axis-aligned, bordered
+   container whose members are laid out INSIDE it, which is what a compound
+   node in the deleted graph library used to claim and what plain containment
+   now proves. */
+.app-flow-wave {
+  min-width: 150px;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+  padding: 8px 10px;
+}
+/* The container of live work reads as live too — a static ember EDGE, never
+   motion: AC24 reserves movement for the CR that is actually running. */
+.app-flow-wave[data-active="true"] { border-color: var(--ember); }
+.app-flow-wave[data-active="true"] .app-flow-wave-label { color: var(--ember); }
+/* CR-CRU-096 §S2 — the header is the design's `<h4>`: the wave's identity on
+   the left, its whole membership on the right. Layout only — the h4's UA
+   margin is reset and the label keeps the colour grammar it already had. */
+.app-flow-wave-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding-bottom: 6px;
+}
+.app-flow-wave-label,
+.app-flow-wave-count {
+  display: block;
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+/* CR-CRU-085 §S2/AC5 — the SWIMLANES, the approved artifact's own
+   `.lanes { display:grid; grid-template-columns:54px 1fr; gap:5px }` (§4): a
+   two-column grid whose cells are the label and the track's rows, laid out in
+   pairs. The pair is two SIBLING cells rather than a wrapper each, which is
+   what keeps every label in one column and every lane's rows aligned in the
+   other. */
+.app-flow-wave-lanes {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  gap: 5px;
+}
+/* The artifact's `.lbl`: the track id set along the lane's edge, dim mono like
+   the header's own facts, with §5's DASHED edge as the swimlane divider. §S8 —
+   the divider is decoration only; the track is named in words here and counted
+   in words in the header. */
+.app-flow-wave-lane-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  border-right: 1px dashed var(--line);
+}
+/* The lane's ROW CELL. It keeps CR-CRU-096 AC8's arrangement — ONE CR PER
+   FULL-WIDTH ROW — because laning partitions those rows and does not restate
+   how they are drawn; the artifact's horizontal `.row` predates that ruling.
+   §5 again: the divider between lanes is DASHED, and the last lane closes the
+   box rather than drawing an edge across it. */
+.app-flow-wave-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.app-flow-wave-lane:last-child { border-bottom: 0; }
+/* AC21 — a CR is a LEAF RECTANGLE: its id on the left, its terse status on
+   the right, and never a title (AC11 — the title's one home is the table). */
+.app-flow-node {
+  display: flex;
+  /* No `flex-wrap`: a row states id then status on ONE line. Wrapping would
+     fold the status under the identifier and re-create the chip. */
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-1);
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.app-flow-node-cr { font: 600 11px/1.4 var(--mono); color: inherit; }
+.app-flow-node-status { font: 400 10px/1.4 var(--mono); color: inherit; opacity: 0.72; }
+/* CR-CRU-096 §S5.4/§S8 — the `+N more` POINTER, the artifact's own `.more`:
+   dim, centred, mono, and NO border and NO background, because a rectangle is
+   what a CR is and this must not read as one. It is not a control either, so
+   it takes no `cursor: pointer`. */
+.app-flow-wave-more {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  text-align: center;
+  padding: 2px 0;
+}
+/* CR-CRU-096 §S3/§S8 — the merged ROLL-UP, the artifact's own `.wsum`: a LINE
+   between the header and the rows. Dim mono like the `+N more` pointer above,
+   and for the same reason (AC7) — NO border and NO background, because a
+   rectangle is what a CR is and an aggregate must not read as one. It is not a
+   control either, so it takes no `cursor: pointer`. */
+.app-flow-wave-rollup {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  padding: 0 0 6px;
+}
+/* CR-CRU-096 §S4/§S8 — the row's ANNOTATION slot. The row is already
+   `justify-content: space-between`, so this rides in its right-hand side; all
+   this rule owns is the face. Dim and quiet: the marker's emphasis is WEIGHT
+   (`.app-flow-node-next`), never the ember and never motion, which AC24
+   reserves for the CR that is actually running. */
+.app-flow-node-annotation {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.app-flow-node-next { font-weight: 700; }
+
+/* ── AC22: colour says WHERE IT STANDS ─────────────────────────────────────
+   One hue per state, every one of them a declared token, and the same status
+   TEXT is rendered beside it (AC23) so nothing here is load-bearing on its
+   own. `--pass` is the app's green, `--ember` its live orange, `--ink-dim` its
+   neutral; PENDING deliberately borrows none of the others. */
+.app-flow-node.completed {
+  border-color: rgba(74, 222, 128, 0.4);
+  color: var(--pass);
+}
+/* COMPLETED_UNTRACKED is the SAME green, DIMMED — one hue at two luminances,
+   because it is the same fact (merged) recorded before plan tracking existed.
+   Dimming is opacity, so it survives a greyscale screenshot. */
+.app-flow-node.completed_untracked {
+  border-color: rgba(74, 222, 128, 0.4);
+  color: var(--pass);
+  opacity: 0.62;
+}
+.app-flow-node.pending { color: var(--ink-dim); }
+/* AC24 — MOTION MEANS LIVE. The one animated element on the whole board, and
+   it reuses `app-run-pulse`, the pulse the running run-card already uses
+   (CR-CRU-017 §S3), rather than inventing a third motion vocabulary.
+   CR-CRU-096 §S1 separated this from the ACTIVE WAVE, which is a release fact
+   and gets a border and a word. */
+.app-flow-node.in_progress {
+  border-color: var(--ember);
+  color: var(--ember);
+  box-shadow: 0 0 0 2px rgba(255, 122, 26, 0.2);
+  animation: app-run-pulse 1.6s ease-in-out infinite;
+}
+/* AC27's SECOND AXIS, distinguishable from each other and from any status
+   without reading a colour: superseded LEANS (the work moved elsewhere),
+   void is STRUCK (it does not count) — the `.app-evt-aborted` convention.
+   CR-CRU-096 AC9b keeps the NODE badge on these rules: AC9a's row-trim only
+   removed the dispositioned PENDING row, and a node still renders for the
+   loose group (AC18a, untrimmed) and for a running dispositioned CR (AC9c),
+   where §S8 forbids `data-lifecycle` being the only channel. */
+.app-flow-node-lifecycle,
+.app-roadmap-lifecycle {
+  font: 400 10px/1.4 var(--mono);
+  color: var(--ink-faint);
+}
+.app-flow-node-lifecycle.superseded,
+.app-roadmap-lifecycle.superseded { font-style: italic; }
+.app-flow-node-lifecycle.void,
+.app-roadmap-lifecycle.void { text-decoration: line-through; }
+/* CR-CRU-103 §S1/AC1/AC1a/AC2 — the approved artifact's own `.delivered`:
+   `border:1.5px solid var(--line); border-radius:9px; background:var(--bg-2);
+   padding:10px 13px; min-width:210px`, with `flex:0 0 auto` beside the
+   min-width. Neither half is decoration. The border, the radius and the
+   elevated face are what make the summary READ as a container at all; the
+   `flex:0 0 auto` on a BLOCK box is what BOUNDS it, because a block's
+   intrinsic width is its widest LINE — so the card is as wide as the widest
+   fact it states and no wider.
+
+   The `display:flex; flex-wrap:wrap; align-items:baseline` that stood here
+   made that intrinsic width the SUM of the facts instead: 682.8px of caption
+   for facts the design draws in 393.3px, which pushed the release diamond
+   818.8px down a 1130px surface. The large empty gap the user reported was
+   never a spacing bug — it was an absent box.
+
+   `box-sizing: border-box` for the reason the strip's gate cell declares it
+   (`:1185`): the design's `min-width` is a figure about the BOX. */
+.app-flow-delivered {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  min-width: 210px;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+  padding: 10px 13px;
+  font: 400 10.5px/1.4 var(--sans);
+  color: var(--ink-dim);
+}
+/* The artifact's `.big` — ONE number taken at a glance, over a small sans
+   cue. `display:block` IS the design's line break: the caption's facts are
+   siblings here, so the headline claims its own line by being a block and the
+   cue flows under it. The 22px mono against the cue's 10.5px sans is the
+   hierarchy §S1 says went missing, and the ink is the shell's own `--ink`
+   because the design's `.big` overrides no colour and inherits it. */
+.app-flow-delivered-crs {
+  display: block;
+  font: 400 22px/1.15 var(--mono);
+  color: var(--ink);
+}
+/* The design states the cue as ONE line — `waves 1–4 · shipped 2026-08-19` —
+   while the app publishes the wave span and the ship date as two spans,
+   because they are two facts and the date is `resolveGateDate`'s own answer
+   carried through (AC30). So the separator is DRAWN rather than authored, and
+   only when there is a date to separate: that answer is `""` for some states,
+   and a dangling `·` would punctuate a fact the release does not have. */
+.app-flow-delivered-date:not(:empty)::before { content: " · "; }
+/* Zone 2's own terminating gate: the SAME diamond zone 1 draws for the same
+   release (its shape, its amber and its dash are shared rules above), stacked
+   over its date with the same overhang. It is always the FOCUSED release, so
+   it carries the focus ring and never the dimming. */
+.app-flow-gate {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--app-gate-overhang);
+  padding: var(--app-gate-overhang) 0 4px;
+  text-align: center;
+}
+.app-flow-gate-date { display: block; font: 400 10px/1.4 var(--mono); color: var(--ink-dim); }
+/* CR-CRU-096 §S7/AC23/AC23a — the state word INSIDE the diamond, the
+   artifact's own `<br><b>shipped</b>` / `<br><b>planned</b>`. `display:
+   block` is that line break; the size steps down so the version stays the
+   diamond's headline, and the colour is inherited from the counter-rotated
+   label so the word takes no colour of its own (§S8 — no new colour, and the
+   word IS the greyscale channel the dashed border needs beside it). */
+.app-flow-gate-state {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: inherit;
+}
+
+/* CR-CRU-078 §S5 — ZONE 3: the scoped table. The head and the rows share one
+   row box so the declared columns line up; which columns exist is AC12's
+   decision and is made in `roadmapTableColumns`, never here. The brief title
+   is the one cell allowed to grow, and it CLAMPS rather than wrapping — §S5's
+   whole complaint was the identifier competing with a sentence. */
+.app-roadmap-table {
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+}
+/* Row rhythm and typography are the design artifact's table: 12.5px rows on
+   the app sans, a rule under each, and the IDENTIFIER-bearing cells on the
+   mono face at 11.5px, so an id never sits at body size beside a badge. */
+.app-roadmap-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 2px;
+  font: 400 12.5px/1.55 var(--sans);
+  border-bottom: 1px solid var(--line);
+}
+.app-roadmap-row:last-child { border-bottom: 0; }
+.app-roadmap-head {
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+/* The wave GROUP header C3 draws between row runs. Same face as the
+   flowchart's own wave label, because it names the same container. */
+.app-roadmap-divider {
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  padding: 8px 2px 2px;
+}
+.app-roadmap-cell { min-width: 0; }
+.app-roadmap-cr { flex: 0 0 auto; font: 600 11.5px/1.4 var(--mono); }
+.app-roadmap-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-roadmap-deps { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 4px; }
+.app-roadmap-deps,
+.app-roadmap-wave,
+.app-roadmap-track { font: 400 11.5px/1.4 var(--mono); color: var(--ink-dim); }
+.app-roadmap-status,
+.app-roadmap-wave,
+.app-roadmap-track,
+.app-roadmap-lifecycle { flex: 0 0 auto; }
+/* AC22/AC23 — the row's status badge wears the SAME palette as its flowchart
+   node, because node and row are one entry drawn twice and must not disagree
+   about where it stands. Scoped to `.app-badge` so the column CELL, which
+   shares the class name, stays a plain cell. The badge's TEXT is
+   `roadmapStatusLabel`'s and is what survives a greyscale reading. */
+.app-badge.app-roadmap-status {
+  font: 600 10px/1.4 var(--mono);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--ink-dim);
+}
+.app-badge.app-roadmap-status.completed {
+  color: var(--pass);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+.app-badge.app-roadmap-status.completed_untracked {
+  color: var(--pass);
+  border-color: rgba(74, 222, 128, 0.4);
+  opacity: 0.62;
+}
+.app-badge.app-roadmap-status.in_progress {
+  color: var(--ember);
+  border-color: var(--ember);
+}
+
+/* CR-CRU-078 §S7 — SELECTION and the drill-through source: the highlight has
+   to be visible on BOTH renderings of one entry (AC17) and the source has to
+   be identifiable before it is clicked (AC18). An OUTLINE, deliberately: it
+   paints outside the border box, so it cannot be mistaken for one of AC22's
+   state edges, and it is static, so it cannot be mistaken for AC24's motion. */
+.app-roadmap-row.selected,
+.app-flow-node.selected {
+  outline: 1px solid var(--ink-dim);
+  outline-offset: 1px;
+}
+.app-roadmap-row[data-drill-source="true"] { cursor: pointer; }
+.app-roadmap-drill {
+  flex: 0 0 auto;
+  font: 400 10px/1.4 var(--mono);
+  color: var(--ink-dim);
+}
+
+/* CR-CRU-123 §S1 — AN AGENT WITH A RUN IN FLIGHT. The fourth signal of the
+   app's motion vocabulary, and deliberately none of the three that already
+   exist: not `app-spin` (CR-CRU-122's spinner — "a fetch you are waiting
+   on"), not `app-run-pulse` (the run card's ember BORDER pulse, so an agent
+   row can never be misread as a run card), not `app-locate-blink` (CR-CRU-025's
+   10s locate flash, which also lands on a row and is the nearest neighbour of
+   the three). This one is a travelling shimmer ACROSS the row — the one
+   treatment that reads as data flowing rather than as a thing throbbing in
+   place — carried on the row's OWN box as a background layer, so the row gains
+   no child element and PRD §4.11's locked agent sub-row enumeration ("final
+   form — round 6, 2026-07-15") stands (AC7).
+
+   APPENDED at the end of the sheet, not filed beside the animation family at
+   :1007/:1096/:1119: eleven informal `styles.css:<line>` citations live in the
+   test tree, seven of them at >=1096, and an insertion up there would shift
+   every one. Appending shifts none — a free mitigation, so it is taken.
+
+   It sits after `.app-card`/`.app-agent-row` (both :343/:359, both 0-1-0), so
+   the source-order tie-break is what layers the shimmer over the row's flat
+   `var(--bg-2)` fill without either rule needing extra specificity. */
+@keyframes app-stream-flow {
+  0% { background-position: -60% 0; }
+  100% { background-position: 160% 0; }
+}
+.app-agent-streaming {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 122, 26, 0) 0%,
+    rgba(255, 122, 26, 0.22) 50%,
+    rgba(255, 122, 26, 0) 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 55% 100%;
+  animation: app-stream-flow 1.9s linear infinite;
+}

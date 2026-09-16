@@ -416,4 +416,248 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       },
     );
   });
+
+  // ── CR-CRU-094 §S2 — participation survives the agent (AC4) ──────────────
+  //
+  // §S2 verbatim: "A `lifecycle` event records the cycle the agent was bound
+  // to, so the register/unregister pair is a complete record of *who worked
+  // which cycle in which role* — recoverable after the agent row is gone, and
+  // recoverable for an agent that produced no runs at all."
+  //
+  // RED, and the exact reason: `Store.recordLifecycleEvent(projectKey,
+  // agentId, action, firstSeen?, role?)` takes NO cycle argument, and the
+  // event it builds carries neither `context` nor `cycleId`, so `insertEvent`
+  // (which derives `events.cycle_id` from `event.context?.cycleId`) writes
+  // NULL and §S1's top-level `cycleId` projection is absent. Both routes that
+  // destroy the agents row already hold the binding at the moment they fire —
+  // the unregister route reads the row (firstSeen/role) BEFORE deleting it
+  // under CR-CRU-057's captured-before-deletion contract, and the register
+  // route validated the binding one statement earlier — so the gap is the
+  // recording, not the availability.
+  //
+  // Asserted with ZERO runs on purpose: a run-derived answer (the §S1
+  // `events.cycle_id` column on an ingested run) would mask exactly the case
+  // this AC closes — an agent that registered, did its work, and ingested
+  // nothing.
+
+  describe("CR-CRU-094 §S2 — the lifecycle record names the cycle (AC4)", () => {
+    const FIXTURE_ORCH = "lifecycle-cycle-fixture-orch";
+
+    async function patchJson(path: string, body: unknown): Promise<Response> {
+      return fetch(`${base()}${path}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    /** Files a one-cycle plan through the real plans API and activates it, so
+     * a `--cycle` binding validates (an ACTIVE cycle of an OPEN plan). Same
+     * HTTP-only fixture shape as tests/agent-cycle-binding.test.ts. */
+    async function fileAndActivate(key: string): Promise<number> {
+      const reg = await postJson("/api/v2/agents/register", {
+        projectKey: key,
+        agentId: FIXTURE_ORCH,
+        role: "ORCHESTRATOR",
+      });
+      expect(reg.status).toBe(200);
+      const filed = await postJson(`/api/v2/projects/${key}/plans`, {
+        agentId: FIXTURE_ORCH,
+        cr: "CR-AUTH",
+        cycles: [{ label: "solo" }],
+      });
+      expect(filed.status).toBe(201);
+      const plan = (await filed.json()) as { planId: number; cycles: { id: number }[] };
+      const cycleId = plan.cycles[0]!.id;
+      const activated = await patchJson(
+        `/api/v2/projects/${key}/plans/${plan.planId}/cycles/${cycleId}`,
+        { agentId: FIXTURE_ORCH, status: "active" },
+      );
+      expect(activated.status).toBe(200);
+      return cycleId;
+    }
+
+    /** The PROJECTION side — the lifecycle events GET /api/v2/events serves
+     * for one agent, oldest-first so `action` order is deterministic. */
+    async function lifecycleBriefsFor(
+      key: string,
+      agentId: string,
+    ): Promise<LifecycleEventBrief[]> {
+      const res = await fetch(`${base()}/api/v2/events?project=${key}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as EventsListResponse;
+      return body.events
+        .filter((e) => e.kind === "lifecycle" && e.agentId === agentId)
+        // Chronological; register/unregister can land in the SAME millisecond
+        // in-memory, so the action name breaks the tie deterministically
+        // ("registered" always precedes "unregistered", which is also the only
+        // causally possible order).
+        .sort(
+          (a, b) =>
+            a.timestamp - b.timestamp ||
+            String(a.action).localeCompare(String(b.action)),
+        );
+    }
+
+    /** The STORED side — the same events read back off the store, so a
+     * projection that fabricated the field could not pass alone. */
+    function storedLifecycleFor(store: Store, key: string, agentId: string) {
+      return store
+        .listEvents(key)
+        .filter((e) => e.kind === "lifecycle" && e.agentId === agentId);
+    }
+
+    test(
+      "register bound to cycle N, ingest NOTHING, unregister: BOTH lifecycle events " +
+        "still name the agent, its role and cycle N after the agents row is gone",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const store = handle.store;
+        const key = seedProject(store);
+        const cycleId = await fileAndActivate(key);
+        const agentId = "participation-unregistered";
+
+        const reg = await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          role: "RED",
+          cycleId,
+        });
+        expect(reg.status).toBe(200);
+
+        const unreg = await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
+        expect(unreg.status).toBe(200);
+
+        // The row is GONE and NOTHING was ingested — the lifecycle events are
+        // the entire surviving record.
+        expect(store.hasAgent(key, agentId)).toBe(false);
+        expect(
+          store.listEvents(key).filter((e) => e.agentId === agentId && e.kind !== "lifecycle"),
+        ).toEqual([]);
+
+        const briefs = await lifecycleBriefsFor(key, agentId);
+        expect(briefs.map((e) => e.action)).toEqual(["registered", "unregistered"]);
+        const [registered, unregistered] = briefs as [LifecycleEventBrief, LifecycleEventBrief];
+
+        // WHO, in which ROLE — already true today (CR-CRU-057), pinned here
+        // because the AC is the whole triple, not the cycle alone.
+        expect(registered.role).toBe("RED");
+        expect(unregistered.role).toBe("RED");
+
+        // WHICH CYCLE — the new half. §S1's top-level `cycleId` key, the same
+        // vocabulary an ingested run's brief already speaks.
+        expect(registered.cycleId).toBe(cycleId);
+        expect(unregistered.cycleId).toBe(cycleId);
+
+        // The STORED event carries it too, so the answer survives a restart
+        // rather than being computed by the read route.
+        const stored = storedLifecycleFor(store, key, agentId);
+        expect(stored).toHaveLength(2);
+        expect(stored.map((e) => e.cycleId)).toEqual([cycleId, cycleId]);
+      },
+    );
+
+    test(
+      "the REGISTER-side event carries the cycle on its own: it is readable before any " +
+        "unregister happens, so an agent still at work is already attributable",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const store = handle.store;
+        const key = seedProject(store);
+        const cycleId = await fileAndActivate(key);
+        const agentId = "participation-still-live";
+
+        const reg = await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          role: "GREEN",
+          cycleId,
+        });
+        expect(reg.status).toBe(200);
+        expect(store.hasAgent(key, agentId)).toBe(true);
+
+        const briefs = await lifecycleBriefsFor(key, agentId);
+        expect(briefs.map((e) => e.action)).toEqual(["registered"]);
+        expect(briefs[0]!.role).toBe("GREEN");
+        expect(briefs[0]!.cycleId).toBe(cycleId);
+      },
+    );
+
+    test(
+      "prune by silence: the row is destroyed with NO unregister, and the surviving " +
+        "'registered' event still names the role and cycle N",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const store = handle.store;
+        const key = seedProject(store);
+        const cycleId = await fileAndActivate(key);
+        const agentId = "participation-pruned";
+
+        const reg = await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          role: "ORCHESTRATOR",
+          cycleId,
+        });
+        expect(reg.status).toBe(200);
+
+        // §S2's SECOND destruction route, driven with the mechanism the suite
+        // already owns (raw last_seen backdating — see the file header): push
+        // silence past DEFAULT_LIVENESS.pruneAfterMs (3_600_000ms) so
+        // `Store.livenessOf` reads "pruned" and `listAgents` lazily deletes
+        // the row. No new machinery, no clock injection, no config patch.
+        setAgentTimestamps(store, key, agentId, { lastSeen: Date.now() - 4_000_000 });
+
+        const listRes = await fetch(`${base()}/api/v2/agents?project=${key}`);
+        expect(listRes.status).toBe(200);
+        const listBody = (await listRes.json()) as AgentsListResponse;
+        expect(listBody.agents.map((a) => a.agentId)).not.toContain(agentId);
+        expect(store.hasAgent(key, agentId)).toBe(false);
+
+        // Nothing journalled the death — exactly ONE lifecycle event exists,
+        // and it has to answer the whole question by itself.
+        const briefs = await lifecycleBriefsFor(key, agentId);
+        expect(briefs.map((e) => e.action)).toEqual(["registered"]);
+        expect(briefs[0]!.role).toBe("ORCHESTRATOR");
+        expect(briefs[0]!.cycleId).toBe(cycleId);
+
+        const stored = storedLifecycleFor(store, key, agentId);
+        expect(stored).toHaveLength(1);
+        expect(stored[0]!.cycleId).toBe(cycleId);
+      },
+    );
+
+    test(
+      "an UNBOUND registration (ORCHESTRATOR, no cycleId) leaves lifecycle events with " +
+        "NO cycleId key at all — absent, never 0 and never null",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const store = handle.store;
+        const key = seedProject(store);
+        const agentId = "participation-unbound";
+
+        const reg = await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          role: "ORCHESTRATOR",
+        });
+        expect(reg.status).toBe(200);
+        const unreg = await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
+        expect(unreg.status).toBe(200);
+
+        const briefs = await lifecycleBriefsFor(key, agentId);
+        expect(briefs.map((e) => e.action)).toEqual(["registered", "unregistered"]);
+        for (const brief of briefs) {
+          expect(brief.role).toBe("ORCHESTRATOR");
+          // ABSENT — the additive convention §S1 states for `cycleId`. A
+          // hardcoded 0/null would satisfy every positive assertion above.
+          expect("cycleId" in brief).toBe(false);
+        }
+
+        const stored = storedLifecycleFor(store, key, agentId);
+        expect(stored).toHaveLength(2);
+        expect(stored.map((e) => e.cycleId)).toEqual([undefined, undefined]);
+      },
+    );
+  });
 });

@@ -55,6 +55,7 @@ Fallback:
     python3 tests/client/test_mvn_crucible_axi.py
 """
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -67,6 +68,19 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+
+# CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
+# this client register, and through what?", reused rather than re-derived.
+from tests.client.test_cr054_fleet_inventory import (
+    _add_parser_verb_names,
+    _defined_function_names,
+    _single_verb_registrar_delegator,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "mvn-crucible.py"
@@ -156,6 +170,12 @@ _INTERIM_SNAPSHOT_3 = (
     '    push,completed,0,40\n'
     '    pr,skipped,0,10\n'
 )
+# TOOL VERSION: `no-mistakes` v1.70.1 — the NINE-row ladder below (and its step
+# names) is that version's pipeline, 2026-09-10; v1.72.0 was already published.
+# This nine-row fixture is a SEALING snapshot: `status: completed` with a
+# resolved outcome. The genuinely NON-TERMINAL nine-row shape a run really has
+# while it is in flight is `_LIVE_NINE_ROW_IN_FLIGHT_SNAPSHOT` at the foot of
+# this file (CR-CRU-117 §S3).
 _INTERIM_SNAPSHOT_FINAL = (
     'run:\n'
     '  id: "gate-axi-mvn-interim-001"\n'
@@ -291,6 +311,27 @@ def _open_plans_response(plans):
     return {"ok": True, "plans": plans}
 
 
+def _plans_gets(get_mock):
+    """The GET paths this run issued against the PLANS surface.
+
+    CR-CRU-056 §S3's contract is that the client-side attach RESOLVER is gone:
+    no plans lookup picks a cycle, and the ingest body carries no cycleId.
+    That is what the assertion below pins. It used to spell it
+    `get_mock.assert_not_called()` -- "no GET at all" -- which pins the
+    TRANSPORT rather than the contract, and CR-CRU-094 §S3 makes the
+    difference load-bearing: pre-flight reads the caller's OWN binding
+    (`GET /api/v2/agents?project=<key>` -> `boundCycleId`) to answer "am I
+    bound?", which resolves nothing and attaches nothing. Forbidding that read
+    would guarantee nothing extra while forbidding the CR the spec mandates.
+    """
+    paths = []
+    for call in get_mock.call_args_list:
+        args, kwargs = call
+        path = args[0] if args else kwargs.get("path")
+        paths.append(str(path))
+    return [p for p in paths if "/plans" in p]
+
+
 def _post_call_for_path(post_mock, path):
     for call in post_mock.call_args_list:
         args, kwargs = call
@@ -310,6 +351,7 @@ class _BaseMvnAxiTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="mvn-crucible-axi-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        install_project_limits(self.tmpdir)
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)
@@ -438,7 +480,8 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
         resp = {"ok": True, "planId": "plan-9", "cr": "CR-CRU-030",
                 "cycles": [{"label": "a", "id": 901}]}
         code, out, _err, _p, _g, _pa = self._run(
-            ["plan-file", "--cr", "CR-CRU-030", "--cycles", "a",
+            ["plan-file", "--cr", "CR-CRU-030", "--cycle", "a",
+             "--cycle-kind", "red-green",
              "--agent", "test-agent", "--project-dir", self.tmpdir], post_return=resp)
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -724,7 +767,20 @@ class MvnCrucibleStatusHookSafeTest(_BaseMvnAxiTest):
         self.assertEqual(axi.get("plans"), [],
                           "the unavailable state must report an EMPTY board, never "
                           "fabricated/stale plan rows")
-        self.assertIsNone(axi.get("lastRunCr"))
+        # CR-CRU-094 §S4/AC7 — the field now states the fact it computes (the
+        # `cr` of the plan with the latest `closedAt`), and the old name that
+        # read as "the CR of the most recent run" is a CLEAN BREAK, not an
+        # alias (the CR-CRU-059 §S0 precedent: no dual-key handling).
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the unavailable envelope must still carry the last-closed-CR key "
+            f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
         help_steps = axi.get("help") or []
         self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
                                      "next-step hint (AXI principle 9)")
@@ -867,7 +923,8 @@ class MvnCrucibleNoWaveWarningTest(_BaseMvnAxiTest):
         self.assertNotIn("no-wave", err)
 
     def _run_plan_file(self, post_return, wave_flag=None):
-        argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
+        argv = ["plan-file", "--cr", post_return["cr"],
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir]
         if wave_flag is not None:
             argv += ["--wave", wave_flag]
@@ -935,7 +992,8 @@ class MvnCrucibleNoTitleWarningTest(_BaseMvnAxiTest):
         self.assertNotIn("no-title", err)
 
     def _run_plan_file(self, post_return, title=None):
-        argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
+        argv = ["plan-file", "--cr", post_return["cr"],
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir]
         if title is not None:
             argv += ["--title", title]
@@ -1044,7 +1102,10 @@ class MvnCrucibleCycleBindingTest(_BaseMvnAxiTest):
                 "auto-ingest", "--agent", "CR-M-auto", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
         self.assertNotIn(
@@ -1376,6 +1437,510 @@ class MvnCrucibleNoReportCauseEnvelopeTest(_BaseMvnAxiTest):
             f"got {len(segments)}: {segments!r}",
         )
         self.assertIn("cannot find symbol", segments[0])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CR-CRU-075 §S1 (AC1/AC2/AC6) — `queue-file` reaches THIS client too
+#
+# CR-CRU-014 §S2 shipped `queue-file` on python-crucible.py alone. The shared
+# `_crucible_axi.cmd_queue_file` / `parse_queue_table` were fleet-available
+# from the start; only the verb SURFACE was not, so an orchestrator on any
+# other stack gets argparse's `invalid choice: 'queue-file'` — a bare
+# SystemExit(2) — where every other workflow verb answers with an envelope
+# (AXI principle 6, CR-CRU-030 §S13).
+#
+# Asserted HERE, in this client's own suite, rather than as one fleet-wide set
+# comparison: a five-for-five that fails must NAME the client that lost the
+# verb, not report "expected 5, got 4". The shared registrar's own contract
+# lives in `test_crucible_axi_shared.py`; the frozen inventory set and the
+# derived registrar-parity sweep are §S2's, in
+# `test_cr054_fleet_inventory.py`.
+#
+# The fixture's CR ids live in module constants and are never spelled inside
+# an assertion (CR-CRU-097 §S1's residue rule), in a namespace this section
+# invents so no board id can decay here.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_QUEUE_FILE_ALPHA = "CR-QF-1"
+_QUEUE_FILE_BETA = "CR-QF-2"
+
+# Two rows exercising the parse's real conventions: an em-dash "depends on
+# nothing" cell, a Wave cell with a parenthetical (`5 (0.2.0)` → `5`), and a
+# bare dependency number normalised to a full id from its own row's namespace.
+_QUEUE_FILE_TABLE = (
+    "# Queue\n\n"
+    "| CR | Title | Type | Status | Depends on | Wave |\n"
+    "|---|---|---|---|---|---|\n"
+    f"| [{_QUEUE_FILE_ALPHA}](alpha.md) | Alpha | patch | PENDING | — | 5 (0.2.0) |\n"
+    f"| [{_QUEUE_FILE_BETA}](beta.md) | Beta | patch | PENDING | 1 | 6 |\n"
+)
+
+# The second row is missing its Wave cell (5 columns against the header's 6)
+# — §S2's malformed row, which must fail LOUDLY and POST nothing.
+_QUEUE_FILE_MALFORMED_TABLE = (
+    "# Queue\n\n"
+    "| CR | Title | Type | Status | Depends on | Wave |\n"
+    "|---|---|---|---|---|---|\n"
+    f"| [{_QUEUE_FILE_ALPHA}](alpha.md) | Alpha | patch | PENDING | — | 5 |\n"
+    f"| [{_QUEUE_FILE_BETA}](beta.md) | Beta | patch | PENDING | 1 |\n"
+)
+
+# What the shared parser must make of `_QUEUE_FILE_TABLE`.
+_QUEUE_FILE_ENTRIES = [
+    {"cr": _QUEUE_FILE_ALPHA, "title": "Alpha", "wave": "5", "dependsOn": []},
+    {"cr": _QUEUE_FILE_BETA, "title": "Beta", "wave": "6",
+     "dependsOn": [_QUEUE_FILE_ALPHA]},
+]
+
+
+class MvnCrucibleQueueFileVerbTest(_BaseMvnAxiTest):
+    """AC1/AC2 — what a caller on THIS client observes: the table is parsed,
+    the whole set is POSTed once to §S1's full-replace endpoint, and BOTH
+    failure paths answer with a structured `ok:false` envelope on stdout."""
+
+    def _source(self, name, text):
+        path = os.path.join(self.tmpdir, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def _queue_path(self):
+        return f"/api/v2/projects/{self.PROJECT_KEY}/queue"
+
+    def _run_queue_file(self, source, post_return=None):
+        post_return = post_return if post_return is not None else {
+            "ok": True, "unknownDependencies": []}
+        argv = ["queue-file", "--project-dir", self.tmpdir,
+                "--from-file", source]
+        with mock.patch.object(self.module, "_post", return_value=post_return,
+                               create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=None,
+                               create=True), \
+             mock.patch.object(self.module, "_patch", return_value=None,
+                               create=True) as patch_mock:
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, post_mock, patch_mock
+
+    def _assert_structured_failure(self, code, out, err, post_mock, cause):
+        """AC2, per client — AXI principle 6 (CR-CRU-030 §S13): a failure is a
+        STRUCTURED envelope on STDOUT carrying a non-empty `help[]`, never a
+        raw argparse usage error and never a traceback."""
+        combined = out + err
+        self.assertNotIn(
+            "invalid choice", combined,
+            f"{SCRIPT_PATH.name} must EXPOSE `queue-file` (§S1 fleet parity) — "
+            f"argparse rejecting the subcommand is the bare SystemExit(2) AXI "
+            f"principle 6 forbids; stdout={out!r} stderr={err!r}")
+        self.assertNotIn(
+            "Traceback (most recent call last)", combined,
+            f"a failing `queue-file` must never surface a traceback; "
+            f"stdout={out!r} stderr={err!r}")
+        self.assertNotEqual(
+            code, 0,
+            f"a failed `queue-file` must exit non-zero (§S13); stdout={out!r}")
+        self.assertEqual(
+            post_mock.call_args_list, [],
+            f"nothing may be POSTed when the source cannot be parsed or read "
+            f"— a partial registration is a silent mis-registration; "
+            f"calls={post_mock.call_args_list!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "queue-file")
+        self.assertIs(
+            axi.get("ok"), False,
+            f"the failure envelope must carry ok:false; got {axi!r}")
+        self.assertIn(
+            cause, str(axi.get("error", "")),
+            f"the envelope's `error` must NAME the cause so the failure is "
+            f"actionable; got {axi!r}")
+        help_steps = axi.get("help")
+        self.assertIsInstance(
+            help_steps, list,
+            f"AXI principle 6 (§S13): an ok:false envelope carries "
+            f"a `help[]` array of concrete next steps, on STDOUT; got {axi!r}")
+        self.assertGreater(
+            len(help_steps), 0,
+            f"the `help[]` array must be NON-EMPTY — an empty one tells the "
+            f"caller nothing; got {axi!r}")
+        return axi
+
+    def test_queue_file_parses_the_table_and_posts_the_whole_set_once_with_a_toon_envelope(self):
+        source = self._source("queue.md", _QUEUE_FILE_TABLE)
+        code, out, err, post_mock, patch_mock = self._run_queue_file(source)
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        queue_posts = [call for call in post_mock.call_args_list
+                       if (call[0][0] if call[0] else None) == self._queue_path()]
+        self.assertEqual(
+            len(queue_posts), 1,
+            f"§S1's `/queue` is a FULL REPLACE — `queue-file` POSTs the whole "
+            f"set exactly ONCE to {self._queue_path()}; "
+            f"calls={post_mock.call_args_list!r}")
+        patch_mock.assert_not_called()
+        self.assertEqual(
+            queue_posts[0][0][1].get("entries"), _QUEUE_FILE_ENTRIES,
+            f"the POST body must carry every parsed row verbatim — wave from "
+            f"the Wave cell's leading integer, dependsOn normalised to full "
+            f"ids; got {queue_posts[0][0][1]!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "queue-file")
+        self.assertIs(axi.get("ok"), True, f"got {axi!r}")
+        self.assertEqual(
+            axi.get("context", {}).get("projectKey"), self.PROJECT_KEY,
+            f"the envelope's context must name the project the set was "
+            f"registered against; got {axi!r}")
+
+    def test_queue_file_malformed_row_fails_loudly_with_a_structured_envelope(self):
+        source = self._source("broken.md", _QUEUE_FILE_MALFORMED_TABLE)
+        code, out, err, post_mock, _patch = self._run_queue_file(source)
+        self._assert_structured_failure(
+            code, out, err, post_mock, _QUEUE_FILE_BETA)
+
+    def test_queue_file_unreadable_source_fails_with_a_structured_envelope(self):
+        absent = os.path.join(self.tmpdir, "absent-queue.md")
+        code, out, err, post_mock, _patch = self._run_queue_file(absent)
+        self._assert_structured_failure(code, out, err, post_mock, absent)
+
+
+class MvnCrucibleQueueFileRegistrationTest(unittest.TestCase):
+    """AC1 — HOW this client wires the verb, read from its AST so a name in a
+    docstring or a help string can never be mistaken for a registration. The
+    readers are `test_cr054_fleet_inventory.py`'s, reused."""
+
+    def test_the_client_defines_one_cmd_queue_file_delegating_to_the_shared_implementation(self):
+        """AC1's delegator and AC6's DRY half in one: a body longer than the
+        single `return _axi().cmd_queue_file(...)` means the parse or the POST
+        leaked back into a client."""
+        counts = _defined_function_names(SCRIPT_PATH)
+        self.assertEqual(
+            counts.get("cmd_queue_file", 0), 1,
+            f"{SCRIPT_PATH.name} must define `cmd_queue_file` exactly once "
+            f"(§S1 fleet parity; a duplicate def would silently make the "
+            f"SECOND one win at import time); defined "
+            f"{counts.get('cmd_queue_file', 0)}x")
+        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH.read_text()))
+                    if isinstance(n, ast.FunctionDef)
+                    and n.name == "cmd_queue_file")
+        body = [stmt for stmt in node.body
+                if not (isinstance(stmt, ast.Expr)
+                        and isinstance(stmt.value, ast.Constant))]
+        self.assertEqual(
+            len(body), 1,
+            f"the delegator is THIN — exactly one `return` (§S1 is wiring, not "
+            f"a re-implementation); got {len(body)} statement(s)")
+        self.assertIsInstance(
+            body[0], ast.Return,
+            f"the delegator's one statement must RETURN the shared verb's "
+            f"exit code; got {ast.dump(body[0])!r}")
+        self.assertIsInstance(
+            body[0].value, ast.Call,
+            f"the delegator must return a CALL into the shared module; "
+            f"got {ast.dump(body[0])!r}")
+        self.assertEqual(
+            getattr(body[0].value.func, "attr", None), "cmd_queue_file",
+            f"the delegator must call the SHARED "
+            f"`_crucible_axi.cmd_queue_file`, never a local copy; "
+            f"got {ast.dump(body[0].value.func)!r}")
+
+    def test_the_client_registers_queue_file_through_the_shared_registrar(self):
+        delegator = _single_verb_registrar_delegator(
+            SCRIPT_PATH, "add_queue_file_verb")
+        self.assertEqual(
+            delegator, "cmd_queue_file",
+            f"{SCRIPT_PATH.name} must register the verb by handing its OWN "
+            f"delegator to the shared `_crucible_axi.add_queue_file_verb` — "
+            f"the `add_next_verb` / `add_cr_depends_verb` shape; "
+            f"got {delegator!r}")
+
+    def test_the_client_hand_rolls_no_queue_file_subparser(self):
+        """§S1's correction: one client built its own `add_parser` for this
+        verb, which forks the flag surface the shared registrar exists to keep
+        identical. After §S1 no client spells it — that one included."""
+        self.assertNotIn(
+            "queue-file", _add_parser_verb_names(SCRIPT_PATH),
+            f"the `queue-file` subparser is built ONCE, by "
+            f"`_crucible_axi.add_queue_file_verb`; {SCRIPT_PATH.name} spells "
+            f"its own")
+
+
+# ── CR-CRU-107 §S1 + §S2 — one label per flag, and the refusals are structured ──
+
+
+class MvnCruciblePlanFileCycleFlagTest(_BaseMvnAxiTest):
+    """§S1/§S2 driven through THIS client's real argparse and `run_verb`
+    dispatch, so a client that never grew `--cycle` — or that kept `--cycles`
+    `required=True` — is named by the failure rather than hidden behind "the
+    fleet". The shared verb's own payload/refusal contract is asserted once,
+    in `test_crucible_axi_shared.py`.
+
+    RED, measured against this client today:
+      * `--cycle` is not declared, so AC1/AC2/AC4 die in argparse with
+        "unrecognized arguments: --cycle" — SystemExit 2 and an EMPTY stdout.
+      * `--cycles` is `required=True`, so AC5's bare call gets argparse's own
+        usage error: exit 2 with nothing on stdout, which is exactly why the
+        exit code alone cannot discriminate and the ENVELOPE assertion carries
+        the contract.
+      * an empty `--cycles` reaches the shared
+        `sys.exit("[crucible] ERROR: --cycles must name at least one cycle")`
+        — exit 1, stderr, no envelope (AC6).
+    """
+
+    # Cycle 281's label, byte-for-byte off this project's own board: six
+    # cycles the operator meant, ONE cycle `--cycles` filed, because the value
+    # was semicolon-delimited. Input only — the row itself stays out of every
+    # fixture (AC9) and the ids below are synthetic.
+    SIX_SEGMENT_LABEL = (
+        "C1 release gating — diamonds connected · membership from crs "
+        "(AC1/AC1b/AC1c);C2 ordering — depends-on + queue sequence · fan-out "
+        "· no synthetic wave edge (AC2/AC3/AC8);C3 labels — CR id + status · "
+        "no title · track rides the node (AC6/AC5);C4 collapse by release "
+        "(AC4);C5 live motion for IN_PROGRESS only · live roadmap renders "
+        "(AC7/AC9);C6 VERIFY")
+
+    # The CR-CRU-078 label, byte-for-byte: ordinary commas inside ONE label,
+    # which `--cycles` split into three cycles nobody planned. The third
+    # fixture is AC2's literal shape — commas AND semicolons in one value —
+    # built as that label sitting inside a semicolon-delimited list, which is
+    # exactly the collision. No single historical label carries both
+    # delimiters: 281/324/328/340 are semicolon-only, and without a
+    # comma-bearing case argparse's `--cycle`→`--cycles` prefix abbreviation
+    # makes the assertion pass against today's client for the wrong reason.
+    COMMA_LABEL = ("C1 data + authored order - proposals read, formatter "
+                   "wiring, seq verbatim")
+    UNSPLIT_LABELS = (SIX_SEGMENT_LABEL, COMMA_LABEL,
+                      f"{COMMA_LABEL};C2 VERIFY")
+
+    def _plan_file(self, extra_argv):
+        resp = {"ok": True, "planId": "plan-x", "cr": "CR-FLAG",
+                "cycles": [{"label": "a", "id": 9001}]}
+        with mock.patch.object(self.module, "_post", return_value=resp,
+                               create=True) as post_mock:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-FLAG", "--title", "a plan",
+                "--wave", "5", "--agent", "test-agent",
+                "--project-dir", self.tmpdir] + extra_argv)
+        return code, out, err, post_mock
+
+    def _posted_payload(self, post_mock, out, err):
+        calls = post_mock.call_args_list
+        self.assertEqual(len(calls), 1,
+                         f"exactly one plans POST expected; got {calls!r} "
+                         f"stdout={out!r} stderr={err!r}")
+        return calls[0][0][1]
+
+    def _assert_structured_refusal(self, code, out, err, post_mock, *, ac):
+        self.assertEqual(
+            post_mock.call_args_list, [],
+            f"{ac}: a refused plan-file must POST NOTHING — a mis-filed plan "
+            f"is what the refusal exists to prevent")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "plan-file", f"{ac}: got {axi!r}")
+        self.assertIs(axi.get("ok"), False,
+                      f"{ac}: a refusal is an ok:false envelope; got {axi!r}")
+        self.assertEqual(
+            code, 2,
+            f"{ac}: the fleet's hard-stop exit code is 2; got {code!r} with "
+            f"stdout={out!r} stderr={err!r}")
+        help_list = [str(h) for h in (axi.get("help") or [])]
+        corrected = [h for h in help_list
+                     if "--cycle " in h and "--cycles" not in h]
+        self.assertTrue(
+            corrected,
+            f"{ac}: help[] must hand back the CORRECTED repeatable-`--cycle` "
+            f"call, not the form that was refused; got help={help_list!r}")
+        return axi
+
+    def test_repeatable_cycle_flag_files_one_cycle_per_occurrence_in_order(self):
+        """CR-CRU-107/AC1, REWRITTEN by CR-CRU-127 §S3: still one cycle per
+        occurrence in the order given, but each entry now carries the kind
+        declared at ITS position."""
+        code, out, err, post_mock = self._plan_file(
+            ["--cycle", "a", "--cycle-kind", "verify",
+             "--cycle", "b", "--cycle-kind", "fix",
+             "--cycle", "c", "--cycle-kind", "red-green"])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = self._posted_payload(post_mock, out, err)
+        self.assertEqual(
+            payload.get("cycles"),
+            [{"label": "a", "kind": "verify"},
+             {"label": "b", "kind": "fix"},
+             {"label": "c", "kind": "red-green"}],
+            f"AC1 + §S1/§S3: three `--cycle` occurrences post three "
+            f"cycles, in the order given, unsplit, each carrying its own "
+            f"declared kind; got payload={payload!r}")
+
+    def test_a_single_cycle_value_carrying_either_delimiter_files_exactly_one_cycle(self):
+        """AC2, REWRITTEN by CR-CRU-127 §S4 to declare the kind the mandate now
+        requires. The no-splitting rule itself is untouched."""
+        for label in self.UNSPLIT_LABELS:
+            with self.subTest(label=f"{label[:48]}…"):
+                code, out, err, post_mock = self._plan_file(
+                    ["--cycle", label, "--cycle-kind", "red-green"])
+                self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+                payload = self._posted_payload(post_mock, out, err)
+                self.assertEqual(
+                    payload.get("cycles"),
+                    [{"label": label, "kind": "red-green"}],
+                    f"AC2: one `--cycle` is ONE cycle whose label is the value "
+                    f"byte-for-byte, however many commas or semicolons it "
+                    f"carries; got payload={payload!r}")
+
+    def test_both_cycle_flags_together_are_refused_with_a_structured_envelope(self):
+        code, out, err, post_mock = self._plan_file(
+            ["--cycle", "a", "--cycles", "b,c"])
+        axi = self._assert_structured_refusal(code, out, err, post_mock, ac="AC4")
+        error = str(axi.get("error") or "")
+        self.assertRegex(
+            error, r"--cycle\b",
+            f"AC4: the error must name BOTH flags; got error={error!r}")
+        self.assertRegex(
+            error, r"--cycles\b",
+            f"AC4: the error must name BOTH flags; got error={error!r}")
+
+    def test_neither_cycle_flag_is_refused_with_the_same_structured_envelope(self):
+        code, out, err, post_mock = self._plan_file([])
+        axi = self._assert_structured_refusal(code, out, err, post_mock, ac="AC5")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycle\b",
+            f"AC5: the error must name the canonical flag the caller is "
+            f"missing, not leave argparse to print a usage block; got {axi!r}")
+
+    def test_an_empty_cycles_value_is_refused_with_an_envelope_not_a_bare_sys_exit(self):
+        code, out, err, post_mock = self._plan_file(["--cycles", ",,"])
+        axi = self._assert_structured_refusal(code, out, err, post_mock, ac="AC6")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycles\b",
+            f"AC6: the converted refusal still names the flag that was empty; "
+            f"got {axi!r}")
+        self.assertNotIn(
+            "[crucible] ERROR:", err,
+            f"AC6: the bare sys.exit string is REPLACED by the envelope, not "
+            f"printed beside it; got stderr={err!r}")
+
+
+# ── CR-CRU-117 §S3 — the REAL in-flight shape, driven as NON-TERMINAL ──────
+#
+# TOOL VERSION: `no-mistakes` v1.70.1 (captured 2026-09-10; v1.72.0 was already
+# published). The nine rows and their step NAMES are that version's pipeline —
+# recorded because the coupling is load-bearing: if the tool gains or loses a
+# step, a nine-row assertion goes red for a TOOL-VERSION reason with no defect
+# behind it, and a reader has to be able to tell which is which.
+#
+# WHY THIS FIXTURE EXISTS. The progressive 3/6/8-row snapshots above are a
+# shape the tool never produces, and `_INTERIM_SNAPSHOT_FINAL` — the only
+# nine-row fixture this suite had — is `status: completed` with a resolved
+# outcome, i.e. a SEALING snapshot. So nothing here ever drove the shape a run
+# REALLY has while in flight: nine rows, `status: running`, NO top-level
+# `outcome`, unrun steps carrying `pending`. That gap is how `cmd_gate_run`'s
+# `0 < nsteps < 9` guard reached a release while posting no interim gate for
+# any real run.
+_LIVE_LADDER_RELAY_MARKER = "mvn-gate-axi-live-ladder-marker-808"
+_LIVE_NINE_ROW_IN_FLIGHT_SNAPSHOT = (
+    'run:\n'
+    '  id: "gate-axi-mvn-live-001"\n'
+    f'  branch: {_LIVE_LADDER_RELAY_MARKER}\n'
+    '  status: running\n'
+    '  head: caf0808\n'
+    '  findings: 0\n'
+    '  steps[9]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,100\n'
+    '    rebase,completed,0,50\n'
+    '    review,running,0,412006\n'
+    '    test,pending,0,0\n'
+    '    document,pending,0,0\n'
+    '    lint,pending,0,0\n'
+    '    push,pending,0,0\n'
+    '    pr,pending,0,0\n'
+    '    ci,pending,0,0\n'
+)
+
+# That ladder as the GATE must carry it: every name present, every status
+# mapped, `pending` REPRESENTED rather than dropped or inferred green.
+_LIVE_LADDER_MAPPED_STATUSES = ["passed", "passed", "running", "pending",
+                                "pending", "pending", "pending", "pending",
+                                "pending"]
+
+# `axi status` answers with the live ladder while `axi run` blocks, then the run
+# resolves and prints its SEALING snapshot — the real tool's own division.
+_FAKE_NO_MISTAKES_LIVE_LADDER_BODY = '''
+import sys
+import time
+
+argv = sys.argv[1:]
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
+    sys.stdout.write({live!r})
+    sys.exit(0)
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
+    time.sleep(1.0)
+    sys.stdout.write({sealed!r})
+    sys.exit(0)
+sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
+sys.exit(1)
+'''.format(live=_LIVE_NINE_ROW_IN_FLIGHT_SNAPSHOT, sealed=_INTERIM_SNAPSHOT_FINAL)
+
+
+class MvnCrucibleLiveInFlightLadderTest(_BaseMvnAxiTest):
+    """CR-CRU-117 §S2/§S3 — this client streams the ladder of a run that is
+    still going, driven on the shape the tool really emits.
+
+    The interim gate is asserted by its CONTENT rather than by its position:
+    the seal is the only gate carrying the commit it gated, so `push` separates
+    them however the loop happens to order its posts."""
+
+    def test_gate_run_streams_the_live_nine_row_ladder_before_it_seals(self):
+        saved_path = os.environ.get("PATH", "")
+        fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-mvn-live-")
+        fake_path = os.path.join(fake_bin_dir, "no-mistakes")
+        with open(fake_path, "w") as f:
+            f.write(f"#!{sys.executable}\n")
+            f.write(_FAKE_NO_MISTAKES_LIVE_LADDER_BODY)
+        st = os.stat(fake_path)
+        os.chmod(fake_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        os.environ["PATH"] = fake_bin_dir + os.pathsep + saved_path
+
+        calls = []
+
+        def fake_post(path, payload):
+            calls.append((path, dict(payload) if isinstance(payload, dict) else payload))
+            return {"ok": True}
+
+        try:
+            with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True):
+                code, out, _err = _run_main(self.module, [
+                    "gate-run", "--intent", "stream the live ladder",
+                    "--agent", "test-agent", "--project-dir", self.tmpdir,
+                ])
+        finally:
+            os.environ["PATH"] = saved_path
+            shutil.rmtree(fake_bin_dir, ignore_errors=True)
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        gates = [p for path, p in calls if path == "/api/v2/gates"]
+        interim = [p for p in gates if "push" not in p.get("gate", {})]
+        seals = [p for p in gates if "push" in p.get("gate", {})]
+
+        self.assertEqual(
+            len(interim), 1,
+            "a nine-row ladder with `pending` rows and no top-level `outcome` "
+            "is a run STILL GOING, so exactly one interim gate reaches the "
+            "board for it: the guard tests terminality, not the row count the "
+            "tool always emits (no-mistakes v1.70.1); got " + repr(gates))
+        self.assertEqual(
+            [s.get("status") for s in interim[0].get("gate", {}).get("steps", [])],
+            _LIVE_LADDER_MAPPED_STATUSES,
+            "the interim gate carries ALL NINE steps with their mapped "
+            "statuses — `pending` represented, not dropped and not inferred "
+            "green; got " + repr(interim[0]))
+        self.assertIs(
+            interim[0].get("gate", {}).get("inFlight"), True,
+            "and it is MARKED in flight inside the gate object, so the board's "
+            "readers can tell a snapshot from a verdict; got " + repr(interim[0]))
+
+        self.assertEqual(
+            [(p.get("gate", {}).get("outcome"), p.get("gate", {}).get("inFlight"))
+             for p in seals],
+            [("passed", None)],
+            "and the run still SEALS exactly once, unmarked: a marked seal "
+            "would be ignored by the very readers the mark exists for; got "
+            + repr(gates))
 
 
 if __name__ == "__main__":

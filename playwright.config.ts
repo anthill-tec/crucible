@@ -75,7 +75,23 @@ export default defineConfig({
   timeout: 30_000,
   // "junit" additionally feeds the Crucible auto-ingest path
   // (`bun-crucible.py auto-ingest`), which reads test-reports/junit.xml.
-  reporter: [["list"], ["junit", { outputFile: "test-reports/junit.xml" }]],
+  //
+  // CR-CRU-133 §S2 — `package.json`'s `crucible.reportPath` DECLARES that this
+  // target takes its report path from PLAYWRIGHT_JUNIT_OUTPUT_NAME, and
+  // playwright's junit reporter prefers an explicit `outputFile` OVER that
+  // variable — so a hardcoded path here would make the declaration a lie and
+  // the client could never move the file this suite writes. The default is
+  // kept for a bare `bun run test:e2e`, which is unaffected.
+  reporter: [
+    ["list"],
+    [
+      "junit",
+      {
+        outputFile:
+          process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
+      },
+    ],
+  ],
   use: {
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
@@ -107,12 +123,19 @@ export default defineConfig({
   // (`chromium-drilldown-dual-axis-scroll`); no ordering requirement
   // relative to `chromium-drill-in` / `chromium-cycle-run-navigation`
   // (own namespaced "DDA …" fixtures), only relative to `chromium`.
+  //
+  // CR-CRU-017 §S3 — `run-lifecycle.feature` sorts alphabetically BEFORE
+  // shell-storyboard.feature ("r" < "s") too, so it would seed projects ahead
+  // of that same F1 empty-DB precondition. Same fix once more, its own
+  // dependent project (`chromium-run-lifecycle`); no ordering requirement
+  // relative to the other dependents (its fixtures are namespaced "RL …"),
+  // only relative to `chromium`.
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
       testIgnore:
-        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll)\.feature\.spec\.js$/,
+        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle)\.feature\.spec\.js$/,
     },
     {
       name: "chromium-drill-in",
@@ -130,6 +153,12 @@ export default defineConfig({
       name: "chromium-drilldown-dual-axis-scroll",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drilldown-dual-axis-scroll\.feature\.spec\.js$/,
+      dependencies: ["chromium"],
+    },
+    {
+      name: "chromium-run-lifecycle",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /run-lifecycle\.feature\.spec\.js$/,
       dependencies: ["chromium"],
     },
   ],

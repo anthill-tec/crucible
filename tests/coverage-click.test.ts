@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
 import type { Store } from "../src/store.ts";
 import type { Coverage } from "../src/types.ts";
+import { settleDom } from "./helpers/dom-settle";
 
 // ─────────────────────────────────────────────────────────────────────────
 // (A) SERVER — GET /api/v2/projects carries latestCoverageEventId
@@ -234,9 +235,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 5): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 describe("workspace Project pane — coverage meter click wiring (integration AC, §nav table)", () => {

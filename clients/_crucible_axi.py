@@ -25,12 +25,20 @@ same way the clients do.
 """
 
 import argparse
+import collections
+import contextlib
+import datetime
 import importlib.util
+import io
 import json
 import os
+import re
+import resource
+import shlex
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.request
 
@@ -56,6 +64,302 @@ def _toon():
         _TOON_MOD = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_TOON_MOD)
     return _TOON_MOD
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CR-CRU-131 §S1/§S1b — the CLIENT's limits are CONFIGURATION, resolved from
+# the PROJECT's `crucible.toml` at the POINT OF USE.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A limit is configuration, never a constant compiled into source (PRD §4.13,
+# user ruling 2026-09-14). It was EARNED: `DEFAULT_RETENTION = 100` was a
+# number one author chose, reachable by nobody, and on 2026-09-13 it evicted
+# every release this project had ever shipped (PRD §4.7).
+#
+# OWNERSHIP follows ENFORCEMENT. The server resolves its own database and may
+# be installed on a machine no client can see; a client resolves a PROJECT
+# DIRECTORY and then posts over HTTP. So the three limits a CLIENT enforces
+# live in a `crucible.toml` beside the `.env` the clients already read, and the
+# server's three live beside its database, loaded by the mirror of this block
+# in `src/limits.ts`. Neither process reads the other's file: one schema, one
+# loader shape, two locations. Built ONCE here, where all five clients inherit
+# it (the shared-module discipline CR-CRU-030 established).
+#
+# The four fields are DOCUMENTATION; `value` is the operator's SETTING.
+# `description`, `recommended`, `min` and `max` are immutable; an operator who
+# overwrote `recommended` in place would destroy, in the very file they read,
+# the record of what we recommend. Keeping both in ONE table is also what lets
+# the range be enforced from the data that documents it — the validator reads
+# `min`/`max` off the very table the operator edits, so the documented bound
+# and the enforced bound cannot drift into two copies.
+#
+# READ AT THE POINT OF USE. `TRUNCATE_LIMIT`, `NO_REPORT_DETAIL_MAX` and
+# `ROADMAP_LIST_LIMIT` were each bound as a DEFAULT ARGUMENT at `def` time,
+# which is a cache with the earliest possible expiry: no edit an operator ever
+# made could reach them. Every entry point below re-reads the file.
+#
+# `bind_project_dir` rather than a `project_dir=` parameter threaded through
+# `truncate_field`/`truncate_rows`/`no_report_warning`, for the reason this
+# module's own scope boundary already states (see the module docstring):
+# project-dir resolution stays CLIENT-specific and arrives ALREADY RESOLVED.
+# The client resolves its root exactly once and hands it over; the pure
+# formatters keep their pure signatures.
+
+#: The limits a CLIENT enforces, by their OWN names -- a key that
+#: transliterated `NO_REPORT_DETAIL_MAX` would carry an accident of the old
+#: source into the file an operator reads.
+CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
+                      "roadmap_list_rows")
+
+#: §S1c -- the SHIPPED declarations are PACKAGE DATA, not a table in this
+#: module. `crucible.toml` travels inside `crucible-axi` beside this file (the
+#: wheel force-includes `clients` as `crucible_axi/clients`), so the file a
+#: reader READS and the table this module FALLS BACK TO are the same bytes. A
+#: declaration held in BOTH a source table and a data file is two copies of one
+#: datum, and the file an operator reads can then disagree with the numbers the
+#: code falls back to with nothing saying so.
+#:
+#: TWO candidates, because this module ships in two shapes. Beside it is where
+#: the data sits in the checkout (`clients/`) and in the wheel
+#: (`crucible_axi/clients/`). The installer lays the fleet down under
+#: `<target-dir>/clients/` and the declarations one level up at
+#: `<target-dir>/crucible.toml` -- the operator-editable copy it writes there --
+#: so a LAID-DOWN fleet finds them at the parent. The list is ordered so the
+#: package's own data always wins where it is present.
+_SHIPPED_DATA_FILENAME = "crucible.toml"
+_SHIPPED_DATA_CANDIDATES = (
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 _SHIPPED_DATA_FILENAME),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 _SHIPPED_DATA_FILENAME),
+)
+
+#: The four fields a shipped limit is DOCUMENTED with. A declaration missing
+#: one is a limit an operator cannot act on, and the range is enforced from the
+#: very data that documents it.
+_DOCUMENTED_FIELDS = ("description", "recommended", "min", "max")
+
+_PROJECT_DIR = None
+
+
+def bind_project_dir(project_dir):
+    """§S1b -- hand the shared module the ALREADY-RESOLVED project root, once,
+    on the client's own boot path. Every client's `_resolve_project_dir` (and
+    arduino's `_project_dir`) calls this, so a limit resolves against the
+    directory the verb is actually working in rather than the process cwd."""
+    global _PROJECT_DIR
+    _PROJECT_DIR = str(project_dir) if project_dir else None
+
+
+def project_config_path():
+    """§S1b -- the PROJECT's own configuration file, beside the `.env` the
+    clients already read. Never the server's: the board may be on another
+    host, and its config directory simply is not on this filesystem."""
+    return os.path.join(_PROJECT_DIR or os.getcwd(), "crucible.toml")
+
+
+def shipped_data_path():
+    """§S1c -- the distribution's own `crucible.toml`, at whichever of the two
+    shapes this module is running in (see `_SHIPPED_DATA_CANDIDATES`).
+
+    Raises when neither exists: a distribution whose own data cannot answer
+    what it enforces is broken in a way no fallback could honestly paper over,
+    and there is deliberately no number in this module to fall back to."""
+    for candidate in _SHIPPED_DATA_CANDIDATES:
+        if os.path.isfile(candidate):
+            return candidate
+    raise RuntimeError(
+        "no shipped limit defaults found at %s. They travel as PACKAGE DATA "
+        "beside this module; without them a client can resolve nothing, "
+        "because the last resort is a DATA FILE in the distribution rather "
+        "than a number in a resolver."
+        % (", ".join(_SHIPPED_DATA_CANDIDATES),))
+
+
+def _shipped_declaration(name, table, path):
+    """One shipped declaration as the data file states it. Every documented
+    field is REQUIRED -- a limit missing its range is a bound nothing can
+    check, and a limit missing its sentence is a number nobody chose."""
+    if not isinstance(table, dict):
+        raise RuntimeError(
+            "%s declares no `[limits.%s]` table, so this distribution cannot "
+            "say what it enforces" % (path, name))
+    out = {}
+    for field in _DOCUMENTED_FIELDS:
+        raw = table.get(field)
+        if field == "description":
+            if not isinstance(raw, str) or not raw:
+                raise RuntimeError(
+                    "%s does not describe `%s`: a limit without a sentence an "
+                    "operator can act on is a number nobody chose"
+                    % (path, name))
+        elif not isinstance(raw, int) or isinstance(raw, bool):
+            raise RuntimeError(
+                "%s does not declare an integer `%s` for `%s`; that file is "
+                "this distribution's PACKAGE DATA, so a missing field is a "
+                "broken distribution rather than an operator error"
+                % (path, field, name))
+        out[field] = raw
+    return out
+
+
+def shipped_limits():
+    """§S1c -- the shipped declarations, read from the distribution's own data.
+
+    A fresh parse per call, at the POINT OF USE, for the same reason the
+    operator's file is never cached: a table bound once at import time is a
+    table no later state can reach. A limit this side does not ENFORCE is
+    ignored rather than adopted, so a data file carrying another package's
+    vocabulary -- the two are independently upgradable -- changes nothing."""
+    path = shipped_data_path()
+    with open(path, "rb") as fh:
+        parsed = tomllib.load(fh)
+    tables = parsed.get("limits")
+    if not isinstance(tables, dict):
+        tables = {}
+    return {name: _shipped_declaration(name, tables.get(name), path)
+            for name in CLIENT_LIMIT_NAMES}
+
+
+def _read_project_config():
+    """One read of the file, at the point of use -- never cached.
+
+    Returns `(path, tables)`, where `tables` is None when the file is ABSENT or
+    does not parse. `tomllib` is stdlib (3.11+; this repo runs 3.14) and
+    already in the tree at `clients/rust-crucible.py`."""
+    path = project_config_path()
+    try:
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+    except (OSError, ValueError):
+        # ValueError covers tomllib.TOMLDecodeError; a malformed file must
+        # DEGRADE, never take a client's verb down with it.
+        return path, None
+    tables = parsed.get("limits")
+    return path, tables if isinstance(tables, dict) else {}
+
+
+def _declared_limit(shipped, table):
+    """One limit as the file leaves it: the shipped declaration with whichever
+    fields the operator's table actually supplies laid over it. A field of the
+    wrong TYPE is ignored rather than obeyed -- a `min` that is a string is a
+    bound nothing can enforce, and a fractional character count is not a
+    supportable setting."""
+    out = dict(shipped)
+    if not isinstance(table, dict):
+        return out
+    description = table.get("description")
+    if isinstance(description, str):
+        out["description"] = description
+    for field in ("recommended", "min", "max", "value"):
+        raw = table.get(field)
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            out[field] = raw
+    return out
+
+
+def _limit_refusal(name, declaration, path):
+    """§S1b -- what an out-of-range `value` owes its operator: the limit, the
+    offending value, the range it crossed and the setting running instead.
+    REFUSED, never clamped -- a clamp leaves the operator's stated intent and
+    the running behaviour different with nothing saying so."""
+    return ("[crucible] WARNING: %s sets `%s` to %d, outside the range "
+            "[%d, %d] declared beside it — the value is REFUSED, not clamped, "
+            "so `%s` runs at its recommended %d until the file is corrected."
+            % (path, name, declaration["value"], declaration["min"],
+               declaration["max"], name, declaration["recommended"]))
+
+
+def _limits_unreadable(path):
+    """Named by PATH: told only that "a config file is broken", on a machine
+    carrying two of them, an operator learns nothing."""
+    return ("[crucible] WARNING: no readable configuration at %s — it is "
+            "absent or does not parse, so every bound this client enforces "
+            "runs at the value the build recommends. Create the file (or "
+            "correct its TOML) to configure them." % path)
+
+
+def _effective_limit(name, declaration, path):
+    """`(value, refusal)` -- the number the limit RUNS at, and the disclosure
+    it owes, in one pass."""
+    value = declaration.get("value")
+    if value is None:
+        return declaration["recommended"], None
+    if declaration["min"] <= value <= declaration["max"]:
+        return value, None
+    return declaration["recommended"], _limit_refusal(name, declaration, path)
+
+
+def resolve_limit(name):
+    """§S1/§S1b -- the number a limit RUNS at: the operator's `value` when the
+    range beside it admits one, its `recommended` otherwise.
+
+    Raises only for an unknown or FOREIGN limit name, which is a programming
+    error rather than an operator error. A bad FILE never raises: a client must
+    still format its output on a machine whose `crucible.toml` was mistyped.
+
+    The refusal names no CR: it is a runtime string a client can EMIT, and
+    CR-CRU-097 AC3a keeps this project's own change-request namespace out of
+    every such string."""
+    if name not in CLIENT_LIMIT_NAMES:
+        raise ValueError(
+            "`%s` is not a limit a client enforces (%s). A limit is owned by the process "
+            "that ENFORCES it, and the server is not necessarily on this machine — "
+            "`run_abandon_ms`, `project_inactive_ms` and `retention` resolve from the "
+            "SERVER's own crucible.toml, never from here."
+            % (name, ", ".join(CLIENT_LIMIT_NAMES)))
+    path, tables = _read_project_config()
+    shipped = shipped_limits()[name]
+    declaration = (shipped if tables is None
+                   else _declared_limit(shipped, tables.get(name)))
+    return _effective_limit(name, declaration, path)[0]
+
+
+def limit_disclosures():
+    """§S1b -- everything the current file owes its operator: one line per
+    REFUSED `value`, or one line naming a file that could not be read at all.
+
+    Stateless and recomputed from the file, mirroring the server's
+    `retentionDisclosure()` rather than inventing a drainable buffer: a
+    disclosure that had to be drained is a disclosure that can be missed."""
+    path, tables = _read_project_config()
+    if tables is None:
+        return [_limits_unreadable(path)]
+    lines = []
+    shipped = shipped_limits()
+    for name in CLIENT_LIMIT_NAMES:
+        _, refusal = _effective_limit(
+            name, _declared_limit(shipped[name], tables.get(name)), path)
+        if refusal is not None:
+            lines.append(refusal)
+    return lines
+
+
+#: The envelope `warnings[]` code every limit disclosure carries. ONE code for
+#: the fleet, so a consumer matches on it without parsing the sentence -- the
+#: same contract `no-test-reports` and `UNIT_RUN_WALL_EXCEEDS_CPU_CODE` have.
+LIMIT_CONFIGURATION_CODE = "limit-configuration"
+
+
+def limit_disclosure_warnings():
+    """§S1b -- `limit_disclosures()` as the envelope `warnings[]` fragment:
+    `[]`, or one `{code, detail}` per disclosure, in the shape
+    `preflight_cycle_warnings` returns its finding.
+
+    The CLIENT's counterpart to the server's boot banner (src/server.ts:357),
+    mirroring its SHAPE rather than copying its channel. A server boots once
+    and discloses on the console it owns; a client has no boot -- each verb
+    invocation IS its boot -- so the disclosure rides the envelope that
+    invocation already emits, on the generic `warnings[]` channel the whole
+    fleet already renders.
+
+    Nothing is buffered and nothing is drained: it is recomputed from the file
+    on every exit, so an operator who corrects the file sees the next envelope
+    go quiet, and one who does not is told again. Silent when the file is
+    readable and every `value` is legal.
+    """
+    return [{"code": LIMIT_CONFIGURATION_CODE, "detail": line}
+            for line in limit_disclosures()]
 
 
 # ── CR-CRU-054 §S2 — the fleet's HTTP core, lifted to ONE locus of truth ────
@@ -112,10 +416,45 @@ def http_request(base_url, method, path, payload=None, timeout=None):
             response.close()
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
-        return {"ok": False, "error": f"HTTP {e.code}: {detail}"}
+        failure = {"ok": False, "error": f"HTTP {e.code}: {detail}"}
+        # CR-CRU-129 §S4 — a client-class status can carry a STRUCTURED answer,
+        # not merely a sentence: the release route REFUSES a lossy replay with
+        # the same `shrink` object an applied repair returns, and a caller that
+        # only ever saw the rendered string could not tell a deliberate refusal
+        # from an unreachable board. So the parsed body travels too, while `ok`
+        # and `error` stay exactly as they have always read — nothing that
+        # already depends on this shape moves, and a non-JSON body (the usual
+        # case) adds nothing at all.
+        try:
+            body = json.loads(detail)
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            carried = {k: v for k, v in body.items() if k not in ("ok", "error")}
+            failure.update(carried)
+        return failure
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
                                       f"(is Crucible running at {base_url}?)"}
+    except TimeoutError:
+        # CR-CRU-126 §S3 — the READ-phase timeout, which is the one a SLOW
+        # board produces: the connection is accepted, so nothing raises until
+        # the bound expires, and `urlopen` then raises a bare `TimeoutError`.
+        # That is NOT a `urllib.error.URLError` (only the CONNECT-phase timeout
+        # arrives wrapped in one), so the handler above never saw it, and
+        # `run_verb` converts only its three typed hard stops — the verb died
+        # with an unhandled traceback and no envelope, which is how every cycle
+        # transition failed on 2026-09-12. Caught NARROWLY, by the exact type
+        # that fires: a broader `except OSError` here would swallow unrelated
+        # transport failures into the same message.
+        #
+        # The BOUND is not tuned (§S3: legibility, not tuning) — `_get`'s 10s
+        # stands. Only the reporting changes: the fleet's standard ok:false
+        # shape, which `open_plans` turns into `PlansFetchFailed` and the
+        # envelope-owning verbs report exactly as they already report an
+        # unreachable board.
+        return {"ok": False, "error": f"request timed out after {timeout}s "
+                                      f"(is Crucible at {base_url} overloaded?)"}
     return json.loads(body) if body else {"ok": True}
 
 
@@ -218,11 +557,28 @@ def echoed_cycle_id(resp):
 
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
-    optional human-readable line to stderr (interactive only)."""
-    axi = {"verb": verb, "ok": ok}
+    optional human-readable line to stderr (interactive only).
+
+    CR-CRU-111 §S5/AC7 — the envelope names the tier of the run this exit
+    ingested, beside `verb`/`ok` and on EVERY exit path, so an orchestrator
+    reading it knows what was covered without inspecting the board. The
+    statement is ASSEMBLED HERE, once for the fleet, from what the ingest seam
+    recorded (`ingested_tier`, and the closed vocabulary beside
+    `TIER_MEANINGS`): a client that ingested nothing on this exit says so
+    rather than claiming coverage it never obtained.
+
+    CR-CRU-131 §S1b — the limit disclosures this invocation owes its operator
+    ride the SAME `warnings[]`, appended AFTER whatever the caller carried
+    (its findings were decided first). Wired HERE, at the one exit every verb
+    of every client passes through, for the reason the server wires its own to
+    the boot banner: a refused `value`, or a `crucible.toml` that could not be
+    read, that nobody is told about is a client running at a number its
+    operator did not choose. A per-verb or per-client wiring would be five
+    places for four of them to be right."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
     axi.update(result_fields)
     axi["context"] = context
-    axi["warnings"] = warnings
+    axi["warnings"] = list(warnings) + limit_disclosure_warnings()
     sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
     if legacy_line is not None:
         print(legacy_line, file=sys.stderr)
@@ -238,6 +594,17 @@ def resolve_single_plan(plans, cr=None, open_only=False):
       (cycle-add, mirroring plan-backfill — the SERVER is the authority on a
       closed plan's rejection, never a client-side pre-filter).
     - `cr` filters the candidates to that CR (the disambiguator).
+    - CR-CRU-124 §S1 — applied only once the `cr` filter above leaves MORE
+      than one candidate: when exactly ONE of them is `status:"open"`, that
+      open plan is the target. A CR whose earlier plan was aborted and re-filed
+      (abort + re-`plan-file` is the sanctioned recovery path) carries one live
+      plan beside settled history, not two targets. ZERO open candidates
+      changes nothing — a lone terminal plan is still handed to the server,
+      which owns its rejection — and two open candidates is a real ambiguity
+      that stays one. A caller who named NO cr is untouched: with no CR to
+      scope them, several plans are several targets (the contract
+      `test_ambiguous_multiple_plans_without_cr_returns_nonzero_without_posting`
+      has pinned since CR-CRU-030).
 
     Returns `(plan, reason)`: exactly one is non-None. `reason` is None on a
     unique match, else `"none"` (zero candidates) or `"ambiguous"` (>1, no
@@ -251,6 +618,10 @@ def resolve_single_plan(plans, cr=None, open_only=False):
     if len(candidates) == 0:
         return None, "none"
     if len(candidates) > 1:
+        if cr:
+            live = [p for p in candidates if p.get("status") == "open"]
+            if len(live) == 1:
+                return live[0], None
         return None, "ambiguous"
     return candidates[0], None
 
@@ -346,6 +717,13 @@ def emit_plans_fetch_failure(verb, exc, project_dir, ops, result_fields, cr=None
     return 1
 
 
+# CR-CRU-124 §S3 — the verbs that own a `--plan <id>` escape, so an ambiguity
+# message offers one only where it exists. `checkpoint`/`abort` deliberately
+# did NOT get the flag (the CR's non-goal): they already restrict to open
+# plans, and the server keeps at most one open plan per cr.
+PLAN_ESCAPE_VERBS = frozenset({"cycle-add"})
+
+
 def resolve_plan_or_emit(verb, cr, result_fields, open_only,
                          get_fn, path, emit_fn, context_fn):
     """The shared prelude for the plan-targeting write verbs (`cycle-add` /
@@ -370,11 +748,23 @@ def resolve_plan_or_emit(verb, cr, result_fields, open_only,
             legacy = (f"[crucible] ERROR: no {scope} to {verb}"
                       + (f" for cr={cr}" if cr else ""))
         else:
+            # CR-CRU-124 §S2 — the candidates named are the candidates MEANT:
+            # filter by `cr` as well as `open_only` (the order `cmd_cr_close`
+            # already uses). Enumerating every plan on the board and then
+            # demanding the flag the caller already passed is the defect.
             candidates = [p for p in plans
                           if (not open_only or p.get("status") == "open")]
+            if cr:
+                candidates = [p for p in candidates if p.get("cr") == cr]
             names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            if not cr:
+                pick = f"Pass --cr to pick one of: {names}"
+            elif verb in PLAN_ESCAPE_VERBS:
+                pick = f"Name the plan with --plan <id>: {names}"
+            else:
+                pick = f"the candidates are: {names}"
             legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
-                      f"Pass --cr to pick one of: {names}")
+                      f"{pick}")
         emit_fn(verb, False, result_fields, context_fn(), [], legacy)
         return None, 1
     return plan, None
@@ -426,26 +816,28 @@ def select_status_fields(rows, extra_fields):
     return [{k: r.get(k) for k in keys} for r in rows]
 
 
-# §S11 — the visible-content limit before a large text field is truncated in
-# the envelope. The CR gives no number; the CR-CRU-030 C1 slice-3 RED contract
-# pins 200 chars of visible content before the size-hint suffix.
-TRUNCATE_LIMIT = 200
+def truncate_field(value, full=False):
+    """§S11 (PURE) — truncate a large text field to the configured visible width
+    with a `(truncated, <N> chars total — use --full)` size hint naming the
+    TOTAL original length. `full=True` (the `--full` flag) returns the value
+    verbatim; a value at or under the limit (or a non-str/None) is returned
+    unchanged — content that was never cut never carries a fabricated hint.
 
-
-def truncate_field(value, full=False, limit=TRUNCATE_LIMIT):
-    """§S11 (PURE) — truncate a large text field to `limit` visible chars with a
-    `(truncated, <N> chars total — use --full)` size hint naming the TOTAL
-    original length. `full=True` (the `--full` flag) returns the value verbatim;
-    a value at or under the limit (or a non-str/None) is returned unchanged —
-    content that was never cut never carries a fabricated hint."""
-    if full or not isinstance(value, str) or len(value) <= limit:
+    CR-CRU-131 §S1 — the width is `truncate_field_chars`, resolved from the
+    PROJECT's `crucible.toml` AT THE POINT OF USE. It was `limit=TRUNCATE_LIMIT`
+    (200), bound as a default argument at `def` time, so no edit an operator
+    ever made could reach it."""
+    if full or not isinstance(value, str):
+        return value
+    limit = resolve_limit("truncate_field_chars")
+    if len(value) <= limit:
         return value
     return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
 
 
-def last_run_cr(plans):
+def last_closed_cr(plans):
     """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
-    merge), or None when no plan has closed yet — never a fabricated guess."""
+    close), or None when no plan has closed yet — never a fabricated guess."""
     closed = [p for p in (plans or []) if p.get("closedAt") is not None]
     if not closed:
         return None
@@ -572,6 +964,63 @@ GATE_CYCLE_HELP = (
     "`register --cycle`. An agent that ALREADY registered bound needs no "
     "--cycle here: the gated run leaves its registration and binding intact.")
 
+# The ONE `--release` help text for the GATE verbs, so all five clients
+# document the flag identically. OPTIONAL, because a gate on a feature branch
+# gates no release.
+GATE_RELEASE_HELP = (
+    "Label of the release this gate gates (e.g. 0.2.0), posted VERBATIM as "
+    "the event's top-level `version` — the client never invents, normalises "
+    "or derives it from a branch name. OMIT IT unless the gate really gates a "
+    "release: a gate naming one is exempt from pruning until that release "
+    "records, and is retired the moment it does.")
+
+
+# CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five
+# clients document the flag identically. OPTIONAL, because a CR can be born
+# mid-release and be placed on the roadmap later.
+PLAN_FILE_RELEASE_HELP = (
+    "Label of the release this CR is planned into (e.g. 0.2.0), posted "
+    "VERBATIM as the body's own `release` — the client never invents or "
+    "normalises it. Given, the CR is REGISTERED in the queue by the same "
+    "call (cr-plan's write, and --wave and --title become required); omitted, "
+    "the plan is filed and nothing is claimed on the roadmap.")
+
+
+# CR-CRU-124 §S3/§S4 — the ONE help text for each `cycle-add` targeting flag,
+# so all five clients document them identically. Both are OPTIONAL: the verb's
+# existing resolution and the server's own kind default are unchanged for a
+# caller who names neither.
+CYCLE_ADD_PLAN_HELP = (
+    "Plan id to append the cycle to. Given alone, the plan board is NOT read "
+    "and no resolution happens (the route carries the plan id in its own "
+    "path) — the escape when a cr carries more than one plan, e.g. an aborted "
+    "sibling beside the live one. Given with a cr, a plan belonging to a "
+    "different cr is refused before anything is posted.")
+
+CYCLE_ADD_KIND_HELP = (
+    "Kind of cycle being appended: red-green, verify or fix (the route's own "
+    "vocabulary). Omitted, no kind rides the body at all and the server's own "
+    "default (red-green) applies — the client never invents one.")
+
+
+# CR-CRU-127 §S1/§S6 — the ONE `--cycle-kind` help text for `plan-file`. The
+# flag carries no argparse `choices=` (the vocabulary is the server's,
+# `CYCLE_KINDS` in src/v2.ts, and the fleet holds no second copy), which makes
+# this string the ONLY surface a calling agent can read the kinds off: an
+# agent who must discover them by being refused is the context loss AXI
+# principle 10 exists to prevent. So it names all three, first.
+# The three are spelled FIRST for a mechanical reason as well as an editorial
+# one: argparse wraps help through `textwrap` with `break_on_hyphens`, so a
+# `red-green` further into the paragraph renders as `red- green` at whatever
+# width the reader's terminal happens to be. At the head of the block it can
+# never straddle a line break.
+PLAN_FILE_CYCLE_KIND_HELP = (
+    "red-green, verify or fix — the kind of the cycle declared at the SAME "
+    "position (the route's own vocabulary; the client holds no copy and "
+    "vetoes nothing). REQUIRED and repeatable, once per cycle in the order "
+    "given: the Nth kind is the Nth cycle's. A count that does not match, or "
+    "a cycle left without one, is refused before anything is posted.")
+
 
 def gate_identity_skipped_line(agent_id, confirmed=True):
     """The stderr line a gated run prints INSTEAD of the cleanup, so an
@@ -633,6 +1082,75 @@ HELP_STEPS = {
 # otherwise).
 GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
 
+# §S3 — the PASS FAMILY: every resolved `axi run` outcome this fleet reads as a
+# pass, each NAMED beside the legal gate outcome it seals as.
+#
+# The sealing path used to take the run's outcome only when it was already one
+# of the four legal values and otherwise fall back to "failed if any step
+# failed, else passed". That fallback is structurally biased green: `pending`,
+# `running`, `fixing` and `awaiting_approval` are none of them `failed`, so a
+# run still going sealed `passed`. This table replaces the green half of it.
+#
+# `passed-with-skips` is what a real release run resolves today, and it is in
+# NO vocabulary the fleet has — not the server's `GATE_OUTCOMES` (which 400s
+# anything outside them), not the renderer's gating rule. It seals `passed` by
+# an explicit decision recorded HERE, and the skips it names are not lost: the
+# `pr,skipped`/`ci,skipped` rows already travel in `steps[]`, and the envelope
+# carries the raw string beside the mapped one. An outcome this table does not
+# name is never inferred green from the mere absence of a failure.
+GATE_PASS_FAMILY = {
+    "passed": "passed",
+    "passed-with-skips": "passed",
+    "checks-passed": "checks-passed",
+}
+
+# CR-CRU-117 §S2 — what a step ladder says about a row the snapshot reported
+# NOTHING for: an empty status cell, or a tabular header with no `status`
+# column at all (`s.get("status")` is then None for every row). The mapper used
+# to answer `passed` there, manufacturing a green step — and a nine-row
+# status-free snapshot became a fully green ladder — which is the same green
+# bias `GATE_PASS_FAMILY` removed one level up, surviving one level down.
+#
+# The word is TRUE (nothing was reported), it is in neither the mapped step
+# vocabulary (`passed`/`skipped`/`failed`/`running`) nor `GATE_OUTCOMES`, so it
+# can be mistaken neither for a status the tool gave nor for a verdict on the
+# run; and it survives the wire — `handleGates` validates intent/outcome/steps-
+# is-an-array and not step statuses, and the board renders a step status as its
+# own text, so a reader sees the word rather than a blank cell.
+#
+# It applies ONLY to silence. A status the tool NAMED but this fleet does not
+# recognise stays verbatim (cycle 409's shipped ladder criterion: `pending` is
+# represented, not dropped), so this sentinel never swallows information.
+GATE_STEP_STATUS_UNKNOWN = "unknown"
+
+# §S4 — WHICH gate an exit posted, stated as a value. A seal is `final`; a run
+# whose poll loop put an in-flight ladder on the board and then HELD is
+# `interim`; the no-gate case reuses the envelope's own stated-absence word
+# (ENVELOPE_TIER_NONE — this exit did the thing zero times) rather than
+# inventing a third vocabulary.
+#
+# `interim` is the ORDINARY state of a long run since CR-CRU-117 §S2 repaired
+# the in-flight guard: every real snapshot is nine rows, so before that repair
+# only a short ladder ever posted one. The field reports what the LOOP really
+# did rather than what the sealing decision alone can see: a `none` while a
+# gate sits on the board is a machine-readable lie.
+GATE_POSTED_FINAL = "final"
+GATE_POSTED_INTERIM = "interim"
+
+# §S3 — the move a HELD caller is told to make, in the TOOL's own words:
+# `axi run --help` says an elapsed wait "is not a failed run: inspect with axi
+# status and reattach". A hold that names no next move strands its caller, and
+# naming a command the tool does not have would strand it further.
+AXI_REATTACH_HELP = "inspect with `axi status` and reattach"
+
+# CR-CRU-117 §S2 — what the HUMAN channel says when the poll loop already put
+# an in-flight ladder on the board and the run then held. `NOT SEALED` alone is
+# true and still leaves the impression the board is silent, with only the
+# machine-readable `postedGate` to correct it — and a caller reading stderr is
+# exactly the reader that never sees that field.
+GATE_ALREADY_ON_BOARD = ("an interim gate is already on the board — this exit "
+                         "posted no seal over it")
+
 # §S8 — gate-run is the AXI streaming standard; gate-report is discouraged.
 # EVERY gate-report invocation emits this warning (envelope warnings[] + stderr)
 # regardless of the POST outcome (the discouragement is a property of using
@@ -672,6 +1190,98 @@ def no_title_warning(cr):
         "detail": (f"plan filed for {cr} with no title — --title was unset; "
                    f"the plan is title-less until one is supplied"),
     }
+
+
+# ── CR-CRU-094 §S3 — the PRE-FLIGHT attribution check, for all five clients ─
+#
+# A run whose agent is bound to no cycle is stored with no cycle attribution,
+# and NOTHING backfills a stored run's cycle (`plan-backfill` backfills a
+# plan's wave). The warning therefore fires when the run STARTS, while
+# `--cycle` can still be supplied — the same voice as `no_wave_warning`/
+# `no_title_warning`: name the omission, then name the lever that fixes it.
+#
+# The binding is READ from the board (`GET /api/v2/agents?project=<key>` →
+# `boundCycleId`, absent when unbound), never inferred from the absence of a
+# local `--cycle` flag: a caller that registered bound in an EARLIER process
+# passes no flag now and has nothing missing.
+
+MISSING_CYCLE_CODE = "no-cycle"
+
+# The lookup is a courtesy on the way to the run, so it is bounded far tighter
+# than the hook-safe read timeout: a slow board must cost a test run a moment,
+# never its start.
+PREFLIGHT_TIMEOUT_S = 3
+
+
+def no_cycle_warning():
+    """Build the §S3 `no-cycle` warning for a run with no cycle attribution."""
+    return {
+        "code": MISSING_CYCLE_CODE,
+        "detail": ("this run has no cycle attribution — its agent is bound to "
+                   "no cycle and no --cycle was supplied, so the stored run "
+                   "cannot be traced to the cycle it belongs to; supply "
+                   "`--cycle <id>` now (nothing backfills a stored run's "
+                   "cycle) or leave it project-scoped deliberately"),
+    }
+
+
+def no_cycle_line():
+    """The stderr half of the §S3 warning — the shape
+    `gate_identity_skipped_line` uses to tell an operator, at the moment it
+    matters, why something did not happen."""
+    w = no_cycle_warning()
+    return f"[crucible] WARN: {w['code']} — {w['detail']}"
+
+
+def _bound_cycle_id(resp, agent_id):
+    """`(known, bound_cycle_id)` for `agent_id` in a `GET /api/v2/agents`
+    response. `known` is False whenever the board did not actually answer for
+    this agent — an error envelope, a malformed body, or an id the board does
+    not hold — because an UNANSWERED lookup is not evidence of a missing
+    binding."""
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return (False, None)
+    agents = resp.get("agents")
+    if not isinstance(agents, list):
+        return (False, None)
+    for agent in agents:
+        if isinstance(agent, dict) and agent.get("agentId") == agent_id:
+            return (True, agent.get("boundCycleId"))
+    return (False, None)
+
+
+def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
+                             context=None, stream=None):
+    """§S3 — the pre-flight attribution check every ingesting run makes BEFORE
+    it spawns its runner. Returns the envelope `warnings[]` fragment (`[]` or
+    one `{code, detail}`) and prints the same warning's stderr line, so both
+    channels are fed from ONE decision.
+
+    Best-effort and NEVER blocking, per AC5: an unreachable board, a timeout,
+    a malformed answer or ANY raised exception yields no warning and the run
+    proceeds. `get` is the calling client's own `_get` (its test harnesses
+    patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
+    """
+    try:
+        if not agent_id or not project_key:
+            return []
+        # `--cycle` supplied, or an explicit `context.cycleId`: the run WILL be
+        # attributed, so there is nothing to warn about and nothing to ask.
+        if cycle_id is not None:
+            return []
+        if isinstance(context, dict) and context.get("cycleId") is not None:
+            return []
+        resp = get(f"/api/v2/agents?project={project_key}",
+                   timeout=PREFLIGHT_TIMEOUT_S)
+        known, bound = _bound_cycle_id(resp, agent_id)
+        if not known or bound is not None:
+            return []
+        print(no_cycle_line(), file=stream if stream is not None else sys.stderr)
+        return [no_cycle_warning()]
+    except Exception:
+        # Attribution is a courtesy; a suite must never become unrunnable
+        # because it could not be computed.
+        return []
 
 
 # ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
@@ -740,9 +1350,6 @@ def gate_step_abort_warning(verb, step, detail):
     }
 
 
-NO_REPORT_DETAIL_MAX = 500
-
-
 def _last_non_empty_line(output):
     """The last line of a captured runner stream that carries anything — the
     CAUSE line of a starved run (`ModuleNotFoundError: No module named
@@ -796,12 +1403,17 @@ def no_report_warning(verb, artifact, exit_code, output, cause=None):
     is the wrong pick). A supplied cause is bounded keeping its HEAD, the
     mirror of the derived path's tail-keeping bound. `cause=None` or a
     blank/whitespace-only cause is NOT an override: it falls back to the
-    derived rule, so every existing caller is byte-identical to CR-CRU-064."""
+    derived rule, so every existing caller is byte-identical to CR-CRU-064.
+
+    CR-CRU-131 §S1 — the bound is `error_detail_chars`, resolved from the
+    PROJECT's `crucible.toml` AT THE POINT OF USE rather than from the module
+    constant `NO_REPORT_DETAIL_MAX = 500`, which no operator could reach."""
+    detail_max = resolve_limit("error_detail_chars")
     prefix = (f"{verb} produced no {artifact} — the runner exited "
               f"{exit_code} before writing a report")
     joiner = "; last output line: "
     if cause is not None and cause.strip():
-        room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+        room = detail_max - len(prefix) - len(joiner)
         if room <= 0:
             return {"code": "no-test-reports", "detail": prefix}
         fragment = cause
@@ -814,7 +1426,7 @@ def no_report_warning(verb, artifact, exit_code, output, cause=None):
                 "detail": (f"{prefix}; no runner output reached this envelope, "
                            f"so the runner's own stream is the only evidence "
                            f"left")}
-    room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+    room = detail_max - len(prefix) - len(joiner)
     if room <= 0:
         return {"code": "no-test-reports", "detail": prefix}
     if len(cause) > room:
@@ -886,7 +1498,7 @@ def cycle_transition_help(status, plan, cycle_id=None):
 # plan's stored orchestrator.
 #
 # `$WORKFLOW_ROLE` is deliberately NOT part of the chain: it carries the TRACK
-# LANE (`mainline` | `track-n`; PRD-crucible-v2.md:291, DN-model-b-language.md:53)
+# LANE (`mainline` | `track-n`; PRD-crucible-v2.md:362, DN-model-b-language.md:53)
 # and is read into `ctx["track"]` by `axi_context`/`fleet_context` — registering
 # an agent named after a lane is the same category error as `bun-crucible`,
 # merely with a tidier-looking value.
@@ -951,25 +1563,203 @@ def emit_agent_identity_hard_stop(verb, context=None):
     return 2
 
 
-def run_verb(func, args, project_key_fn=None):
-    """Fleet-uniform subcommand dispatch: run the resolved verb and convert an
-    undeclared agent identity (§S5) into the `ok:false` hard-stop envelope and a
-    non-zero exit code instead of an unhandled traceback.
+# ── CR-CRU-107 §S2 — the second hard stop: `plan-file` cannot resolve WHICH ──
+#
+# cycles to file. Same route as the identity stop above (a typed exception from
+# the shared verb, converted by `run_verb`, an `ok:false` envelope on stdout,
+# exit 2, nothing posted), so all five clients inherit it without a line of
+# per-client code. The three refusals share that shape and NOTHING else: a
+# caller who passed both flags, one who passed neither, and one whose `--cycles`
+# split to nothing each need a different next move, and one canned `help[]`
+# reused across them would name none of them (AXI principle 6).
+
+CYCLE_FLAGS_CONFLICT_CODE = "cycle-flags-conflict"
+CYCLE_SELECTION_REQUIRED_CODE = "cycle-selection-required"
+CYCLE_LIST_EMPTY_CODE = "cycle-list-empty"
+
+# CR-CRU-127 §S1/§S4/§S4a — the three refusals the kind mandate adds, kept
+# DISTINCT because each needs a different next move: declare the kinds, fix
+# the count, or stop filing through the legacy flag. One code reused across
+# them would name none of them to a caller matching on the code.
+CYCLE_KIND_REQUIRED_CODE = "cycle-kind-required"
+CYCLE_KIND_COUNT_MISMATCH_CODE = "cycle-kind-count-mismatch"
+CYCLE_LEGACY_FLAG_REFUSED_CODE = "cycle-legacy-flag-refused"
+
+# The corrected call every refusal hands back: one label per flag, so there is
+# no delimiter left to collide with the label's own punctuation (§S1). The two
+# occurrences carry DISTINCT placeholders (`<c1>`/`<c2>`, the form AC8 pins on
+# `_next_start_help`): one identical token repeated reads as a duplicated
+# argument to anyone copying it out of a refusal envelope, which is the
+# opposite of the repetition the template exists to teach.
+# CR-CRU-127 §S6 — each cycle now carries the kind declared at its own
+# position, because a template teaching a command the mandate REFUSES turns
+# contextual disclosure into a dead end. `_next_start_help` spells the same
+# form by hand and moves with this one.
+CYCLE_FLAG_TEMPLATE = ('plan-file --cr <CR-id> --title "<brief>" '
+                       '--cycle "<c1>" --cycle-kind <k1> '
+                       '--cycle "<c2>" --cycle-kind <k2> --agent <agentId>')
+
+
+def cycle_list_empty_help():
+    """§S2 — the `cycle-list-empty` remedy, shared by BOTH halves of the same
+    defect: a `--cycle` occurrence that names no cycle and a `--cycles` value
+    that splits to nothing.
+
+    CR-CRU-127 §S4a — the `--cycles` half of that pairing is gone: the legacy
+    flag is refused for filing outright, so the second step no longer offers
+    it. A remedy that taught the refused form would send the caller straight
+    into the next refusal."""
+    return [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, so a label carrying "
+            f"commas or semicolons files as ONE cycle",
+            "every --cycle carries its own --cycle-kind (red-green, verify or "
+            "fix), paired by position"]
+
+
+class CycleSelectionRefused(Exception):
+    """§S2 — raised by `plan_file_cycle_entries` when the cycle list a
+    `plan-file` call asks for cannot be resolved unambiguously.
+
+    Like `AgentIdentityRequired` it carries no fallback, because every fallback
+    here files a plan the caller did not ask for — which is the defect this CR
+    exists to end. Carries the AXI `code`, the `error` detail and the `help[]`
+    steps for THIS refusal; the caller MUST convert it into an `ok:false`
+    envelope + non-zero exit (see `run_verb` /
+    `emit_cycle_selection_hard_stop`) and issue NO POST."""
+
+    def __init__(self, code, detail, help_steps):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.help = list(help_steps)
+
+
+def emit_cycle_selection_hard_stop(verb, refusal, context=None):
+    """§S2 — emit the `ok:false` refusal envelope (stdout) plus the human error
+    line (stderr) for an unresolvable cycle list, and return the NON-ZERO exit
+    code the client's `main` must exit with (the same 2 the identity hard stop
+    returns). Nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {refusal.code} — {refusal.detail}")
+    return 2
+
+
+# ── CR-CRU-111 §S1 — the third hard stop: a tier verb with no declared run ─
+#
+# The vocabulary and the project's targets are two different facts, and
+# conflating them is what let a targeted run claim `unit` for everything. A
+# tier the vocabulary does not contain is argparse's own `invalid choice`; a
+# tier it DOES contain, registered on this client with no target declared for
+# it, is THIS refusal — it names the missing declaration rather than falling
+# back to another target, because a run that silently widened to the whole
+# suite would report a tier it did not perform.
+#
+# Same route as the two hard stops above (a typed exception, converted by
+# `run_verb`, an `ok:false` envelope on stdout, nothing run and nothing
+# posted), so all five clients inherit it without a line of per-client code.
+# The exit code is 1 rather than the 2 those two return: this is a
+# declaration the PROJECT has not made, not a malformed call the caller can
+# retype.
+
+TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
+
+
+def tier_run_undeclared_help(tier, declared, surface):
+    """§S1/§S3 — the next moves for a tier with no declared target: declare one
+    ON THIS STACK'S OWN SURFACE, or run a tier this client DOES run. The second
+    step names those tiers by reading what the client actually wired, so a
+    caller is never sent to a target that does not exist here either.
+
+    CR-CRU-111 §S3/AC6a — `surface` is the caller client's one-line naming of
+    WHERE the declaration goes (a `package.json` script, a discovery start-dir,
+    a profile in `pom.xml`, a profile in `.config/nextest.toml`, a native `make`
+    target). It is a REQUIRED argument, never a defaulted one: a refusal that
+    prints the same sentence in all five clients tells a caller the tier is
+    unwired and never where to wire it, which is a refusal that cannot be acted
+    on. The SHAPE of the sentence is fleet-wide and lives here; the surface it
+    names is that stack's own fact and is stated by that client, exactly as
+    `TierVerb.runs` already is."""
+    runnable = ", ".join(declared) if declared else "none yet"
+    return [f"declare this stack's {tier} target — {surface} — then re-run "
+            f"`{tier}`",
+            f"tier verbs this client runs today: {runnable}",
+            f"`{tier}` never falls back to another target: a run that widened "
+            f"to the whole suite would report a tier it did not perform"]
+
+
+class TierRunUndeclared(Exception):
+    """§S1 — raised by a tier verb that is REGISTERED on this client and has
+    no target declared for it, so there is nothing to run.
+
+    Like the two refusals above it carries no fallback, because every fallback
+    here runs something the caller did not ask for and reports it under the
+    tier they did. Carries the AXI `detail` and the `help[]` for this refusal;
+    `run_verb` converts it into the `ok:false` envelope and the non-zero exit,
+    and NO test is run and NO ingest is posted from this path."""
+
+    def __init__(self, tier, declared, surface):
+        self.tier = tier
+        self.declared = sorted(declared)
+        self.surface = surface
+        self.detail = (f"no {tier} target is declared for this stack, so the "
+                       f"{tier} verb has nothing to run")
+        self.help = tier_run_undeclared_help(tier, self.declared, surface)
+        super().__init__(self.detail)
+
+
+def emit_tier_run_undeclared_hard_stop(verb, refusal, context=None):
+    """§S1 — emit the `ok:false` refusal envelope (stdout) plus the human error
+    line (stderr) for a tier with no declared target, and return the NON-ZERO
+    exit code the client's `main` must exit with. Nothing is run, nothing is
+    posted from this path."""
+    emit_axi(verb or refusal.tier, False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {TIER_RUN_UNDECLARED_CODE} — {refusal.detail}")
+    return 1
+
+
+def _hard_stop_context(args, project_key_fn):
+    """The best-effort `context` a hard-stopped verb's envelope carries.
 
     `project_key_fn(args)` is the client's own `.env` key resolver (project-dir
     resolution stays client-specific per this module's scope boundary); it is
     best-effort only — a project whose key cannot be resolved still hard-stops,
-    just with a bare context."""
+    just with a bare context, because the refusal matters more than the
+    decoration."""
+    if project_key_fn is None:
+        return {}
+    try:
+        return axi_context(project_key_fn(args))
+    except Exception:
+        return {}
+
+
+def run_verb(func, args, project_key_fn=None):
+    """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
+    typed hard stop — an undeclared agent identity (§S5), an unresolvable
+    cycle list (CR-CRU-107 §S2) or a tier with no declared target
+    (CR-CRU-111 §S1) — into the `ok:false` envelope and a non-zero exit code
+    instead of an unhandled traceback.
+
+    CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
+    tier statement starts from `none` here: an invocation may never inherit
+    what an earlier one in the same process put on the board."""
+    forget_ingested_run()
     try:
         return func(args)
     except AgentIdentityRequired:
-        context = {}
-        if project_key_fn is not None:
-            try:
-                context = axi_context(project_key_fn(args))
-            except Exception:
-                context = {}
-        return emit_agent_identity_hard_stop(getattr(args, "cmd", None), context)
+        return emit_agent_identity_hard_stop(
+            getattr(args, "cmd", None), _hard_stop_context(args, project_key_fn))
+    except CycleSelectionRefused as refusal:
+        return emit_cycle_selection_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn))
+    except TierRunUndeclared as refusal:
+        return emit_tier_run_undeclared_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn))
 
 
 def fleet_context(cr=None):
@@ -1010,21 +1800,71 @@ def parse_steps_flag(steps_raw):
 
 
 def map_axi_step_status(status):
-    """Map a no-mistakes axi step status onto a gate step status."""
+    """Map a no-mistakes axi step status onto a gate step status.
+
+    CR-CRU-117 §S2 — three cases, and the middle one is the whole point. A
+    status the table NAMES maps to its gate equivalent. A status the tool
+    stated but this table does not name (`pending` above all, plus
+    `awaiting_approval`/`fixing`) is INFORMATION and survives verbatim. A
+    status the snapshot never stated at all — empty, blank, or absent because
+    the tabular header carried no `status` column — is SILENCE, and is
+    reported as `GATE_STEP_STATUS_UNKNOWN` rather than manufactured into a
+    verdict. `completed` is the only input that earns `passed`."""
+    if not isinstance(status, str) or not status.strip():
+        return GATE_STEP_STATUS_UNKNOWN
     return {
         "completed": "passed",
         "skipped": "skipped",
         "failed": "failed",
         "running": "running",
-    }.get(status, status or "passed")
+    }.get(status, status)
+
+
+def sealed_outcome(raw, any_failed):
+    """§S3 — resolve a SEALING gate's outcome, or None when the run reached no
+    terminus this client understands.
+
+    Two termini, and nothing else counts as one. A FAILED step is a resolved
+    fact in its own right, so it seals `failed` whether or not the snapshot
+    carries a top-level outcome — the defect being fixed is the green bias, not
+    verdicts derived from steps. Otherwise the verdict is the run's OWN
+    resolved outcome, mapped through the named `GATE_PASS_FAMILY` or taken
+    verbatim when it is already one the server accepts.
+
+    Everything left over answers None: no outcome at all (a bounded `--wait`
+    elapsed while the run was still going), or an outcome in no family the
+    fleet knows. A value nobody understands must not become green, and the
+    absence of a failure is not a verdict."""
+    if isinstance(raw, str) and raw:
+        mapped = GATE_PASS_FAMILY.get(raw)
+        if mapped:
+            return mapped
+        if raw in GATE_OUTCOMES:
+            return raw
+    return "failed" if any_failed else None
 
 
 def gate_from_axi(decoded, intent, final):
     """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
 
     An in-flight snapshot (`final=False`) synthesises a valid interim outcome
-    from its steps; the sealing snapshot (`final=True`) takes the run's own
-    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
+    from its steps; the sealing snapshot (`final=True`) resolves the run's own
+    terminus through `sealed_outcome`. Returns (gate_dict, step_count).
+
+    CR-CRU-117 §S1 — an in-flight gate carries `inFlight: true` INSIDE the gate
+    object, and a seal carries no such key at all. Every gate must name one of
+    the server's four outcomes, so an unfinished ladder necessarily reaches the
+    board as `checks-passed` — a value BOTH readers (`workflowLens`'s gated
+    waves, `boundaryGate`'s primary zone) treat as a verdict. The mark is what
+    they exclude on, and it is explicit data on the event rather than a
+    heuristic like "fewer than nine steps" or "has no push.commit", both of
+    which this very defect proved unreliable.
+
+    §S3 — a sealing gate whose run reached NO terminus carries no `outcome` key
+    at all: there is no honest value to put there, and its absence is the one
+    fact the caller branches on before posting. Returning a gate rather than
+    raising keeps the step ladder (the evidence of WHERE the run stopped)
+    available to a caller that must report the hold."""
     run = decoded.get("run") if isinstance(decoded, dict) else None
     run = run or {}
     axi_steps = run.get("steps") or []
@@ -1036,11 +1876,15 @@ def gate_from_axi(decoded, intent, final):
             any_failed = True
         steps.append({"name": s.get("step"), "status": map_axi_step_status(st)})
     if final:
-        raw = decoded.get("outcome")
-        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
+        outcome = sealed_outcome(decoded.get("outcome"), any_failed)
     else:
         outcome = "failed" if any_failed else "checks-passed"
-    gate = {"intent": intent, "outcome": outcome, "steps": steps}
+    gate = {"intent": intent}
+    if outcome:
+        gate["outcome"] = outcome
+    gate["steps"] = steps
+    if not final:
+        gate["inFlight"] = True
     head = run.get("head")
     if final and head:
         gate["push"] = {"commit": head}
@@ -1103,7 +1947,7 @@ class ClientOps:
 def cmd_status(args, project_dir, ops):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    `lastRunCr`."""
+    `lastClosedCr` — the `cr` of the plan with the latest `closedAt`."""
     resp = ops.get(ops.plans_path(project_dir))
     if not resp.get("ok"):
         # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
@@ -1117,7 +1961,7 @@ def cmd_status(args, project_dir, ops):
                   f"{resp.get('error')}")
         legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
         ops.emit("status", True,
-                 {"plans": [], "lastRunCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0,
                   "help": [f"check the Crucible server is running / reachable "
                            f"at {ops.base_url}"]},
                  ops.context(project_dir),
@@ -1126,7 +1970,7 @@ def cmd_status(args, project_dir, ops):
         return 0
     plans = resp.get("plans", [])
     full_rows = build_status_rows(plans)
-    last = last_run_cr(plans)
+    last = last_closed_cr(plans)
     # §S10 — the DEFAULT projection is the minimal base column set
     # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
     # to that base, never replaces it.
@@ -1139,16 +1983,822 @@ def cmd_status(args, project_dir, ops):
     if not rows:
         legacy = "status: ok=True — no plans filed for this project"
         ops.emit("status", True,
-                 {"plans": [], "lastRunCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0,
                   "help": HELP_STEPS["status"]},
                  ops.context(project_dir), [], legacy)
         return 0
-    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    legacy = f"status: ok=True plans={len(rows)} lastClosedCr={last}"
     ops.emit("status", True,
-             {"plans": rows, "lastRunCr": last, "count": count,
+             {"plans": rows, "lastClosedCr": last, "count": count,
               "help": HELP_STEPS["status"]},
              ops.context(project_dir), [], legacy)
     return 0
+
+
+# ── CR-CRU-081 §S2 — the `queue` READ verb (the landing-record sources) ─────
+
+# CR-CRU-129 §S3 — the record type the landing read ASKS FOR. It is the whole
+# request: the milestone collection is queried by type, so there is no feed
+# depth beside it and nothing to size. The scan depth this replaces was DELETED
+# rather than raised, because a bounded window over unbounded content loses
+# records silently as the telemetry grows — whatever the bound.
+MERGED_MILESTONE_TYPE = "cr-merged"
+
+
+def build_queue_rows(entries):
+    """CR-CRU-081 §S2 (PURE) — the project's registered CR queue as
+    uniform-table-safe rows: one dict per entry with the SAME scalar-only
+    key-set, so the list round-trips as a TOON Construct-3 table (the same
+    rule `build_status_rows` follows). `planId` is null when the queue entry
+    has no plan at all — which IS the fact the release ceremony needs."""
+    return [{"cr": e.get("cr"), "wave": e.get("wave"),
+             "status": e.get("status"), "planId": e.get("planId")}
+            for e in entries or []]
+
+
+def cr_merged_crs(records):
+    """CR-CRU-081 §S2 (PURE) — the CR ids carrying a `cr-merged` milestone: the
+    project's SECOND landing source, beside the closed plan record. A CR absent
+    from BOTH has no landing record at any source, which is exactly the class
+    the release ceremony must name rather than drop in silence.
+
+    CR-CRU-129 §S3 — the argument is the answer to a TYPE-SCOPED query, no
+    longer a slice of the whole event feed, so nothing is filtered here that
+    the request already said. In particular NO `kind` is required of a row: a
+    collection addressed by type has already answered "which kind", and a
+    consumer that still demanded one would read a complete answer as an empty
+    set — silently, which is the failure class this CR exists to remove."""
+    return sorted({r.get("label") for r in records or []
+                   if r.get("type") == MERGED_MILESTONE_TYPE and r.get("label")})
+
+
+def cmd_queue(args, project_dir, ops):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the two DB-side
+    landing sources the release ceremony's provenance needs, in ONE read — the
+    registered CR queue (GET …/queue) and the CR ids a `cr-merged` milestone
+    covers (GET …/milestones?type=cr-merged). A pure carrier: every set
+    operation over these ids stays in the ceremony, which is the only actor
+    that also has git.
+
+    CR-CRU-129 §S3 — the second source is a QUERY, not a scan. It names the
+    record type it wants and sends no window with it, so the ids it publishes
+    cannot shrink as the project's telemetry grows: the answer is every
+    `cr-merged` record the project holds, decided server-side by the one
+    surface that can see them all.
+
+    Tolerant like `cmd_status`: an unreachable or non-ok source yields the empty
+    set plus a structured warning, never an error — a release is PUBLISHED
+    before it is reported and must never fail on its own provenance."""
+    key = ops.project_key(project_dir)
+    warnings = []
+
+    resp = ops.get(f"/api/v2/projects/{key}/queue")
+    if resp.get("ok"):
+        rows = build_queue_rows(resp.get("entries"))
+    else:
+        rows = []
+        warnings.append({
+            "code": "queue-unavailable",
+            "detail": (f"could not read the registered CR queue: "
+                       f"{resp.get('error')}"),
+        })
+
+    milestones = ops.get(f"/api/v2/projects/{key}/milestones"
+                         f"?type={MERGED_MILESTONE_TYPE}")
+    if milestones.get("ok"):
+        merged = cr_merged_crs(milestones.get("milestones"))
+    else:
+        merged = []
+        warnings.append({
+            "code": "milestones-unavailable",
+            "detail": (f"could not read the cr-merged milestones: "
+                       f"{milestones.get('error')}"),
+        })
+
+    ops.emit("queue", True,
+             {"queue": rows, "crMerged": merged, "count": len(rows),
+              "help": ["status"]},
+             ops.context(project_dir), warnings,
+             f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
+    return 0
+
+
+# ── CR-CRU-092 §S2–§S6 — `next`: the roadmap's decision oracle ─────────────
+#
+# ONE read (`GET …/queue`) in, ONE decision out: `NEXT`, `HOLD` or `DRAINED`.
+# All three are ANSWERS (§S1), so all three exit 0 — the harness's 0/2/3 split
+# is deliberately NOT adopted (the fleet's terminal-state rule,
+# `clients/STATUS-CONTRACT.md:65-68`). The only non-answer is §S3's usage
+# refusal, which exits 2.
+#
+# An ORACLE, not a scheduler (§S4): read-only, no `--agent`, no POST/PATCH,
+# and it never scans past a blocked entry to something startable — that would
+# be Crucible substituting a sequence of its own.
+#
+# §S5 is absolute, and AC11 enforces it by grep: nothing on this path opens,
+# reads, imports or shells out to the HARNESS lane-plan database or its CLI.
+# The two answers come from different datasets over different questions, and a
+# disagreement between them is a real signal, left visible. No fallback, no
+# cross-check, no merge — which is why this comment does not even name the
+# harness's files.
+
+# §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
+# (`deriveQueueStatus`, src/store.ts:5801 — re-pinned 2026-09-14 from :5790,
+# shifted UP by the three lines CR-CRU-131 C2 deleted above it when the
+# environment-variable layer under `defaultRetention` and `runAbandonAfterMs`
+# was retired; re-pinned again the same day from :5787, shifted DOWN by the
+# fourteen lines CR-CRU-131 §S2 added above it — the three states
+# `ProjectPatch.retention` now distinguishes, and `updateProject` merging the
+# cap by key PRESENCE so a patch naming another field cannot wipe a cap of
+# zero). Anything else — PENDING, IN_PROGRESS — is unmerged.
+LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
+
+# §S2 — the three DRAINED reasons and the four HOLD trigger kinds, as the
+# vocabulary the DN fixes ("Reading the lane during execution"). Named here so
+# the enum is one list rather than four string literals scattered downstream.
+DRAINED_REASONS = ("wave-complete", "awaiting-assignment", "no-roadmap")
+HOLD_TRIGGER_KINDS = ("in-flight", "dead-dependency", "dependency",
+                      "unknown-dependency")
+
+_TRACK_LANE_RE = re.compile(r"\d+")
+
+
+def canonical_track(value):
+    """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
+    mirror of `normalizeTrack` (src/store.ts:381-384). The first run of digits
+    anywhere in the value, rendered as the PRD's locked wire format
+    `track-<n>`; `None` when the value names no lane.
+
+    Why a client-side copy of a server-side rule is NOT a second
+    decision-maker: CR-CRU-091 §S9 puts ARGUMENT PARSING in the client half and
+    the WRITE rule on the server. `next` writes nothing, so no round-trip
+    exists to normalise its `--track`, and a naive by-value match would refuse
+    `next --track 2` while `wave-sequence --track 2` succeeds — one flag, one
+    project, two answers. The two implementations are held to one rule by
+    assertion (AC18), not by comment."""
+    if not value:
+        return None
+    lane = _TRACK_LANE_RE.search(value)
+    return None if lane is None else f"track-{int(lane.group(0))}"
+
+
+class QueueTrackFactUnpublished(Exception):
+    """CR-CRU-108 §S2 — raised when a queue READ states no track fact.
+
+    A typed hard stop in the shape `AgentIdentityRequired` and
+    `CycleSelectionRefused` already establish: it carries the AXI `code`, the
+    `error` detail and this refusal's `help[]`, and it carries NO fallback
+    value by design. Deriving one from the entries beside it is precisely the
+    second copy of the rule CR-CRU-108 deleted, and a read that omits the fact
+    must fail LOUDLY rather than let a multi-track project read as
+    single-track — that would be `next` picking a lane design §11 forbids it
+    to pick. The caller MUST convert it into an `ok:false` envelope + non-zero
+    exit (`cmd_next`), never a raw traceback."""
+
+    def __init__(self, code, detail, help_steps):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.help = list(help_steps)
+
+
+def queue_tracks(queue):
+    """§S2/AC4 (PURE) — the lanes the queue READ PUBLISHED, read rather than
+    re-derived: `GET …/queue` answers `{ok, entries, tracks}` and `tracks` is
+    the whole track fact (`declaredTracks`, src/store.ts — sorted, distinct,
+    non-blank, trimmed, echoed as stored).
+
+    `len() > 1` is still the whole definition of multi-track and the values
+    are still echoed to the caller unchanged. What changed is WHOSE answer it
+    is: the server owns the normalisation, so it is the one surface that may
+    say how many lanes a project declares. A client that recomputed the list
+    answered FOUR lanes where the server answered TWO — a whitespace-only
+    value and a padded duplicate — and `next` refused a queue it owed an
+    answer.
+
+    A payload carrying no `tracks` list is not "no tracks": it is a read that
+    did not state the fact, and it raises rather than degrading."""
+    tracks = (queue or {}).get("tracks")
+    if not isinstance(tracks, list):
+        raise QueueTrackFactUnpublished(
+            "queue-track-fact-unpublished",
+            "the queue read published no `tracks` list, so the project's "
+            "declared lanes are unknown — next will not guess one",
+            ["upgrade the Crucible server: GET /api/v2/projects/<key>/queue "
+             "publishes `tracks` beside `entries`",
+             "then re-run next"])
+    return list(tracks)
+
+
+def _entry_seq(entry):
+    """The DECLARED position, or None. `bool` is an `int` subclass — excluded
+    so a stray `True` can never pose as a position (the same guard
+    `echoed_cycle_id` applies)."""
+    seq = entry.get("seq")
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        return seq
+    return None
+
+
+def _is_actionable(entry):
+    """§S2 — the TWO axes. A CR is actionable iff it is `PENDING` on the
+    server-derived status axis AND carries no `lifecycle` disposition.
+
+    The second half is load-bearing: `deriveQueueStatus(projectKey, cr,
+    shipped)` cannot see `lifecycle`, by signature, so a VOID cr with no plan
+    reads `status: "PENDING"`. Keyed on `status` alone this verb would offer,
+    as the next thing to build, work whose author explicitly recorded that it
+    is not happening."""
+    return entry.get("status") == "PENDING" and "lifecycle" not in entry
+
+
+def _dead_entries(entries):
+    """The lane's declared-dead rows, as `(cr, lifecycle)`. A dead entry is not
+    blocked work — it is not work — which is why it leaves the candidate set
+    exactly as a landed one does, and why §S4's no-scanning-past rule is not
+    engaged by it."""
+    return [(e.get("cr"), e["lifecycle"]) for e in entries
+            if isinstance(e.get("lifecycle"), dict)]
+
+
+def _dead_phrase(cr, lifecycle):
+    state = lifecycle.get("state")
+    by = lifecycle.get("by")
+    return f"{cr} ({state} by {by})" if by else f"{cr} ({state})"
+
+
+def _next_start_help(entry):
+    """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1567-1588`).
+    `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
+    step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
+            f'--cycle "<c1>" --cycle-kind <k1> '
+            f'--cycle "<c2>" --cycle-kind <k2> --agent <agentId>')
+    wave = entry.get("wave")
+    if wave:
+        step += f" --wave {wave}"
+    return [step, "status"]
+
+
+def _hold_help(trigger):
+    """§S6 — the move that clears the NAMED trigger, then `next` again. Each
+    kind demands a different response, which is the whole point of splitting
+    the vocabulary rather than emitting one "blocked" state."""
+    kind = trigger["kind"]
+    if kind == "in-flight":
+        cr = trigger["cr"]
+        steps = [f"cr-close --cr {cr} --commit <sha> --agent <agentId> — "
+                 f"{cr} occupies the lane and holds everything behind it"]
+    elif kind == "dead-dependency":
+        cr, state, by = trigger["cr"], trigger["state"], trigger.get("by")
+        target = f"at {by}" if by else "off it"
+        steps = [f"re-point the dependsOn {target} in docs/changes/README.md "
+                 f"and re-run queue-file — {cr} is {state}, so waiting will "
+                 f"never clear this"]
+    elif kind == "unknown-dependency":
+        cr = trigger["cr"]
+        steps = [f"cr-plan --cr {cr} --release <v> --wave <n> "
+                 f"--title <brief> --agent <agentId> — the queue does not "
+                 f"hold {cr}"]
+    else:
+        steps = [f"cr-close --cr {row['cr']} --commit <sha> --agent <agentId>"
+                 for row in trigger["blockedBy"]]
+    steps.append("next")
+    return steps
+
+
+def _drained_help(reason, lane, next_wave=None):
+    """§S6 — `DRAINED`'s state-derived `help[]`: the move that would REFILL the
+    lane. `wave-complete` additionally names the lane's corpses, so a lane that
+    drained because its remaining work was declared dead reads as legible
+    rather than mysterious (AC16).
+
+    §S2 — on a finished wave the move that OPENS the next one carries that
+    wave's LABEL as data, taken verbatim from the published order, so the
+    caller is not left to re-derive it off the board; a wave with nothing
+    published after it keeps the placeholder, because there is no label to
+    name."""
+    sequence = ("wave-sequence --release <v> --wave <n> --crs <a,b,c> "
+                "--agent <agentId>")
+    if reason == "no-roadmap":
+        return ["release-propose --label <v> --agent <agentId>",
+                "cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
+                "--agent <agentId>",
+                sequence]
+    if reason == "awaiting-assignment":
+        return [f"{sequence} --track <n>"]
+    steps = []
+    dead = _dead_entries(lane)
+    if dead:
+        steps.append("the lane's remaining entries are declared dead: "
+                     + ", ".join(_dead_phrase(cr, lc) for cr, lc in dead))
+    steps.append("cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
+                 "--agent <agentId>")
+    opens = next_wave or "<n>"
+    steps.append(f"wave-sequence --release <v> --wave {opens} "
+                 f"--crs <a,b,c> --agent <agentId>")
+    return steps
+
+
+def _next_trigger(target, lane, entries):
+    """§S2 (PURE) — the ONE cause holding `target`, or `(None, warnings)` when
+    nothing does. Returns `(trigger, warnings)`.
+
+    Evaluated in the order the DN fixes: `in-flight` first (an occupied lane
+    holds everything behind it), then `dead-dependency` (waiting NEVER clears
+    it, so it outranks a blocker that waiting does clear), then `dependency`,
+    then `unknown-dependency`.
+
+    Occupancy is scoped to the LANE; dependency resolution is scoped to the
+    WHOLE queue, because a `dependsOn` legitimately crosses tracks."""
+    for entry in lane:
+        if entry.get("status") == "IN_PROGRESS":
+            return {"kind": "in-flight", "cr": entry.get("cr")}, []
+
+    by_cr = {e.get("cr"): e for e in entries if e.get("cr")}
+    dead, blocked_by, unknown = [], [], []
+    for dep in target.get("dependsOn") or []:
+        entry = by_cr.get(dep)
+        if entry is None:
+            unknown.append(dep)
+            continue
+        # The status axis decides LANDED first: a dep that COMPLETED did the
+        # work, whatever lifecycle note was filed over it afterwards.
+        if entry.get("status") in LANDED_STATUSES:
+            continue
+        lifecycle = entry.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            dead.append((dep, lifecycle))
+        else:
+            blocked_by.append({"cr": dep, "status": entry.get("status")})
+
+    warnings = []
+    if unknown:
+        # §12 — reported, never rejected, and it rides a STRUCTURED warning
+        # alongside whichever trigger wins.
+        warnings.append({
+            "code": "unknown-dependency",
+            "detail": (f"{target.get('cr')} declares a dependsOn the queue "
+                       f"does not hold: {', '.join(unknown)} — a roadmap "
+                       f"authored forwards reads back this way until the dep "
+                       f"is filed with cr-plan"),
+        })
+
+    if dead:
+        dep, lifecycle = dead[0]
+        trigger = {"kind": "dead-dependency", "cr": dep,
+                   "state": lifecycle.get("state")}
+        if lifecycle.get("by"):
+            trigger["by"] = lifecycle["by"]
+        return trigger, warnings
+    if blocked_by:
+        return {"kind": "dependency", "blockedBy": blocked_by}, warnings
+    if unknown:
+        return {"kind": "unknown-dependency", "cr": unknown[0]}, warnings
+    return None, warnings
+
+
+def _lane_fields(release, wave, track, entry=None):
+    """The CONTAINER an answer is ABOUT — its release when one is in scope, its
+    wave, and its track only when the project declares more than one lane.
+
+    A reader can then tell WHICH container an answer covers instead of
+    inferring it from the cr that came back, which a HOLD or a DRAINED does not
+    even name.
+
+    `entry` is the answer's own row where it has one. An explicit `--release`
+    IS the scope; with no flag a row's own declared release still rides its
+    answer verbatim, and a row declaring none carries none — never a
+    neighbour's.
+
+    The track is the RESOLVED lane rather than the row's stored value: one
+    declared lane is no lane to choose between, and echoing a stored track
+    there would tell a reader a lane was resolved when none was."""
+    fields = {}
+    declared = release or (entry.get("release") if entry else None)
+    if declared:
+        fields["release"] = declared
+    if wave:
+        fields["wave"] = wave
+    if track:
+        fields["track"] = track
+    return fields
+
+
+def _announced_fields(fields, announced):
+    """§S2 — the boundary statement, carried ALONGSIDE the decision on every
+    answer: the crossing is a fact about the resolved WAVE, not about which
+    decision that wave produced.
+
+    It is ABSENT rather than empty or null when there is nothing to announce,
+    so a reader tells "no crossing" from "a crossing of an unnamed wave" by key
+    presence alone, and an expired announcement leaves no residue behind."""
+    if announced:
+        fields["waveCompleted"] = announced
+    return fields
+
+
+def _next_answer(entry, lane_fields, announced=None):
+    """§S2/AC14 — `NEXT`'s result fields. Every declared value is CONSUMED
+    verbatim and an undeclared `release` is OMITTED, never defaulted, never
+    index-derived. The container rides every answer through `_lane_fields`, so
+    one rule spells it for all three decisions."""
+    fields = {"decision": "NEXT", "cr": entry.get("cr")}
+    seq = _entry_seq(entry)
+    if seq is not None:
+        fields["seq"] = seq
+    fields.update(lane_fields)
+    _announced_fields(fields, announced)
+    fields["help"] = _next_start_help(entry)
+    return fields
+
+
+def _drained_answer(reason, rows, lane_fields, announced=None,
+                    next_wave=None):
+    """§S2 — the empty answer, and the container it is empty FOR. `rows` is the
+    set the reason is a claim about: the WAVE when the wave itself finished,
+    the lane when only the lane did — which is what `help[]` reads to name the
+    corpses that emptied it."""
+    fields = {"decision": "DRAINED", "reason": reason}
+    fields.update(lane_fields)
+    _announced_fields(fields, announced)
+    fields["help"] = _drained_help(reason, rows, next_wave)
+    return fields
+
+
+def _wave_of_the_lane(scope, wave):
+    """§S2 (PURE) — the ONE wave an answer is about.
+
+    An explicit `--wave` IS the answer. Otherwise it is the wave the first
+    ACTIONABLE row declares, taken in the order the server PUBLISHED and never
+    re-derived from the `seq` value; with nothing actionable anywhere, the last
+    wave published. One pass, because the answer is the first row that
+    qualifies and the fallback is the last row seen.
+
+    A row whose `wave` is the empty string is in NO wave and resolves none —
+    the row the write-side scope guard skips when it derives the wave it
+    permits. A reader that adopted it would offer work the server refuses."""
+    if wave is not None:
+        return wave
+    published = None
+    for entry in scope:
+        declared = entry.get("wave")
+        if not declared:
+            continue
+        if _is_actionable(entry):
+            return declared
+        published = declared
+    return published
+
+
+def _previous_published_wave(scope, wave):
+    """§S2 (PURE) — the PREDECESSOR: the previous DISTINCT wave label in the
+    order the server PUBLISHED, or `None` when the resolved wave is the
+    earliest published and has crossed nothing.
+
+    Waves are strings on the wire, so the label standing immediately before the
+    resolved wave's FIRST row is taken verbatim — never parsed as a number,
+    never sorted, never re-derived from the `seq` value, which is the same
+    published-order rule `_wave_of_the_lane` reads the resolved wave by. Every
+    label before that first row differs from the resolved one by construction,
+    so the nearest of them IS the previous distinct label.
+
+    A row whose `wave` is the empty string is in NO wave and can be neither a
+    predecessor nor a step towards one — skipped exactly as the resolution
+    skips it."""
+    if wave is None:
+        return None
+    previous = None
+    for entry in scope:
+        declared = entry.get("wave")
+        if not declared:
+            continue
+        if declared == wave:
+            return previous
+        previous = declared
+    return None
+
+
+def _next_published_wave(scope, wave):
+    """§S2 (PURE) — the wave the lane moves INTO once this one is finished: the
+    next distinct label published after the resolved wave's rows, or `None`
+    when nothing follows it. Read the same verbatim way as the predecessor, so
+    a zero-padded or non-numeric label is reachable without a case of its
+    own."""
+    if wave is None:
+        return None
+    reached = False
+    for entry in scope:
+        declared = entry.get("wave")
+        if not declared:
+            continue
+        if declared == wave:
+            reached = True
+        elif reached:
+            return declared
+    return None
+
+
+def _boundary_announcement(scope, container, wave):
+    """§S2 (PURE) — the predecessor wave this read PROVES has completed, or
+    `None` when there is nothing to announce.
+
+    The crossing has just happened when the predecessor holds no actionable
+    entry left — a landed CR and a declared-dead one are both finished for this
+    predicate, which `_is_actionable` already spells — AND the resolved wave
+    has landed nothing yet. It therefore EXPIRES by itself the moment the new
+    wave's first cr merges, and needs no state on either side.
+
+    A resolved wave nothing precedes announces nothing: "the predecessor
+    completed" is a claim about a predecessor that EXISTS, and a container that
+    selects no row has no first row to stand behind.
+
+    THE STATEMENT IS SCOPED TO THE CONTAINER ASKED ABOUT, deliberately (ruled
+    at cycle 401). Both the predecessor and its completeness are read over
+    `scope` — the caller's release narrowing — so a release-scoped question is
+    answered about that release and NOTHING else: the answer announces that the
+    predecessor completed within it even while that wave still holds an
+    actionable entry declaring no release. That is the same narrowing
+    membership already gets, and the envelope names the release beside the
+    statement; the unscoped reading would report on work the caller explicitly
+    excluded."""
+    predecessor = _previous_published_wave(scope, wave)
+    if predecessor is None:
+        return None
+    if any(_is_actionable(e) for e in scope
+           if e.get("wave") == predecessor):
+        return None
+    if any(e.get("status") in LANDED_STATUSES for e in container):
+        return None
+    return predecessor
+
+
+def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
+    """§S2/§S3 (PURE) — the decision resolver: the lane's declared sequence
+    plus live state in, exactly one decision out.
+
+    A lane is three dimensions and each does its own job. `release` and `wave`
+    are CONTAINERS, matched VERBATIM against the entry's own strings: nothing
+    is coerced on the way in, so `6` and `06` are two waves and `0.2.0` and
+    `v0.2.0` two releases. Membership is declared, never inferred, so a row
+    with no release is in none. `track` is SCHEDULING — which cr comes next,
+    in what order — and keeps `canonical_track`'s digit rule, a mirror of the
+    server's own write rule.
+
+    The wave predicate therefore reads `wave` and NOTHING else: a wave is a
+    container of CRs, so a track-filtered set can never answer whether one is
+    finished — not as a filter, not as a union of per-track slices, not as a
+    special case for one lane or many. A lane holding no actionable cr inside
+    a wave that still holds some is `awaiting-assignment`; `wave-complete` is
+    reserved for the wave itself, independent of how many tracks it was
+    scheduled across.
+
+    `tracks` is the list the queue read PUBLISHED (CR-CRU-108 §S2), handed in
+    rather than derived here: the refusal names the SERVER's lanes or it names
+    none. There is deliberately no default answer — `None` means no read
+    stated the fact, and that raises `QueueTrackFactUnpublished` rather than
+    resolving over a lane set nobody published.
+
+    Returns `(ok, code, fields, warnings)` — a tuple, like the module's
+    existing `resolve_single_plan`. `code` is the process exit code, so the
+    three DECISIONS (all answers, all `0`) and §S3's usage refusal (`2`) come
+    out of one function rather than being re-derived by the caller."""
+    if tracks is None:
+        raise QueueTrackFactUnpublished(
+            "queue-track-fact-unpublished",
+            "the decision was asked for without the `tracks` list the queue "
+            "read publishes, so the project's declared lanes are unknown — "
+            "next will not guess one",
+            ["pass the `tracks` the queue read published"])
+    entries = list(entries or [])
+    tracks = list(tracks)
+    wanted = canonical_track(track)
+
+    # §S3 — track scoping is required only when the DATA justifies it. With one
+    # track or none the flag is never prompted for and `tracks` never rides the
+    # envelope; with more than one the verb refuses to guess and names the live
+    # lanes. It never picks a lane.
+    if len(tracks) > 1 and (
+            wanted is None
+            or wanted not in {canonical_track(t) for t in tracks}):
+        return (False, EXIT_USAGE,
+                {"needs": ["track"], "tracks": tracks,
+                 "totalCount": len(tracks),
+                 "help": [f"next --track <n> — the live lanes are "
+                          f"{', '.join(tracks)}"]},
+                [])
+
+    # The CONTAINER, resolved BEFORE any lane is chosen and never from the
+    # lane: the release scope narrows to DECLARED membership, and the wave
+    # follows from that scope's own `wave` values alone.
+    scope = entries if release is None else [
+        e for e in entries if e.get("release") == release]
+    resolved_wave = _wave_of_the_lane(scope, wave)
+    container = scope if resolved_wave is None else [
+        e for e in scope if e.get("wave") == resolved_wave]
+
+    # CR-CRU-095 §S1 — the lane is consumed in the order the server PUBLISHED
+    # (the canonical key lives in `listQueue`); a reader re-sorting it by the
+    # seq VALUE is what CR-091 AC18 outlawed.
+    lane = container if wanted is None else [
+        e for e in container if canonical_track(e.get("track")) == wanted]
+    resolved_track = wanted if len(tracks) > 1 else None
+    lane_fields = _lane_fields(release, resolved_wave, resolved_track)
+    # §S2 — the boundary this ONE read already proves, resolved before any
+    # decision so the same statement rides whichever answer the lane produces.
+    announced = _boundary_announcement(scope, container, resolved_wave)
+
+    warnings = []
+    unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]
+    if unpositioned:
+        # CR-CRU-091 §S2 — the roadmap publishes `seq` on EVERY entry, so an
+        # entry without one is a defect to surface, not a hole to fill with a
+        # position. THE DETAIL NAMES NO CR (CR-CRU-097 AC3a): this module is
+        # SHARED, so all five clients emit this string on any project's
+        # board, and it states the contract it checks rather than the id of
+        # the CR that wrote it. The lineage stays here.
+        warnings.append({
+            "code": "missing-seq",
+            "detail": (f"the queue published no seq for "
+                       f"{', '.join(unpositioned)} — the roadmap declares "
+                       f"one on every entry, so this is a roadmap defect; "
+                       f"re-run wave-sequence for its wave"),
+        })
+
+    if not entries:
+        return (True, 0,
+                _drained_answer("no-roadmap", lane, lane_fields, announced),
+                warnings)
+    if not container:
+        # The declared container holds no row at all, so nothing is SCHEDULED
+        # here — which is not the claim that a wave finished.
+        return (True, 0,
+                _drained_answer("awaiting-assignment", lane, lane_fields,
+                                announced),
+                warnings)
+
+    if not [e for e in container if _is_actionable(e)]:
+        # A MEMBERSHIP claim, read off the container and nothing else, so it
+        # is the same claim from every lane and from no lane at all. The wave
+        # is finished, so its help[] names the wave the lane moves into.
+        return (True, 0,
+                _drained_answer("wave-complete", container, lane_fields,
+                                announced,
+                                _next_published_wave(scope, resolved_wave)),
+                warnings)
+
+    actionable = [e for e in lane if _is_actionable(e)]
+    if not actionable:
+        # The wave still holds actionable work — a sibling lane's, or work
+        # this lane was never scheduled — so this answer makes no claim about
+        # the wave.
+        return (True, 0,
+                _drained_answer("awaiting-assignment", lane, lane_fields,
+                                announced),
+                warnings)
+
+    target = actionable[0]
+    target_fields = _lane_fields(release, resolved_wave, resolved_track,
+                                 target)
+    trigger, trigger_warnings = _next_trigger(target, lane, entries)
+    warnings.extend(trigger_warnings)
+    if trigger is None:
+        return (True, 0, _next_answer(target, target_fields, announced),
+                warnings)
+
+    fields = {"decision": "HOLD", "cr": target.get("cr")}
+    seq = _entry_seq(target)
+    if seq is not None:
+        fields["seq"] = seq
+    fields.update(target_fields)
+    _announced_fields(fields, announced)
+    fields["trigger"] = trigger
+    fields["help"] = _hold_help(trigger)
+    return (True, 0, fields, warnings)
+
+
+def _next_legacy_line(ok, fields):
+    """The human line (stderr only) — one sentence per outcome, never the
+    envelope in prose.
+
+    Every decision STATES its wave. This is the channel an orchestrator reads
+    when it is not parsing the envelope, and a line that names no container is
+    how a wave boundary gets crossed silently."""
+    if not ok:
+        return (f"next: ok=False needs=track — {len(fields['tracks'])} live "
+                f"track(s): {', '.join(fields['tracks'])}")
+    decision = fields["decision"]
+    wave = f" wave={fields['wave']}" if fields.get("wave") else ""
+    if decision == "NEXT":
+        return (f"next: decision=NEXT cr={fields['cr']} "
+                f"seq={fields.get('seq')}{wave}")
+    if decision == "HOLD":
+        return (f"next: decision=HOLD cr={fields['cr']} "
+                f"trigger={fields['trigger']['kind']}{wave}")
+    return f"next: decision=DRAINED reason={fields['reason']}{wave}"
+
+
+def next_context(context, ok, track):
+    """§S6 P7 — this verb's `context` block: the lane the answer is ABOUT.
+
+    `axi_context` fills `track` from `$WORKFLOW_ROLE`, which is the lane the
+    session DECLARED. When `--track` scoped the answer, that flag —
+    canonicalised, so one rule spells the lane on the read side too (AC18) —
+    IS the resolved lane, and it overrides the declaration: an answer about
+    track-2 emitted from a session that declared track-1 must not stamp itself
+    track-1, or an agent reading `context.track` is misled by its own
+    envelope.
+
+    Nothing is overridden when nothing was resolved. A bare invocation scoped
+    no lane — the answer covers the queue as published — and §S3's refusal
+    scoped none BY DEFINITION, because refusing is precisely not picking a
+    lane. In both the declaration stands as the only track fact available.
+
+    Adjusts the block `ops.context` built FRESH for this call and hands it
+    back, so the change is scoped to `next`: `emit_axi` is untouched and no
+    other verb's context moves."""
+    resolved = canonical_track(track) if ok else None
+    if resolved:
+        context["track"] = resolved
+    return context
+
+
+def next_projection(ok, fields, args):
+    """§S6 P2 (C2) — `--fields` NARROWS the one decision, through the SAME
+    `select_row_fields` a roadmap row is narrowed by, so one flag means one
+    thing across the fleet.
+
+    A projection narrows a RECORD, and `ok=False` carries none: §S3's refusal
+    is scaffolding — `needs`, the live `tracks[]`, its `totalCount` and the
+    state-derived `help[]` — so narrowing THAT to a decision key empties the
+    body outright and hands an agent that habitually passes `--fields` a
+    refusal naming no reason, no candidate lane and no next step, defeating
+    P4, P9 and §S3's whole point. The exemption is therefore STRUCTURAL — it
+    keys on the ABSENCE of a record, never on the flag's value — exactly as
+    `emit_cr_plan_ask` narrows only its `releases` rows and leaves
+    `needs`/`totalCount`/`help` whole, and as `roadmap_scalar_list` leaves a
+    list of bare ids alone because a scalar has no columns to narrow.
+
+    The default (no flag) is the WHOLE decision: there is no truncation to
+    defeat on a single-record answer, which is exactly why P3's `--full` is
+    absent by shape rather than added as a no-op. The transport-failure
+    envelope never arrives here at all — `cmd_next` emits and returns before
+    the resolver runs — matching `roadmap_failure_fields`, which `--fields`
+    also leaves alone."""
+    if not ok:
+        return fields
+    return select_row_fields([fields], getattr(args, "fields", None))[0]
+
+
+def cmd_next(args, project_dir, ops):
+    """§S2/§S6 — the `next` READ verb (no `--agent`, §S4): one
+    `GET …/queue`, one decision, one envelope.
+
+    The read failure is NOT tolerantly degraded the way `cmd_status`/`cmd_queue`
+    degrade theirs: an unreadable roadmap and an empty one are DIFFERENT FACTS
+    (AC13), so a failed read exits 1 with no `decision` key rather than
+    reporting `DRAINED` and walking the orchestrator past a lane it never
+    actually read."""
+    key = ops.project_key(project_dir)
+    resp = ops.get(f"/api/v2/projects/{key}/queue")
+    if not resp.get("ok"):
+        error = resp.get("error")
+        ops.emit("next", False,
+                 {"help": [f"check the Crucible server is running / reachable "
+                           f"at {ops.base_url}, then re-run next"]},
+                 ops.context(project_dir),
+                 [{"code": "queue-unavailable",
+                   "detail": (f"could not read the registered CR queue: "
+                              f"{error}")}],
+                 f"next: ok=False — the roadmap could not be read: {error}")
+        return 1
+
+    track = getattr(args, "track", None)
+    try:
+        tracks = queue_tracks(resp)
+    except QueueTrackFactUnpublished as refusal:
+        # The SAME shape the failed read above emits, for the same reason: a
+        # read that never stated the track fact is a read this verb cannot act
+        # on, and answering anyway would pick a lane out of a set nobody
+        # published.
+        ops.emit("next", False,
+                 {"error": refusal.detail, "help": refusal.help},
+                 ops.context(project_dir),
+                 [{"code": refusal.code, "detail": refusal.detail}],
+                 f"next: ok=False — {refusal.detail}")
+        return 1
+    # All three dimensions ride the ONE read already made: narrowing the lane
+    # is a question about the payload in hand, never a second round-trip.
+    ok, code, fields, warnings = resolve_next(
+        resp.get("entries"), track=track, tracks=tracks,
+        release=getattr(args, "release", None),
+        wave=getattr(args, "wave", None))
+    # The legacy line reads the UNprojected decision: the human channel is not
+    # narrowed by a machine-channel projection flag.
+    ops.emit("next", ok, next_projection(ok, fields, args),
+             next_context(ops.context(project_dir), ok, track),
+             warnings, _next_legacy_line(ok, fields))
+    return code
 
 
 def status_namespace(**extra_fields):
@@ -1232,31 +2882,92 @@ def cmd_abort(args, project_dir, ops):
     return 0 if ok else 1
 
 
+def resolve_named_plan_or_emit(plan_id, cr, result_fields, project_dir, ops):
+    """CR-CRU-124 §S3 — the target of a `cycle-add --plan <id>`.
+
+    `--plan` ALONE resolves to ITSELF: the route carries the plan id in its own
+    path, so there is nothing to resolve and the plan board is NOT read at all
+    — which is the whole point, since reading it is what put the verb at the
+    mercy of an ambiguity it could not escape. With a `--cr` beside it the
+    board IS read once, because a `--plan` whose cr contradicts the `--cr`
+    given cannot be detected any other way; that contradiction is refused HERE,
+    before any POST, as appending a cycle to the wrong plan is unrecoverable
+    history.
+
+    Returns `(plan_id, cr)` for a usable target, or None with the ok:false
+    envelope already emitted."""
+    plan_id = str(plan_id)
+    if not cr:
+        return plan_id, None
+    resp = ops.get(ops.plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        ops.emit("cycle-add", False, result_fields,
+                 ops.context(project_dir, cr=cr), [], legacy)
+        return None
+    named = [p for p in resp.get("plans", [])
+             if str(p.get("planId")) == plan_id]
+    if not named:
+        legacy = (f"[crucible] ERROR: no plan {plan_id} on this board — "
+                  f"--plan names a plan that does not exist")
+        ops.emit("cycle-add", False, result_fields,
+                 ops.context(project_dir, cr=cr), [], legacy)
+        return None
+    named_cr = named[0].get("cr")
+    if named_cr != cr:
+        legacy = (f"[crucible] ERROR: plan {plan_id} belongs to cr={named_cr}, "
+                  f"not {cr} — --plan and --cr name different targets, so "
+                  f"nothing was appended")
+        ops.emit("cycle-add", False, result_fields,
+                 ops.context(project_dir, cr=cr), [], legacy)
+        return None
+    return plan_id, named_cr
+
+
 def cmd_cycle_add(args, project_dir, ops):
     """§S4 — append a cycle to a plan. Resolve the target plan exactly like
     plan-backfill (ALL plans, optional --cr), POST …/plans/<planId>/cycles with
-    ONLY the label, and let the SERVER reject a CLOSED/absent plan — never a
+    the label, and let the SERVER reject a CLOSED/absent plan — never a
     client-side pre-filter. The assigned numeric id stays machine-readable.
 
     CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
+    FIRST so the hard stop precedes any request.
+
+    CR-CRU-124 §S3 — `--plan <id>` names the target directly, skipping the
+    plans GET and all resolution (see `resolve_named_plan_or_emit`).
+
+    CR-CRU-124 §S4 — `--kind` rides the body when given. Omitted, the field is
+    left OUT of the body entirely so the server's own default (`red-green`,
+    `parseCycleInput`) applies: the client never invents a kind, and the body
+    an existing caller sends is unchanged."""
     agent_id = ops.agent_id(args)
+    named_plan = getattr(args, "plan", None)
+    kind = getattr(args, "kind", None)
     # §S15 — the next step after appending a cycle is to activate it; help[]
     # rides both the resolve-failure envelope and the success envelope.
     result_fields = {"label": args.label, "help": HELP_STEPS["cycle-add"]}
-    plan, rc = ops.resolve_plan("cycle-add", project_dir, args.cr,
-                                result_fields, open_only=False)
-    if plan is None:
-        return rc
-    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan['planId']}/cycles",
-                    {"label": args.label, "agentId": agent_id})
+    if named_plan:
+        target = resolve_named_plan_or_emit(named_plan, args.cr, result_fields,
+                                            project_dir, ops)
+        if target is None:
+            return 1
+        plan_id, cr_label = target
+    else:
+        plan, rc = ops.resolve_plan("cycle-add", project_dir, args.cr,
+                                    result_fields, open_only=False)
+        if plan is None:
+            return rc
+        plan_id, cr_label = plan["planId"], plan.get("cr")
+    body = {"label": args.label, "agentId": agent_id}
+    if kind:
+        body["kind"] = kind
+    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan_id}/cycles", body)
     ok = resp.get("ok", False)
-    cr_label = plan.get("cr")
-    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
+    legacy = (f"cycle-add: ok={ok} plan={plan_id} cr={cr_label} "
               f"label={args.label} id={resp.get('id')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     ops.emit("cycle-add", bool(ok),
-             {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
+             {"plan": plan_id, "id": resp.get("id"), "label": args.label,
               "help": HELP_STEPS["cycle-add"]},
              ops.context(project_dir, cr=cr_label), [], legacy)
     return 0 if ok else 1
@@ -1492,6 +3203,104 @@ def cmd_unregister(args, project_dir, ops, *, unregister_fn=None,
     return 0 if ok else 1
 
 
+def plan_file_cycle_entries(args):
+    """CR-CRU-107 §S1 + CR-CRU-127 §S1/§S3 — the ONE rule that resolves a
+    plan's cycles, so five clients cannot drift apart on it. Answers the body's
+    own `cycles` list: one `{label, kind}` entry per declared cycle, in the
+    order declared.
+
+    `--cycle` is repeatable: one occurrence per cycle, in the order given, and
+    the value is NEVER split — a label may carry commas, semicolons or any other
+    character, because there is no delimiter left to get wrong. `--cycle-kind`
+    is repeatable beside it and pairs BY POSITION: the Nth kind is the Nth
+    cycle's, travelling verbatim (the vocabulary is the server's, so the client
+    neither invents a kind nor vetoes one it does not recognise).
+
+    CR-CRU-127 §S4a — `--cycles`, the legacy comma-split form, no longer files.
+    With the kind mandate enforced CLIENT-SIDE ONLY (user ruling 2026-09-13) it
+    was the one door left filing kindless cycles, and pairing kinds against
+    comma-split labels would let a comma inside a label corrupt the KIND
+    pairing too — CR-CRU-078's one recorded defect turned into two.
+
+    Every refusal raises `CycleSelectionRefused` and the caller posts NOTHING.
+    The ORDER below is a contract, not an accident: the conflict is answered
+    FIRST so a caller who passed both flags is told about both (CR-CRU-107/AC4)
+    rather than only about the legacy one; a `--cycle` that names no cycle is
+    answered before any kind check, because a call naming no cycle has nothing
+    for a kind to pair with."""
+    repeated = list(getattr(args, "cycle", None) or ())
+    legacy = getattr(args, "cycles", None)
+    kinds = list(getattr(args, "cycle_kind", None) or ())
+    if repeated and legacy is not None:
+        raise CycleSelectionRefused(
+            CYCLE_FLAGS_CONFLICT_CODE,
+            "--cycle and --cycles were both given, so the cycle list this plan "
+            "asks for is ambiguous — pass one form or the other. Nothing was "
+            "posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, each with its own "
+             f"kind, filed in the order given"])
+    if legacy is not None:
+        # §S4a — the flag stays DECLARED (deleting it would replace this
+        # envelope with argparse's bare usage error, which carries no help[]),
+        # and the remedy never hands back the form just refused.
+        raise CycleSelectionRefused(
+            CYCLE_LEGACY_FLAG_REFUSED_CODE,
+            f"--cycles was given as {legacy!r}, and the legacy comma-split "
+            f"form no longer files: a filed cycle declares its kind, and a "
+            f"kind cannot be paired against labels a comma may have split. "
+            f"Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one --cycle per label, each followed by "
+             f"its own --cycle-kind (red-green, verify or fix)",
+             "a label carrying commas or semicolons now files as ONE cycle, "
+             "so nothing needs escaping"])
+    if repeated:
+        # §S2 — an occurrence that names no cycle gets the `cycle-list-empty`
+        # refusal rather than the server's bare `label is required` (which
+        # carries no help[]). The realistic trigger is an unset shell variable:
+        # --cycle "$LABEL". The emptiness TEST strips; the values that are KEPT
+        # never do — the strip below decides only whether a value is blank, and
+        # `repeated` is used untouched, so AC2's byte-for-byte pass-through
+        # still files `--cycle " a "` as the label ' a '.
+        blank = [label for label in repeated if not label.strip()]
+        if blank:
+            raise CycleSelectionRefused(
+                CYCLE_LIST_EMPTY_CODE,
+                f"--cycle was given as {blank[0]!r}, which names no cycle — "
+                f"usually an unset shell variable in --cycle \"$LABEL\". "
+                f"Nothing was posted.",
+                cycle_list_empty_help())
+    else:
+        raise CycleSelectionRefused(
+            CYCLE_SELECTION_REQUIRED_CODE,
+            "no cycle list was declared — a plan needs at least one cycle, "
+            "declared per-label with --cycle and its --cycle-kind. Nothing was "
+            "posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — repeat --cycle once per cycle, each "
+             f"with its own --cycle-kind"])
+    # CR-CRU-127 §S4 — the kind is REQUIRED, not optional-with-a-default: a
+    # client-side default IS the defect being fixed, since the route's own
+    # `red-green` default is what silently mislabelled every cycle filed here.
+    if not kinds:
+        raise CycleSelectionRefused(
+            CYCLE_KIND_REQUIRED_CODE,
+            f"{len(repeated)} cycle(s) were declared with no --cycle-kind, so "
+            f"what kind of work each one is cannot be told — the board would "
+            f"store them all as red-green. Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one --cycle-kind per --cycle "
+             f"(red-green, verify or fix), paired by position"])
+    if len(kinds) != len(repeated):
+        raise CycleSelectionRefused(
+            CYCLE_KIND_COUNT_MISMATCH_CODE,
+            f"{len(repeated)} --cycle occurrence(s) were given but "
+            f"{len(kinds)} --cycle-kind — the kinds pair with the cycles BY "
+            f"POSITION, so an unequal count would file a plan whose kinds are "
+            f"off by one. Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — repeat the --cycle/--cycle-kind PAIR "
+             f"once per cycle, in the order the cycles run"])
+    return [{"label": label, "kind": kind}
+            for label, kind in zip(repeated, kinds)]
+
+
 def cmd_plan_file(args, project_dir, ops):
     """§S4 — file a workflow plan (CR + its cycles) for this project.
 
@@ -1501,13 +3310,24 @@ def cmd_plan_file(args, project_dir, ops):
     --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are retired).
     Resolve it FIRST: the hard stop must happen before any POST."""
     agent_id = ops.agent_id(args)
-    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
-    if not labels:
-        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
-    payload = {"cr": args.cr, "agentId": agent_id,
-               "cycles": [{"label": label} for label in labels]}
+    # CR-CRU-107 §S1/§S2 — the cycle list comes from exactly one flag, and an
+    # unresolvable one raises rather than exiting on a bare string: `run_verb`
+    # converts it into the ok:false envelope, on the same seam as the identity
+    # hard stop above, and this stays BEFORE the POST for the same reason.
+    # CR-CRU-127 §S3 — each entry carries the kind declared at ITS position,
+    # composed by the same rule so the client invents no default: the kind that
+    # travels is the kind the caller declared.
+    cycles = plan_file_cycle_entries(args)
+    payload = {"cr": args.cr, "agentId": agent_id, "cycles": cycles}
     if args.title:
         payload["title"] = args.title
+    # CR-CRU-121 §S2 — the declared release rides as the body's own field, and
+    # ONLY when declared: the route branches on its PRESENCE, so a fabricated
+    # value (an empty string, a derived label) would register the CR into a
+    # release nobody named. No env fallback for the same reason.
+    release = getattr(args, "release", None)
+    if release:
+        payload["release"] = release
     wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
     warnings = []
     if wave:
@@ -1531,7 +3351,21 @@ def cmd_plan_file(args, project_dir, ops):
         # CR-CRU-054 §S2b (DN §4 finding #2) — context.cr rides the FAILURE
         # envelope too: a plan-file that could not be filed is exactly when the
         # caller needs to know which CR it was for.
-        ops.emit("plan-file", False, {"cr": args.cr},
+        #
+        # CR-CRU-116 §S3 — and so do the two fields that make the refusal
+        # ACTIONABLE. The wave scope answers `already-active` / `out-of-order`
+        # with a `help[]` naming the move that clears it, and this client is
+        # how an orchestrator files a plan; emitting only `cr` left both
+        # surviving in the legacy stderr line alone, which is the one channel
+        # a machine caller does not read. `code` rides only when the server
+        # declared one — see `server_failure_code`.
+        fields = {"cr": args.cr,
+                  "help": (server_failure_help(resp)
+                           or server_unreachable_help("plan-file", ops.base_url))}
+        refusal_code = server_failure_code(resp)
+        if refusal_code:
+            fields["code"] = refusal_code
+        ops.emit("plan-file", False, fields,
                  ops.context(project_dir, agent_id=agent_id, cr=args.cr),
                  warnings, legacy)
         return 1
@@ -1560,6 +3394,212 @@ def milestone_help(ok, mtype, base_url):
             f"milestone --type {mtype} --agent <agentId>"]
 
 
+def release_crs(raw, project_dir, ops):
+    """CR-CRU-080 §S4 (PURE-ish: one GET) — the CR ids a release actually
+    shipped, from the ceremony's comma-separated tag-range scan INTERSECTED
+    with the project's REGISTERED QUEUE.
+
+    The two halves of the answer live in different places and neither may move:
+    only the ceremony can scan a tag range (it stands in the repo, git in
+    reach), and only the project's queue says which CR ids the project ever
+    registered. The intersection therefore happens HERE, on the ceremony's own
+    side of the wire, so the server never has to run git and never has to
+    guess whether a posted id is real.
+
+    Returns `None` when nothing was scanned (no §S4 data to record at all),
+    and a possibly EMPTY list otherwise: a queue that is unregistered,
+    unreachable or simply knows none of the scanned ids yields the truthful
+    empty set, NEVER a fall back to the raw scan — a release must not claim
+    CRs the project never registered."""
+    scanned = [cr.strip() for cr in (raw or "").split(",") if cr.strip()]
+    if not scanned:
+        return None
+    resp = ops.get(f"/api/v2/projects/{ops.project_key(project_dir)}/queue")
+    queued = {entry.get("cr") for entry in (resp.get("entries") or [])} \
+        if resp.get("ok") else set()
+    return [cr for cr in dict.fromkeys(scanned) if cr in queued]
+
+
+def release_packages(raw):
+    """CR-CRU-084 §S1 — the artifacts a release DELIVERED, parsed out of the
+    ceremony's one delimited flag into one entry per artifact.
+
+    The format is `registry:name:version`, entries separated by `,` — the same
+    single-flag shape `--crs` already uses for a computed multi-value
+    provenance field, and lossless for the real coordinates:
+    `@anthill-tec/crucible-server` carries an `@` and a `/`, both ordinary
+    characters here, while no registry id, package name or SemVer version may
+    contain a `:` or a `,`, so a split can never straddle a field.
+
+    Parsed HERE rather than by a `type=` callable in five duplicated
+    subparsers — that would be exactly the drift CR-CRU-075 exists to fix — so
+    the clients carry the flag and the shared module owns its meaning.
+
+    Three states, identical to `crs`': `None` when the flag was never given
+    (the key never reaches the wire), an EMPTY list when it was given empty
+    (§S3/AC4 — "this release delivered nothing" is a recordable fact), and one
+    dict per entry otherwise, in declaration order.
+
+    A malformed entry is DROPPED — never raised, never carried. Never raised
+    because a release is published before it is reported, so its report must
+    not explode over a typo. Never carried because the route keeps only
+    entries whose three fields are all non-empty strings (src/v2.ts
+    `isPackageRef`) while the §S1 envelope echoes THIS value: carrying a
+    partial entry the wire discards would show the operator a package the
+    server never stored. The drop is instead STATED on the interactive
+    channel, the one `crs=(none registered)` already speaks on, so a mistyped
+    `--packages` is not silent; an all-malformed value still yields `[]`,
+    which on a recording remains the §S3 "declared none" fact.
+    """
+    if raw is None:
+        return None
+    entries, dropped = [], []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        registry, _, rest = entry.partition(":")
+        name, _, version = rest.rpartition(":")
+        if registry and name and version:
+            entries.append({"registry": registry, "name": name,
+                            "version": version})
+        else:
+            dropped.append(entry)
+    if dropped:
+        print(f"milestone: packages=(dropped {len(dropped)} malformed: "
+              f"{', '.join(dropped)} — each entry must spell "
+              f"registry:name:version)", file=sys.stderr)
+    return entries
+
+
+# CR-CRU-086 §S2 — the exit status a REFUSED repair leaves: not 0 (nothing was
+# recorded, so a caller must never tally it as recorded) and not 1 (nothing
+# failed either — the refusal is the correct outcome, per-release and
+# non-fatal). The ceremony reads it to say "refused" rather than "recorded".
+EXIT_REPAIR_REFUSED = 3
+
+
+def repair_refusal_reason(project_dir, ops):
+    """CR-CRU-086 §S2 (one GET) — WHY a repair's CR derivation came back empty,
+    named rather than left as a bare "skipped".
+
+    Three distinguishable states, all of them the QUEUE (the intersection's
+    right-hand side is the only half that can empty a non-empty scan):
+    UNREACHABLE (the read itself failed), holds NO CR ids at all (never
+    registered, or the roadmap was cleared — the wire cannot separate those
+    two: `GET …/queue` answers `entries: []` for both), or registered and
+    simply disjoint from what this tag range landed."""
+    resp = ops.get(f"/api/v2/projects/{ops.project_key(project_dir)}/queue")
+    if not resp.get("ok"):
+        return ("the registered CR queue is UNREACHABLE "
+                f"({resp.get('error')})")
+    if not (resp.get("entries") or []):
+        return ("the registered CR queue holds NO CR ids — it was never "
+                "registered, or the roadmap was cleared")
+    return ("the registered CR queue knows NONE of the CRs this tag range "
+            "landed")
+
+
+def repair_refusal_detail(crs, packages, project_dir, ops):
+    """CR-CRU-086 §S2 + CR-CRU-084 §S4 — WHAT a refused repair offered and why
+    none of it is derivable, named per OFFERED set (`None` = never offered).
+
+    Symmetric across the two provenance fields, because the refusal is: a
+    packages-only refusal whose detail blamed the registered CR queue would be
+    a false statement about which read came back empty — and the queue GET
+    `repair_refusal_reason` makes is not worth making when no `--crs` was
+    offered at all."""
+    clauses = []
+    if crs is not None:
+        clauses.append("the re-derived CR set came back EMPTY "
+                       f"({repair_refusal_reason(project_dir, ops)})")
+    if packages is not None:
+        clauses.append("the declared package set came back EMPTY (no entry "
+                       "spelled a registry, a name and a version)")
+    return (f"{'; '.join(clauses)}, and an empty derivation is NO ANSWER "
+            f"rather than an answer of nothing. Nothing was written; the "
+            f"stored provenance stands.")
+
+
+def refuse_repair(args, project_dir, ops, crs=None, packages=None):
+    """CR-CRU-086 §S2 — refuse ONE release's repair, loudly, having posted
+    nothing.
+
+    Silence is what made the defect destructive: the run that wiped 0.1.0
+    printed `crs=(none registered)` and then wrote the empty set over 58 good
+    CRs. So the refusal is stated on the interactive channel — named release,
+    named reason — and carried as a structured warning for a machine caller,
+    and the post never happens.
+
+    CR-CRU-084 §S4 — `crs`/`packages` are the DERIVED sets this repair
+    offered, so the reason names the ones that actually came back empty
+    instead of always speaking about `crs`."""
+    detail = repair_refusal_detail(crs, packages, project_dir, ops)
+    print(f"milestone: REFUSED to repair type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + f" — {detail}", file=sys.stderr)
+    ops.emit("milestone", True,
+             {"type": args.type, "label": args.label,
+              "commit": getattr(args, "commit", None),
+              "refused": True, "recorded": False,
+              "help": ["queue-file", "status"]},
+             ops.context(project_dir, cr=args.cr),
+             [{"code": "repair-refused", "detail": detail}], None)
+    return EXIT_REPAIR_REFUSED
+
+
+def replay_refusal_detail(label, shrink):
+    """CR-CRU-129 §S4 (PURE) — the server's REFUSAL of a lossy replay, as the
+    ceremony says it: the release, the counts either side, and every id it
+    declined to drop.
+
+    The ids are NAMED rather than counted because a count cannot be acted on —
+    the operator's next step is to restore those landings (or to say
+    `--repair-provenance` and own the correction), and neither is possible
+    from `9 CR(s)`. The same sentence is carried as the structured warning, so
+    a machine caller is never told less than a human reader."""
+    removed = shrink.get("removed") or []
+    return (f"release {label} replay REFUSED (nothing written) — it would DROP "
+            f"{len(removed)} recorded CR(s): {shrink.get('before')} CR(s) "
+            f"before, {shrink.get('after')} after; would drop: "
+            f"{', '.join(removed)}")
+
+
+def refuse_replay(args, project_dir, ops, shrink):
+    """CR-CRU-129 §S4 — report ONE release's REFUSED replay: the server wrote
+    nothing, on purpose, and said what it declined to lose.
+
+    The SAME bucket CR-CRU-086 §S2's refused repair uses (`EXIT_REPAIR_REFUSED`
+    → `release.sh`'s `REFUSED (nothing written)`), because it is the same
+    verdict: neither recorded nor failed. Mapping it to the FAILED status
+    instead is what let the 2026-09-13 run print a `recover with:` line
+    inviting the operator to re-run the very write that was refused — and, a
+    layer up, to read `4/4 recorded` over a release that had come back with 51
+    of its 60 CRs."""
+    detail = replay_refusal_detail(args.label, shrink)
+    print(f"milestone: {detail}", file=sys.stderr)
+    ops.emit("milestone", True,
+             {"type": args.type, "label": args.label,
+              "commit": getattr(args, "commit", None),
+              "refused": True, "recorded": False,
+              "shrink": shrink,
+              "help": ["status", "queue"]},
+             ops.context(project_dir, cr=args.cr),
+             [{"code": "replay-refused", "detail": detail}], None)
+    return EXIT_REPAIR_REFUSED
+
+
+def shrink_report(label, shrink):
+    """CR-CRU-086 §S3 (PURE) — a repair that REDUCED a stored `crs`, as the
+    ceremony says it: the count before, the count after, and the ids dropped.
+
+    A legitimate shrink stays possible (the measured 58→51 case, where nine
+    CRs have no landing record at any source) — it is simply never silent."""
+    return (f"milestone: {label} provenance SHRANK — "
+            f"{shrink.get('before')} CR(s) before, {shrink.get('after')} "
+            f"after; removed: {', '.join(shrink.get('removed') or [])}")
+
+
 def cmd_milestone(args, project_dir, ops):
     """POST a workflow milestone. §S4b.
 
@@ -1570,25 +3610,2012 @@ def cmd_milestone(args, project_dir, ops):
     CR-CRU-058 §S1 — the verb reached NO emitter at all: the stderr line was
     its only output, so a machine caller saw nothing on stdout. It now emits
     the fleet's standard envelope like every other write verb, in the shared
-    module, for all five clients at once."""
+    module, for all five clients at once.
+
+    CR-CRU-080 §S4 — a `release` milestone also carries its PROVENANCE:
+    `--released-at` (the tag's own commit date, epoch seconds — when the
+    release SHIPPED, as opposed to when it was recorded) and `--crs` (the CR
+    ids its tag range merged, kept only where the registered queue agrees).
+    Both are computed by the ceremony, which is the only actor that can.
+
+    CR-CRU-081 §S3 — `--repair-provenance` turns the post from a REPLAY of an
+    already-recorded release into a CORRECTION of it: the server re-derives
+    that release's `releasedAt`/`crs` from what this post carries, and changes
+    nothing else about it. Explicit and non-default: an ordinary post never
+    sets it, so a release record cannot be rewritten by accident.
+
+    CR-CRU-086 §S1/§S2/§S3 — a repair whose derivation is EMPTY never reaches
+    the wire: it is REFUSED here, per-release and non-fatally, because an
+    empty set posted as a correction erases the stored one. A repair that
+    goes through and SHRINKS a stored set says what it dropped.
+
+    CR-CRU-084 §S1/§S4 — a `release` also declares the PACKAGES it delivered,
+    parsed from `--packages` by `release_packages` and handed on unchanged.
+    The CR-086 refusal narrows accordingly: the server's repair applies
+    `crs` and `packages` INDEPENDENTLY (`repairReleaseProvenance`), so a
+    packages-only correction — §S4's real shape for 0.1.0 — has something to
+    write and must travel. Only a repair with NOTHING to write is refused."""
     context = fleet_context(cr=args.cr)
+    released_at = getattr(args, "released_at", None)
+    crs = release_crs(getattr(args, "crs", None), project_dir, ops)
+    packages = release_packages(getattr(args, "packages", None))
+    repair = bool(getattr(args, "repair_provenance", False))
+    # CR-CRU-086 §S2 + CR-CRU-084 §S4 — refuse a repair with NOTHING to write,
+    # symmetrically across the two provenance fields: at least one set was
+    # OFFERED and nothing is derivable from ANY offered set. Each set carries
+    # three states and only the middle one is a refusal input — `None` = never
+    # offered, `[]` = offered and derived nothing, non-empty = something to
+    # write. A repair that offers NEITHER set is not refused (it corrects
+    # `releasedAt` alone). A repair that offers one and derives nothing from it
+    # would otherwise post the empty set that erased 0.1.0's 58 CRs, or — once
+    # the server's `offeredNothing` declines to write it — exit 0, which
+    # `cmd_backfill_releases` tallies as a recorded release that never was.
+    offered = crs is not None or packages is not None
+    if repair and offered and not crs and not packages:
+        return refuse_repair(args, project_dir, ops, crs, packages)
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
-                              context=context or None)
+                              context=context or None,
+                              released_at=released_at, crs=crs,
+                              packages=packages, repair_provenance=repair)
     ok = resp.get("ok", False)
     # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
     # single locus for it) rather than riding the emitter's legacy channel —
     # the envelope below is an ADDITION to that line, not a replacement.
     print(f"milestone: ok={ok} type={args.type}"
           + (f" label={args.label}" if args.label else "")
+          + (f" releasedAt={released_at}" if released_at else "")
+          + (" repair=provenance" if repair else "")
+          + (f" crs={','.join(crs) if crs else '(none registered)'}"
+             if crs is not None else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
           file=sys.stderr)
+    # CR-CRU-129 §S4 — a REFUSED replay is not a failed write: the server
+    # declined it BECAUSE it would have lost provenance, and it says so in the
+    # very `shrink` object an applied repair carries. That object is the key —
+    # not `ok`, which every transport fault also clears: a not-ok answer with
+    # NO shrink is an ordinary failure and keeps the failed status, so real
+    # failures are never hidden in the refused bucket.
+    shrink = resp.get("shrink")
+    if shrink and not ok:
+        return refuse_replay(args, project_dir, ops, shrink)
+    if shrink:
+        print(shrink_report(args.label, shrink), file=sys.stderr)
     ops.emit("milestone", bool(ok),
              {"type": args.type, "label": args.label,
               "commit": getattr(args, "commit", None),
+              **({"releasedAt": released_at} if released_at else {}),
+              **({"crs": crs} if crs is not None else {}),
+              **({"packages": packages} if packages is not None else {}),
+              **({"shrink": shrink} if shrink else {}),
               "help": milestone_help(bool(ok), args.type, ops.base_url)},
              ops.context(project_dir, cr=args.cr), [], None)
     return 0 if ok else 1
+
+
+# ── CR-CRU-014 §S2 — the `queue-file` client verb ───────────────────────────
+
+class QueueParseError(ValueError):
+    """A queue-table row could not be parsed. Carries a message NAMING the
+    offending CR so the loud failure is actionable (§S2 Risk: the API is the
+    contract, the parser is a convenience — it must fail loudly, never
+    silently mis-register)."""
+
+
+# A queue-table data row opens with a Markdown link cell `[CR-XXX-NNN](…)`.
+_QUEUE_ROW_RE = re.compile(r"^\|\s*\[([A-Za-z]+-[A-Za-z]+-\d+)\]\([^)]*\)\s*\|")
+
+
+def _split_md_row(line):
+    """Split a Markdown table row into stripped cell strings."""
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _find_col(header_cells, *keywords):
+    """Index of the first header cell whose lowercased text contains any of
+    `keywords`; None when absent."""
+    for i, cell in enumerate(header_cells):
+        low = cell.lower()
+        if any(k in low for k in keywords):
+            return i
+    return None
+
+
+def parse_queue_table(text):
+    """Parse a `docs/changes/README.md`-style queue table into §S1 entries.
+
+    Returns a list of `{cr, title, wave, dependsOn}` dicts, one per CR row, in
+    file order. `cr` is the full link id; `title` the Title cell; `wave` the
+    LEADING integer of the Wave cell (cells read like `4 (after 011)`);
+    `dependsOn` the comma list of the Depends-on cell, each bare number
+    normalized to a full CR id from THIS row's namespace (`007` → `CR-CRU-007`)
+    so the server's `unknownDependencies` join matches the `cr` set.
+
+    Raises QueueParseError (naming the CR) for a row whose column count differs
+    from the header's or whose Wave cell has no leading integer."""
+    header = None
+    idx = {}
+    entries = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        # separator row (|---|---|): skip
+        if set(stripped) <= set("|-: "):
+            continue
+        cells = _split_md_row(stripped)
+        if header is None:
+            low = [c.lower() for c in cells]
+            if "wave" in low and any(c == "cr" or c.startswith("cr ") for c in low):
+                header = cells
+                idx = {
+                    "cr": _find_col(cells, "cr"),
+                    "title": _find_col(cells, "title"),
+                    "depends": _find_col(cells, "depend"),
+                    "wave": _find_col(cells, "wave"),
+                }
+            continue
+        m = _QUEUE_ROW_RE.match(line)
+        if not m:
+            continue
+        cr = m.group(1)
+        if len(cells) != len(header):
+            raise QueueParseError(
+                f"malformed queue row for {cr}: expected {len(header)} columns, "
+                f"got {len(cells)} ({stripped!r})")
+        wave_cell = cells[idx["wave"]]
+        wave_m = re.match(r"\s*(\d+)", wave_cell)
+        if wave_m is None:
+            raise QueueParseError(
+                f"malformed queue row for {cr}: Wave cell has no leading integer "
+                f"({wave_cell!r})")
+        wave = wave_m.group(1)
+        title = cells[idx["title"]]
+        depends_cell = cells[idx["depends"]]
+        prefix_m = re.match(r"(.*-)\d+$", cr)
+        prefix = prefix_m.group(1) if prefix_m else ""
+        deps = []
+        if depends_cell and depends_cell != "—":
+            for tok in depends_cell.split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                deps.append(prefix + tok if re.fullmatch(r"\d+", tok) else tok)
+        entries.append({"cr": cr, "title": title, "wave": wave, "dependsOn": deps})
+    return entries
+
+
+def cmd_queue_file(args, project_dir, ops):
+    """§S2 — parse the project's `docs/changes/README.md` queue table (or the
+    `--from-file` override) and POST the WHOLE set once to the §S1 full-replace
+    endpoint `/api/v2/projects/<key>/queue`. A malformed row fails LOUDLY
+    (non-zero exit, nothing POSTed)."""
+    from_file = getattr(args, "from_file", None)
+    path = from_file or os.path.join(project_dir, "docs", "changes", "README.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        msg = f"could not read queue file {path}: {e}"
+        print(f"[crucible] ERROR: {msg}", file=sys.stderr)
+        # CR-CRU-075 §S1/AC2 — AXI principle 6: an ok:false envelope carries the
+        # next step for THIS failure. Nothing was read, so the step is the
+        # source itself: the path tried, and the flag that overrides it.
+        ops.emit("queue-file", False,
+                 {"error": msg,
+                  "help": [f"create the queue table at {path}, or read it from "
+                           f"elsewhere: queue-file --from-file <path>"]},
+                 ops.context(project_dir),
+                 [], f"queue-file: ok=False error={msg}")
+        return 1
+    try:
+        entries = parse_queue_table(text)
+    except QueueParseError as e:
+        print(f"[crucible] ERROR: {e}", file=sys.stderr)
+        # CR-CRU-075 §S1/AC2 — the parse named the offending CR in `error`;
+        # the step is that row. Nothing was POSTed, so re-running after the fix
+        # registers the whole set (the endpoint is a full replace).
+        ops.emit("queue-file", False,
+                 {"error": str(e),
+                  "help": [f"fix the row this error names in {path} — a row "
+                           f"carries the header's column count and a Wave cell "
+                           f"starting with an integer",
+                           "queue-file"]},
+                 ops.context(project_dir),
+                 [], f"queue-file: ok=False error={e}")
+        return 1
+    queue_path = f"/api/v2/projects/{ops.project_key(project_dir)}/queue"
+    resp = ops.post(queue_path, {"entries": entries})
+    resp = resp or {}
+    ok = resp.get("ok", False)
+    unknown = resp.get("unknownDependencies", [])
+    print(f"queue-file: ok={ok} entries={len(entries)}"
+          + (f" unknownDependencies={unknown}" if unknown else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    # CR-CRU-118 §S3 — the findings the route raised are RENDERED, never
+    # dropped. This argument was hard-coded `[]`, so every warning the queue
+    # route answered with died here in all five clients at once: §S2's
+    # inherited-release-less migration list, and the deprecation notice that
+    # names the per-CR verbs replacing this very door. The five roadmap verbs
+    # already forward theirs `resp.get("warnings") or []`; this is the same
+    # line, in the one shared module, so no client decides anything (§S9).
+    ops.emit("queue-file", bool(ok),
+             {"entries": entries, "unknownDependencies": unknown,
+              "help": ["status"]},
+             ops.context(project_dir), resp.get("warnings") or [], None)
+    return 0 if ok else 1
+
+
+# ── CR-CRU-091 §S3/§S6/§S7/§S8/§S10 — roadmap registration: the five verbs ──
+#
+# `release-propose`, `cr-plan`, `wave-sequence`, `cr-supersede` and `cr-void`
+# land HERE, once (the CR-CRU-054 DRY rule); each of the five clients wires a
+# subparser and delegates, exactly as `queue-file` does. §S9 fixes the split:
+# this half owns argument parsing, §S6's asking, exit codes and the envelope,
+# and holds NO business rule — it never decides an order, never infers a
+# release, never validates a dependency, and never normalises `--track` (§S2
+# puts that on the server so five clients cannot produce two lanes for one
+# track). It POSTs and renders what came back.
+
+# §S3 — the role every roadmap route requires. Carried in the refusal envelope
+# as DISCLOSURE, never as enforcement: the client checks no role and refuses
+# no caller. It is named because the shared caller-auth seam's own 409 (an
+# UNREGISTERED caller) does not mention a role at all, and AC16 requires both
+# refusals to tell the caller what the verb needs.
+ROADMAP_ROLE = "ORCHESTRATOR"
+
+# §S6/P6 — the fleet's USAGE exit: a call the CLIENT resolved as incomplete
+# before anything reached the wire. A refusal that came back FROM the server
+# is a transport-class outcome and keeps the fleet's `0 if ok else 1`.
+EXIT_USAGE = 2
+
+# §S6/P6 — the two fields `cr-plan` will not guess, in the order `needs`
+# reports them.
+CR_PLAN_DECLARED_FIELDS = ("release", "wave")
+
+
+def release_proposals_path(project_key):
+    """§S8 — `…/projects/<key>/release-proposals`: the POST that records or
+    revises a proposal, and the GET §S6's candidate list is read from."""
+    return f"/api/v2/projects/{project_key}/release-proposals"
+
+
+def queue_plan_path(project_key):
+    """§S8 — `…/projects/<key>/queue/plan`. The verb NAME is never a path
+    segment (`queue/plan`, not `queue/cr-plan`), so a guessed shape 404s."""
+    return f"/api/v2/projects/{project_key}/queue/plan"
+
+
+def queue_sequence_path(project_key):
+    """§S8 — `…/projects/<key>/queue/sequence`."""
+    return f"/api/v2/projects/{project_key}/queue/sequence"
+
+
+def queue_depends_path(project_key):
+    """CR-CRU-106 §S1 — `…/projects/<key>/queue/depends`, under the same rule:
+    `queue/depends`, never `queue/cr-depends`."""
+    return f"/api/v2/projects/{project_key}/queue/depends"
+
+
+def queue_lifecycle_path(project_key, cr, verb):
+    """§S8 — `…/projects/<key>/queue/<cr>/supersede` | `/void`."""
+    return f"/api/v2/projects/{project_key}/queue/{cr}/{verb}"
+
+
+def server_failure_body(resp):
+    """The SERVER's structured refusal, parsed back out of the `http_request`
+    error string (PURE) — or None when the failure carried none (a transport
+    failure, or a body that is not the fleet's JSON refusal).
+
+    `http_request` flattens an HTTP error to `"HTTP <code>: <body>"`, so every
+    field the server derived — its `help[]`, its `code` — survives only as
+    text. ONE parse serves both readers below: CR-CRU-116 §S3 needed the
+    `code` beside the `help[]` that was already lifted here, and a second
+    partition-and-`json.loads` differing by one key is the duplication this
+    module exists to prevent.
+
+    Lifting rather than re-deriving is what keeps CR-CRU-091 §S9's division
+    honest: the refusal's wording and its next move are the SERVER's own
+    derivations, and a client that rebuilt either would be a second
+    decision-maker for the same rule."""
+    error = (resp or {}).get("error")
+    if not isinstance(error, str):
+        return None
+    _, _, detail = error.partition(": ")
+    try:
+        parsed = json.loads(detail)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def server_failure_help(resp):
+    """The `help[]` the SERVER derived for a refusal (PURE) — the state-derived
+    steps `roadmapHints` (`src/hints.ts:358`) and `waveHints` build. AC6's "a
+    `help[]` entry `release-propose --label 9.9.9`" is the server's answer,
+    read back verbatim.
+
+    Returns the parsed list, or None when the failure carried none."""
+    parsed = server_failure_body(resp)
+    steps = parsed.get("help") if parsed else None
+    return [str(s) for s in steps] if isinstance(steps, list) and steps else None
+
+
+def server_failure_code(resp):
+    """CR-CRU-116 §S3 — the machine-readable `code` the SERVER put on a
+    refusal (PURE), so a caller can BRANCH on which rule refused instead of
+    matching the error sentence.
+
+    Returns None when the failure declared none, and nothing is invented in
+    that case: a transport failure has no server-side code, and a client that
+    synthesised one would be answering a question the server did not."""
+    parsed = server_failure_body(resp)
+    code = parsed.get("code") if parsed else None
+    return code if isinstance(code, str) and code else None
+
+
+def roadmap_failure_fields(verb, resp, ops, full=False):
+    """§S10 P6/P9 — the result fields of a roadmap FAILURE envelope: the error
+    verbatim, the required role (AC16), the server's own state-derived
+    `help[]` when it sent one, and the fleet's reachability next-step when the
+    call never landed. `converged` is false because a call that wrote nothing
+    converged on nothing, and `totalCount` is 0 because it answered with no
+    record — both ride EVERY envelope (§S7, P4)."""
+    error = (resp or {}).get("error")
+    return {
+        "converged": False,
+        "error": truncate_field(str(error), full=full) if error else None,
+        "requiredRole": ROADMAP_ROLE,
+        "totalCount": 0,
+        "help": (server_failure_help(resp)
+                 or server_unreachable_help(verb, ops.base_url)),
+    }
+
+
+def parse_target_at(raw):
+    """§S1/§S3 — `--target <date>` → `targetAt` in epoch SECONDS, the unit
+    `releasedAt` uses (PURE).
+
+    Accepts an ISO-8601 date (`2026-09-01`, read as midnight UTC so the value
+    is deterministic wherever the orchestrator runs) or datetime, and a bare
+    epoch-seconds integer for a caller that already holds one. Anything else
+    raises ValueError NAMING the value — a target that silently vanished
+    would read back as "no target was ever declared", which is the same
+    failure the server refuses a malformed `targetAt` for.
+
+    NOTE: the CR fixes the WIRE unit (§S1) but names no client-side input
+    format for `--target`; these two are this client half's reading of
+    `<date>`, reported as a spec silence rather than smuggled in.
+    """
+    text = str(raw).strip()
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(
+            f"--target {raw!r} is not a date: declare an ISO-8601 date "
+            f"(2026-09-01), an ISO-8601 datetime, or epoch SECONDS") from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return int(parsed.timestamp())
+
+
+def parse_crs(raw):
+    """§S4 — `--crs A,B,C` → the ORDERED list; array position becomes `seq`
+    server-side, so the order is preserved exactly as typed and no entry is
+    de-duplicated here (a repeat is the server's refusal to make, by name and
+    index)."""
+    return [tok.strip() for tok in str(raw or "").split(",") if tok.strip()]
+
+
+def select_row_fields(rows, fields):
+    """§S10 P2 (PURE) — narrow each row to the requested columns.
+
+    Deliberately NARROWING rather than `select_status_fields`' ADDITIVE shape:
+    `status`' rows carry a wide set behind a 4-column base, so its flag adds;
+    a roadmap row is already the minimal record the write produced, so the
+    only useful control is asking for less. AC19 words it exactly that way —
+    "`--fields` narrows the envelope". A key the row does not hold is dropped
+    rather than emitted as null, so the list stays uniform-table safe."""
+    if not fields:
+        return rows
+    keys = [f.strip() for f in str(fields).split(",") if f.strip()]
+    return [{k: row[k] for k in keys if k in row} for row in rows]
+
+
+def truncate_rows(rows, full=False):
+    """§S10 P3 (PURE) — the visible head of a roadmap list; `--full` defeats
+    it. The caller emits `totalCount` from the UNtruncated list, so a truncated
+    list can never be mistaken for the whole one.
+
+    CR-CRU-131 §S1 — the length is `roadmap_list_rows`, resolved from the
+    PROJECT's `crucible.toml` AT THE POINT OF USE rather than from
+    `limit=ROADMAP_LIST_LIMIT` (20), bound as a default argument at `def`
+    time."""
+    rows = list(rows or [])
+    if full:
+        return rows
+    limit = resolve_limit("roadmap_list_rows")
+    return rows if len(rows) <= limit else rows[:limit]
+
+
+def roadmap_rows(resp, key, args):
+    """The list answer of a roadmap response, projected (P2) and truncated
+    (P3) for the envelope. Returns `(visible_rows, total)` so the caller can
+    emit the TRUE total beside a possibly-shortened list (P4)."""
+    rows = [r for r in (resp or {}).get(key) or [] if isinstance(r, dict)]
+    total = len(rows)
+    return (truncate_rows(select_row_fields(rows, getattr(args, "fields", None)),
+                          full=bool(getattr(args, "full", False))), total)
+
+
+def roadmap_scalar_list(resp, key):
+    """A roadmap response's list of bare CR ids (`resolvedDependants` /
+    `brokenDependants` / `unknownDependencies`) — never projected, because a
+    scalar has no columns to narrow."""
+    return [str(v) for v in (resp or {}).get(key) or []]
+
+
+def roadmap_entry(resp, args):
+    """The single-record answer (`entry`), projected by `--fields` exactly as
+    a row of a list answer is, so one flag means one thing across the five
+    verbs."""
+    entry = (resp or {}).get("entry")
+    if not isinstance(entry, dict):
+        return None
+    return select_row_fields([entry], getattr(args, "fields", None))[0]
+
+
+# ── §S6 — the client ASKS (AXI P5/P6/P7/P9) ────────────────────────────────
+#
+# The whole of the asking lives here, in the shared module, for the reason
+# §S6 gives out loud: "no business rule lives in a client and no two clients
+# can decide differently". It NEVER guesses — not even when exactly one
+# release and exactly one wave are open, because silent inference is the
+# failure class this design removes.
+
+
+def undeclared_cr_plan_fields(args):
+    """P6 — EXACTLY the fields the caller left undeclared, in §S6's order."""
+    return [field for field in CR_PLAN_DECLARED_FIELDS
+            if not getattr(args, field, None)]
+
+
+def proposal_candidates(resp):
+    """P7 (PURE) — the live candidate proposals and the waves already planned
+    against each, from `GET …/release-proposals`.
+
+    §S8 settles that the server emits NO `status` field: every proposal it
+    returns is live by construction, so reading one off the wire would be
+    reading a field that is not there. The CLIENT labels them, which is
+    presentation rather than a rule — the fact ("this proposal is live") is
+    the server's, carried by the route's own contract."""
+    return [{"label": str(p.get("label")),
+             "status": "live",
+             "waves": [str(w) for w in p.get("waves") or []]}
+            for p in (resp or {}).get("proposals") or []
+            if isinstance(p, dict)]
+
+
+def cr_plan_ask_help(candidates, cr, title):
+    """P9 (PURE) — the pre-filled next-step templates: one `cr-plan` line per
+    candidate release/wave with the caller's OWN `--cr` and `--title` already
+    substituted, plus the `release-propose` line for the case where the
+    intended release does not exist yet. With NO proposal recorded at all that
+    last line is the ONLY entry — the definitive empty state (P5/AC11)."""
+    steps = []
+    for candidate in candidates:
+        waves = candidate.get("waves") or ["<n>"]
+        for wave in waves:
+            steps.append(f'cr-plan --cr {cr} --release {candidate["label"]} '
+                         f'--wave {wave} --title "{title}"')
+    steps.append("release-propose --label <v>")
+    return steps
+
+
+def emit_cr_plan_ask(args, project_dir, ops, needs, agent_id):
+    """§S6 — resolve the undeclared `cr-plan` BEFORE posting: read the live
+    candidates, emit the `ok:false` envelope on stdout, exit 2, POST nothing.
+
+    A candidate read that FAILS is not "zero proposals": reporting an
+    unreachable roadmap as an empty one would turn a transport fault into a
+    fact. It degrades the fleet's way (`cmd_status`/`cmd_queue`) — an empty
+    candidate list plus a STRUCTURED warning naming the condition — and still
+    refuses to guess, because the caller's own declaration is what is
+    missing either way."""
+    resp = ops.get(release_proposals_path(ops.project_key(project_dir)))
+    warnings = []
+    if resp.get("ok"):
+        candidates = proposal_candidates(resp)
+    else:
+        candidates = []
+        warnings.append({
+            "code": "release-proposals-unavailable",
+            "detail": (f"could not read the live release proposals: "
+                       f"{resp.get('error')}"),
+        })
+    full = bool(getattr(args, "full", False))
+    visible = truncate_rows(
+        select_row_fields(candidates, getattr(args, "fields", None)), full=full)
+    ops.emit("cr-plan", False,
+             {"converged": False,
+              "needs": needs,
+              "releases": visible,
+              "totalCount": len(candidates),
+              "requiredRole": ROADMAP_ROLE,
+              "help": cr_plan_ask_help(candidates, args.cr, args.title)},
+             ops.context(project_dir, agent_id=agent_id, cr=args.cr),
+             warnings,
+             f"cr-plan: ok=False needs={','.join(needs)} — nothing was posted; "
+             f"{len(candidates)} live release proposal(s) to choose from")
+    return EXIT_USAGE
+
+
+# ── §S3 — the five verbs ───────────────────────────────────────────────────
+
+
+def cmd_release_propose(args, project_dir, ops):
+    """§S3 — record or REVISE the `release-proposal` milestone for one label.
+    The super container must exist before a CR can target it."""
+    agent_id = ops.agent_id(args)
+    full = bool(getattr(args, "full", False))
+    body = {"label": args.label, "agentId": agent_id}
+    if getattr(args, "target", None):
+        try:
+            body["targetAt"] = parse_target_at(args.target)
+        except ValueError as exc:
+            ops.emit("release-propose", False,
+                     {"converged": False, "error": str(exc),
+                      "requiredRole": ROADMAP_ROLE, "totalCount": 0,
+                      "help": [f"release-propose --label {args.label} "
+                               f"--target <YYYY-MM-DD>"]},
+                     ops.context(project_dir, agent_id=agent_id), [],
+                     f"release-propose: ok=False error={exc}")
+            return EXIT_USAGE
+    resp = ops.post(release_proposals_path(ops.project_key(project_dir)), body)
+    resp = resp or {}
+    ok = bool(resp.get("ok", False))
+    if not ok:
+        ops.emit("release-propose", False,
+                 roadmap_failure_fields("release-propose", resp, ops, full),
+                 ops.context(project_dir, agent_id=agent_id), [],
+                 f"release-propose: ok=False error={resp.get('error')}")
+        return 1
+    proposal = resp.get("proposal") if isinstance(resp.get("proposal"), dict) else {}
+    converged = bool(resp.get("converged", False))
+    ops.emit("release-propose", True,
+             {"converged": converged,
+              "proposal": select_row_fields(
+                  [proposal], getattr(args, "fields", None))[0],
+              "totalCount": 1,
+              "help": [f"cr-plan --cr <id> --release {args.label} --wave <n> "
+                       f"--title <brief>", "queue"]},
+             ops.context(project_dir, agent_id=agent_id),
+             resp.get("warnings") or [],
+             f"release-propose: ok=True label={args.label} "
+             f"converged={converged}")
+    return 0
+
+
+def cmd_cr_plan(args, project_dir, ops):
+    """§S3 — the per-CR upsert of `release`, `wave` and `title`. Re-running
+    with different values is a legitimate re-plan, not an error (§S3), and
+    re-running with the same values writes nothing (§S7).
+
+    §S6 — a call missing `--release` or `--wave` is resolved HERE and never
+    reaches the server."""
+    agent_id = ops.agent_id(args)
+    needs = undeclared_cr_plan_fields(args)
+    if needs:
+        return emit_cr_plan_ask(args, project_dir, ops, needs, agent_id)
+    full = bool(getattr(args, "full", False))
+    resp = ops.post(queue_plan_path(ops.project_key(project_dir)),
+                    {"cr": args.cr, "release": args.release,
+                     "wave": str(args.wave), "title": args.title,
+                     "agentId": agent_id}) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
+    if not ok:
+        ops.emit("cr-plan", False,
+                 roadmap_failure_fields("cr-plan", resp, ops, full),
+                 context, [], f"cr-plan: ok=False error={resp.get('error')}")
+        return 1
+    converged = bool(resp.get("converged", False))
+    ops.emit("cr-plan", True,
+             {"converged": converged,
+              "entry": roadmap_entry(resp, args),
+              "unknownDependencies": roadmap_scalar_list(
+                  resp, "unknownDependencies"),
+              "totalCount": 1,
+              "help": [f"wave-sequence --release {args.release} "
+                       f"--wave {args.wave} --crs <a,b,c>", "queue"]},
+             context, resp.get("warnings") or [],
+             f"cr-plan: ok=True cr={args.cr} release={args.release} "
+             f"wave={args.wave} converged={converged}")
+    return 0
+
+
+def cmd_wave_sequence(args, project_dir, ops):
+    """§S4 — ONE call carrying the WHOLE ordered list: the array position of
+    `--crs` becomes `seq`, because the order IS the payload. Insert and
+    reorder are the same call — re-send the list.
+
+    `--track` is forwarded VERBATIM: §S2 normalises to `track-<n>` on the
+    server so two clients cannot write `2` and `track-2` and draw two lanes
+    for one track."""
+    agent_id = ops.agent_id(args)
+    full = bool(getattr(args, "full", False))
+    body = {"release": args.release, "wave": str(args.wave),
+            "crs": parse_crs(args.crs), "agentId": agent_id}
+    if getattr(args, "track", None):
+        body["track"] = args.track
+    resp = ops.post(queue_sequence_path(ops.project_key(project_dir)), body) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id)
+    if not ok:
+        ops.emit("wave-sequence", False,
+                 roadmap_failure_fields("wave-sequence", resp, ops, full),
+                 context, [],
+                 f"wave-sequence: ok=False error={resp.get('error')}")
+        return 1
+    entries, total = roadmap_rows(resp, "entries", args)
+    converged = bool(resp.get("converged", False))
+    ops.emit("wave-sequence", True,
+             {"converged": converged, "entries": entries,
+              "unknownDependencies": roadmap_scalar_list(
+                  resp, "unknownDependencies"),
+              "totalCount": total, "help": ["queue", "status"]},
+             context, resp.get("warnings") or [],
+             f"wave-sequence: ok=True release={args.release} "
+             f"wave={args.wave} entries={total} converged={converged}")
+    return 0
+
+
+def cmd_cr_supersede(args, project_dir, ops):
+    """§S3 — lifecycle `SUPERSEDED` with `by`. The work still happens,
+    elsewhere: AC15 requires the dependants to be reported RESOLVING through
+    the successor, never collapsed into one "removed" answer with `cr-void`'s.
+    The row is not deleted; the CR stays visible carrying its declaration."""
+    return _cr_lifecycle(args, project_dir, ops, "supersede",
+                         {"by": args.by}, "resolvedDependants")
+
+
+def cmd_cr_void(args, project_dir, ops):
+    """§S3 — lifecycle `VOID` with `reason`. The work is not happening, so
+    AC15 requires the dependants to be reported BROKEN — the report is why
+    the write still lands (§S8's warn-and-write rung), not a refusal."""
+    return _cr_lifecycle(args, project_dir, ops, "void",
+                         {"reason": args.reason}, "brokenDependants")
+
+
+def _cr_lifecycle(args, project_dir, ops, verb, body, dependants_key):
+    """The shared body of the two lifecycle verbs. They differ ONLY in the
+    path segment, the one declared field and the name their dependant list
+    answers to — which is exactly AC15's point, so the difference is a
+    parameter and the identical half is written once."""
+    agent_id = ops.agent_id(args)
+    full = bool(getattr(args, "full", False))
+    cli_verb = f"cr-{verb}"
+    resp = ops.post(
+        queue_lifecycle_path(ops.project_key(project_dir), args.cr, verb),
+        {**body, "agentId": agent_id}) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
+    if not ok:
+        ops.emit(cli_verb, False,
+                 roadmap_failure_fields(cli_verb, resp, ops, full),
+                 context, [], f"{cli_verb}: ok=False error={resp.get('error')}")
+        return 1
+    dependants = roadmap_scalar_list(resp, dependants_key)
+    converged = bool(resp.get("converged", False))
+    ops.emit(cli_verb, True,
+             {"converged": converged,
+              "entry": roadmap_entry(resp, args),
+              dependants_key: truncate_rows(dependants, full=full),
+              "totalCount": len(dependants),
+              "help": lifecycle_help(verb, args, dependants)},
+             context, resp.get("warnings") or [],
+             f"{cli_verb}: ok=True cr={args.cr} "
+             f"{dependants_key}={len(dependants)} converged={converged}")
+    return 0
+
+
+def lifecycle_help(verb, args, dependants):
+    """§S10 P9 (PURE) — the STATE-DERIVED next step after a lifecycle write:
+    supersede points at planning the successor the caller just named, void
+    names the dependants that now point at a VOID cr — which is the fact
+    AC15 exists to surface and the only actionable thing left to do."""
+    if verb == "supersede":
+        return [f"cr-plan --cr {args.by} --release <v> --wave <n> "
+                f"--title <brief> — the work moves to {args.by}", "queue"]
+    if dependants:
+        return [f"cr-plan --cr <dependant> --release <v> --wave <n> "
+                f"--title <brief> — {', '.join(dependants)} still depend on "
+                f"the now-VOID {args.cr}", "queue"]
+    return ["queue"]
+
+
+# ── CR-CRU-106 §S1/§S2a — `cr-depends`: the dependency axis ────────────────
+#
+# Lands HERE, once, for the same CR-CRU-054 DRY reason the five roadmap verbs
+# do, and holds NO business rule: it never validates a target, never decides
+# whether a set closes a cycle and never infers a set. It POSTs the WHOLE set
+# and renders what came back.
+#
+# §S6/P6 — the ONE field this verb will not guess. `--cr` is argparse-required
+# exactly as `cr-plan`'s, `cr-supersede`'s and `cr-void`'s are: the SUBJECT is
+# the thing the caller is naming, and the asking is for what the declaration
+# TARGETS, which is the case §S1 points at ("exactly as `cr-plan` does for
+# `--release`/`--wave`").
+CR_DEPENDS_DECLARED_FIELDS = ("on",)
+
+
+def undeclared_cr_depends_fields(args):
+    """P6 — the fields the caller left undeclared.
+
+    `is None` and not falsiness, and the distinction is load-bearing: §S1
+    makes an EMPTY set a legitimate declaration that a cr depends on nothing,
+    so `--on ""` is an answer while an ABSENT `--on` is the question. A
+    truthiness test would collapse the two and make "depends on nothing"
+    unsayable.
+    """
+    return [field for field in CR_DEPENDS_DECLARED_FIELDS
+            if getattr(args, field, None) is None]
+
+
+def queue_candidates(resp):
+    """P7 (PURE) — the crs this board actually holds, from `GET …/queue`: the
+    live candidates a dependency declaration can name.
+
+    A dependency's candidates are CRs, not release proposals, because
+    `dependsOn` points at crs — so this verb's ask reads the queue where
+    `cr-plan`'s reads the proposals. Only the columns that identify a
+    candidate are carried; the row's full declaration is `queue`'s answer to
+    give, not this ask's."""
+    return [{"cr": str(e.get("cr")),
+             "wave": str(e.get("wave")),
+             "status": str(e.get("status"))}
+            for e in (resp or {}).get("entries") or []
+            if isinstance(e, dict)]
+
+
+def cr_depends_ask_help(cr):
+    """P9 (PURE) — the pre-filled next steps, with the caller's OWN `--cr`
+    already substituted: the declaration it was about to make, and the empty
+    declaration, which is the one a caller cannot otherwise guess is legal.
+
+    ONE line per SHAPE rather than one per candidate, unlike
+    `cr_plan_ask_help`: a release proposal list is bounded by the milestones a
+    project has open, while a dependency may name any cr on the board, so a
+    template per candidate would emit a line per row of a 100-row roadmap and
+    bury the two shapes that matter. The candidates themselves ride the
+    envelope's own list.
+
+    NOTE: the CR fixes that an empty set is a legitimate declaration (§S1) but
+    names no command-line spelling for one; `--on ""` is this client half's
+    reading, reported as a spec silence rather than smuggled in."""
+    return [f"cr-depends --cr {cr} --on <a,b,c> — the WHOLE set; re-sending "
+            f"REPLACES it",
+            f'cr-depends --cr {cr} --on "" — declares that {cr} depends on '
+            f"nothing",
+            "queue"]
+
+
+def emit_cr_depends_ask(args, project_dir, ops, needs, agent_id):
+    """§S1/§S6 — resolve the undeclared `cr-depends` BEFORE posting: read the
+    live candidates, emit the `ok:false` envelope on stdout, exit 2, POST
+    nothing.
+
+    A candidate read that FAILS is not "an empty board", and degrades exactly
+    as `emit_cr_plan_ask` degrades its own: an empty list plus a STRUCTURED
+    warning naming the condition, and still no guess, because the caller's own
+    declaration is what is missing either way."""
+    resp = ops.get(f"/api/v2/projects/{ops.project_key(project_dir)}/queue")
+    warnings = []
+    if resp.get("ok"):
+        candidates = queue_candidates(resp)
+    else:
+        candidates = []
+        warnings.append({
+            "code": "queue-unavailable",
+            "detail": (f"could not read the registered CR queue: "
+                       f"{resp.get('error')}"),
+        })
+    full = bool(getattr(args, "full", False))
+    visible = truncate_rows(
+        select_row_fields(candidates, getattr(args, "fields", None)), full=full)
+    ops.emit("cr-depends", False,
+             {"converged": False,
+              "needs": needs,
+              "crs": visible,
+              "totalCount": len(candidates),
+              "requiredRole": ROADMAP_ROLE,
+              "help": cr_depends_ask_help(args.cr)},
+             ops.context(project_dir, agent_id=agent_id, cr=args.cr),
+             warnings,
+             f"cr-depends: ok=False needs={','.join(needs)} — nothing was "
+             f"posted; {len(candidates)} cr(s) on the board to depend on")
+    return EXIT_USAGE
+
+
+def cr_depends_help(args, unknown):
+    """§S10 P9 (PURE) — the STATE-DERIVED next step after a declaration.
+
+    AC5 rules that an unknown target is ACCEPTED and FLAGGED, so the flag is
+    given somewhere to go: the declaration stands, and the actionable thing
+    left is planning the target it names."""
+    if unknown:
+        return [f"cr-plan --cr {unknown[0]} --release <v> --wave <n> "
+                f"--title <brief> — {', '.join(unknown)} is not on the board; "
+                f"the declaration stands and is flagged", "queue"]
+    return ["queue", "next"]
+
+
+def cmd_cr_depends(args, project_dir, ops):
+    """§S1 — declare one cr's COMPLETE dependency set → POST …/queue/depends.
+    The whole set is the payload and re-sending REPLACES it, so a dependency
+    dropped from a re-sent set is a declaration rather than an accident of
+    arrival.
+
+    §S6 — a call that declares no `--on` is resolved HERE and never reaches
+    the server."""
+    agent_id = ops.agent_id(args)
+    needs = undeclared_cr_depends_fields(args)
+    if needs:
+        return emit_cr_depends_ask(args, project_dir, ops, needs, agent_id)
+    full = bool(getattr(args, "full", False))
+    resp = ops.post(queue_depends_path(ops.project_key(project_dir)),
+                    {"cr": args.cr, "dependsOn": parse_crs(args.on),
+                     "agentId": agent_id}) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
+    if not ok:
+        ops.emit("cr-depends", False,
+                 roadmap_failure_fields("cr-depends", resp, ops, full),
+                 context, [],
+                 f"cr-depends: ok=False error={resp.get('error')}")
+        return 1
+    unknown = roadmap_scalar_list(resp, "unknownDependencies")
+    declared = roadmap_entry(resp, args) or {}
+    converged = bool(resp.get("converged", False))
+    ops.emit("cr-depends", True,
+             {"converged": converged,
+              "entry": declared,
+              "unknownDependencies": unknown,
+              "totalCount": 1,
+              "help": cr_depends_help(args, unknown)},
+             context, resp.get("warnings") or [],
+             f"cr-depends: ok=True cr={args.cr} "
+             f"dependsOn={len(parse_crs(args.on))} converged={converged}"
+             + (f" unknownDependencies={','.join(unknown)}" if unknown else ""))
+    return 0
+
+
+def add_cr_depends_verb(sub, func, *, parents=(), add_args=()):
+    """CR-CRU-106 §S1 — register the ONE `cr-depends` subparser on `sub`.
+
+    A single callable rather than `add_roadmap_verbs`' verb-name→delegator
+    dict, following `add_next_verb`'s precedent for the same reason: one verb
+    needs one delegator, and a one-entry dict would be ceremony that hides
+    that. It is its OWN registrar rather than a sixth entry in
+    `add_roadmap_verbs` because that registrar's contract is CR-CRU-091's
+    frozen five, asserted by name in the fleet inventory.
+    """
+    cd = sub.add_parser(
+        "cr-depends", parents=list(parents),
+        help="Declare one CR's COMPLETE dependency set → POST …/queue/depends "
+             "(§S1). Re-sending REPLACES the set. Omit --on and the client "
+             "ASKS instead of guessing. ORCHESTRATOR only.")
+    cd.add_argument("--cr", required=True,
+                    help="The CR whose dependency set this declares.")
+    cd.add_argument("--on",
+                    help="The WHOLE set, comma-separated. Undeclared → the "
+                         'client lists the board\'s crs and exits 2 (§S6); '
+                         '--on "" declares that this CR depends on nothing.')
+    add_roadmap_projection_args(cd)
+    for adder in add_args:
+        adder(cd)
+    cd.set_defaults(func=func)
+
+
+def add_roadmap_projection_args(p):
+    """§S10 P2/P3 — the two envelope-shaping flags every roadmap verb carries,
+    added identically in all five clients so the surface cannot drift."""
+    p.add_argument("--fields",
+                   help="Comma-separated columns to NARROW the envelope's "
+                        "records to (§S10 P2).")
+    p.add_argument("--full", action="store_true",
+                   help="Emit the whole list and untruncated text fields "
+                        "(§S10 P3).")
+
+
+def add_roadmap_verbs(sub, funcs, *, parents=(), add_args=()):
+    """§S3/§S9 — register the five roadmap subparsers on `sub`.
+
+    The registration itself is shared, so "a reviewer diffing two client files
+    sees near-identical thin registrations" is guaranteed rather than hoped
+    for. Only the three genuinely per-client pieces are injected — and they
+    are injected rather than flattened into one shared constant, which is the
+    silent fleet-wide regression CR-CRU-054 §S1's classification exists to
+    prevent:
+
+      * `funcs` — verb name → that client's own delegator;
+      * `parents` — a client that already carries `--agent`/`--project-dir` on
+        a shared parent parser (arduino's `common`) passes it here;
+      * `add_args` — the per-verb arg adders for the other four, each client's
+        OWN `_add_workflow_agent_arg` / `_add_project_dir_arg` (mvn's
+        `_add_project_args` also carries its `--maven-dir` convention).
+    """
+    def _common(p):
+        for adder in add_args:
+            adder(p)
+
+    rp = sub.add_parser(
+        "release-propose", parents=list(parents),
+        help="Record or REVISE a proposed release → POST …/release-proposals "
+             "(§S1/§S3). ORCHESTRATOR only.")
+    rp.add_argument("--label", required=True,
+                    help="The version this release proposes to ship, e.g. 0.4.0.")
+    rp.add_argument("--target", required=True,
+                    help="Declared target date (ISO-8601 date/datetime, or "
+                         "epoch SECONDS). Required (§S4) and revisable; a "
+                         "revision retires its predecessor rather than "
+                         "editing it.")
+    add_roadmap_projection_args(rp)
+    _common(rp)
+    rp.set_defaults(func=funcs["release-propose"])
+
+    cp = sub.add_parser(
+        "cr-plan", parents=list(parents),
+        help="Declare one CR's release, wave and title → POST …/queue/plan "
+             "(§S3). Omit --release/--wave and the client ASKS (§S6) instead "
+             "of guessing. ORCHESTRATOR only.")
+    cp.add_argument("--cr", required=True, help="The CR this plan declares.")
+    cp.add_argument("--title", required=True, help="The CR's brief.")
+    cp.add_argument("--release",
+                    help="The release this CR targets. Undeclared → the client "
+                         "lists the live proposals and exits 2 (§S6).")
+    cp.add_argument("--wave",
+                    help="The wave within the release. Undeclared → the client "
+                         "lists the waves already planned and exits 2 (§S6).")
+    add_roadmap_projection_args(cp)
+    _common(cp)
+    cp.set_defaults(func=funcs["cr-plan"])
+
+    ws = sub.add_parser(
+        "wave-sequence", parents=list(parents),
+        help="Author a whole wave's order in ONE call → POST …/queue/sequence "
+             "(§S4): the position of each cr in --crs becomes its seq. "
+             "ORCHESTRATOR only.")
+    ws.add_argument("--release", required=True,
+                    help="The release whose wave is being sequenced.")
+    ws.add_argument("--wave", required=True,
+                    help="The wave whose order this call authors.")
+    ws.add_argument("--crs", required=True,
+                    help="The WHOLE ordered list, comma-separated. Insert and "
+                         "reorder are the same call: re-send the list.")
+    ws.add_argument("--track",
+                    help="The track this wave's crs run in — 2, track-2 or "
+                         '"Track 2". The SERVER normalises to track-<n>.')
+    add_roadmap_projection_args(ws)
+    _common(ws)
+    ws.set_defaults(func=funcs["wave-sequence"])
+
+    cs = sub.add_parser(
+        "cr-supersede", parents=list(parents),
+        help="Record that a CR's work moves to a successor → POST "
+             "…/queue/<cr>/supersede (§S3). The row is kept. ORCHESTRATOR only.")
+    cs.add_argument("--cr", required=True, help="The superseded CR.")
+    cs.add_argument("--by", required=True,
+                    help="The successor CR the work moves to.")
+    add_roadmap_projection_args(cs)
+    _common(cs)
+    cs.set_defaults(func=funcs["cr-supersede"])
+
+    cv = sub.add_parser(
+        "cr-void", parents=list(parents),
+        help="Record that a CR's work is not happening → POST "
+             "…/queue/<cr>/void (§S3). The row is kept, and the dependants it "
+             "breaks are named. ORCHESTRATOR only.")
+    cv.add_argument("--cr", required=True, help="The voided CR.")
+    cv.add_argument("--reason", required=True,
+                    help="Why the work is not happening.")
+    add_roadmap_projection_args(cv)
+    _common(cv)
+    cv.set_defaults(func=funcs["cr-void"])
+
+
+def add_next_verb(sub, func, *, parents=(), add_args=()):
+    """CR-CRU-092 §S6 — register the ONE `next` subparser on `sub`.
+
+    The subparser BODY lives here, once, so the flag surface cannot fork into
+    five for one verb — the same rule (and the same `parents`/`add_args` seam)
+    `add_roadmap_verbs` above follows. What stays per-client is exactly the
+    delegator plus that client's own project-dir convention, which is why the
+    five call sites read alike.
+
+    Three deliberate ABSENCES, each of which a census asserts rather than
+    assumes:
+
+      * no `--full` (§S6 P3, N/A BY SHAPE) — the answer is ONE decision, never
+        a truncated list, so a `--full` here could reveal nothing. "A faked
+        `--full` on a one-record answer is as wrong as a missing one."
+      * no `--agent` (§S4/AC10) — `next` is READ-ONLY: it performs no write,
+        claims nothing, and must never route through
+        `emit_agent_identity_hard_stop`.
+      * no `--user-approved` — there is no mutation to approve.
+
+    `func` is a single callable rather than the verb-name→delegator dict
+    `add_roadmap_verbs` takes: one verb needs one delegator, and a one-entry
+    dict would be ceremony that hides that.
+    """
+    nx = sub.add_parser(
+        "next", parents=list(parents),
+        help="Ask the DECLARED roadmap what is actionable now → GET …/queue "
+             "(§S2). Answers NEXT | HOLD | DRAINED, all exit 0. Read-only: "
+             "asking claims nothing.")
+    nx.add_argument("--track",
+                    help="The lane to resolve — 2, track-2 or \"Track 2\" "
+                         "(canonicalised client-side, §S3, because this verb "
+                         "writes nothing and so has no server round-trip to "
+                         "normalise it). Required ONLY when the project "
+                         "declares more than one track.")
+    nx.add_argument("--release",
+                    help="The release to resolve within — the CRs DECLARED "
+                         "into it, matched VERBATIM against each entry's own "
+                         "label (nothing is coerced, so 0.2.0 and v0.2.0 are "
+                         "two releases). Membership is declared, never "
+                         "inferred: an entry with no release is in none.")
+    nx.add_argument("--wave",
+                    help="The wave to resolve — matched VERBATIM too, so 6 "
+                         "and 06 are two waves and no integer parse merges "
+                         "them. Unset, the wave is the one the first "
+                         "actionable cr declares, in the order the server "
+                         "published.")
+    nx.add_argument("--fields",
+                    help="Comma-separated keys to NARROW the decision to "
+                         "(§S6 P2). There is no --full: the answer is one "
+                         "decision, never a truncated list (P3).")
+    for adder in add_args:
+        adder(nx)
+    nx.set_defaults(func=func)
+
+
+def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
+    """CR-CRU-075 §S1 — register the ONE `queue-file` subparser on `sub`.
+
+    CR-CRU-014 §S2 put the parse and the full-replace POST in this module from
+    the start but left the SUBPARSER per-client: python hand-rolled its own and
+    the other four registered nothing, so one verb was an envelope on one stack
+    and argparse's `invalid choice` on four. The body lands here for the reason
+    `add_next_verb` and `add_cr_depends_verb` above give — one verb needs one
+    flag surface — through their identical seam: `func` is the CALLER'S own
+    delegator, `parents` the shared parent a client like arduino already
+    carries, `add_args` that client's own project-dir convention.
+
+    `--from-file` is OPTIONAL and carries no default, so the shared
+    `cmd_queue_file` keeps resolving the unset case to
+    `<project>/docs/changes/README.md` (§S2) rather than the registrar deciding
+    a path five clients would then have to agree on.
+
+    No `--agent`: the verb registers a PROJECT's queue, not an agent's work,
+    and has never declared an identity — AC6's unchanged surface.
+    """
+    qf = sub.add_parser(
+        "queue-file", parents=list(parents),
+        help="Parse docs/changes/README.md (or --from-file) queue table and "
+             "POST the full CR set → /api/v2/projects/<key>/queue (§S2).")
+    qf.add_argument("--from-file", dest="from_file",
+                    help="Source Markdown file (default: "
+                         "<project>/docs/changes/README.md).")
+    for adder in add_args:
+        adder(qf)
+    qf.set_defaults(func=func)
+
+
+# ── CR-CRU-111 §S1/AC10 — the tier vocabulary, mirrored ONCE ─────────────
+#
+# PROVENANCE: the server DECLARES this vocabulary as the `Tier` union in
+# `src/types.ts`, and that declaration is authoritative. The dict below is the
+# client side's ONLY copy of it: `tests/client/test_client_tier_surface.py`
+# parses that union out by SYMBOL and asserts the two are the same set, so a
+# seventh server-side value fails a test rather than quietly narrowing five
+# clients. Reading `src/types.ts` at client RUNTIME is not the requirement and
+# cannot be — an installed wheel ships no `src/` — so this is the
+# mirror-plus-guard pattern `canonical_track` already uses for `normalizeTrack`
+# above. What is forbidden is a SECOND mirror: no client carries its own copy
+# of the six, they take them from here through `add_tier_verbs`.
+#
+# The VALUE is what the tier means: the DEPENDENCY a run of it takes. That is
+# the only definition portable across five toolchains — a tier is never a
+# subject matter and never a size.
+TIER_MEANINGS = {
+    "unit": "no dependency beyond the code under test — no process, no "
+            "socket, no live service, no wait on the clock",
+    "module": "one module or package of this project, across its own boundary",
+    "integration": "a real dependency — a spawned process, a socket, a live "
+                   "service, or a wait on real time",
+    "e2e": "the assembled system, driven the way it is really driven",
+    "regression": "every tier the project declares, run as one suite",
+    "bdd": "executable specifications, in the project's own BDD form",
+}
+
+# CR-CRU-112 §S1 — WHICH TIERS THE GATE COVERS, ruled at cycle 388 after RED
+# measured that a `package.json` script table cannot carry a per-target flag.
+# Gate coverage is a property of the TIER, so it is named HERE, beside the
+# vocabulary it belongs to and for the same reason `TIER_MEANINGS` lives here:
+# a per-project field would be the second declaration format §S1 forbids, and
+# five clients each deciding coverage would be the second mirror AC10 forbids.
+#
+# `e2e` is the ONE tier the gate does not cover, fleet-wide, and the reason is
+# a citation rather than a preference: who runs an e2e suite and who ingests it
+# is DN open question 5 (`docs/research/DN-testing-tiers-in-crucible-
+# projects.md`), which CR-CRU-112's non-goals defer. A project that wants its
+# e2e suite gated is the CR that answers that question, never a flag here.
+#
+# The VALUE is the sentence the gate's envelope prints beside that suite: an
+# excluded target is NAMED as excluded rather than omitted, so a reader can
+# tell a decision from an oversight (§S1).
+#
+# That sentence NAMES the open question and cites no CR id, and the omission is
+# deliberate: the value is EMITTED into `suites[].excluded`, and a project
+# namespace literal at a position a client EMITS is what this project's own
+# tripwire forbids. The lineage belongs in this comment, where it already is;
+# the reader of the envelope needs the REASON, which is the unanswered
+# question, not the number of the CR that declined to answer it.
+GATE_UNCOVERED_TIERS = {
+    "e2e": ("excluded from the gate fleet-wide — who runs the e2e suite and "
+            "who ingests it is DN open question 5 (`docs/research/DN-testing-"
+            "tiers-in-crucible-projects.md`), still unanswered; this gate "
+            "defers to that answer rather than invent one"),
+}
+
+# What a client hands `add_tier_verbs` for a tier it actually RUNS:
+#
+#   * `func` — that client's own delegator, exactly as the other registrars
+#     take one;
+#   * `runs` — one sentence naming what this tier runs ON THIS STACK, which
+#     the registrar folds into the verb's help. It says what the verb DOES and
+#     never what a run claims: printed help asserting a tier the client does
+#     not send is a defect this CR's own Context measured, not a pattern to
+#     copy;
+#   * `add_args` — that ONE verb's own flag adders. The client-wide pieces
+#     ride `parents=`/`add_args=` as they do for `add_roadmap_verbs`, but a
+#     flag belonging to a single tier (mvn's `unit --test`, arduino's
+#     `regression --coverage`) belongs here — so migrating a pre-existing
+#     tier-named verb onto the shared registration cannot cost it a flag.
+TierVerb = collections.namedtuple(
+    "TierVerb", ("func", "runs", "add_args"), defaults=((),))
+
+
+# CR-CRU-111 §S5/AC7 — WHAT THE ENVELOPE SAYS IT INGESTED.
+#
+# "The AXI envelope names the tier of the run it just ingested, so an
+# orchestrator reading the envelope knows what was covered without inspecting
+# the board. Every exit path states it." The value is a CLOSED vocabulary,
+# because a consumer MATCHES on it, and it lives HERE — once, beside the
+# `Tier` mirror it extends (`TIER_MEANINGS` above IS this fleet's one mirror of
+# `Tier` in `src/types.ts`; AC10 forbids a second copy, and five clients each
+# spelling their own sentinel would be exactly that second mirror). Ratified at
+# cycle 381 rather than left to GREEN, so AC7 fails on a defect and never on a
+# naming disagreement.
+#
+#   one of `TIER_MEANINGS`   a TEST run reached the board under THAT tier;
+#   ENVELOPE_TIER_UNSTATED   a test run reached the board and the client stated
+#                            NO tier (§S2/AC3), so the server applied its own
+#                            documented default. The envelope neither invents a
+#                            tier nor prints a null — it says, positively, that
+#                            the client asserted nothing;
+#   ENVELOPE_TIER_COMPILE    a COMPILE event was ingested, which is not a test
+#                            tier at all (AC13a): a build in the test-tier
+#                            record is the conflation that AC forbids;
+#   ENVELOPE_TIER_NONE       this exit ingested nothing — python's
+#                            zero-discovery, §S1's `tier-run-undeclared`
+#                            refusal, a no-report exit, and every verb that
+#                            runs no tests at all.
+ENVELOPE_TIER_UNSTATED = "unstated"
+ENVELOPE_TIER_COMPILE = "compile"
+ENVELOPE_TIER_NONE = "none"
+
+# The ingest endpoints, by what an ingest to them MEANS. `/api/v2/runs/start`
+# is deliberately NOT here: it OPENS a run before any test has finished, so a
+# verb that opened a run and then ingested a compile failure (bun `test` with
+# no JUnit) has ingested no test run at all, and must say `compile`.
+RUN_INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed")
+COMPILE_INGEST_PATH = "/api/v2/runs/compile"
+
+# What THIS invocation has put on the board so far. Module state, because the
+# statement belongs to the whole exit and not to the one call site that made
+# it: the client that ingests and the client that emits are the same process,
+# and `run_verb` clears it before every verb so a second invocation inside one
+# process cannot inherit the first one's claim.
+_ingested_run_tier = AXI_UNSET
+_ingested_compile = False
+
+
+def forget_ingested_run():
+    """§S5 — clear what this process claims to have ingested. Called once per
+    verb dispatch (`run_verb`), so an envelope can only ever state the ingest
+    of the invocation it belongs to."""
+    global _ingested_run_tier, _ingested_compile
+    _ingested_run_tier = AXI_UNSET
+    _ingested_compile = False
+
+
+def post_ingest(post_fn, path, payload):
+    """§S5/AC7 — send a run to the board through the client's own `_post` seam
+    and REMEMBER what went out, so `emit_axi` can state the tier of the run it
+    ingested without any client deciding that answer for itself.
+
+    `post_fn` is that client's `_post`, taken as a parameter the way
+    `post_gate`/`post_milestone` already take it: this module owns the meaning
+    of an ingest, never the transport. The tier is read off the BODY rather
+    than from a parameter, so the envelope can only repeat what the wire
+    carried — an ingest that stated no tier is remembered as having stated
+    none, which §S2/AC3 made the honest answer."""
+    global _ingested_run_tier, _ingested_compile
+    if path in RUN_INGEST_PATHS:
+        _ingested_run_tier = (payload or {}).get("tier")
+    elif path == COMPILE_INGEST_PATH:
+        _ingested_compile = True
+    return post_fn(path, payload)
+
+
+def ingested_tier():
+    """§S5/AC7 — the envelope's tier statement for this exit, drawn from the
+    closed vocabulary above.
+
+    A TEST ingest decides the answer whether or not a compile event also rode
+    out on the same exit: a run that reached the board as a test run IS what an
+    orchestrator reading the envelope is asking about."""
+    if _ingested_run_tier is not AXI_UNSET:
+        return _ingested_run_tier or ENVELOPE_TIER_UNSTATED
+    return ENVELOPE_TIER_COMPILE if _ingested_compile else ENVELOPE_TIER_NONE
+
+
+def tier_verb_help(tier, meaning, wired):
+    """§S1 — the one line a tier verb prints in its client's help: what the
+    tier MEANS (from the mirror, so all five clients teach one vocabulary) and
+    what THIS client does with it — the run it performs, or the refusal it
+    answers with while the project has declared no target for it."""
+    if wired is not None:
+        return f"{tier.upper()} tier — {meaning}. {wired.runs}"
+    return (f"{tier.upper()} tier — {meaning}. No target for it is declared on "
+            f"this stack: the verb refuses (ok:false, exit 1) naming what to "
+            f"declare, and never falls back to another target.")
+
+
+# ── §S6 — a DECLARED target is DETECTED and RUN, not merely demanded ──────
+#
+# §S3 said a cell with no toolchain split "requires a project declaration", and
+# what shipped was the REFUSAL half only: nothing read a declaration, so a cell
+# refused even when the project HAD declared its target. "An instruction that
+# changes nothing when followed is worse than no instruction" (§S6), so the
+# refusal stays exactly as it was for the case it was written for and becomes
+# REACHABLE-PAST for every other.
+#
+# WHAT LIVES HERE IS THE POLICY, and it is the whole of it: the NAME a declared
+# target is looked up under is one template applied to the tier
+# (`declared_target_name`), the refusal's example is that SAME string
+# (`declared_tier_surface_line`, §S6 ruling 5 — "a refusal that shows an example
+# the client would not then find is the defect AC14a exists to catch"), a miss
+# is the §S1 refusal and never a fallback, and a hit runs under the VERB's own
+# tier. Five clients repeating that policy would be the second mirror AC10
+# forbids; what stays per-stack is the two facts only that stack knows — how to
+# READ its own surface and how to RUN what it found.
+#
+#   `target`    the ONE template, `<tier>` substituted: a bun `package.json`
+#               script (`test:<tier>`), an arduino native make target
+#               (`junit-<tier>`), a maven / nextest profile whose id IS the
+#               tier (`<tier>`), python's example discovery start-dir.
+#   `names`     this stack's one-line naming of WHERE the declaration goes,
+#               with `<target>` filled from the template above.
+#   `read`      `(args, target) -> declared-or-None`, that stack's own read.
+#   `run`       `(args, tier, declared) -> exit code`, that stack's own run.
+#   `add_args`  ruling 4 — the flag surface every DECLARED cell of this client
+#               takes: the one its test-running sibling already takes, so the
+#               instruction a refusal gives can actually be typed (AC14b).
+#   `suites`    CR-CRU-112 §S1 — THE ONE FIELD THIS CR ADDS: how this stack
+#               ENUMERATES what the project declared, and with what command,
+#               `(args, surface) -> ((target, command-or-None), …)`. A target's
+#               COMMAND is what names the stack that owns it
+#               (`declaring_stack`); a target that names none is the reading
+#               client's own, so every CR-CRU-111 declaration keeps its
+#               meaning. `template_declared_suites` is the default reading for
+#               a stack whose declarable names ARE the tier vocabulary, and
+#               `None` says this surface cannot enumerate a project's
+#               declaration at all (python, whose declaration IS the
+#               invocation — CR-CRU-111 ruling 1).
+DeclaredTierSurface = collections.namedtuple(
+    "DeclaredTierSurface",
+    ("target", "names", "read", "run", "add_args", "suites"),
+    defaults=((), None))
+
+
+def declared_target_name(surface, tier):
+    """§S6 ruling 5 — THE template, applied. The lookup and the refusal's help
+    example are both this string, so the two cannot drift apart."""
+    return surface.target.replace("<tier>", tier)
+
+
+def declared_tier_surface_line(surface, tier):
+    """§S3/AC6a — the surface sentence a refusal names, carrying the example
+    `declared_target_name` would find."""
+    return surface.names.replace("<target>",
+                                 declared_target_name(surface, tier))
+
+
+def declared_tier_run(tier, funcs, surface):
+    """§S1/§S6 — the handler a DECLARED cell is registered with: DETECT this
+    project's declaration at this stack's own surface and RUN it, or refuse.
+
+    The refusal is unchanged in shape — it RAISES, so it travels the fleet's
+    own hard-stop route through `run_verb` (the `ok:false` envelope carrying
+    the project context, exit 1, nothing run and nothing posted) and no client
+    repeats a line of it. Never a no-op, and never a fall-back run: the verb
+    has to ANSWER, and what it answers is which declaration is missing and
+    WHERE on this stack it goes.
+
+    What §S6 adds is the other branch. A declaration the project HAS made is
+    read and run, and the run rides the VERB's own tier — §S2's rule holds
+    without exception, and a detected declaration is the project's
+    classification decision being honoured, never the client classifying."""
+    declared = sorted(funcs)
+
+    def _run_declared_tier(args):
+        target = declared_target_name(surface, tier)
+        found = surface.read(args, target)
+        if not found:
+            raise TierRunUndeclared(tier, declared,
+                                    declared_tier_surface_line(surface, tier))
+        return surface.run(args, tier, found)
+
+    return _run_declared_tier
+
+
+def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
+    """§S1 — register the SIX tier subparsers on `sub`, in every client that
+    runs tests.
+
+    The vocabulary is the mirror's, never an argument: the loop is driven off
+    `TIER_MEANINGS`, so the six a client exposes cannot drift from the six the
+    server declares, and a client cannot quietly expose five. That is the
+    whole reason this registration is shared rather than hand-rolled five
+    times — the fleet answered the same question two different ways before it
+    (mvn had `unit`/`module`/`e2e` as verbs, everyone else had a hardcoded
+    tier literal buried in a run path).
+
+    What stays per-client is exactly what the other registrars leave
+    per-client:
+
+      * `funcs` — tier → that client's `TierVerb` for the tiers it RUNS. A
+        tier absent from the mapping is registered all the same: it answers
+        its own `--help` and refuses with `TierRunUndeclared`, because the
+        vocabulary containing a tier and this project having a target for it
+        are two different facts and conflating them is the defect;
+      * `parents` — the shared parent a client like arduino already carries
+        (its `common` bundles `--agent`/`--project-dir`);
+      * `add_args` — the client's own per-verb conventions, applied to all
+        six (each client's project-dir flag), with a single verb's own flags
+        riding that verb's `TierVerb.add_args`;
+      * `declares` — §S3/AC6a and §S6: this stack's `DeclaredTierSurface` —
+        WHERE a declaration goes, how to READ it, how to RUN it, and the flag
+        surface a declared cell takes. Required, because §S3's rule is per
+        CELL: a client wires the cells its toolchain already splits and
+        DETECTS the rest, and a refusal that cannot say where the declaration
+        goes is not actionable. The surface is the client's fact (a
+        `package.json` script, a discovery start-dir, a profile in `pom.xml` /
+        `.config/nextest.toml`, a native `make` target); the policy it rides —
+        the template, the refusal, the verb's tier — is this module's.
+    """
+    for tier, meaning in TIER_MEANINGS.items():
+        wired = funcs.get(tier)
+        tp = sub.add_parser(tier, parents=list(parents),
+                            help=tier_verb_help(tier, meaning, wired))
+        for adder in add_args:
+            adder(tp)
+        # §S6 ruling 4 — a DECLARED cell takes its client's declared-cell flag
+        # surface. Before this it took NOTHING, not even `--agent`, so it
+        # exited 2 before any declaration could be read: unusable, not merely
+        # inert, and a refusal naming a flag its own verb rejects (AC14b).
+        for adder in (wired.add_args if wired is not None else declares.add_args):
+            adder(tp)
+        tp.set_defaults(func=(wired.func if wired is not None
+                              else declared_tier_run(tier, funcs, declares)))
+
+
+# ── CR-CRU-112 §S1/§S2 — THE GATE COVERS EVERY DECLARED SUITE ─────────────
+#
+# §S1: "the gate's scope becomes the project's declared suites rather than one
+# runner's discovery … each suite ingests through THAT stack's client … No
+# client learns to run another language's tests." §S2: "`regression` is the
+# union of the declared targets."
+#
+# The composition lives HERE, once, for the reason `add_tier_verbs` does: all
+# five clients own a `cmd_pre_merge_gate` (`check` then `regression`), and a
+# per-suite gate written five times would diverge five ways. What stays
+# per-client is what only that client knows — how to RUN one of its own
+# declared targets, and WHERE a declared command of its project runs.
+#
+# The declaration is CR-CRU-111's extended by ONE field (`DeclaredTierSurface.
+# suites`): the targets a project declares, each with the command that declares
+# it where the surface has one. Which STACK owns a target is then read off that
+# command by ONE shared rule, so five surfaces cannot answer it five ways.
+
+SIBLING_CLIENT = "<stack>-crucible.py"
+
+_SIBLING_CLIENT_RE = re.compile(
+    SIBLING_CLIENT.replace(".", r"\.").replace("<stack>", r"([a-z][a-z0-9_]*)"))
+
+# The INTERPRETER a stack's suite is driven by, for a declaration that spells
+# the suite out instead of naming that stack's client. Cycle 388 ruling 3: a
+# project's test script must stay runnable with no agent and no ingest, so this
+# repo declares `test:client` as `python3 -m unittest discover -s tests/client
+# -t .` — the FIRST TOKEN identifies the stack, the flags identify the paths,
+# and the GATE does the client dispatch itself. One entry per stack whose
+# declarations take that form; a head that is not here names no stack, and a
+# target that names no stack is the reading client's own.
+STACK_INTERPRETERS = {"python": ("python",)}
+
+
+def sibling_client(stack):
+    """§S1 — the file name of the client that OWNS `stack`. The fleet's one
+    naming of a sibling client, so a gate's dispatch and a declaration's
+    ownership read the same string."""
+    return SIBLING_CLIENT.replace("<stack>", stack)
+
+
+def clients_dir():
+    """The directory this shared module lives in — where every sibling client
+    sits beside it, which is how a gate finds the one it must dispatch to."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def declaring_stack(command):
+    """§S1 — the stack a declared target's COMMAND names, or None when it names
+    none (→ the reading client's own stack).
+
+    Two spellings and no third: the command INVOKES that stack's client
+    (`…/python-crucible.py regression …`), or its first token is that stack's
+    INTERPRETER (`python3 -m unittest …`). Both are read off the command the
+    project already wrote, so neither invents the second declaration format
+    §S1 forbids."""
+    if not command:
+        return None
+    match = _SIBLING_CLIENT_RE.search(command)
+    if match:
+        return match.group(1)
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    head = os.path.basename(tokens[0]) if tokens else ""
+    for stack, heads in STACK_INTERPRETERS.items():
+        if any(head.startswith(prefix) for prefix in heads):
+            return stack
+    return None
+
+
+def _python_suite_argv(tokens):
+    """`python -m unittest discover -s <dir> [-p <pattern>]` → the python
+    client's own `regression` over that SAME discovery.
+
+    Nothing is invented: the flags that client takes are the discovery's own
+    (CR-CRU-111 ruling 1 — on that stack the declaration IS the invocation), so
+    the gate reads the declared paths and hands them to the client that can
+    ingest them. `-t` has no client flag and is dropped: the run's top-level
+    dir is the project dir the client resolves. None when the command declares
+    no discovery this gate can read, which the gate REPORTS against the suite
+    rather than skipping."""
+    if "unittest" not in tokens:
+        return None
+    flags = {"-s": "--start-dir", "--start-dir": "--start-dir",
+             "-p": "--pattern", "--pattern": "--pattern"}
+    argv = [tokens[0], os.path.join(clients_dir(), sibling_client("python")),
+            "regression"]
+    start_dir = False
+    for index, token in enumerate(tokens[:-1]):
+        flag = flags.get(token)
+        if flag is None:
+            continue
+        argv += [flag, tokens[index + 1]]
+        start_dir = start_dir or flag == "--start-dir"
+    return argv if start_dir else None
+
+
+_SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
+
+
+def sibling_client_argv(stack, command, agent=None):
+    """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
+    `command` declares, or None when this declaration cannot be dispatched.
+
+    A command that already invokes that client IS the invocation and runs as
+    declared. One that spells its suite out is translated by the one rule that
+    stack's declarations take (`_SUITE_ARGV_BY_STACK`) — the gate reading the
+    declared paths, never a re-implementation of the suite: what runs the tests
+    is that stack's client, in its own process, ingesting under its own stack,
+    which is §S1's "no client learns another language's tests" enforced by
+    construction.
+
+    The gate's `--agent` rides last so the dispatched run is attributed to the
+    gate that asked for it; a client handed the flag twice takes the last,
+    which is this one."""
+    try:
+        tokens = shlex.split(command or "")
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    if any(os.path.basename(token) == sibling_client(stack) for token in tokens):
+        argv = list(tokens)
+    else:
+        builder = _SUITE_ARGV_BY_STACK.get(stack)
+        argv = builder(tokens) if builder else None
+    if argv and agent:
+        argv += ["--agent", agent]
+    return argv
+
+
+# One declared suite of a project: the target, the stack that owns it, the tier
+# it names (None when it names none of the vocabulary — `test:client` is a
+# declared target and not a tier), the command it was declared with, and
+# whether the GATE covers it.
+GateSuite = collections.namedtuple(
+    "GateSuite", ("target", "stack", "tier", "command", "gated", "excluded"))
+
+GATE_SUITE_FAILED_CODE = "gate-suite-failed"
+GATE_SUITE_UNREPORTED_CODE = "gate-suite-unreported"
+GATE_SUITE_UNDISPATCHABLE_CODE = "gate-suite-undispatchable"
+# AC3 — a suite whose RUNNER is not there: the run never happened, so it has no
+# exit code and no envelope of its own, and the gate NAMES it instead of dying
+# with it.
+GATE_SUITE_UNRUNNABLE_CODE = "gate-suite-unrunnable"
+
+# The OSError shapes a PROCESS LAUNCH raises, and the ONLY ones AC3's "the
+# runner is not there" produces: `Popen` re-raises the child's failed `exec` as
+# one of these three, and a run that never started is the whole content of
+# `gate-suite-unrunnable`.
+#
+# It is a closed list rather than a bare `OSError` because `OSError` is not the
+# spawn's alone. `urllib.error.URLError` is an `OSError` SUBCLASS, and so is
+# `TimeoutError`: a board that goes unreachable during a run's INGEST raises
+# one of those out of the run body, LONG after the suite has run to completion.
+# Reading that as "could NOT be run" would have the gate tell a reader a suite
+# that ran and passed never ran at all — the one misreport a gate must not
+# make, because a reader cannot tell it from a real one.
+SPAWN_FAILURES = (FileNotFoundError, NotADirectoryError, PermissionError)
+
+
+def declared_target_tier(surface, target):
+    """The `<tier>` slot's value in a declared target's NAME, or None when the
+    name does not fit this stack's template at all.
+
+    It is not necessarily a TIER: `test:client` fits `test:<tier>` and names no
+    tier of the vocabulary, which is why every caller checks the answer against
+    `TIER_MEANINGS` rather than assuming it."""
+    head, _, tail = surface.target.partition("<tier>")
+    if not target.startswith(head) or not target.endswith(tail):
+        return None
+    return target[len(head):len(target) - len(tail) if tail else None]
+
+
+def template_declared_suites(args, surface):
+    """The DEFAULT enumeration, for a stack whose declarable target NAMES are
+    the tier vocabulary itself (`<tier>` for a maven / nextest profile,
+    `junit-<tier>` for a native make target): every tier whose target this
+    surface can READ.
+
+    It is CR-CRU-111's own lookup asked six times instead of once — the same
+    parse, without the single-name filter — so enumeration and lookup cannot
+    disagree about what a project declared. Such a target carries no command,
+    so it names no stack and belongs to the client reading it."""
+    return tuple((declared_target_name(surface, tier), None)
+                 for tier in TIER_MEANINGS
+                 if surface.read(args, declared_target_name(surface, tier)))
+
+
+def declared_gate_suites(args, surface, stack):
+    """§S1/§S2 — the SUITES this project declares: every declared target, the
+    stack that owns it, and whether the gate covers it.
+
+    EMPTY when this stack's surface cannot enumerate a project's declaration
+    (`suites=None`) or the project declares nothing; the gate then keeps its
+    own single-runner regression, which is the one suite such a project has
+    (§S2: "where a project declares one suite, behaviour is unchanged").
+
+    `regression` is never a MEMBER: §S2 makes it the UNION of the declared
+    targets, and a union is not an element of itself."""
+    reader = surface.suites
+    if reader is None:
+        return ()
+    suites = []
+    for target, command in reader(args, surface) or ():
+        named = declared_target_tier(surface, target)
+        tier = named if named in TIER_MEANINGS else None
+        if tier == "regression":
+            continue
+        excluded = GATE_UNCOVERED_TIERS.get(tier)
+        suites.append(GateSuite(target=target, tier=tier, command=command,
+                                stack=declaring_stack(command) or stack,
+                                gated=excluded is None, excluded=excluded))
+    return tuple(suites)
+
+
+def _captured_suite_run(call):
+    """Run one suite in THIS process and take the envelope it emits, as
+    `(exit code, stdout, error)`.
+
+    The gate puts exactly ONE document on stdout (CR-CRU-058 §S1) and it is now
+    composing N runs, so a locally-run suite's own envelope is READ here
+    instead of printed. Nothing else about the run changes: it ingests,
+    narrates on stderr and returns its exit code exactly as a standalone run
+    does — only the destination of the document it emits differs.
+
+    AC3, the LOCAL half of the guard: a runner that is not there raises out of
+    the client's own run body (`bun-crucible.py`'s `Popen`), and a gate that
+    lets that propagate reports NOTHING — no envelope, no verdict, and not a
+    word about the suites it could have run. The `OSError` is caught and
+    handed back so the gate can name the suite and the reason; there is then no
+    exit code and no document, which is what `code=None` says.
+
+    The catch stays WIDE and the reading is narrow. It has to stay wide: an
+    error the gate does not catch here kills the composition, which is the very
+    defect AC3 exists to close. But `call()` is a whole run — spawn, collect,
+    ingest — so an `OSError` out of it is not evidence the suite failed to
+    START; the board going unreachable at the ingest raises one too. Deciding
+    WHICH failure this was belongs to `_run_outcome`, once, for this path and
+    the dispatched one alike (`SPAWN_FAILURES`)."""
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            code = call()
+    except OSError as error:
+        return None, buffer.getvalue(), error
+    return code, buffer.getvalue(), None
+
+
+def _suite_envelope(stdout_text):
+    """The AXI envelope a suite's run put on stdout — the LAST decodable
+    document, because a DISPATCHED client's stdout carries whatever its own
+    children printed before it."""
+    for match in reversed(list(re.finditer(r"(?m)^axi:", stdout_text or ""))):
+        decoded = _decode_axi_snapshot(stdout_text[match.start():])
+        axi = decoded.get("axi") if isinstance(decoded, dict) else None
+        if isinstance(axi, dict):
+            return axi
+    return None
+
+
+# Everything a run's own envelope counts, `files` INCLUDED. CR-CRU-051 §S2
+# carries that count "so a suite that silently shrinks is visible in the gate
+# output itself", which is this CR's own thesis — a composition that dropped it
+# would hide precisely what the gate exists to show (AC4).
+SUITE_COUNT_KEYS = ("passed", "failed", "pending", "total", "files")
+
+
+def _suite_counts(envelope):
+    """The run counts a suite's own envelope reports, or None when it reported
+    none — a suite that never said what it ran is not a suite the gate can
+    claim it covered."""
+    run = (envelope or {}).get("run")
+    if not isinstance(run, dict):
+        return None
+    counts = {key: run[key] for key in SUITE_COUNT_KEYS
+              if isinstance(run.get(key), int)}
+    return counts or None
+
+
+def _gate_suite_warning(code, suite, detail):
+    return {"code": code,
+            "detail": f"declared suite `{suite.target}` ({suite.stack}) {detail}"}
+
+
+def whole_suite_label(stack):
+    """§S2 rule 1 — what the invoking stack's own regression IS, named once so
+    the `suites[]` row that points at it and the warning that reports it read
+    alike."""
+    return f"the whole {stack} suite this gate ran"
+
+
+def _whole_suite_warning(code, stack, covered, detail):
+    """The same finding, for the run that is no declared suite but COVERS them:
+    §S2 rule 3 makes an own-stack declared target a subset of the whole-suite
+    run, so that run's outcome is reported against every declared target it
+    covered — which is how AC2's `warnings[]` still NAMES the suite whose
+    caller has somewhere to look."""
+    covers = (" covering " + ", ".join(f"`{target}`" for target in covered)
+              if covered else "")
+    return {"code": code,
+            "detail": f"{whole_suite_label(stack)}{covers} {detail}"}
+
+
+def _run_outcome(code, counts, error):
+    """What the gate has to SAY about ONE run it made: `(ok, warning code,
+    warning detail)`, the detail None for a run that simply passed.
+
+    One reading for the whole-suite run and for a dispatched suite, so the two
+    cannot report the same condition differently.
+
+    A raised error is CLASSIFIED and never taken at face value. Only a
+    `SPAWN_FAILURES` shape means the run never happened; every other `OSError`
+    that reaches here — an unreachable board during the INGEST above all — was
+    raised by a suite that HAD already run, and it is reported as the thing it
+    actually is: a run with no counts to show for it."""
+    if isinstance(error, SPAWN_FAILURES):
+        return False, GATE_SUITE_UNRUNNABLE_CODE, f"could NOT be run: {error}"
+    if error is not None:
+        return False, GATE_SUITE_UNREPORTED_CODE, (
+            f"RAN, and then failed before it could report what it ran, so the "
+            f"gate cannot say what it covered: {error}")
+    if counts is None:
+        return False, GATE_SUITE_UNREPORTED_CODE, (
+            f"reported no run counts (exit {code}), so the gate cannot say "
+            f"what it covered")
+    if counts.get("failed") or code != 0:
+        return False, GATE_SUITE_FAILED_CODE, (
+            f"FAILED: {counts.get('failed', 0)} of {counts.get('total', 0)} "
+            f"test(s) failed (exit {code})")
+    return True, None, None
+
+
+def _adopt_suite_warnings(gate_warnings, envelope):
+    """A run's own findings are the gate's: the document they rode on is not
+    printed any more, so they ride this one."""
+    for warning in (envelope or {}).get("warnings") or []:
+        if isinstance(warning, dict) and warning not in gate_warnings:
+            gate_warnings.append(warning)
+
+
+def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
+                    crucible_url, warnings=()):
+    """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
+    plus one dispatched run for every declared suite another stack owns, in ONE
+    envelope naming them all.
+
+    Three rules, and only the second adds a run to a project that already had a
+    gate:
+
+    1. the invoking stack's whole-suite regression ALWAYS runs (`whole_suite`),
+       unchanged — same argv, same `regression` tier, same `run` block
+       INCLUDING `files`. It is the gate's union BASE, so the union is never
+       smaller than what the gate covered before this CR (AC4);
+    2. a declared suite owned by ANOTHER stack is ADDED — one dispatched run
+       each, run and ingested by that stack's own client, under its own stack;
+    3. a declared target owned by THIS stack is NOT re-run. The whole-suite run
+       already collected it — there is no discovery exclusion (AC6/§S3), so an
+       own-stack target is a SUBSET of a run that has already happened — and
+       its `suites[]` row records which run covered it rather than running it
+       twice.
+
+    Each row's counts are attributed to the suite that produced them (AC1),
+    never pooled into one total. A run that FAILED, that could not be RUN at
+    all, that could not be dispatched, or that reported no counts makes the
+    gate NOT ok and is NAMED in `warnings[]`: "a gate that ran a subset reports
+    as a gate that ran a subset"."""
+    rows, gate_warnings = [], list(warnings)
+    ok, worst = True, 0
+
+    # Rule 1, and FIRST: every own-stack declared target is reported against
+    # this run, so its outcome has to be known before they are named.
+    covered = tuple(suite.target for suite in suites
+                    if suite.gated and suite.stack == stack)
+    code, out, error = _captured_suite_run(whole_suite)
+    envelope = _suite_envelope(out)
+    whole_counts = _suite_counts(envelope)
+    _adopt_suite_warnings(gate_warnings, envelope)
+    totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
+    totals.update(whole_counts or {})
+    whole_ok, warning_code, detail = _run_outcome(code, whole_counts, error)
+    if not whole_ok:
+        gate_warnings.append(
+            _whole_suite_warning(warning_code, stack, covered, detail))
+        ok, worst = False, worst or (code or 0)
+
+    for suite in suites:
+        row = {"suite": suite.target, "stack": suite.stack, "gated": suite.gated}
+        if not suite.gated:
+            # §S1 — declared and OUT, with the reason, so an omission by
+            # silence cannot pass for a decision.
+            row["excluded"] = suite.excluded
+            rows.append(row)
+            continue
+        if suite.stack == stack:
+            # Rule 3 — covered by the run that already happened, and SAYING so
+            # rather than collecting the same files a second time. The counts
+            # are that run's, and they are NOT added to the union again.
+            row["coveredBy"] = whole_suite_label(stack)
+            row.update(whole_counts or {})
+            rows.append(row)
+            continue
+        row["client"] = sibling_client(suite.stack)
+        argv, cwd = dispatch(suite) if dispatch else (None, None)
+        if not argv:
+            rows.append(row)
+            gate_warnings.append(_gate_suite_warning(
+                GATE_SUITE_UNDISPATCHABLE_CODE, suite,
+                f"declares no invocation this gate can dispatch to "
+                f"{sibling_client(suite.stack)}, so it did NOT run"))
+            ok, worst = False, worst or 1
+            continue
+        print(f"[crucible] {verb}: dispatching `{suite.target}` to "
+              f"{' '.join(argv)}  (cwd={cwd})", file=sys.stderr)
+        try:
+            result = subprocess.run(argv, cwd=cwd, capture_output=True,
+                                    text=True)
+        except OSError as spawn_error:
+            # AC3, the DISPATCHED half of the guard: a declared command whose
+            # first token is not there would otherwise kill the gate
+            # mid-composition, taking the suites that DID run with it.
+            code, out, error = None, "", spawn_error
+        else:
+            sys.stderr.write(result.stderr or "")
+            code, out, error = result.returncode, result.stdout or "", None
+        envelope = _suite_envelope(out)
+        counts = _suite_counts(envelope)
+        if counts:
+            row.update(counts)
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + value
+        rows.append(row)
+        _adopt_suite_warnings(gate_warnings, envelope)
+        suite_ok, warning_code, detail = _run_outcome(code, counts, error)
+        if not suite_ok:
+            gate_warnings.append(
+                _gate_suite_warning(warning_code, suite, detail))
+            ok = False
+        worst = worst or (code or 0)
+    emit_axi(verb, ok,
+             {"run": totals, "suites": rows,
+              "help": run_help(verb, ok, totals["failed"], crucible_url)},
+             context, gate_warnings,
+             f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
+             f"failed={totals['failed']} total={totals['total']}")
+    return 0 if ok else (worst or 1)
+
+
+def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
+                    context, crucible_url):
+    """§S1/§S2 — the GATE's regression step: the one composition all five gates
+    run, so "the gate covers every declared suite" is a property of the fleet
+    and not of one client.
+
+    `whole_suite` is this client's OWN whole-suite regression, and §S2's
+    additive rule runs it either way — as the gate's whole answer for a project
+    whose declaration this stack cannot enumerate or that declares nothing (it
+    IS that project's one suite), and as the union BASE for a project that
+    declares suites, which are added to it and never substituted for it."""
+    suites = declared_gate_suites(args, surface, stack)
+    if not suites:
+        return whole_suite()
+    return run_gate_suites(suites, stack=stack, verb=verb,
+                           whole_suite=whole_suite, dispatch=dispatch,
+                           context=context, crucible_url=crucible_url)
+
+
+# ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
+#
+# `unit` is the one tier of the six whose MEANING forbids waiting ("no wait on
+# the clock", `TIER_MEANINGS` above), so a run of it that spends its wall clock
+# not computing has taken a dependency its tier does not name. The check is
+# scoped to that tier alone and it is deliberate: `integration`, `e2e`,
+# `regression` and `bdd` name real elapsed time as a dependency by definition,
+# and a warning there would be noise, not a finding.
+#
+# It WARNS and never refuses. Classification is the project's decision, so the
+# client reports the contradiction rather than vetoing it: `ok` and the exit
+# code are the run's own, untouched, and a check that turned a passing suite
+# red would be a worse defect than the one it detects.
+#
+# The measurement is `resource.getrusage(RUSAGE_CHILDREN)` deltas taken around
+# the client's OWN `subprocess.run` — stdlib, no dependency. Measured
+# discrimination: a sleeping child reads 38.4x, a CPU-bound child 1.00x, and
+# this repo's own unit target 1.09x (17.8 s wall / 16.3 s CPU), so 2x sits ~1.8x
+# above a real unit suite and ~19x below a sleeping one. `RUSAGE_CHILDREN` sums
+# CPU across cores, so a PARALLEL runner reads BELOW 1x and can never
+# false-positive — the asymmetry is the reason this factor is safe.
+#
+# BOUND, stated where the mechanism is: `RUSAGE_CHILDREN` is a per-PROCESS
+# cumulative counter, so a delta taken around one `subprocess.run` is
+# attributable to that child only while the bracketed call spawns exactly ONE.
+# Every `unit` run in the fleet does. Widening this check past `unit` would
+# demand a delta per `subprocess.run` rather than one per verb (a gate that
+# brings a compose stack up spawns two), which is why widening it is not a
+# wording change.
+UNIT_RUN_WALL_EXCEEDS_CPU_CODE = "unit-run-wall-exceeds-cpu"
+
+# The tier the check is scoped to, and the factor §S4 states: wall at or over
+# 2x CPU. Named rather than spelled at the comparison so the one definition the
+# fleet shares is also the one it prints.
+WALL_VS_CPU_TIER = "unit"
+WALL_VS_CPU_FACTOR = 2.0
+
+
+class ChildRunTiming:
+    """§S4 — the bracket around a child run: wall seconds, child CPU seconds,
+    and the ratio between them.
+
+    Used as a context manager around the ONE `subprocess.run` a test verb makes
+    (`with ChildRunTiming() as timing: result = _run_logged(...)`), so the
+    rusage delta covers that child and nothing else. `wall` and `cpu` are 0.0
+    until the block exits, and never negative: a monotonic clock cannot go
+    backwards, and a rusage counter is cumulative, but clamping costs nothing
+    and keeps a nonsense figure out of a warning.
+
+    `ratio` is None when no CPU was measurable at all rather than raising or
+    reporting an infinity — a child that consumed no measurable CPU is the
+    STRONGEST form of the condition this exists to detect, so the division is
+    guarded and the caller words that case for itself."""
+
+    __slots__ = ("wall", "cpu", "_wall_at", "_cpu_at")
+
+    def __init__(self):
+        self.wall = 0.0
+        self.cpu = 0.0
+        self._wall_at = None
+        self._cpu_at = None
+
+    @staticmethod
+    def _child_cpu():
+        """CPU seconds this process's waited-for children have consumed, user
+        plus system — the whole cost of a child, since a run that spends its
+        time in the kernel is computing just as much as one in user space."""
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return usage.ru_utime + usage.ru_stime
+
+    def __enter__(self):
+        self._wall_at = time.monotonic()
+        self._cpu_at = self._child_cpu()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.wall = max(time.monotonic() - self._wall_at, 0.0)
+        self.cpu = max(self._child_cpu() - self._cpu_at, 0.0)
+        return False
+
+    @property
+    def ratio(self):
+        """wall / cpu, or None when no child CPU was measurable."""
+        return self.wall / self.cpu if self.cpu > 0 else None
+
+
+def unit_run_wall_vs_cpu_warnings(tier, client, timing,
+                                  factor=WALL_VS_CPU_FACTOR):
+    """§S4/AC6b — the envelope `warnings[]` fragment for a `unit` run that spent
+    its wall clock waiting: `[]` or exactly one `{code, detail}`, in the shape
+    `preflight_cycle_warnings` returns its finding, so a call site adds it to
+    the warnings it already carries and changes nothing else.
+
+    ONE definition for the fleet: five clients reach this, and a consumer
+    matches on `UNIT_RUN_WALL_EXCEEDS_CPU_CODE`, so `client` (this client's own
+    name — its own fact, like the declaration surface it hands
+    `add_tier_verbs`) is what tells a reader of the board WHICH stack waited.
+
+    `tier` is the tier the caller STATED, so an untiered run (`tier=None`) and
+    every tier but `unit` return `[]` without measuring anything twice. A run
+    with no wall time at all — nothing was bracketed — is not a finding
+    either."""
+    if tier != WALL_VS_CPU_TIER or timing is None or timing.wall <= 0.0:
+        return []
+    if timing.wall < factor * timing.cpu:
+        return []
+    ratio = timing.ratio
+    measured = (f"{ratio:.1f}x" if ratio is not None
+                else "no child CPU was measurable at all")
+    return [{
+        "code": UNIT_RUN_WALL_EXCEEDS_CPU_CODE,
+        "detail": (f"{client} {tier}: this run spent {timing.wall:.3f}s of "
+                   f"wall time against {timing.cpu:.3f}s of child CPU "
+                   f"({measured}, at or over the {factor:g}x mark) — a "
+                   f"{tier} run that spends its time WAITING is taking a "
+                   f"dependency its tier does not name (a process, a socket, "
+                   f"a live service, or the clock itself). Reclassify the "
+                   f"run, or find what it waits on; it is reported either "
+                   f"way, because which tier these tests belong to is the "
+                   f"project's call and not this client's"),
+    }]
 
 
 def remove_agent_silent(project_dir, agent_id, ops):
@@ -1660,33 +5687,121 @@ def close_gate_identity(project_dir, identity, ops, remove_fn=None):
           file=sys.stderr)
 
 
-def post_gate(project_key, agent_id, gate, post_fn, context=None):
+def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
     """POST a gate event. `context` is OMITTED entirely when falsy — never a
-    fabricated empty dict."""
+    fabricated empty dict.
+
+    `release` is the label of the release this gate gates, and rides as the
+    event's own top-level `version` — a SIBLING of `gate`, the server's
+    first-class field, never a key inside the gate object. It travels
+    VERBATIM: nothing here normalises a pre-release suffix, strips a prefix or
+    derives a label from a branch name. It follows `context`'s absent-key rule
+    for the same reason the server does: `version` is taken only when it is a
+    non-empty string, and a gate carrying one is retention-protected until its
+    release records, so an empty or null value would either be dropped
+    silently or make every gate look release-bound and unprunable."""
     payload = {"projectKey": project_key, "agentId": agent_id, "gate": gate}
     if context:
         payload["context"] = context
+    if isinstance(release, str) and release:
+        payload["version"] = release
     return post_fn("/api/v2/gates", payload)
 
 
 def post_milestone(project_key, agent_id, mtype, post_fn,
-                   label=None, commit=None, context=None):
+                   label=None, commit=None, context=None,
+                   released_at=None, crs=None, packages=None,
+                   repair_provenance=False):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
-    OMITTED rather than sent as nulls."""
+    OMITTED rather than sent as nulls.
+
+    CR-CRU-080 §S4 — a release's provenance travels the same way: `releasedAt`
+    (the tag's commit date, epoch seconds) only when it was computed, and
+    `crs` whenever a scan HAPPENED — including as an empty list, which says
+    "the queue registered none of them" and is a different fact from a release
+    that carries no CR set at all.
+
+    CR-CRU-081 §S3 — `repairProvenance` is sent ONLY when the caller asked for
+    it, so an ordinary post is byte-identical to the pre-081 one and stays the
+    server's dedup replay. It is the whole opt-in: without this key on the
+    wire a held release cannot be rewritten.
+
+    CR-CRU-084 §S1/§S3 — `packages` rides on `crs`' exact terms, because AC4
+    gives its empty state the same kind of meaning: the key is OMITTED when
+    the ceremony said nothing about packages, and SENT as `[]` when it
+    declared none. Hence `is not None` rather than a truthiness test — a
+    falsy check here would silently turn "this release delivered nothing"
+    into "this ceremony said nothing"."""
     payload = {"projectKey": project_key, "agentId": agent_id, "type": mtype}
     if label:
         payload["label"] = label
     if commit:
         payload["commit"] = commit
+    if released_at:
+        payload["releasedAt"] = released_at
+    if crs is not None:
+        payload["crs"] = crs
+    if packages is not None:
+        payload["packages"] = packages
+    if repair_provenance:
+        payload["repairProvenance"] = True
     if context:
         payload["context"] = context
     return post_fn("/api/v2/milestones", payload)
+
+
+def add_plan_file_release_arg(p):
+    """CR-CRU-121 §S2 — declare `--release` on `plan-file`: the release the CR
+    this plan executes belongs to, posted VERBATIM as the body's top-level
+    `release`. The ONE declaration site for the whole fleet — a flag five
+    clients hand-rolled would word itself five ways, and the route reads its
+    PRESENCE (a plan filed without it makes no roadmap claim)."""
+    p.add_argument("--release", help=PLAN_FILE_RELEASE_HELP)
+
+
+def add_plan_file_cycle_kind_arg(p):
+    """CR-CRU-127 §S1/§S2 — declare `--cycle-kind` on `plan-file`: the kind of
+    the cycle declared at the SAME position, posted VERBATIM inside that
+    cycle's own body entry.
+
+    The ONE declaration site for the whole fleet, following
+    `add_plan_file_release_arg` (CR-CRU-121) and `add_cycle_add_target_args`
+    (CR-CRU-124) — `--cycle` itself is hand-rolled five times and has drifted
+    nowhere yet only by luck, and the NEW flag must not repeat that.
+
+    `action="append"` because §S1's grammar is one occurrence per cycle: a
+    scalar declaration would silently keep the last kind and file every other
+    cycle under it. NO `choices=`: `CYCLE_KINDS` belongs to the server, so an
+    unrecognised kind must travel and come back as the ROUTE's own refusal
+    rather than an argparse exit against a second copy that drifts."""
+    p.add_argument("--cycle-kind", action="append",
+                   help=PLAN_FILE_CYCLE_KIND_HELP)
+
+
+def add_cycle_add_target_args(p):
+    """CR-CRU-124 §S3/§S4 — declare `--plan` and `--kind` on `cycle-add`: the
+    plan the cycle is appended to, and the kind of work that cycle is.
+
+    The ONE declaration site for the whole fleet, created because `cycle-add`
+    had none: all five clients hand-rolled their own subparser, exactly the
+    situation `plan-file` was in before `add_plan_file_release_arg`. Five
+    independent declarations would word themselves five ways and drift."""
+    p.add_argument("--plan", help=CYCLE_ADD_PLAN_HELP)
+    p.add_argument("--kind", help=CYCLE_ADD_KIND_HELP)
 
 
 def add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (test/regression/
     pre-merge-gate): the binding for the register-inside-the-run case."""
     p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
+
+
+def add_gate_release_arg(p):
+    """Declare `--release` on a GATE verb (gate-run/gate-report): the label of
+    the release this gate gates, posted as the event's top-level `version`.
+    One helper for the whole fleet, so all five clients spell the flag and its
+    help identically."""
+    p.add_argument("--release", help=GATE_RELEASE_HELP)
 
 
 def cmd_gate_report(args, project_dir, ops):
@@ -1712,7 +5827,8 @@ def cmd_gate_report(args, project_dir, ops):
     gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
     if args.commit:
         gate["push"] = {"commit": args.commit}
-    resp = ops.post_gate(project_dir, agent_id, gate, fleet_context() or None)
+    resp = ops.post_gate(project_dir, agent_id, gate, fleet_context() or None,
+                         getattr(args, "release", None))
     ok = resp.get("ok", False)
     legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -1730,6 +5846,180 @@ def cmd_gate_report(args, project_dir, ops):
 # in flight, and how often it wakes to check. One cadence for the whole fleet.
 _GATE_POLL_CADENCE_S = 2.0
 _GATE_POLL_TICK_S = 0.4
+
+# CR-CRU-117 §S2 — the axi step states that are RESOLVED: the row is finished
+# and will not change again. Every other state a row can be in — `pending`,
+# `running`, `fixing`, and each awaiting-a-decision state the tool has or
+# grows — means the run is still going. Stated as the RESOLVED set rather than
+# its complement so a state this fleet has never seen counts as still-going:
+# withholding the stream is the failure mode that hid this defect for a
+# release, and an in-flight gate is marked as one anyway.
+_RESOLVED_AXI_STEP_STATES = frozenset(("completed", "skipped", "failed"))
+
+# The RUN-level states that are a terminus. A run reporting one has stopped,
+# whatever its ladder still says.
+_TERMINAL_AXI_RUN_STATES = frozenset(("completed", "failed", "cancelled"))
+
+
+def axi_snapshot_in_flight(decoded):
+    """CR-CRU-117 §S2 — is this decoded snapshot a run STILL GOING?
+
+    TERMINALITY, never the row count. The guard this replaces demanded a
+    PARTIAL ladder (`0 < nsteps < 9`), and `axi status` ALWAYS emits all nine
+    rows with the unrun ones `pending`, so it was false for every real snapshot
+    and no client ever streamed an interim gate for a real run.
+
+    A snapshot is in flight when it has resolved NOTHING — no top-level
+    `outcome`, no top-level `error`, no terminal run status — and it still has
+    a ladder to stream. Two independent things then say the run is going, and
+    either is enough: the RUN's own non-terminal status, or a ROW that has not
+    resolved. The row test alone would drop a snapshot whose listed rows have
+    all finished while the next has yet to appear; the run test alone would
+    trust a status field over the ladder beneath it.
+
+    An EMPTY ladder is not streamed: there is nothing to put in the gate's
+    `steps[]`, which is the only half of the `0 < nsteps < 9` guard that was
+    ever right.
+
+    A snapshot carrying a top-level `error` is NOT in flight, and that is the
+    same terminality test rather than an exception to it: the `error` line is
+    the tool saying THIS invocation stopped observing the run (the documented
+    bounded-`--wait` return is exactly that shape), so its ladder is a
+    last-known state and not a live one. CR-CRU-115 §S3 pins the consequence —
+    a bounded hold posts no gate at all — and the caller reports it instead.
+
+    Takes a DECODED snapshot, never a maybe-snapshot: `poll_axi_snapshot`
+    answers a dict or None and `stream_axi_ladder` drops the None before asking,
+    so a type guard here would be a branch no run can reach — and one that
+    would answer "not in flight" for a caller whose real problem is that it
+    never decoded."""
+    if decoded.get("outcome") or decoded.get("error"):
+        return False
+    run = decoded.get("run") or {}
+    status = str(run.get("status") or "")
+    if status in _TERMINAL_AXI_RUN_STATES:
+        return False
+    steps = run.get("steps") or []
+    if not steps:
+        return False
+    return bool(status) or any(
+        str(s.get("status")) not in _RESOLVED_AXI_STEP_STATES for s in steps)
+
+
+def axi_ladder_identity(decoded):
+    """CR-CRU-117 §S2 — what makes a polled ladder the SAME one already posted:
+    the step names, their statuses, and whether the snapshot carries a
+    top-level `outcome` key at all.
+
+    The throttle the cadence alone cannot be. Ruled 2026-09-10: at a 2 s
+    cadence a 45-minute pipeline would post ~1350 gate events, against 1842 on
+    this whole board, while the ladder itself transitions at most nine times
+    per run. Durations and finding counts are deliberately NOT part of the
+    identity — they move on every tick, which would defeat the dedup while
+    telling a reader nothing it did not already have."""
+    run = (decoded.get("run") or {}) if isinstance(decoded, dict) else {}
+    return (tuple((s.get("step"), s.get("status"))
+                  for s in (run.get("steps") or [])),
+            isinstance(decoded, dict) and "outcome" in decoded)
+
+
+def poll_axi_snapshot(no_mistakes_path):
+    """One `axi status` poll, decoded — or None when the tool answered with
+    nothing usable. An unparseable or empty snapshot is a normal state of a run
+    still being written, so it is a SKIPPED tick and never an error."""
+    status = subprocess.run([no_mistakes_path, "axi", "status"],
+                            capture_output=True, text=True)
+    snap = (status.stdout or "").strip()
+    decoded = _decode_axi_snapshot(snap) if snap else None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
+                      context, ops):
+    """§S8/CR-CRU-117 §S2 — poll `axi status` while `proc` is alive and POST one
+    INTERIM gate per DISTINCT ladder. Returns True when at least one interim
+    gate reached the board: the fact the envelope states and the sealing
+    decision below cannot see for itself.
+
+    TWO throttles, both required and neither sufficient. The CADENCE decides
+    how often the tool is asked — untouched, per this CR's Non-goals, and the
+    poll clock ticks on every poll rather than on every POST so a run holding
+    one ladder is not interrogated five times a second. The LADDER then decides
+    whether the answer is worth putting on the board.
+
+    The interim POST carries NO release: a version-stamped gate is
+    retention-protected (`LIVE_GATE`, `src/store.ts`), so stamping every
+    snapshot would leave a run's worth of unprunable gates behind for one
+    release — and the seal restates the release anyway."""
+    last_poll = None
+    last_ladder = None
+    posted_interim = False
+    while proc.poll() is None:
+        now = time.monotonic()
+        if last_poll is None or (now - last_poll) >= _GATE_POLL_CADENCE_S:
+            last_poll = now
+            decoded = poll_axi_snapshot(no_mistakes_path)
+            if decoded is not None and axi_snapshot_in_flight(decoded):
+                ladder = axi_ladder_identity(decoded)
+                if ladder != last_ladder:
+                    gate, _ = gate_from_axi(decoded, intent, final=False)
+                    ops.post_gate(project_dir, agent_id, gate, context or None)
+                    last_ladder = ladder
+                    posted_interim = True
+        time.sleep(_GATE_POLL_TICK_S)
+    return posted_interim
+
+
+def gate_run_result_fields(outcome, resolved, release, posted_interim, held):
+    """§S4 — the envelope's statement of what this exit put on the board, always
+    as a value and never as an absent key: a reader cannot tell a missing field
+    from a client too old to have one. `unstated` and `none` are the fleet's own
+    distinction and are not interchangeable — `unstated` means nothing was
+    ASSERTED (no `--release` was given; the run named no outcome), `none` means
+    this exit did the thing ZERO times (no gate reached the wire).
+
+    CR-CRU-117 §S2 — `outcome` is therefore the SEALING verdict when there is
+    one and otherwise names what DID reach the board, which is the same word
+    `postedGate` uses. `none` beside a gate sitting on the board would be a
+    reader's only evidence pointing the wrong way, correctable solely by a
+    second field."""
+    posted = (GATE_POSTED_FINAL if outcome
+              else GATE_POSTED_INTERIM if posted_interim
+              else ENVELOPE_TIER_NONE)
+    return {
+        "outcome": outcome or posted,
+        "rawOutcome": resolved or ENVELOPE_TIER_UNSTATED,
+        "release": release if isinstance(release, str) and release
+                   else ENVELOPE_TIER_UNSTATED,
+        "postedGate": posted,
+        "inFlight": held,
+    }
+
+
+def unsealed_run_report(exit_code, resolved, detail, held, posted_interim):
+    """§S3/CR-CRU-117 §S2 — the caller-facing report for an exit that SEALED
+    nothing: the stderr lines and the legacy one-liner, built from ONE list of
+    facts so the two channels cannot drift apart.
+
+    The facts, in order: what was not sealed and why; that an in-flight gate is
+    already on the board, when the poll loop put one there; the run's OWN error,
+    which is what answers "did this run terminate?" and is already in hand; and
+    the move that resumes a held run."""
+    said = ("the run is still in flight — `axi run` resolved no outcome"
+            if held else
+            f"the run resolved {resolved!r}, which is in no pass family "
+            f"this client knows, so it is not sealed")
+    rest = []
+    if posted_interim:
+        rest.append(GATE_ALREADY_ON_BOARD)
+    if detail:
+        rest.append(f"the run said: {detail}")
+    if held:
+        rest.append(AXI_REATTACH_HELP)
+    lines = [f"gate-run: NOT SEALED: {said}"] + [f"gate-run: {r}" for r in rest]
+    legacy = (f"gate-run: ok=False sealed=nothing exit={exit_code} — "
+              + "; ".join([said] + rest))
+    return lines, legacy
 
 
 def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
@@ -1769,27 +6059,13 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
               file=sys.stderr)
         return 1
 
-    # Poll `axi status` while the run is in flight; post throttled INTERIM
-    # gates decoded from each (partial) snapshot.
-    last_post = None
-    while proc.poll() is None:
-        now = time.monotonic()
-        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
-            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
-            snap = (status.stdout or "").strip()
-            if snap:
-                decoded = _decode_axi_snapshot(snap)
-                if isinstance(decoded, dict):
-                    run = decoded.get("run") or {}
-                    in_flight = (str(run.get("status")) != "completed"
-                                 and "outcome" not in decoded)
-                    gate, nsteps = gate_from_axi(decoded, intent, final=False)
-                    # Post only a genuine PARTIAL ladder (never a resolved /
-                    # full 9-step snapshot masquerading as interim).
-                    if in_flight and 0 < nsteps < 9:
-                        ops.post_gate(project_dir, agent_id, gate, context or None)
-                        last_post = now
-        time.sleep(_GATE_POLL_TICK_S)
+    # Stream the ladder while the run is in flight (`stream_axi_ladder` owns
+    # the cadence, the terminality guard and the ladder dedup). Whether it
+    # actually POSTED is remembered here, because the envelope below states
+    # which gate this exit put on the board and the sealing decision cannot see
+    # the loop.
+    posted_interim = stream_axi_ladder(proc, nm, intent, project_dir, agent_id,
+                                       context, ops)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout.
@@ -1803,15 +6079,48 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
               file=sys.stderr)
         return 1
 
+    # Only the SEAL carries the release: a version-stamped gate is retention-
+    # protected until its release records, so stamping every interim snapshot
+    # of the poll loop above would leave a run's worth of unprunable gates
+    # behind for one release — and the seal restates the release anyway.
     final_gate, _ = gate_from_axi(final_decoded, intent, final=True)
-    resp = ops.post_gate(project_dir, agent_id, final_gate, context or None)
+    outcome = final_gate.get("outcome")
+
+    raw = final_decoded.get("outcome")
+    resolved = raw if isinstance(raw, str) and raw else None
+    release = getattr(args, "release", None)
+    held = outcome is None and resolved is None
+    result_fields = gate_run_result_fields(outcome, resolved, release,
+                                           posted_interim, held)
+    envelope_context = ops.context(project_dir, agent_id=agent_id)
+
+    if outcome is None:
+        # §S3 — the run reached no terminus, so this exit SEALS nothing. Not
+        # merely nothing green: every gate carries an outcome, and both values
+        # that would fit an unfinished ladder (`passed`, `checks-passed`) are
+        # read as a verdict by the wave lens. A `awaiting_approval` ladder
+        # therefore reaches the board only as an in-flight-MARKED gate from the
+        # loop above (CR-CRU-117 §S1), never as a seal from here.
+        #
+        # The report goes to the CALLER instead, naming what the loop already
+        # put on the board, the run's OWN error — the fact that answers "did
+        # this run terminate?", already in hand — and the move that resumes it.
+        lines, legacy = unsealed_run_report(proc.returncode, resolved,
+                                            final_decoded.get("error"),
+                                            held, posted_interim)
+        for line in lines:
+            print(line, file=sys.stderr)
+        ops.emit("gate-run", False, result_fields, envelope_context, [], legacy)
+        return 1
+
+    resp = ops.post_gate(project_dir, agent_id, final_gate, context or None,
+                         release)
     ok = resp.get("ok", False)
     overall = bool(ok and proc.returncode == 0)
-    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
+    legacy = (f"gate-run: ok={ok} outcome={outcome} "
               f"exit={proc.returncode}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    ops.emit("gate-run", overall, {"outcome": final_gate.get("outcome")},
-             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    ops.emit("gate-run", overall, result_fields, envelope_context, [], legacy)
     return 0 if overall else 1
 
 

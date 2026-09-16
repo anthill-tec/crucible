@@ -1,0 +1,2116 @@
+// CR-CRU-014 §S1 — Queue registration (server, additive). C1 RED tests.
+//
+// Spec (§S1, verbatim): `POST /api/v2/projects/<key>/queue` — full replace:
+// `{entries:[{cr, title?, wave, dependsOn:[cr…], size?}]}`; validation 400s
+// name the field + index; unknown `dependsOn` targets are allowed (forward
+// refs) but flagged in the response. `GET …/queue` returns entries with
+// DERIVED `status` (PENDING/IN_PROGRESS/COMPLETED via plans) + the plan link
+// when present. SSE on change.
+//
+// Derived-status rule — AUTHORITATIVE, as amended by CR-CRU-083 §S1/§S2 (it
+// was three plan-only values; the fourth consults release membership, because
+// a CR that a release SHIPPED cannot honestly read "never started"). In
+// PRECEDENCE order, for a cr registered in the queue:
+//   1. an OPEN plan for the cr                      → IN_PROGRESS (+ planId)
+//   2. a plan for the cr CLOSED WITH a merge commit → COMPLETED    (+ planId)
+//   3. no such plan, but the cr appears in SOME release's `crs`
+//                                                   → COMPLETED_UNTRACKED
+//                                                      (NO planId — there is no
+//                                                      plan to link to)
+//   4. otherwise                                    → PENDING
+// A plan record ALWAYS outranks release membership (CR-CRU-083 AC4), and
+// nothing synthesises plan or cycle rows to make the answer tidy (AC5).
+// `plans.cr` is the STABLE (verbatim, never-normalized) join key (spec
+// §Forward-compatibility contract).
+//
+// ── Contract field names this RED file PINS (RED's prerogative per §S1) ────
+//   POST /queue reply : { ok:true, entries: QueueEntry[], unknownDependencies:
+//                         string[] } — 200 or 202.
+//   GET  /queue reply : { ok:true, entries: QueueEntry[] }.
+//   QueueEntry        : { cr, title?, wave, dependsOn: string[], size?,
+//                         status: "PENDING"|"IN_PROGRESS"|"COMPLETED"
+//                                 |"COMPLETED_UNTRACKED" (CR-CRU-083 §S2),
+//                         planId? } — planId is the plan link, present only
+//                         when a plan exists for the cr, so a
+//                         COMPLETED_UNTRACKED entry never carries one.
+//
+// ── Schema design this file ASSUMES (stated per dispatch) ──────────────────
+// The queue_entries TABLE is created ADDITIVELY via CREATE TABLE IF NOT
+// EXISTS inside createBaseTables (the same way CR-017's runs surface is
+// seeded), so CR-CRU-014 itself needed no migration chain step and
+// SCHEMA_VERSION stayed 7 for this CR.
+//
+// The literal below is a TRIPWIRE, not a tautology: a chain step must make a
+// human look. It fired for CR-CRU-091 §S2, which appends a step retrofitting
+// this very table with release/track/lifecycle_json — legitimate and specified
+// — so it is consciously RE-ARMED at 8 rather than derived from
+// SCHEMA_VERSION, which would defend nothing. What this guard still asserts is
+// unchanged: a freshly booted store round-trips the queue without any
+// per-boot retrofit, and the version it reports is a value someone chose.
+// tests/store-migration.test.ts derives every version from schemaVersion()
+// (reads SCHEMA_VERSION) — it pins NO literal — so the two do different jobs.
+//
+// Drives the REAL production server (startServer) — POST/GET
+// /api/v2/projects/<key>/queue do not exist in the route table yet, so every
+// call 404s through the generic catch-all until GREEN wires the route + the
+// queue_entries table. The failures name the MISSING contract (a 404 where a
+// 200/202 is required), not fixture bugs.
+//
+// SSE frame + reader technique: identical to tests/project-archive.test.ts /
+// tests/v2-stream-paging.test.ts.
+import { describe, test, expect, afterEach } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { startServer, type ServerHandle } from "../src/server.ts";
+import { SCHEMA_VERSION } from "../src/store.ts";
+import * as AppLogic from "../public/app-logic.mjs";
+
+interface OkResponse {
+  ok: true;
+  [key: string]: unknown;
+}
+
+interface QueueEntry {
+  cr: string;
+  title?: string;
+  wave: string | number;
+  dependsOn: string[];
+  size?: string;
+  /** CR-CRU-083 §S2 — the fourth derived value: shipped by a release, never
+   *  plan-tracked. */
+  status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
+  planId?: number;
+  [key: string]: unknown;
+}
+
+interface QueuePostResponse extends OkResponse {
+  entries: QueueEntry[];
+  unknownDependencies: string[];
+}
+
+interface QueueGetResponse extends OkResponse {
+  entries: QueueEntry[];
+  /** CR-CRU-108 §S1/AC1 — the tracks the read publishes beside its entries:
+   *  the sorted distinct non-blank `track` values over `entries`, ALWAYS
+   *  present (a trackless queue states `[]`). Declared OPTIONAL so the RED
+   *  run measures the WIRE — an undefined field, not a compile error. */
+  tracks?: string[];
+}
+
+interface ErrResponse {
+  ok: false;
+  error: string;
+  help?: unknown;
+  [key: string]: unknown;
+}
+
+interface CyclePayload {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+}
+
+interface PlanFileResponse {
+  planId: number;
+  cr: string;
+  status: string;
+  cycles: CyclePayload[];
+  [key: string]: unknown;
+}
+
+// ── CR-CRU-099 §S1 — the consumers this route's dropped fields feed ────────
+
+/** §S2/AC23 as widened by CR-CRU-095 §S2 — the ONE warning wording, pinned
+ *  once (the same string tests/queue-defaulted-seq-scope.test.ts pins) so the
+ *  regression ACs below assert CR-CRU-095's shipped message and not a
+ *  paraphrase of it. */
+interface WarningWire {
+  code: string;
+  message: string;
+  crs?: string[];
+  containers?: string[];
+  [key: string]: unknown;
+}
+
+function defaultedSeqMessage(crs: string[]): string {
+  return (
+    `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave or release carries ` +
+    `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
+    `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`
+  );
+}
+
+/** CR-CRU-118 §S3 — the route-level notice the bulk queue post raises on EVERY
+ *  call. It is a finding about the DOOR, not about any row a post carried. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a bulk post raised BESIDE §S3's standing deprecation notice.
+ *
+ * The notice is EXCLUDED rather than the finding under test being filtered
+ * FOR: `toEqual([])` on the remainder still says "and nothing else happened",
+ * which is the claim these fixtures were making before §S3 landed and the one
+ * that catches an unexpected code arriving from somewhere nobody is watching.
+ * Filtering to the code a test is about would pass while a stray finding
+ * sailed through.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
+
+function expectDefaultedSeqWarning(warnings: WarningWire[] | undefined, crs: string[]): void {
+  expect(warnings).toBeDefined();
+  const warning = warnings!.find((w) => w.code === "defaulted-seq");
+  expect(warning).toBeDefined();
+  expect(warning!.crs).toEqual(crs);
+  expect(warning!.message).toBe(defaultedSeqMessage(crs));
+  expect(warning!.message).toContain("wave-sequence");
+}
+
+/** CR-CRU-078 §S4 — the strip gate `focusedReleaseView` answers zone 2 for.
+ *  The ambient tests/app-logic.d.ts predates that export, so the module is
+ *  cast to the one boundary read here (the house pattern, shared with
+ *  tests/wave-loose-box-truthful.test.ts). */
+interface StripGateLike {
+  version: string;
+  kind: "shipped" | "proposed";
+  date: string;
+  dateState: "dated" | "absent" | "unusable";
+}
+
+interface WaveBoxLike {
+  wave: string | null;
+  active: boolean;
+  entries: Array<{ cr: string }>;
+  rows: Array<{ cr: string }>;
+}
+
+const Logic = AppLogic as unknown as {
+  focusedReleaseView: (
+    gate: StripGateLike,
+    releases: unknown[],
+    entries: unknown[],
+  ) => { members: Array<{ cr: string }>; waves: WaveBoxLike[] };
+};
+
+const PROPOSED_020: StripGateLike = {
+  version: "0.2.0",
+  kind: "proposed",
+  date: "",
+  dateState: "absent",
+};
+
+// ── SSE frame reading helpers (same technique as tests/project-archive.test.ts) ──
+
+interface ParsedFrame {
+  raw: string;
+  isComment: boolean;
+  data?: Record<string, unknown>;
+}
+
+function parseFrame(raw: string): ParsedFrame {
+  const lines = raw.split("\n").filter((l) => l.length > 0);
+  if (lines.length > 0 && lines.every((l) => l.startsWith(":"))) {
+    return { raw, isComment: true };
+  }
+  const dataLine = lines.find((l) => l.startsWith("data:"));
+  if (dataLine !== undefined) {
+    const jsonStr = dataLine.slice("data:".length).trim();
+    try {
+      return { raw, isComment: false, data: JSON.parse(jsonStr) };
+    } catch {
+      return { raw, isComment: false };
+    }
+  }
+  return { raw, isComment: false };
+}
+
+class SseReader {
+  private buf = "";
+  private readonly decoder = new TextDecoder();
+
+  constructor(private readonly reader: ReadableStreamDefaultReader<Uint8Array>) {}
+
+  async nextFrame(deadline: number): Promise<string> {
+    for (;;) {
+      const idx = this.buf.indexOf("\n\n");
+      if (idx !== -1) {
+        const frame = this.buf.slice(0, idx);
+        this.buf = this.buf.slice(idx + 2);
+        return frame;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("SSE read deadline exceeded waiting for a full frame");
+      }
+      // Real timer, justified (ts-no-test-timers integration exception): this
+      // races the live SSE reader against a wall-clock read deadline — there is
+      // no promise/event to await for "the server never sent a frame", so a
+      // real timeout is the only way to bound a genuinely open network stream.
+      const result = await Promise.race([
+        this.reader.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("SSE read timed out")), remaining),
+        ),
+      ]);
+      if (result.done) {
+        throw new Error("SSE stream closed unexpectedly before a frame completed");
+      }
+      this.buf += this.decoder.decode(result.value, { stream: true });
+    }
+  }
+}
+
+async function nextFrameMatching(
+  sse: SseReader,
+  predicate: (frame: ParsedFrame) => boolean,
+  timeoutMs: number,
+): Promise<ParsedFrame> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const raw = await sse.nextFrame(deadline);
+    const parsed = parseFrame(raw);
+    if (predicate(parsed)) {
+      return parsed;
+    }
+  }
+}
+
+describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
+  let handle: ServerHandle | undefined;
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+  });
+
+  /** An on-disk, per-boot ephemeral store — never data/crucible.db, and the
+   *  server always takes an OS-assigned port (never 3849, the live board). */
+  function boot(): ServerHandle {
+    const dir = mkdtempSync(join(tmpdir(), "cru014-queue-"));
+    return startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+  }
+
+  function base(): string {
+    return `http://localhost:${handle!.server.port}`;
+  }
+
+  async function postJson(path: string, body: unknown): Promise<Response> {
+    return fetch(`${base()}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function patchJson(path: string, body: unknown): Promise<Response> {
+    return fetch(`${base()}${path}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function getJson(path: string): Promise<Response> {
+    return fetch(`${base()}${path}`);
+  }
+
+  const ORCH = "orchestrator-1";
+
+  async function registerOrchestrator(projectKey: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", {
+      projectKey,
+      agentId: ORCH,
+      role: "ORCHESTRATOR",
+    });
+    expect(res.status).toBe(200);
+  }
+
+  /** Creates a project and registers the default orchestrator (workflow
+   *  verbs require a live registered caller — CR-CRU-056 §S2b). */
+  async function createProject(name: string): Promise<string> {
+    const res = await postJson("/api/v2/projects", { name });
+    const body = (await res.json()) as OkResponse & { project: { key: string } };
+    await registerOrchestrator(body.project.key);
+    return body.project.key;
+  }
+
+  function queuePath(key: string): string {
+    return `/api/v2/projects/${key}/queue`;
+  }
+
+  function plansPath(key: string, suffix = ""): string {
+    return `/api/v2/projects/${key}/plans${suffix}`;
+  }
+
+  /** POST a queue full-replace body; agentId is carried in case the route
+   *  gates on a registered caller (harmless extra field if it does not). */
+  async function postQueue(
+    key: string,
+    entries: Array<Record<string, unknown>>,
+  ): Promise<Response> {
+    return postJson(queuePath(key), { agentId: ORCH, entries });
+  }
+
+  /**
+   * CR-CRU-118 §S2 — the board AS HISTORY LEFT IT: rows written straight to
+   * the store, so they are ALREADY HELD when the route runs. The bulk post now
+   * REFUSES to insert a cr that names no release, and the fixtures below whose
+   * subject is status derivation, full replace, ordering, seq or tracks need
+   * release-less rows ON the board rather than membership in a release. Seeding
+   * them is what they honestly are — inherited rows the post carries forward,
+   * which is exactly the state the live board is in for its own release-less
+   * entries. No fixture is given a filler release to silence the refusal: one
+   * that never meant to name a release still does not name one.
+   */
+  function seedQueue(key: string, entries: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      entries.map((entry) => ({
+        cr: String(entry.cr),
+        ...(entry.title !== undefined ? { title: String(entry.title) } : {}),
+        wave: String(entry.wave),
+        dependsOn: Array.isArray(entry.dependsOn) ? entry.dependsOn.map(String) : [],
+        ...(entry.size !== undefined ? { size: String(entry.size) } : {}),
+        ...(typeof entry.seq === "number" ? { seq: entry.seq } : {}),
+      })),
+    );
+  }
+
+  /** The release-less table as the route meets it after CR-CRU-118: already
+   *  held, then re-posted. The POST is still the thing under test — it is the
+   *  INSERT of an unheld release-less cr that the CR closed, never the
+   *  re-post. */
+  async function bootstrapQueue(
+    key: string,
+    entries: Array<Record<string, unknown>>,
+  ): Promise<Response> {
+    seedQueue(key, entries);
+    return postQueue(key, entries);
+  }
+
+  /** CR-CRU-104 AC1/AC12 — a DECLARED release must hold a LIVE PROPOSAL, on
+   *  this route exactly as on `cr-plan` (CR-CRU-091 §S8). Every fixture below
+   *  that declares one therefore proposes the label first: a fixture gaining a
+   *  PRECONDITION leaves what its assertions measure untouched, and none of
+   *  them was ever about an unproposed target — the release-LESS fixtures
+   *  (AC6, AC9's bootstrap half) keep no proposal, which is their subject. */
+  async function propose(key: string, label: string): Promise<void> {
+    const res = await postJson(`/api/v2/projects/${key}/release-proposals`, {
+      agentId: ORCH,
+      label,
+      // CR-CRU-118 §S4 — a proposal declares the date it is aiming at. Same
+      // reading as the release above: a fixture gains a PRECONDITION, and
+      // no assertion here was ever about the date.
+      targetAt: 1_788_220_800, // 2026-09-01T00:00:00Z
+    });
+    expect(res.status).toBe(200);
+  }
+
+  async function getQueue(key: string): Promise<QueueGetResponse> {
+    const res = await getJson(queuePath(key));
+    expect(res.status).toBe(200);
+    return (await res.json()) as QueueGetResponse;
+  }
+
+  // ── plan-flow helpers (real HTTP, never store.filePlan directly) ─────────
+
+  /** Files a one-cycle OPEN plan for `cr` → the cr's derived status becomes
+   *  IN_PROGRESS. Returns the plan + cycle ids. */
+  async function filePlan(key: string, cr: string): Promise<{ planId: number; cycleId: number }> {
+    const res = await postJson(plansPath(key), { agentId: ORCH, cr, cycles: [{ label: "solo" }] });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as PlanFileResponse;
+    return { planId: body.planId, cycleId: body.cycles[0]!.id };
+  }
+
+  /** Drives the plan to CLOSED-WITH-MERGE (activate cycle → done → close with
+   *  a merge commit) → the cr's derived status becomes COMPLETED. */
+  async function closePlanWithMerge(
+    key: string,
+    planId: number,
+    cycleId: number,
+    commit: string,
+  ): Promise<void> {
+    const act = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+      agentId: ORCH,
+      status: "active",
+    });
+    expect(act.status).toBe(200);
+    const done = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+      agentId: ORCH,
+      status: "done",
+    });
+    expect(done.status).toBe(200);
+    const close = await patchJson(plansPath(key, `/${planId}`), {
+      agentId: ORCH,
+      status: "closed",
+      merge: { commit },
+    });
+    expect(close.status).toBe(200);
+  }
+
+  function findEntry(entries: QueueEntry[], cr: string): QueueEntry {
+    const e = entries.find((x) => x.cr === cr);
+    expect(e).toBeDefined();
+    return e!;
+  }
+
+  // ── AC — derived status walks PENDING → IN_PROGRESS → COMPLETED ──────────
+  describe("AC — POST /queue with 3 entries → GET /queue derives PENDING/IN_PROGRESS/COMPLETED", () => {
+    test(
+      "a single fixture walks all three: a queued cr with NO plan is PENDING; after a plan is " +
+        "filed (open) it is IN_PROGRESS carrying that plan's id; after the plan closes WITH a " +
+        "merge commit it is COMPLETED — the other two entries never drift from PENDING",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-derived-status");
+
+        // CR-CRU-116 §S2 — all three share ONE wave on purpose. This test's
+        // subject is `deriveQueueStatus`'s three statuses, and filing a plan
+        // in a LATER wave while an earlier one still holds a PENDING cr is now
+        // the out-of-order refusal, so a single-wave board is the only legal
+        // shape for a fixture whose subject is the derivation.
+        const posted = await bootstrapQueue(key, [
+          { cr: "CR-Q-1", title: "roadmap", wave: 4, dependsOn: ["CR-Q-2"] },
+          { cr: "CR-Q-2", title: "join key", wave: 4, dependsOn: [] },
+          { cr: "CR-Q-3", title: "milestones", wave: 4, dependsOn: [] },
+        ]);
+        expect([200, 202]).toContain(posted.status);
+
+        // Phase 1 — no plans filed anywhere → all three PENDING, no plan link.
+        {
+          const q = await getQueue(key);
+          expect(q.ok).toBe(true);
+          expect(q.entries.length).toBe(3);
+          const e = findEntry(q.entries, "CR-Q-1");
+          expect(e.status).toBe("PENDING");
+          expect(e.planId).toBeUndefined();
+          expect(findEntry(q.entries, "CR-Q-2").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-3").status).toBe("PENDING");
+        }
+
+        // Phase 2 — file an OPEN plan for CR-Q-1 → IN_PROGRESS + plan link.
+        const { planId, cycleId } = await filePlan(key, "CR-Q-1");
+        {
+          const q = await getQueue(key);
+          const e = findEntry(q.entries, "CR-Q-1");
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+          // The sibling CRs (no plan) must NOT flip — a runaway derivation fails here.
+          expect(findEntry(q.entries, "CR-Q-2").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-3").status).toBe("PENDING");
+        }
+
+        // Phase 3 — close that plan WITH a merge commit → COMPLETED.
+        await closePlanWithMerge(key, planId, cycleId, "deadbee014");
+        {
+          const q = await getQueue(key);
+          const e = findEntry(q.entries, "CR-Q-1");
+          expect(e.status).toBe("COMPLETED");
+          expect(e.planId).toBe(planId);
+          expect(findEntry(q.entries, "CR-Q-2").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-3").status).toBe("PENDING");
+        }
+      },
+    );
+
+    test(
+      "the queue preserves each entry's registered wave, title and dependsOn verbatim on read " +
+        "back (dependsOn is a string[] of CR ids, never normalized)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-fields-verbatim");
+
+        expect(
+          [200, 202].includes(
+            (
+              await bootstrapQueue(key, [
+                { cr: "CR-Q-1", title: "release bundle", wave: 3, dependsOn: ["CR-Q-2", "CR-Q-3"], size: "L" },
+              ])
+            ).status,
+          ),
+        ).toBe(true);
+
+        const q = await getQueue(key);
+        expect(q.entries.length).toBe(1);
+        const e = q.entries[0]!;
+        expect(e.cr).toBe("CR-Q-1");
+        expect(e.title).toBe("release bundle");
+        expect(String(e.wave)).toBe("3");
+        expect(e.dependsOn).toEqual(["CR-Q-2", "CR-Q-3"]);
+        expect(e.size).toBe("L");
+      },
+    );
+  });
+
+  // ── AC — full replace + idempotency + unknown-dependsOn flagging ─────────
+  describe("AC — Queue replace is idempotent + full-replace; unknown dependsOn flagged", () => {
+    test(
+      "POSTing the SAME set twice yields no duplicates — GET returns exactly the 3 crs once each",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-idempotent");
+
+        const set = [
+          { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+          { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
+          { cr: "CR-Q-3", wave: 2, dependsOn: ["CR-Q-2"] },
+        ];
+        expect([200, 202]).toContain((await bootstrapQueue(key, set)).status);
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+
+        const q = await getQueue(key);
+        expect(q.entries.length).toBe(3);
+        const crs = q.entries.map((e) => e.cr).sort();
+        expect(crs).toEqual(["CR-Q-1", "CR-Q-2", "CR-Q-3"]);
+      },
+    );
+
+    test(
+      "a second POST with a CHANGED set is a FULL REPLACE: the absent entry is removed, a " +
+        "surviving entry's edited wave takes effect, and no leftovers remain",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-full-replace");
+
+        expect(
+          [200, 202].includes(
+            (
+              await bootstrapQueue(key, [
+                { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+                { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
+                { cr: "CR-Q-3", wave: 2, dependsOn: ["CR-Q-2"] },
+              ])
+            ).status,
+          ),
+        ).toBe(true);
+
+        // Replace: drop CR-Q-3 entirely, re-wave CR-Q-2.
+        expect(
+          [200, 202].includes(
+            (
+              await postQueue(key, [
+                { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+                { cr: "CR-Q-2", wave: 9, dependsOn: ["CR-Q-1"] },
+              ])
+            ).status,
+          ),
+        ).toBe(true);
+
+        const q = await getQueue(key);
+        expect(q.entries.length).toBe(2);
+        expect(q.entries.map((e) => e.cr).sort()).toEqual(["CR-Q-1", "CR-Q-2"]);
+        expect(q.entries.some((e) => e.cr === "CR-Q-3")).toBe(false);
+        expect(String(findEntry(q.entries, "CR-Q-2").wave)).toBe("9");
+      },
+    );
+
+    test(
+      "an unknown dependsOn target (a forward ref to a not-yet-queued CR) is ACCEPTED (200/202) " +
+        "AND flagged in the response's unknownDependencies field — never rejected; the entry is " +
+        "still stored and readable",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-unknown-depends");
+
+        const res = await bootstrapQueue(key, [
+          { cr: "CR-Q-1", wave: 1, dependsOn: ["CR-Q-ABSENT"] },
+          { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse;
+        expect(body.ok).toBe(true);
+        // The forward ref is flagged...
+        expect(Array.isArray(body.unknownDependencies)).toBe(true);
+        expect(body.unknownDependencies).toContain("CR-Q-ABSENT");
+        // ...but a KNOWN, in-set dependency is NOT flagged.
+        expect(body.unknownDependencies).not.toContain("CR-Q-1");
+
+        // ...and the entry with the forward ref is nonetheless stored.
+        const q = await getQueue(key);
+        expect(q.entries.length).toBe(2);
+        expect(findEntry(q.entries, "CR-Q-1").dependsOn).toEqual(["CR-Q-ABSENT"]);
+      },
+    );
+  });
+
+  // ── AC — validation 400 names the offending FIELD + INDEX ────────────────
+  describe("AC — validation 400 names the offending field + index", () => {
+    test(
+      "an entry missing `wave` at index 2 → 400 whose error names BOTH the field (`wave`) and " +
+        "the index (2); the valid earlier entries do not mask the offender",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-validation-index");
+
+        const res = await postQueue(key, [
+          { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+          { cr: "CR-Q-2", wave: 1, dependsOn: [] },
+          { cr: "CR-Q-3", dependsOn: [] }, // index 2 — no wave
+        ]);
+        expect(res.status).toBe(400);
+        const err = (await res.json()) as ErrResponse;
+        expect(err.ok).toBe(false);
+        expect(err.error).toContain("wave");
+        expect(err.error).toContain("2");
+      },
+    );
+
+    test(
+      "an entry missing the required `cr` at index 0 → 400 naming BOTH `cr` and the index 0",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-validation-cr");
+
+        const res = await postQueue(key, [
+          { wave: 1, dependsOn: [] }, // index 0 — no cr
+        ]);
+        expect(res.status).toBe(400);
+        const err = (await res.json()) as ErrResponse;
+        expect(err.ok).toBe(false);
+        expect(err.error).toContain("cr");
+        expect(err.error).toContain("0");
+      },
+    );
+  });
+
+  // ── AC — archived project handled like the other project routes ──────────
+  describe("AC — an archived project's queue is excluded like the other project routes", () => {
+    test(
+      "GET /queue on an archived project returns 200 with an empty entries array; unarchiving " +
+        "restores the registered entries intact (records excluded, never deleted)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-archived");
+
+        expect(
+          [200, 202].includes(
+            (await bootstrapQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
+          ),
+        ).toBe(true);
+        expect((await getQueue(key)).entries.length).toBe(1);
+
+        expect((await postJson(`/api/v2/projects/${key}/archive`, {})).status).toBe(200);
+        const whileArchived = await getQueue(key);
+        expect(whileArchived.entries).toEqual([]);
+
+        expect((await postJson(`/api/v2/projects/${key}/unarchive`, {})).status).toBe(200);
+        const after = await getQueue(key);
+        expect(after.entries.length).toBe(1);
+        expect(after.entries[0]!.cr).toBe("CR-Q-1");
+      },
+    );
+  });
+
+  // ── AC — SSE fires on queue change ───────────────────────────────────────
+  describe("AC — SSE fires on a queue change", () => {
+    test(
+      "after the hello frame, a POST /queue emits an SSE change frame carrying this project's " +
+        "key within 1s",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-sse");
+
+        const res = await fetch(`${base()}/api/stream`);
+        const reader = res.body!.getReader();
+        const sse = new SseReader(reader);
+        await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
+
+        expect(
+          [200, 202].includes(
+            (await bootstrapQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
+          ),
+        ).toBe(true);
+
+        const frame = await nextFrameMatching(
+          sse,
+          (f) => !f.isComment && f.data?.projectKey === key,
+          1000,
+        );
+        expect(frame.data?.projectKey).toBe(key);
+
+        await reader.cancel();
+      },
+    );
+  });
+
+  // ── Design guard — the queue round-trip needs no retrofit at boot ────────
+  describe("design guard — queue_entries needs no per-boot retrofit", () => {
+    test(
+      "a queue round-trip succeeds against a freshly booted store that MIGRATED NOTHING and " +
+        "reports the version this build writes (the base CREATE TABLE writes the current shape whole)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-schema-additive");
+
+        expect(
+          [200, 202].includes(
+            (await bootstrapQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
+          ),
+        ).toBe(true);
+        expect((await getQueue(key)).entries.length).toBe(1);
+
+        // "No per-boot retrofit" said as what it MEANS, not as a literal. This
+        // once read `toBe(8)`, which fails on every later CR that appends a
+        // migration body regardless of whether that body touches the queue —
+        // the number was never the claim. The claim is: this boot ran no
+        // migration at all, and the store it opened is already at the version
+        // this build writes.
+        expect(handle.store.migration).toBeNull();
+        expect(handle.store.schemaVersion).toBe(SCHEMA_VERSION);
+      },
+    );
+  });
+
+  // ── CR-CRU-083 §S1/§S2/§S3 — the FOURTH derived value ───────────────────
+  //
+  // Spec: docs/changes/CR-CRU-083-derived-status-cannot-say-done.md
+  //       §S1/§S2/§S3 + AC1/AC2/AC3/AC4/AC5/AC6/AC8/AC9. (AC7 — the badge,
+  //       the inert row click and the graph node style — is a UI cycle and is
+  //       deliberately NOT touched here.)
+  //
+  // WHY THESE EXIST. `PENDING` carries two incompatible meanings today: "not
+  // started" and "finished before plan tracking existed". Measured on the live
+  // board, CR-CRU-001–007, 010 and 016 render PENDING while `0.1.0`'s `crs`
+  // carries all nine — the same board asserting both "never started" and "a
+  // release bundled and shipped it". §S1 makes release membership authoritative
+  // evidence of completion; §S2 names the honest state COMPLETED_UNTRACKED
+  // rather than borrowing the fully-tracked COMPLETED presentation.
+  //
+  // RED expectation (measured against src/store.ts:3052): `deriveQueueStatus`
+  // reads `listPlans` ALONE — zero plans returns `{ status: "PENDING" }` and no
+  // second source is ever consulted — and `QueueStatus` (src/types.ts:310) has
+  // three members. So every COMPLETED_UNTRACKED assertion below fails with the
+  // derivation answering "PENDING": the missing contract, not a fixture bug.
+  //
+  // A release is recorded through the ceremony's OWN production entry — POST
+  // /api/v2/milestones with {type:"release", label:<version>, commit,
+  // releasedAt, crs} — the same route and body shape
+  // tests/release-provenance.test.ts drives (CR-CRU-080 §S4/AC9). No route is
+  // invented, `handleMilestones` (src/v2.ts:1164) carries `crs` verbatim and
+  // `listReleases` (src/store.ts:2111) serves it, so membership here is real
+  // stored evidence read back off the wire, never a fixture side-channel.
+  describe("CR-CRU-083 §S1/§S2 — a shipped CR derives COMPLETED_UNTRACKED, never PENDING", () => {
+    /**
+     * Shipped in a release, never plan-tracked. The class was MEASURED on this
+     * project's own board (CR-CRU-001–007, 010, 016 on 2026-09-02 — see the
+     * block comment above), but the contract under test is id-independent, so
+     * the fixture id is synthetic: what these tests assert is the RULE, not a
+     * reproduction of any one row (CR-CRU-097 §S5/AC4).
+     */
+    const SHIPPED_CR = "CR-Q-SHIPPED";
+    /** Genuinely unstarted: no plan, in no release's `crs` (AC2's class). */
+    const UNSTARTED_CR = "CR-Q-UNSTARTED";
+    /** Fully plan-tracked through merge — the COMPLETED comparison arm (AC3). */
+    const TRACKED_CR = "CR-Q-TRACKED";
+
+    /** Epoch SECONDS — the unit §S4 names as `releasedAt`'s source (`git log
+     *  -1 --format=%ct <tag>`). A month back, so it can never be read as the
+     *  ingest clock. */
+    const SHIPPED_AT = Date.UTC(2026, 6, 10, 12, 0, 0) / 1000;
+
+    interface ReleaseBrief {
+      version?: string;
+      crs?: string[];
+      [key: string]: unknown;
+    }
+
+    interface ReleasesResponse extends OkResponse {
+      releases: ReleaseBrief[];
+    }
+
+    interface PlansResponse extends OkResponse {
+      plans: Array<Record<string, unknown>>;
+    }
+
+    async function listReleases(key: string): Promise<ReleaseBrief[]> {
+      const res = await getJson(`/api/v2/projects/${key}/releases`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as ReleasesResponse;
+      return body.releases;
+    }
+
+    /** Records a real `release` milestone carrying `crs` exactly as the
+     *  ceremony does, then PROVES the membership landed by reading it back off
+     *  GET …/releases — so no membership assertion below can pass, or fail, on
+     *  a release that was never actually recorded. */
+    async function recordRelease(
+      key: string,
+      version: string,
+      commit: string,
+      crs: readonly string[],
+    ): Promise<void> {
+      const res = await postJson("/api/v2/milestones", {
+        projectKey: key,
+        agentId: ORCH,
+        type: "release",
+        label: version,
+        commit,
+        releasedAt: SHIPPED_AT,
+        crs,
+      });
+      expect(res.status).toBe(201);
+      const rel = (await listReleases(key)).find((r) => r.version === version);
+      expect(rel).toBeDefined();
+      expect([...(rel!.crs ?? [])].sort()).toEqual([...crs].sort());
+    }
+
+    /** The project's plan rows, optionally narrowed to one cr — AC5's
+     *  instrument (a synthesised plan would show up here). */
+    async function plansFor(key: string, cr?: string): Promise<Array<Record<string, unknown>>> {
+      const res = await getJson(plansPath(key, cr === undefined ? "" : `?cr=${cr}`));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as PlansResponse;
+      return body.plans;
+    }
+
+    /** Every entry's derived answer, cr-keyed and order-independent — the unit
+     *  AC6/AC9 compare across a re-registration. */
+    function derivations(entries: QueueEntry[]): Record<string, string> {
+      const out: Record<string, string> = {};
+      for (const e of entries) {
+        out[e.cr] = `${e.status}/${e.planId ?? "-"}`;
+      }
+      return out;
+    }
+
+    /** Drives the plan to CLOSED-WITHOUT-MERGE — the ABANDONED plan: the
+     *  cycle is activated then done (a plan cannot close over a non-terminal
+     *  cycle), and the closing PATCH omits `merge` entirely. `merge` is
+     *  OPTIONAL on PATCH …/plans/<id> (src/v2.ts:1480-1491) — the body is
+     *  `{agentId, status:"closed"}` and nothing else — so this is a reachable
+     *  production state, not a contrived one. Mirrors closePlanWithMerge in
+     *  every other respect. */
+    async function closePlanWithoutMerge(
+      key: string,
+      planId: number,
+      cycleId: number,
+    ): Promise<void> {
+      const act = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        agentId: ORCH,
+        status: "active",
+      });
+      expect(act.status).toBe(200);
+      const done = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        agentId: ORCH,
+        status: "done",
+      });
+      expect(done.status).toBe(200);
+      const close = await patchJson(plansPath(key, `/${planId}`), {
+        agentId: ORCH,
+        status: "closed",
+      });
+      expect(close.status).toBe(200);
+      // PROVE the plan really is closed WITHOUT a merge — otherwise every
+      // assertion below would be measuring a plan that never closed, or one
+      // that closed with a merge and is legitimately COMPLETED.
+      const plans = await plansFor(key);
+      const row = plans.find((p) => p.planId === planId);
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("closed");
+      expect(row!.merge).toBeUndefined();
+    }
+
+    test(
+      "AC1 a queued cr with NO plan that a recorded release's crs names derives " +
+        "COMPLETED_UNTRACKED and carries NO planId — the plan-only derivation answers PENDING, " +
+        "which is the contradiction: the same board would say both 'never started' and 'shipped'",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-completed-untracked");
+
+        expect(
+          [200, 202],
+        ).toContain(
+          (
+            await bootstrapQueue(key, [
+              { cr: SHIPPED_CR, title: "pre-tracking work", wave: 1, dependsOn: [] },
+              { cr: UNSTARTED_CR, title: "not started", wave: 1, dependsOn: [] },
+            ])
+          ).status,
+        );
+
+        // PRECONDITION — with no release recorded yet BOTH read PENDING, so the
+        // flip below is caused by the release membership and nothing else.
+        {
+          const q = await getQueue(key);
+          expect(findEntry(q.entries, SHIPPED_CR).status).toBe("PENDING");
+          expect(findEntry(q.entries, UNSTARTED_CR).status).toBe("PENDING");
+        }
+
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const q = await getQueue(key);
+        const shipped = findEntry(q.entries, SHIPPED_CR);
+        expect(shipped.status).toBe("COMPLETED_UNTRACKED");
+        // NO plan link: there is no plan, and §S3/AC5 forbid inventing one.
+        expect(shipped.planId).toBeUndefined();
+        expect("planId" in shipped).toBe(false);
+        // AC3 — distinct from BOTH neighbours; the values never collapse.
+        expect(shipped.status).not.toBe("COMPLETED");
+        expect(shipped.status).not.toBe("PENDING");
+        // NON-VACUITY — membership is read PER CR, not "some release exists":
+        // the cr this release did not ship is untouched.
+        expect(findEntry(q.entries, UNSTARTED_CR).status).toBe("PENDING");
+      },
+    );
+
+    test(
+      "AC2 a queued cr with no plan and in NO release's crs stays PENDING: PENDING now carries " +
+        "exactly one meaning — Crucible holds no evidence for this cr — so the genuinely " +
+        "unstarted case is unchanged even while a sibling in the same queue is shipped",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-pending-unchanged");
+
+        expect([200, 202]).toContain(
+          (
+            await bootstrapQueue(key, [
+              { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
+              { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
+              { cr: "CR-Q-UNSTARTED-2", wave: 2, dependsOn: [] },
+            ])
+          ).status,
+        );
+
+        // Two releases exist and neither names the unstarted CRs — the
+        // exclusion is membership-based, not "no releases recorded".
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+        await recordRelease(key, "0.1.1", "aaa0002", ["CR-Q-OTHER"]);
+
+        const q = await getQueue(key);
+        // GUARD — the new contract must EXIST, or the PENDING claims below are
+        // vacuous (a plan-only derivation would satisfy them by accident).
+        expect(findEntry(q.entries, SHIPPED_CR).status).toBe("COMPLETED_UNTRACKED");
+
+        for (const cr of [UNSTARTED_CR, "CR-Q-UNSTARTED-2"]) {
+          const e = findEntry(q.entries, cr);
+          expect(e.status).toBe("PENDING");
+          expect(e.planId).toBeUndefined();
+        }
+      },
+    );
+
+    test(
+      "AC4 a plan record ALWAYS outranks release membership: the SAME cr, present in a release's " +
+        "crs, reads IN_PROGRESS while its plan is open and COMPLETED once that plan closes with " +
+        "a merge — never COMPLETED_UNTRACKED, and carrying that plan's id throughout",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-plan-outranks-release");
+
+        expect([200, 202]).toContain(
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        // GUARD — release membership genuinely drives this cr's status first,
+        // so "the plan outranks it" is a real precedence claim and not a
+        // statement about a source the derivation never consulted.
+        expect(findEntry((await getQueue(key)).entries, SHIPPED_CR).status).toBe(
+          "COMPLETED_UNTRACKED",
+        );
+
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+          expect(e.status).not.toBe("COMPLETED_UNTRACKED");
+        }
+
+        await closePlanWithMerge(key, planId, cycleId, "deadbee001");
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED");
+          expect(e.planId).toBe(planId);
+          expect(e.status).not.toBe("COMPLETED_UNTRACKED");
+        }
+      },
+    );
+
+    test(
+      "AC5 no synthetic plan or cycle row is created to satisfy the derivation: a cr reading " +
+        "COMPLETED_UNTRACKED still has NO plan row on GET …/plans — before the read, and " +
+        "unchanged after it — so nothing was fabricated to make the answer tidy",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-no-synthetic-rows");
+
+        expect([200, 202]).toContain(
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        // Before: the project holds no plans at all.
+        expect(await plansFor(key)).toEqual([]);
+
+        expect(findEntry((await getQueue(key)).entries, SHIPPED_CR).status).toBe(
+          "COMPLETED_UNTRACKED",
+        );
+
+        // After: still none — neither for this cr nor anywhere in the project,
+        // and therefore no cycles either (cycles hang off a plan row).
+        expect(await plansFor(key, SHIPPED_CR)).toEqual([]);
+        expect(await plansFor(key)).toEqual([]);
+      },
+    );
+
+    test(
+      "AC6 re-registering the queue changes no derived status: a full REPLACE with the identical " +
+        "entries reads back byte-identical derivations, COMPLETED_UNTRACKED included — status is " +
+        "derived at read time, never queue data",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-replace-preserves");
+
+        const set = [
+          { cr: SHIPPED_CR, title: "pre-tracking work", wave: 1, dependsOn: [] },
+          { cr: TRACKED_CR, title: "tracked", wave: 2, dependsOn: [SHIPPED_CR] },
+          { cr: UNSTARTED_CR, title: "not started", wave: 3, dependsOn: [] },
+        ];
+        expect([200, 202]).toContain((await bootstrapQueue(key, set)).status);
+
+        // One of each: shipped-without-tracking, tracked through merge, unstarted.
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+        const tracked = await filePlan(key, TRACKED_CR);
+        await closePlanWithMerge(key, tracked.planId, tracked.cycleId, "deadbee021");
+
+        const before = derivations((await getQueue(key)).entries);
+        // GUARD — all three distinct values are actually present, so the
+        // equality below is not three PENDINGs matching three PENDINGs.
+        expect(before[SHIPPED_CR]).toBe("COMPLETED_UNTRACKED/-");
+        expect(before[TRACKED_CR]).toBe(`COMPLETED/${tracked.planId}`);
+        expect(before[UNSTARTED_CR]).toBe("PENDING/-");
+
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+
+        const after = derivations((await getQueue(key)).entries);
+        expect(after).toEqual(before);
+        expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+      },
+    );
+
+    test(
+      "AC8 tracking attaches AFTER the cr exists and status follows it with NO queue " +
+        "re-registration: one fixture walks PENDING → COMPLETED_UNTRACKED (a release names it) " +
+        "→ IN_PROGRESS (an open plan is filed) → COMPLETED (that plan closes with a merge)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-attach-after-creation");
+
+        // Registered ONCE — the queue is never posted again in this walk.
+        expect([200, 202]).toContain(
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("PENDING");
+          expect(e.planId).toBeUndefined();
+        }
+
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED_UNTRACKED");
+          expect(e.planId).toBeUndefined();
+        }
+
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+        }
+
+        await closePlanWithMerge(key, planId, cycleId, "deadbee101");
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED");
+          expect(e.planId).toBe(planId);
+        }
+      },
+    );
+
+    test(
+      "AC9 an implemented cr never reads back PENDING: with one cr COMPLETED (plan closed with a " +
+        "merge) and one COMPLETED_UNTRACKED (release membership), a full queue replace AND a " +
+        "further unrelated release recording both leave the two statuses exactly as they were",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-implemented-never-pending");
+
+        const set = [
+          { cr: TRACKED_CR, wave: 1, dependsOn: [] },
+          { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
+          { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
+        ];
+        expect([200, 202]).toContain((await bootstrapQueue(key, set)).status);
+
+        const tracked = await filePlan(key, TRACKED_CR);
+        await closePlanWithMerge(key, tracked.planId, tracked.cycleId, "deadbee021");
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const before = derivations((await getQueue(key)).entries);
+        expect(before[TRACKED_CR]).toBe(`COMPLETED/${tracked.planId}`);
+        expect(before[SHIPPED_CR]).toBe("COMPLETED_UNTRACKED/-");
+
+        // Two things that could plausibly rewrite settled fact: a full queue
+        // replace, and a later release that names neither cr.
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+        await recordRelease(key, "0.2.0", "aaa0002", ["CR-Q-ELSEWHERE"]);
+
+        const after = derivations((await getQueue(key)).entries);
+        expect(after[TRACKED_CR]).toBe(before[TRACKED_CR]);
+        expect(after[SHIPPED_CR]).toBe(before[SHIPPED_CR]);
+        // Stated as the invariant itself: neither implemented state moves
+        // backwards to PENDING.
+        const implemented = findEntry((await getQueue(key)).entries, TRACKED_CR);
+        expect(implemented.status).not.toBe("PENDING");
+        const shipped = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+        expect(shipped.status).not.toBe("PENDING");
+        expect(shipped.status).toBe("COMPLETED_UNTRACKED");
+        // And the genuinely unstarted cr is still PENDING (nothing drifted).
+        expect(after[UNSTARTED_CR]).toBe("PENDING/-");
+      },
+    );
+
+    // ── AC4 (amended) / AC9 — the ABANDONED-plan backwards path ────────────
+    //
+    // The gap the VERIFY of cycle 253 measured. `deriveQueueStatus`
+    // (src/store.ts:3095) consults `shipped` ONLY on the zero-plans path; the
+    // fallthrough — plans exist, none open, none closed-with-merge — returns
+    // PENDING without ever asking whether a release shipped the cr. Because
+    // `merge` is OPTIONAL on PATCH …/plans/<id> (src/v2.ts:1480-1491), closing
+    // a plan with no merge body is a plain production route call, so a shipped
+    // cr that reads COMPLETED_UNTRACKED can be walked BACKWARDS to PENDING by
+    // filing a plan and abandoning it. That is exactly the contradiction AC9
+    // forbids ("an implemented cr never reads back PENDING").
+    //
+    // AC4 as amended by this CR settles the answer: an abandoned plan is not
+    // evidence of work and does NOT un-ship a release — for a cr in some
+    // release's `crs` whose plans are all closed-or-aborted WITHOUT a merge
+    // the answer stays COMPLETED_UNTRACKED. Open plans and merged plans keep
+    // their current answers untouched.
+    test(
+      "AC4/AC9 an ABANDONED plan does not un-ship a release: a shipped cr walks " +
+        "COMPLETED_UNTRACKED → IN_PROGRESS (plan filed) → back to COMPLETED_UNTRACKED once that " +
+        "plan closes with NO merge commit — never backwards to PENDING",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-abandoned-plan-shipped");
+
+        expect([200, 202]).toContain(
+          (
+            await bootstrapQueue(key, [
+              { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
+              { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
+            ])
+          ).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        // GUARD — release membership genuinely drives this cr before any plan
+        // exists, so the final assertion is a real "the plan did not un-ship
+        // it" claim and not a value that was never there.
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED_UNTRACKED");
+        }
+
+        // An open plan still outranks membership (AC4's untouched half).
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+        }
+
+        // The plan is ABANDONED — closed through the production route with no
+        // `merge` in the body. The release that shipped this cr is unchanged.
+        await closePlanWithoutMerge(key, planId, cycleId);
+
+        const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+        // The invariant, stated as AC9 words it…
+        expect(e.status).not.toBe("PENDING");
+        // …and the value AC4 (amended) names.
+        expect(e.status).toBe("COMPLETED_UNTRACKED");
+        // Nothing else drifted: the unshipped, unplanned sibling is untouched.
+        expect(findEntry((await getQueue(key)).entries, UNSTARTED_CR).status).toBe("PENDING");
+      },
+    );
+
+    test(
+      "AC4 boundary — the fix is membership-gated, not a blanket rewrite: a cr in NO release's " +
+        "crs whose only plan closed WITHOUT a merge still reads PENDING, and still carries that " +
+        "trailing plan's id",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-abandoned-plan-unshipped");
+
+        expect([200, 202]).toContain(
+          (await bootstrapQueue(key, [{ cr: UNSTARTED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        // A release EXISTS but names a different cr — so PENDING below is a
+        // membership decision, not "no releases were ever recorded".
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const { planId, cycleId } = await filePlan(key, UNSTARTED_CR);
+        expect(findEntry((await getQueue(key)).entries, UNSTARTED_CR).status).toBe("IN_PROGRESS");
+
+        await closePlanWithoutMerge(key, planId, cycleId);
+
+        const e = findEntry((await getQueue(key)).entries, UNSTARTED_CR);
+        expect(e.status).toBe("PENDING");
+        expect(e.status).not.toBe("COMPLETED_UNTRACKED");
+        // The trailing plan link survives — an abandoned plan is still the
+        // plan record this cr has, and the wire keeps pointing at it.
+        expect(e.planId).toBe(planId);
+      },
+    );
+
+    test(
+      "AC5/§S2 wire shape — a shipped cr whose plan was abandoned carries NO planId: " +
+        "COMPLETED_UNTRACKED omits the key entirely (QueueEntry, src/types.ts), so no consumer " +
+        "can link an untracked completion to a plan that never delivered it",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-abandoned-plan-no-planid");
+
+        expect([200, 202]).toContain(
+          (await bootstrapQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        await closePlanWithoutMerge(key, planId, cycleId);
+
+        const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+        expect(e.status).toBe("COMPLETED_UNTRACKED");
+        // The KEY is absent, not merely undefined — `planId is present only
+        // when a plan exists, so a COMPLETED_UNTRACKED entry never carries
+        // one` (src/types.ts QueueEntry doc), pinned as written.
+        expect("planId" in e).toBe(false);
+        // AC5 — and nothing was synthesised or deleted to make that tidy: the
+        // abandoned plan row is still there, exactly one of it.
+        const plans = await plansFor(key, SHIPPED_CR);
+        expect(plans.length).toBe(1);
+        expect(plans[0]!.planId).toBe(planId);
+        expect(plans[0]!.status).toBe("closed");
+      },
+    );
+  });
+
+  // ── CR-CRU-099 §S1 — the handler reads the fields it accepts ─────────────
+  //
+  // WHY HERE. This is the bulk route's own suite and the established home of
+  // its `entries[]` field contract — `cr`, `title`, `wave`, `dependsOn` and
+  // `size` are each pinned above, and the validation 400s that name a field
+  // AND an index with them. A field this route ACCEPTS and DROPS belongs
+  // beside them. The two alternatives were rejected:
+  // tests/queue-defaulted-seq-scope.test.ts is CR-CRU-095's, which is shipped
+  // and not edited, and tests/roadmap-registration-routes.test.ts is the five
+  // per-CR verbs' suite — this route is not one of them.
+  //
+  // WHAT IS BROKEN TODAY. `handleQueuePost` builds its `QueueEntryInput` from
+  // `cr/title/wave/dependsOn/size/seq` (src/v2.ts:1865-1876) and never reads
+  // `fields.release`, `fields.track` or `fields.lifecycle` — three keys
+  // `QueueEntryInput` DECLARES (src/store.ts:283-287) and which `replaceQueue`
+  // already accepts, normalises and stores. The route still answers 200, so
+  // the loss is indistinguishable from success at the call site.
+  //
+  // WHY EVERY FIXTURE POSTS A CR THE STORE HAS NEVER SEEN. Carry-forward hides
+  // the defect on a live board: `replaceQueue` writes
+  // `entry.release ?? snapshot?.release ?? null` (src/store.ts:3599), so a
+  // re-post preserves the release `cr-plan` set. The loss lands only on rows
+  // the bulk post CREATES — which is the e2e scenario's shape
+  // (tests/e2e/features/roadmap-graph.feature:38) and a fresh board's.
+  describe("CR-CRU-099 §S1 — the bulk queue post READS the fields it accepts", () => {
+    /** The declared target release every fixture below posts into. */
+    const RELEASE = "0.2.0";
+
+    test(
+      "AC1 a declared `release` is STORED: the POST reply and the subsequent GET both carry it " +
+        "byte-identically to what was sent — today the route never reads `fields.release`, so the " +
+        "row reads back release-less",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-stored");
+        await propose(key, RELEASE);
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-A", title: "Graph CR", wave: "5", dependsOn: [], release: RELEASE },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        // BOTH boundaries: the reply the caller reads, and the row the next
+        // reader gets. A route that answered one while dropping the other
+        // would still be this defect.
+        const posted = (await res.json()) as QueuePostResponse;
+        expect(findEntry(posted.entries, "CR-Q99-A").release).toBe(RELEASE);
+        const stored = findEntry((await getQueue(key)).entries, "CR-Q99-A");
+        expect(stored.release).toBe(RELEASE);
+        // BYTE-identical — no normalisation, no re-labelling, no defaulting.
+        expect(JSON.stringify(stored.release)).toBe(JSON.stringify(RELEASE));
+      },
+    );
+
+    test(
+      "AC2 the posted row is then a MEMBER of its release: `focusedReleaseView` over the PUBLISHED " +
+        "payload names it and hands zone 2 its wave box — while the same payload with `release` " +
+        "dropped, which is what the route stores today, is a member of nothing",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-membership");
+        await propose(key, RELEASE);
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q99-M", title: "Graph CR", wave: "5", dependsOn: [], release: RELEASE },
+            ])
+          ).status,
+        );
+        // The PUBLISHED payload, consumed verbatim by the pure view the
+        // roadmap renders from. Membership is decided here, not in the DOM.
+        const entries = (await getQueue(key)).entries;
+        const view = Logic.focusedReleaseView(PROPOSED_020, [], entries);
+        expect(view.members.map((member) => member.cr)).toEqual(["CR-Q99-M"]);
+        const box = view.waves.find((candidate) => candidate.wave === "5");
+        expect(box).toBeDefined();
+        expect(box!.entries.map((member) => member.cr)).toEqual(["CR-Q99-M"]);
+        expect(box!.rows.map((member) => member.cr)).toEqual(["CR-Q99-M"]);
+        // SUPERSEDED 2026-09-09 by CR-CRU-116 §S4 — an `expect(box!.active)`
+        // assertion stood here. Its premise was CR-CRU-096 AC1's release-level
+        // reading, where every box of an in-flight release was active; §S4
+        // makes activeness the wave's own work (a member IN_PROGRESS), which
+        // this posted PENDING row is not. It is DELETED rather than re-pinned:
+        // this test's subject is CR-CRU-099 AC2 MEMBERSHIP, and the marker is
+        // asserted in tests/roadmap-wave-active-marker.test.ts.
+        // NON-VACUITY — membership is filtered on `entry?.release === version`
+        // (public/app-logic.mjs:1275), so the release-less row today's route
+        // stores is a member of nothing: no wave box, no rows, no warning.
+        const releaseless = entries.map((entry) => {
+          const copy: Record<string, unknown> = { ...entry };
+          delete copy.release;
+          return copy;
+        });
+        const blind = Logic.focusedReleaseView(PROPOSED_020, [], releaseless);
+        expect(blind.members).toEqual([]);
+        expect(blind.waves).toEqual([]);
+      },
+    );
+
+    test(
+      "AC4 `track` and `lifecycle` store on the SAME FOOTING as `release`: one post declaring every " +
+        "key `QueueEntryInput` accepts reads back carrying all of them, so the route silently " +
+        "ignores none of them",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-every-declared-key");
+        await propose(key, RELEASE);
+        // `at` is epoch MILLISECONDS — the unit `QueueLifecycle` declares
+        // (src/types.ts:360-363).
+        const lifecycle = { state: "VOID", reason: "folded into CR-Q99-A", at: 1_787_149_125_000 };
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              {
+                cr: "CR-Q99-B",
+                title: "declares everything",
+                wave: "5",
+                dependsOn: ["CR-Q99-A"],
+                size: "M",
+                release: RELEASE,
+                track: "Track 2",
+                seq: 5007,
+                lifecycle,
+              },
+            ])
+          ).status,
+        );
+        const e = findEntry((await getQueue(key)).entries, "CR-Q99-B");
+        // The six the route already read — unchanged by this CR.
+        expect(e.title).toBe("declares everything");
+        expect(String(e.wave)).toBe("5");
+        expect(e.dependsOn).toEqual(["CR-Q99-A"]);
+        expect(e.size).toBe("M");
+        expect(e.seq).toBe(5007);
+        // The three it dropped.
+        expect(e.release).toBe(RELEASE);
+        // `track` is the ONE declared field carrying a normaliser: any
+        // accepted spelling is stored in the PRD's locked wire format
+        // (`normalizeTrack`, src/store.ts:345-348), so "Track 2" reads back
+        // `track-2` — normalised on write, never verbatim and never refused.
+        expect(e.track).toBe("track-2");
+        expect(e.lifecycle).toEqual(lifecycle);
+      },
+    );
+
+    test(
+      "AC4a a `track` carrying no lane number is refused 400 naming BOTH the field and the index — " +
+        "never the 500 `replaceQueue`'s plain Error would answer — and the queue it would have " +
+        "replaced is untouched",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-track-refusal");
+        // A queue the refusal must leave EXACTLY as it stands: `replaceQueue`
+        // is a full replace, so a refusal that ran the write would be visible
+        // here as a lost row.
+        expect([200, 202]).toContain(
+          (await bootstrapQueue(key, [{ cr: "CR-Q99-HELD", wave: "5", dependsOn: [] }])).status,
+        );
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-HELD", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-BAD", wave: "5", dependsOn: [], track: "the fast lane" },
+        ]);
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as ErrResponse;
+        expect(body.ok).toBe(false);
+        // The route's OWN shape for a malformed field, as `dependsOn` and
+        // `seq` already answer it (src/v2.ts:1851-1864): the field by name and
+        // the INDEX of the offender — 1, never the valid entry at 0.
+        expect(body.error).toContain("track");
+        expect(body.error).toMatch(/index 1\b/);
+        const entries = (await getQueue(key)).entries;
+        expect(entries.map((entry) => entry.cr)).toEqual(["CR-Q99-HELD"]);
+      },
+    );
+
+    test(
+      "AC4b a `lifecycle` that is not one is refused 400 by name and index — the shape `dependsOn` " +
+        "and `seq` already use — rather than stringified into `lifecycle_json`, where the next " +
+        "reader publishes it as a `QueueLifecycle` it is not",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-lifecycle-shape");
+        // Exactly what `QueueLifecycle` DECLARES (src/types.ts:365-372) and
+        // nothing about the disposition itself: a scalar is not a lifecycle, a
+        // `state` outside the two declared values is not one, and `at` — epoch
+        // MILLISECONDS, required — is not optional. Which disposition is
+        // legitimate for a cr is `cr-supersede`/`cr-void`'s business
+        // (`handleCrLifecycle` in `src/v2.ts`), not this route's.
+        const rejected: unknown[] = [
+          "VOID",
+          42,
+          [{ state: "VOID", at: 1 }],
+          { state: "RETIRED", at: 1_787_149_125_000 },
+          { state: "VOID" },
+          { state: "VOID", at: "1787149125000" },
+        ];
+        for (const lifecycle of rejected) {
+          const res = await postQueue(key, [
+            { cr: "CR-Q99-OK", wave: "5", dependsOn: [] },
+            { cr: "CR-Q99-LC", wave: "5", dependsOn: [], lifecycle },
+          ]);
+          expect(res.status).toBe(400);
+          const body = (await res.json()) as ErrResponse;
+          expect(body.error).toContain("lifecycle");
+          expect(body.error).toMatch(/index 1\b/);
+          // Refused before the write: the full replace never ran.
+          expect((await getQueue(key)).entries).toEqual([]);
+        }
+        // NON-VACUITY — a lifecycle that IS one lands, so the refusals above
+        // are a shape verdict and not a blanket rejection of the field.
+        // CR-CRU-118 §S2 — the row is HELD first: the refusals above need an
+        // empty board to prove nothing was written, and a declaration is not
+        // an insert, so the cr this post disposes of is one the board already
+        // holds. Its lifecycle still arrives through the ROUTE, which is what
+        // this assertion is about.
+        seedQueue(key, [{ cr: "CR-Q99-LC", wave: "5", dependsOn: [] }]);
+        const ok = await postQueue(key, [
+          {
+            cr: "CR-Q99-LC",
+            wave: "5",
+            dependsOn: [],
+            lifecycle: { state: "SUPERSEDED", by: "CR-Q99-OK", at: 1_787_149_125_000 },
+          },
+        ]);
+        expect([200, 202]).toContain(ok.status);
+        expect(findEntry((await getQueue(key)).entries, "CR-Q99-LC").lifecycle).toEqual({
+          state: "SUPERSEDED",
+          by: "CR-Q99-OK",
+          at: 1_787_149_125_000,
+        });
+      },
+    );
+
+    test(
+      "AC6 regression — a release-LESS row is still STORED as one: a post whose rows the board " +
+        "already holds lands, the release key stays ABSENT rather than fabricated, and the only " +
+        "finding it raises is CR-CRU-118's inherited list — no seq was defaulted",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-optional");
+        // CR-CRU-118 §S2 — this AC's storage half is untouched and is what it
+        // measures: an undeclared release is a FACT, stored as an absent key.
+        // Its arrival half moved, and the fixture follows the contract rather
+        // than the other way round — the route no longer INSERTS a cr that
+        // names no release, so these two are held first and the post inherits
+        // them, which is the only shape a release-less row now reaches it in.
+        seedQueue(key, [
+          { cr: "CR-Q99-N1", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-N2", wave: "5", dependsOn: [] },
+        ]);
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-N1", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-N2", wave: "5", dependsOn: [] },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        // CR-CRU-095 AC12b — "a fresh import raises no warning at all", which
+        // is a claim about DEFAULTED SEQ and stays exactly true: nothing here
+        // was given a position nobody authored.
+        expect((body.warnings ?? []).filter((w) => w.code === "defaulted-seq")).toEqual([]);
+        // And CR-CRU-118 §S2's inherited list names both, because both still
+        // carry no release — warn-and-write, never a refusal.
+        expect((body.warnings ?? []).find((w) => w.code === "inherited-release-less")?.crs).toEqual([
+          "CR-Q99-N1",
+          "CR-Q99-N2",
+        ]);
+        const entries = (await getQueue(key)).entries;
+        for (const cr of ["CR-Q99-N1", "CR-Q99-N2"]) {
+          // ABSENT, not null: an undeclared release is a fact
+          // (src/store.ts:262-266) and `listQueue` omits the key entirely.
+          expect("release" in findEntry(entries, cr)).toBe(false);
+        }
+        // CR-CRU-095 §S3 unchanged — both still default into wave 5's block.
+        expect(findEntry(entries, "CR-Q99-N1").seq).toBe(5001);
+        expect(findEntry(entries, "CR-Q99-N2").seq).toBe(5002);
+        // And a release-less row is a member of nothing — CR-CRU-095's own
+        // rule, not a regression this CR introduces.
+        expect(Logic.focusedReleaseView(PROPOSED_020, [], entries).members).toEqual([]);
+      },
+    );
+
+    test(
+      "AC6 regression — the WAVE axis still warns exactly as CR-CRU-095 §S2 requires: a release-less " +
+        "defaulted row beside a HELD positional same-wave sibling is named, in that CR's own code and " +
+        "wording, and the sibling is not",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-releaseless-wave-axis");
+        // A HELD positional seq: `10` is outside wave 5's block (5001–5999,
+        // `inWaveBlock`), and an explicit seq rides the bulk post
+        // (CR-CRU-091 §S2).
+        // CR-CRU-118 §S2 — both rows are HELD before the post, because the
+        // route no longer inserts a release-less cr. `CR-Q99-D` is held in
+        // ANOTHER wave, so the post still DEFAULTS its seq: a row whose wave
+        // moved has no valid position in the new one and is re-slotted into
+        // its block (`replaceQueue`'s AC12g rule), which is the same defaulting
+        // this fixture always measured.
+        seedQueue(key, [
+          { cr: "CR-Q99-P", wave: "5", dependsOn: [], seq: 10 },
+          { cr: "CR-Q99-D", wave: "6", dependsOn: [] },
+        ]);
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-P", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-D", wave: "5", dependsOn: [] },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        expectDefaultedSeqWarning(body.warnings, ["CR-Q99-D"]);
+        const entries = (await getQueue(key)).entries;
+        // The held positional value is carried forward untouched, and the
+        // defaulted row takes its own block's first slot — the two scales the
+        // warning is about.
+        expect(findEntry(entries, "CR-Q99-P").seq).toBe(10);
+        expect(findEntry(entries, "CR-Q99-D").seq).toBe(5001);
+      },
+    );
+
+    test(
+      "AC7 the shape CR-CRU-095 §S2 declared unreachable now OCCURS: a NEW row posted WITH `release` " +
+        "and no `seq` is defaulted AND release-bearing — and it lands in its own wave block, so it " +
+        "is IN SCALE beside its authored siblings and warns about nothing",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-defaulted-and-release-bearing");
+        await propose(key, RELEASE);
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q99-A1", wave: "5", dependsOn: [], release: RELEASE, seq: 5001 },
+              { cr: "CR-Q99-A2", wave: "5", dependsOn: [], release: RELEASE, seq: 5002 },
+            ])
+          ).status,
+        );
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-A1", wave: "5", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-A2", wave: "5", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-NEW", wave: "5", dependsOn: [], release: RELEASE },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        const entries = (await getQueue(key)).entries;
+        const fresh = findEntry(entries, "CR-Q99-NEW");
+        // BOTH halves of the shape §S2 ruled impossible — "a row the bulk post
+        // defaults is always new and release-less" — in ONE row.
+        expect(fresh.release).toBe(RELEASE);
+        expect(fresh.seq).toBe(5003);
+        // Carry-forward left the authored block exactly where it was
+        // (CR-CRU-095 AC12a: appended after it, never colliding).
+        expect(findEntry(entries, "CR-Q99-A1").seq).toBe(5001);
+        expect(findEntry(entries, "CR-Q99-A2").seq).toBe(5002);
+        // IN SCALE ⇒ SILENT. A mixture is a DIFFERENCE OF SCALE, never "this
+        // write chose the value" (CR-CRU-095 §S2, ruled 2026-09-02), and every
+        // compared row here sits inside wave 5's own block.
+        expect(besideTheDeprecationNotice(body.warnings)).toEqual([]);
+      },
+    );
+
+    test(
+      "AC7 and a GENUINE difference of scale still warns: the release-BEARING defaulted row is named " +
+        "when its own wave holds a held positional sibling — the pre-existing wave axis " +
+        "(CR-CRU-095 AC11/AC12b), now reached by a row that carries a release",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-bearing-wave-axis");
+        await propose(key, RELEASE);
+        // Legacy positional `62` in wave 6's terms is wave 5's out-of-block
+        // value here: held, carried forward, and not counted toward the slot.
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q99-L", wave: "5", dependsOn: [], release: RELEASE, seq: 62 },
+            ])
+          ).status,
+        );
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-L", wave: "5", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-F", wave: "5", dependsOn: [], release: RELEASE },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        // A write names ITS OWN ROW, and only it: the legacy positional value
+        // was named by the write that chose it (CR-CRU-095 AC11a).
+        expectDefaultedSeqWarning(body.warnings, ["CR-Q99-F"]);
+        const entries = (await getQueue(key)).entries;
+        const fresh = findEntry(entries, "CR-Q99-F");
+        expect(fresh.seq).toBe(5001);
+        expect(fresh.release).toBe(RELEASE);
+        const legacy = findEntry(entries, "CR-Q99-L");
+        expect(legacy.seq).toBe(62);
+        expect(legacy.release).toBe(RELEASE);
+      },
+    );
+
+    // ── AC7's own axis — the RELEASE one, unreachable through this route
+    // until §S1 ───────────────────────────────────────────────────────────
+    //
+    // CR-CRU-095 §S2 widened `defaulted-seq` from "a sibling in the same wave"
+    // to "the same wave OR the same release", and implemented the release half
+    // in `upsertQueueEntry` ALONE (its `const scale` / `const mixed` pair,
+    // whose sibling query is `(wave = ? OR release = ?)`) for one stated
+    // reason: *"the bulk route never forwards `release` … a row the bulk post
+    // defaults is always new and release-less … so a bulk cross-wave
+    // `defaulted-seq` is unreachable by construction"*. §S1 forwards it, so
+    // the premise is gone and the axis is reachable from here.
+    //
+    // MEASURED before this test existed, on ONE configuration (0.2.0 wave 5
+    // authored at 5001, 0.2.0 wave 6 holding positional 2, then a new
+    // release-bearing seq-less row into wave 5): the bulk post answered
+    // `defaultedSeq: []` and `cr-plan` answered `["NEW"]` for the same board.
+    // A release on two scales is a property of the RELEASE, not of the writer
+    // that got there, so the two must converge — ruled by the user 2026-09-03
+    // on this cycle's report.
+    test(
+      "AC7 the RELEASE axis, now reachable: a NEW release-bearing defaulted row is NAMED when ANOTHER " +
+        "wave of the SAME RELEASE holds a positional seq — the same code, the same wording and the " +
+        "same `wave-sequence` remedy `cr-plan` already answers the identical board with",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-axis");
+        await propose(key, RELEASE);
+        // CR-CRU-095 AC9's fixture, reached through the BULK route: release
+        // 0.2.0 with wave 5 authored (5001+) and a wave-6 row of the SAME
+        // release holding positional seq 2.
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q99-AU", wave: "5", dependsOn: [], release: RELEASE, seq: 5001 },
+              { cr: "CR-Q99-W6", wave: "6", dependsOn: [], release: RELEASE, seq: 2 },
+            ])
+          ).status,
+        );
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-AU", wave: "5", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-W6", wave: "6", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-RB", wave: "5", dependsOn: [], release: RELEASE },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        // Named — and ONLY its own row: the positional wave-6 value was named
+        // by the write that chose it (CR-CRU-095 AC11a).
+        expectDefaultedSeqWarning(body.warnings, ["CR-Q99-RB"]);
+        const entries = (await getQueue(key)).entries;
+        const fresh = findEntry(entries, "CR-Q99-RB");
+        // It is the RELEASE axis and nothing else: the row's own wave holds no
+        // out-of-block value, so the wave axis is silent for it, and its slot
+        // is its own block's next free one.
+        expect(fresh.seq).toBe(5002);
+        expect(fresh.release).toBe(RELEASE);
+        expect(findEntry(entries, "CR-Q99-AU").seq).toBe(5001);
+        expect(findEntry(entries, "CR-Q99-W6").seq).toBe(2);
+        // warn-and-WRITE — the post landed, nothing was refused.
+        expect(body.ok).toBe(true);
+      },
+    );
+
+    test(
+      "AC7 release-axis CONVERSE — a release whose every compared row shares a scale is SILENT: waves " +
+        "5 and 6 of 0.2.0 both authored in their own blocks, and the new release-bearing defaulted " +
+        "row beside them names nobody (CR-CRU-095 AC10 through this route)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-axis-one-scale");
+        await propose(key, RELEASE);
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q99-S5", wave: "5", dependsOn: [], release: RELEASE, seq: 5001 },
+              { cr: "CR-Q99-S6", wave: "6", dependsOn: [], release: RELEASE, seq: 6001 },
+            ])
+          ).status,
+        );
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-S5", wave: "5", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-S6", wave: "6", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-SN", wave: "5", dependsOn: [], release: RELEASE },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        // A mixture is a DIFFERENCE OF SCALE, never "this write chose the
+        // value" (CR-CRU-095 §S2, ruled 2026-09-02) — so a row defaulted
+        // in-block beside in-block siblings warns about nothing.
+        expect(besideTheDeprecationNotice(body.warnings)).toEqual([]);
+        const entries = (await getQueue(key)).entries;
+        expect(findEntry(entries, "CR-Q99-SN").seq).toBe(5002);
+        expect(findEntry(entries, "CR-Q99-SN").release).toBe(RELEASE);
+      },
+    );
+
+    test(
+      "AC7 release-axis NULL semantics — a positional sibling declaring NO release is never compared " +
+        "on the release axis: the same fixture with the wave-6 row release-less names NOBODY, which " +
+        "is what keeps the live board's 66 release-less rows silent (CR-CRU-095 AC9a)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-release-axis-null");
+        await propose(key, RELEASE);
+        // CR-CRU-118 §S2 — the release-less row is HELD before the post, the
+        // only shape one now reaches this route in. Its seq, its wave and its
+        // release-lessness — everything this fixture measures — are identical.
+        seedQueue(key, [{ cr: "CR-Q99-NW", wave: "6", dependsOn: [], seq: 2 }]);
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q99-NU", wave: "5", dependsOn: [], release: RELEASE, seq: 5001 },
+              // The ONE difference from the naming fixture above: no release.
+              { cr: "CR-Q99-NW", wave: "6", dependsOn: [], seq: 2 },
+            ])
+          ).status,
+        );
+        const res = await postQueue(key, [
+          { cr: "CR-Q99-NU", wave: "5", dependsOn: [], release: RELEASE },
+          { cr: "CR-Q99-NW", wave: "6", dependsOn: [] },
+          { cr: "CR-Q99-NN", wave: "5", dependsOn: [], release: RELEASE },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse & { warnings?: WarningWire[] };
+        // THE SILENCE THIS FIXTURE IS ABOUT is the release axis naming nobody.
+        // CR-CRU-118 §S2's inherited list is a different finding on the same
+        // fact — the row carries no release — so it is asserted rather than
+        // folded in: the seq axis stays silent, and the membership list names
+        // exactly the one row that has no membership.
+        expect((body.warnings ?? []).filter((w) => w.code === "defaulted-seq")).toEqual([]);
+        expect((body.warnings ?? []).find((w) => w.code === "inherited-release-less")?.crs).toEqual([
+          "CR-Q99-NW",
+        ]);
+        const entries = (await getQueue(key)).entries;
+        // The positional row is still there, still out of block, still
+        // release-less — the silence is the NULL semantics, not a missing row.
+        expect(findEntry(entries, "CR-Q99-NW").seq).toBe(2);
+        expect("release" in findEntry(entries, "CR-Q99-NW")).toBe(false);
+        expect(findEntry(entries, "CR-Q99-NN").seq).toBe(5002);
+      },
+    );
+  });
+
+  // ── CR-CRU-099 §S3/AC9 — declaring membership is ORCHESTRATOR work ───────
+  //
+  // THE RULE. §S3: a post that declares `release`, `track` or `lifecycle` is
+  // roadmap registration and requires the `ORCHESTRATOR` role, exactly as
+  // `cr-plan` does; a post declaring none of them is queue BOOTSTRAP and stays
+  // open. The five roadmap verbs (`handleCrPlan`, `handleWaveSequence`,
+  // `handleCrLifecycle` and their siblings) have enforced the role through
+  // `requireOrchestrator` since CR-CRU-091 §S3. `handleQueuePost` never did,
+  // and before §S1 that was harmless — the route could not write membership,
+  // so the rule was enforced by the very defect this CR fixes. §S1 removed the
+  // accident, so the rule is stated here or it is stated nowhere.
+  //
+  // ONE AUTHORIZATION RULE, ONE WORDING. These fixtures assert the refusal
+  // `requireOrchestrator` already answers — 409, the caller named, the
+  // required role named, a state-derived `help[]` — and NOT a second error
+  // shape invented for this route. tests/roadmap-registration-routes.test.ts
+  // (AC16) pins the same three refusal shapes on the five verbs; what is new
+  // here is only WHICH POSTS the rule reaches.
+  //
+  // WHY THE OPEN HALF IS ASSERTED AS HARD AS THE REFUSAL. A guard that proved
+  // only the refusal would let the gate silently widen to every queue post,
+  // and the post it would break is the orchestrator's own roadmap import.
+  // `queue-file` (`cmd_queue_file`, clients/_crucible_axi.py) builds its rows
+  // with `parse_queue_table` — `{cr, title, wave, dependsOn}` per row, nothing
+  // else — and sends them through the shared `ops.post` as
+  // `{"entries": [...]}`, which carries NO `agentId` and no other identity
+  // field; `ops.post` adds none. Read off that client's source on 2026-09-03,
+  // not assumed, and pinned independently by
+  // tests/client/test_queue_file_verb.py (`_posted_entries`). The open-path
+  // fixture below therefore posts that exact shape and requires 200 — a client
+  // change is explicitly out of this CR's scope.
+  describe("CR-CRU-099 §S3/AC9 — declaring membership requires ORCHESTRATOR; bootstrap stays open", () => {
+    const RELEASE = "0.2.0";
+    const RED_CALLER = "red-1";
+
+    /** The three declarations §S3 names, each as the whole entry carrying it.
+     *  All three are WELL-FORMED on purpose: a malformed `track` or
+     *  `lifecycle` is refused by AC4a/AC4b's own validation and would prove
+     *  nothing about the role gate. */
+    const DECLARED: Array<{ field: string; entry: Record<string, unknown> }> = [
+      { field: "release", entry: { cr: "CR-Q99-G", wave: "5", dependsOn: [], release: RELEASE } },
+      { field: "track", entry: { cr: "CR-Q99-G", wave: "5", dependsOn: [], track: "track-2" } },
+      {
+        field: "lifecycle",
+        entry: {
+          cr: "CR-Q99-G",
+          wave: "5",
+          dependsOn: [],
+          lifecycle: { state: "VOID", reason: "gate probe", at: 1_787_149_125_000 },
+        },
+      },
+    ];
+
+    /** The row every refusal fixture holds first: this route is a FULL
+     *  REPLACE, so a refusal that ran the write is visible here as a lost row
+     *  (the AC4a technique). */
+    const HELD: Record<string, unknown> = { cr: "CR-Q99-HELD", wave: "5", dependsOn: [] };
+
+    /** POSTs the bulk route as `agentId` — or, when it is undefined, with NO
+     *  identity field at all, which is `queue-file`'s own shape. */
+    async function postAs(
+      key: string,
+      agentId: string | undefined,
+      entries: Array<Record<string, unknown>>,
+    ): Promise<Response> {
+      return postJson(queuePath(key), agentId === undefined ? { entries } : { agentId, entries });
+    }
+
+    /** A LIVE registered caller that is NOT an orchestrator. A TDD role cannot
+     *  register unbound (CR-CRU-056 §S1 refuses that 409), so RED is bound to
+     *  the ACTIVE cycle of a throwaway plan filed on a cr that never enters
+     *  the queue — the fixture tests/roadmap-registration-routes.test.ts uses
+     *  for the same reason. */
+    async function registerRed(key: string): Promise<string> {
+      const { planId, cycleId } = await filePlan(key, "CR-Q99-GATE-BIND");
+      const activated = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        agentId: ORCH,
+        status: "active",
+      });
+      expect(activated.status).toBe(200);
+      const red = await postJson("/api/v2/agents/register", {
+        projectKey: key,
+        agentId: RED_CALLER,
+        role: "RED",
+        cycleId,
+      });
+      expect(red.status).toBe(200);
+      return RED_CALLER;
+    }
+
+    async function crs(key: string): Promise<string[]> {
+      return (await getQueue(key)).entries.map((entry) => entry.cr);
+    }
+
+    test(
+      "AC9 a declared `release`, `track` or `lifecycle` from a REGISTERED NON-ORCHESTRATOR is " +
+        "refused 409 naming the caller and the required role — the refusal the five roadmap verbs " +
+        "already answer — and the queue it would have replaced is untouched",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-gate-non-orchestrator");
+        const red = await registerRed(key);
+        expect([200, 202]).toContain((await bootstrapQueue(key, [HELD])).status);
+
+        for (const declaration of DECLARED) {
+          const res = await postAs(key, red, [declaration.entry]);
+          expect(`${declaration.field}:${res.status}`).toBe(`${declaration.field}:409`);
+          const body = (await res.json()) as ErrResponse;
+          expect(body.ok).toBe(false);
+          expect(body.error).toContain("ORCHESTRATOR");
+          expect(body.error).toContain("RED");
+          expect(body.error).toContain(red);
+          expect(Array.isArray(body.help)).toBe(true);
+          // WROTE NOTHING — the full replace never ran, so the held row is
+          // still the whole queue.
+          expect(await crs(key)).toEqual(["CR-Q99-HELD"]);
+        }
+
+        // THE GATE IS ON THE DECLARATION, NOT ON THE CALLER: the same
+        // non-orchestrator, the same route, one field fewer — accepted.
+        // CR-CRU-118 §S2 — the second row is held first, so what this asserts
+        // stays the AUTHORIZATION verdict rather than the membership one: an
+        // undeclared release is refused for being an INSERT, by every caller
+        // alike, and that is a different gate from the one under test here.
+        seedQueue(key, [HELD, { cr: "CR-Q99-OPEN", wave: "5", dependsOn: [] }]);
+        expect([200, 202]).toContain(
+          (await postAs(key, red, [HELD, { cr: "CR-Q99-OPEN", wave: "5", dependsOn: [] }])).status,
+        );
+        expect(await crs(key)).toEqual(["CR-Q99-HELD", "CR-Q99-OPEN"]);
+      },
+    );
+
+    test(
+      "AC9 the same three declared with NO `agentId` at all — `queue-file`'s payload plus a " +
+        "declaration — are refused 409 for carrying no registered caller, and write nothing",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-gate-anonymous");
+        expect([200, 202]).toContain((await bootstrapQueue(key, [HELD])).status);
+
+        for (const declaration of DECLARED) {
+          const res = await postAs(key, undefined, [declaration.entry]);
+          expect(`${declaration.field}:${res.status}`).toBe(`${declaration.field}:409`);
+          const body = (await res.json()) as ErrResponse;
+          expect(body.ok).toBe(false);
+          // `requireRegisteredCaller`'s own wording, reached through
+          // `requireOrchestrator` — no second spelling for this route.
+          expect(body.error).toContain("agentId");
+          expect(Array.isArray(body.help)).toBe(true);
+          expect(await crs(key)).toEqual(["CR-Q99-HELD"]);
+        }
+      },
+    );
+
+    test(
+      "AC9 the OPEN half — `queue-file`'s own payload, `{entries:[{cr,title,wave,dependsOn}]}` with " +
+        "no identity field of any kind, is accepted exactly as today and stores its rows: the gate " +
+        "keys on the declaration, so the orchestrator's roadmap import needs no client change",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-gate-bootstrap");
+        // The shape `cmd_queue_file` sends, verbatim — `parse_queue_table`'s
+        // four keys and nothing else, no `agentId`.
+        // CR-CRU-118 §S2 — the two rows are already held, which is what the
+        // live board's own release-less table is: this is the RE-post that
+        // bootstrap actually performs, and it must still be accepted from an
+        // anonymous caller. Inserting a release-less cr is refused for every
+        // caller now, which is a membership rule and not this AC's gate.
+        seedQueue(key, [
+          { cr: "CR-Q99-QF1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-QF2", title: "another row", wave: "6", dependsOn: ["CR-Q99-QF1"] },
+        ]);
+        const res = await postAs(key, undefined, [
+          { cr: "CR-Q99-QF1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-QF2", title: "another row", wave: "6", dependsOn: ["CR-Q99-QF1"] },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse;
+        expect(body.ok).toBe(true);
+        const entries = (await getQueue(key)).entries;
+        expect(entries.map((entry) => entry.cr)).toEqual(["CR-Q99-QF1", "CR-Q99-QF2"]);
+        expect(findEntry(entries, "CR-Q99-QF1").title).toBe("queue file row");
+        expect(findEntry(entries, "CR-Q99-QF2").dependsOn).toEqual(["CR-Q99-QF1"]);
+        // A bootstrap row declares no membership, so it carries none: the open
+        // path fabricates nothing on the way through.
+        for (const cr of ["CR-Q99-QF1", "CR-Q99-QF2"]) {
+          expect("release" in findEntry(entries, cr)).toBe(false);
+          expect("track" in findEntry(entries, cr)).toBe(false);
+          expect("lifecycle" in findEntry(entries, cr)).toBe(false);
+        }
+      },
+    );
+  });
+
+  // ── CR-CRU-108 §S1/AC1 — the queue read publishes the tracks it STORES ───
+  //
+  // WHY HERE: this suite owns the queue WRITE → READ round trip, and the
+  // published list is a fact about what the write path stored. Measured
+  // 2026-09-07: `handleQueueGet` (src/v2.ts:1833 ON DEVELOP — §S1 landed 25
+  // lines of `declaredTracks` above it, so the same function reads at :1840 on
+  // this branch; the line cited is the one the measurement was taken at) answers
+  // `{ok: true, entries: store.listQueue(key)}` and states no track fact at
+  // all — so both tests below fail on a MISSING FIELD (`tracks` is
+  // undefined), never on a wrong value, a crash or a 404.
+  //
+  // THE RULE (CR-CRU-092 §S3, restated by AC1): the sorted distinct `track`
+  // values over the entries the read RETURNED, excluding null, absent and
+  // blank values, each echoed exactly as stored. `normalizeTrack`
+  // (src/store.ts:349) runs on the WRITE, so a value posted as `3` is STORED
+  // `track-3` and the read echoes THAT: normalising on write and echoing on
+  // read are one sentence, not two rules.
+  describe("CR-CRU-108 §S1/AC1 — GET /queue publishes the tracks the write stored", () => {
+    const RELEASE = "0.2.0";
+
+    test(
+      "a queue declaring 3 once and 1 twice publishes tracks [track-1, track-3] — sorted, " +
+        "distinct, and each value byte-identical to the entry that carries it",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-108-published-tracks");
+        await propose(key, RELEASE);
+
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q108-C", wave: "5", dependsOn: [], release: RELEASE, track: "3" },
+              { cr: "CR-Q108-A", wave: "5", dependsOn: [], release: RELEASE, track: "1" },
+              { cr: "CR-Q108-B", wave: "5", dependsOn: [], release: RELEASE, track: "1" },
+              { cr: "CR-Q108-NONE", wave: "5", dependsOn: [], release: RELEASE },
+            ])
+          ).status,
+        );
+
+        const body = await getQueue(key);
+        // SORTED (`3` was declared before `1`) and DISTINCT (`1` twice).
+        expect(body.tracks).toEqual(["track-1", "track-3"]);
+        // BOUND — the trackless entry declares nothing, so a third member
+        // could only come from a fabricated lane.
+        expect(body.tracks).toHaveLength(2);
+        expect("track" in findEntry(body.entries, "CR-Q108-NONE")).toBe(false);
+        // ECHOED AS STORED — the published values ARE the entries' own values
+        // (what `normalizeTrack` wrote), not a second re-spelling of the
+        // posted `1` / `3` invented by the read.
+        expect(findEntry(body.entries, "CR-Q108-A").track).toBe("track-1");
+        expect(findEntry(body.entries, "CR-Q108-B").track).toBe("track-1");
+        expect(findEntry(body.entries, "CR-Q108-C").track).toBe("track-3");
+      },
+    );
+
+    test(
+      'a queue whose entries declare NO track publishes `tracks: []` — the KEY is present and ' +
+        'the array empty, so "no tracks" is a stated fact and an absent key cannot pass as one',
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-108-trackless");
+
+        expect([200, 202]).toContain(
+          (
+            await bootstrapQueue(key, [
+              { cr: "CR-Q108-T1", title: "no lane", wave: "5", dependsOn: [] },
+              { cr: "CR-Q108-T2", title: "no lane either", wave: "6", dependsOn: [] },
+            ])
+          ).status,
+        );
+
+        const body = await getQueue(key);
+        // The read really did return entries — an empty list would make
+        // `tracks: []` true for the wrong reason.
+        expect(body.entries.map((entry) => entry.cr)).toEqual(["CR-Q108-T1", "CR-Q108-T2"]);
+        // The key FIRST, the value second: an omitted `tracks` fails here.
+        expect(body).toHaveProperty("tracks");
+        expect(body.tracks).toEqual([]);
+      },
+    );
+  });
+});

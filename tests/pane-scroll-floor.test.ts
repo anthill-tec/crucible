@@ -4,7 +4,9 @@
 // minimum expected size on standard computer screens is 1024x640.").
 //
 // Spec (verbatim, §S1): "Every central content pane (workspace tab panes —
-// Workflow/Runs/Coverage/Compile/BDD —, the home timeline pane, and the
+// Roadmap/Workflow/Runs/Coverage/Compile/BDD (band order per CR-CRU-076 §S1;
+// the spec text predates both the Roadmap tab and the re-order) —, the home
+// timeline pane, and the
 // in-pane run detail) gains a MINIMUM CONTENT WIDTH floor with
 // `overflow-x: auto` on the pane container: when the viewport is narrower
 // than the supported minimum, the pane scrolls horizontally instead of
@@ -63,6 +65,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { settleDom } from "./helpers/dom-settle";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -258,9 +261,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 8): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

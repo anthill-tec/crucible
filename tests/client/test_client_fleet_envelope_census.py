@@ -67,13 +67,17 @@ section's original hand-traced guess of "nine rust verbs".
 """
 
 import argparse
+import http.server
 import importlib.util
+import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -287,6 +291,27 @@ def _build_fake_bin_dir():
     return bin_dir
 
 
+def install_project_limits(project_dir):
+    """CR-CRU-131 §S1b — lay the project's `crucible.toml` down beside its
+    `.env`, which is what the installer does and therefore what a REAL project
+    directory holds.
+
+    Without it a fixture is an UNCONFIGURED project, and every envelope driven
+    out of it correctly carries the client's `limit-configuration` disclosure
+    naming the file it could not read (`emit_axi`, clients/_crucible_axi.py).
+    That disclosure is a property of the fixture, not of the verb under test,
+    so the fixture is made real rather than the finding filtered out — a filter
+    would also hide a disclosure a verb genuinely started emitting.
+
+    The SHIPPED declarations are copied verbatim: no `value` anywhere, so every
+    limit resolves to its `recommended` exactly as it does for an operator who
+    has installed and not yet edited.
+    """
+    shutil.copyfile(CLIENTS_DIR / "crucible.toml",
+                    Path(project_dir) / "crucible.toml")
+    return Path(project_dir) / "crucible.toml"
+
+
 def _make_project_dir(client_key):
     """A throwaway project fixture: `.env` with CRUCIBLE_PROJECT_KEY (+
     CRUCIBLE_PROJECT_NAME for arduino, which reads it), plus whatever each
@@ -306,6 +331,7 @@ def _make_project_dir(client_key):
     if client_key == "arduino":
         env_lines.append("CRUCIBLE_PROJECT_NAME=detector-project\n")
     (d / ".env").write_text("".join(env_lines))
+    install_project_limits(d)
     if client_key == "python":
         tests_dir = d / "tests"
         tests_dir.mkdir()
@@ -396,6 +422,7 @@ _DEST_DEFAULTS = {
     "type": "custom",
     "label": "detector-cycle",
     "cycle_id": "1",
+    "target": "2026-09-01",
 }
 
 
@@ -444,15 +471,27 @@ def build_argv(verb_name, subparser, project_dir):
     return argv
 
 
-def drive_verb(script_path, argv, project_dir, fake_bin_dir, timeout=20):
+def drive_verb(script_path, argv, project_dir, fake_bin_dir, timeout=20,
+               extra_env=None):
     """A genuine subprocess dispatch of the real client script -- never an
     in-process `module.main()` call for this half (that idiom is reserved
-    for enumeration, which must never let a command actually run)."""
+    for enumeration, which must never let a command actually run).
+
+    `extra_env` (CR-CRU-092 §S6) overrides the drive's environment AFTER the
+    unreachable-server defaults. The unreachable URL can only ever exercise a
+    verb's READ-FAILURE path, which is a fair census for a write verb but
+    cannot measure a READ verb's live-data principles (P2/P4/P5/P8 all need an
+    answer to narrow, count, drain or return). `next`'s section below points
+    the same `drive_verb` at a local queue STUB for those, and leaves the
+    default unreachable URL in place for its own failed-read drive -- so both
+    halves of AC13's exit-code rule are measured by one machinery."""
     env = os.environ.copy()
     env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
     env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL  # arduino's 2nd-choice var
     env["ARDUINO_CLI"] = str(fake_bin_dir / "arduino-cli")
     env["PATH"] = str(fake_bin_dir) + os.pathsep + env.get("PATH", "")
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(script_path)] + argv,
         cwd=str(project_dir), env=env, capture_output=True, text=True,
@@ -1097,6 +1136,11 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-real-copy-"))
         shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.tmp_dir / "_crucible_axi.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
+        # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
+        # `_crucible_axi.py`, so a copy of the module without them is a broken
+        # distribution rather than a scratch client: `shipped_limits()` refuses
+        # to invent a number and says so.
+        shutil.copy(CLIENTS_DIR / "crucible.toml", cls.tmp_dir / "crucible.toml")
 
         # The bare verb's function definition must sit BEFORE `def main():`
         # in the file: the real client's trailing `if __name__ == "__main__":
@@ -1385,6 +1429,2315 @@ class SevenNoReportSitesStarvedCensusTest(unittest.TestCase):
             f"{NO_REPORT_WARNING_CODE!r} warning code specifically -- a "
             f"future client that emits SOME envelope but drops the "
             f"specific warning code must still fail HERE: {offenders!r}")
+
+
+# ── CR-CRU-091 §S10 / AC19 -- the 25 (verb x client) roadmap pairs ─────────
+#
+# AC19 is explicit that conformance is asserted by EXTENDING the two existing
+# harnesses, never by a parallel checker: verb PRESENCE in the sibling
+# `test_cr054_fleet_inventory.py`, and ENVELOPE CONFORMANCE here, through
+# THIS file's own `enumerate_verbs`/`build_argv`/`drive_verb`/
+# `classify_envelope` machinery -- the same four functions `_get_census()`
+# drives, so a roadmap verb cannot be conformant by a different standard than
+# the rest of the fleet.
+#
+# The drives below run under the census's own unreachable CRUCIBLE_URL, which
+# is the point: four of the five verbs therefore exercise a real TRANSPORT
+# failure (exit 1) and `cr-plan` -- whose `--release`/`--wave` are deliberately
+# NOT argparse-required, because §S6 makes the client ASK for them -- exercises
+# the USAGE refusal (exit 2) with nothing POSTed. Both are envelope-bearing
+# states, so "no server" is a fair census rather than a skipped one.
+
+CR091_ROADMAP_VERBS = (
+    "release-propose", "cr-plan", "wave-sequence", "cr-supersede", "cr-void",
+)
+
+# §S6/P6 -- the exit each verb owes under an unreachable server: `cr-plan`
+# never reaches the wire (the client resolves the undeclared fields itself and
+# refuses with the fleet's USAGE code), the other four do and fail transport.
+CR091_EXPECTED_EXIT = {
+    "release-propose": 1,
+    "cr-plan": 2,
+    "wave-sequence": 1,
+    "cr-supersede": 1,
+    "cr-void": 1,
+}
+
+CR091_ROADMAP_ROLE = "ORCHESTRATOR"
+
+_ROADMAP_DRIVE_CACHE = None
+
+
+def _get_roadmap_drives():
+    """Drive all 25 (verb x client) roadmap pairs once, keeping the RAW
+    `CompletedProcess` -- the census cache above keeps only the decoded `axi`,
+    and AC19 asserts on the exit code and on stdout PURITY as well as on the
+    envelope. Cached at module scope exactly like `_get_census()`."""
+    global _ROADMAP_DRIVE_CACHE
+    if _ROADMAP_DRIVE_CACHE is not None:
+        return _ROADMAP_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                verbs = enumerate_verbs(client_key, script_path)
+                for verb in CR091_ROADMAP_VERBS:
+                    subparser = verbs.get(verb)
+                    if subparser is None:
+                        drives[(client_key, verb)] = None
+                        continue
+                    argv = build_argv(verb, subparser, project_dir)
+                    result = drive_verb(script_path, argv, project_dir,
+                                        fake_bin_dir)
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    options = {opt for action in subparser._actions
+                               for opt in action.option_strings}
+                    drives[(client_key, verb)] = {
+                        "result": result, "axi": axi, "options": options,
+                        "argv": argv,
+                    }
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _ROADMAP_DRIVE_CACHE = drives
+    return drives
+
+
+_ROADMAP_HELP_CACHE = None
+
+
+def _get_roadmap_help_drives():
+    """P10 -- `<client> <verb> --help` for all 25 pairs, as real subprocesses.
+    A `--help` that exits non-zero or omits its own verb name is a broken
+    agent-facing surface however correct the write path is."""
+    global _ROADMAP_HELP_CACHE
+    if _ROADMAP_HELP_CACHE is not None:
+        return _ROADMAP_HELP_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    helps = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                for verb in CR091_ROADMAP_VERBS:
+                    helps[(client_key, verb)] = drive_verb(
+                        script_path, [verb, "--help"], project_dir,
+                        fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _ROADMAP_HELP_CACHE = helps
+    return helps
+
+
+class Cr091RoadmapVerbAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-091 AC19 -- all five verbs, AXI-conformant, in all five clients.
+
+    "A verb emitting JSON, or printing prose, or routing its error to stderr
+    fails this AC even when its write is correct"."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_roadmap_drives()
+        cls.helps = _get_roadmap_help_drives()
+        cls.census = _get_census()
+
+    def _pairs(self):
+        for client_key in CLIENT_FILES:
+            for verb in CR091_ROADMAP_VERBS:
+                yield client_key, verb
+
+    def test_all_25_pairs_are_registered_and_enumerable(self):
+        missing = [f"{c}:{v}" for c, v in self._pairs()
+                   if self.drives.get((c, v)) is None]
+        self.assertEqual(
+            missing, [],
+            f"AC13 -- every roadmap verb must be a real argparse subcommand in "
+            f"every client (5 x 5 = 25 pairs); a fleet verb registered on some "
+            f"clients and not on others is the defect this counts: "
+            f"{missing!r}")
+
+    def test_every_pair_emits_a_toon_envelope_carrying_verb_ok_context_warnings(self):
+        """P1/P7 -- the fleet's own envelope shape, decoded by the SAME
+        `classify_envelope` the rest of the census uses."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            drive = self.drives.get((client_key, verb))
+            axi = (drive or {}).get("axi")
+            if not axi:
+                offenders[f"{client_key}:{verb}"] = "no envelope"
+                continue
+            for field in ("verb", "ok", "context", "warnings"):
+                if field not in axi:
+                    offenders[f"{client_key}:{verb}"] = f"missing {field!r}"
+            if axi.get("verb") != verb:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"envelope names verb={axi.get('verb')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"every roadmap verb must write a TOON-AXI envelope on STDOUT "
+            f"carrying verb/ok/context/warnings (P1/P7): {offenders!r}")
+
+    def test_the_fleet_census_also_reads_every_roadmap_verb_as_enveloped(self):
+        """Belt and braces: the roadmap verbs must also pass the file's
+        PRIMARY census (the one whose per-client bare counts the rust/mvn
+        guards above assert are zero), not only this section's own drives."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            per_verb = self.census.get(client_key, {})
+            if verb not in per_verb:
+                offenders[f"{client_key}:{verb}"] = "not enumerated"
+            elif not per_verb[verb]:
+                offenders[f"{client_key}:{verb}"] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"the roadmap verbs must be enveloped in the fleet-wide census "
+            f"too: {offenders!r}")
+
+    def test_every_envelope_carries_the_convergence_verdict(self):
+        """§S7 -- "every verb's envelope carries `converged: true|false`"."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = (self.drives.get((client_key, verb)) or {}).get("axi") or {}
+            if not isinstance(axi.get("converged"), bool):
+                offenders[f"{client_key}:{verb}"] = axi.get("converged")
+        self.assertEqual(
+            offenders, {},
+            f"§S7 -- `converged` rides EVERY roadmap envelope, including a "
+            f"call that never landed: {offenders!r}")
+
+    def test_every_list_bearing_envelope_carries_total_count(self):
+        """P4 -- the pre-computed aggregate. Every roadmap envelope reports
+        how many records it is answering with, so a caller never counts rows
+        to learn the size of the answer."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = (self.drives.get((client_key, verb)) or {}).get("axi") or {}
+            if not isinstance(axi.get("totalCount"), int):
+                offenders[f"{client_key}:{verb}"] = axi.get("totalCount")
+        self.assertEqual(
+            offenders, {},
+            f"P4 -- `totalCount` rides every roadmap envelope: {offenders!r}")
+
+    def test_every_failure_envelope_carries_a_state_derived_help_and_the_role(self):
+        """P9 + AC16 -- a refusal names a concrete next call, and names the
+        role roadmap registration requires. Under an unreachable server every
+        one of the 25 drives is a failure, so this is measured, not asserted
+        into a vacuum."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = (self.drives.get((client_key, verb)) or {}).get("axi") or {}
+            if axi.get("ok") is not False:
+                offenders[f"{client_key}:{verb}"] = f"ok={axi.get('ok')!r}"
+                continue
+            if not axi.get("help"):
+                offenders[f"{client_key}:{verb}"] = "no help[]"
+            elif axi.get("requiredRole") != CR091_ROADMAP_ROLE:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"requiredRole={axi.get('requiredRole')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"P9/AC16 -- a roadmap refusal carries a state-derived help[] and "
+            f"names {CR091_ROADMAP_ROLE} as the required role: {offenders!r}")
+
+    def test_a_usage_refusal_exits_two_and_a_transport_failure_exits_one(self):
+        """P6 -- "exit `2` for a usage failure or `1` for a transport
+        failure". `cr-plan` is the usage case here: §S6 makes the client
+        resolve the undeclared `--release`/`--wave` BEFORE posting."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            drive = self.drives.get((client_key, verb)) or {}
+            result = drive.get("result")
+            expected = CR091_EXPECTED_EXIT[verb]
+            if result is None or result.returncode != expected:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"exit {getattr(result, 'returncode', None)}, "
+                    f"expected {expected}")
+        self.assertEqual(
+            offenders, {},
+            f"P6 -- the roadmap verbs' exit codes: {offenders!r}")
+
+    def test_no_roadmap_verb_routes_its_error_to_stderr_as_bare_prose(self):
+        """P6/P1 -- "a refusal writes its structured error to STDOUT ... never
+        bare prose on stderr". stdout must decode as exactly ONE envelope
+        document, with nothing printed before it."""
+        toon_module = _load_toon_module()
+        offenders = {}
+        for client_key, verb in self._pairs():
+            result = (self.drives.get((client_key, verb)) or {}).get("result")
+            if result is None:
+                offenders[f"{client_key}:{verb}"] = "not driven"
+                continue
+            emits, _axi = classify_envelope(result.stdout, toon_module)
+            if not emits:
+                offenders[f"{client_key}:{verb}"] = f"stdout={result.stdout!r}"
+            elif not result.stdout.lstrip().startswith("axi:"):
+                offenders[f"{client_key}:{verb}"] = (
+                    f"prose precedes the envelope: {result.stdout!r}")
+        self.assertEqual(
+            offenders, {},
+            f"stdout is the machine channel and carries the envelope ALONE: "
+            f"{offenders!r}")
+
+    def test_every_pair_offers_fields_and_full(self):
+        """P2/P3 -- the minimal-schema selector and the truncation defeat are
+        part of the verb surface in every client, never a python-only
+        courtesy."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            options = (self.drives.get((client_key, verb)) or {}).get("options") or set()
+            absent = [flag for flag in ("--fields", "--full")
+                      if flag not in options]
+            if absent:
+                offenders[f"{client_key}:{verb}"] = absent
+        self.assertEqual(
+            offenders, {},
+            f"P2/P3 -- every roadmap verb offers `--fields` and `--full` in "
+            f"every client: {offenders!r}")
+
+    def test_help_exits_zero_and_names_its_verb_for_all_25_pairs(self):
+        """P10 -- consistent `--help`, driven as a real subprocess."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            result = self.helps.get((client_key, verb))
+            if result is None or result.returncode != 0:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif verb not in result.stdout:
+                offenders[f"{client_key}:{verb}"] = "help omits its own verb"
+        self.assertEqual(
+            offenders, {},
+            f"P10 -- `<client> {'{verb}'} --help` must exit 0 and list the "
+            f"verb for all 25 pairs: {offenders!r}")
+
+    def test_cr_plan_asks_rather_than_guessing_and_posts_nothing(self):
+        """§S6/AC11 through the census's own machinery: with `--release` and
+        `--wave` undeclared the envelope is the ASK -- `needs`, a candidate
+        `releases[]` and pre-filled `help[]` -- in every client alike."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = (self.drives.get((client_key, "cr-plan")) or {}).get("axi") or {}
+            if axi.get("needs") != ["release", "wave"]:
+                offenders[client_key] = f"needs={axi.get('needs')!r}"
+            elif "releases" not in axi:
+                offenders[client_key] = "no releases[] candidate list"
+            elif not any(step.startswith("release-propose --label")
+                         for step in axi.get("help") or []):
+                offenders[client_key] = f"help={axi.get('help')!r}"
+        self.assertEqual(
+            offenders, {},
+            f"§S6 -- the asking is the SHARED module's, so all five clients "
+            f"must ask identically: {offenders!r}")
+
+
+# ── CR-CRU-092 §S6 / AC15 -- `next`, asserted PER PRINCIPLE, in all five ───
+#
+# AC15 is explicit that conformance EXTENDS the two existing harnesses rather
+# than adding a parallel checker: verb PRESENCE in the sibling
+# `test_cr054_fleet_inventory.py`, and ENVELOPE CONFORMANCE here, through THIS
+# file's own `enumerate_verbs`/`build_argv`/`drive_verb`/`classify_envelope`
+# machinery -- exactly the shape CR-CRU-091 §S10 used above.
+#
+# One thing differs from the roadmap section, and it is the whole reason for
+# the stub below. Those five verbs WRITE, so the census's unreachable
+# CRUCIBLE_URL gives each of them a genuine envelope-bearing failure and "no
+# server" is a fair census. `next` READS, and five of its ten principles are
+# statements about an ANSWER: `--fields` narrows one (P2), `tracks[]` carries
+# a `totalCount` (P4), `DRAINED` is a decision rather than a blank (P5), a
+# bare invocation answers with live data (P8), and `help[]` is derived per
+# decision (P9). Against an unreachable server every one of those would be
+# asserted into a vacuum. So this section points the SAME `drive_verb` at a
+# local queue STUB: one real HTTP server, on a free port, answering the ONE
+# read `next` makes with an exact fixture. Never the live :3849 instance,
+# never the shared project and never a Crucible process -- the thing under
+# census is the CLIENT's envelope, and a stub keeps each fixture state exact
+# and instant. AC13's other half keeps the census's own unreachable URL, so
+# "the roadmap is empty" and "the roadmap could not be read" are measured as
+# the two different facts the AC says they are.
+
+CR092_NEXT_VERB = "next"
+
+# §S3/§S6 P2 -- the WHOLE flag surface: the lane selectors plus the fleet's
+# projection flag. `--project-dir` is each client's own convention and is
+# added by the client, not by the shared registrar.
+#
+# CR-CRU-114 §S1 added `--release` and `--wave` beside `--track`: a lane is
+# three dimensions, all three narrow it, and all three are declared by the ONE
+# shared registrar -- which is why this census measures them per client. The
+# ABSENCES below are unchanged, and are the point: two READ dimensions arrive
+# and no identity arrives with them.
+CR092_NEXT_FLAGS = ("--track", "--release", "--wave", "--fields")
+
+# §S6 P3 -- THE DECLARED EXEMPTION, asserted as an ABSENCE.
+#
+# P3 is the fleet's truncation defeat: `--full` exists so a caller can recover
+# a LIST the default projection cut short (`ROADMAP_LIST_LIMIT`). `next`
+# answers with ONE decision and never a truncated list, so there is nothing
+# `--full` could reveal, and the CR says so in its own words -- "a faked
+# `--full` on a one-record answer is as wrong as a missing one".
+#
+# The exemption is EXPRESSIBLE in this census because the file's
+# `--fields`/`--full` expectation is scoped to the verb set that owes both
+# (`CR091_ROADMAP_VERBS`, above) rather than being a fleet-wide "every verb
+# has --full" sweep. Two assertions below keep it declared rather than
+# incidental: the flag must be absent from all five clients, AND `next` must
+# stay outside the roadmap set whose expectation would otherwise sweep it in
+# -- while `--fields` stays REQUIRED, so this is a justified single-principle
+# exemption and never a blanket opt-out of projection.
+CR092_NEXT_EXEMPT_FLAGS = ("--full",)
+
+# §S4/AC10 -- read-only: the verb never declares an identity or an approval,
+# so it can never route through `emit_agent_identity_hard_stop`.
+CR092_NEXT_FORBIDDEN_FLAGS = ("--agent", "--user-approved")
+
+
+def _next_entry(cr, seq, status="PENDING", wave="5", release=None, track=None,
+                depends=()):
+    """One queue entry in the shape CR-CRU-091's read publishes -- `seq`
+    always, `release`/`track` only when non-null -- mirroring the sibling
+    `test_cr092_next_decision_resolver.py`'s own `_entry` helper so the two
+    harnesses cannot drift into two ideas of the wire format."""
+    entry = {"cr": cr, "seq": seq, "status": status, "wave": wave,
+             "dependsOn": list(depends)}
+    if release is not None:
+        entry["release"] = release
+    if track is not None:
+        entry["track"] = track
+    return entry
+
+
+def _published_tracks(entries):
+    """CR-CRU-108 §S1/AC1 — what `GET …/queue` publishes BESIDE its entries:
+    the sorted distinct non-blank TRIMMED `track` values (`declaredTracks`,
+    src/store.ts:380, called from `handleQueueGet`).
+
+    The stub stands in for the SERVER, so it must state the server's fact. A
+    stub that omitted `tracks` would serve a payload no live read produces,
+    and every `next` assertion below would be measured against a wire shape
+    that does not exist."""
+    return sorted({(e.get("track") or "").strip() for e in entries
+                   if (e.get("track") or "").strip()})
+
+
+def _next_queue(*entries):
+    return {"ok": True, "entries": list(entries),
+            "tracks": _published_tracks(entries)}
+
+
+# The six fixture states the ten principles need. No fixture's lowest entry
+# has `seq` 0, so an index-derived position (the derivation §S2 forbids) could
+# never pass the echo assertions below.
+CR092_FIXTURES = {
+    # P8/AC8 -- no `track` key anywhere: single-track BY ABSENCE, so a bare
+    # `next` owes an answer and the envelope owes no `tracks` key.
+    "no-track": _next_queue(
+        _next_entry("CR-CRU-500", 10, release="0.3.0"),
+        _next_entry("CR-CRU-501", 20)),
+    # §S3 -- one DECLARED lane is still single-track.
+    "one-track": _next_queue(
+        _next_entry("CR-CRU-510", 10, track="track-2"),
+        _next_entry("CR-CRU-511", 20, track="track-2")),
+    # P4/AC7 -- two live lanes and no flag: the refusal that lists them.
+    "two-track": _next_queue(
+        _next_entry("CR-CRU-520", 10, track="track-1"),
+        _next_entry("CR-CRU-521", 20, track="track-2")),
+    # P5 -- the queue read returned zero entries.
+    "no-roadmap": _next_queue(),
+    # P5 -- the lane held work and all of it landed.
+    "wave-complete": _next_queue(
+        _next_entry("CR-CRU-530", 10, status="COMPLETED"),
+        _next_entry("CR-CRU-531", 20, status="COMPLETED_UNTRACKED")),
+    # AC4(a) -- the lane is occupied, so everything behind it holds.
+    "in-flight": _next_queue(
+        _next_entry("CR-CRU-540", 10, status="IN_PROGRESS"),
+        _next_entry("CR-CRU-541", 20)),
+    # The two fixtures below are THIS CR's, and their ids read `CR-Q108-*`
+    # rather than `CR-CRU-*` because CR-CRU-097 AC7 forbids a test asserting
+    # on the project's own namespace; the rows above predate that rule and
+    # are pinned by its dated residue table, so they are left as they are.
+    # CR-CRU-108 AC5b -- THE behaviour change, per client. A whitespace-only
+    # value is a track to the pre-cutover client rule (which filters on
+    # truthiness) and is NOT one to the published rule, so this queue refuses
+    # `next` today and answers after. Published: ["2"].
+    "blank-second-track": _next_queue(
+        _next_entry("CR-Q108-550", 10, track="   "),
+        _next_entry("CR-Q108-551", 20, track="2")),
+    # CR-CRU-108 AC5b's second half -- a padded value and the value it pads
+    # are ONE lane (identity is the TRIMMED value). Published: ["track-2"].
+    "padded-track": _next_queue(
+        _next_entry("CR-Q108-560", 10, track=" track-2 "),
+        _next_entry("CR-Q108-561", 20, track="track-2")),
+}
+
+
+class _QueueStubServer:
+    """A real HTTP server answering the ONE read `next` makes.
+
+    Genuine socket, genuine `urllib` round trip, from the genuine subprocess
+    `drive_verb` already spawns -- the same "fake counterpart, real mechanism"
+    idiom the fake toolchains above use, applied to the transport rather than
+    to a CLI. `payload` is set before each drive (the drives are serial), and
+    EVERY request is recorded with its METHOD, so §S4/AC9's "asking claims,
+    locks, reserves and advances nothing" is provable across the fleet instead
+    of only in-process.
+    """
+
+    def __init__(self):
+        self.payload = _next_queue()
+        self.requests = []
+        stub = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def _answer(self, status, body):
+                encoded = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_GET(self):
+                stub.requests.append(("GET", self.path))
+                if self.path.endswith("/queue"):
+                    self._answer(200, stub.payload)
+                else:
+                    self._answer(404, {"ok": False,
+                                       "error": f"no stub for {self.path}"})
+
+            def _refuse_write(self):
+                # Recorded, then refused: a write reaching here is an AC9
+                # failure, and the record is what names it.
+                stub.requests.append((self.command, self.path))
+                self._answer(405, {"ok": False, "error": "next is read-only"})
+
+            do_POST = do_PUT = do_PATCH = do_DELETE = _refuse_write
+
+            def log_message(self, *args):
+                pass
+
+        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+                                                      _Handler)
+        self.base_url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        daemon=True)
+        self._thread.start()
+
+    def env(self):
+        """The base-URL overrides `drive_verb` needs (four clients spell it
+        `CRUCIBLE_URL`, arduino accepts `CRUCIBLE_BASE` as its second choice),
+        plus an explicitly BLANKED orchestrator env: `axi_context` reads
+        `$WORKFLOW_ROLE`/`$WORKFLOW_WAVE`, so an ambient orchestrator session
+        would otherwise colour the very `context` block P7 asserts on."""
+        return {"CRUCIBLE_URL": self.base_url,
+                "CRUCIBLE_BASE": self.base_url,
+                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+
+    def close(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=5)
+
+
+# (case, fixture, extra argv, extra env) -- every stub-served drive the ten
+# principles need. The last two are P7's: "carrying the resolved lane" is a
+# statement about the `context` block's `track` key, so `lane-context`
+# DECLARES an orchestrator lane and agrees with it, while `lane-mismatch`
+# declares one lane and asks about ANOTHER -- the only shape in which a
+# declared-vs-resolved confusion is observable at all.
+_NEXT_CASES = (
+    ("no-track", "no-track", (), {}),
+    ("fields", "no-track", ("--fields", "decision,cr"), {}),
+    ("one-track", "one-track", (), {}),
+    ("two-track", "two-track", (), {}),
+    ("two-track-flagged", "two-track", ("--track", "2"), {}),
+    ("no-roadmap", "no-roadmap", (), {}),
+    ("wave-complete", "wave-complete", (), {}),
+    ("in-flight", "in-flight", (), {}),
+    ("lane-context", "one-track", (), {"WORKFLOW_ROLE": "track-2"}),
+    ("lane-mismatch", "two-track", ("--track", "2"),
+     {"WORKFLOW_ROLE": "track-1"}),
+    ("blank-second-track", "blank-second-track", (), {}),
+    ("padded-track", "padded-track", (), {}),
+)
+
+# §S6/AC13 -- the exit each drive owes. All three DECISIONS are answers, so
+# all three exit 0; the harness's own `worktree-flow next` 0/2/3 split is
+# explicitly NOT adopted (§S1). `two-track` is §S3's usage refusal and
+# `unreachable` is the failed read -- and the failed read is never `DRAINED`.
+#
+# CR-CRU-108 AC5b -- the two whitespace fixtures owe 0, not 2: neither queue
+# declares a second lane once the PUBLISHED rule is the one being read. Both
+# exit 2 before the §S2 cutover, and that difference IS the stated behaviour
+# change, which is why they are declared here rather than exempted from the
+# one map that says what each drive owes.
+CR092_EXPECTED_EXIT = {
+    "no-track": 0, "fields": 0, "one-track": 0, "two-track": 2,
+    "two-track-flagged": 0, "no-roadmap": 0, "wave-complete": 0,
+    "in-flight": 0, "lane-context": 0, "lane-mismatch": 0, "unreachable": 1,
+    "blank-second-track": 0, "padded-track": 0,
+}
+
+_NEXT_DRIVE_CACHE = None
+
+
+def _next_argv(project_dir, *extra):
+    return [CR092_NEXT_VERB, "--project-dir", str(project_dir), *extra]
+
+
+def _get_next_drives():
+    """Drive `next` once per (client x case), as real subprocesses, cached at
+    module scope exactly like `_get_census()`.
+
+    Each value keeps the RAW `CompletedProcess` (exit codes and stdout PURITY
+    are asserted, not only the envelope), the decoded `axi`, and the requests
+    the stub actually saw. `(client, "registered")` holds the subparser's real
+    option strings -- argparse's own ground truth for the flag-surface
+    assertions, including P3's declared ABSENCE."""
+    global _NEXT_DRIVE_CACHE
+    if _NEXT_DRIVE_CACHE is not None:
+        return _NEXT_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    stub = _QueueStubServer()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                subparser = enumerate_verbs(client_key, script_path).get(
+                    CR092_NEXT_VERB)
+                if subparser is None:
+                    drives[(client_key, "registered")] = None
+                    continue
+                drives[(client_key, "registered")] = {
+                    opt for action in subparser._actions
+                    for opt in action.option_strings}
+                for case, fixture, extra_argv, extra_env in _NEXT_CASES:
+                    stub.payload = CR092_FIXTURES[fixture]
+                    seen = len(stub.requests)
+                    result = drive_verb(
+                        script_path, _next_argv(project_dir, *extra_argv),
+                        project_dir, fake_bin_dir,
+                        extra_env={**stub.env(), **extra_env})
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    drives[(client_key, case)] = {
+                        "result": result, "axi": axi,
+                        "requests": stub.requests[seen:]}
+                # AC13's other half, on the census's OWN unreachable URL.
+                result = drive_verb(script_path, _next_argv(project_dir),
+                                    project_dir, fake_bin_dir)
+                _emits, axi = classify_envelope(result.stdout, toon_module)
+                drives[(client_key, "unreachable")] = {
+                    "result": result, "axi": axi, "requests": []}
+                drives[(client_key, "help")] = drive_verb(
+                    script_path, [CR092_NEXT_VERB, "--help"], project_dir,
+                    fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        stub.close()
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _NEXT_DRIVE_CACHE = drives
+    return drives
+
+
+class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-092 AC15 -- `next`, measured against the WHOLE fleet standard,
+    principle by principle, in all five clients.
+
+    §S6: "where a principle does not apply to a single-decision verb, that is
+    DECLARED here rather than silently skipped". So P3 gets its own test
+    asserting an ABSENCE plus a second one keeping that absence justified, and
+    a passing class means each of the ten principles was either satisfied or
+    explicitly exempted -- never quietly unmeasured."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_next_drives()
+        cls.census = _get_census()
+
+    def _axi(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("axi") or {}
+
+    def _result(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("result")
+
+    def _options(self, client_key):
+        return self.drives.get((client_key, "registered")) or set()
+
+    def test_next_is_a_real_subcommand_in_all_five_clients(self):
+        """AC12 -- "the verb exists in all five clients", enumerated from each
+        client's REAL argparse. This verb landed at parity ON ARRIVAL, which
+        is what §S6 asked of it."""
+        missing = [c for c in CLIENT_FILES
+                   if self.drives.get((c, "registered")) is None]
+        self.assertEqual(
+            missing, [],
+            f"AC12 -- `next` must be a registered subcommand in every client; "
+            f"a fleet verb that reaches some of the five and not the rest is "
+            f"the defect; absent from: {missing!r}")
+
+    def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
+        """P10/AC12 -- driven as a REAL subprocess (`<client> next --help`),
+        never read off a fixture list: a `--help` that exits non-zero or omits
+        its own verb is a broken agent-facing surface however correct the
+        resolver is."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            result = self.drives.get((client_key, "help"))
+            if result is None or result.returncode != 0:
+                offenders[client_key] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif CR092_NEXT_VERB not in result.stdout:
+                offenders[client_key] = "help omits its own verb"
+        self.assertEqual(
+            offenders, {},
+            f"P10 -- `<client> next --help` must exit 0 and list the verb in "
+            f"all five clients: {offenders!r}")
+
+    def test_every_drive_writes_one_toon_envelope_naming_next_on_stdout(self):
+        """P1 -- TOON envelope on stdout via `emit_axi`, naming its OWN verb,
+        with nothing printed before it. Decoded by the SAME
+        `classify_envelope` the rest of the census uses."""
+        offenders = {}
+        cases = [case for case, *_ in _NEXT_CASES] + ["unreachable"]
+        for client_key in CLIENT_FILES:
+            for case in cases:
+                label = f"{client_key}:{case}"
+                axi = self._axi(client_key, case)
+                result = self._result(client_key, case)
+                if not axi:
+                    offenders[label] = (
+                        f"no envelope; stdout="
+                        f"{getattr(result, 'stdout', None)!r}")
+                elif axi.get("verb") != CR092_NEXT_VERB:
+                    offenders[label] = f"envelope names {axi.get('verb')!r}"
+                elif not (result.stdout or "").lstrip().startswith("axi:"):
+                    offenders[label] = f"prose precedes it: {result.stdout!r}"
+        self.assertEqual(
+            offenders, {},
+            f"P1 -- stdout is the machine channel and carries the `next` "
+            f"envelope ALONE: {offenders!r}")
+
+    def test_the_human_line_lands_on_stderr_only(self):
+        """P1's second half -- `emit_axi` writes the human sentence to stderr.
+        Both directions are asserted: no envelope on stderr, and the human
+        line must still exist rather than having been deleted to pass."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            result = self._result(client_key, "no-track")
+            stderr = getattr(result, "stderr", "") or ""
+            if "axi:" in stderr:
+                offenders[client_key] = f"envelope on stderr: {stderr!r}"
+            elif "next:" not in stderr:
+                offenders[client_key] = f"no human line: {stderr!r}"
+        self.assertEqual(
+            offenders, {},
+            f"P1 -- the human line is stderr-only, and still present: "
+            f"{offenders!r}")
+
+    def test_fields_narrows_the_envelope(self):
+        """P2 -- `--fields` NARROWS the answer, the fleet's existing selection.
+        Asserted in both directions: the requested keys survive, the
+        unrequested RESULT fields are gone, and the envelope FRAME
+        (verb/ok/context/warnings) is never narrowed away."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            whole = self._axi(client_key, "no-track")
+            narrowed = self._axi(client_key, "fields")
+            if not narrowed:
+                offenders[client_key] = "no envelope under --fields"
+                continue
+            if (narrowed.get("decision") != whole.get("decision")
+                    or narrowed.get("cr") != whole.get("cr")):
+                offenders[client_key] = (
+                    f"requested keys lost: {narrowed!r}")
+                continue
+            dropped = [k for k in ("seq", "release", "wave", "help")
+                       if k in narrowed]
+            if dropped:
+                offenders[client_key] = f"--fields narrowed nothing: {dropped!r}"
+                continue
+            frame = [k for k in ("verb", "ok", "context", "warnings")
+                     if k not in narrowed]
+            if frame:
+                offenders[client_key] = f"frame narrowed away: {frame!r}"
+        self.assertEqual(
+            offenders, {},
+            f"P2 -- `--fields decision,cr` must narrow the decision to those "
+            f"two keys in every client, frame intact: {offenders!r}")
+
+    def test_no_client_offers_full_because_the_answer_is_one_decision(self):
+        """P3, asserted as an ABSENCE (§S6: "`--full` is not added, because
+        there is nothing it could reveal"). A `--full` that reveals nothing on
+        a one-record answer is a conformance FAILURE, not a courtesy, so this
+        test fails when the flag EXISTS."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            options = self._options(client_key)
+            present = [f for f in CR092_NEXT_EXEMPT_FLAGS if f in options]
+            if present:
+                offenders[client_key] = present
+        self.assertEqual(
+            offenders, {},
+            f"P3 is N/A BY SHAPE for `next` -- the answer is ONE decision, "
+            f"never a truncated list, so a `--full` on it would be a dead "
+            f"flag: {offenders!r}")
+
+    def test_the_p3_exemption_stays_declared_and_narrow(self):
+        """The exemption must be a STATED single-principle carve-out, not a
+        blanket opt-out and not an accident of scoping:
+
+          * `--fields` (P2) is still REQUIRED in every client, so the absence
+            above is P3's alone;
+          * every other flag `next` declares is one §S3/§S6 names, so the
+            surface cannot grow a `--full` under another spelling;
+          * `next` must stay OUTSIDE `CR091_ROADMAP_VERBS`, the set this
+            file's own `test_every_pair_offers_fields_and_full` expectation is
+            scoped to -- the moment it were swept in, the census would demand
+            the dead flag rather than express the justified absence."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            options = self._options(client_key)
+            absent = [f for f in CR092_NEXT_FLAGS if f not in options]
+            if absent:
+                offenders[client_key] = f"missing {absent!r}"
+                continue
+            unexpected = sorted(
+                options - set(CR092_NEXT_FLAGS)
+                - {"-h", "--help", "--project-dir", "--maven-dir"})
+            if unexpected:
+                offenders[client_key] = f"undeclared flags {unexpected!r}"
+        self.assertEqual(
+            offenders, {},
+            f"P2 stays required while P3 is exempt; `next`'s surface is "
+            f"{CR092_NEXT_FLAGS} plus each client's project-dir convention: "
+            f"{offenders!r}")
+        self.assertNotIn(
+            CR092_NEXT_VERB, CR091_ROADMAP_VERBS,
+            "`next` must stay outside the roadmap verb set, whose "
+            "`--fields`+`--full` expectation would otherwise sweep it in and "
+            "turn a justified absence into a demanded no-op flag")
+
+    def test_no_client_declares_an_identity_flag_on_next(self):
+        """§S4/AC10 -- read-only: no `--agent`, no `--user-approved`, so the
+        verb can never route through `emit_agent_identity_hard_stop`. Every
+        drive above ran with no identity of any kind and still answered, which
+        is the behavioural half of the same AC."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            present = [f for f in CR092_NEXT_FORBIDDEN_FLAGS
+                       if f in self._options(client_key)]
+            if present:
+                offenders[client_key] = present
+        self.assertEqual(
+            offenders, {},
+            f"AC10 -- `next --help` declares no identity flag: {offenders!r}")
+
+    def test_the_multi_track_refusal_carries_total_count_on_its_tracks_list(self):
+        """P4/AC7 -- `totalCount` on `tracks[]`, the verb's ONLY list, so a
+        caller never counts rows to learn the size of the answer. The refusal
+        also names no decision: it never picks a lane."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._axi(client_key, "two-track")
+            tracks = axi.get("tracks")
+            if axi.get("ok") is not False or axi.get("needs") != ["track"]:
+                offenders[client_key] = (
+                    f"ok={axi.get('ok')!r} needs={axi.get('needs')!r}")
+            elif tracks != ["track-1", "track-2"]:
+                offenders[client_key] = f"tracks={tracks!r}"
+            elif axi.get("totalCount") != len(tracks):
+                offenders[client_key] = (
+                    f"totalCount={axi.get('totalCount')!r} for "
+                    f"{len(tracks)} tracks")
+            elif "decision" in axi:
+                offenders[client_key] = "the refusal carries a decision"
+        self.assertEqual(
+            offenders, {},
+            f"P4 -- the multi-track refusal lists the live lanes with a "
+            f"pre-computed totalCount and picks none: {offenders!r}")
+
+    def test_an_accepted_track_spelling_resolves_the_lane_in_every_client(self):
+        """§S3/AC18's read side, through the CLI: `--track 2` must be accepted
+        where the stored value is `track-2`, in every client alike, because the
+        canonicaliser is the SHARED helper and not five per-client guesses."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._axi(client_key, "two-track-flagged")
+            if axi.get("decision") != "NEXT" or axi.get("cr") != "CR-CRU-521":
+                offenders[client_key] = (
+                    f"decision={axi.get('decision')!r} cr={axi.get('cr')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"§S3 -- `next --track 2` must resolve the stored `track-2` lane "
+            f"in every client: {offenders!r}")
+
+    def test_drained_is_a_decision_never_a_blank(self):
+        """P5 -- `DRAINED` is the DEFINITIVE empty state: an explicit reason
+        plus a non-empty `help[]` naming the move that would refill the lane.
+        `next` never emits an empty array or a null decision as its answer."""
+        expected = {"no-roadmap": "no-roadmap", "wave-complete": "wave-complete"}
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case, reason in expected.items():
+                axi = self._axi(client_key, case)
+                label = f"{client_key}:{case}"
+                if axi.get("decision") != "DRAINED":
+                    offenders[label] = f"decision={axi.get('decision')!r}"
+                elif axi.get("reason") != reason:
+                    offenders[label] = f"reason={axi.get('reason')!r}"
+                elif not axi.get("help"):
+                    offenders[label] = "empty help[]"
+        self.assertEqual(
+            offenders, {},
+            f"P5 -- an empty lane answers with a REASONED decision, never a "
+            f"blank: {offenders!r}")
+
+    def test_a_failed_read_is_structured_on_stdout_and_is_never_drained(self):
+        """P6 + AC13 -- a queue GET that returns non-ok exits 1 with
+        `ok=false`, a structured warning NAMING the read failure and NO
+        `decision` key, written to stdout rather than as prose on stderr. An
+        unreadable roadmap and an empty one are different facts."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._axi(client_key, "unreachable")
+            result = self._result(client_key, "unreachable")
+            warnings = axi.get("warnings") or []
+            if axi.get("ok") is not False:
+                offenders[client_key] = f"ok={axi.get('ok')!r}"
+            elif "decision" in axi:
+                offenders[client_key] = (
+                    f"a failed read reported decision="
+                    f"{axi.get('decision')!r} -- an unreadable roadmap is not "
+                    f"an empty one")
+            elif not any("queue" in (w.get("code") or "") for w in warnings):
+                offenders[client_key] = f"read failure unnamed: {warnings!r}"
+            elif not axi.get("help"):
+                offenders[client_key] = "no help[] on the failure"
+            elif "axi:" in (result.stderr or ""):
+                offenders[client_key] = "the envelope leaked to stderr"
+        self.assertEqual(
+            offenders, {},
+            f"P6/AC13 -- the read failure is a NAMED, structured, stdout "
+            f"envelope and is never DRAINED: {offenders!r}")
+
+    def test_every_envelope_carries_the_context_block_with_the_resolved_lane(self):
+        """P7 -- the `context` block `emit_axi` always writes, and the LANE it
+        carries. Measured twice against a DECLARED orchestrator lane
+        (`axi_context` reads `$WORKFLOW_ROLE` into `context.track`):
+
+          * `lane-context` declares track-2 and asks about it -- the
+            declaration and the answer agree, so the key is simply present;
+          * `lane-mismatch` declares track-1 and asks `--track 2` in a
+            two-track project -- the ONE shape where "the resolved lane" and
+            "the declared lane" are different strings. `context.track` owes
+            the lane the answer is ABOUT, or an agent reading it is misled by
+            its own envelope."""
+        offenders = {}
+        cases = [case for case, *_ in _NEXT_CASES] + ["unreachable"]
+        for client_key in CLIENT_FILES:
+            for case in cases:
+                context = self._axi(client_key, case).get("context")
+                if not isinstance(context, dict) or "projectKey" not in context:
+                    offenders[f"{client_key}:{case}"] = context
+            lane = self._axi(client_key, "lane-context").get("context") or {}
+            if lane.get("track") != "track-2":
+                offenders[f"{client_key}:lane"] = (
+                    f"context.track={lane.get('track')!r}")
+            mismatch = self._axi(client_key, "lane-mismatch")
+            resolved = (mismatch.get("context") or {}).get("track")
+            if mismatch.get("cr") != "CR-CRU-521":
+                offenders[f"{client_key}:mismatch-answer"] = (
+                    f"cr={mismatch.get('cr')!r} -- the fixture must answer "
+                    f"about track-2 for the lane assertion to mean anything")
+            elif resolved != "track-2":
+                offenders[f"{client_key}:mismatch-lane"] = (
+                    f"context.track={resolved!r} -- the session declared "
+                    f"track-1 and the answer is about track-2")
+        self.assertEqual(
+            offenders, {},
+            f"P7 -- every `next` envelope carries a `context` block naming the "
+            f"project and the RESOLVED lane: {offenders!r}")
+
+    def test_bare_next_answers_with_live_data_in_a_single_track_project(self):
+        """P8/AC8 -- a bare `next` (no flag but each client's own
+        `--project-dir`) answers with LIVE data in a single-track project,
+        whether the single track is declared or absent. The envelope carries
+        no `needs` and no `tracks` key: the flag exists on the parser but is
+        never PROMPTED FOR. The `seq` echoed is the PUBLISHED one (10), so an
+        index-derived position could not pass."""
+        expected = {"no-track": "CR-CRU-500", "one-track": "CR-CRU-510"}
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case, cr in expected.items():
+                axi = self._axi(client_key, case)
+                label = f"{client_key}:{case}"
+                if axi.get("decision") != "NEXT" or axi.get("cr") != cr:
+                    offenders[label] = (
+                        f"decision={axi.get('decision')!r} "
+                        f"cr={axi.get('cr')!r}")
+                elif axi.get("seq") != 10:
+                    offenders[label] = f"seq={axi.get('seq')!r}"
+                elif "needs" in axi or "tracks" in axi:
+                    offenders[label] = "prompted for a flag it never needs"
+        self.assertEqual(
+            offenders, {},
+            f"P8 -- a single-track project answers a bare `next` with live "
+            f"data, no flags required: {offenders!r}")
+
+    def test_help_is_state_derived_per_decision_and_next_owns_no_canned_entry(self):
+        """P9 -- `help[]` is STATE-DERIVED per decision, never canned. The
+        four decision states must each name the move THEIR state needs, and
+        `next` must have no `HELP_STEPS` entry at all -- the mechanism that
+        makes a canned string impossible rather than merely unused."""
+        wanted = {
+            "no-track": "plan-file --cr CR-CRU-500",
+            "in-flight": "CR-CRU-540",
+            "no-roadmap": "release-propose",
+            "wave-complete": "cr-plan",
+        }
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            rendered = {}
+            for case, needle in wanted.items():
+                steps = self._axi(client_key, case).get("help") or []
+                joined = " | ".join(steps)
+                rendered[case] = joined
+                if needle not in joined:
+                    offenders[f"{client_key}:{case}"] = (
+                        f"help[] does not name {needle!r}: {steps!r}")
+            if len(set(rendered.values())) != len(rendered):
+                offenders[f"{client_key}:canned"] = (
+                    f"two decisions rendered the SAME help[]: {rendered!r}")
+        self.assertEqual(
+            offenders, {},
+            f"P9 -- each decision derives its own help[]: {offenders!r}")
+        axi_module = _load_module(CLIENTS_DIR / "_crucible_axi.py",
+                                  "cr092_axi_under_census")
+        self.assertNotIn(
+            CR092_NEXT_VERB, axi_module.HELP_STEPS,
+            "§S6 -- `next` gets NO entry in HELP_STEPS; a canned per-verb "
+            "string is exactly what CR-CRU-048's rule forbids")
+
+    def test_the_exit_codes_split_answers_from_usage_and_a_failed_read(self):
+        """AC13, both halves. All three DECISIONS exit 0 -- they are ANSWERS,
+        and the harness's own `worktree-flow next` 0/2/3 split is explicitly
+        not adopted (§S1). §S3's usage refusal exits 2; a failed queue read
+        exits 1."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case, expected in CR092_EXPECTED_EXIT.items():
+                result = self._result(client_key, case)
+                actual = getattr(result, "returncode", None)
+                if actual != expected:
+                    offenders[f"{client_key}:{case}"] = (
+                        f"exit {actual}, expected {expected}")
+        self.assertEqual(
+            offenders, {},
+            f"AC13 -- decisions 0, usage 2, failed read 1: {offenders!r}")
+
+    def test_asking_issues_exactly_one_get_and_never_a_write(self):
+        """§S4/AC9 -- the oracle: one read, and asking claims, locks, reserves
+        and advances nothing. Measured on the STUB's own request log across all
+        five clients, so a single POST/PATCH/PUT from any of them fails here."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case, *_ in _NEXT_CASES:
+                requests = (self.drives.get((client_key, case))
+                            or {}).get("requests")
+                if requests is None:
+                    offenders[f"{client_key}:{case}"] = "not driven"
+                elif [m for m, _p in requests if m != "GET"]:
+                    offenders[f"{client_key}:{case}"] = requests
+                elif len(requests) != 1:
+                    offenders[f"{client_key}:{case}"] = (
+                        f"{len(requests)} reads, expected exactly 1: "
+                        f"{requests!r}")
+        self.assertEqual(
+            offenders, {},
+            f"§S4 -- `next` is ONE read and zero writes: {offenders!r}")
+
+    def test_the_fleet_census_also_reads_next_as_enveloped(self):
+        """Belt and braces: `next` must also pass the file's PRIMARY census --
+        the one whose per-client bare counts the rust/mvn guards above assert
+        are zero -- not only this section's own drives."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            per_verb = self.census.get(client_key, {})
+            if CR092_NEXT_VERB not in per_verb:
+                offenders[client_key] = "not enumerated"
+            elif not per_verb[CR092_NEXT_VERB]:
+                offenders[client_key] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"`next` must be enveloped in the fleet-wide census too: "
+            f"{offenders!r}")
+
+
+# ── CR-CRU-106 §S1 / AC7 -- `cr-depends`, in all five, and NO deps flag on
+# `cr-plan`/`wave-sequence` in any ──────────────────────────────────────────
+#
+# `cr-depends` WRITES, so the roadmap section's rule applies unchanged: the
+# census's unreachable CRUCIBLE_URL gives it a genuine envelope-bearing
+# failure in both of its shapes. `build_argv` fills `--cr` (argparse-required)
+# and `--agent` and never `--on` (not required, because §S1/AC6 make the
+# client ASK for it), so the primary drive is the USAGE refusal (exit 2, one
+# read that fails, nothing POSTed) -- exactly `cr-plan`'s shape in the
+# CR-CRU-091 section. A second drive declares `--on` and so reaches the wire,
+# which is the TRANSPORT failure (exit 1). Both are measured.
+#
+# AC7 is the fleet's half of "no dependency flag or argument appears on
+# `cr-plan` or `wave-sequence`" (shapes B and C, both rejected). The server
+# half -- a `dependsOn` in a `cr-plan` body is ignored -- is
+# `tests/cr-depends-envelope.test.ts`'s. Here it is read off each client's
+# REAL argparse, the same option-string set the roadmap section already
+# collects, so a flag added to the shared registrar OR hand-rolled in one
+# client fails in the same place.
+
+CR106_DEPENDS_VERB = "cr-depends"
+
+# The two verbs AC7 forbids a dependency flag on, and the spellings a flag
+# would plausibly take. `--on` is `cr-depends`' own flag; on either of these
+# two it would be shape B/C by another name.
+CR106_NO_DEPS_FLAG_VERBS = ("cr-plan", "wave-sequence")
+CR106_FORBIDDEN_DEPS_FLAGS = ("--on", "--depends", "--depends-on", "--deps",
+                              "--dependson")
+
+CR106_EXPECTED_EXIT = {"ask": 2, "declared": 1}
+
+_DEPENDS_DRIVE_CACHE = None
+
+
+def _get_depends_drives():
+    """Drive `cr-depends` twice per client -- the ask and the declaration --
+    plus `--help`, as real subprocesses, cached at module scope exactly like
+    `_get_roadmap_drives()`. `(client, "options")` keeps the subparser's real
+    option strings; `(client, verb, "options")` keeps `cr-plan`'s and
+    `wave-sequence`'s for AC7."""
+    global _DEPENDS_DRIVE_CACHE
+    if _DEPENDS_DRIVE_CACHE is not None:
+        return _DEPENDS_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                verbs = enumerate_verbs(client_key, script_path)
+                for verb in CR106_NO_DEPS_FLAG_VERBS:
+                    subparser = verbs.get(verb)
+                    drives[(client_key, verb, "options")] = (
+                        None if subparser is None else
+                        {opt for action in subparser._actions
+                         for opt in action.option_strings})
+                subparser = verbs.get(CR106_DEPENDS_VERB)
+                if subparser is None:
+                    drives[(client_key, "options")] = None
+                    continue
+                drives[(client_key, "options")] = {
+                    opt for action in subparser._actions
+                    for opt in action.option_strings}
+                argv = build_argv(CR106_DEPENDS_VERB, subparser, project_dir)
+                for case, extra in (("ask", ()),
+                                    ("declared", ("--on", "CR-CRU-999"))):
+                    result = drive_verb(script_path, argv + list(extra),
+                                        project_dir, fake_bin_dir)
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    drives[(client_key, case)] = {"result": result, "axi": axi}
+                drives[(client_key, "help")] = drive_verb(
+                    script_path, [CR106_DEPENDS_VERB, "--help"], project_dir,
+                    fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _DEPENDS_DRIVE_CACHE = drives
+    return drives
+
+
+class Cr108PublishedTrackFactTest(unittest.TestCase):
+    """CR-CRU-108 §S2 / AC5 / AC5b -- `next`'s track fact, per client, END TO
+    END.
+
+    Same machinery as the CR-CRU-092 section above (`_get_next_drives()`: one
+    real subprocess per client x case against the queue stub) -- never a
+    second harness. What is new is WHERE the fact comes from. The stub now
+    publishes `tracks` exactly as §S1's `handleQueueGet` does, and these tests
+    assert the envelope carries THAT list rather than one the client
+    re-derived from the entries beside it.
+
+    Per-client subTests throughout: a fleet failure that does not name the
+    client sends the next reader to all five.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_next_drives()
+
+    def _axi(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("axi") or {}
+
+    def _exit(self, client_key, case):
+        result = (self.drives.get((client_key, case)) or {}).get("result")
+        return getattr(result, "returncode", None)
+
+    def test_every_client_reads_its_track_fact_off_the_published_list(self):
+        """AC5 -- `next`'s multi-track behaviour is UNCHANGED on the wire for
+        every value that classifies the same under both rules, driven per
+        client. Three fixtures, one rule -- the envelope's track fact IS the
+        payload's published `tracks`:
+
+          * `two-track` (two published lanes) -- exit 2, `ok=false`,
+            `needs=["track"]`, `tracks` EQUAL to the published list, a
+            `totalCount` matching its length, and no decision;
+          * `one-track` and `no-track` (one published lane / none) -- exit 0,
+            a decision, no `needs` and NO `tracks` key.
+
+        The CR-CRU-092 P4/P8 tests above pin the same fixtures against
+        HARDCODED values; this pins them against the PAYLOAD, which is the
+        claim §S2 actually makes."""
+        for client_key in CLIENT_FILES:
+            published = CR092_FIXTURES["two-track"]["tracks"]
+            with self.subTest(client=client_key, case="two-track"):
+                axi = self._axi(client_key, "two-track")
+                self.assertIs(axi.get("ok"), False)
+                self.assertEqual(axi.get("needs"), ["track"])
+                self.assertEqual(
+                    axi.get("tracks"), published,
+                    "AC5 -- the refusal lists the tracks the READ published")
+                self.assertEqual(axi.get("totalCount"), len(published))
+                self.assertNotIn("decision", axi)
+                self.assertEqual(self._exit(client_key, "two-track"), 2)
+            for case in ("one-track", "no-track"):
+                with self.subTest(client=client_key, case=case):
+                    self.assertLessEqual(
+                        len(CR092_FIXTURES[case]["tracks"]), 1,
+                        f"non-vacuity: the {case!r} fixture must publish at "
+                        f"most ONE lane, or it is not the single-track case")
+                    axi = self._axi(client_key, case)
+                    self.assertEqual(self._exit(client_key, case), 0)
+                    self.assertEqual(axi.get("decision"), "NEXT")
+                    self.assertNotIn(
+                        "needs", axi,
+                        "AC5 -- a single-track project takes no argument")
+                    self.assertNotIn("tracks", axi)
+
+    def test_a_whitespace_only_second_value_is_not_a_second_track_in_any_client(self):
+        """AC5b -- the ONE behaviour change, pinned as a change, in all five
+        clients. A queue declaring `"   "` beside `"2"` is multi-track to
+        `next` TODAY -- it refuses without `--track` -- and becomes
+        single-track after, because the server's rule is the one that
+        survives. The old answer was wrong: whitespace is not a lane."""
+        self.assertEqual(
+            CR092_FIXTURES["blank-second-track"]["tracks"], ["2"],
+            "non-vacuity: the published list must drop the whitespace-only "
+            "value, or this fixture is not AC5b's")
+        for client_key in CLIENT_FILES:
+            with self.subTest(client=client_key):
+                axi = self._axi(client_key, "blank-second-track")
+                self.assertEqual(
+                    self._exit(client_key, "blank-second-track"), 0,
+                    "AC5b -- one published lane, so `next` answers; exit 2 is "
+                    "the pre-cutover refusal this AC retires")
+                self.assertEqual(axi.get("decision"), "NEXT")
+                self.assertEqual(axi.get("cr"), "CR-Q108-550")
+                self.assertNotIn("needs", axi)
+                self.assertNotIn("tracks", axi)
+
+    def test_a_padded_value_collapses_into_the_track_it_pads_in_every_client(self):
+        """AC5b's second half -- `" track-2 "` beside `"track-2"` is ONE track,
+        not two, in all five clients. Identity is the TRIMMED value, so
+        preserving the padding would draw the second lane `normalizeTrack`
+        exists to prevent."""
+        self.assertEqual(
+            CR092_FIXTURES["padded-track"]["tracks"], ["track-2"],
+            "non-vacuity: the published list must collapse the padded value "
+            "into the value it pads, or this fixture is not AC5b's")
+        for client_key in CLIENT_FILES:
+            with self.subTest(client=client_key):
+                axi = self._axi(client_key, "padded-track")
+                self.assertEqual(
+                    self._exit(client_key, "padded-track"), 0,
+                    "AC5b -- a padded value and the value it pads are ONE "
+                    "lane, so this queue is single-track")
+                self.assertEqual(axi.get("decision"), "NEXT")
+                self.assertEqual(axi.get("cr"), "CR-Q108-560")
+                self.assertNotIn("needs", axi)
+                self.assertNotIn("tracks", axi)
+
+
+class Cr106CrDependsAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-106 §S1 -- `cr-depends` measured against the fleet standard in
+    all five clients, and AC7's flag ABSENCE read off the same argparse."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_depends_drives()
+        cls.census = _get_census()
+
+    def _axi(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("axi") or {}
+
+    def _result(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("result")
+
+    def test_cr_depends_is_a_real_subcommand_in_all_five_clients(self):
+        """CR-CRU-091 §S3's "gap not to repeat": the verb reached python only
+        when it landed; it must reach all five."""
+        missing = [c for c in CLIENT_FILES
+                   if self.drives.get((c, "options")) is None]
+        self.assertEqual(
+            missing, [],
+            f"`cr-depends` must be a registered subcommand in every client; a "
+            f"fleet verb that reaches some of the five and not the rest is the "
+            f"defect; absent from: {missing!r}")
+
+    def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
+        """P10 -- `<client> cr-depends --help`, as a real subprocess."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            result = self.drives.get((client_key, "help"))
+            if result is None or result.returncode != 0:
+                offenders[client_key] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif CR106_DEPENDS_VERB not in result.stdout:
+                offenders[client_key] = "help omits its own verb"
+        self.assertEqual(
+            offenders, {},
+            f"P10 -- `<client> cr-depends --help` must exit 0 and list the "
+            f"verb in all five clients: {offenders!r}")
+
+    def test_both_drives_write_one_toon_envelope_carrying_verb_ok_context_warnings(self):
+        """P1/P7 -- the fleet's envelope shape, on stdout ALONE, naming its
+        own verb, in both the ask and the declaration."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in CR106_EXPECTED_EXIT:
+                label = f"{client_key}:{case}"
+                axi = self._axi(client_key, case)
+                result = self._result(client_key, case)
+                if not axi:
+                    offenders[label] = (
+                        f"no envelope; stdout="
+                        f"{getattr(result, 'stdout', None)!r}")
+                    continue
+                absent = [f for f in ("verb", "ok", "context", "warnings")
+                          if f not in axi]
+                if absent:
+                    offenders[label] = f"missing {absent!r}"
+                elif axi.get("verb") != CR106_DEPENDS_VERB:
+                    offenders[label] = f"envelope names {axi.get('verb')!r}"
+                elif not (result.stdout or "").lstrip().startswith("axi:"):
+                    offenders[label] = f"prose precedes it: {result.stdout!r}"
+        self.assertEqual(
+            offenders, {},
+            f"P1/P7 -- stdout carries the `cr-depends` envelope ALONE, with "
+            f"verb/ok/context/warnings: {offenders!r}")
+
+    def test_the_ask_exits_two_and_the_declaration_fails_transport_with_one(self):
+        """P6 -- the ask is a USAGE refusal the client resolves itself (§S6:
+        never a blank argparse failure, and nothing posted); the declaration
+        reaches the unreachable wire and fails TRANSPORT."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case, expected in CR106_EXPECTED_EXIT.items():
+                result = self._result(client_key, case)
+                if result is None or result.returncode != expected:
+                    offenders[f"{client_key}:{case}"] = (
+                        f"exit {getattr(result, 'returncode', None)}, "
+                        f"expected {expected}")
+        self.assertEqual(
+            offenders, {},
+            f"P6 -- `cr-depends` exit codes: {offenders!r}")
+
+    def test_the_ask_names_on_lists_candidates_and_carries_the_role(self):
+        """§S1/AC6 through the census's own machinery: with `--on` undeclared
+        the envelope is the ASK -- `needs`, a candidate `crs[]` (empty here,
+        with a STRUCTURED warning saying why) and pre-filled `help[]` naming
+        the caller's own `--cr` -- identically in every client, because the
+        asking is the SHARED module's."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._axi(client_key, "ask")
+            if axi.get("ok") is not False:
+                offenders[client_key] = f"ok={axi.get('ok')!r}"
+            elif axi.get("needs") != ["on"]:
+                offenders[client_key] = f"needs={axi.get('needs')!r}"
+            elif "crs" not in axi:
+                offenders[client_key] = "no crs[] candidate list"
+            elif axi.get("requiredRole") != CR091_ROADMAP_ROLE:
+                offenders[client_key] = (
+                    f"requiredRole={axi.get('requiredRole')!r}")
+            elif not any(step.startswith("cr-depends --cr ")
+                         for step in axi.get("help") or []):
+                offenders[client_key] = f"help={axi.get('help')!r}"
+            elif "queue-unavailable" not in {
+                    w.get("code") for w in axi.get("warnings") or []
+                    if isinstance(w, dict)}:
+                offenders[client_key] = f"warnings={axi.get('warnings')!r}"
+        self.assertEqual(
+            offenders, {},
+            f"§S1/AC6 -- all five clients must ask identically: {offenders!r}")
+
+    def test_every_envelope_carries_convergence_total_count_help_and_role(self):
+        """§S7/P4/P9/AC16 -- the roadmap envelope's four constants ride both
+        shapes, including a call that never landed."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in CR106_EXPECTED_EXIT:
+                axi = self._axi(client_key, case)
+                label = f"{client_key}:{case}"
+                if not isinstance(axi.get("converged"), bool):
+                    offenders[label] = f"converged={axi.get('converged')!r}"
+                elif not isinstance(axi.get("totalCount"), int):
+                    offenders[label] = f"totalCount={axi.get('totalCount')!r}"
+                elif not axi.get("help"):
+                    offenders[label] = "no help[]"
+                elif axi.get("requiredRole") != CR091_ROADMAP_ROLE:
+                    offenders[label] = (
+                        f"requiredRole={axi.get('requiredRole')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"§S7/P4/P9/AC16 -- converged, totalCount, help[] and "
+            f"requiredRole ride every `cr-depends` envelope: {offenders!r}")
+
+    def test_every_client_offers_fields_and_full(self):
+        """P2/P3 -- the projection flags are part of the verb surface in every
+        client, never a python-only courtesy."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            options = self.drives.get((client_key, "options")) or set()
+            absent = [flag for flag in ("--fields", "--full")
+                      if flag not in options]
+            if absent:
+                offenders[client_key] = absent
+        self.assertEqual(
+            offenders, {},
+            f"P2/P3 -- `cr-depends` offers `--fields` and `--full` in every "
+            f"client: {offenders!r}")
+
+    def test_the_fleet_census_also_reads_cr_depends_as_enveloped(self):
+        """Belt and braces: the verb must also pass the file's PRIMARY census
+        -- the one whose per-client bare counts the rust/mvn guards above
+        assert are zero -- not only this section's own drives."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            per_verb = self.census.get(client_key, {})
+            if CR106_DEPENDS_VERB not in per_verb:
+                offenders[client_key] = "not enumerated"
+            elif not per_verb[CR106_DEPENDS_VERB]:
+                offenders[client_key] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"`cr-depends` must be enveloped in the fleet-wide census too: "
+            f"{offenders!r}")
+
+    def test_ac7_no_dependency_flag_on_cr_plan_or_wave_sequence_in_any_client(self):
+        """AC7 -- shapes B (`--depends-on` on `cr-plan`) and C (folding into
+        `wave-sequence`) were REJECTED; neither verb carries a dependency flag
+        in any client. Asserted as an ABSENCE on each client's real argparse,
+        so the two verbs are also proven to still EXIST there (an unregistered
+        verb would trivially carry no flag)."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for verb in CR106_NO_DEPS_FLAG_VERBS:
+                options = self.drives.get((client_key, verb, "options"))
+                label = f"{client_key}:{verb}"
+                if options is None:
+                    offenders[label] = "verb not registered"
+                    continue
+                present = [flag for flag in CR106_FORBIDDEN_DEPS_FLAGS
+                           if flag in options]
+                present += [opt for opt in options
+                            if "depend" in opt.lower() and opt not in present]
+                if present:
+                    offenders[label] = present
+        self.assertEqual(
+            offenders, {},
+            f"AC7 -- no dependency flag on `cr-plan` or `wave-sequence` "
+            f"anywhere in the fleet: {offenders!r}")
+
+
+# ── CR-CRU-092 §S5/AC11 -- the harness lane plan, BEHAVIOURALLY ────────────
+
+_HARNESS_DB_NAMES = (".wf-schedule.db", ".nai-schedule.db")
+
+# The harness's own lane-plan table (`changeset`), cut to the columns a lane
+# read would use. Real sqlite, so "populated" is a fact rather than a claim.
+_HARNESS_DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS changeset (
+    cr          TEXT PRIMARY KEY,
+    track       TEXT,
+    seq         INTEGER,
+    state       TEXT NOT NULL DEFAULT 'PENDING',
+    trigger     TEXT,
+    wave        TEXT,
+    depends_on  TEXT
+);
+"""
+
+# DISAGREEING on purpose: a different CR, at the seq the roadmap's own answer
+# occupies. A reconciling `next` would have to name one of these.
+_HARNESS_DB_ROWS = (
+    ("CR-HARNESS-999", "Track 1 - Crucible", 10, "PENDING", None, "5", None),
+    ("CR-HARNESS-998", "Track 1 - Crucible", 20, "PENDING", None, "5", None),
+)
+
+_HARNESS_DB_CRS = frozenset(row[0] for row in _HARNESS_DB_ROWS)
+
+# The tokens §S5 forbids on this path, as the sibling resolver harness's
+# static scan spells them -- reused here as the OUTPUT check, so a client that
+# somehow learned of the harness plan could not report it either.
+_HARNESS_TOKENS = ("schedule_db", ".wf-schedule.db", ".nai-schedule.db",
+                   "next_for_track", "worktree-flow")
+
+_HARNESS_CLI_MARKER_ENV = "CR092_HARNESS_CLI_MARKER"
+
+_HARNESS_CLI_SHIM = r'''#!/usr/bin/env python3
+"""A `worktree-flow` on PATH whose only job is to RECORD being called.
+
+The census's other fake tools stand in for toolchains the fleet legitimately
+shells out to. This one stands in for a CLI no code path may reach, so it
+leaves evidence and then answers plausibly -- a client that did shell out
+sails on and is caught by the marker, rather than by a crash that could be
+mistaken for an unrelated fixture gap.
+"""
+import os
+import sys
+
+marker = os.environ.get("CR092_HARNESS_CLI_MARKER")
+if marker:
+    with open(marker, "a") as handle:
+        handle.write(" ".join(sys.argv[1:]) + "\n")
+print("CR-HARNESS-999")
+'''
+
+
+def _build_bin_dir_with_harness_cli_tripwire():
+    """The census's own proven bin dir plus a `worktree-flow` tripwire (and the
+    `.py` spelling), so §S5's "shells out to" half is MEASURED rather than only
+    scanned for."""
+    bin_dir = _build_fake_bin_dir()
+    for name in ("worktree-flow", "worktree-flow.py"):
+        path = bin_dir / name
+        path.write_text(_HARNESS_CLI_SHIM)
+        st = os.stat(path)
+        os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir
+
+
+def _plant_harness_lane_plan(project_dir):
+    """Plant a POPULATED harness lane plan under BOTH the current and the
+    legacy filename, and read the CR ids back out -- so the fixture's own
+    "populated and disagreeing" claim is measured, not asserted."""
+    planted = {}
+    for name in _HARNESS_DB_NAMES:
+        path = Path(project_dir) / name
+        connection = sqlite3.connect(path)
+        try:
+            connection.executescript(_HARNESS_DB_SCHEMA)
+            connection.executemany(
+                "INSERT INTO changeset (cr, track, seq, state, trigger, wave, "
+                "depends_on) VALUES (?, ?, ?, ?, ?, ?, ?)", _HARNESS_DB_ROWS)
+            connection.commit()
+            planted[name] = [
+                row[0] for row in connection.execute(
+                    "SELECT cr FROM changeset ORDER BY seq")]
+        finally:
+            connection.close()
+    return planted
+
+
+_HARNESS_ISOLATION_CACHE = None
+
+
+def _get_harness_isolation_drives():
+    """Drive `next` twice per client against the SAME stub fixture and project
+    dir -- once clean, once with the harness lane plan planted -- keeping both
+    raw results plus what the plant actually contained."""
+    global _HARNESS_ISOLATION_CACHE
+    if _HARNESS_ISOLATION_CACHE is not None:
+        return _HARNESS_ISOLATION_CACHE
+    toon_module = _load_toon_module()
+    bin_dir = _build_bin_dir_with_harness_cli_tripwire()
+    scratch = Path(tempfile.mkdtemp(prefix="cr092-harness-isolation-"))
+    marker = scratch / "worktree-flow-invocations.log"
+    stub = _QueueStubServer()
+    stub.payload = CR092_FIXTURES["no-track"]
+    env = {**stub.env(), _HARNESS_CLI_MARKER_ENV: str(marker)}
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                clean = drive_verb(script_path, _next_argv(project_dir),
+                                   project_dir, bin_dir, extra_env=env)
+                planted = _plant_harness_lane_plan(project_dir)
+                sizes = {name: (Path(project_dir) / name).stat().st_size
+                         for name in _HARNESS_DB_NAMES}
+                with_plan = drive_verb(script_path, _next_argv(project_dir),
+                                       project_dir, bin_dir, extra_env=env)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+            drives[client_key] = {
+                "clean": clean,
+                "with_plan": with_plan,
+                "clean_axi": classify_envelope(clean.stdout, toon_module)[1],
+                "with_plan_axi": classify_envelope(
+                    with_plan.stdout, toon_module)[1],
+                "planted": planted,
+                "sizes": sizes,
+            }
+        drives["cli_invocations"] = (
+            marker.read_text(encoding="utf-8") if marker.exists() else "")
+    finally:
+        stub.close()
+        shutil.rmtree(bin_dir, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)
+    _HARNESS_ISOLATION_CACHE = drives
+    return drives
+
+
+class Cr092HarnessLanePlanIsolationTest(unittest.TestCase):
+    """CR-CRU-092 §S5/AC11, BEHAVIOURALLY -- the companion to the STATIC scans
+    (byte scan, AST, import surface) in the sibling
+    `test_cr092_next_decision_resolver.py`.
+
+    A scan proves no client SPELLS the harness lane-plan database. It cannot
+    prove the ANSWER is unaffected by one that EXISTS. So: plant a populated
+    lane plan -- real sqlite, the harness's own `changeset` shape, under both
+    the current `.wf-schedule.db` and the legacy `.nai-schedule.db` -- in the
+    project dir, naming a DIFFERENT CR than the roadmap's answer, put a
+    recording `worktree-flow` on PATH, and require `next`'s envelope to be
+    BYTE-IDENTICAL to the run without any of it.
+
+    §S5 is absolute: the two `next`s are never reconciled. A disagreement
+    between them is a real signal, left VISIBLE to the orchestrator -- which
+    means invisible to this verb. No merge, no fallback, no cross-check, and
+    specifically no warning naming the harness plan, because emitting one
+    would itself be a read of it.
+
+    RECORDING A GREEN, not chasing a bug: nothing on the path opens the file
+    today. This is the assertion that keeps it so, and the one the static scan
+    structurally cannot make.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_harness_isolation_drives()
+
+    def test_the_planted_lane_plan_is_populated_and_disagrees(self):
+        """The fixture guard, in the `_status_only_pick` idiom: if the plant
+        were empty, absent, or naming the roadmap's own answer, every
+        assertion below would be measuring nothing."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run = self.drives[client_key]
+            for name in _HARNESS_DB_NAMES:
+                if run["sizes"].get(name, 0) <= 0:
+                    offenders[f"{client_key}:{name}"] = "not a populated file"
+                elif set(run["planted"].get(name) or ()) != _HARNESS_DB_CRS:
+                    offenders[f"{client_key}:{name}:rows"] = (
+                        run["planted"].get(name))
+            answer = run["clean_axi"].get("cr")
+            if answer in _HARNESS_DB_CRS:
+                offenders[f"{client_key}:overlap"] = (
+                    f"the plant names the roadmap's own answer {answer!r}, so "
+                    f"a reconciling verb would pass unnoticed")
+        self.assertEqual(
+            offenders, {},
+            f"the harness lane plan must be real, populated and DISAGREEING: "
+            f"{offenders!r}")
+
+    def test_the_envelope_is_byte_identical_with_the_lane_plan_present(self):
+        """AC11's behavioural core -- same stdout, byte for byte, and the same
+        exit code. Nothing on this path read the file, so nothing about the
+        answer can have moved."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run = self.drives[client_key]
+            if run["clean"].stdout != run["with_plan"].stdout:
+                offenders[client_key] = (
+                    f"stdout moved:\n  clean={run['clean'].stdout!r}\n  "
+                    f"planted={run['with_plan'].stdout!r}")
+            elif run["clean"].returncode != run["with_plan"].returncode:
+                offenders[client_key] = (
+                    f"exit moved {run['clean'].returncode} -> "
+                    f"{run['with_plan'].returncode}")
+        self.assertEqual(
+            offenders, {},
+            f"§S5 -- a harness lane plan in the project dir cannot change one "
+            f"byte of this verb's answer: {offenders!r}")
+
+    def test_the_decision_stays_the_roadmap_s_own(self):
+        """Byte-identity would also hold if BOTH runs were wrong, so the answer
+        is named: the roadmap's `NEXT`/`CR-CRU-500`, never a lane-plan CR."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self.drives[client_key]["with_plan_axi"]
+            if axi.get("decision") != "NEXT" or axi.get("cr") != "CR-CRU-500":
+                offenders[client_key] = (
+                    f"decision={axi.get('decision')!r} cr={axi.get('cr')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"§S5 -- the answer comes from the REGISTERED roadmap alone: "
+            f"{offenders!r}")
+
+    def test_the_disagreement_is_never_reported_and_the_cli_never_runs(self):
+        """The disagreement stays INVISIBLE to this verb: no warning, no help
+        line, no stderr sentence naming the harness plan -- reporting it would
+        itself be a read of it. And the `worktree-flow` tripwire on PATH was
+        never invoked, which is the "shells out to" half a byte scan cannot
+        measure."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run = self.drives[client_key]
+            for channel in ("stdout", "stderr"):
+                text = getattr(run["with_plan"], channel) or ""
+                hits = [token for token in _HARNESS_TOKENS if token in text]
+                if hits:
+                    offenders[f"{client_key}:{channel}"] = hits
+            named = [cr for cr in _HARNESS_DB_CRS
+                     if cr in (run["with_plan"].stdout or "")]
+            if named:
+                offenders[f"{client_key}:crs"] = named
+        self.assertEqual(
+            offenders, {},
+            f"§S5 -- a disagreement between the two `next`s is left visible to "
+            f"the ORCHESTRATOR, never surfaced by this verb: {offenders!r}")
+        self.assertEqual(
+            self.drives["cli_invocations"], "",
+            "§S5 -- no code path may shell out to the harness lane-plan CLI; "
+            "the recording `worktree-flow` on PATH was called")
+
+
+# ---------------------------------------------------------------------------
+# CR-CRU-094 §S4 (AC7/AC8) — the renamed status field, on the CHANGED verb, in
+# every client, measured by the SAME census machinery the rest of this file
+# uses (AC8: "asserted by extending the two EXISTING harnesses ... rather than
+# a parallel checker" — the pattern CR-091 AC19 and CR-092 AC15 both follow).
+#
+# The changed verb is the `status`/`plans` PAIR (one implementation, two
+# registered names), so both are driven: an alias left emitting the old key
+# would be a client-visible dual-key envelope, which AC7 forbids.
+#
+# The census drives against an UNREACHABLE server, so the envelope measured
+# here is the §S1 tolerant degrade — where the field is an EXPLICIT null. That
+# is the strongest thing this harness can measure and it is worth measuring:
+# a rename that silently DROPPED the key on the degrade path would leave a
+# reader unable to distinguish "nothing has closed" from "this client predates
+# the field". The populated-board discrimination (latest `closedAt`) is pinned
+# where a fixture can supply a closed plan: `test_bun_crucible_status.py`.
+# ---------------------------------------------------------------------------
+
+# The registered names of the one changed verb (implementation + alias).
+CR094_STATUS_VERBS = ("status", "plans")
+
+# The client's own top-level help, where argparse prints the verb pair's
+# one-line description — the surface that advertises this field.
+CR094_ROOT_HELP = "<root>"
+
+_CR094_STATUS_HELP_CACHE = None
+
+
+def _get_status_help_drives():
+    """Every LIVE help surface on which the changed verb advertises this field:
+    the client's ROOT `--help` (argparse prints the verb pair's one-line help
+    there, which is where the field is named at all today) and each verb's own
+    `<client> <verb> --help`. Both are driven because the rename must reach
+    the surface that advertises the field AND must not survive on any other:
+    a positive check on one surface alone would let the retired name live on
+    in the other. COLUMNS is pinned so argparse's wrap width is deterministic
+    across terminals and CI."""
+    global _CR094_STATUS_HELP_CACHE
+    if _CR094_STATUS_HELP_CACHE is not None:
+        return _CR094_STATUS_HELP_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    helps = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                for surface in (CR094_ROOT_HELP,) + CR094_STATUS_VERBS:
+                    argv = (["--help"] if surface == CR094_ROOT_HELP
+                            else [surface, "--help"])
+                    helps[(client_key, surface)] = drive_verb(
+                        script_path, argv, project_dir, fake_bin_dir,
+                        extra_env={"COLUMNS": "200"})
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _CR094_STATUS_HELP_CACHE = helps
+    return helps
+
+
+class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
+    """CR-CRU-094 AC7/AC8 — the field states the fact it computes (the `cr` of
+    the plan with the latest `closedAt`), the old name is a CLEAN BREAK
+    (CR-CRU-059 §S0's precedent: no alias, no dual-key handling), and both
+    hold on every one of the 10 (client x changed-verb) pairs."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.census = _get_census()
+        cls.helps = _get_status_help_drives()
+
+    def _pairs(self):
+        for client_key in CLIENT_FILES:
+            for verb in CR094_STATUS_VERBS:
+                yield client_key, verb
+
+    def test_every_changed_verb_still_emits_an_envelope_in_every_client(self):
+        """Non-vacuity for the two tests below: a missing/bare envelope would
+        make "the old key is absent" vacuously true everywhere."""
+        bare = [f"{c}:{v}" for c, v in self._pairs()
+                if not self.census[c].get(v)]
+        self.assertEqual(
+            bare, [],
+            f"both registered names of the changed verb must still emit a "
+            f"decodable envelope in every client, or the key assertions below "
+            f"measure nothing: {bare!r}")
+
+    def test_every_changed_verb_reports_the_last_closed_cr_key(self):
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = self.census[client_key].get(verb) or {}
+            if "lastClosedCr" not in axi:
+                offenders[f"{client_key}:{verb}"] = sorted(axi)
+        self.assertEqual(
+            offenders, {},
+            f"every client must report the last-closed-CR under the name that "
+            f"states what it computes, on BOTH registered names of the verb; "
+            f"envelope keys seen: {offenders!r}")
+
+    def test_the_last_closed_cr_key_is_an_explicit_null_on_an_unreadable_board(self):
+        """The degrade must not fabricate a CR, and must not drop the key: an
+        explicit null is the definitive "nothing to report" (AXI principle
+        5), a missing key is indistinguishable from an older client."""
+        offenders = {f"{c}:{v}": self.census[c].get(v, {}).get("lastClosedCr")
+                     for c, v in self._pairs()
+                     if (self.census[c].get(v) or {}).get("lastClosedCr") is not None}
+        self.assertEqual(
+            offenders, {},
+            f"an unreadable board has no closed plan to report -- the field "
+            f"must be null, never a fabricated or stale value: {offenders!r}")
+
+    def test_no_changed_verb_envelope_still_carries_the_old_key(self):
+        """AC7's clean break, measured on the wire rather than in the source: a
+        response carrying BOTH keys fails the AC."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = self.census[client_key].get(verb) or {}
+            if "lastRunCr" in axi:
+                offenders[f"{client_key}:{verb}"] = axi.get("lastRunCr")
+        self.assertEqual(
+            offenders, {},
+            f"the old key must be ABSENT from every envelope -- it is replaced "
+            f"outright, not aliased alongside the new one: {offenders!r}")
+
+    def _squeezed_help(self, client_key, surface):
+        run = self.helps[(client_key, surface)]
+        return run, " ".join(f"{run.stdout}{run.stderr}".split()).lower()
+
+    def test_the_advertised_help_states_the_fact_the_field_computes(self):
+        """The live surface on which the verb pair advertises this field is the
+        client's own `--help` listing (the pair shares one description, so
+        both names are covered by construction; the per-client string itself
+        is pinned exactly by the sibling fleet-inventory harness)."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run, squeezed = self._squeezed_help(client_key, CR094_ROOT_HELP)
+            if run.returncode != 0:
+                offenders[client_key] = f"exit {run.returncode}"
+            elif "lastclosedcr" not in squeezed:
+                offenders[client_key] = "help does not name the field"
+            elif "last cr to close" not in squeezed:
+                offenders[client_key] = "help does not state the fact computed"
+        self.assertEqual(
+            offenders, {},
+            f"all five clients advertise this field in their help; each must "
+            f"name it and say what it is -- the last CR to close: "
+            f"{offenders!r}")
+
+    def test_each_verb_name_still_has_a_working_help_of_its_own(self):
+        """Non-vacuity for the rejection below: a `--help` that errored out
+        would carry no wording to reject."""
+        offenders = {f"{c}:{v}": self.helps[(c, v)].returncode
+                     for c, v in self._pairs()
+                     if self.helps[(c, v)].returncode != 0
+                     or not self.helps[(c, v)].stdout.strip()}
+        self.assertEqual(
+            offenders, {},
+            f"both registered names must still print their own help and exit "
+            f"0: {offenders!r}")
+
+    def test_no_live_help_surface_still_describes_the_field_as_the_most_recent_run(self):
+        """The DEFECT, stated as a rejection rather than only as a new
+        expectation: five clients advertise this field, and one left naming it
+        for the most recent run keeps the misreading alive however correct the
+        envelope is. Checked on EVERY live help surface -- the root listing
+        and each verb's own help -- so the retired name cannot survive by
+        moving between them."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for surface in (CR094_ROOT_HELP,) + CR094_STATUS_VERBS:
+                _run, squeezed = self._squeezed_help(client_key, surface)
+                stale = [phrase for phrase in ("lastruncr", "most recent run")
+                         if phrase in squeezed]
+                if stale:
+                    offenders[f"{client_key}:{surface}"] = stale
+        self.assertEqual(
+            offenders, {},
+            f"no client may still advertise the retired name or the 'most "
+            f"recent run' reading of this field: {offenders!r}")
+
+
+# ── CR-CRU-075 §S2/AC5 — `queue-file`, enveloped on all five clients ───────
+#
+# Presence and conformance are separate assertions, and this is the second
+# one: the sibling `test_cr054_fleet_inventory.py` says the verb is REGISTERED
+# in all five clients, and this section says what each of the five actually
+# writes on stdout — on the success path and on BOTH failure paths, because a
+# wired subparser that emits prose, or an error with no next step in it, is a
+# conformance failure however correct the write is.
+#
+# The success path needs an answer, so it is driven against a local stub that
+# accepts the one POST `queue-file` makes — the same "fake counterpart, real
+# mechanism" idiom `next` uses above, applied to a write instead of a read.
+# The two failure paths need no server at all: nothing is POSTed on either, so
+# they run on the census's own unreachable URL and still exercise the real
+# refusal.
+
+CR075_QUEUE_FILE_VERB = "queue-file"
+
+# The queue table, in the `docs/changes/README.md` shape `parse_queue_table`
+# reads. The ids belong to NO project: this fixture drives a genuine POST, and
+# a real board's CR ids in it would be a claim about that board's queue. The
+# parser is namespace-agnostic by construction (it normalises a bare `001` to
+# THIS row's own prefix), which is exactly what the second row exercises.
+_QUEUE_TABLE_HEADER = ("| CR | Title | Wave | Depends on |\n"
+                       "|---|---|---|---|\n")
+
+_QUEUE_TABLE_ROWS = (
+    "| [QF-CENSUS-001](./QF-CENSUS-001.md) | first queued item | 5 | — |\n"
+    "| [QF-CENSUS-002](./QF-CENSUS-002.md) | second queued item | 6 | 001 |\n"
+)
+
+# A row whose column count differs from the header's — `parse_queue_table`
+# raises naming the CR, and nothing is POSTed.
+_QUEUE_TABLE_MALFORMED = _QUEUE_TABLE_HEADER + (
+    "| [QF-CENSUS-003](./QF-CENSUS-003.md) | third queued item | 7 |\n"
+)
+
+_MALFORMED_ROW_CR = "QF-CENSUS-003"
+
+# What the parse owes, and therefore what the POST body and the success
+# envelope must both carry — the value that has to survive the client's parse,
+# the JSON POST, the server's answer and the TOON encode to be observed.
+_QUEUE_EXPECTED_ENTRIES = [
+    {"cr": "QF-CENSUS-001", "title": "first queued item", "wave": "5",
+     "dependsOn": []},
+    {"cr": "QF-CENSUS-002", "title": "second queued item", "wave": "6",
+     "dependsOn": ["QF-CENSUS-001"]},
+]
+
+
+class _QueueFileStubServer:
+    """A real HTTP server accepting the ONE full-replace POST `queue-file`
+    makes, recording every request with its method, path and decoded body —
+    so "the client sent the parsed queue to the queue endpoint" is measured
+    across a genuine socket from the genuine subprocess, not inferred from the
+    envelope the same client printed."""
+
+    def __init__(self):
+        self.requests = []
+        stub = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def _answer(self, status, body):
+                encoded = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw.decode() or "null")
+                except ValueError:
+                    body = None
+                stub.requests.append(("POST", self.path, body))
+                if self.path.endswith("/queue"):
+                    self._answer(200, {"ok": True, "unknownDependencies": []})
+                else:
+                    self._answer(404, {"ok": False,
+                                       "error": f"no stub for {self.path}"})
+
+            def do_GET(self):
+                stub.requests.append(("GET", self.path, None))
+                self._answer(404, {"ok": False,
+                                   "error": f"no stub for {self.path}"})
+
+            def log_message(self, *args):
+                pass
+
+        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+                                                      _Handler)
+        self.base_url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        daemon=True)
+        self._thread.start()
+
+    def env(self):
+        """The base-URL overrides `drive_verb` needs (arduino accepts
+        `CRUCIBLE_BASE` as its second choice), plus a blanked orchestrator env
+        so an ambient session cannot colour the `context` block."""
+        return {"CRUCIBLE_URL": self.base_url,
+                "CRUCIBLE_BASE": self.base_url,
+                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+
+    def close(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=5)
+
+
+# §S2 — the exit each drive owes. The success POST is answered `ok: true`, so
+# the fleet's `0 if ok else 1` gives 0; both failures refuse before the wire.
+CR075_EXPECTED_EXIT = {"success": 0, "unreadable": 1, "malformed": 1}
+
+_QUEUE_FILE_DRIVE_CACHE = None
+
+
+def _get_queue_file_drives():
+    """Drive `queue-file` once per (client × case) as real subprocesses,
+    cached at module scope exactly like `_get_census()`.
+
+    Each value keeps the RAW `CompletedProcess` (exit codes and stdout PURITY
+    are asserted, not only the envelope), the decoded `axi`, and — for the
+    success case — the requests the stub actually saw. `(client, "options")`
+    holds the subparser's real option strings, argparse's own ground truth for
+    the flag surface the ONE shared registrar builds."""
+    global _QUEUE_FILE_DRIVE_CACHE
+    if _QUEUE_FILE_DRIVE_CACHE is not None:
+        return _QUEUE_FILE_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    stub = _QueueFileStubServer()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                subparser = enumerate_verbs(client_key, script_path).get(
+                    CR075_QUEUE_FILE_VERB)
+                if subparser is None:
+                    drives[(client_key, "options")] = None
+                    continue
+                drives[(client_key, "options")] = {
+                    opt for action in subparser._actions
+                    for opt in action.option_strings}
+
+                # The default source, at the path the verb resolves on its
+                # own: `<project-dir>/docs/changes/README.md`.
+                queue_path = project_dir / "docs" / "changes" / "README.md"
+                queue_path.parent.mkdir(parents=True, exist_ok=True)
+                queue_path.write_text(_QUEUE_TABLE_HEADER + _QUEUE_TABLE_ROWS,
+                                      encoding="utf-8")
+                malformed_path = project_dir / "malformed-queue.md"
+                malformed_path.write_text(_QUEUE_TABLE_MALFORMED,
+                                          encoding="utf-8")
+                absent_path = project_dir / "no-such-queue-table.md"
+
+                base_argv = [CR075_QUEUE_FILE_VERB,
+                             "--project-dir", str(project_dir)]
+                cases = (
+                    # The success path is the only one that reaches the wire,
+                    # so it is the only one that needs the stub.
+                    ("success", [], stub.env()),
+                    ("unreadable", ["--from-file", str(absent_path)], None),
+                    ("malformed", ["--from-file", str(malformed_path)], None),
+                )
+                for case, extra_argv, extra_env in cases:
+                    seen = len(stub.requests)
+                    result = drive_verb(script_path, base_argv + extra_argv,
+                                        project_dir, fake_bin_dir,
+                                        extra_env=extra_env)
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    drives[(client_key, case)] = {
+                        "result": result, "axi": axi,
+                        "requests": stub.requests[seen:],
+                        "source": str(absent_path) if case == "unreadable"
+                        else str(queue_path)}
+                drives[(client_key, "help")] = drive_verb(
+                    script_path, [CR075_QUEUE_FILE_VERB, "--help"],
+                    project_dir, fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        stub.close()
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _QUEUE_FILE_DRIVE_CACHE = drives
+    return drives
+
+
+class Cr075QueueFileAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-075 AC5 — `queue-file` measured against the fleet standard in
+    all five clients, on the success path and on both failure paths.
+
+    Until §S1 this verb was registered on ONE client, which is why the three
+    sections above each cite it. Presence is now the sibling inventory
+    harness's assertion; what this class adds is that all five clients emit a
+    real TOON-AXI envelope for it, and that neither refusal is a bare error.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_queue_file_drives()
+        cls.census = _get_census()
+
+    def _drive(self, client_key, case):
+        return self.drives.get((client_key, case)) or {}
+
+    def _cases(self):
+        for client_key in CLIENT_FILES:
+            for case in CR075_EXPECTED_EXIT:
+                yield client_key, case
+
+    def test_queue_file_is_a_real_subcommand_in_all_five_clients(self):
+        """Enumerated from each client's REAL argparse, never a hand list —
+        the same ground truth the rest of the census reads."""
+        missing = [c for c in CLIENT_FILES
+                   if self.drives.get((c, "options")) is None]
+        self.assertEqual(
+            missing, [],
+            f"`queue-file` must be a registered subcommand in every client; "
+            f"absent from: {missing!r}")
+
+    def test_every_client_carries_the_shared_registrars_own_flag(self):
+        """One registrar builds one flag surface, so the flag the SHARED
+        registrar declares must be on all five. A client that grew its own
+        `--from-file` spelling would have forked the surface even while every
+        envelope assertion below still passed."""
+        offenders = {
+            client_key: sorted(options)
+            for client_key, options in (
+                (c, self.drives.get((c, "options")) or set())
+                for c in CLIENT_FILES)
+            if "--from-file" not in options
+        }
+        self.assertEqual(
+            offenders, {},
+            f"`--from-file` is declared once, by the shared registrar, and "
+            f"must reach every client: {offenders!r}")
+
+    def test_every_case_writes_one_toon_envelope_naming_the_verb_on_stdout(self):
+        """P1 — the envelope, on stdout, naming its OWN verb, with nothing
+        printed before it, on all fifteen (client × case) drives."""
+        offenders = {}
+        for client_key, case in self._cases():
+            drive = self._drive(client_key, case)
+            axi = drive.get("axi")
+            result = drive.get("result")
+            label = f"{client_key}:{case}"
+            if not axi:
+                offenders[label] = (f"no envelope; stdout="
+                                    f"{getattr(result, 'stdout', None)!r}")
+            elif axi.get("verb") != CR075_QUEUE_FILE_VERB:
+                offenders[label] = f"envelope names {axi.get('verb')!r}"
+            elif not (result.stdout or "").lstrip().startswith("axi:"):
+                offenders[label] = f"prose precedes it: {result.stdout!r}"
+        self.assertEqual(
+            offenders, {},
+            f"stdout is the machine channel and carries the `queue-file` "
+            f"envelope ALONE, on success and on both refusals: {offenders!r}")
+
+    def test_every_case_exits_with_the_code_its_outcome_owes(self):
+        """The fleet's `0 if ok else 1`, measured rather than assumed: an
+        enveloped failure that exits 0 is the silent-success shape this
+        census exists to catch."""
+        offenders = {}
+        for client_key, case in self._cases():
+            result = self._drive(client_key, case).get("result")
+            code = getattr(result, "returncode", None)
+            if code != CR075_EXPECTED_EXIT[case]:
+                offenders[f"{client_key}:{case}"] = (
+                    f"exit {code}, expected {CR075_EXPECTED_EXIT[case]}")
+        self.assertEqual(
+            offenders, {},
+            f"each outcome owes its exit code, and the envelope's `ok` must "
+            f"agree with it: {offenders!r}")
+
+    def test_the_success_envelope_carries_the_parsed_queue_back_to_the_caller(self):
+        """The observable outcome of the success path: not "it did not crash"
+        but the entries the caller registered, parsed from the table and
+        round-tripped through the POST, the answer and the TOON encode."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._drive(client_key, "success").get("axi") or {}
+            if axi.get("ok") is not True:
+                offenders[client_key] = f"ok={axi.get('ok')!r}"
+            elif axi.get("entries") != _QUEUE_EXPECTED_ENTRIES:
+                offenders[client_key] = f"entries={axi.get('entries')!r}"
+            elif axi.get("unknownDependencies") != []:
+                offenders[client_key] = (
+                    f"unknownDependencies="
+                    f"{axi.get('unknownDependencies')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"every client must return the whole parsed queue — both rows, "
+            f"the second's bare dependency normalised to its own namespace: "
+            f"{offenders!r}")
+
+    def test_the_success_path_posts_the_parsed_queue_to_this_projects_queue_endpoint(self):
+        """The other side of the wire, recorded by the stub: exactly ONE POST,
+        at the project's own queue path, carrying the entries. A client that
+        printed a convincing envelope without ever sending the queue fails
+        here and nowhere else."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            requests = self._drive(client_key, "success").get("requests") or []
+            writes = [r for r in requests if r[0] == "POST"]
+            if len(writes) != 1:
+                offenders[client_key] = f"{len(writes)} POSTs: {requests!r}"
+                continue
+            _method, path, body = writes[0]
+            if path != f"/api/v2/projects/detector-{client_key}-key/queue":
+                offenders[client_key] = f"POSTed to {path!r}"
+            elif (body or {}).get("entries") != _QUEUE_EXPECTED_ENTRIES:
+                offenders[client_key] = f"body={body!r}"
+        self.assertEqual(
+            offenders, {},
+            f"one full-replace POST per client, at that project's own queue "
+            f"path, carrying the parsed entries: {offenders!r}")
+
+    def test_neither_failure_path_reaches_the_wire(self):
+        """Both refusals happen in the client, so nothing may be registered
+        by a run that failed — the loud failure CR-CRU-014 §S2 specified is
+        loud AND inert."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in ("unreadable", "malformed"):
+                requests = self._drive(client_key, case).get("requests") or []
+                if requests:
+                    offenders[f"{client_key}:{case}"] = requests
+        self.assertEqual(
+            offenders, {},
+            f"a refused `queue-file` POSTs nothing: {offenders!r}")
+
+    def test_both_failure_envelopes_are_structured_and_carry_an_actionable_help(self):
+        """AXI principle 6 — an `ok:false` envelope names the failure AND the
+        next step. Both refusals, all five clients, and the malformed one must
+        name the offending row rather than only that a row was bad."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in ("unreadable", "malformed"):
+                label = f"{client_key}:{case}"
+                drive = self._drive(client_key, case)
+                axi = drive.get("axi") or {}
+                help_lines = axi.get("help")
+                if axi.get("ok") is not False:
+                    offenders[label] = f"ok={axi.get('ok')!r}"
+                elif not (axi.get("error") or "").strip():
+                    offenders[label] = f"error={axi.get('error')!r}"
+                elif not isinstance(help_lines, list) or not help_lines:
+                    offenders[label] = f"help={help_lines!r}"
+                elif case == "unreadable" and \
+                        drive["source"] not in " ".join(help_lines):
+                    offenders[label] = (f"help does not name the source "
+                                        f"tried: {help_lines!r}")
+                elif case == "malformed" and \
+                        _MALFORMED_ROW_CR not in axi.get("error", ""):
+                    offenders[label] = f"error does not name the row: " \
+                                       f"{axi.get('error')!r}"
+        self.assertEqual(
+            offenders, {},
+            f"both refusals owe an ok:false envelope with an error and a "
+            f"help[] a caller can act on: {offenders!r}")
+
+    def test_the_two_failure_paths_do_not_share_one_generic_help(self):
+        """Each failure gets the step for ITS failure. A single array shared
+        by both, or an echo of the success path's, is help in name only —
+        the caller who cannot read the source and the caller with a bad row
+        have nothing to do in common."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            helps = {case: ((self._drive(client_key, case).get("axi") or {})
+                            .get("help"))
+                     for case in ("success", "unreadable", "malformed")}
+            if helps["unreadable"] == helps["malformed"]:
+                offenders[client_key] = f"both refusals: {helps!r}"
+            elif helps["unreadable"] == helps["success"] \
+                    or helps["malformed"] == helps["success"]:
+                offenders[client_key] = f"echoes the success help: {helps!r}"
+        self.assertEqual(
+            offenders, {},
+            f"the two refusals owe two different next steps: {offenders!r}")
+
+    def test_the_human_line_lands_on_stderr_only(self):
+        """P1's second half, asserted in both directions: no envelope on
+        stderr, and the human sentence still exists rather than having been
+        deleted to pass."""
+        offenders = {}
+        for client_key, case in self._cases():
+            result = self._drive(client_key, case).get("result")
+            stderr = getattr(result, "stderr", "") or ""
+            if "axi:" in stderr:
+                offenders[f"{client_key}:{case}"] = f"envelope on stderr"
+            elif CR075_QUEUE_FILE_VERB not in stderr:
+                offenders[f"{client_key}:{case}"] = f"no human line: {stderr!r}"
+        self.assertEqual(
+            offenders, {},
+            f"the human line is stderr-only, and still present: "
+            f"{offenders!r}")
+
+    def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
+        """P10 — `<client> queue-file --help`, as a real subprocess. A verb
+        whose help is broken is a broken agent-facing surface however correct
+        its write path is."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            result = self.drives.get((client_key, "help"))
+            if result is None or result.returncode != 0:
+                offenders[client_key] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif CR075_QUEUE_FILE_VERB not in result.stdout:
+                offenders[client_key] = "help omits the verb name"
+        self.assertEqual(
+            offenders, {},
+            f"every client's `queue-file --help` must exit 0 and name the "
+            f"verb: {offenders!r}")
+
+    def test_the_fleet_census_also_reads_queue_file_as_enveloped(self):
+        """Belt and braces: the verb must also pass the file's PRIMARY census
+        — the one whose per-client bare counts the guards above assert are
+        zero — not only this section's own drives."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            per_verb = self.census.get(client_key, {})
+            if CR075_QUEUE_FILE_VERB not in per_verb:
+                offenders[client_key] = "not enumerated"
+            elif not per_verb[CR075_QUEUE_FILE_VERB]:
+                offenders[client_key] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"`queue-file` must be enveloped in the fleet-wide census too: "
+            f"{offenders!r}")
 
 
 if __name__ == "__main__":

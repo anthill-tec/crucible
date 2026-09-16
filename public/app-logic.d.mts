@@ -61,8 +61,10 @@ export interface WorkspaceProjectLike {
 }
 
 export interface WorkspaceTab {
-  // CR-CRU-021 §S1 — "Workflow" leads the fixed order (primary tab).
-  name: "Workflow" | "Runs" | "Coverage" | "Compile" | "BDD";
+  // CR-CRU-076 §S1 — "Roadmap" leads the fixed order (the origin document);
+  // supersedes CR-CRU-021 §S1 AC1 (Workflow-first). "Roadmap" was missing
+  // from this union — inherited CR-CRU-014 drift, fixed here (CR-076 F3).
+  name: "Roadmap" | "Workflow" | "Runs" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
   /** RED-phase declaration only — present when `disabled` explains why
    * (Coverage: "coverage lands with the first green regression"). */
@@ -132,6 +134,231 @@ export declare function filterEvents(
 
 export declare function relativeTime(ts: number, now: number): string;
 
+/** CR-CRU-091 §S1/AC3 — the one release-date formatter; epoch SECONDS in, ISO
+ * `YYYY-MM-DD` out, empty string for an absent or unusable value. */
+export declare function formatReleaseDate(epochSeconds: number | null | undefined): string;
+
+/** CR-CRU-078 §S3 — the kind of gate the strip is resolving a date for. The
+ *  caller declares it from the slice it iterated; it is never sniffed. */
+export type ReleaseGateKind = "shipped" | "proposed";
+
+export interface GateDateResult {
+  kind: ReleaseGateKind;
+  /** The one field consulted, or `null` for an unrecognised kind. */
+  field: "releasedAt" | "targetAt" | null;
+  /** `absent` is AC6's declared empty state; `unusable` is a data defect. */
+  state: "dated" | "absent" | "unusable";
+  /** `formatReleaseDate`'s answer for that field — `""` unless `dated`. */
+  date: string;
+}
+
+/** CR-CRU-078 §S3/AC6/AC7 — the date ONE release gate carries, or its declared
+ * absence. Pure; never forecasts, and never reads a proposal's `timestamp`. */
+export declare function resolveGateDate(
+  record: { releasedAt?: unknown; targetAt?: unknown } | null | undefined,
+  kind: ReleaseGateKind,
+): GateDateResult;
+
+/** CR-CRU-078 §S2 — ONE gate of the release strip: which release, and the date
+ *  it carries (or the state that says it has none). */
+export interface ReleaseStripGate {
+  /** A shipped row's `version`, a proposal's `label`; `""` when unlabelled. */
+  version: string;
+  kind: ReleaseGateKind;
+  /** `resolveGateDate`'s answer — `""` unless `dateState` is `dated`. */
+  date: string;
+  dateState: GateDateResult["state"];
+}
+
+/** CR-CRU-078 §S2/AC4 — the strip's page window. `size` is the VISIBLE gate
+ *  count (the last page of a non-multiple sequence is short); `earlier`/`later`
+ *  are the hidden counts, and a zero is why a tag is absent, not disabled. */
+export interface ReleaseStripPage {
+  size: number;
+  offset: number;
+  earlier: number;
+  later: number;
+}
+
+/** CR-CRU-078 §S9/AC28 — shipped as published, then proposals as published.
+ *  Concatenation only: re-sorting either half fails AC28. */
+export declare function releaseStripGates(
+  releases: readonly unknown[] | null | undefined,
+  proposals: readonly unknown[] | null | undefined,
+): ReleaseStripGate[];
+
+/** CR-CRU-078 §S2/AC5 + §S4/AC10 — the index of the FOCUSED gate: the version
+ *  the user chose when it is still in the sequence, else the release in
+ *  progress (the first live proposal, else the newest shipped tag); -1 for an
+ *  empty sequence. The ONE notion of focus on this surface. */
+export declare function releaseStripFocusIndex(
+  gates: readonly ReleaseStripGate[],
+  focusedVersion?: string,
+): number;
+
+/** CR-CRU-078 §S2/AC3 — how many WHOLE gates a MEASURED track holds. 0 when
+ *  either measurement is unusable — never a fallback constant. */
+export declare function stripWindowSize(
+  availableWidth: number | null | undefined,
+  gatePitch: number | null | undefined,
+): number;
+
+/** CR-CRU-078 §S2/AC4/AC5 — the page window: snapped to the page grid, clamped
+ *  to the ends, landing on the page that CONTAINS `focusIndex`. */
+export declare function releaseStripPage(input: {
+  count: number;
+  size: number;
+  focusIndex?: number;
+  offset?: number;
+}): ReleaseStripPage;
+
+/** CR-CRU-084 §S1 — one artifact a release delivered. */
+export interface ReleasePackage {
+  registry: string;
+  name: string;
+  version: string;
+}
+
+/** CR-CRU-078 §S4 — one wave CONTAINER of the focused release. `wave` is
+ *  `null` for members declaring none: a real group, drawn without chrome.
+ *  CR-CRU-116 §S4 — `active` is whether THIS WAVE holds the work in flight:
+ *  true for the box whose membership holds an `IN_PROGRESS` member, false for
+ *  every other box, including every box of a release with nothing running.
+ *  The `wave: null` LOOSE group is always `false`, whatever it holds: §S1
+ *  places a CR with no declared wave outside the constraint entirely, so that
+ *  box is not a wave and can hold no wave's work in flight. */
+export interface FocusedReleaseWave<Entry = unknown> {
+  wave: string | null;
+  active: boolean;
+  entries: Entry[];
+  /** CR-CRU-096 §S5 — the members this box DRAWS, in the server's published
+   *  order. A window on `entries`, never a re-ordering of it. For a wave box
+   *  that is the top of the scheduled queue (five by default) union every
+   *  running member; for the `wave: null` LOOSE group it is ALL of `entries`,
+   *  because AC18a leaves that group untrimmed. */
+  rows: Entry[];
+  /** CR-CRU-096 §S5.4 — the SCHEDULED remainder the `+N more` pointer states:
+   *  actionable members minus actionable rows shown, so merged members
+   *  (rolled up) are never counted here as well. `0` for the `wave: null`
+   *  loose group, which hides nothing and has no header to anchor a pointer
+   *  on (AC18a). */
+  hiddenCount: number;
+  /** CR-CRU-096 §S3/AC6 — merged members (`COMPLETED` or
+   *  `COMPLETED_UNTRACKED`, AC6a) over the WHOLE wave, the count the roll-up
+   *  states. Independent of the trim: `0` means the wave has none, and AC5a
+   *  renders no roll-up then. */
+  mergedCount: number;
+  /** CR-CRU-085 §S2 — the box's track swimlanes, in the tracks'
+   *  first-appearance order. The lane SET is the WHOLE membership's distinct
+   *  declared `track` labels (`roadmapTableColumns`' rule, AC7), so a lane
+   *  whose every member is merged or beyond the row cap is still published,
+   *  with no `rows`; a lane's `rows` are a subset of the box's own `rows`, in
+   *  the same published order. EMPTY unless more than one track is reported
+   *  (AC2/AC4) — one track, or none, draws no lane chrome at all — and always
+   *  EMPTY for the `wave: null` loose group, which has no box to lane and
+   *  draws its rows flat (AC18a). */
+  lanes: FocusedReleaseWaveLane<Entry>[];
+  /** CR-CRU-085 §S3/AC9 — the rows drawn in the wave BODY, OUTSIDE the lane
+   *  grid: the IMPLICIT SOLO LANE (`DN-model-b-language.md`, LOCKED:
+   *  "`track` absent = implicit solo lane (no UI noise, byte-identical lens
+   *  output)"), so they carry no lane, no label and no divider. Together with
+   *  the lanes' `rows` they are `rows` ENTIRE, in the same published order —
+   *  one pass puts every row in exactly one bucket, so no drawn member can be
+   *  drawn nowhere. With no lanes published this is ALL of `rows`, which is
+   *  the flat list CR-CRU-078 draws. */
+  soloRows: Entry[];
+}
+
+/** CR-CRU-085 §S2 — ONE track's swimlane inside a wave box: the declared
+ *  track id the lane is labelled with, and that track's share of the rows the
+ *  box draws (possibly none). */
+export interface FocusedReleaseWaveLane<Entry = unknown> {
+  track: string;
+  rows: Entry[];
+}
+
+/** CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused
+ *  release: its membership in authored order, that membership grouped into
+ *  waves, what it delivered, and the tracks it reports. */
+export interface FocusedReleaseView<Entry = unknown> {
+  version: string;
+  kind: ReleaseGateKind;
+  date: string;
+  dateState: GateDateResult["state"];
+  members: Entry[];
+  waves: FocusedReleaseWave<Entry>[];
+  /** CR-CRU-096 §S7/AC22 — the wave labels this release spans, compressed into
+   *  runs by `compressWaveRuns`. The delivered summary joins them with `", "`;
+   *  the label COUNT it states the noun from is `waves.length`, not this. */
+  waveRuns: string[];
+  /** CR-CRU-096 §S4/AC12b — the ONE row in the whole zone marked `next`: the
+   *  first actionable member among the rows the zone draws, in the published
+   *  order across every wave (the loose group included, AC12c). `null` when
+   *  the focused release draws no actionable row. */
+  nextCr: string | null;
+  crCount: number;
+  packages: ReleasePackage[] | undefined;
+  /** `empty` (delivered none) and `absent` (pre-CR-CRU-084) stay distinct. */
+  packagesState: "listed" | "empty" | "absent";
+  tracks: string[];
+}
+
+export declare function focusedReleaseView<Entry = unknown>(
+  gate: ReleaseStripGate | null | undefined,
+  releases: readonly unknown[] | null | undefined,
+  entries: readonly Entry[] | null | undefined,
+): FocusedReleaseView<Entry>;
+
+/** CR-CRU-096 §S7/AC22/AC22a/AC22b — a set of wave labels as the delivered
+ *  summary states it: ascending by leading-integer reading, maximal
+ *  consecutive runs compressed to `first–last` (U+2013), a label with no
+ *  numeric reading joining no run and following in first-appearance order.
+ *  Non-string and empty labels are dropped; the caller joins with `", "`. */
+export declare function compressWaveRuns(
+  labels: readonly (string | null | undefined)[] | null | undefined,
+): string[];
+
+/** CR-CRU-078 §S5/AC12 — the columns zone 3 shows for the rows it was given:
+ *  `wave` only across waves, `track` only across reported tracks. */
+export declare function roadmapTableColumns(entries: readonly unknown[] | null | undefined): string[];
+
+/** CR-CRU-078 §S5/AC11 — the CR's own H1 without the leading id the row
+ *  already carries; `""` for an absent title, and never truncated. */
+export declare function briefCrTitle(
+  title: string | null | undefined,
+  cr: string | null | undefined,
+): string;
+
+/** CR-CRU-078 AC27 — CR-CRU-091's SECOND axis as one badge, or `null` when the
+ *  entry declares none. Never replaces the derived `status`. */
+export declare function lifecycleBadge(
+  lifecycle: { state?: unknown; by?: unknown; reason?: unknown } | null | undefined,
+): { state: "SUPERSEDED" | "VOID"; text: string } | null;
+
+/** CR-CRU-078 §S4 — the terse status a flowchart node states as TEXT; `""` for
+ *  an unrecognised value, which supports no claim. */
+export declare function crStatusMark(status: string | null | undefined): string;
+
+/** CR-CRU-102 §S1/AC1/AC2 — one dependency id in the BARE form the approved
+ *  design draws, derived from the two ids compared and never from a known
+ *  prefix: the common leading text trimmed back to the last non-digit, and
+ *  the dependency's remainder returned only when it is entirely digits.
+ *  Otherwise the FULL published id, which is what a synthetic board with no
+ *  numeric tail renders (AC7). `""` for a dependency that is not a string;
+ *  the full id when the ROW's id is not one, because nothing can be compared.
+ *  RENDERING ONLY — `dependsOn` keeps full ids on the wire (AC3). */
+export declare function bareDependencyId(
+  cr: string | null | undefined,
+  dependency: string | null | undefined,
+): string;
+
+/** CR-CRU-109 §S1/AC8 — how many dependency ids a wave row STATES before the
+ *  COUNT of the rest, and the ONE place the number is spelled. TWO, by §S1's
+ *  measurement of the live wave box (three ids leave it at 321.0px against
+ *  the design's ~300px, two bring it to 292.5px). DISPLAY ONLY: `dependsOn`
+ *  keeps every full id and zone 3 still states the whole set. */
+export declare const DEPENDENCY_ANNOTATION_CAP: number;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;
@@ -185,7 +412,7 @@ export interface LensPlanLike {
   // linkage semantics.
   projectKey?: string;
   cr: string;
-  status: "open" | "closed";
+  status: "open" | "closed" | "aborted";
   wave?: string;
   track?: string;
   cycles: LensPlanCycleLike[];
@@ -228,7 +455,7 @@ export interface LensCycleNode<E extends LensRunLike> {
 export interface LensCrNode<E extends LensRunLike> {
   cr: string;
   source: "declared" | "inferred";
-  status?: "open" | "closed";
+  status?: "open" | "closed" | "aborted";
   track?: string;
   merge?: { commit: string };
   // CR-CRU-020 §S1.1 — passthrough of Plan.closedAt (declared nodes only).

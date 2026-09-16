@@ -54,6 +54,17 @@ Rather not pipe a remote script into a shell? Install Bun yourself first and
 pass `--no-bun-bootstrap` (or set `CRUCIBLE_NO_BUN_BOOTSTRAP=1`): an absent Bun
 then fails immediately with the remedy instead of fetching an installer.
 
+**Upgrading is the same one-liner.** Re-run it (or `install.sh` directly) and
+the script advances an existing install instead of no-opping on it: it reports
+`crucible-axi upgraded: 0.1.1 -> 0.1.2`, then re-runs the staged install so the
+server half is re-provisioned to the new release's pin — CLI and server move in
+lockstep. On a machine that is already current it says so and stops, doing no
+work. Note that plain `uv tool upgrade crucible-axi` is *not* sufficient by
+hand: it resolves within the constraint the tool was installed under, so a
+pinned install reports "already current" forever. The installer uses
+`uv tool install --upgrade`, which ignores that pin. Version selection is
+entirely uv's — the installer never pins a `crucible-axi` version.
+
 Running the server is a separate, explicit step. Start it in the foreground and
 check its health:
 
@@ -66,6 +77,57 @@ curl -fsSL http://127.0.0.1:3849/api/health
 `CRUCIBLE_HOST` / `CRUCIBLE_PORT` (overridable per run with `--host` /
 `--port`), and passes the server's exit code straight through so a shell — or a
 process supervisor — sees the real failure.
+
+On a systemd machine the install also provisions a **`--user` service**, so the
+server survives logout and comes back on login without a terminal held open:
+
+```sh
+systemctl --user status crucible-server     # provisioned by `crucible-axi install`
+systemctl --user stop crucible-server       # clean stop — leaves Result=success
+journalctl --user -u crucible-server -f
+```
+
+The unit is **`--user` only** — no root, no `sudo`, nothing in
+`/etc/systemd/system` — matching the user-scoped `bun add -g`. Its `ExecStart`
+is the same absolute argv `serve` uses, it carries `Restart=on-failure`, and it
+puts the resolved Bun's directory on `PATH`: the published `crucible-server` bin
+is a shim that spawns `bun` itself, and a unit inherits no shell `PATH`. Only
+the `CRUCIBLE_*` variables you actually set are forwarded.
+
+Don't want a daemon? `crucible-axi install --no-service` (or
+`CRUCIBLE_NO_SERVICE=1`) skips that stage. On a machine with no systemd — or no
+user D-Bus session — the stage reports itself skipped with the reason and the
+install still succeeds.
+
+Uninstalling inverts the install along the same path — the verb reverses the
+stages it owns, then uv removes the tool that ran it:
+
+```sh
+crucible-axi uninstall          # program only: store and config survive
+uv tool uninstall crucible-axi  # LAST — a running tool cannot remove itself
+```
+
+A plain `crucible-axi uninstall` removes **program artifacts only**: the
+user-scoped server package and its `crucible-server` symlink, via
+`bun remove -g` with the same absolute Bun the install resolved. It reports each
+stage in the usual TOON-AXI envelope and names the two things it deliberately
+kept — the **store** (`$XDG_DATA_HOME/crucible`, else `~/.local/share/crucible`)
+and the **config** (`<target-dir>/crucible-clients.json`) — with their paths,
+marked `retained`. Stage order is `server`, `config`, `store`: destructive last,
+so a failing step can never leave your data gone and the program still installed.
+
+Destroying data is opt-in and explicit:
+
+```sh
+crucible-axi uninstall --purge  # also removes the store AND the config
+```
+
+Without `--purge` nothing is deleted: a non-interactive run always retains (so
+automation cannot silently lose a database), and an interactive one asks once,
+naming both paths and the store's size, keeping them on empty input, EOF, or
+Ctrl-C. **Bun is never removed** — the install only guarantees it, it does not
+own it. Absent artifacts converge with no subprocess, so re-running is
+indistinguishable from running once.
 
 ## Development
 
@@ -87,6 +149,54 @@ pip install -e '.[dev]'
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 
+## Telling Crucible a release shipped
+
+Crucible does not observe your release process, so a release only appears on the
+board if something reports it. This is worth stating explicitly because **not
+every stack has a release script** — the pattern below is the strategy, and the
+script is only one way to run it.
+
+The unit is a `release` **milestone**, posted through any stack's client:
+
+```sh
+<stack>-crucible.py milestone --type release \
+  --label 1.4.0 --commit "$(git rev-list -n1 1.4.0)" --agent <agentId>
+```
+
+`--agent` is **required** and has no fallback: an agent identity is a real
+registration, and a derived default would plant a phantom row on the agent rail.
+`$WORKFLOW_ROLE` is a track lane (`mainline` | `track-n`), not an identity.
+
+**What depends on it.** Skip this and the loss is silent but wide: the roadmap
+draws no release-boundary rows (nothing distinguishes work *in* a release from
+work deferred past it), gate retirement has no completion event to fire on, and
+delivery forecasting has no release to anchor to. Three releases of this project
+shipped with no record at all before the gap was noticed.
+
+**Adoption strategies**, in the order most projects should consider them:
+
+1. **Release script / ceremony hook** — if the stack has one (`release.sh`, a
+   Maven release plugin, `cargo release`), post the milestone *after the push
+   succeeds*, so a recorded release always corresponds to a real remote tag.
+2. **CI on tag push** — no release script needed: a tag-triggered job posts the
+   milestone. Best fit for stacks whose release *is* "push a tag".
+3. **By hand, once per release** — a single command, entirely acceptable for
+   small projects. Better a manual report than an unrecorded release.
+4. **Backfill** — already shipped releases can be replayed from their tags at
+   any time; reporting is idempotent per tag/commit.
+
+**Two rules learned the hard way.** Make reporting **non-fatal** — never roll
+back or fail a published release because a tracking call failed; the artifact is
+already public and the record can be backfilled. But check the **identity at
+preflight**, before the tag exists, because a non-fatal report that fails at the
+end is a warning nobody reads: this project's ceremony exited clean while
+recording nothing, three times. Fail early, warn late.
+
 ## Version
 
-`0.1.2` (set on the release branch per the git-flow release ceremony).
+`0.2.0` — published on [PyPI](https://pypi.org/project/crucible-axi/) (`crucible-axi`) and
+[npm](https://www.npmjs.com/package/@anthill-tec/crucible-server) (`@anthill-tec/crucible-server`).
+
+The authoritative value is the **git tag** and what those two registries serve; `package.json`
+is aligned to it by the release ceremony. Read it from there rather than trusting this line —
+it went stale at 0.1.3 because a hotfix merge-back bumped the manifest and not this file.

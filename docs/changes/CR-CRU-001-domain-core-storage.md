@@ -61,6 +61,12 @@ grouped by `context.wave` when present, else by UTC day — accumulating
 Opening a corrupt/unreadable db: rename it to `crucible.db.corrupt-<epoch>`,
 start a fresh db, log one loud line. Boot must never fail because of a bad file.
 
+> **Amended by CR-CRU-071.** This holds for a store that cannot be READ. A store
+> that reads fine but was written by a NEWER Crucible is REFUSED instead — exit
+> non-zero, touch nothing — because quarantining a good newer database would
+> rename the user's live data aside and boot empty. The version check runs after
+> this corruption probe and before the migration chain.
+
 ### §S6 Minimal boot + health (the CR's production call path)
 `src/server.ts`: `Bun.serve` on port 3849 (env `CRUCIBLE_PORT` override), bound to
 loopback `127.0.0.1` by default (env `CRUCIBLE_HOST` / `hostname` opt override —

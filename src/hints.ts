@@ -16,7 +16,6 @@ export const hints: Record<
   | "abortNeedsApproval"
   | "gateFields"
   | "gateOutcomes"
-  | "milestoneTypes"
   | "illegalCycleTransition"
   | "planCycleNotFound"
   | "planFileInput"
@@ -91,17 +90,12 @@ export const hints: Record<
   ],
   /** CR-CRU-013 §S1 — a gate POST missing a required field. */
   gateFields: [
-    "POST /api/v2/gates {projectKey, agentId, context?, gate:{intent, outcome, steps:[…], fixes?, push?, pr?}} — record a no-mistakes gate outcome",
+    "POST /api/v2/gates {projectKey, agentId, version?, context?, gate:{intent, outcome, steps:[…], fixes?, push?, pr?}} — record a no-mistakes gate outcome (top-level `version` names the release it gated)",
     "gate.intent, gate.outcome, and gate.steps are all required",
   ],
   /** CR-CRU-013 §S1 — a gate POST with an out-of-set outcome. */
   gateOutcomes: [
     "gate.outcome must be one of: checks-passed, passed, failed, cancelled",
-  ],
-  /** CR-CRU-013 §S4b/§S4c — a milestone POST with an out-of-set type. */
-  milestoneTypes: [
-    "POST /api/v2/milestones {projectKey, agentId, type, label?, commit?, context?} — record a workflow milestone",
-    "type must be one of: gap-analysis, design-review, stage-flip, custom, cr-merged",
   ],
   /** CR-CRU-024 §S4 — an illegal per-cycle transition (e.g. active→pending). */
   illegalCycleTransition: [
@@ -274,6 +268,25 @@ export const cycleHints = {
 };
 
 /**
+ * CR-CRU-116 §S3 — the WAVE-scope refusals' help[], in the same shape and the
+ * same wording style `cycleHints` uses one container down: name the concrete
+ * move that would make the write legal, then the alternative. Parameterized by
+ * the wave and the cr the refusal names, both read off the QUEUE entry.
+ */
+export const waveHints = {
+  /** §S1 — another wave holds the open work; offer the plan-closing move. */
+  alreadyActive: (wave: string, cr: string): string[] => [
+    `close or abort ${cr}'s open plan first — wave ${wave} holds the open work, and one wave is active at a time`,
+    `or file this plan for a cr in wave ${wave}, the active wave`,
+  ],
+  /** §S2 — an earlier wave is still unfinished; land it or declare it dead. */
+  outOfOrder: (wave: string, cr: string): string[] => [
+    `land ${cr} first — waves open in ascending order, and wave ${wave} still holds it unfinished`,
+    `or declare ${cr} dead (lifecycle VOID | SUPERSEDED), then retry this plan`,
+  ],
+};
+
+/**
  * CR-CRU-052 §S1 — the DOUBLE gate on `DELETE /api/v2/projects/<key>`, the
  * most destructive route in the system. Both refusals are state-derived: they
  * name the project the caller actually aimed at (key + name) and the ONE
@@ -312,6 +325,33 @@ export const identityHints = {
 };
 
 /**
+ * CR-CRU-130 §S4/§S5 — milestone-vocabulary refusals, RESOLVED and never
+ * held. A milestone type is a project's own word for a dated goal, declared as
+ * configuration, so a help string that ENUMERATED it would be a second
+ * vocabulary: the copy these replaced omitted `release` from the day
+ * CR-CRU-074 accepted it, and a refused caller was handed a `help[]` naming a
+ * different set from the message beside it, in one response. The accepted set
+ * arrives from the SAME read the validator measured the request against
+ * (`Store.acceptedMilestoneTypes`), exactly as `identityHints.invalidSource`
+ * takes the sources it names.
+ */
+export const milestoneHints = {
+  /** §S4 — a milestone POST with no type, or one this project never declared. */
+  types: (accepted: readonly string[]): string[] => [
+    "POST /api/v2/milestones {projectKey, agentId, type, label?, commit?, context?} — record a workflow milestone",
+    `type must be one of: ${accepted.join(", ")}`,
+    "a type this project has not declared is refused rather than filed under a catch-all — declare your own vocabulary: PATCH /api/v2/projects/<key> {milestoneTypes: [\"your-type\", …]}",
+    "GET /api/v2/projects reads back what this project declared; the refusal above names the whole accepted set, declared and reserved alike",
+  ],
+  /** §S4 — a declaration trying to take a name the SERVER derives from. */
+  reservedType: (type: string, derives: string): string[] => [
+    `${type} is a RESERVED milestone type — the server derives ${derives} from that exact name, so a project can neither declare, shadow nor remove it`,
+    "nothing was declared: re-send PATCH /api/v2/projects/<key> {milestoneTypes: […]} without the reserved name — the whole declaration is refused, so a legitimate type beside it is not left half-applied",
+    "a reserved type stays recordable by every project — it never has to be declared to be used",
+  ],
+};
+
+/**
  * CR-CRU-056 §S2b/§S3b — registered-caller refusals. Every mutating workflow
  * verb and every ingest surface requires a LIVE registered caller; the help
  * is state-derived (names the offending agentId when the request carried one)
@@ -325,5 +365,99 @@ export const authHints = {
       : `agentId ${agentId} has no live registration in this project (never registered, unregistered, or pruned) — nothing was stored or changed`,
     "register first: POST /api/v2/agents/register {projectKey, agentId, role} (role: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report; TDD roles register bound with cycleId)",
     "then retry this call with that same agentId in the body",
+  ],
+};
+
+/**
+ * CR-CRU-091 §S3/§S8 — the roadmap-registration refusals. Every entry is
+ * STATE-DERIVED (AXI P9): it names the state actually found — the role the
+ * caller holds, the release nobody proposed, the container the cr really sits
+ * in — and offers the concrete next CALL that fixes it, never an explanation
+ * of the rule. The server emits no templates of its own beyond these next
+ * steps (§S6's division of labour); the asking stays the client's.
+ */
+export const roadmapHints = {
+  /**
+   * §S3 — a registered caller whose role is not ORCHESTRATOR. `role` is the
+   * one it declared, or undefined for a pre-CR-044 row that declared none —
+   * which is refused rather than assumed, so the help says so out loud.
+   */
+  notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
+    role === undefined
+      ? `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${agentId} with role ${required} — its row predates declared roles and carries none, and a role is never fabricated`
+      : `re-register ${agentId} with role ${required}: POST /api/v2/agents/register {projectKey, agentId, role: "${required}"} — it currently holds ${role}`,
+    "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
+    "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
+  ],
+  /**
+   * CR-CRU-118 §S1/§S5 — a declaration carrying NO release at all, at either
+   * door: `cr-plan` (the field is absent) and the bulk post (an entry the
+   * write would INSERT with none). The sibling one field lower
+   * (`unproposedRelease`) answers a label nobody PROPOSED; this one answers an
+   * ABSENT label, so it interpolates none and shares that refusal's
+   * `release-proposals` line VERBATIM — one question, one route named. §S5
+   * forbids a bare 400: the move that fixes absence is naming a live
+   * proposal, or proposing the container that is missing.
+   */
+  missingRelease: [
+    `GET /api/v2/projects/<key>/release-proposals — the live proposals a CR can be planned into`,
+    `cr-plan --cr <cr> --release <v> --wave <n> --title <brief> — every CR names the release it targets`,
+    `release-propose --label <v> — propose the super container first when none of the live ones is the target`,
+  ],
+  /**
+   * CR-CRU-118 §S4/§S5 — a `release-propose` carrying NO `targetAt` at all.
+   * Distinct from the SHAPE complaint a malformed value earns ("epoch
+   * SECONDS"): absence and nonsense are different findings needing different
+   * next moves, so the caller who typed nothing is handed the runnable call
+   * with the flag in it rather than a unit lecture about a value it never
+   * sent. Published here like every other roadmap refusal so five clients
+   * render one wording instead of the route inventing a second inline.
+   */
+  missingTarget: [
+    `release-propose --label <v> --target <YYYY-MM-DD> — the date this release is aiming at, in epoch SECONDS on the wire as \`targetAt\``,
+    `--target also takes an ISO-8601 date or datetime; the client reads it to the same integer, and a revision retires its predecessor rather than editing it`,
+    `GET /api/v2/projects/<key>/release-proposals — the live proposals and the targets they already declared`,
+  ],
+  /** §S8/AC6 — a cr-plan or wave-sequence naming a release nobody proposed. */
+  unproposedRelease: (label: string): string[] => [
+    `release-propose --label ${label} — the super container must exist before a CR can target it`,
+    `GET /api/v2/projects/<key>/release-proposals — the live proposals a CR can be planned into`,
+    `a release that has already SHIPPED is settled history and is no longer a plannable target for ${label}`,
+  ],
+  /** §S4/AC7 — wave-sequence naming a cr the container does not hold. */
+  unsequenceableCr: (cr: string, planned: string | undefined, container: string): string[] => [
+    planned === undefined
+      ? `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> — sequencing never plans, so ${cr} needs a row before it can hold a position`
+      : `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> to move it into ${container}, or re-send --crs without it — it is planned into ${planned}`,
+    `GET /api/v2/projects/<key>/queue — the crs actually registered in ${container}`,
+  ],
+  /**
+   * §S4 / CR-CRU-095 §S3 — a wave whose next seq would leave its block: the
+   * ONE `help[]` `wave-sequence`, the bulk post and `cr-plan` all carry beside
+   * `waveOverflowMessage`. `seq` is the value that would leave the block.
+   */
+  waveOverflow: (container: string, seq: number): string[] => [
+    `split ${container} across two waves: cr-plan --cr <cr> --release <v> --wave <n+1> --title <brief> moves a cr out, then re-send --crs for each wave`,
+    `seq ${seq} is past the block a wave's seq values live in — nothing was written, so the stored order is still the last authored one`,
+  ],
+  /**
+   * §S5 — the ONE finding that refuses: a dependency cycle. CR-CRU-106 §S2b —
+   * the remedy names `cr-depends`, the axis's own verb: it used to send the
+   * caller back through the bulk queue post, and a natively-authored project
+   * has no queue to re-post.
+   */
+  dependencyCycle: (members: string[]): string[] => [
+    `cr-depends --cr ${members[0] ?? "<cr>"} --on <corrected set> — re-declare the WHOLE set without the edge that closes the ring; the cycle is ${members.join(" → ")}`,
+    "every other dependency finding is accepted and reported — a cycle is the only one that refuses, because no order can satisfy it",
+  ],
+  /** §S3/AC14 — a lifecycle verb aimed at a cr a cut release already shipped. */
+  shippedCr: (cr: string, label: string): string[] => [
+    `GET /api/v2/projects/<key>/releases — ${label} named ${cr} in its crs, and a cut release is settled fact`,
+    `record the successor's own intent instead: cr-plan --cr <new> --release <v> --wave <n> --title <brief>`,
+  ],
+  /** §S3 — supersede/void aimed at a cr that was never registered. */
+  unregisteredCr: (cr: string): string[] => [
+    `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> — a lifecycle disposition belongs to a registered cr, and neither verb creates one`,
+    "GET /api/v2/projects/<key>/queue — the crs this project actually holds",
   ],
 };

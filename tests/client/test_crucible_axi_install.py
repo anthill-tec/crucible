@@ -55,7 +55,7 @@ This RED slice pins the exact package layout + API GREEN must build:
         main(argv=None) -> int                 # console-script entry point
 
     crucible_axi/install.py
-        STAGE_ORDER = ("server", "fleet", "manifest")
+        STAGE_ORDER = ("server", "fleet", "manifest", "unit")
         DEFAULT_STAGE_RUNNERS: dict[str, callable]   # module-level, mutable
                                                       # in place (tests patch
                                                       # it via mock.patch.dict)
@@ -70,7 +70,8 @@ This RED slice pins the exact package layout + API GREEN must build:
     crucible_axi/manifest.py
         build_manifest(install_dir) -> dict
             {"version": <str>, "clients": {<stack>: <path>, ...},
-             "status": <path ending in "STATUS-CONTRACT.md">}
+             "status": <path ending in "STATUS-CONTRACT.md">,
+             "config": <path ending in "crucible.toml">}
             "clients" covers exactly {"bun","python","rust","mvn","arduino"}.
         write_manifest(target_dir, manifest_dict) -> str
             Writes "crucible-clients.json" (single JSON document, overwriting
@@ -103,6 +104,13 @@ STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
 
 EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino"}
 
+# The manifest's top-level key set, DECLARED ONCE in `manifest_contract` and
+# imported here rather than restated: three suites pin it, and three copies of
+# one consumer contract is a schema change that can land on two of them
+# (CR-CRU-131 §S1c).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
+
 
 def _ensure_repo_root_on_path():
     root_str = str(REPO_ROOT)
@@ -133,6 +141,44 @@ def _load_toon_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# CR-CRU-070 -- the install grew a third stage, `[unit]`, which writes a
+# systemd `--user` unit into `$XDG_CONFIG_HOME/systemd/user` and drives
+# `systemctl --user`. NOTHING in this suite may reach the operator's real user
+# manager, so every test that runs the REAL default stage table below is
+# guarded on two independent axes: a `shutil.which` that never resolves
+# `systemctl` (so the stage reports skipped-with-reason and touches nothing)
+# and a tmp `$XDG_CONFIG_HOME`/`$HOME` (so BOTH unit-dir resolution rules land
+# inside tmp even if the first guard ever regressed).
+UNIT_STAGE = "unit"
+SYSTEMCTL_BIN_NAME = "systemctl"
+
+
+def _which_without_systemctl(resolved="/usr/bin/bun"):
+    """A `shutil.which` stand-in that resolves everything EXCEPT `systemctl`."""
+    def _which(cmd, mode=os.F_OK | os.X_OK, path=None):
+        if os.path.basename(str(cmd)) == SYSTEMCTL_BIN_NAME:
+            return None
+        return resolved
+    return _which
+
+
+def _fast_unit_stage(target_dir, force):
+    """A `[unit]` stage double that provisions nothing: no unit file, no
+    `systemctl`. Matches the `(target_dir, force)` runner protocol."""
+    return {"path": os.path.join(target_dir, UNIT_STAGE), "converged": False}
+
+
+@contextlib.contextmanager
+def _unit_stage_sandboxed(tmp_dir):
+    """CR-CRU-070 isolation for a test that runs the REAL `[unit]` stage
+    runner: no resolvable `systemctl`, and a tmp `$XDG_CONFIG_HOME`/`$HOME`."""
+    with mock.patch.dict(os.environ,
+                         {"XDG_CONFIG_HOME": tmp_dir, "HOME": tmp_dir}), \
+            mock.patch("crucible_axi.install.shutil.which",
+                       side_effect=_which_without_systemctl()):
+        yield
 
 
 class PyprojectPackageEntryPointTest(unittest.TestCase):
@@ -237,9 +283,10 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
 
 
 class InstallOrchestratorFrameworkTest(unittest.TestCase):
-    """S2 -- `run_install` sequences [server] -> [fleet] -> [manifest] via
-    INJECTABLE stage callables (no real subprocess), aggregating results into
-    one TOON-AXI envelope with ok + each stage's `~`-abbreviated path."""
+    """S2 -- `run_install` sequences [server] -> [fleet] -> [manifest] ->
+    [unit] via INJECTABLE stage callables (no real subprocess), aggregating
+    results into one TOON-AXI envelope with ok + each stage's `~`-abbreviated
+    path."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="crucible-axi-install-")
@@ -247,7 +294,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_run_install_executes_server_fleet_manifest_stages_in_order(self):
+    def test_run_install_executes_server_fleet_manifest_unit_stages_in_order(self):
         install = _import_fresh("crucible_axi.install")
         call_order = []
 
@@ -257,16 +304,20 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
                 return {"path": os.path.join(target_dir, name), "converged": False}
             return _runner
 
+        # CR-CRU-070 gave STAGE_ORDER `[unit]` and CR-CRU-090 `[fleet]`, so the
+        # injected table has to carry a runner for BOTH: `run_install` looks
+        # every stage up, and a missing key is a KeyError, not a skipped stage.
         fakes = {name: make_fake(name)
-                 for name in ("server", "fleet", "manifest")}
+                 for name in ("server", "fleet", "manifest", UNIT_STAGE)}
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
 
         self.assertEqual(
-            call_order, ["server", "fleet", "manifest"],
+            call_order, ["server", "fleet", "manifest", UNIT_STAGE],
             "stages must run in the exact S2 sequence")
         self.assertTrue(ok)
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "fleet", "manifest"])
+            [s["name"] for s in stages],
+            ["server", "fleet", "manifest", UNIT_STAGE])
 
     def test_run_install_stops_calling_further_stages_once_a_stage_raises(self):
         """Negative/bound path: a stage failure must NOT silently continue to
@@ -289,14 +340,22 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             return {"path": os.path.join(target_dir, "crucible-clients.json"),
                      "converged": False}
 
+        def unit_runner(target_dir, force):
+            call_order.append(UNIT_STAGE)
+            return {"path": os.path.join(target_dir, UNIT_STAGE),
+                     "converged": False}
+
+        # Every LATER stage gets a real double, so a regression that kept
+        # going records its name here instead of dying on a KeyError that
+        # `run_install` would itself convert into the same halt.
         fakes = {"server": failing_server, "fleet": fleet_runner,
-                 "manifest": manifest_runner}
+                 "manifest": manifest_runner, UNIT_STAGE: unit_runner}
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
 
         self.assertEqual(
             call_order, ["server"],
-            "a failing [server] stage must not be followed by [fleet] or "
-            "[manifest]")
+            "a failing [server] stage must not be followed by [fleet], "
+            "[manifest] or [unit]")
         self.assertFalse(ok, "a stage failure must surface as ok:false")
 
     def test_run_install_stage_results_carry_tilde_abbreviated_installed_path(self):
@@ -311,6 +370,11 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
                 "converged": False},
             "manifest": lambda target_dir, force: {
                 "path": os.path.join(target_dir, "crucible-clients.json"),
+                "converged": False},
+            # CR-CRU-070 -- the third stage needs a runner in the injected
+            # table too (`run_install` looks up every STAGE_ORDER name).
+            UNIT_STAGE: lambda target_dir, force: {
+                "path": os.path.join(target_dir, UNIT_STAGE),
                 "converged": False},
         }
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
@@ -347,11 +411,15 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             completed.returncode = 0
             return completed
 
+        # CR-CRU-070 -- this test drives the REAL default stage table, which
+        # now includes `[unit]`. `_unit_stage_sandboxed` denies it a resolvable
+        # `systemctl` (so it reports skipped-with-reason and writes nothing)
+        # and points both unit-dir resolution rules at tmp, so the operator's
+        # real `~/.config/systemd/user` is unreachable on two independent axes.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
+                _unit_stage_sandboxed(self.tmp), \
                 mock.patch("crucible_axi.install.subprocess.run",
                            side_effect=_fail_if_npx_server_run) as mock_run, \
-                mock.patch("crucible_axi.install.shutil.which",
-                           return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
             result = install.run_install(self.tmp)
@@ -366,9 +434,13 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             f"server stage -- a `npx -y <server>` run would hang/fail here; "
             f"warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "fleet", "manifest"],
-            "all three stages must complete once the server stage "
-            "provisions+exits")
+            # CR-CRU-090 -- `[fleet]` runs for real here (a pure file copy
+            # into the scratch target dir). CR-CRU-070 -- `[unit]` is last;
+            # with no systemctl it reports skipped-with-reason, and still
+            # reports.
+            [s["name"] for s in stages],
+            ["server", "fleet", "manifest", UNIT_STAGE],
+            "every stage must complete once the server stage provisions+exits")
         # argv[0] is matched by BASENAME: CR-CRU-066 §S2 provisions with the
         # RESOLVED ABSOLUTE bun path, never the bare `bun` token.
         provisioned = [
@@ -413,7 +485,10 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         self.assertEqual(axi["verb"], "install")
         self.assertIs(axi["ok"], True)
         stage_names = [s["name"] for s in axi["stages"]]
-        self.assertEqual(stage_names, ["server", "fleet", "manifest"])
+        # CR-CRU-070 + CR-CRU-090 -- STAGE_ORDER is
+        # (server, fleet, manifest, unit).
+        self.assertEqual(stage_names,
+                         ["server", "fleet", "manifest", UNIT_STAGE])
         for stage in axi["stages"]:
             self.assertIn("path", stage)
             self.assertTrue(stage["path"])
@@ -471,7 +546,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         with open(written_path) as f:
             on_disk = json.load(f)
         self.assertEqual(on_disk, manifest)
-        self.assertEqual(set(on_disk.keys()), {"version", "clients", "status"})
+        self.assertEqual(set(on_disk.keys()), set(EXPECTED_MANIFEST_KEYS))
 
 
 class InstallIdempotencyTest(unittest.TestCase):
@@ -499,14 +574,18 @@ class InstallIdempotencyTest(unittest.TestCase):
                         "converged": calls[name] > 1}
             return _runner
 
-        return {"server": make("server"), "fleet": make("fleet")}
+        # CR-CRU-070 -- `[unit]` gets a double too: `mock.patch.dict` MERGES,
+        # so a table without it would leave the REAL systemd stage in place.
+        return {"server": make("server"), "fleet": make("fleet"),
+                UNIT_STAGE: _fast_unit_stage}
 
     def test_running_install_twice_does_not_duplicate_the_manifest_file(self):
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
 
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
+        with _unit_stage_sandboxed(self.tmp), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, _stages1, _w1 = install.run_install(self.tmp)
             with open(manifest_path) as f:
                 first_content = f.read()
@@ -524,13 +603,14 @@ class InstallIdempotencyTest(unittest.TestCase):
         # JSON documents, which json.loads rejects -- this must stay a single
         # parseable document.
         reparsed = json.loads(second_content)
-        self.assertEqual(set(reparsed.keys()), {"version", "clients", "status"})
+        self.assertEqual(set(reparsed.keys()), set(EXPECTED_MANIFEST_KEYS))
 
     def test_running_install_twice_reports_manifest_stage_converged_on_second_run(self):
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
+        with _unit_stage_sandboxed(self.tmp), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             manifest_result_1 = next(s for s in stages1 if s["name"] == "manifest")
 
@@ -550,14 +630,21 @@ class InstallIdempotencyTest(unittest.TestCase):
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
+        with _unit_stage_sandboxed(self.tmp), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             ok2, stages2, _w2 = install.run_install(self.tmp)
 
         self.assertTrue(ok1)
         self.assertTrue(ok2)
-        self.assertEqual(len(stages1), 3)
-        self.assertEqual(len(stages2), 3)
+        # CR-CRU-070 + CR-CRU-090 -- FOUR stages now:
+        # (server, fleet, manifest, unit). Asserted by NAME, not by length: a
+        # count alone would pass on a pipeline that ran the right number of
+        # wrong stages, or ran them out of order.
+        self.assertEqual([s["name"] for s in stages1],
+                         ["server", "fleet", "manifest", UNIT_STAGE])
+        self.assertEqual([s["name"] for s in stages2],
+                         ["server", "fleet", "manifest", UNIT_STAGE])
 
 
 if __name__ == "__main__":

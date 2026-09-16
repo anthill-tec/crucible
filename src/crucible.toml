@@ -1,0 +1,68 @@
+# Crucible SERVER limits — PACKAGE DATA. This file is the distribution's own
+# last resort, and it ships INSIDE `@anthill-tec/crucible-server` beside the
+# resolver that reads it (`src/limits.ts`).
+#
+# CR-CRU-131 §S1c. A limit is CONFIGURATION, never a constant compiled into
+# source (PRD §4.13) — and the last resort is a DATA FILE in the distribution,
+# not a number in a resolver. That is what makes "no literal in source"
+# achievable rather than aspirational: the file a reader READS and the table
+# the code FALLS BACK TO are the same bytes, so they cannot disagree with
+# nothing saying so.
+#
+# ── This is NOT the file you edit ─────────────────────────────────────────
+#
+# It is package data, replaced wholesale by the next upgrade. The file an
+# OPERATOR edits is the `crucible.toml` beside the server's own DATABASE,
+# found by the same rule that finds the database (`$CRUCIBLE_DB`, else
+# `<cwd>/data/crucible.db`, else the XDG data dir). Add a `value = …` line to
+# a limit's table THERE; a value set here would be overwritten on upgrade.
+#
+# ── Why only the SERVER's three limits are here ───────────────────────────
+#
+# A limit is owned by the process that ENFORCES it, and the server and the
+# clients are not necessarily on the same machine — they are separate
+# packages, installable on different hosts at independently resolved versions.
+# So this distribution documents the three limits this distribution enforces
+# and nothing else. The three CLIENT limits (`truncate_field_chars`,
+# `error_detail_chars`, `roadmap_list_rows`) ship in the `crucible-axi`
+# distribution and are read from a PROJECT directory; a table for one of them
+# written here would be inert, and documentation must not teach a knob that
+# provably does nothing where it sits.
+#
+# Every `recommended` below is the value this server ran at before the limits
+# became configuration, so an install with no operator file behaves EXACTLY as
+# it did before — the whole safety argument for a configuration change of this
+# reach. `min`/`max` are a SUPPORTABILITY judgement, so each states its
+# reasoning: a bound nobody can justify is the same defect as a default nobody
+# chose.
+
+[limits.run_abandon_ms]
+description = "Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off the board sooner."
+recommended = 1800000
+# A one-second deadline abandons every live run, so the floor is more than
+# "positive": a minute is shorter than any suite this fleet reports on.
+min = 60000
+# A day. Past it an open run is not "still going", it is a row nobody will
+# ever settle.
+max = 86400000
+
+[limits.project_inactive_ms]
+description = "Milliseconds of silence after which a project with no live agent reads INACTIVE on the board's project list. Raise it to keep occasional projects visible; lower it to retire finished ones from the default view sooner."
+recommended = 3600000
+# The default agent TOMBSTONE horizon (`DEFAULT_LIVENESS`, src/types.ts): a
+# window shorter than that would call a project inactive while its own agents
+# still read as live, which is a verdict the board cannot honour.
+min = 300000
+# Thirty days, past which "inactive" has stopped distinguishing anything.
+max = 2592000000
+
+[limits.retention]
+description = "Events kept per project for projects that declare no `retention` of their own. NOTE the documented exception: with NO crucible.toml at all there is NO cap and the boot banner names the uncapped projects — this number applies only once the table exists."
+# The value this fleet actually runs at, carried forward from CR-CRU-129's
+# close-out rather than invented, so adopting the file changes no cap.
+recommended = 5000
+# Ten events still leaves one run's own history readable; beneath that a board
+# evicts what it has only just ingested.
+min = 10
+# A million rows for one project is where disk, not usefulness, binds.
+max = 1000000

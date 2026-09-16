@@ -27,8 +27,11 @@ describe("startServer — production boot + /api/health", () => {
     const raw = await res.json();
     const body = raw as HealthResponse;
 
+    // CR-CRU-068 AC3 — `store` { path, rule } is ADDITIVE to the health payload:
+    // the shape stays a CLOSED key set (never a subset check) so accidental
+    // payload growth is still caught; it is 6 keys now, not 5.
     expect(Object.keys(raw as object).sort()).toEqual(
-      ["counts", "ok", "status", "uptime_s", "version"].sort(),
+      ["counts", "ok", "status", "store", "uptime_s", "version"].sort(),
     );
     expect(body.ok).toBe(true);
     expect(body.status).toBe("healthy");

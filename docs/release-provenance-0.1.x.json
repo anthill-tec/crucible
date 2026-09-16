@@ -1,0 +1,145 @@
+{
+  "_note": "Release provenance exported 2026-08-28 before the development board was cleared for dogfood re-population under the CR-091 API. `commit` and `releasedAt` are re-derivable from git tags; `crs` for 0.1.0 and every `packages` array are NOT \u2014 nine of its ids (001-007, 010, 016) landed without a naming merge commit, so commit-ancestry repair cannot recover them. Replay with: python3 clients/python-crucible.py milestone --type release --label <v> --commit <sha> --released-at <epoch-seconds> --crs <ids> --packages <registry:name:version,...> --agent vidushi",
+  "unit": {
+    "releasedAt": "epoch SECONDS (git %ct), not milliseconds"
+  },
+  "releases": [
+    {
+      "label": "0.1.0",
+      "commit": "c07274c853088fb9b6c40e3c05b1e763b1d29e78",
+      "releasedAt": 1787149125,
+      "crs": [
+        "CR-CRU-001",
+        "CR-CRU-002",
+        "CR-CRU-003",
+        "CR-CRU-004",
+        "CR-CRU-005",
+        "CR-CRU-006",
+        "CR-CRU-007",
+        "CR-CRU-008",
+        "CR-CRU-009",
+        "CR-CRU-010",
+        "CR-CRU-011",
+        "CR-CRU-012",
+        "CR-CRU-013",
+        "CR-CRU-016",
+        "CR-CRU-019",
+        "CR-CRU-020",
+        "CR-CRU-021",
+        "CR-CRU-023",
+        "CR-CRU-024",
+        "CR-CRU-025",
+        "CR-CRU-026",
+        "CR-CRU-027",
+        "CR-CRU-028",
+        "CR-CRU-029",
+        "CR-CRU-030",
+        "CR-CRU-031",
+        "CR-CRU-032",
+        "CR-CRU-033",
+        "CR-CRU-034",
+        "CR-CRU-035",
+        "CR-CRU-036",
+        "CR-CRU-037",
+        "CR-CRU-038",
+        "CR-CRU-039",
+        "CR-CRU-040",
+        "CR-CRU-041",
+        "CR-CRU-042",
+        "CR-CRU-043",
+        "CR-CRU-044",
+        "CR-CRU-045",
+        "CR-CRU-046",
+        "CR-CRU-047",
+        "CR-CRU-048",
+        "CR-CRU-049",
+        "CR-CRU-050",
+        "CR-CRU-051",
+        "CR-CRU-052",
+        "CR-CRU-053",
+        "CR-CRU-054",
+        "CR-CRU-055",
+        "CR-CRU-056",
+        "CR-CRU-057",
+        "CR-CRU-058",
+        "CR-CRU-059",
+        "CR-CRU-060",
+        "CR-CRU-061",
+        "CR-CRU-062",
+        "CR-CRU-063",
+        "CR-CRU-064",
+        "CR-CRU-065"
+      ],
+      "packages": [
+        {
+          "registry": "pypi",
+          "name": "crucible-axi",
+          "version": "0.1.0"
+        },
+        {
+          "registry": "npm",
+          "name": "@anthill-tec/crucible-server",
+          "version": "0.1.0"
+        }
+      ]
+    },
+    {
+      "label": "0.1.1",
+      "commit": "abc30d5732e71ed11f8d0b81d6248f95b68b2b12",
+      "releasedAt": 1787151205,
+      "crs": null,
+      "packages": [
+        {
+          "registry": "pypi",
+          "name": "crucible-axi",
+          "version": "0.1.1"
+        },
+        {
+          "registry": "npm",
+          "name": "@anthill-tec/crucible-server",
+          "version": "0.1.1"
+        }
+      ]
+    },
+    {
+      "label": "0.1.2",
+      "commit": "9ef24b1867ab33f34c66c7acf4633fb3995bf339",
+      "releasedAt": 1787181002,
+      "crs": [
+        "CR-CRU-066"
+      ],
+      "packages": [
+        {
+          "registry": "pypi",
+          "name": "crucible-axi",
+          "version": "0.1.2"
+        },
+        {
+          "registry": "npm",
+          "name": "@anthill-tec/crucible-server",
+          "version": "0.1.2"
+        }
+      ]
+    },
+    {
+      "label": "0.1.3",
+      "commit": "74088863dfb250dfb8d75917b79ec4e29de8b685",
+      "releasedAt": 1787819729,
+      "crs": [
+        "CR-CRU-090"
+      ],
+      "packages": [
+        {
+          "registry": "pypi",
+          "name": "crucible-axi",
+          "version": "0.1.3"
+        },
+        {
+          "registry": "npm",
+          "name": "@anthill-tec/crucible-server",
+          "version": "0.1.3"
+        }
+      ]
+    }
+  ]
+}

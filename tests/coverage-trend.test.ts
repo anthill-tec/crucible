@@ -58,6 +58,7 @@ import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
 import { Store } from "../src/store.ts";
 import type { RunSummary, SuiteNode } from "../src/types.ts";
+import { settleDom } from "./helpers/dom-settle";
 
 // ── (S1) STORE — rollup buckets keyed by UTC day, never by wave (CR-CRU-033 §S1) ──
 //
@@ -565,9 +566,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 5): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 function trendCard(): Element | null {

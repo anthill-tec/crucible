@@ -65,6 +65,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 
@@ -148,6 +153,27 @@ def _open_plans_response(plans):
     return {"ok": True, "plans": plans}
 
 
+def _plans_gets(get_mock):
+    """The GET paths this run issued against the PLANS surface.
+
+    CR-CRU-056 §S3's contract is that the client-side attach RESOLVER is gone:
+    no plans lookup picks a cycle, and the ingest body carries no cycleId.
+    That is what the assertions below pin. They used to spell it
+    `get_mock.assert_not_called()` -- "no GET at all" -- which pins the
+    TRANSPORT rather than the contract, and CR-CRU-094 §S3 makes the
+    difference load-bearing: pre-flight reads the caller's OWN binding
+    (`GET /api/v2/agents?project=<key>` -> `boundCycleId`) to answer "am I
+    bound?", which resolves nothing and attaches nothing. Forbidding that read
+    would guarantee nothing extra while forbidding the CR the spec mandates.
+    """
+    paths = []
+    for call in get_mock.call_args_list:
+        args, kwargs = call
+        path = args[0] if args else kwargs.get("path")
+        paths.append(str(path))
+    return [p for p in paths if "/plans" in p]
+
+
 def _post_call_for_path(post_mock, path):
     """The first recorded `_post(path, payload)` call matching `path`
     exactly, as a `unittest.mock.call` object, or None. Needed because
@@ -175,6 +201,7 @@ class _BaseEnvelopeTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="bun-crucible-toon-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        install_project_limits(self.tmpdir)
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)
@@ -283,7 +310,9 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         }
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a,b",
+                "plan-file", "--cr", "CR-X",
+                "--cycle", "a", "--cycle-kind", "red-green",
+                "--cycle", "b", "--cycle-kind", "verify",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -313,7 +342,8 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
                         "cycles": [{"label": "a", "id": 201}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, _err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-Y", "--cycles", "a",
+                "plan-file", "--cr", "CR-Y",
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -326,7 +356,8 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": "bad cr"}):
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-BAD", "--cycles", "a",
+                "plan-file", "--cr", "CR-BAD",
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -496,7 +527,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "test")
         self.assertIs(axi.get("ok"), True)
@@ -556,7 +590,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
 
         # NEGATIVE -- no client-side RESOLUTION anywhere: the ingest POST body
         # still sends no cycleId, and no plans/active-cycle GET was made.
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
         self.assertIsNotNone(ingest_call)
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
@@ -576,7 +613,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         context = self._decode_axi(out).get("context")
         self.assertNotIn("cycleId", context)
 
@@ -614,7 +654,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "regression")
         self.assertIs(axi.get("ok"), True)
@@ -653,7 +696,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "auto-ingest")
         self.assertIs(axi.get("ok"), True)

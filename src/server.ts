@@ -8,7 +8,8 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Store } from "./store.ts";
+import { limitDisclosures, serverConfigPath } from "./limits.ts";
+import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 
 const pkg = JSON.parse(
@@ -31,6 +32,15 @@ export interface ResolveDbPathOpts {
   dbPath?: string;
 }
 
+/** CR-CRU-068 §S1 — which of the four cascade rules picked the store. */
+export type StoreRule = "explicit" | "CRUCIBLE_DB" | "cwd-data" | "user-data";
+
+/** CR-CRU-068 §S1 — a resolved store path together with the rule that matched. */
+export interface StoreResolution {
+  path: string;
+  rule: StoreRule;
+}
+
 /**
  * CR-CRU-043 §S1-§S3 — resolve the store path, first match wins:
  *   1. explicit `opts.dbPath` (returned verbatim, `":memory:"` included);
@@ -39,35 +49,49 @@ export interface ResolveDbPathOpts {
  *      which is what keeps the live dog-food instance in use from the repo root;
  *   4. `<XDG_DATA_HOME or <HOME>/.local/share>/crucible/crucible.db`.
  *
+ * CR-CRU-068 §S1 — reports WHICH rule matched alongside the path, so a surprising
+ * store is explicable instead of merely observable. Rule 3 is CWD-relative, so the
+ * same binary opens a different database depending on where it was launched from.
+ *
  * Pure: computes a string and never touches the filesystem beyond the rule-3
  * existence probe. The `HOME` fallback deliberately reads `env.HOME` rather than
  * `os.homedir()` — Bun caches `HOME` at process startup, so `os.homedir()` cannot
  * observe an injected env and the contract would be untestable.
  */
-export function resolveDbPath(opts?: ResolveDbPathOpts): string {
+export function resolveStore(opts?: ResolveDbPathOpts): StoreResolution {
   if (opts?.dbPath !== undefined) {
-    return opts.dbPath;
+    return { path: opts.dbPath, rule: "explicit" };
   }
   const env = opts?.env ?? process.env;
   const fromEnv = env.CRUCIBLE_DB;
   if (fromEnv !== undefined && fromEnv !== "") {
-    return fromEnv;
+    return { path: fromEnv, rule: "CRUCIBLE_DB" };
   }
   const cwd = opts?.cwd ?? process.cwd();
   const cwdDb = path.join(cwd, "data", "crucible.db");
   if (existsSync(cwdDb)) {
-    return cwdDb;
+    return { path: cwdDb, rule: "cwd-data" };
   }
   const xdg = env.XDG_DATA_HOME;
   const dataHome =
     xdg !== undefined && xdg !== "" ? xdg : path.join(env.HOME ?? "", ".local", "share");
-  return path.join(dataHome, "crucible", "crucible.db");
+  return { path: path.join(dataHome, "crucible", "crucible.db"), rule: "user-data" };
+}
+
+/**
+ * CR-CRU-043 §S1-§S3 — the bare-string store path: exactly {@link resolveStore}'s
+ * `path`, so the two entry points can never disagree.
+ */
+export function resolveDbPath(opts?: ResolveDbPathOpts): string {
+  return resolveStore(opts).path;
 }
 
 export interface ServerHandle {
   server: ReturnType<typeof Bun.serve>;
   store: Store;
   stop(): void;
+  /** CR-CRU-068 §S1 — the store this server opened, and the rule that chose it. */
+  storeResolution: StoreResolution;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -189,7 +213,10 @@ async function handleStatic(url: URL): Promise<Response> {
 export function startServer(opts?: StartServerOpts): ServerHandle {
   // CR-CRU-043 §S1-§S3 — no CWD-relative default: explicit opts, then CRUCIBLE_DB,
   // then an existing ./data/crucible.db, then the user data directory.
-  const dbPath = resolveDbPath({ dbPath: opts?.dbPath });
+  // CR-CRU-068 §S1 — resolved ONCE here; the rule travels with the path so the
+  // handle, both health routes and the boot banner all disclose the same identity.
+  const storeResolution = resolveStore({ dbPath: opts?.dbPath });
+  const dbPath = storeResolution.path;
   if (dbPath !== ":memory:") {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
@@ -206,6 +233,15 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
       projects: store.listProjects().length,
       agents: store.listAgents().length,
       events: store.countEvents(),
+    },
+    // CR-CRU-068 §S1 — one site, so /api/health and /api/v2/health cannot drift.
+    // CR-CRU-071 §S1 — the same site carries the schema version and what this
+    // boot migrated, so an in-place upgrade is visible without shell forensics.
+    store: {
+      path: storeResolution.path,
+      rule: storeResolution.rule,
+      schemaVersion: store.schemaVersion,
+      migration: store.migration,
     },
   });
 
@@ -252,15 +288,82 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   return {
     server,
     store,
+    storeResolution,
     stop: () => {
       server.stop(true);
     },
   };
 }
 
+/**
+ * CR-CRU-129 §S2 — an unconfigured cap means NO cap, and the boot SAYS SO.
+ *
+ * Deleting `DEFAULT_RETENTION = 100` made retention opt-in, and an opt-in
+ * nobody is told about is how the next silent growth starts: a project with no
+ * `retention` of its own, on a board whose own `crucible.toml` declares no
+ * `[limits.retention]` either, prunes NOTHING for ever without a word. So the
+ * disclosure goes on the same channel that already names the store and a
+ * schema rewrite — the boot banner — and it names both the projects that are
+ * unbounded and the FILE and the LIMIT that would bound them — §S1b retired
+ * the environment override this advice used to name, and advice naming it
+ * would send an operator to a lever that moves nothing.
+ *
+ * `null` when a cap resolves, because a line that is always printed discloses
+ * nothing. The operator's fallback silences it for every project at once; a
+ * project's own `retention` — including `0`, which is a DECLARED cap — silences
+ * it for that project alone.
+ *
+ * The kinds are read off `RETENTION_DISPOSABLE_KINDS` rather than listed here,
+ * so the warning can never describe a sweep the store no longer performs.
+ */
+export function retentionDisclosure(store: Store): string | null {
+  if (defaultRetention() !== undefined) return null;
+  const uncapped = store.listProjects().filter((project) => project.retention === undefined);
+  if (uncapped.length === 0) return null;
+  const kinds = [...RETENTION_DISPOSABLE_KINDS].sort().join(", ");
+  const named = uncapped.map((project) => project.name).join(", ");
+  const file = serverConfigPath();
+  return (
+    `[crucible] WARNING: event retention is UNBOUNDED for ${uncapped.length} project(s) ` +
+    `(${named}) — neither a per-project \`retention\` nor a \`[limits.retention]\` table in ` +
+    `${file} resolves a cap, so ${kinds} events are never evicted and the store grows without ` +
+    `limit. Declare \`[limits.retention]\` in ${file} to bound every project, or configure ` +
+    `\`retention\` on each project named above.`
+  );
+}
+
 if (import.meta.main) {
   const handle = startServer();
   console.log(`[crucible] listening on http://localhost:${handle.server.port}`);
+  // CR-CRU-068 §S1 — the store is disclosed at boot, taken from the handle rather
+  // than re-resolved, so the banner can never name a store the server did not open.
+  console.log(
+    `[crucible] store ${handle.storeResolution.path} (rule: ${handle.storeResolution.rule}, schema v${handle.store.schemaVersion})`,
+  );
+  // CR-CRU-071 §S1 — a boot that rewrote the store's schema says so, naming the
+  // recovery point it wrote first.
+  const migrated = handle.store.migration;
+  if (migrated !== null) {
+    console.log(
+      `[crucible] migrated store schema v${migrated.from} -> v${migrated.to}` +
+        (migrated.backupPath === null ? "" : ` (pre-upgrade backup: ${migrated.backupPath})`),
+    );
+  }
+  // CR-CRU-131 §S1b — a limits file that could not be read, and every `value`
+  // refused for leaving the range declared beside it, on the same channel that
+  // already names the store: a refusal nobody is told about is a board running
+  // at a number its operator did not choose. Silent when the file is readable
+  // and every value is legal.
+  for (const disclosure of limitDisclosures()) {
+    console.log(disclosure);
+  }
+  // CR-CRU-129 §S2 — retention became opt-in when the literal default went, so
+  // a board on which nothing bounds it discloses that at boot instead of
+  // growing quietly. Silent when a cap resolves.
+  const unbounded = retentionDisclosure(handle.store);
+  if (unbounded !== null) {
+    console.log(unbounded);
+  }
   // CR-CRU-024 §S5.2 — a graceful stop checkpoints EVERY active cycle's timer
   // (all plans, all projects) before exit, so an orderly shutdown never loses
   // in-flight epoch state; only a hard power cut falls back to the <=60s

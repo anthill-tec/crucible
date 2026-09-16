@@ -19,11 +19,32 @@ export interface Project {
   sutRoot: string;
   createdAt: number;
   liveness?: Partial<LivenessConfig>;
-  /** §S4 — per-project raw-event retention cap override (default 100). */
+  /** §S4 — this project's OWN raw-event retention cap, in events per kind.
+   * CR-CRU-129 §S2 — THERE IS NO DEFAULT LITERAL. Absent, the sweep falls
+   * back on `defaultRetention()` (`src/store.ts`), which reads the
+   * `[limits.retention]` table of the server's own `crucible.toml` PER SWEEP
+   * and yields `undefined` — NO CAP, nothing evicted — when that file is
+   * absent or does not parse. Nothing sits in front of that file and nothing
+   * beneath it: the environment override that once did is retired.
+   * Unconfigured therefore means UNBOUNDED, and the boot banner discloses it
+   * by project name. The `default 100` this comment used to claim was
+   * `DEFAULT_RETENTION`, deleted by that section: on 2026-09-13 the literal
+   * silently evicted every release this project had shipped. A cap is
+   * configuration; re-introducing a constant here re-introduces the defect.
+   * `retention: 0` is a DECLARED cap and still wins over the fallback
+   * (`??`, never `||`). */
   retention?: number;
   /** CR-CRU-008 §S4 — guarded run deletion config gate (default false:
    * the run journal is an immutable audit log unless a human enables this). */
   allowRunDeletion?: boolean;
+  /** CR-CRU-130 §S4 — the milestone vocabulary this project DECLARED, and only
+   * that: the seeded words every project starts with are not its declaration,
+   * and the reserved pair is the server's, so neither appears here. ABSENT
+   * until the project declares one (`PATCH /api/v2/projects/<key>`). What a
+   * milestone POST is actually validated against — declared, seeded and
+   * reserved together — is `Store.acceptedMilestoneTypes`, resolved from the
+   * single definition in `src/store.ts`. */
+  milestoneTypes?: string[];
 }
 
 /**
@@ -143,6 +164,19 @@ export interface RunContext {
 
 export type Tier = "unit" | "module" | "integration" | "e2e" | "regression" | "bdd";
 
+/**
+ * CR-CRU-084 §S1 — ONE artifact a `release` delivered: the registry it was
+ * published to, the package NAME it carries there (which is registry-specific
+ * and NOT the project name), and the version. Crucible never verifies that the
+ * publish happened or that the package is reachable (spec Non-goals): this is
+ * what the release ceremony DECLARED it shipped.
+ */
+export interface PackageRef {
+  registry: string;
+  name: string;
+  version: string;
+}
+
 export interface RunEvent {
   id: string;
   projectKey: string;
@@ -153,6 +187,21 @@ export interface RunEvent {
   stack?: string;
   codec?: string;
   context?: RunContext;
+  /**
+   * CR-CRU-094 §S1 — the plan cycle this run is bound to, served from the
+   * `events.cycle_id` COLUMN so a reader can tell a bound run from an unbound
+   * one without unpacking `context`. The column is DERIVED at the single
+   * row-insert seam (`insertEvent`), which PREFERS `context.cycleId` — itself
+   * stamped at the one ingest seam, `resolveIngestAttach`. §S2 — the field is
+   * set directly by exactly ONE constructor, `recordLifecycleEvent`, whose
+   * event carries no `context` of its own (giving it one would enrol a
+   * register/unregister event in the cycle's RUN lists); every run-bearing
+   * constructor stamps `context` alone. The two representations are therefore
+   * disjoint per event kind and cannot disagree. ABSENT — never null,
+   * never 0 — on an unbound run and on every pre-094 row, which the retrofit
+   * leaves NULL rather than reconstructing a binding that was never recorded.
+   */
+  cycleId?: number;
   timestamp: number;
   // CR-CRU-011 §S1 (additive) — lifecycle events only: which transition this
   // event records, and (on "unregistered") the firstSeen snapshot taken
@@ -171,6 +220,18 @@ export interface RunEvent {
   // (forward-tolerant: fields outside the ladder round-trip untouched).
   gate?: unknown;
   /**
+   * CR-CRU-073 §S1 — the release VERSION this gate gated (a bare SemVer),
+   * stored first-class on the event, never parsed back out of the free-text
+   * intent. ABSENT on a versionless gate and on every non-gate kind.
+   */
+  version?: string;
+  /**
+   * CR-CRU-073 §S1 — the release-retirement marker (epoch ms). Stamped when
+   * the gate's release ships (or on insert for an already-released version);
+   * a live gate has NO marker. ABSENT until retired.
+   */
+  retiredAt?: number;
+  /**
    * CR-CRU-057 §S1 — the posting agent's DECLARED role (CR-CRU-044), stamped
    * server-side at write time through CR-CRU-056's `resolveIngestAttach` seam
    * so classification survives the agent row's deletion at unregister. ABSENT
@@ -188,6 +249,74 @@ export interface RunEvent {
   type?: string;
   label?: string;
   commit?: string;
+  /**
+   * CR-CRU-080 §S4 — a `release` milestone's SHIP instant: the tag's own
+   * commit date in epoch SECONDS (`git log -1 --format=%ct <tag>`), computed
+   * by the ceremony — the only actor standing in the repo with git. Distinct
+   * from `timestamp`, which is when the release was RECORDED. ABSENT on a
+   * release recorded before §S4 and on every non-release event.
+   */
+  releasedAt?: number;
+  /**
+   * CR-CRU-091 §S1 / CR-CRU-130 §S1 — a milestone's DECLARED target date: when
+   * it is DUE, in epoch SECONDS — deliberately the SAME unit as `releasedAt`
+   * above, so one formatter serves both and neither surface renders 1970.
+   * Optional and revisable: a milestone with no declared target is undated,
+   * which is a legitimate state for a record of something that simply
+   * happened. CR-CRU-091 confined this to a `release-proposal`; CR-CRU-130 §S1
+   * carries it on EVERY type, because what a goal was aimed at is a fact about
+   * that goal whatever kind of goal it is.
+   */
+  targetAt?: number;
+  /**
+   * CR-CRU-130 §S1 — when the milestone was MET, in epoch SECONDS. Absent
+   * means OUTSTANDING, and the absence is the whole signal: a milestone
+   * defaulted to 0 or to its row's timestamp would read as delivered at the
+   * dawn of time. `releasedAt` above is this same date under its old,
+   * release-only name; both are carried so every wire shape a client already
+   * reads stays byte-identical (§S0), and a record holding only the old
+   * spelling still answers the new question.
+   */
+  deliveredAt?: number;
+  /**
+   * CR-CRU-080 §S4 — the CR ids a `release` shipped: the ceremony's tag-range
+   * scan INTERSECTED with the project's registered queue at record time.
+   * ABSENT on a pre-§S4 release; EMPTY when the queue knew none of the scanned
+   * ids (a truthful "nothing registered", never a fallback to the raw scan).
+   */
+  crs?: string[];
+  /**
+   * CR-CRU-084 §S1 — the packages a `release` DELIVERED, in the order the
+   * ceremony declared them. AC2: each entry's `version` IS the release tag's,
+   * because the tag is what the publish jobs build from. ABSENT on a release
+   * recorded before this CR and on every non-release event; EMPTY when the
+   * ceremony looked and delivered none — a meaningful fact (§S3), and a
+   * DIFFERENT one from absent (AC4), so the two are never collapsed.
+   */
+  packages?: PackageRef[];
+  /**
+   * CR-CRU-017 §S1 — the RUN's start instant, carried from the open run onto
+   * the event that CLOSED it. Absent on a single-shot ingest (no `runId`, no
+   * lifecycle) and on every pre-017 row.
+   */
+  startedAt?: number;
+  /**
+   * CR-CRU-017 §S1 — the SERVER-computed wall-clock runtime of the run
+   * (`endedAt - startedAt`), which includes queue, spawn and teardown time the
+   * tool-reported `summary.duration_ms` cannot see. The two are distinct
+   * values and both are kept.
+   */
+  runtimeMs?: number;
+  /**
+   * CR-CRU-017 §S1/§S2 — the RUN's exceptional terminal state: `"aborted"`
+   * means this run ended for NON-TEST reasons (timeout, kill, dead agent).
+   * It is a property of a RUN and has nothing to do with `Plan.status`'s
+   * `"aborted"` (a user-discarded workflow, CR-CRU-024 §S6) — nothing may
+   * treat one as the other. Absent on a normally-ended run.
+   */
+  status?: "aborted";
+  /** CR-CRU-017 §S1 — why the RUN was aborted; present exactly when `status` is. */
+  abortReason?: string;
 }
 
 // ── CR-CRU-011 §S0 — cycle plans (the orchestrator's declared todo list) ─────
@@ -252,4 +381,82 @@ export interface Plan {
   merge?: { commit: string };
   closedAt?: number;
   commitBoundary?: CommitBoundary;
+}
+
+// ── CR-CRU-014 §S1 — the CR execution queue (project roadmap registration) ──
+
+/**
+ * CR-CRU-014 §S1 / CR-CRU-083 §S2 — a queued CR's derived lifecycle. Three of
+ * the four values come from the cr's plans; `COMPLETED_UNTRACKED` is the
+ * fourth, and the only one derived from release membership — a cr some release
+ * SHIPPED but no plan ever tracked, which `PENDING` used to misreport as
+ * "never started".
+ */
+export type QueueStatus =
+  | "PENDING"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "COMPLETED_UNTRACKED";
+
+/**
+ * CR-CRU-091 §S2 — the SECOND AXIS: whether the declared work is still wanted.
+ * `QueueStatus` above answers *what happened to the work* and stays derived
+ * from plans and release membership; this one is AUTHORED and stored, and the
+ * two are never collapsed — a `SUPERSEDED` cr whose plan is open still reads
+ * `IN_PROGRESS`, because that is true. `SUPERSEDED` carries `by` (the
+ * successor cr — the work still happens, elsewhere); `VOID` carries `reason`
+ * (the work is not happening). `at` is epoch MILLISECONDS, the unit every
+ * other stored server-side instant uses (`filed_at`, `retired_at`) —
+ * `RunEvent.releasedAt`/`targetAt` are seconds because they are git's, not
+ * ours. Neither axis is defaulted when absent.
+ */
+export interface QueueLifecycle {
+  state: "SUPERSEDED" | "VOID";
+  /** The successor cr. Present for SUPERSEDED. */
+  by?: string;
+  /** Why the work is not happening. Present for VOID. */
+  reason?: string;
+  at: number;
+}
+
+/**
+ * CR-CRU-014 §S1 — one registered queue entry as served by GET …/queue. The
+ * caller supplies {cr, title?, wave, dependsOn, size?}; `status` and `planId`
+ * are DERIVED on read from the cr's plan (never stored), in this PRECEDENCE
+ * order (CR-CRU-083 §S2): IN_PROGRESS = an open plan; COMPLETED = a plan
+ * closed with a merge commit; COMPLETED_UNTRACKED = NO plan at all and the cr
+ * named in some release's `crs`; PENDING = otherwise. `planId` is present only
+ * when a plan exists, so a COMPLETED_UNTRACKED entry never carries one — the
+ * key is omitted, and §S3/AC5 forbid inventing a plan to fill it.
+ * `dependsOn` is a string[] of CR ids, stored and returned verbatim.
+ *
+ * CR-CRU-091 §S2 — the caller may also DECLARE `release`, `track`, `seq` and
+ * `lifecycle` (see `QueueEntryInput`); those are stored, never derived, and
+ * published back here — `seq` always, the other three only where declared.
+ */
+export interface QueueEntry {
+  cr: string;
+  title?: string;
+  wave: string;
+  dependsOn: string[];
+  size?: string;
+  status: QueueStatus;
+  planId?: number;
+  /**
+   * CR-CRU-091 §S2 — the STORED sequence within its container, published on
+   * EVERY entry and read verbatim from the column. CR-CRU-095 §S1 — `listQueue`
+   * publishes rows sorted by `compareQueueOrder` (wave, release with undeclared
+   * last, seq), and that published order is the ONLY order: a reader consumes
+   * it verbatim and never re-derives it from `seq` or from array index (AC18).
+   */
+  seq: number;
+  /** §S2 — the declared target release label. Absent when undeclared. */
+  release?: string;
+  /**
+   * §S2 — the declared track in the PRD's locked wire format `track-<n>`
+   * (`normalizeTrack`). Absent when undeclared.
+   */
+  track?: string;
+  /** §S2 — the second axis, parsed from `lifecycle_json`. Absent when none. */
+  lifecycle?: QueueLifecycle;
 }

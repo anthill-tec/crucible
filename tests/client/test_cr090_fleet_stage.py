@@ -15,9 +15,11 @@ for its own use (through `manifest.source_clients_dir()`, §S2's single
 resolver), so no in-repo path exercises the declaration `--target-dir`
 actually makes.
 
-- AC1 pins the ORDER as data: `STAGE_ORDER == ("server", "fleet", "manifest")`,
-  `fleet` strictly before `manifest`, a runner registered under that key, and a
-  real `run_install` reporting a `fleet` stage whose `path` is the clients dir.
+- AC1 pins the ORDER as data: `STAGE_ORDER ==
+  ("server", "fleet", "manifest", "unit")` (the merge-back shape -- CR-CRU-070's
+  `[unit]` stays LAST), `fleet` strictly before `manifest`, a runner registered
+  under that key, and a real `run_install` reporting a `fleet` stage whose
+  `path` is the clients dir.
 - AC2 pins the PAYLOAD as bytes: exactly the eight packaged files, no extras,
   each byte-identical to its source. Bytes, not sizes -- a truncated or
   rewritten copy is the failure a size check would pass. The five clients load
@@ -60,8 +62,11 @@ integration (AC8).
 
 Every test owns a `tempfile.mkdtemp` scratch target under `/tmp` and removes
 it; the `[server]` stage is always stubbed to a no-subprocess provision double,
-because the real one runs `bun add -g` and provisions GLOBALLY. Nothing is
-written inside the repo or into `~/.crucible`.
+because the real one runs `bun add -g` and provisions GLOBALLY, and the
+`[unit]` stage (CR-CRU-070) is always stubbed too, because the real one writes
+a systemd `--user` unit and drives `systemctl --user enable --now` against the
+OPERATOR'S user manager. Nothing is written inside the repo, into
+`~/.crucible`, or into the operator's systemd unit directory.
 """
 
 import filecmp
@@ -97,11 +102,20 @@ EXPECTED_FLEET_FILES = frozenset({
     "STATUS-CONTRACT.md",
 })
 
-EXPECTED_STAGE_ORDER = ("server", "fleet", "manifest")
+# The MERGED four-stage pipeline (CR-CRU-090 §S1 `[fleet]` + CR-CRU-070
+# `[unit]`): `fleet` strictly before `manifest`, `unit` last. Asserted as the
+# exact tuple -- a subset or a length would pass on a pipeline that ran the
+# wrong stages, or ran them out of order.
+EXPECTED_STAGE_ORDER = ("server", "fleet", "manifest", "unit")
 
 FLEET_STAGE_NAME = "fleet"
 MANIFEST_STAGE_NAME = "manifest"
 CLIENTS_DIRNAME = "clients"
+
+# CR-CRU-070 -- the `[unit]` stage writes a systemd `--user` unit and drives
+# `systemctl --user enable --now`. Every default-table run below stubs it, so
+# no test in this module can reach the operator's own user manager.
+UNIT_STAGE_NAME = "unit"
 MANIFEST_FILENAME = "crucible-clients.json"
 
 STAGE_FAILED_CODE = "stage-failed"
@@ -131,6 +145,14 @@ def _fast_provision_server_stage(target_dir, force):
     return {"path": os.path.join(target_dir, "server"), "converged": False}
 
 
+def _fast_unit_stage(target_dir, force):
+    """A `[unit]` stage double that provisions NOTHING: no unit file, no
+    `systemctl`, no user manager. Matches the `(target_dir, force)` runner
+    protocol."""
+    return {"path": os.path.join(target_dir, UNIT_STAGE_NAME),
+            "converged": False}
+
+
 class _ScratchInstallCase(unittest.TestCase):
     """Shared fixture: one throwaway target dir per test, under `/tmp`."""
 
@@ -148,11 +170,14 @@ class _ScratchInstallCase(unittest.TestCase):
         return os.path.join(self.target, MANIFEST_FILENAME)
 
     def run_install_with_stubbed_server(self, **kwargs):
-        """`run_install` against the scratch target with ONLY the [server]
-        stage stubbed -- the real `fleet` and `manifest` runners execute, which
-        is the whole point of AC2."""
+        """`run_install` against the scratch target with the [server] and
+        [unit] stages stubbed -- the real `fleet` and `manifest` runners
+        execute, which is the whole point of AC2. [unit] is a double because it
+        is the one stage that hands work to the operator's own systemd user
+        manager, and a test must never reach it."""
         with mock.patch.dict(self.install.DEFAULT_STAGE_RUNNERS,
-                             {"server": _fast_provision_server_stage}):
+                             {"server": _fast_provision_server_stage,
+                              UNIT_STAGE_NAME: _fast_unit_stage}):
             return self.install.run_install(self.target, **kwargs)
 
 
@@ -160,7 +185,7 @@ class FleetStageOrderContractTest(_ScratchInstallCase):
     """AC1 -- the stage exists, is registered, is ordered strictly BEFORE
     `manifest`, and reports the clients dir as its path."""
 
-    def test_stage_order_is_exactly_server_fleet_manifest(self):
+    def test_stage_order_is_exactly_server_fleet_manifest_unit(self):
         self.assertEqual(
             self.install.STAGE_ORDER, EXPECTED_STAGE_ORDER,
             f"§S1/AC1 -- STAGE_ORDER must be exactly {EXPECTED_STAGE_ORDER!r} "
@@ -304,7 +329,8 @@ class FleetBeforeManifestIsEnforcedTest(_ScratchInstallCase):
         with mock.patch.dict(
                 self.install.DEFAULT_STAGE_RUNNERS,
                 {"server": _fast_provision_server_stage,
-                 FLEET_STAGE_NAME: exploding_fleet_stage}):
+                 FLEET_STAGE_NAME: exploding_fleet_stage,
+                 UNIT_STAGE_NAME: _fast_unit_stage}):
             ok, stages, warnings = self.install.run_install(self.target)
 
         names = [s["name"] for s in stages]
@@ -336,7 +362,8 @@ class FleetBeforeManifestIsEnforcedTest(_ScratchInstallCase):
         with mock.patch.dict(
                 self.install.DEFAULT_STAGE_RUNNERS,
                 {"server": _fast_provision_server_stage,
-                 FLEET_STAGE_NAME: exploding_fleet_stage}):
+                 FLEET_STAGE_NAME: exploding_fleet_stage,
+                 UNIT_STAGE_NAME: _fast_unit_stage}):
             ok, stages, warnings = self.install.run_install(self.target)
 
         stage_failures = [
@@ -645,8 +672,13 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
 # class fails. That is exactly the 0.1.2 defect this CR exists for.
 
 # §S3 -- the manifest's shape is UNCHANGED by this CR, so the guard pins it:
-# these three top-level keys, no more, and exactly the five client stacks.
-EXPECTED_MANIFEST_KEYS = frozenset({"version", "clients", "status"})
+# exactly the published top-level keys, no more, and exactly the five client
+# stacks. The key set is DECLARED ONCE in `manifest_contract` and imported here
+# rather than restated: three suites pin it, and three copies of one contract is
+# a schema change that can land on two of them (CR-CRU-131 §S1c).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
+
 EXPECTED_CLIENT_STACKS = frozenset({
     "bun", "python", "rust", "mvn", "arduino",
 })

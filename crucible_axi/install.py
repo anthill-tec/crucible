@@ -1,10 +1,11 @@
 """CR-CRU-009 §S2 — the staged install orchestrator framework.
 
-`run_install` sequences the server -> fleet -> manifest sub-installers through
-an INJECTABLE stage-runner table (no real subprocess/network in this cycle) and
-aggregates each stage's result into `(ok, stages, warnings)`. Stages run in
-`STAGE_ORDER`; a stage exception is FAIL-FAST (remaining stages are skipped and
-`ok` is False). Each returned stage path is `~`-abbreviated by `run_install`.
+`run_install` sequences the server -> fleet -> manifest -> unit sub-installers
+through an INJECTABLE stage-runner table (no real subprocess/network in this
+cycle) and aggregates each stage's result into `(ok, stages, warnings)`. Stages
+run in `STAGE_ORDER`; a stage exception is FAIL-FAST (remaining stages are
+skipped and `ok` is False). Each returned stage path is `~`-abbreviated by
+`run_install`.
 
 `DEFAULT_STAGE_RUNNERS` is a module-level, in-place-mutable dict (tests patch it
 via `mock.patch.dict`); `run_install` reads it by name at call time so a patch
@@ -32,13 +33,48 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
 from crucible_axi import manifest
 
-STAGE_ORDER = ("server", "fleet", "manifest")
+# The stage whose ADVANCE gates the upgrade restart (CR-CRU-071 AC9) -- named
+# once, so the threading in `run_install` cannot drift from `STAGE_ORDER`.
+SERVER_STAGE_NAME = "server"
+
+# CR-CRU-090 §S1 -- `[fleet]` sits strictly BEFORE `[manifest]`: the manifest
+# publishes six paths anchored on `<target-dir>/clients/`, so it may only be
+# written once the files it names actually exist. Before this stage existed,
+# nothing materialised that directory and every published path dangled.
+# CR-CRU-070 §Design -- `[unit]` is LAST: it is the only stage that hands work
+# to another supervisor, so the launcher its `ExecStart` names must already be
+# provisioned (enabling it earlier would `enable --now` a unit that cannot
+# start).
+# CR-CRU-071 AC9 gives that ordering a second job: `[unit]` runs AFTER
+# `[server]`, so by the time it decides whether to restart, the stage that
+# re-provisioned has already reported that it did.
+STAGE_ORDER = (SERVER_STAGE_NAME, "fleet", "manifest", "unit")
+
+# The INVERSE sequence (CR-CRU-069 §S1) -- DESTRUCTIVE-LAST, deliberately not a
+# naive reverse of `STAGE_ORDER`. Install has no destructive stage, so
+# inverting its order says nothing about where a purge belongs; combined with
+# fail-fast, destructive-last means data is destroyed only after every
+# reversible step has already succeeded. `[config]` is the inverse of the
+# `[manifest]` stage, named after the artifact it removes; `[store]` reverses
+# what the SERVER creates at runtime and goes absolutely last -- it is the one
+# irreplaceable artifact.
+# CR-CRU-070 §Design extends the inversion with `[unit]` FIRST: removing the
+# server package while an enabled unit still points at
+# `~/.bun/bin/crucible-server` would leave systemd restarting a DELETED binary
+# (`Restart=on-failure`, failing in a loop with no operator watching). Stopping
+# the supervisor precedes removing what it supervises; destructive-last is
+# untouched.
+# `[fleet]` has NO inverse here yet: CR-CRU-090 §S1 defers the uninstall
+# counterpart to a follow-up CR rather than widening this chain inside a
+# hotfix.
+UNINSTALL_STAGE_ORDER = ("unit", "server", "config", "store")
 
 # External sources for the concrete sub-installers. `SERVER_NPM_PACKAGE` is the
 # published npm package name and MUST stay equal to the repo package.json's
@@ -87,11 +123,87 @@ _PACKAGE_JSON_NAME_KEY = "name"
 
 # The server's own runtime configuration, forwarded to the child process by
 # `crucible-axi serve` (CR-CRU-066 §S3). `serve` composes the child env
-# EXPLICITLY: a systemd `--user` unit (the follow-up CR) inherits neither the
-# operator's PATH nor their exports.
+# EXPLICITLY, because the systemd `--user` unit the [unit] stage writes
+# (CR-CRU-070) inherits neither the operator's PATH nor their exports.
 SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
 SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
 
+# The server's STORE-PATH override (RUNBOOK "Database path" rule 2) -- the
+# third `CRUCIBLE_*` knob the [unit] stage forwards explicitly, for the same
+# reason `serve` composes the child env explicitly (CR-CRU-070 AC1).
+SERVER_DB_ENV_VAR = "CRUCIBLE_DB"
+
+# systemd's client. Resolved ABSOLUTELY and driven `--user` only: the unit is
+# user-scoped exactly as `bun add -g` is, so nothing here needs privilege
+# escalation (CR-CRU-070 §Scope).
+SYSTEMCTL_BIN_NAME = "systemctl"
+_USER_SCOPE_FLAG = "--user"
+
+# The verb that re-execs an ALREADY-RUNNING service so the process becomes the
+# code `bun add -g` just laid down (CR-CRU-071 AC9). `restart` and not
+# `try-restart`: the stage has already PROBED the service active, so "restart
+# it only if it happens to be up" would hide a genuine failure to come back.
+_RESTART_VERB = "restart"
+
+# The READ-ONLY verb that shows a failed unit's own last output -- where the
+# server's store refusal / migration failure lands, since systemd captures a
+# `--user` unit's stderr into the journal (CR-CRU-071 AC8). `--no-pager`
+# because an install is not an interactive session. Fetched ONLY after a start
+# has failed: a probe on every install is chatter the happy path does not need.
+_UNIT_LOG_VERB = "status"
+_NO_PAGER_FLAG = "--no-pager"
+
+# The unit `systemctl --user` reads, and the directory it reads it from:
+# `$XDG_CONFIG_HOME/systemd/user`, falling back to `<HOME>/.config` by the XDG
+# base-directory rule the user manager itself follows.
+UNIT_FILE_NAME = "crucible-server.service"
+CONFIG_HOME_ENV_VAR = "XDG_CONFIG_HOME"
+_DEFAULT_CONFIG_HOME_SUFFIX = (".config",)
+_USER_UNIT_SUBDIR = ("systemd", "user")
+
+# Operator opt-out of the whole systemd surface (CR-CRU-070 AC4) -- the
+# `--no-service` flag's environment equivalent. An opt-out must not even PROBE:
+# on a machine with a perfectly good user manager, it is the ONLY reason
+# nothing happened, so the stage says so instead of staying silent.
+NO_SERVICE_ENV_VAR = "CRUCIBLE_NO_SERVICE"
+
+# How a user D-Bus session is detected WITHOUT spawning anything: the address
+# the bus exports, else the socket the user manager lays down in the runtime
+# dir.
+DBUS_SESSION_ENV_VAR = "DBUS_SESSION_BUS_ADDRESS"
+RUNTIME_DIR_ENV_VAR = "XDG_RUNTIME_DIR"
+_USER_BUS_SOCKET_NAME = "bus"
+
+# The read-only verb that asks the USER MANAGER whether it is there at all, and
+# the failure it prints when it is not. This is the SECOND, independent bus
+# check: the environment pair above can be inherited by a process whose bus has
+# since gone away.
+_MANAGER_PROBE_VERB = "is-system-running"
+_BUS_FAILURE_NEEDLE = "failed to connect to bus"
+
+# Why the [unit] stage did nothing, for each of the three ways it can decline
+# (CR-CRU-070 AC4). A skip without a reason leaves the operator guessing
+# whether their daemon exists.
+_OPT_OUT_REASON = (
+    f"skipped: systemd unit management was opted out of explicitly "
+    f"(--no-service / ${NO_SERVICE_ENV_VAR})")
+_NO_SYSTEMCTL_REASON = (
+    f"skipped: no {SYSTEMCTL_BIN_NAME} is resolvable, so this machine has no "
+    f"user service manager to hand the server to")
+_NO_USER_BUS_REASON = (
+    f"skipped: no user D-Bus session is reachable (${DBUS_SESSION_ENV_VAR} "
+    f"unset and no ${RUNTIME_DIR_ENV_VAR} socket), so the user manager cannot "
+    f"be addressed")
+
+# The server's STORE, resolved by the server's own documented rule 4
+# (CR-CRU-043 / RUNBOOK "Database path"): `$XDG_DATA_HOME/crucible`, falling
+# back to `<HOME>/.local/share/crucible` when `$XDG_DATA_HOME` is unset or
+# empty. `crucible-axi` never creates it -- the server does, on boot -- but
+# `uninstall --purge` is what removes it, so the resolution must MATCH
+# `resolveDbPath` in `src/server.ts` exactly or a purge would miss the store.
+XDG_DATA_HOME_ENV_VAR = "XDG_DATA_HOME"
+_DEFAULT_DATA_HOME_SUFFIX = (".local", "share")
+STORE_DIR_NAME = "crucible"
 # The packaged fleet, exactly (CR-CRU-090 §S1). The five stack clients plus:
 # `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
 # which the five load BY FILE PATH from their OWN directory, so a clients-only
@@ -131,6 +243,36 @@ def _provisioned_server_bin_path() -> str:
     return os.path.join(_bun_global_bin_dir(), SERVER_BIN_NAME)
 
 
+def _provisioned_server_package_dir() -> str:
+    """Absolute path of the package tree `bun add -g` unpacks the server into
+    -- `$BUN_INSTALL/install/global/node_modules/<pkg>`. Together with the bin
+    link it is what `bun remove -g` takes away, so it is also the PROBE an
+    uninstall answers "is anything still provisioned?" from."""
+    return os.path.join(_bun_install_prefix(), *BUN_GLOBAL_NODE_MODULES,
+                        *SERVER_NPM_PACKAGE.split("/"))
+
+
+def store_dir() -> str:
+    """The server's store directory, by the server's own rule 4 (CR-CRU-043).
+
+    Mirrors `resolveDbPath` in `src/server.ts`: `$XDG_DATA_HOME` when set and
+    non-empty, else `<HOME>/.local/share`, plus `crucible`. Read at call time,
+    so a test (or an operator) that redirects `$XDG_DATA_HOME`/`$HOME` is
+    observed rather than a value captured at import.
+    """
+    xdg = os.environ.get(XDG_DATA_HOME_ENV_VAR, "")
+    data_home = xdg if xdg else os.path.join(
+        os.path.expanduser("~"), *_DEFAULT_DATA_HOME_SUFFIX)
+    return os.path.join(os.path.expanduser(data_home), STORE_DIR_NAME)
+
+
+def config_path(target_dir: str) -> str:
+    """The client config/state artifact the [manifest] install stage writes --
+    `<target-dir>/crucible-clients.json`. The one locus both the [config]
+    uninstall stage and the interactive purge prompt derive it from."""
+    return os.path.join(target_dir, manifest.MANIFEST_FILENAME)
+
+
 def _installed_server_metadata_candidates() -> list[str]:
     """Every `package.json` path the PROVISIONED server's own metadata may sit
     at, most canonical first.
@@ -144,8 +286,8 @@ def _installed_server_metadata_candidates() -> list[str]:
     `package.json` files off the operator's disk.
     """
     prefix = _bun_install_prefix()
-    candidates = [os.path.join(prefix, *BUN_GLOBAL_NODE_MODULES,
-                               *SERVER_NPM_PACKAGE.split("/"), "package.json")]
+    candidates = [os.path.join(_provisioned_server_package_dir(),
+                               "package.json")]
 
     real_prefix = os.path.realpath(prefix)
     directory = os.path.dirname(
@@ -388,6 +530,13 @@ def _server_stage(target_dir: str, force: bool,
     read -- is NOT converged, so an upgrade re-provisions through the same
     absolute-Bun `bun add -g <pkg>@<pin>` path instead of silently leaving the
     older server in place.
+
+    A re-provision reports `advanced: True` (CR-CRU-071 AC9). This stage is the
+    ONLY one that can know an upgrade happened -- the `[unit]` stage compares
+    unit TEXT, and `ExecStart` is a version-INDEPENDENT
+    `$BUN_INSTALL/bin/crucible-server`, so its text is byte-identical across an
+    upgrade. Without this signal `bun add -g` replaces the package on disk
+    while the running service keeps serving the old code from memory.
     """
     server_path = _provisioned_server_bin_path()
 
@@ -412,7 +561,8 @@ def _server_stage(target_dir: str, force: bool,
             f"server stage failed: `{' '.join(provision_argv)}` exited with "
             f"returncode {completed.returncode}")
 
-    return {"path": server_path, "converged": False, "bun": bun}
+    return {"path": server_path, "converged": False, "advanced": True,
+            "bun": bun}
 
 
 def server_launch_argv() -> list[str]:
@@ -421,8 +571,9 @@ def server_launch_argv() -> list[str]:
     `$BUN_INSTALL/bin/crucible-server` when the [server] install stage has
     provisioned it, else the version-pinned package through the resolved
     ABSOLUTE Bun (`<bun> x <pkg>@<pinned>` — what `bunx` is). Never a bare
-    `crucible-server`/`bun`/`bunx` token: the follow-up systemd `--user` unit
-    gets a minimal PATH that resolves none of them.
+    `crucible-server`/`bun`/`bunx` token: the systemd `--user` unit that
+    renders this argv into its `ExecStart` (CR-CRU-070 AC1) gets a minimal PATH
+    that resolves none of them.
 
     This RUNS the server, it never provisions one — `bun add -g` is the
     [server] stage's job (§S1). So Bun is resolved and verified with the curl
@@ -437,6 +588,332 @@ def server_launch_argv() -> list[str]:
     return [bun, "x", f"{SERVER_NPM_PACKAGE}@{server_version}"]
 
 
+def user_unit_dir() -> str:
+    """The directory `systemctl --user` reads units from --
+    `$XDG_CONFIG_HOME/systemd/user`, else `<HOME>/.config/systemd/user`
+    (CR-CRU-070 §Scope).
+
+    The same XDG rule the user manager itself applies, so the unit lands where
+    it is actually read. Never a system-scope directory: that needs root, which
+    this install never has.
+    """
+    config_home = os.environ.get(CONFIG_HOME_ENV_VAR, "").strip()
+    if not config_home:
+        config_home = os.path.join(os.path.expanduser("~"),
+                                   *_DEFAULT_CONFIG_HOME_SUFFIX)
+    return os.path.join(os.path.expanduser(config_home), *_USER_UNIT_SUBDIR)
+
+
+def user_unit_path() -> str:
+    """Absolute path of the `--user` unit the [unit] stage owns."""
+    return os.path.join(user_unit_dir(), UNIT_FILE_NAME)
+
+
+def _service_disabled(no_service: bool = False) -> bool:
+    """Whether the operator opted OUT of the systemd surface -- the
+    `--no-service` flag or `$CRUCIBLE_NO_SERVICE` (CR-CRU-070 AC4), read
+    exactly as `_bun_bootstrap_disabled` reads its own opt-out."""
+    if no_service:
+        return True
+    raw = os.environ.get(NO_SERVICE_ENV_VAR, "").strip().lower()
+    return raw not in ("", "0", "false", "no", "off")
+
+
+def _user_bus_available() -> bool:
+    """Whether a user D-Bus session looks reachable, WITHOUT spawning anything.
+
+    `systemctl --user` is useless without one (an ssh session with no
+    `systemd --user`, a CI container), and asking the environment first is what
+    keeps the opt-out-free absent-systemd path from shelling out at all.
+    """
+    if os.environ.get(DBUS_SESSION_ENV_VAR, "").strip():
+        return True
+    runtime_dir = os.environ.get(RUNTIME_DIR_ENV_VAR, "").strip()
+    return bool(runtime_dir) and os.path.exists(
+        os.path.join(runtime_dir, _USER_BUS_SOCKET_NAME))
+
+
+def _run_systemctl(systemctl: str, *arguments: str):
+    """Run `systemctl --user <arguments>`; the `CompletedProcess`, or None when
+    the user manager is UNREACHABLE (the binary vanished mid-run, or no bus
+    answered).
+
+    `--user` is not optional: the system manager would need root, which this
+    install never has. Output is CAPTURED -- stdout belongs to the ONE TOON-AXI
+    envelope the verb emits, so systemctl's chatter must never land in it.
+    """
+    argv = [systemctl, _USER_SCOPE_FLAG, *arguments]
+    try:
+        completed = subprocess.run(argv, check=False, capture_output=True,
+                                   text=True)
+    except OSError:  # the resolved systemctl is gone / not executable
+        return None
+    stderr = getattr(completed, "stderr", None) or ""
+    if completed.returncode != 0 and \
+            _BUS_FAILURE_NEEDLE in str(stderr).lower():
+        return None
+    return completed
+
+
+def _unit_log(systemctl: str) -> str:
+    """The failed unit's OWN last output, as `systemctl --user status` shows it.
+
+    systemd captures a `--user` unit's stdout/stderr into the journal, so this
+    is where the server's store refusal (`REFUSING TO OPEN ...`) or migration
+    failure (`MIGRATION FAILED on ...`) lands -- including the
+    `<store>.pre-upgrade-<epoch>` backup to restore from. Read-only, and only
+    ever called once a start has already failed.
+    """
+    completed = _run_systemctl(systemctl, _UNIT_LOG_VERB, _NO_PAGER_FLAG,
+                               UNIT_FILE_NAME)
+    if completed is None:
+        return ""
+    return str(getattr(completed, "stdout", None) or "")
+
+
+def _start_service_or_fail(systemctl: str, *arguments: str) -> None:
+    """Run a systemctl verb that STARTS the service, and FAIL when it could not
+    (CR-CRU-071 AC8).
+
+    Starting is where the new build opens the store and runs the migration
+    chain, so the start's outcome IS the upgrade's migration gate: a store this
+    build refuses to open (AC5 -- a newer Crucible wrote it) or a migration step
+    that threw (AC7) leaves the service dead, and swallowing the returncode is
+    what would leave a new binary pointed at a store it cannot open while the
+    install reported `ok: true`. The failure carries the server's own message,
+    fetched from the unit's log, so the operator reads the refusal and its
+    backup path instead of going digging in the journal.
+
+    An UNREACHABLE manager still DEGRADES (CR-CRU-070 AC4): `_run_systemctl`
+    answers None for a machine whose user bus went away, which is not a failed
+    start and must not fail the install.
+    """
+    completed = _run_systemctl(systemctl, *arguments)
+    if completed is None or completed.returncode == 0:
+        return
+    reported = "\n".join(
+        text.strip() for text in (
+            str(getattr(completed, "stdout", None) or ""),
+            str(getattr(completed, "stderr", None) or ""),
+            _unit_log(systemctl))
+        if text.strip())
+    raise RuntimeError(
+        f"`{SYSTEMCTL_BIN_NAME} {_USER_SCOPE_FLAG} {' '.join(arguments)}` "
+        f"exited with returncode {completed.returncode}, so the server never "
+        f"started and this upgrade is NOT complete (CR-CRU-071 AC8). The store "
+        f"is under {store_dir()}; a store this build REFUSES to open, or a "
+        f"migration that threw and rolled back, is reported below and names "
+        f"the pre-upgrade backup to restore from. "
+        f"{SYSTEMCTL_BIN_NAME} reported:\n{reported}")
+
+
+def _unit_manager(no_service: bool = False) -> tuple[str | None, str]:
+    """The absolute `systemctl` the [unit] stage may drive, or `(None, reason)`
+    naming why it may not -- decided WITHOUT spawning anything (CR-CRU-070
+    AC4).
+
+    Opt-out first, so an explicit `--no-service` never probes a machine whose
+    user manager is perfectly healthy.
+    """
+    if _service_disabled(no_service):
+        return None, _OPT_OUT_REASON
+    systemctl = shutil.which(SYSTEMCTL_BIN_NAME)
+    if not systemctl:
+        return None, _NO_SYSTEMCTL_REASON
+    if not _user_bus_available():
+        return None, _NO_USER_BUS_REASON
+    return os.path.abspath(systemctl), ""
+
+
+def _manager_probe_reason(systemctl: str) -> str:
+    """`""` when the user manager answers a READ-ONLY probe, else the reason it
+    does not -- the second bus check, through the subprocess seam rather than
+    the environment (an inherited `$DBUS_SESSION_BUS_ADDRESS` outlives the bus
+    it names)."""
+    if _run_systemctl(systemctl, _MANAGER_PROBE_VERB) is None:
+        return _NO_USER_BUS_REASON
+    return ""
+
+
+def _unit_state(systemctl: str, probe: str) -> bool:
+    """Whether a read-only unit probe (`is-enabled`, `is-active`) answers yes."""
+    completed = _run_systemctl(systemctl, probe, UNIT_FILE_NAME)
+    return completed is not None and completed.returncode == 0
+
+
+def _unit_path_value() -> str | None:
+    """`PATH` for the unit, or None when Bun cannot be resolved.
+
+    An absolute `ExecStart` is NOT sufficient. The published
+    `crucible-server` bin is a SHIM that spawns bare `bun` ITSELF, so under a
+    unit -- which inherits no shell `PATH` -- that spawn resolves to nothing
+    and the service dies `status=127` in a `Restart=on-failure` loop. Observed
+    exactly that on a real `--user` unit before this was added:
+
+        crucible-server: failed to launch bun on .../src/server.ts:
+          spawn bun ENOENT
+
+    CR-CRU-066 made OUR argv absolute; it cannot reach inside the npm
+    package's own launcher. So the unit puts the RESOLVED Bun's directory
+    first, then a minimal system PATH for anything else the server shells out
+    to. The curl bootstrap is OPTED OUT: rendering a unit must never pipe a
+    remote installer to a shell.
+    """
+    bun = _resolve_bun_path()
+    if bun is None:
+        return None
+    return os.pathsep.join([os.path.dirname(bun), "/usr/local/bin",
+                            "/usr/bin", "/bin"])
+
+
+def _unit_environment() -> list[tuple[str, str]]:
+    """The `PATH` the shim needs, plus the `CRUCIBLE_*` knobs to forward, as
+    `(name, value)`.
+
+    Only the `CRUCIBLE_*` ones actually SET: `Environment=CRUCIBLE_PORT=` would
+    override the server's own default with nothing, which is worse than not
+    forwarding it.
+    """
+    forwarded = []
+    path_value = _unit_path_value()
+    if path_value is not None:
+        forwarded.append(("PATH", path_value))
+    for name in (SERVER_HOST_ENV_VAR, SERVER_PORT_ENV_VAR, SERVER_DB_ENV_VAR):
+        value = os.environ.get(name, "")
+        if value.strip():
+            forwarded.append((name, value))
+    return forwarded
+
+
+def _render_user_unit() -> str:
+    """The `--user` unit text (CR-CRU-070 AC1).
+
+    `ExecStart` is `server_launch_argv()` -- the ABSOLUTE argv `serve` runs, the
+    function CR-CRU-066 §S3 built for exactly this: a unit inherits no shell
+    PATH, so a bare `crucible-server`/`bun`/`bunx` token would resolve to
+    nothing. `Restart=on-failure` brings a CRASHED server back while leaving a
+    clean `systemctl --user stop` alone (the 128+N contract CR-CRU-066 shipped),
+    and `[Install] WantedBy=default.target` is what `enable` has to link.
+
+    Deterministic byte-for-byte: the text carries no timestamp and no
+    machine-specific ordering, which is what lets the install compare it
+    against the unit on disk and decline to rewrite an unchanged one (AC2).
+    """
+    lines = [
+        "# Managed by crucible-axi install (CR-CRU-070). Edits are OVERWRITTEN",
+        "# by the next `crucible-axi install`; `crucible-axi uninstall`",
+        f"# removes it. Opt out with --no-service / ${NO_SERVICE_ENV_VAR}.",
+        "[Unit]",
+        "Description=Crucible test-reporting server",
+        "After=network.target",
+        "",
+        "[Service]",
+        "Type=simple",
+        f"ExecStart={shlex.join(server_launch_argv())}",
+        "Restart=on-failure",
+        "RestartSec=2",
+    ]
+    lines += [f"Environment={name}={value}"
+              for name, value in _unit_environment()]
+    lines += ["", "[Install]", "WantedBy=default.target", ""]
+    return "\n".join(lines)
+
+
+def _existing_unit_text(unit_path: str) -> str | None:
+    """The unit already on disk, or None when there is none to compare."""
+    try:
+        with open(unit_path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def _skipped_unit(unit_path: str, reason: str) -> dict:
+    """A stage row saying the systemd surface was NOT touched, and WHY.
+
+    `converged: True` is the honest answer: a skip leaves nothing half-done, and
+    a systemd-less machine's `uninstall` must still report every stage converged
+    (CR-CRU-069 AC3). The path is reported either way, so the operator can see
+    WHERE the unit would have gone.
+    """
+    return {"path": unit_path, "converged": True, "skipped": True,
+            "reason": reason}
+
+
+def _unit_stage(target_dir: str, force: bool, no_service: bool = False,
+                server_advanced: bool = False) -> dict:
+    """[unit] sub-installer -- provisions the systemd `--user` unit that runs
+    the server the way `serve` does (CR-CRU-070 AC1/AC2).
+
+    WRITE -> `daemon-reload` -> `enable --now`, in that order: reloading before
+    the file exists makes systemd re-read a directory that does not yet contain
+    the unit, and enabling before the reload enables a definition the manager
+    has not read.
+
+    Idempotent in both halves. An UNCHANGED unit is not rewritten (a rewrite
+    churns the mtime on every install) and an already-enabled, already-active
+    service is not touched (a restart drops every live SSE subscriber for
+    nothing). `force` re-asserts the manager state without rewriting identical
+    bytes.
+
+    `server_advanced` is the ONE exception, and CR-CRU-071 AC9: when the
+    `[server]` stage re-provisioned IN THIS RUN, the live process is still
+    serving the code `bun add -g` replaced, so an ACTIVE service is restarted.
+    The signal comes from the stage sequence alone -- never from re-reading the
+    installed version or re-resolving the pin, because two sources of truth for
+    "did the server advance?" is exactly how the missing-restart bug appeared:
+    the `[server]` stage compared VERSIONS, this stage compared unit TEXT, and
+    `ExecStart` is version-independent so the text never changed. A converged
+    server plus an unchanged unit therefore still writes nothing and restarts
+    nothing. `force` restarts an active service too -- it is the "make it match
+    whatever the state" escape hatch.
+
+    Every START is GATED (AC8): starting is where the new build opens the store
+    and runs the migration chain, so a store it refuses to open or a migration
+    that threw makes the start fail, and that failure FAILS THE RUN with the
+    server's own message rather than being swallowed into an `ok: true`
+    install pointing a new binary at a store it cannot open.
+
+    Absent systemd DEGRADES, never fails (AC4): no `systemctl`, no user bus, or
+    an explicit opt-out reports skipped-with-reason, and the overall install
+    stays ok -- the base install has no systemd dependency.
+
+    `target_dir` is unused: a `--user` unit belongs where the user manager reads
+    it, never under the client's target dir.
+    """
+    unit_path = user_unit_path()
+    systemctl, reason = _unit_manager(no_service)
+    if systemctl is None:
+        return _skipped_unit(unit_path, reason)
+    unreachable = _manager_probe_reason(systemctl)
+    if unreachable:
+        return _skipped_unit(unit_path, unreachable)
+
+    desired = _render_user_unit()
+    changed = _existing_unit_text(unit_path) != desired
+    if changed:
+        os.makedirs(os.path.dirname(unit_path), exist_ok=True)
+        with open(unit_path, "w", encoding="utf-8") as handle:
+            handle.write(desired)
+    if changed or force:
+        _run_systemctl(systemctl, "daemon-reload")
+
+    # `is-active` FIRST: it is the probe the restart decision needs, and an
+    # inactive service short-circuits the enablement check exactly as before.
+    active = _unit_state(systemctl, "is-active")
+    provisioned = active and _unit_state(systemctl, "is-enabled")
+    if force or not provisioned:
+        _start_service_or_fail(systemctl, "enable", "--now", UNIT_FILE_NAME)
+
+    # AC9 -- an INACTIVE unit has no stale process to replace (`enable --now`
+    # above just started the new code), so only a running one is re-exec'd.
+    restarted = active and (server_advanced or force)
+    if restarted:
+        _start_service_or_fail(systemctl, _RESTART_VERB, UNIT_FILE_NAME)
+
+    return {"path": unit_path,
+            "converged": not changed and not force and provisioned,
+            "restarted": restarted}
 def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     """[fleet] sub-installer — lay the eight packaged fleet files down under
     `<target-dir>/clients/` (CR-CRU-090 §S1).
@@ -520,6 +997,7 @@ DEFAULT_STAGE_RUNNERS: dict = {
     "server": _server_stage,
     "fleet": run_fleet_stage,
     "manifest": manifest.run_manifest_stage,
+    "unit": _unit_stage,
 }
 
 
@@ -533,25 +1011,35 @@ def _abbreviate_home(path: str) -> str:
     return path
 
 
-def _stage_options(runner, no_bun_bootstrap: bool) -> dict:
+def _stage_options(runner, no_bun_bootstrap: bool, no_service: bool,
+                   server_advanced: bool = False) -> dict:
     """The extra keyword options a stage runner OPTS INTO by declaring them.
 
     Keeps the `(target_dir, force)` runner protocol intact -- injected doubles
     that take exactly those two arguments are called exactly as before -- while
     letting the real `[server]` stage receive `no_bun_bootstrap` (CR-CRU-066
-    §S2 AC4) instead of reaching for global state.
+    §S2 AC4), the real `[unit]` stage `no_service` (CR-CRU-070 AC4) and, since
+    CR-CRU-071 AC9, whatever the EARLIER stages of this very run reported:
+    `server_advanced` says the `[server]` stage re-provisioned, which is the
+    only thing that licenses restarting a live service. All three arrive as
+    declared parameters instead of any stage reaching for global state.
     """
     try:
         parameters = inspect.signature(runner).parameters
     except (TypeError, ValueError):  # builtins/C callables expose no signature
         return {}
+    options = {}
     if "no_bun_bootstrap" in parameters:
-        return {"no_bun_bootstrap": no_bun_bootstrap}
-    return {}
+        options["no_bun_bootstrap"] = no_bun_bootstrap
+    if "no_service" in parameters:
+        options["no_service"] = no_service
+    if "server_advanced" in parameters:
+        options["server_advanced"] = server_advanced
+    return options
 
 
 def run_install(target_dir, stage_runners=None, force=False,
-                no_bun_bootstrap=False):
+                no_bun_bootstrap=False, no_service=False):
     """Run the staged install; return `(ok, stages, warnings)`.
 
     `stages` is a list of `{"name", "path" (~-abbreviated), "converged"}` in
@@ -566,8 +1054,15 @@ def run_install(target_dir, stage_runners=None, force=False,
     otherwise die on the [manifest] write. A target that cannot be created
     fails definitively with the path named.
 
-    `no_bun_bootstrap` is the `--no-bun-bootstrap` opt-out, threaded down to
-    the stages that accept it.
+    `no_bun_bootstrap` is the `--no-bun-bootstrap` opt-out and `no_service` the
+    `--no-service` one (CR-CRU-070 AC4), each threaded down to the stages that
+    accept it.
+
+    The sequence also carries what an EARLIER stage reported into the later
+    ones: an `advanced` `[server]` stage (it re-provisioned) becomes the
+    `[unit]` stage's `server_advanced`, which is the ONLY thing that licenses
+    restarting a live service (CR-CRU-071 AC9). Nothing re-derives it -- the
+    stage that did the work is the single source of truth.
     """
     runners = stage_runners if stage_runners is not None else DEFAULT_STAGE_RUNNERS
     stages: list[dict] = []
@@ -587,11 +1082,239 @@ def run_install(target_dir, stage_runners=None, force=False,
         })
         return False, stages, warnings
 
+    # CR-CRU-071 AC9 -- what the `[server]` stage reported, carried forward to
+    # the `[unit]` stage. False until that stage has actually said otherwise,
+    # so an injected double that provisions nothing never restarts anything.
+    server_advanced = False
+
     for name in STAGE_ORDER:
         runner = runners[name]
         try:
             result = runner(target_dir, force,
-                            **_stage_options(runner, no_bun_bootstrap))
+                            **_stage_options(runner, no_bun_bootstrap,
+                                             no_service, server_advanced))
+        except Exception as exc:  # noqa: BLE001 — fail-fast: record + halt
+            ok = False
+            warnings.append({
+                "code": "stage-failed",
+                "detail": f"{name} stage failed: {exc}",
+            })
+            break
+        if name == SERVER_STAGE_NAME:
+            server_advanced = bool(result.get("advanced", False))
+        stage = {
+            "name": name,
+            "path": _abbreviate_home(str(result.get("path", ""))),
+            "converged": bool(result.get("converged", False)),
+        }
+        # A stage that DECLINED says so, and says why (CR-CRU-070 AC4): a
+        # silent absence of a daemon is the bug the reason exists to prevent.
+        if result.get("skipped"):
+            stage["skipped"] = True
+        reason = result.get("reason")
+        if reason:
+            stage["reason"] = str(reason)
+        # The resolved Bun path is reported verbatim (never ~-abbreviated): it
+        # is the executable the install ran, so it must stay runnable as-is.
+        bun = result.get("bun")
+        if bun:
+            stage["bun"] = str(bun)
+        # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
+        # subscriber, so an operator watching an upgrade must see that it
+        # happened on purpose rather than infer it from a broken stream.
+        if result.get("restarted"):
+            stage["restarted"] = True
+        stages.append(stage)
+
+    return ok, stages, warnings
+
+
+def _server_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[server] inverse -- DE-PROVISIONS the server with
+    `<abs-bun> remove -g <SERVER_NPM_PACKAGE>` (CR-CRU-069 §S1).
+
+    The exact inverse of `_server_stage`'s `bun add -g`, through the same
+    absolute-Bun resolution: Bun links the `crucible-server` bin into its
+    global prefix, so only Bun knows how to unlink it, and a bare `bun` token
+    off an inherited PATH is as wrong here as it is on the install path.
+
+    Idempotent, and the probe is answered from the FILESYSTEM before Bun is
+    touched at all: an already-absent artifact converges without spawning any
+    subprocess (not even `bun --version`), so a second uninstall -- or a
+    machine that never installed -- is a no-op rather than a failure.
+
+    Bun itself is NEVER removed (AC5): install only GUARANTEES Bun, it does not
+    own it. For the same reason the curl bootstrap is OPTED OUT here -- an
+    uninstall that pipes a remote installer to a shell to acquire the tool it
+    is about to stop using would be absurd.
+
+    `purge` is unused: the program artifacts are what a plain uninstall
+    removes, and no `--purge` escalation applies to them.
+    """
+    server_path = _provisioned_server_bin_path()
+    if not os.path.lexists(server_path) and \
+            not os.path.isdir(_provisioned_server_package_dir()):
+        return {"path": server_path, "converged": True}
+
+    bun = _guarantee_bun(no_bun_bootstrap=True)
+    removal_argv = [bun, "remove", "-g", SERVER_NPM_PACKAGE]
+    completed = subprocess.run(removal_argv, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"server stage failed: `{' '.join(removal_argv)}` exited with "
+            f"returncode {completed.returncode}")
+
+    return {"path": server_path, "converged": False, "bun": bun}
+
+
+def _operator_config_is_untouched(path: str) -> bool:
+    """Whether the laid-down `crucible.toml` at `path` is still exactly the
+    bytes the install wrote (CR-CRU-131 §S1c).
+
+    Bytes against the SHIPPED source, never an mtime: a file touched by a
+    backup tool is not an edit, and a file rewritten with different numbers at
+    the same size is. A source that cannot be read answers False -- the
+    fail-safe direction, since the cost of keeping a replaceable artifact is a
+    stale file and the cost of the other mistake is an operator's
+    configuration.
+    """
+    try:
+        return Path(path).read_bytes() == Path(
+            manifest.shipped_config_path()).read_bytes()
+    except OSError:
+        return False
+
+
+def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[config] inverse -- removes the two artifacts the [manifest] install
+    stage wrote at `<target-dir>`: `crucible-clients.json` and the
+    operator-editable `crucible.toml`. ONLY under `purge`.
+
+    Without `purge` the stage is a NO-OP that reports the path it RETAINED: a
+    plain uninstall destroys nothing and stays reversible by reinstalling, and
+    automation must never be left guessing where the state it kept now lives.
+
+    An operator-EDITED `crucible.toml` SURVIVES a purge (CR-CRU-131 §S1c). The
+    manifest is an artifact and is replaceable; an unmodified config is an
+    artifact too, and removing it is what keeps that protection observable
+    rather than indistinguishable from "uninstall stopped removing anything".
+    A config carrying an operator's own values is DATA, and the stage order is
+    already fail-fast-first / destructive-last for exactly this class of
+    reason. The retained path is reported, so a purge that kept something says
+    so instead of leaving it to be discovered.
+    """
+    path = config_path(target_dir)
+    operator_config = manifest.operator_config_path(target_dir)
+    if not purge:
+        return {"path": path, "converged": True, "retained": True}
+    removed = False
+    if os.path.exists(path):
+        os.remove(path)
+        removed = True
+    retained = False
+    if os.path.exists(operator_config):
+        if _operator_config_is_untouched(operator_config):
+            os.remove(operator_config)
+            removed = True
+        else:
+            retained = True
+    result = {"path": path, "converged": not removed}
+    if retained:
+        result["retained"] = True
+        result["reason"] = (
+            f"kept {_abbreviate_home(operator_config)}: it carries edits, and "
+            f"an operator's configuration is data rather than a replaceable "
+            f"artifact")
+    return result
+
+
+def _store_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[store] inverse -- removes the server's store directory (every
+    `crucible.db` and every `crucible-pre-*.db` backup in it), ONLY under
+    `purge`, and LAST of all stages.
+
+    The store is the one irreplaceable artifact, so retention is the default
+    and the stage otherwise only reports where the data it kept lives.
+    """
+    store_path = store_dir()
+    if not purge:
+        return {"path": store_path, "converged": True, "retained": True}
+    if not os.path.isdir(store_path):
+        return {"path": store_path, "converged": True}
+    shutil.rmtree(store_path)
+    return {"path": store_path, "converged": False}
+
+
+def _unit_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[unit] inverse -- `disable --now`, remove the unit file, `daemon-reload`,
+    and FIRST of all uninstall stages (CR-CRU-070 AC2/AC3).
+
+    Disabling LAST would leave the manager holding a unit whose file is already
+    gone -- and `disable --now` is what STOPS the running service rather than
+    merely de-linking it for the next login. The closing reload is what makes
+    systemd forget the unit instead of keeping it loaded until logout.
+
+    Idempotent, and the probe is answered from the FILESYSTEM before the
+    manager is touched at all: an already-absent unit converges without
+    spawning any systemctl, exactly as the [server] inverse converges without
+    spawning Bun (CR-CRU-069 AC3).
+
+    The unit is a program artifact, so a plain uninstall always removes it and
+    `purge` is unused. An opt-out (`$CRUCIBLE_NO_SERVICE`) leaves it strictly
+    alone: the operator asked crucible-axi not to manage their systemd.
+    """
+    unit_path = user_unit_path()
+    systemctl, reason = _unit_manager()
+    if systemctl is None:
+        return _skipped_unit(unit_path, reason)
+    if not os.path.lexists(unit_path):
+        return {"path": unit_path, "converged": True}
+    unreachable = _manager_probe_reason(systemctl)
+    if unreachable:
+        return _skipped_unit(unit_path, unreachable)
+
+    _run_systemctl(systemctl, "disable", "--now", UNIT_FILE_NAME)
+    os.remove(unit_path)
+    _run_systemctl(systemctl, "daemon-reload")
+    return {"path": unit_path, "converged": False}
+
+
+# The uninstall counterpart of `DEFAULT_STAGE_RUNNERS` -- module-level and
+# in-place-mutable, so a test injects doubles with `mock.patch.dict` exactly as
+# it does for install. `run_uninstall` reads this name at call time.
+DEFAULT_UNINSTALL_STAGE_RUNNERS: dict = {
+    "unit": _unit_uninstall_stage,
+    "server": _server_uninstall_stage,
+    "config": _config_uninstall_stage,
+    "store": _store_uninstall_stage,
+}
+
+
+def run_uninstall(target_dir, stage_runners=None, purge=False):
+    """Run the staged uninstall; return `(ok, stages, warnings)` -- the same
+    triple, the same fail-fast semantics and the same runner protocol as
+    `run_install`, with `purge` where install has `force`.
+
+    `stages` is a list of `{"name", "path" (~-abbreviated), "converged"}` in
+    `UNINSTALL_STAGE_ORDER` up to (and excluding) the first failing stage, plus
+    whatever the runner reported (`retained` on a stage that kept its artifact,
+    the `[server]` stage's resolved absolute `bun`). A stage exception halts
+    the sequence and surfaces as `ok=False` plus a warning.
+
+    Unlike `run_install` this does NOT create `target_dir`: an uninstall that
+    materialises the directory it is dismantling would be a contradiction, and
+    an absent target simply means the config is already gone.
+    """
+    runners = (stage_runners if stage_runners is not None
+               else DEFAULT_UNINSTALL_STAGE_RUNNERS)
+    stages: list[dict] = []
+    warnings: list[dict] = []
+    ok = True
+
+    for name in UNINSTALL_STAGE_ORDER:
+        runner = runners[name]
+        try:
+            result = runner(target_dir, purge)
         except Exception as exc:  # noqa: BLE001 — fail-fast: record + halt
             ok = False
             warnings.append({
@@ -604,8 +1327,17 @@ def run_install(target_dir, stage_runners=None, force=False,
             "path": _abbreviate_home(str(result.get("path", ""))),
             "converged": bool(result.get("converged", False)),
         }
-        # The resolved Bun path is reported verbatim (never ~-abbreviated): it
-        # is the executable the install ran, so it must stay runnable as-is.
+        if result.get("retained"):
+            stage["retained"] = True
+        # The same declined-with-a-reason row the install side reports
+        # (CR-CRU-070 AC4) -- a teardown that skipped systemd must say so.
+        if result.get("skipped"):
+            stage["skipped"] = True
+        reason = result.get("reason")
+        if reason:
+            stage["reason"] = str(reason)
+        # Reported verbatim (never ~-abbreviated): it is the executable the
+        # uninstall ran, so it must stay runnable as-is.
         bun = result.get("bun")
         if bun:
             stage["bun"] = str(bun)

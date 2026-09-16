@@ -23,7 +23,7 @@ axi:
   verb: status
   ok: <bool>
   plans[]{cr,wave,status,activeCycleId}
-  lastRunCr: <string|null>
+  lastClosedCr: <string|null>
   count: <int>
   help[]
   context: { projectKey, agentId?, cycleId?, wave?, cr?, track? }
@@ -38,7 +38,7 @@ axi:
 | `context`   | The resolved run context: `projectKey`, plus optional `agentId`, `cycleId`, `wave`, `cr`, `track`. | 1 (TOON envelope) |
 | `warnings`  | Structured `{code,detail}` entries on STDOUT (never stderr) — e.g. the `status-unavailable` degrade signal. Empty `[]` on a clean read. | 6 (structured, on stdout) |
 | `plans`     | The board: one uniform row per open plan (see row schema). Empty `[]` when no plan is filed, or in the unavailable degrade. | 1, 2 (minimal schema) |
-| `lastRunCr` | The `cr` of the plan with the latest `closedAt` (the last CR to merge), or `null` when none has closed — never a fabricated guess. | 5 |
+| `lastClosedCr` | The `cr` of the plan with the latest `closedAt` (the last CR to close), or `null` when none has closed — never a fabricated guess. | 5 |
 | `count`     | Total plans available (unaffected by the `--fields` column projection); `0` on an empty or unavailable board. | 5 |
 | `help`      | A block of CONCRETE next-step command templates for the terminal state reached. | 9 (next-steps) |
 
@@ -85,7 +85,7 @@ unavailable" and continue, never fail (CR-CRU-035 §S1):
 - `warnings[]` carries a structured `{code:"status-unavailable", detail:"…"}` entry
   (AXI principle 6 — structured, on stdout). Its presence is the signal that
   distinguishes this state from the "no plan filed" empty state.
-- `plans: []`, `lastRunCr: null`, `count: 0` — an EMPTY board, never fabricated or
+- `plans: []`, `lastClosedCr: null`, `count: 0` — an EMPTY board, never fabricated or
   stale rows.
 - `help[]` carries a CONCRETE next-step naming the Crucible server (e.g. "check the
   Crucible server is running / reachable at <base>") — AXI principle 9.
@@ -105,8 +105,9 @@ The **`--role` flag declares the agent's role**, and that stored declaration is 
 classifies the agent everywhere (the dashboard's agent rail, the role filters, the
 run attribution). The role is never inferred from the agentId's shape.
 
-- `--role` is **required** on `register` across all five `*-crucible.py` clients and
-  `cli/crucible-axi.ts`, and is constrained to the enumeration
+- `--role` is **required** on `register` across all five `*-crucible.py` clients — the
+  whole fleet, since CR-CRU-132 retired the orphaned sixth surface — and is constrained
+  to the enumeration
   `RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report`. Omitting it, or passing a value
   outside the enumeration, fails argument parsing with a non-zero exit and the accepted
   values listed — no registration is sent.

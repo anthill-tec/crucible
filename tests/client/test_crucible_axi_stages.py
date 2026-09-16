@@ -4,11 +4,13 @@
 
 CR-CRU-042 §S1/§S1b retired the `[skills]` stage from this file's contract
 (`_skills_stage`, `_skills_already_installed`, `SKILLS_CLI_SOURCE`) -- skill
-content is Model-B's scope now (Sandesh 1337/1342) -- and CR-CRU-090 §S1 then
-added the `[fleet]` stage that lays the client fleet down before the manifest.
-The pinned order is therefore `STAGE_ORDER == ("server", "fleet",
-"manifest")`: still no `[skills]` stage, so Crucible ships no `npx skills`
-invocation and no envelope this suite exercises may carry a `skills` key.
+content is Model-B's scope now (Sandesh 1337/1342). CR-CRU-070 then added
+`[unit]` (last -- it hands the server to another supervisor) and CR-CRU-090 §S1
+added `[fleet]` (before `[manifest]`, which names the paths it lays down), so
+the contract this suite pins is now
+`STAGE_ORDER == ("server", "fleet", "manifest", "unit")`: still no `[skills]`
+stage, so Crucible ships no `npx skills` invocation and no envelope this suite
+exercises may carry a `skills` key.
 
 Contract pinned from docs/changes/CR-CRU-066-install-provisions-not-runs-plus-serve.md
 §S1/§S5 (CR-CRU-066 P0), superseding CR-CRU-009's npx-run contract:
@@ -33,10 +35,12 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
                                                 # `...install.shutil.which`.
 
         STAGE_ORDER: tuple                      # == ("server", "fleet",
-                                                 #     "manifest") exactly
-                                                 #     (CR-CRU-042 §S1 retired
-                                                 #     [skills]; CR-CRU-090 §S1
-                                                 #     added [fleet]).
+                                                 #     "manifest", "unit")
+                                                 #     exactly (CR-CRU-042 §S1
+                                                 #     retired [skills];
+                                                 #     CR-CRU-090 §S1 added
+                                                 #     [fleet]; CR-CRU-070
+                                                 #     appended [unit]).
 
         SERVER_NPM_PACKAGE: str                 # published npm package name of
                                                  # the bun/node server.
@@ -63,11 +67,11 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
             5. Otherwise return {"path": ..., "converged": False}.
 
     DEFAULT_STAGE_RUNNERS carries EXACTLY `{"server": ..., "fleet": ...,
-    "manifest": ...}` -- no `"skills"` key -- so `run_install(target_dir)`
-    with NO injected `stage_runners` must, with subprocess/shutil/
-    already-installed all mocked to "fresh success", execute
-    server -> fleet -> manifest and return `ok=True` with exactly those three
-    stage names present, and must never invoke `npx` at all.
+    "manifest": ..., "unit": ...}` -- no `"skills"` key -- so
+    `run_install(target_dir)` with NO injected `stage_runners` must, with
+    subprocess/shutil/already-installed all mocked to "fresh success", execute
+    server -> fleet -> manifest -> unit and return `ok=True` with exactly those
+    four stage names present, and must never invoke `npx` at all.
 
 The 0.1.2 release round REFINES that idempotency probe rather than replacing
 it: presence of the bin alone made the [server] stage report converged on the
@@ -87,6 +91,7 @@ Fallback:
     python3 tests/client/test_crucible_axi_stages.py
 """
 
+import contextlib
 import importlib
 import json
 import os
@@ -145,6 +150,36 @@ def _bun_provision_argvs(mock_run):
                 and argv[1:3] == ["add", "-g"]:
             found.append(argv)
     return found
+
+
+# CR-CRU-070 -- the install grew a third stage, `[unit]`, which writes a
+# systemd `--user` unit and drives `systemctl --user`. The two end-to-end tests
+# below run the REAL default stage table, so each is guarded on two independent
+# axes: a `shutil.which` that never resolves `systemctl` (the stage then
+# reports skipped-with-reason and touches nothing) and a tmp
+# `$XDG_CONFIG_HOME`/`$HOME`, so BOTH unit-dir resolution rules land in tmp.
+UNIT_STAGE = "unit"
+SYSTEMCTL_BIN_NAME = "systemctl"
+
+
+def _which_without_systemctl(resolved="/usr/bin/bun"):
+    """A `shutil.which` stand-in that resolves everything EXCEPT `systemctl`."""
+    def _which(cmd, mode=os.F_OK | os.X_OK, path=None):
+        if os.path.basename(str(cmd)) == SYSTEMCTL_BIN_NAME:
+            return None
+        return resolved
+    return _which
+
+
+@contextlib.contextmanager
+def _unit_stage_sandboxed(tmp_dir):
+    """CR-CRU-070 isolation for a test that runs the REAL `[unit]` stage
+    runner: no resolvable `systemctl`, and a tmp `$XDG_CONFIG_HOME`/`$HOME`."""
+    with mock.patch.dict(os.environ,
+                         {"XDG_CONFIG_HOME": tmp_dir, "HOME": tmp_dir}), \
+            mock.patch("crucible_axi.install.shutil.which",
+                       side_effect=_which_without_systemctl()):
+        yield
 
 
 class ServerStageTest(unittest.TestCase):
@@ -650,28 +685,36 @@ class InstalledServerVersionProbeTest(_ProvisionedServerFixtureCase):
 
 
 class StageOrderContractTest(unittest.TestCase):
-    """CR-CRU-042 §S1 + CR-CRU-090 §S1 -- `STAGE_ORDER` is exactly the three
-    surviving stages, in order. The `[skills]` stage stays retired (Model-B
-    scope now); `[fleet]` joined ahead of `[manifest]`."""
+    """CR-CRU-042 §S1 + CR-CRU-090 §S1 + CR-CRU-070 -- `STAGE_ORDER` is exactly
+    the four surviving stages, in order. The `[skills]` stage stays retired
+    (Model-B scope now); `[fleet]` joined ahead of `[manifest]`, whose paths it
+    materialises; `[unit]` must stay LAST because it hands work to another
+    supervisor."""
 
-    def test_stage_order_is_exactly_server_fleet_then_manifest(self):
+    def test_stage_order_is_exactly_server_fleet_manifest_then_unit(self):
         install = _import_fresh("crucible_axi.install")
+        # CR-CRU-090 + CR-CRU-070 -- (server, manifest) is superseded by
+        # (server, fleet, manifest, unit): the fleet lands before the manifest
+        # that names it, and the unit is provisioned only after the launcher
+        # its ExecStart names.
         self.assertEqual(
-            install.STAGE_ORDER, ("server", "fleet", "manifest"),
-            "STAGE_ORDER must be exactly the three-stage (server, fleet, "
-            "manifest) order -- [fleet] lays the clients down before the "
-            "manifest names them (CR-CRU-090 §S1), and the [skills] stage is "
-            "Model-B's scope now (CR-CRU-042)")
+            install.STAGE_ORDER, ("server", "fleet", "manifest", UNIT_STAGE),
+            "STAGE_ORDER must be exactly the four-stage (server, fleet, "
+            "manifest, unit) order -- [fleet] lays the clients down before the "
+            "manifest names them (CR-CRU-090 §S1), [unit] is last "
+            "(CR-CRU-070), and the [skills] stage is Model-B's scope now "
+            "(CR-CRU-042)")
 
 
 class StagedInstallEndToEndMockedTest(unittest.TestCase):
     """§S2 end-to-end (mocked externals) -- `run_install` with NO injected
     `stage_runners` (i.e. `DEFAULT_STAGE_RUNNERS`) must drive the REAL
-    `_server_stage` -> `run_fleet_stage` -> `manifest.run_manifest_stage`
-    chain and aggregate `ok:True`, complementing C1's injected-stub coverage
-    by exercising the DEFAULT runners with subprocess/Bun mocked. The `fleet`
-    stage runs for REAL here -- it only copies files into the scratch target
-    dir, no subprocess, no network (CR-CRU-090 §S1).
+    `_server_stage` -> `run_fleet_stage` -> `manifest.run_manifest_stage` ->
+    `_unit_stage` chain and aggregate `ok:True`, complementing C1's
+    injected-stub coverage by exercising the DEFAULT runners with
+    subprocess/Bun mocked. The `fleet` stage runs for REAL here -- it only
+    copies files into the scratch target dir, no subprocess, no network
+    (CR-CRU-090 §S1).
 
     CR-CRU-042 keeps this envelope skills-free: no `skills` key, and no
     invoked command may contain `npx skills` -- the anti-regression assertion
@@ -684,7 +727,7 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_run_install_default_runners_server_fleet_manifest_all_ok_true_with_subprocess_mocked(self):
+    def test_run_install_default_runners_all_four_stages_ok_true_with_subprocess_mocked(self):
         """Patches `crucible_axi.__version__` to a realistic installed-release
         value -- the live value in a source checkout is the
         `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
@@ -693,10 +736,12 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
         stage-sequencing test."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
+        # CR-CRU-070 -- `_unit_stage_sandboxed` replaces the bare
+        # `which -> /usr/bin/bun` patch: the REAL `[unit]` stage runs here, and
+        # it must never reach the operator's user manager or unit directory.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
+                _unit_stage_sandboxed(self.tmp), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install.shutil.which",
-                           return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
             mock_run.return_value.returncode = 0
@@ -706,8 +751,12 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
             ok, f"expected ok:True with every sub-installer mocked to "
                 f"success, warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "fleet", "manifest"],
-            "expected exactly the three surviving stages, in order -- no "
+            # CR-CRU-090 + CR-CRU-070 -- four stages now; `[fleet]` runs for
+            # REAL (a pure file copy) and `[unit]` reports skipped-with-reason
+            # because the fixture resolves no systemctl.
+            [s["name"] for s in stages],
+            ["server", "fleet", "manifest", UNIT_STAGE],
+            "expected exactly the four surviving stages, in order -- no "
             "'skills' key anywhere in the envelope")
         for stage in stages:
             self.assertTrue(stage["path"], f"empty path for stage {stage}")
@@ -741,10 +790,10 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
         fresh-install branch above."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
+        # CR-CRU-070 -- same two-axis systemd isolation as the sibling test.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
+                _unit_stage_sandboxed(self.tmp), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install.shutil.which",
-                           return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=True):
             mock_run.return_value.returncode = 0
@@ -752,8 +801,9 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
 
         self.assertTrue(ok, f"expected ok:True on the converged re-run, "
                              f"warnings={warnings}")
+        # CR-CRU-090 + CR-CRU-070 -- (server, fleet, manifest, unit).
         self.assertEqual([s["name"] for s in stages],
-                         ["server", "fleet", "manifest"])
+                         ["server", "fleet", "manifest", UNIT_STAGE])
 
         skills_calls = [c for c in mock_run.call_args_list
                         if "npx skills" in _call_command_text(c)]

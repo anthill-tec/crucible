@@ -34,6 +34,7 @@ import * as path from "node:path";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
+import { settleDom } from "./helpers/dom-settle";
 
 // ── shared API helpers (real startServer, plain fetch) ──────────────────────
 
@@ -573,9 +574,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
 }
 
 async function settle(ticks = 10): Promise<void> {
-  for (let i = 0; i < ticks; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await settleDom({ ticks });
 }
 
 afterEach(async () => {

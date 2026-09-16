@@ -73,6 +73,10 @@ CRUCIBLE = (os.environ.get("CRUCIBLE_URL") or os.environ.get("CRUCIBLE_BASE")
 ARDUINO_CLI = os.environ.get(
     "ARDUINO_CLI", "/opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli")
 FQBN = os.environ.get("ARDUINO_FQBN", "arduino:renesas_uno:minima")
+# The STACK this client's runs belong to — the name its sibling clients address
+# it by (`arduino-crucible.py`), which is what a gate composes declared suites
+# over (CR-CRU-112 §S1).
+_STACK = "arduino"
 
 # §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
 
@@ -81,12 +85,18 @@ FQBN = os.environ.get("ARDUINO_FQBN", "arduino:renesas_uno:minima")
 
 
 def _project_dir(args):
+    """CR-CRU-131 §S1b — the resolved root is BOUND into the shared module,
+    which reads this project's `crucible.toml` beside the `.env` checked below
+    for the three display limits. Bound HERE, on this client's own boot path,
+    because project-dir resolution stays client-specific and the shared module
+    takes it ALREADY RESOLVED."""
     d = (getattr(args, "project_dir", None)
          or os.environ.get("ARDUINO_CRUCIBLE_PROJECT_DIR") or os.getcwd())
     d = os.path.abspath(d)
     if not os.path.exists(os.path.join(d, ".env")):
         sys.exit(f"[crucible] no .env at {d} — pass --project-dir <subproject> "
                  f"(the dir holding .env + tests/native, e.g. sheetal-firmware)")
+    _axi().bind_project_dir(d)
     return d
 
 
@@ -247,7 +257,7 @@ def _open_plans(project_dir):
 
 
 def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
-                             help_steps=None):
+                             help_steps=None, warnings=None):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path).
     CR-CRU-051 §S2 — `files` (the distinct-source count from `_parse_junit`,
     per-FILE when the native harness stamps `file=`, else per-class/per-suite)
@@ -262,7 +272,9 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
 
     CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
     next step for the run it just made (`_axi().run_help`), instead of the
-    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly."""
+    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
+    CR-CRU-094 §S3 — `warnings` carries the run's pre-flight finding onto the
+    envelope, so the stderr line and `warnings[]` say the same thing."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
@@ -273,7 +285,7 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 # ── project self-registration + JUnit parsing ────────────────────────────────
@@ -367,7 +379,7 @@ def _ingest_compile(project_dir, key, agent_id, errors, context=None):
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
-    resp = _post("/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(f"[crucible] compile FAILED -> /api/v2/runs/compile (ok={resp.get('ok')})",
           file=sys.stderr)
     return resp
@@ -458,9 +470,9 @@ def _close_gate_identity(project_dir, identity):
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
-def _run_native_tests(args, verb, tier, want_coverage):
+def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
     """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
-    (`make junit`) → parse → /api/v2/runs/parsed under the given `tier`; a
+    (`make <target>`) → parse → /api/v2/runs/parsed under the given `tier`; a
     bound agent's run is server-stamped with its registered cycle (CR-CRU-056
     §S3). `unit`/`test` ride tier `unit`; `regression` rides tier `regression`
     and, with `want_coverage`, attaches lcov coverage from
@@ -473,6 +485,7 @@ def _run_native_tests(args, verb, tier, want_coverage):
     caller who registered BEFORE the run keeps its registration and binding."""
     pd = _project_dir(args)
     identity = None
+    preflight_warnings = []
     try:
         if getattr(args, "agent", None):
             # Open under the SAME id the run will ingest under. The body
@@ -486,12 +499,31 @@ def _run_native_tests(args, verb, tier, want_coverage):
             identity = _open_gate_identity(pd, _agent_id(args),
                                            getattr(args, "cycle", None),
                                            f"gated {verb} run starting")
-        return _run_native_tests_body(args, verb, tier, want_coverage, pd)
+            # CR-CRU-094 §S3 — PRE-FLIGHT, before `make junit` spawns and while
+            # `--cycle` can still be supplied: ask the board whether this agent
+            # is bound and say so on both channels if it is not. Best-effort —
+            # a failed lookup warns about nothing and never delays the run.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(pd), _agent_id(args),
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
+        return _run_native_tests_body(args, verb, tier, want_coverage, pd,
+                                      preflight_warnings, target)
     finally:
         _close_gate_identity(pd, identity)
 
 
-def _run_native_tests_body(args, verb, tier, want_coverage, pd):
+def _run_native_tests_body(args, verb, tier, want_coverage, pd,
+                           preflight_warnings=(), target="junit"):
+    """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
+    finding, decided BEFORE the runner spawned; it rides every envelope this
+    body can emit, ahead of whatever the run itself discovers.
+
+    §S6 — `target` is the native-host make target to run: `junit`, the one this
+    stack's own split already has, or the one a DECLARED cell detected in the
+    Makefile under `--dir`. Which target a tier means is the project's
+    decision; this body only runs the one it is handed."""
+    preflight_warnings = list(preflight_warnings)
     key, name = _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
     # no-ingest early return below), so it needs no declared identity; the id is
@@ -500,7 +532,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     _ensure_project(key, name, pd)
-    run = subprocess.run(["make", "junit"], cwd=native_dir, capture_output=True, text=True)
+    # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
+    # run that spends its wall clock waiting says so in its own envelope. The
+    # untiered `test` verb and `regression` run this same body and are left
+    # alone, because the shared check is scoped to `unit` by the tier it is
+    # handed.
+    with _axi().ChildRunTiming() as timing:
+        run = subprocess.run(["make", target], cwd=native_dir,
+                             capture_output=True, text=True)
     reports = sorted(glob.glob(os.path.join(native_dir, "reports", "TEST-*.xml")))
     if not reports:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
@@ -513,8 +552,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "TEST-*.xml")},
                   _axi_context(pd, agent_id=agent_id),
-                  [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
-                                            (run.stdout or "") + (run.stderr or ""))],
+                  preflight_warnings
+                  + [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
+                                              (run.stdout or "") + (run.stderr or ""))],
                   message)
         return 1
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
@@ -555,7 +595,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     # identity must be DECLARED (hard stop when it is not).
     agent_id = _agent_id(args)
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree, "tier": tier}
+               "summary": summary, "tree": tree}
+    # CR-CRU-111 §S2/AC3 — the tier rides ONLY when the caller stated one (a
+    # verb whose own name is the tier). A `tier: None` key is not the same
+    # thing as no key: the field would be on the wire, asserting emptiness
+    # where the honest body asserts nothing and lets the server's default
+    # apply.
+    if tier is not None:
+        payload["tier"] = tier
     if coverage:
         payload["coverage"] = coverage
     context = _run_context()
@@ -566,7 +613,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     raw = (run.stdout or "") + (run.stderr or "")
     if raw:
         payload["raw"] = raw
-    resp = _post("/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
@@ -577,16 +624,29 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE)
                   if verb == "pre-merge-gate" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
-                             help_steps=help_steps)
+                             help_steps=help_steps,
+                             warnings=(preflight_warnings
+                                       + _axi().unit_run_wall_vs_cpu_warnings(
+                                           tier, "arduino", timing)))
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
 
 
 def cmd_test(args):
-    """§S2 fleet-uniform test verb — native host tests (`make junit`) → tier
-    `unit`. Retained (byte-compatible verb + envelope) alongside the `unit` alias."""
-    return _run_native_tests(args, "test", "unit", False)
+    """§S2 fleet-uniform test verb — native host tests (`make junit`), under NO
+    stated tier. Retained (byte-compatible verb + envelope) alongside the
+    `unit` alias.
+
+    CR-CRU-111 §S2/AC3/AC13 — this verb's name is not a tier, so it earns none:
+    it ran the native host build over whatever `--dir` pointed at, which says
+    nothing about the dependency those tests take. It stated `unit`
+    POSITIONALLY here (the spelling cycle 378's keyword-only census could not
+    see), and its printed help claimed no tier at all — help and wire now agree,
+    in both directions. A caller who knows the tier says so with the `unit` verb
+    beside it; absent that the run carries none and the server's own documented
+    default applies."""
+    return _run_native_tests(args, "test", None, False)
 
 
 def cmd_unit(args):
@@ -607,11 +667,22 @@ def _compile_gate(args, verb):
     build output to /api/v2/runs/compile. Returns the §S1 envelope under `verb`
     (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
+    # CR-CRU-094 §S3 — this gate INGESTS the build output on a failing compile,
+    # so `check` is one of the five ingesting verbs the pre-flight covers. The
+    # seam is HERE, in the envelope-owning caller, and not in `_compile_run`:
+    # that helper is also `pre-merge-gate`'s step 0, whose regression step
+    # already makes this check and whose step form must stay emit-free
+    # (CR-CRU-058 §S1). Asked before arduino-cli spawns.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(pd), _axi().optional_agent_id(args),
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     state = _compile_run(args, pd)
     legacy = f"{verb}: ok={state['ok']} exit={state['exit']}"
     _emit_axi(verb, state["ok"],
               {"exit": state["exit"], "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              _axi_context(pd, agent_id=state["agent_id"]), [], legacy)
+              _axi_context(pd, agent_id=state["agent_id"]),
+              preflight_warnings, legacy)
     return 0 if state["ok"] else (state["exit"] or 1)
 
 
@@ -695,16 +766,28 @@ def cmd_auto_ingest(args):
         # CR-CRU-051 §S1 — and `files`, per the same aggregation trap.
         files += f
         tree.extend(t)
+    # CR-CRU-111 §S2/AC3 — NO tier: this verb runs no tests at all. It ingests
+    # TEST-*.xml files it merely FOUND under `--reports`, so it cannot know
+    # what dependency that run took — the DICT-KEY spelling of the unearned
+    # stamp, and AC3's own named worse case. AC13's "every test ingest carries
+    # a tier" governs the runs this client RUNS, never the reports it finds.
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree, "tier": "unit"}
+               "summary": summary, "tree": tree}
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _post("/api/v2/runs/parsed", payload)
+    # CR-CRU-094 §S3 — this verb invokes no toolchain and offers no `--cycle`,
+    # so its ingest is the furthest from the run that produced the reports and
+    # an unattributed store here is the hardest to notice; before the POST.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, key, agent_id, cycle_id=getattr(args, "cycle", None),
+        context=context)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id)
+    _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id,
+                             warnings=preflight_warnings)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
@@ -745,9 +828,22 @@ def cmd_pre_merge_gate(args):
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
         cycle=getattr(args, "cycle", None))
-    # §S1 — the native-test body emits under THIS gate's verb, so the gate puts
-    # exactly one envelope on stdout under the name the caller invoked.
-    return _run_native_tests(reg_args, "pre-merge-gate", "regression", True)
+    # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own native regression always
+    # runs, and every declared target it covers is a SUBSET of that run rather
+    # than a replacement for it, so the gate's `suites[]` names them beside it.
+    # §S1 (CR-CRU-058) — that body emits under THIS gate's verb, so the gate
+    # puts exactly one envelope on stdout under the name the caller invoked.
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
+        verb="pre-merge-gate",
+        # A native `make` target declaration is a NAME and carries no command,
+        # so it can name no other stack: every suite declared here is this
+        # client's own, and there is nothing to dispatch.
+        dispatch=None,
+        whole_suite=lambda: _run_native_tests(reg_args, "pre-merge-gate",
+                                              "regression", True),
+        context=_axi_context(pd, agent_id=args.agent),
+        crucible_url=CRUCIBLE)
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────
@@ -823,8 +919,93 @@ def cmd_abort(args):
 def cmd_status(args):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastRunCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _project_dir(args), _ops())
+
+
+def cmd_queue(args):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the registered CR
+    queue (GET …/queue) plus the CR ids a `cr-merged` milestone covers, the two
+    landing-record sources the release ceremony's provenance needs. Delegates
+    to the shared implementation."""
+    return _axi().cmd_queue(args, _project_dir(args), _ops())
+
+# ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
+#
+# The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
+# what lives here is the `queue-file` shape and nothing more. §S9: the client
+# half owns argument parsing, the asking, exit codes and the envelope — never
+# a business rule, so every one of these bodies is a single delegating call.
+
+
+def cmd_release_propose(args):
+    """§S3 — record or REVISE a proposed release → POST …/release-proposals.
+    Delegates to the shared implementation."""
+    return _axi().cmd_release_propose(args, _project_dir(args), _ops())
+
+
+def cmd_cr_plan(args):
+    """§S3/§S6 — declare one CR's release, wave and title → POST …/queue/plan;
+    with either undeclared the client ASKS instead of guessing. Delegates to
+    the shared implementation."""
+    return _axi().cmd_cr_plan(args, _project_dir(args), _ops())
+
+
+def cmd_wave_sequence(args):
+    """§S4 — author a whole wave's order in ONE call → POST …/queue/sequence.
+    Delegates to the shared implementation."""
+    return _axi().cmd_wave_sequence(args, _project_dir(args), _ops())
+
+
+def cmd_cr_depends(args):
+    """CR-CRU-106 §S1 — declare one CR's COMPLETE dependency set → POST
+    …/queue/depends; with `--on` undeclared the client ASKS instead of
+    guessing. Delegates to the shared implementation."""
+    return _axi().cmd_cr_depends(args, _project_dir(args), _ops())
+
+
+def cmd_cr_supersede(args):
+    """§S3 — record that a CR's work moves to a successor → POST
+    …/queue/<cr>/supersede. Delegates to the shared implementation."""
+    return _axi().cmd_cr_supersede(args, _project_dir(args), _ops())
+
+
+def cmd_cr_void(args):
+    """§S3 — record that a CR's work is not happening → POST
+    …/queue/<cr>/void. Delegates to the shared implementation."""
+    return _axi().cmd_cr_void(args, _project_dir(args), _ops())
+
+
+# ── CR-CRU-092 §S6/§S9 — `next`: one thin delegator ────────────────────────
+
+
+def cmd_next(args):
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
+    Delegates to the shared implementation."""
+    return _axi().cmd_next(args, _project_dir(args), _ops())
+
+
+# ── CR-CRU-075 §S1 — `queue-file`: one thin delegator ──────────────────────
+
+
+def cmd_queue_file(args):
+    """§S2 — parse docs/changes/README.md (or --from-file) into queue entries
+    and POST the full set to /api/v2/projects/<key>/queue. Delegates to the
+    shared implementation."""
+    return _axi().cmd_queue_file(args, _project_dir(args), _ops())
+
+
+def _add_project_dir_arg(p):
+    """§S4/AC10 — the project-dir flag ALONE, named exactly as the other four
+    clients name theirs. This client's `common` parent bundles `--agent` with
+    `--project-dir`, and `next` must declare no identity flag at all, so the
+    read-only verbs get the one flag they do need without the one they must
+    not have."""
+    p.add_argument("--project-dir",
+                   help="Override project root (default: "
+                        "$ARDUINO_CRUCIBLE_PROJECT_DIR, else CWD). The .env "
+                        "there must hold CRUCIBLE_PROJECT_KEY.")
 
 
 # ── CR-CRU-013 §S5 / §S8 — fleet gate / milestone verbs ─────────────────────
@@ -844,19 +1025,29 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _post_gate(project_dir, agent_id, gate, context=None):
-    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+def _post_gate(project_dir, agent_id, gate, context=None, release=None):
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
+    `release` is the label of the release the gate gates; it rides on to the
+    builder untouched and reaches the wire as the event's top-level
+    `version`."""
     return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
-                            context)
+                            context, release)
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
-                    context=None):
+                    context=None, released_at=None, crs=None, packages=None,
+                    repair_provenance=False):
     """POST a workflow milestone (CR-CRU-054 §S2 — delegates to the shared
-    builder)."""
+    builder). CR-CRU-080 §S4 — `released_at`/`crs` carry a release's
+    provenance through the same builder. CR-CRU-081 §S3 —
+    `repair_provenance` carries the opt-in that CORRECTS an already-recorded
+    release instead of replaying it. CR-CRU-084 §S1 — `packages` carries the
+    artifacts that release delivered."""
     return _axi().post_milestone(_project_key(project_dir), agent_id, mtype,
                                  _post, label=label, commit=commit,
-                                 context=context)
+                                 context=context, released_at=released_at,
+                                 crs=crs, packages=packages,
+                                 repair_provenance=repair_provenance)
 
 
 def cmd_gate_report(args):
@@ -909,6 +1100,84 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+# The native target-dir help, at module scope because the tier verbs' flag
+# adders below are module-level functions the shared registrar calls.
+_DIR_HELP = ("test-target subdir under the project (default tests/native; "
+             "e.g. tests/native-mock for the ArduinoFake L2 tier)")
+
+
+# ── CR-CRU-111 §S1/AC5 — the flags each tier-named verb OWNS ─────────────
+#
+# `unit` and `regression` pre-date the shared tier registration and keep every
+# flag they had: the registrar supplies the name, the help and the tier
+# binding, each verb's own surface rides its `TierVerb.add_args`.
+
+
+def _add_native_dir_arg(p):
+    p.add_argument("--dir", default="tests/native", help=_DIR_HELP)
+
+
+def _add_native_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help="attach lcov coverage from <native_dir>/coverage/lcov.info")
+
+
+# CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
+# by every refusal the shared registrar builds here. This client's ONE
+# toolchain split is the native host build (`make junit` under --dir), which
+# `unit` and `regression` already run; every other cell is a DECLARED cell, and
+# the surface that can carry it is that native Makefile's own target list. Two
+# directories behind one `--dir` flag is not a split this client can READ, so
+# `integration` is declared here rather than invented.
+def _add_declared_tier_args(p):
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
+    siblings (`unit`/`regression`) already take, so the instruction a refusal
+    gives can actually be typed (AC14b — the refusal names `--dir`, and the
+    verb that printed it had no `--dir` to accept). `--agent` and
+    `--project-dir` ride the `common` parent, as they do for every verb here."""
+    _add_native_dir_arg(p)
+    _add_gate_cycle_arg(p)
+
+
+def _read_declared_make_target(args, target):
+    """§S6, arduino's READ — a rule named for the tier in the native-host
+    Makefile under `--dir`. A make RULE is a line beginning with the target
+    name and a colon, so a target merely mentioned in a recipe or a comment is
+    not a declaration."""
+    pd = _project_dir(args)
+    sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
+    makefile = os.path.join(pd, *sub.split("/"), "Makefile")
+    try:
+        with open(makefile, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    return target if re.search(rf"^{re.escape(target)}\s*:", text, re.M) else None
+
+
+def _run_declared_make_target(args, tier, target):
+    """§S6, arduino's RUN — that native-host target, ingested under the tier of
+    the VERB that asked for it."""
+    return _run_native_tests(args, tier, tier,
+                             bool(getattr(args, "coverage", False)),
+                             target=target)
+
+
+_TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
+    target="junit-<tier>",
+    names="a native-host `make` target for it in the Makefile under --dir "
+          "(e.g. `make <target>`)",
+    read=_read_declared_make_target,
+    run=_run_declared_make_target,
+    add_args=(_add_declared_tier_args,),
+    # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
+    # vocabulary itself (`junit-<tier>`), so the enumeration is the lookup
+    # above asked for each tier: the same Makefile read, without the
+    # single-name filter.
+    suites=_axi().template_declared_suites,
+)
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -925,32 +1194,41 @@ def main():
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    _dir_help = ("test-target subdir under the project (default tests/native; "
-                 "e.g. tests/native-mock for the ArduinoFake L2 tier)")
-
     t = sub.add_parser("test", parents=[common],
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
-    t.add_argument("--dir", default="tests/native", help=_dir_help)
+    t.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     _add_gate_cycle_arg(t)
     t.set_defaults(func=cmd_test)
 
-    un = sub.add_parser("unit", parents=[common],
-                        help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S3)")
-    un.add_argument("--dir", default="tests/native", help=_dir_help)
-    _add_gate_cycle_arg(un)
-    un.set_defaults(func=cmd_unit)
-
-    rg = sub.add_parser("regression", parents=[common],
-                        help="full native suite -> /api/v2/runs/parsed, tier regression (§S3)")
-    rg.add_argument("--dir", default="tests/native", help=_dir_help)
-    rg.add_argument("--coverage", action="store_true",
-                    help="attach lcov coverage from <native_dir>/coverage/lcov.info")
-    _add_gate_cycle_arg(rg)
-    rg.set_defaults(func=cmd_regression)
+    # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
+    #
+    # `unit` and `regression` migrate onto it and keep their handlers, their
+    # flags and their behaviour; the four cells this stack declares no target
+    # for answer their help and refuse. The help each verb prints says what it
+    # RUNS and no longer what tier the run claims — this client sends no tier
+    # yet, and help that says otherwise contradicts the board. `common` is the
+    # parent for the reason the other registrars take it: these verbs write,
+    # so they carry --agent.
+    tier_verb = _axi().TierVerb
+    _axi().add_tier_verbs(
+        sub,
+        dict(unit=tier_verb(
+                 cmd_unit,
+                 "Runs the native host tests (`make junit`) under --dir -> "
+                 "/api/v2/runs/parsed.",
+                 (_add_native_dir_arg, _add_gate_cycle_arg)),
+             regression=tier_verb(
+                 cmd_regression,
+                 "Runs the full native suite under --dir -> "
+                 "/api/v2/runs/parsed; --coverage attaches lcov.",
+                 (_add_native_dir_arg, _add_native_coverage_arg,
+                  _add_gate_cycle_arg))),
+        declares=_TIER_DECLARATION_SURFACE,
+        parents=[common])
 
     ai = sub.add_parser("auto-ingest", parents=[common],
                         help="ingest a PRE-EXISTING native reports dir (no toolchain) (§S3)")
-    ai.add_argument("--dir", default="tests/native", help=_dir_help)
+    ai.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     ai.add_argument("--reports",
                     help="reports dir holding TEST-*.xml (default <native_dir>/reports)")
     ai.set_defaults(func=cmd_auto_ingest)
@@ -965,7 +1243,7 @@ def main():
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],
                          help="fail-fast compile -> regression --coverage (§S3)")
-    pmg.add_argument("--dir", default="tests/native", help=_dir_help)
+    pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
     _add_gate_cycle_arg(pmg)
@@ -1001,10 +1279,19 @@ def main():
                              "Requires --agent <registered id> (§S2b) — the registered id is "
                              "also stored as the plan's orchestrator (the free-text "
                              "--orchestrator label is retired).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
-    pf.add_argument("--cycles", required=True, help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--cycle", action="append",
+                    help="One cycle label, never split; repeat --cycle per cycle.")
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _axi().add_plan_file_release_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
 
     ca = sub.add_parser("cycle-activate", parents=[common],
@@ -1031,6 +1318,7 @@ def main():
                               "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _axi().add_cycle_add_target_args(cad)
     cad.set_defaults(func=cmd_cycle_add)
 
     cp = sub.add_parser("checkpoint", parents=[common],
@@ -1054,11 +1342,47 @@ def main():
 
     for _name in ("status", "plans"):
         sv = sub.add_parser(_name, parents=[common],
-                            help="Read the plan queue (GET …/plans) as a TOON-AXI table + lastRunCr.")
+                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
+                                 "+ lastClosedCr (the last CR to close).")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10).")
         sv.set_defaults(func=cmd_status)
+
+    # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
+    qv = sub.add_parser("queue", parents=[common],
+                        help="Read the registered CR queue (GET …/queue) plus the "
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+    qv.set_defaults(func=cmd_queue)
+
+    # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
+    # subparsers are built by the SHARED registrar so the five clients cannot
+    # drift into five different flag surfaces for one verb.
+    _axi().add_roadmap_verbs(
+        sub,
+        {"release-propose": cmd_release_propose, "cr-plan": cmd_cr_plan,
+          "wave-sequence": cmd_wave_sequence, "cr-supersede": cmd_cr_supersede,
+          "cr-void": cmd_cr_void},
+        parents=[common])
+
+    # ── CR-CRU-106 §S1 — the DEPENDENCY axis, its own verb and its own
+    # registrar (`add_roadmap_verbs`' contract is CR-CRU-091's frozen five).
+    # `common` is the parent for the same reason it is above: the verb
+    # writes, so it carries --agent.
+    _axi().add_cr_depends_verb(sub, cmd_cr_depends, parents=[common])
+
+    # ── CR-CRU-092 §S6 — the roadmap READ verb. Its subparser is built by the
+    # SHARED registrar for the same reason; only `--project-dir` is this
+    # client's own. No --agent: `next` is read-only (§S4), so `common` (which
+    # bundles --agent) is deliberately NOT the parent here.
+    _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
+
+    # ── CR-CRU-075 §S1 — the queue REGISTRATION verb, shared registrar for the
+    # same reason: one verb, one flag surface across five clients. Like `next`
+    # it declares no identity, so `common` is not the parent here; only this
+    # client's own project-dir convention is injected.
+    _axi().add_queue_file_verb(sub, cmd_queue_file,
+                               add_args=(_add_project_dir_arg,))
 
     gr = sub.add_parser("gate-run", parents=[common],
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim + final gates.")
@@ -1070,6 +1394,7 @@ def main():
                           "git-flow project that merges directly has no PR for it "
                           "to watch — without --skip the gate blocks until "
                           "ci_timeout.")
+    _axi().add_gate_release_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
     grp = sub.add_parser("gate-report", parents=[common],
@@ -1080,15 +1405,58 @@ def main():
     grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields untruncated (§S11).")
+    _axi().add_gate_release_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
     ms = sub.add_parser("milestone", parents=[common],
                         help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type. The vocabulary is this project's own, not this "
+                         "CLI's: PATCH /api/v2/projects/<key> {milestoneTypes: [...]} "
+                         "declares it, GET /api/v2/projects reads back what this project "
+                         "declared, and a refused milestone names the live accepted set "
+                         "back to you.")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")
+    # CR-CRU-080 §S4 — a release's provenance, computed by the ceremony (the
+    # only actor standing in the repo with git in reach).
+    ms.add_argument("--released-at", dest="released_at", type=int,
+                    help="Release SHIP date: the tag's own commit date in epoch "
+                         "SECONDS (`git log -1 --format=%%ct <tag>`), which is "
+                         "when the release shipped rather than when it was "
+                         "recorded (§S4).")
+    ms.add_argument("--crs",
+                    help="Comma-separated CR ids the release shipped (the merges "
+                         "in its tag range). Only the ids the project's "
+                         "registered queue holds are recorded (§S4).")
+    # CR-CRU-084 §S1 — WHAT the release delivered, declared by the ceremony:
+    # Crucible never verifies a publish, so the pair is a DECLARATION (§S1
+    # Non-goals). Absent means "this ceremony said nothing" and the key never
+    # reaches the wire; on a RECORDING, `--packages ""` means "this release
+    # delivered none", which is a different and recordable fact (§S3/AC4). On
+    # `--repair-provenance` the empty value writes NOTHING instead: an empty
+    # derivation never overwrites a stored set, and a repair left with nothing
+    # to write is REFUSED (CR-CRU-086 §S2).
+    ms.add_argument("--packages",
+                    help="Comma-separated `registry:name:version` entries the "
+                         "release DELIVERED, e.g. `pypi:crucible-axi:0.4.0,"
+                         "npm:@anthill-tec/crucible-server:0.4.0`. Pass an "
+                         "empty string to record that it delivered none "
+                         "(§S1/§S3) — on a recording only: with "
+                         "--repair-provenance an empty value writes nothing "
+                         "(it never overwrites a stored set) and the repair is "
+                         "REFUSED.")
+    # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
+    # re-post of an already-recorded release is the server's dedup replay
+    # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to
+    # rewrite release history by accident.
+    ms.add_argument("--repair-provenance", dest="repair_provenance",
+                    action="store_true",
+                    help="RE-DERIVE an already-recorded release's provenance "
+                         "from this post's --released-at/--crs instead of "
+                         "replaying it. Opt-in and non-default; the release's "
+                         "version, commit and row are never touched (§S3).")
     ms.set_defaults(func=cmd_milestone)
 
     args = p.parse_args()
