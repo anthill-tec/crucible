@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { limitDisclosures, serverConfigPath } from "./limits.ts";
+import { SHIPPED_DATA_FILE, limitDisclosures, serverConfigPath } from "./limits.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 
@@ -86,12 +86,120 @@ export function resolveDbPath(opts?: ResolveDbPathOpts): string {
   return resolveStore(opts).path;
 }
 
+/** CR-CRU-139 §S1 — inputs to the listener resolver, injectable exactly as
+ *  {@link ResolveDbPathOpts} is: `env`/`cwd` decide WHERE the server's own
+ *  `crucible.toml` is, because that file is found beside the store. */
+export interface ResolveListenerOpts {
+  /** An explicit port — including `0`, which is the caller asking the kernel to choose. */
+  port?: number;
+  /** An explicit bind address. */
+  hostname?: string;
+  /** Environment the STORE (and so the config file's directory) resolves from. */
+  env?: NodeJS.ProcessEnv;
+  /** Base directory for the store's rule-3 probe. */
+  cwd?: string;
+}
+
+/**
+ * CR-CRU-139 §S1 — which layer supplied ONE AXIS of the listener. PER AXIS,
+ * because port and host resolve independently: a boot may take its port from
+ * an argument and its host from the file, and one word for two values could
+ * not say so. `explicit` is the word {@link resolveStore} already uses.
+ */
+export type ListenerRule = "explicit" | "file" | "shipped";
+
+/** CR-CRU-139 §S1 — a resolved listener, with the layer that won on each axis. */
+export interface ListenerResolution {
+  port: number;
+  host: string;
+  portRule: ListenerRule;
+  hostRule: ListenerRule;
+}
+
+/** The `[server]` table a `crucible.toml` declares, or `null` when the file is
+ *  absent, unparseable or carries no such table — all three being the operator
+ *  having declared NOTHING, which is what the next layer down is for. */
+function serverTable(file: string): Record<string, unknown> | null {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = Bun.TOML.parse(text) as { server?: unknown };
+    const table = parsed?.server;
+    return typeof table === "object" && table !== null
+      ? (table as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function declaredPort(table: Record<string, unknown> | null): number | undefined {
+  const raw = table?.port;
+  return typeof raw === "number" && Number.isInteger(raw) ? raw : undefined;
+}
+
+function declaredHost(table: Record<string, unknown> | null): string | undefined {
+  const raw = table?.host;
+  return typeof raw === "string" && raw !== "" ? raw : undefined;
+}
+
+/**
+ * CR-CRU-139 §S1 — resolve the listener, first match wins, PER AXIS:
+ *   1. an explicit `opts.port` / `opts.hostname` (the in-process test seam;
+ *      `port: 0` is one — the caller asking the kernel to choose has chosen);
+ *   2. the `[server]` table in the server's own `crucible.toml`, the file
+ *      {@link serverConfigPath} already resolves beside the database;
+ *   3. the SHIPPED declaration in this distribution's package data.
+ *
+ * `$CRUCIBLE_PORT` and `$CRUCIBLE_HOST` are RETIRED and are not read at all
+ * (CR-CRU-131's retirement, applied to the listener): a retired variable that
+ * silently still works is worse than either state.
+ *
+ * PURE — it reads the layers, opens NO SOCKET and mutates nothing. That is
+ * what makes the shipped default provable without binding `:3849`, the port a
+ * production install holds on exactly the two-instance machine this serves.
+ */
+export function resolveListener(opts?: ResolveListenerOpts): ListenerResolution {
+  const file = serverTable(serverConfigPath({ env: opts?.env, cwd: opts?.cwd }));
+  const shipped = serverTable(SHIPPED_DATA_FILE);
+  const shippedPort = declaredPort(shipped);
+  const shippedHost = declaredHost(shipped);
+  if (shippedPort === undefined || shippedHost === undefined) {
+    throw new Error(
+      `CR-CRU-139 §S1: ${SHIPPED_DATA_FILE} declares no \`[server]\` table with a \`port\` and a ` +
+        `\`host\`. That file is this distribution's PACKAGE DATA — the last resort the listener ` +
+        `resolves from — so a missing declaration is a broken distribution, not an operator ` +
+        `error, and there is no number compiled in to fall back to.`,
+    );
+  }
+  const filePort = declaredPort(file);
+  const fileHost = declaredHost(file);
+  const explicitPort = opts?.port;
+  const explicitHost = opts?.hostname;
+  return {
+    port: explicitPort ?? filePort ?? shippedPort,
+    host: explicitHost ?? fileHost ?? shippedHost,
+    portRule:
+      explicitPort !== undefined ? "explicit" : filePort !== undefined ? "file" : "shipped",
+    hostRule:
+      explicitHost !== undefined ? "explicit" : fileHost !== undefined ? "file" : "shipped",
+  };
+}
+
 export interface ServerHandle {
   server: ReturnType<typeof Bun.serve>;
   store: Store;
   stop(): void;
   /** CR-CRU-068 §S1 — the store this server opened, and the rule that chose it. */
   storeResolution: StoreResolution;
+  /** CR-CRU-139 §S1 — the listener this server BOUND, and the rule that chose
+   *  each axis. Always the real socket: a disclosure naming a port the process
+   *  is not listening on would be a disclosure that lies. */
+  listenerResolution: ListenerResolution;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -223,6 +331,10 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   const store = Store.open(dbPath);
   const startedAt = Date.now();
 
+  // CR-CRU-139 §S1 — and the listener, through the same three-layer shape, by
+  // the PURE resolver that binds nothing.
+  const resolvedListener = resolveListener({ port: opts?.port, hostname: opts?.hostname });
+
   // Shared by GET /api/health and GET /api/v2/health (§S1 health parity).
   const healthPayload = () => ({
     ok: true,
@@ -243,13 +355,20 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
       schemaVersion: store.schemaVersion,
       migration: store.migration,
     },
+    // CR-CRU-139 §S1 — the second thing this boot resolved, at the SAME single
+    // site, so the listener cannot drift between the two health routes either.
+    listener: { ...listenerResolution },
   });
 
   const server = Bun.serve({
-    port: opts?.port ?? Number(process.env.CRUCIBLE_PORT ?? 3849),
+    // CR-CRU-139 §S1 — the listener is CONFIGURATION: an explicit argument,
+    // else this server's own `crucible.toml`, else the shipped declaration.
     // The API is unauthenticated and dataPath ingest reads server-side files,
-    // so stay loopback-only unless CRUCIBLE_HOST opts into wider exposure.
-    hostname: opts?.hostname ?? process.env.CRUCIBLE_HOST ?? "127.0.0.1",
+    // so the shipped host stays loopback and widening it is an operator's
+    // explicit act IN THAT FILE — `$CRUCIBLE_PORT`/`$CRUCIBLE_HOST` are
+    // retired and are not read at all.
+    port: resolvedListener.port,
+    hostname: resolvedListener.host,
     // §S3 — SSE connections are long-lived and quiet between 15s keep-alives;
     // Bun's default 10s idleTimeout would reset them mid-stream.
     idleTimeout: 0,
@@ -285,10 +404,24 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     },
   });
 
+  // CR-CRU-139 §S1 — what is DISCLOSED is the socket that was actually bound:
+  // the rules name the layer that decided, but `port: 0` means the kernel — not
+  // the resolver — had the last word, and a disclosure that named `0` would be
+  // a disclosure nobody could connect to.
+  const listenerResolution: ListenerResolution = {
+    ...resolvedListener,
+    port: typeof server.port === "number" ? server.port : resolvedListener.port,
+    host:
+      server.hostname !== undefined && server.hostname !== ""
+        ? server.hostname
+        : resolvedListener.host,
+  };
+
   return {
     server,
     store,
     storeResolution,
+    listenerResolution,
     stop: () => {
       server.stop(true);
     },
@@ -335,6 +468,13 @@ export function retentionDisclosure(store: Store): string | null {
 if (import.meta.main) {
   const handle = startServer();
   console.log(`[crucible] listening on http://localhost:${handle.server.port}`);
+  // CR-CRU-139 §S1 — the listener is disclosed the way the store already is,
+  // taken from the handle rather than re-resolved, and NAMING THE LAYER: an
+  // operator surprised by a port can see whether their file was read at all.
+  console.log(
+    `[crucible] listener ${handle.listenerResolution.host}:${handle.listenerResolution.port} ` +
+      `(port: ${handle.listenerResolution.portRule}, host: ${handle.listenerResolution.hostRule})`,
+  );
   // CR-CRU-068 §S1 — the store is disclosed at boot, taken from the handle rather
   // than re-resolved, so the banner can never name a store the server did not open.
   console.log(
