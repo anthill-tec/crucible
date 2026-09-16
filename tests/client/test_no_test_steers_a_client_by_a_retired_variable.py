@@ -13,6 +13,15 @@ the two-instance workstation this CR serves is the PRODUCTION board. That is
 the precise accident §S2 exists to make impossible, and a suite is not exempt
 from it.
 
+A fixture that READS one and supplies its own fallback is the same fixture
+with the accident already committed: `process.env.CRUCIBLE_URL ??
+"http://localhost:3849"` names the production board in source, and since
+nothing sets that variable any more it is the literal, every time. Either
+production answers and the suite asserts against the wrong board, or nothing
+answers and the suite passes VACUOUSLY, having quietly lost the live-board
+coverage it claims. So STEERING here is the whole channel -- the aim and the
+obedience -- not the assignment half of it.
+
 The replacement is stronger than the export in every case and §S1b names all
 three: `startServer({ port })` in-process, a `[server]` table in the temp
 store dir for a server spawned as a subprocess, and a `[client] url` table in
@@ -51,9 +60,12 @@ flagged nothing. So the python half is an AST pass over the real syntax of an
 assignment -- subscript store, dict entry, keyword argument, `setdefault` --
 with ONE level of name indirection resolved, because `env[SERVER_PORT_ENV_VAR]
 = port` is the same steering spelled through a constant. The TypeScript half is
-a line scan over the three shapes a bun suite can steer with (`process.env.X =`,
-an `env: { X: ... }` entry, an `X=...` word in a shell command string), with
-comment lines dropped.
+a line scan over the shapes a bun suite can steer with -- three that ASSIGN
+(`process.env.X =`, an `env: { X: ... }` entry, an `X=...` word in a shell
+command string) and five that OBEY (`process.env.X ?? ...`, `... || ...`, a `!`
+non-null assertion, and a subscript read off `process.env`/`Bun.env`) -- with
+comment lines dropped. A `!==` comparison is excluded by lookahead: comparing
+against a retired name is what a deadness proof does.
 
 A detector that can see nothing passes vacuously, so the first test in this
 file feeds it both a positive and a negative control before any real file is
@@ -115,8 +127,8 @@ DEADNESS_PROOFS = {
 _PY_SUFFIXES = (".py",)
 _TS_SUFFIXES = (".ts", ".tsx", ".mts")
 
-#: The three shapes a TypeScript suite can steer with. `undefined` on the
-#: right-hand side is a REMOVAL, filtered below beside python's `None`.
+#: The three shapes a TypeScript suite can steer ASSIGNING with. `undefined`
+#: on the right-hand side is a REMOVAL, filtered below beside python's `None`.
 _TS_SETTERS = (
     re.compile(r"process\.env\.(?P<name>" + "|".join(RETIRED_VARIABLES)
                + r")\s*=(?!=)\s*(?P<value>.*)$"),
@@ -137,6 +149,45 @@ _TS_REMOVAL = re.compile(r"^\s*(undefined|null)\b")
 #: are assignment syntax that cannot occur inside a regex literal.
 _TS_MATCHER = re.compile(r"expect\(|/\^|\.test\(|toMatch|assert")
 
+#: The shapes a TypeScript suite can steer READING with.
+#:
+#: An assignment is only half of the channel, and it is the half the criterion
+#: does NOT turn on: its words are "no file under `tests/` STEERS a client or a
+#: server by any of the four retired variables", and a suite that does
+#: `const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849"` and then
+#: `fetch(base)` is steering by one of them just as surely as a suite that
+#: exports it. Worse, in fact: the export at least lands where the fixture
+#: aimed, while a READ of a name nothing sets any more lands on the FALLBACK --
+#: the shipped default, which on a two-instance workstation is the PRODUCTION
+#: board. Either production answers and the suite asserts against the wrong
+#: board, or nothing answers and the suite passes VACUOUSLY.
+#:
+#: So the trigger is a retired name being read WITH a fallback or an assertion
+#: attached -- `?? …`, `|| …`, a `!` non-null assertion, or a subscript read off
+#: `process.env`/`Bun.env`. Each of those says, in source, "this value may be
+#: absent and I have decided what to do about it", which is the decision a
+#: retired variable no longer gets to participate in. `!==`/`!=` are
+#: comparisons rather than the non-null assertion, and are excluded by the
+#: lookahead, because comparing against a retired name is the shape a DEADNESS
+#: PROOF uses.
+_TS_READS = (
+    ("read with a `??` fallback",
+     re.compile(r"process\.env\.(?P<name>" + "|".join(RETIRED_VARIABLES)
+                + r")\s*\?\?")),
+    ("read with a `||` fallback",
+     re.compile(r"process\.env\.(?P<name>" + "|".join(RETIRED_VARIABLES)
+                + r")\s*\|\|")),
+    ("read with a non-null assertion",
+     re.compile(r"process\.env\.(?P<name>" + "|".join(RETIRED_VARIABLES)
+                + r")\s*!(?!=)")),
+    ("subscript read",
+     re.compile(r"(?:process|Bun)\.env\[\s*[\"'](?P<name>"
+                + "|".join(RETIRED_VARIABLES) + r")[\"']\s*\]")),
+    ("Bun.env read",
+     re.compile(r"Bun\.env\.(?P<name>" + "|".join(RETIRED_VARIABLES)
+                + r")\b")),
+)
+
 
 class _Setter:
     """One steering site: where it is, which variable it aimed, and the shape
@@ -152,7 +203,7 @@ class _Setter:
         self.shape = shape
 
     def __repr__(self):
-        return f"{self.path}:{self.line} sets {self.name} ({self.shape})"
+        return f"{self.path}:{self.line} steers by {self.name} ({self.shape})"
 
 
 def _is_removal(node):
@@ -243,16 +294,23 @@ def python_setters(source, path, filename="<source>"):
 
 
 def typescript_setters(source, path):
-    """Every retired-variable assignment in a `.ts` source, by line scan.
+    """Every retired-variable STEERING SITE in a `.ts` source, by line scan --
+    an assignment that aims one, or a read that has decided what to do when one
+    is absent.
 
     Comment lines are dropped first: the bun suites discuss the retired
     variables at length (C1 left the reasoning in place beside the code it
     changed), and prose is not a channel.
+
+    Reads are scanned AFTER assignments so a line that is both keeps its more
+    specific description, and at most one site is reported per line either way:
+    the reader has one line to go and change.
     """
     found = []
     for number, line in enumerate(source.splitlines(), start=1):
         if _TS_COMMENT.match(line):
             continue
+        site = None
         for index, pattern in enumerate(_TS_SETTERS):
             match = pattern.search(line)
             if match is None:
@@ -261,9 +319,16 @@ def typescript_setters(source, path):
                 continue
             if index == 2 and _TS_MATCHER.search(line):
                 continue
-            found.append(_Setter(path, number, match.group("name"),
-                                 "assignment"))
+            site = _Setter(path, number, match.group("name"), "assignment")
             break
+        if site is None:
+            for shape, pattern in _TS_READS:
+                match = pattern.search(line)
+                if match is not None:
+                    site = _Setter(path, number, match.group("name"), shape)
+                    break
+        if site is not None:
+            found.append(site)
     return found
 
 
@@ -347,6 +412,29 @@ delete process.env.CRUCIBLE_BASE;
 const env = { CRUCIBLE_DB: dbPath, CRUCIBLE_PORT: undefined };
 '''
 
+#: The READ half. Every line here is a drive aimed by a retired name: the value
+#: is absent, so each one silently lands on the literal beside it.
+_POSITIVE_CONTROL_TS_READS = '''
+const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+const fallback = process.env.CRUCIBLE_BASE || "http://localhost:3849";
+const asserted = process.env.CRUCIBLE_PORT!;
+const viaSubscript = process.env["CRUCIBLE_HOST"];
+const viaBun = Bun.env["CRUCIBLE_URL"];
+const viaBunDot = Bun.env.CRUCIBLE_BASE ?? board;
+await fetch(`${base}/api/v2/projects/${key}/runs`);
+'''
+
+#: A read that decides NOTHING, a COMPARISON against a retired name (the shape
+#: every deadness proof uses -- `!==` is not the `!` non-null assertion), and
+#: the two variables §S3 keeps.
+_NEGATIVE_CONTROL_TS_READS = '''
+expect(process.env.CRUCIBLE_PORT).toBeUndefined();
+if (process.env.CRUCIBLE_URL !== undefined) throw new Error("retired");
+const store = process.env.CRUCIBLE_DB ?? defaultStore;
+const key = process.env["CRUCIBLE_PROJECT_KEY"]!;
+// process.env.CRUCIBLE_BASE ?? board -- prose about a line that was deleted
+'''
+
 
 class TheDetectorSeesSteeringAndIgnoresProseTest(unittest.TestCase):
     """The controls. A guard whose verdict is green because its detector is
@@ -388,6 +476,38 @@ class TheDetectorSeesSteeringAndIgnoresProseTest(unittest.TestCase):
             "a comment, a `delete`, an `undefined` value and a CRUCIBLE_DB "
             f"entry are not steering; flagged {found!r}")
 
+    def test_the_typescript_detector_finds_a_read_that_falls_back_to_the_default(self):
+        """The half that was missing, and the half the criterion's own words
+        cover. A suite that READS a retired name and supplies its own fallback
+        is steering by that name: nothing sets it any more, so the fallback is
+        what every request goes to -- `http://localhost:3849`, the production
+        board on the two-instance workstation this CR serves.
+        """
+        found = typescript_setters(_POSITIVE_CONTROL_TS_READS, "<positive>")
+        self.assertEqual(
+            [(s.name, s.shape) for s in found],
+            [("CRUCIBLE_URL", "read with a `??` fallback"),
+             ("CRUCIBLE_BASE", "read with a `||` fallback"),
+             ("CRUCIBLE_PORT", "read with a non-null assertion"),
+             ("CRUCIBLE_HOST", "subscript read"),
+             ("CRUCIBLE_URL", "subscript read"),
+             ("CRUCIBLE_BASE", "Bun.env read")],
+            "a read with a fallback or an assertion attached is a steering "
+            "site: the criterion says no file under tests/ steers a client or "
+            "a server BY one of these names, and a detector that sees only "
+            f"the setter half certifies what it cannot see; saw {found!r}")
+
+    def test_the_typescript_detector_passes_comparisons_and_the_surviving_pair(self):
+        """The boundary the read half must not cross. `!==` against a retired
+        name is a DEADNESS PROOF asserting the variable is gone, not a channel;
+        and `$CRUCIBLE_DB`/`$CRUCIBLE_PROJECT_KEY` (§S3) are still read with a
+        fallback everywhere, legitimately."""
+        found = typescript_setters(_NEGATIVE_CONTROL_TS_READS, "<negative>")
+        self.assertEqual(
+            found, [],
+            "an `expect(...)`, a `!==` comparison, a §S3 survivor and a "
+            f"comment are not steering reads; flagged {found!r}")
+
     def test_the_guard_reads_a_real_and_substantial_part_of_the_suite(self):
         """The scan itself is asserted to have work to do. A `rglob` that
         matched nothing -- a moved directory, a renamed suffix -- would make
@@ -409,16 +529,19 @@ class NoTestSteersAClientOrAServerByARetiredVariableTest(unittest.TestCase):
         its own `file:line` because the fix is per-site: declare the board in
         the fixture's project file, or the listener in its store dir."""
         _, offenders = _scan_tree()
-        report = "\n".join(f"  {s.path}:{s.line} sets ${s.name} ({s.shape})"
-                           for s in offenders)
+        report = "\n".join(f"  {s.path}:{s.line} steers by ${s.name} "
+                           f"({s.shape})" for s in offenders)
         self.assertEqual(
             offenders, [],
             f"{len(offenders)} site(s) under tests/ still steer a client or a "
-            f"server through a RETIRED variable. Nothing reads these, so each "
-            f"drive silently lands on the shipped default -- port 3849 / "
-            f"http://localhost:3849, the production board on a two-instance "
-            f"machine. Declare `[client] url` in the fixture's project root, "
-            f"or `[server] port` in its store dir, instead:\n{report}")
+            f"server through a RETIRED variable. Nothing sets these any more, "
+            f"so each drive silently lands on the shipped default -- port "
+            f"3849 / http://localhost:3849, the production board on a "
+            f"two-instance machine -- whether it was aimed by an export that "
+            f"no longer arrives or by a read whose own fallback spells that "
+            f"default out. Declare `[client] url` in the fixture's project "
+            f"root, or `[server] port` in its store dir, and resolve it "
+            f"through the product's own chain instead:\n{report}")
 
     def test_the_two_surviving_variables_are_not_touched_by_this_guard(self):
         """§S3 -- `CRUCIBLE_DB` and `CRUCIBLE_PROJECT_KEY` PRECEDE configuration
