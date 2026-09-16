@@ -139,7 +139,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-131](CR-CRU-131-a-limit-is-configuration-everywhere.md) | a limit is configuration, everywhere | fix | COMPLETED (0.2.0) | 129 | 6 (0.2.0) |
 | [CR-CRU-132](CR-CRU-132-the-server-stops-speaking-toon.md) | the server stops speaking TOON | fix | COMPLETED (0.2.0) | 005, 046 | 6 (0.2.0) |
 | [CR-CRU-133](CR-CRU-133-a-declared-target-is-run-on-its-own-terms.md) | a declared target is run on its own terms | fix | COMPLETED (0.2.0) | 046, 131 | 6 (0.2.0) |
-| [CR-CRU-134](CR-CRU-134-a-figure-in-prose-is-derived-or-it-drifts.md) | a figure in prose is derived, or it drifts | fix | PENDING (0.2.0) | 131 | 6 (0.2.0) |
+| [CR-CRU-134](CR-CRU-134-a-figure-in-prose-is-derived-or-it-drifts.md) | a figure in prose is derived, or it drifts | fix | COMPLETED (0.2.0) | 131 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
