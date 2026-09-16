@@ -314,10 +314,11 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   (**name + type badge**), ordered **most-recently-active first, inactive last**;
   badge display state is binary **active / inactive** — active while the project
   has ≥1 live agent (agent inactive rules apply); inactive once the system-wide
-  configurable project-inactive timeout (`CRUCIBLE_PROJECT_INACTIVE_MS`, default
-  1 h) elapses after its last activity (locked round 13; v2 projects listing
-  carries additive `active`+`lastActivity`). The row also carries a **⚙ manage
-  chip** opening the **Projects manager** (`/manage` slide-over, CR-CRU-012):
+  configurable project-inactive timeout (`project_inactive_ms` in the server's
+  `crucible.toml`, §4.13; default 1 h) elapses after its last activity (locked
+  round 13; v2 projects listing carries additive `active`+`lastActivity`). The
+  row also carries a **⚙ manage chip** opening the **Projects manager**
+  (`/manage` slide-over, CR-CRU-012):
   add project + edit name/type/sutRoot/per-project liveness overrides/retention;
   the project key is immutable (additive `PATCH /api/v2/projects/<key>`).
   Projects are **archivable** (round 14, in 0.1.0): archived projects vanish
@@ -564,7 +565,8 @@ a file the other wrote.
 **There is no environment-variable layer for a limit.** An authoritative, editable,
 documented file does not need a second way to say the same thing, and a second way is a
 second place to look when a value is not what you expected, so
-`$CRUCIBLE_DEFAULT_RETENTION` and `$CRUCIBLE_RUN_ABANDON_MS` are retired as overrides.
+`$CRUCIBLE_DEFAULT_RETENTION`, `$CRUCIBLE_RUN_ABANDON_MS` and
+`$CRUCIBLE_PROJECT_INACTIVE_MS` are retired as overrides.
 The variables that are NOT limits are untouched: `CRUCIBLE_DB`, `CRUCIBLE_PORT` and
 `CRUCIBLE_PROJECT_KEY` answer *where am I and who am I*, which must be answerable before
 any file can be found. The `CRUCIBLE_*` prefix is reserved for Crucible's own
