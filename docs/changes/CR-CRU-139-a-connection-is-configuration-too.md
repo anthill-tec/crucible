@@ -136,10 +136,11 @@ already lays `crucible.toml` down (CR-CRU-138 §S2 beside the database, §S4 bes
 is the thing that SETS these values — an operator does not hand-edit a fresh install, and no
 process needs `Environment=CRUCIBLE_PORT=` to be told where to listen.
 
-So `crucible-axi install` accepts the connection settings and WRITES them into the files it lays
-down: the listener into the server's `[server]` table, the board URL into the fleet's
-`[client]` table. An install on a machine that already carries a production instance is
-therefore configured at install time, in the file, once — which is exactly the two-instance
+So `crucible-axi install` DISCOVERS the connection and WRITES it into the files it lays down: the
+listener into the server's `[server]` table, the board URL into the fleet's `[client]` table. It
+takes no connection flags and asks the operator for no number — see the discovery rule below. An
+install on a machine that already carries a production instance is therefore configured at install
+time, in the file, once — which is exactly the two-instance
 scenario above.
 
 **The installer DISCOVERS the port; nobody picks a number (user ruling 2026-09-16).** The shipped
@@ -177,7 +178,7 @@ That is the whole mechanism. Production installs and takes a port; this repo's d
 installs and takes the next free one; neither knows about the other, and both record what they took.
 
 **The install's own write must not read as an operator's edit (user ruling 2026-09-16, option a).**
-`_operator_config_is_untouched` (`crucible_axi/install.py:1300-1326`) decides "did the operator
+`_operator_config_is_untouched` (`crucible_axi/install.py:1546`) decides "did the operator
 change this?" by comparing the file's BYTES against the shipped template, and CR-CRU-138 §S2's
 uninstall/purge convergence depends on that answer. Writing a probed port in would make every
 installed file differ from its template forever — so the install's own value would be
@@ -193,7 +194,7 @@ still preserved. A file with no recording (an older install, a hand-placed file)
 template comparison, so the existing fail-safe direction is untouched.
 
 **Nothing else needs to know the port — including the service.** `_unit_environment()` stops
-forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST` (`crucible_axi/install.py:863-879`): the unit only ever
+forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST` (`crucible_axi/install.py:1091`): the unit only ever
 carried them because the server had no file to read. The unit boots the server, the server reads
 its own `crucible.toml`, and it binds what the install wrote there. No port in the unit, none in
 the bootstrap, none in a skill — one datum, one file.
@@ -339,13 +340,20 @@ retired variables; retire and migrate in ONE cycle, which is the ordering lesson
 
 **§S1a — the installer sets it, so an operator never has to**
 
-- [ ] `crucible-axi install` accepts the connection settings and WRITES them into the files it lays
-      down: the listener into the server file's `[server]` table, the board URL into the fleet's
-      `[client]` table. Asserted by running a real install into a temp target and reading the
-      resulting files, not by reading the installer's own output.
-- [ ] A second install on the same machine, given different settings, produces a second instance
-      whose files name its own port and board — the two-instance scenario, proven end to end: boot
-      both, run a verb against each, and assert each run landed on the board its own file names.
+- [ ] `crucible-axi install` WRITES the discovered connection into the files it lays down: the
+      listener into the server file's `[server]` table, the board URL into the fleet's `[client]`
+      table. Asserted by running a real install into a temp target and reading the resulting files,
+      not by reading the installer's own output. (Corrected 2026-09-16: this criterion first said
+      the install "accepts the connection settings", which the discovery ruling superseded — the
+      install parser deliberately carries no `--host`/`--port`, so VERIFY was right to refuse to
+      tick a criterion whose subject was never built.)
+- [ ] TWO installs on one machine, run with NO knowledge of each other, land on DIFFERENT ports and
+      each records its own: two real installs into two targets with two stores, the first's chosen
+      port held by a live listener across the second, asserting the second takes its own port, the
+      first's file is NOT renumbered, each fleet file's `[client] url` names its own board, and both
+      declared ports carry listening sockets at the same time. This is the scenario the CR exists
+      for, so its COMPOSITION is the criterion — the constituent mechanics passing separately does
+      not discharge it.
 - [ ] The shipped `[server]` table declares the PORT RANGE this project may occupy, documented the
       way the limits are (a sentence plus bounds), so the range is read where it is set.
 - [ ] The installer PROBES that range and writes the first port it can BIND into the file it lays
@@ -376,7 +384,7 @@ retired variables; retire and migrate in ONE cycle, which is the ordering lesson
 - [ ] An operator-EDITED connection value SURVIVES a re-install: configuration the operator changed
       is data, not an artifact.
 - [ ] The `[manifest]` stage RECORDS the bytes it wrote for each config file it authored, and
-      `_operator_config_is_untouched` (`crucible_axi/install.py:1300-1326`) compares an authored
+      `_operator_config_is_untouched` (`crucible_axi/install.py:1546`) compares an authored
       file against THAT recording rather than against the shipped template. Asserted three ways, on
       a real install into a temp target: (1) a file the install wrote a probed port into is reported
       UNTOUCHED, so `uninstall --purge` removes it and reports `converged`; (2) the same file after
@@ -386,10 +394,14 @@ retired variables; retire and migrate in ONE cycle, which is the ordering lesson
 - [ ] CR-CRU-138 §S2/§S3's purge convergence still holds on a machine that probed a port — the
       regression this recording exists to prevent: without it every installed file would read as
       operator-edited forever and `converged` would go false with no operator involved.
-- [ ] `_unit_environment()` (`crucible_axi/install.py:863-879`) no longer forwards `CRUCIBLE_PORT`
-      or `CRUCIBLE_HOST`; the rendered unit carries neither, and the installed server still listens
-      on its configured port — asserted by reading the rendered unit text AND by the server's own
-      `/api/health`.
+- [ ] `_unit_environment()` (`crucible_axi/install.py:1091`) no longer forwards `CRUCIBLE_PORT`
+      or `CRUCIBLE_HOST`: the rendered unit carries neither, while `CRUCIBLE_DB` is still forwarded
+      — asserted by reading the rendered unit text under junk exports of both retired names. The
+      companion half — that a server so launched listens on its CONFIGURED port — is discharged by
+      §S1's boot suite against `/api/health`, not here: this fixture stubs the `[server]` and
+      `[unit]` stages and cannot reach a real boot. (Split 2026-09-16: VERIFY found the criterion
+      claimed both halves while only one was asserted, and a half-asserted criterion must not be
+      ticked whole.)
 
 **Close-out**
 
