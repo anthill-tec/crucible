@@ -51,6 +51,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import { declareClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const RELEASE_SH = join(REPO_ROOT, "scripts", "release.sh");
@@ -293,12 +294,14 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
       // CR-CRU-130 §S2 — `""` models the branch git really takes when it
       // cannot date the sha: `release_ship_date` prints nothing and exits 0.
       RSH_SHIP: opts.ship ?? String(SHIP_DATE),
-      // The real client's own contract: where the server is, and which project
-      // root holds the .env carrying CRUCIBLE_PROJECT_KEY.
-      CRUCIBLE_URL: base,
+      // The real client's own contract: which project root holds the .env
+      // carrying CRUCIBLE_PROJECT_KEY. WHERE the server is is no longer an
+      // environment matter (CR-CRU-139 §S2) — it is declared below, in that
+      // same root's `crucible.toml`.
       PY_CRUCIBLE_PROJECT_DIR: world.root,
     };
     if (agent !== null) env.CRUCIBLE_AGENT = agent;
+    declareClientBoard(base, world.root);
 
     const proc = Bun.spawn({
       cmd: ["bash", RELEASE_SH, ...args],

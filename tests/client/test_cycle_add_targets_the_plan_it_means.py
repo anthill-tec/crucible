@@ -78,6 +78,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
 from tests.client.test_bun_crucible_cycle_add import (
     _BaseCycleAddTest,
     _plans_response,
@@ -444,6 +447,11 @@ def setUpModule():
     (Path(_PROJECT_DIR) / ".env").write_text(
         "CRUCIBLE_PROJECT_KEY=cycle-add-target-surface-key\n"
         "CRUCIBLE_PROJECT_NAME=cycle-add-target-surface-project\n")
+    # CR-CRU-139 §S2 — the board is DECLARED in the project file the help
+    # drives run against, never exported. A `--help` never reaches the wire;
+    # one that somehow did refuses instantly instead of touching a live board.
+    declare_and_require_board(_PROJECT_DIR, _UNREACHABLE_CRUCIBLE_URL,
+                              "a help drive")
 
 
 def tearDownModule():
@@ -456,8 +464,6 @@ def _drive_cycle_add_help(client):
     `cycle-add --help`, cached per client for this process."""
     if client not in _HELP_CACHE:
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
         # COLUMNS is PINNED (added 2026-09-13, CR-CRU-127 C2 FIX) for the same
         # reason the sibling `plan-file` driver pins it, stated there in full:
         # argparse wraps with `textwrap`'s `break_on_hyphens=True`, so an
@@ -868,8 +874,13 @@ class _ScratchBoardTestBase(unittest.TestCase):
             proc.kill()
 
     def _client(self, *argv):
+        # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own
+        # project file, and the interlock refuses the spawn unless the client
+        # would really resolve it: these verbs WRITE, and a drive that merely
+        # stopped steering would write to the shipped default instead.
+        declare_and_require_board(self.project_dir, self.base,
+                                  "python-crucible.py")
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = self.base
         return subprocess.run(
             [sys.executable, str(CLIENT_FILES["python"])] + list(argv),
             cwd=str(REPO_ROOT), env=env, capture_output=True, text=True,

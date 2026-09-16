@@ -73,6 +73,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
 import { SCHEMA_VERSION } from "../src/store.ts";
+import { declareClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const RELEASE_SH = join(REPO_ROOT, "scripts", "release.sh");
@@ -366,9 +367,12 @@ async function runBackfill(
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
     CRUCIBLE_AGENT: AGENT_ID,
-    CRUCIBLE_URL: base,
     PY_CRUCIBLE_PROJECT_DIR: repo,
   };
+  // CR-CRU-139 §S2 — the board the ceremony's client posts to is DECLARED in
+  // the project dir it is given, never exported; the interlock refuses unless
+  // the fleet really resolves it.
+  declareClientBoard(base, repo);
   const proc = Bun.spawn({
     cmd: ["bash", RELEASE_SH, "backfill-releases", ...flags],
     cwd: repo,

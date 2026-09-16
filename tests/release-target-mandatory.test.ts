@@ -40,6 +40,7 @@ import { startServer, type ServerHandle } from "../src/server.ts";
 // Consumed rather than re-spelled: the wording is GREEN's to choose, and a
 // test that pinned a sentence would be pinning a decision it does not own.
 import { roadmapHints } from "../src/hints.ts";
+import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const CLIENT_PATH = join(REPO_ROOT, "clients", "bun-crucible.py");
@@ -132,10 +133,14 @@ async function runClient(args: string[], opts: { cwd: string; crucibleUrl: strin
   for (const key of Object.keys(baseEnv)) {
     if (key.startsWith("WORKFLOW_")) delete baseEnv[key];
   }
+  // CR-CRU-139 §S2 — the board is DECLARED in the project file this drive
+  // resolves, never exported; the interlock refuses a spawn that would reach
+  // any other board.
+  declareClientBoard(opts.crucibleUrl, opts.cwd, projectDirFromArgs(args));
   const proc = Bun.spawn({
     cmd: ["python3", CLIENT_PATH, ...args],
     cwd: opts.cwd,
-    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl },
+    env: { ...baseEnv },
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -51,6 +51,10 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 
@@ -214,6 +218,11 @@ def setUpModule():
     (Path(_PROJECT_DIR) / ".env").write_text(
         "CRUCIBLE_PROJECT_KEY=gate-release-surface-key\n"
         "CRUCIBLE_PROJECT_NAME=gate-release-surface-project\n")
+    # CR-CRU-139 §S2 — the board is DECLARED in the project file the help
+    # drives run against, never exported. A `--help` never reaches the wire;
+    # one that somehow did refuses instantly instead of touching a live board.
+    declare_and_require_board(_PROJECT_DIR, _UNREACHABLE_CRUCIBLE_URL,
+                              "a help drive")
 
 
 def tearDownModule():
@@ -226,8 +235,6 @@ def _drive_gate_help(client, verb):
     `<verb> --help`, cached per (client, verb) for this process."""
     if (client, verb) not in _HELP_CACHE:
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
         _HELP_CACHE[(client, verb)] = subprocess.run(
             [sys.executable, str(CLIENT_FILES[client]), verb, "--help"],
             cwd=_PROJECT_DIR, env=env, capture_output=True, text=True,
@@ -632,8 +639,13 @@ class ReleaseStampedGateIsRetiredOnInsertTest(unittest.TestCase):
             proc.kill()
 
     def _post_gate_through_the_client(self, release):
+        # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own
+        # project file, and the interlock refuses the spawn unless the client
+        # would really resolve it: a gate report is a WRITE, and a drive that
+        # merely stopped steering would land it on the shipped default.
+        declare_and_require_board(self.project_dir, self.base,
+                                  "bun-crucible.py gate-report")
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = self.base
         return subprocess.run(
             [sys.executable, str(CLIENT_FILES["bun"]), "gate-report",
              "--outcome", "passed", "--steps", "review:passed",

@@ -250,9 +250,9 @@ class NoSuiteResolvesTheCheckoutConfigurationTest(unittest.TestCase):
         resolver = getattr(axi, BOARD_RESOLVER, None)
         self.assertTrue(
             callable(resolver),
-            "clients/_crucible_axi.py must export `%s()` -- CR-CRU-139 §S2 "
-            "resolves a client's board through THIS chain, so the board is "
-            "part of what this guard has to isolate" % (BOARD_RESOLVER,))
+            "clients/_crucible_axi.py must export `%s()` -- §S2 resolves a "
+            "client's board through THIS chain, so the board is part of what "
+            "this guard has to isolate" % (BOARD_RESOLVER,))
         return resolver()
 
     def declare_install_board(self, url):

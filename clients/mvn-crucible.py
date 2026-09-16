@@ -51,7 +51,8 @@ Project + Crucible endpoint:
     --maven-dir > $MVN_CRUCIBLE_MAVEN_DIR > CRUCIBLE_MAVEN_DIR in .env > project dir.
   Optional .env keys: CRUCIBLE_MAVEN_DIR, CRUCIBLE_COMPOSE_FILE,
     CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE.
-  Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the board the project's `crucible.toml` declares (`[client] url`,
+  shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs (codec junit),
   /api/v2/runs/parsed, /api/v2/runs/compile.
 
@@ -90,7 +91,6 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 STALE_THRESHOLD_S = 120
 # The STACK this client's runs belong to — the name its sibling clients address
 # it by (`mvn-crucible.py`), which is what a gate composes declared suites over
@@ -207,6 +207,21 @@ def _common_mvn_flags(args):
 # --------------------------------------------------------------------------- #
 # HTTP + process helpers
 # --------------------------------------------------------------------------- #
+def _base_url():
+    """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
+    USE from the fleet's ONE resolver: the project's own `crucible.toml`
+    (`[client] url`), else the install's, else the distribution's shipped
+    declaration.
+
+    A call rather than the module constant this line used to hold. A constant
+    bound at import was a setting no edit an operator made could reach, and it
+    froze the board for the whole process — so a verb handed a different
+    `--project-dir` posted to the previous one's board. `resolve_base_url()` in
+    `_crucible_axi.py` documents the resolution and the environment channel it
+    retired."""
+    return _axi().resolve_base_url()
+
+
 def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
@@ -220,7 +235,7 @@ def _request(method, path, payload=None, timeout=None):
     the §S2b empty-body correction). The local name is kept deliberately: the
     CR-CRU-030 delegation pattern, addressed unqualified by every call site
     here and by the client test harnesses."""
-    return _axi().http_request(CRUCIBLE_URL, method, path, payload, timeout)
+    return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -298,7 +313,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=CRUCIBLE_URL)
+        base_url=_base_url())
 
 
 def _run_context():
@@ -920,11 +935,11 @@ def _emit_tier_run_axi(verb, ingested, project_dir, agent, warnings=()):
     _emit_ingest_summary_axi(verb, resp, summary, ingested["files"],
                              project_dir, agent,
                              help_steps=_axi().run_help(verb, ok, summary["failed"],
-                                                        CRUCIBLE_URL),
+                                                        _base_url()),
                              warnings=(list(warnings)
                                        + ([] if resp.get("ok")
                                           else [_axi().ingest_failed_warning(
-                                              verb, CRUCIBLE_URL)])))
+                                              verb, _base_url())])))
 
 
 _MVN_CAUSE_JOINER = " · "
@@ -1100,7 +1115,7 @@ def cmd_compile(args):
     # the state actually reached (a clean build points at the next verb, a
     # broken one at the errors just ingested).
     warnings = ([] if rc == 0
-                else [_axi().ingest_failed_warning("compile", CRUCIBLE_URL)])
+                else [_axi().ingest_failed_warning("compile", _base_url())])
     _emit_axi("compile", ok,
               {"exit": result.returncode,
                "help": (_axi().HELP_STEPS["check"] if ok else
@@ -1292,7 +1307,7 @@ def _regression_run(args, identity=None, verb="regression",
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                   if verb != "regression" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, args.agent,
                              help_steps=help_steps, warnings=preflight_warnings)
@@ -1605,7 +1620,7 @@ def cmd_pre_merge_gate(args):
             whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                                verb="pre-merge-gate"),
             context=_axi_context(project_dir, agent_id=args.agent),
-            crucible_url=CRUCIBLE_URL)
+            crucible_url=_base_url())
     finally:
         # STEP form — the teardown must not put a second document on stdout.
         _docker_down(argparse.Namespace(

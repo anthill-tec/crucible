@@ -6,7 +6,8 @@
 """arduino-crucible.py — Arduino-firmware stack script (global, like bun/rust-crucible.py).
 
 Runs native host tests / firmware compile and reports to Crucible via the v2 API
-($CRUCIBLE_URL, default http://localhost:3849). Mirrors the bun/rust/python/mvn
+(the board the project's `crucible.toml` declares as `[client] url`, shipped
+default http://localhost:3849). Mirrors the bun/rust/python/mvn
 `.env` + /api/v2/* ingest pattern, extended with per-subproject self-registration:
 identity from the SUBPROJECT's .env (CRUCIBLE_PROJECT_KEY + CRUCIBLE_PROJECT_NAME),
 agent `Vidushi - <NAME>`.
@@ -33,7 +34,8 @@ Run context (CR-CRU-008 §S2): when any WORKFLOW_* env var is set
 carry a `context` object {cycle, wave, orchestrator, git:{branch,commit}}; the
 attach cycle is stamped SERVER-side from the agent's registered binding.
 
-Env overrides: CRUCIBLE_URL (legacy alias CRUCIBLE_BASE), ARDUINO_CLI, ARDUINO_FQBN.
+Env overrides: ARDUINO_CLI, ARDUINO_FQBN. The board is NOT one of them any
+more (CR-CRU-139 §S2): it is declared in the project's `crucible.toml`.
 
 CR-CRU-044 §S5 — the agent identity comes from `--agent` ONLY: no env var supplies
 one, and there is no fallback. A verb that would POST under an agentId without a
@@ -68,8 +70,6 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-CRUCIBLE = (os.environ.get("CRUCIBLE_URL") or os.environ.get("CRUCIBLE_BASE")
-            or "http://localhost:3849")
 ARDUINO_CLI = os.environ.get(
     "ARDUINO_CLI", "/opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli")
 FQBN = os.environ.get("ARDUINO_FQBN", "arduino:renesas_uno:minima")
@@ -130,6 +130,20 @@ def _project_key(pd):
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ─────
 
 
+def _base_url():
+    """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
+    USE from the fleet's ONE resolver: the project's own `crucible.toml`
+    (`[client] url`), else the install's, else the distribution's shipped
+    declaration.
+
+    A call rather than the module constant this line used to hold — and this
+    client held the worst of the five, a constant with a SECOND environment
+    name behind it, so the board could be aimed from either of two channels
+    and a reader had to know both. `resolve_base_url()` in `_crucible_axi.py`
+    documents the resolution and the environment channels it retired."""
+    return _axi().resolve_base_url()
+
+
 def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
@@ -143,7 +157,7 @@ def _request(method, path, payload=None, timeout=None):
     the §S2b empty-body correction). The local name is kept deliberately: the
     CR-CRU-030 delegation pattern, addressed unqualified by every call site
     here and by the client test harnesses."""
-    return _axi().http_request(CRUCIBLE, method, path, payload, timeout)
+    return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -221,7 +235,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=CRUCIBLE)
+        base_url=_base_url())
 
 
 # ── run context (declared cycle linkage) ─────────────────────────────────────
@@ -621,7 +635,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # reached (unrecorded / red / green); the plain test verbs keep their canned
     # HELP_STEPS entry, unchanged.
     ok = bool(resp.get("ok")) and summary["failed"] == 0
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE)
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                   if verb == "pre-merge-gate" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
                              help_steps=help_steps,
@@ -843,7 +857,7 @@ def cmd_pre_merge_gate(args):
         whole_suite=lambda: _run_native_tests(reg_args, "pre-merge-gate",
                                               "regression", True),
         context=_axi_context(pd, agent_id=args.agent),
-        crucible_url=CRUCIBLE)
+        crucible_url=_base_url())
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────

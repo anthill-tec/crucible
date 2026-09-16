@@ -51,6 +51,10 @@ from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
@@ -405,6 +409,11 @@ def setUpModule():
     (Path(_PROJECT_DIR) / ".env").write_text(
         "CRUCIBLE_PROJECT_KEY=next-lane-surface-key\n"
         "CRUCIBLE_PROJECT_NAME=next-lane-surface-project\n")
+    # CR-CRU-139 §S2 — the board is DECLARED in the project file the help
+    # drives run against, never exported. A `--help` never reaches the wire;
+    # one that somehow did refuses instantly instead of touching a live board.
+    declare_and_require_board(_PROJECT_DIR, _UNREACHABLE_CRUCIBLE_URL,
+                              "a help drive")
 
 
 def tearDownModule():
@@ -417,8 +426,6 @@ def _drive_next_help(client):
     `next --help`, cached per client for this process."""
     if client not in _HELP_CACHE:
         env = os.environ.copy()
-        env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
         _HELP_CACHE[client] = subprocess.run(
             [sys.executable, str(CLIENT_FILES[client]), "next", "--help"],
             cwd=_PROJECT_DIR, env=env, capture_output=True, text=True,
@@ -867,8 +874,13 @@ class NextsAnswerIsAPlanTheWriteSideAcceptsTest(unittest.TestCase):
         """One real client dispatch against the scratch board → (exit code,
         envelope). The orchestrator's own surface, and the only place the two
         verbs meet."""
+        # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own
+        # project file, and the interlock refuses the spawn unless the client
+        # would really resolve it: a drive that merely stopped steering would
+        # reach the shipped default instead, which is a live board here.
+        declare_and_require_board(self.project_dir, self.base,
+                                  "bun-crucible.py")
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = self.base
         proc = subprocess.run(
             [sys.executable, str(CLIENT_FILES["bun"]), *argv,
              "--project-dir", self.project_dir],

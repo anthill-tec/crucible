@@ -121,6 +121,18 @@ def _toon():
 CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
                       "roadmap_list_rows")
 
+#: The two TOP-LEVEL tables a client reads out of that one file, and the ONE
+#: field the second carries. `[limits]` is CR-CRU-131's; `[client]` is
+#: CR-CRU-139 §S2's BOARD -- the connection, which is configuration for exactly
+#: the reasons a limit is: bound at import from `$CRUCIBLE_URL` it was a
+#: setting no edit an operator made could reach, and forgetting the export was
+#: silent, landing the run on the default -- the PRODUCTION board on a machine
+#: running two instances. Spelled here rather than at each read so the file's
+#: schema is stated once.
+LIMITS_TABLE = "limits"
+CLIENT_TABLE = "client"
+CLIENT_BOARD_FIELD = "url"
+
 #: §S1c -- the SHIPPED declarations are PACKAGE DATA, not a table in this
 #: module. `crucible.toml` travels inside `crucible-axi` beside this file (the
 #: wheel force-includes `clients` as `crucible_axi/clients`), so the file a
@@ -274,14 +286,40 @@ def shipped_limits():
     path = shipped_data_path()
     with open(path, "rb") as fh:
         parsed = tomllib.load(fh)
-    tables = parsed.get("limits")
+    tables = parsed.get(LIMITS_TABLE)
     if not isinstance(tables, dict):
         tables = {}
     return {name: _shipped_declaration(name, tables.get(name), path)
             for name in CLIENT_LIMIT_NAMES}
 
 
-def _read_project_config():
+def shipped_board():
+    """§S1c/§S2 -- the BOARD the distribution's own data declares: the last
+    resort of the chain, and the value every deleted `CRUCIBLE_URL` constant
+    defaulted to.
+
+    A DATA FILE rather than a literal here, for §S1c's reason exactly: the
+    address a reader READS in the file they edit and the address the code falls
+    back to must be the same bytes, or the documentation and the behaviour are
+    two copies of one datum. So this raises rather than inventing a default --
+    a distribution whose own data cannot say where it posts is broken in a way
+    no fallback could honestly paper over, which is how `shipped_limits()`
+    already treats a missing declaration."""
+    path = shipped_data_path()
+    with open(path, "rb") as fh:
+        parsed = tomllib.load(fh)
+    table = parsed.get(CLIENT_TABLE)
+    url = table.get(CLIENT_BOARD_FIELD) if isinstance(table, dict) else None
+    if not isinstance(url, str) or not url.strip():
+        raise RuntimeError(
+            "%s declares no `[%s] %s`, so this distribution cannot say which "
+            "board it posts to. The last resort is PACKAGE DATA rather than a "
+            "literal in this module, and there is deliberately no address here "
+            "to fall back to." % (path, CLIENT_TABLE, CLIENT_BOARD_FIELD))
+    return url.strip()
+
+
+def _read_project_config(table=LIMITS_TABLE):
     """One walk of the chain, at the point of use -- never cached.
 
     Returns `(path, tables)` for the FIRST candidate that read: a file that is
@@ -289,6 +327,12 @@ def _read_project_config():
     rather than degrading on the spot. `tables` is None only when NONE of the
     candidates read, and `path` is then the first of them -- the file an
     operator should create.
+
+    `table` names the TOP-LEVEL table wanted -- `[limits]` for the three a
+    client enforces, `[client]` for CR-CRU-139 §S2's board. ONE walk, because
+    the two settings live in one file and resolve by one rule: a second walk
+    with its own precedence is how a project's file comes to decide one datum
+    and not the other.
 
     `tomllib` is stdlib (3.11+; this repo runs 3.14) and already in the tree at
     `clients/rust-crucible.py`."""
@@ -301,7 +345,7 @@ def _read_project_config():
             # ValueError covers tomllib.TOMLDecodeError; a malformed file must
             # DEGRADE, never take a client's verb down with it.
             continue
-        tables = parsed.get("limits")
+        tables = parsed.get(table)
         return path, tables if isinstance(tables, dict) else {}
     return candidates[0], None
 
@@ -386,6 +430,37 @@ def resolve_limit(name):
     return _effective_limit(name, declaration, path)[0]
 
 
+def resolve_base_url():
+    """CR-CRU-139 §S2 -- the BOARD this client posts to, resolved at the POINT
+    OF USE from the same chain and the same bound project dir `resolve_limit()`
+    reads: the project's own `[client] url`, else the install's, else the
+    distribution's shipped declaration.
+
+    THE ONE PLACE the fleet's board is spelled. It replaces five module
+    constants bound at import from `$CRUCIBLE_URL` (arduino also honoured
+    `$CRUCIBLE_BASE`), which had two defects a limit had already been cured of:
+    a value bound at import is a setting no later state can reach -- a second
+    verb in one process inherits the first one's board -- and a channel that
+    must be EXPORTED is one that fails silently when it is forgotten, landing
+    the run on the shipped default, which on a machine carrying a production
+    instance is the production board.
+
+    Point of use, never cached, for the same reason every limit is re-read: the
+    project dir a verb resolved (`--project-dir` included) is bound before the
+    first request, and a verb given a different project must post to a
+    different project's board.
+
+    A FILE never raises here -- a mistyped or absent `[client]` table falls
+    through to the shipped declaration exactly as a missing limit does, because
+    a client that cannot read a config file must still degrade rather than
+    break."""
+    _, table = _read_project_config(CLIENT_TABLE)
+    url = table.get(CLIENT_BOARD_FIELD) if table else None
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+    return shipped_board()
+
+
 def limit_disclosures():
     """§S1b -- everything the current file owes its operator: one line per
     REFUSED `value`, or one line naming a file that could not be read at all.
@@ -449,10 +524,11 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     """The fleet's ONE JSON-over-HTTP call to Crucible. Returns the parsed JSON
     response, or a structured `{ok: False, error}` on an HTTP/connection error.
 
-    `base_url` is passed in rather than read from the environment here: each
-    client owns its own base-URL constant (four spell it `CRUCIBLE_URL`,
-    arduino `CRUCIBLE`), and resolving it stays client-side under this module's
-    scope boundary — the shared module reads no config of its own.
+    `base_url` is passed in rather than resolved here: the transport's job is
+    to make the call, and its callers (every client's own `_request`) read the
+    address from `resolve_base_url()` above at the point of use — one
+    resolution, one transport, and a caller free to name a board explicitly
+    without this function acquiring a second opinion about where to post.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
     (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
@@ -1973,10 +2049,9 @@ def gate_from_axi(decoded, intent, final):
 # implementation below, exactly the pattern CR-CRU-030 established for
 # `_axi_context`/`_emit_axi` and C2/C3 extended to the HTTP and plan layers.
 #
-# Three things stay genuinely PER-CLIENT and are injected rather than flattened
+# Two things stay genuinely PER-CLIENT and are injected rather than flattened
 # (flattening a parameterised value into one shared constant is the silent
 # fleet-wide regression this CR exists to prevent):
-#   * the base URL (four clients spell it `CRUCIBLE_URL`, arduino `CRUCIBLE`);
 #   * the project-dir convention (arduino's `_project_dir(args)` vs the other
 #     four's `_resolve_project_dir(args.project_dir)`) — resolved by the wrapper
 #     and passed in ALREADY-RESOLVED, per this module's scope boundary;
@@ -2300,7 +2375,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1567-1588`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1582-1603`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycle "<c1>" --cycle-kind <k1> '

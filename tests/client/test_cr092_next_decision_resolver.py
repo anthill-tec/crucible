@@ -1812,7 +1812,13 @@ class NextBlockCitationsTest(unittest.TestCase):
         # loader, adding eight lines ABOVE this block. Measured at BOTH ends
         # after the last production edit, not inferred from the shift. Twelfth
         # time — the CR that shifted the file re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1567, 1588,
+        # Re-pinned 2026-09-17 (CR-CRU-139 C2), 1567-1588 -> 1582-1603: §S2
+        # replaced the module's base-URL constant with the `_base_url()`
+        # point-of-use resolver, adding fourteen lines ABOVE this block and
+        # removing the one-line constant. Measured at BOTH ends after the last
+        # production edit, not inferred from the shift. Thirteenth time — the
+        # CR that shifted the file re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1582, 1603,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

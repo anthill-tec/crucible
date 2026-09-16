@@ -78,6 +78,10 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE = CLIENTS_DIR / "_crucible_axi.py"
@@ -163,6 +167,12 @@ def setUpModule():
     (Path(_PROJECT_DIR) / ".env").write_text(
         "CRUCIBLE_PROJECT_KEY=plan-file-release-surface-key\n"
         "CRUCIBLE_PROJECT_NAME=plan-file-release-surface-project\n")
+    # CR-CRU-139 §S2 — the surface drives declare the unreachable board in
+    # their own project file, which is where a client reads it now. A `--help`
+    # never reaches the wire; one that somehow did refuses instantly instead
+    # of touching a live board.
+    declare_and_require_board(_PROJECT_DIR, _UNREACHABLE_CRUCIBLE_URL,
+                              "a help drive")
 
 
 def tearDownModule():
@@ -175,8 +185,10 @@ def _drive_plan_file_help(client):
     `plan-file --help`, cached per client for this process."""
     if client not in _HELP_CACHE:
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # CR-CRU-139 §S2 — the board is DECLARED, never exported. A `--help`
+        # drive reaches no board at all (argparse prints and exits before any
+        # verb body runs), so the declaration `_PROJECT_DIR` already carries
+        # from `setUpModule` is all this drive needs.
         # COLUMNS is PINNED (added 2026-09-13, CR-CRU-127 C2 FIX) so argparse's
         # wrap width is deterministic across terminals and CI. It is not
         # cosmetic: argparse wraps help through `textwrap` with
@@ -703,8 +715,13 @@ class PlanFileRegistersTheCrOnTheBoardTest(unittest.TestCase):
             proc.kill()
 
     def _client(self, *argv):
+        # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own
+        # project file, and the interlock refuses the spawn unless the client
+        # would really resolve it: these verbs WRITE, and a drive that merely
+        # stopped steering would write to the shipped default instead.
+        declare_and_require_board(self.project_dir, self.base,
+                                  "python-crucible.py")
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-        env["CRUCIBLE_URL"] = self.base
         return subprocess.run(
             [sys.executable, str(CLIENT_FILES["python"])] + list(argv),
             cwd=str(REPO_ROOT), env=env, capture_output=True, text=True,

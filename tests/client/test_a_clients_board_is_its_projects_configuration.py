@@ -851,7 +851,8 @@ class TheOrchestratorsOwnBoardStaysOperatorStateTest(unittest.TestCase):
             f"operator's own connection, not a repo artefact: committing a "
             f"board here points every suite that is not perfectly isolated at "
             f"the development instance, and agents' test runs land on a live "
-            f"board (CR-CRU-138, and C1's 3849 orphan one port over)")
+            f"board (the ignore rule's own reason, and C1's 3849 orphan one "
+            f"port over)")
         ignored = self._git("check-ignore", "-v", CONFIG_NAME)
         self.assertEqual(
             ignored.returncode, 0,

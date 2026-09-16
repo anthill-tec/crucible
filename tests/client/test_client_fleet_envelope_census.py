@@ -568,6 +568,36 @@ def would_resolve(axi_path, project_dir, expected):
     return True, None
 
 
+def declare_and_require_board(project_dir, board, label="a client"):
+    """Declare `board` in `project_dir`'s own `crucible.toml` and REFUSE unless
+    the shared module really resolves it -- the two halves a migrated fixture
+    always needs together, so no suite can do the first and forget the second.
+
+    Raises rather than returning a verdict, because its callers are fixtures
+    rather than assertions: a drive that was never made records nothing on any
+    board, so a silent refusal is indistinguishable from a passing test, while
+    an exception names the reason wherever it happens. `BoardInterlockCase`
+    below is the same interlock for the shape that RECORDS a refusal instead
+    (the criteria suite, whose drives are built once and asserted later).
+    """
+    if Path(project_dir).resolve() == REPO_ROOT:
+        raise RuntimeError(
+            f"refusing to declare a board at {REPO_ROOT}: that file is the "
+            f"OPERATOR's own connection, and a fixture that wrote it would "
+            f"both destroy their setting and make every later drive in this "
+            f"checkout resolve a fixture's board "
+            f"(test_no_suite_resolves_the_checkout_configuration.py).")
+    declare_board(Path(project_dir) / "crucible.toml", board)
+    resolves, reason = would_resolve(CLIENTS_DIR / "_crucible_axi.py",
+                                     project_dir, board)
+    if not resolves:
+        raise RuntimeError(
+            f"refusing to drive {label}: {reason}. A drive that does not "
+            f"resolve its own declared board lands on {SHIPPED_DEFAULT_BOARD} "
+            f"instead, which on this machine is the PRODUCTION install.")
+    return board
+
+
 class BoardInterlockCase(unittest.TestCase):
     """The one place a drive REFUSED by `would_resolve` becomes a failure.
 
@@ -591,22 +621,35 @@ class BoardInterlockCase(unittest.TestCase):
 
 
 def drive_verb(script_path, argv, project_dir, fake_bin_dir, timeout=20,
-               extra_env=None):
+               extra_env=None, board=_UNREACHABLE_CRUCIBLE_URL):
     """A genuine subprocess dispatch of the real client script -- never an
     in-process `module.main()` call for this half (that idiom is reserved
     for enumeration, which must never let a command actually run).
 
-    `extra_env` (CR-CRU-092 §S6) overrides the drive's environment AFTER the
-    unreachable-server defaults. The unreachable URL can only ever exercise a
-    verb's READ-FAILURE path, which is a fair census for a write verb but
-    cannot measure a READ verb's live-data principles (P2/P4/P5/P8 all need an
-    answer to narrow, count, drain or return). `next`'s section below points
-    the same `drive_verb` at a local queue STUB for those, and leaves the
-    default unreachable URL in place for its own failed-read drive -- so both
-    halves of AC13's exit-code rule are measured by one machinery."""
+    `board` (CR-CRU-139 §S2) is DECLARED in the drive's own project directory
+    rather than exported: the fleet's target is `[client] url` in the project's
+    `crucible.toml` now, and the environment channel this fixture used to aim
+    is retired. The declaration is written into the temp project root every
+    drive owns, and the INTERLOCK below refuses to spawn unless the shared
+    module really resolves it -- a drive that merely stopped steering would
+    otherwise land on the shipped default, which on this machine is the
+    production board.
+
+    `extra_env` (CR-CRU-092 §S6) overrides the drive's environment. The default
+    unreachable board can only ever exercise a verb's READ-FAILURE path, which
+    is a fair census for a write verb but cannot measure a READ verb's
+    live-data principles (P2/P4/P5/P8 all need an answer to narrow, count,
+    drain or return). `next`'s section below points the same `drive_verb` at a
+    local queue STUB with `board=`, and leaves the default unreachable one in
+    place for its own failed-read drive -- so both halves of AC13's exit-code
+    rule are measured by one machinery."""
+    declare_and_require_board(project_dir, board, Path(script_path).name)
     env = os.environ.copy()
-    env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-    env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL  # arduino's 2nd-choice var
+    for name in ("CRUCIBLE_URL", "CRUCIBLE_BASE"):
+        # Retired (CR-CRU-139 §S2), and POPPED rather than aimed: an ambient
+        # value in the operator's own session must not reach a drive whose
+        # board is now a file.
+        env.pop(name, None)
     env["ARDUINO_CLI"] = str(fake_bin_dir / "arduino-cli")
     env["PATH"] = str(fake_bin_dir) + os.pathsep + env.get("PATH", "")
     if extra_env:
@@ -2049,14 +2092,15 @@ class _QueueStubServer:
         self._thread.start()
 
     def env(self):
-        """The base-URL overrides `drive_verb` needs (four clients spell it
-        `CRUCIBLE_URL`, arduino accepts `CRUCIBLE_BASE` as its second choice),
-        plus an explicitly BLANKED orchestrator env: `axi_context` reads
-        `$WORKFLOW_ROLE`/`$WORKFLOW_WAVE`, so an ambient orchestrator session
-        would otherwise colour the very `context` block P7 asserts on."""
-        return {"CRUCIBLE_URL": self.base_url,
-                "CRUCIBLE_BASE": self.base_url,
-                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+        """The explicitly BLANKED orchestrator env a stub-served drive needs:
+        `axi_context` reads `$WORKFLOW_ROLE`/`$WORKFLOW_WAVE`, so an ambient
+        orchestrator session would otherwise colour the very `context` block P7
+        asserts on.
+
+        The BOARD is no longer in here (CR-CRU-139 §S2): a drive reaches this
+        stub by `drive_verb(..., board=stub.base_url)`, which declares it in the
+        drive's own project file and checks the resolution before spawning."""
+        return {"WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
 
     def close(self):
         self._httpd.shutdown()
@@ -2143,7 +2187,7 @@ def _get_next_drives():
                     seen = len(stub.requests)
                     result = drive_verb(
                         script_path, _next_argv(project_dir, *extra_argv),
-                        project_dir, fake_bin_dir,
+                        project_dir, fake_bin_dir, board=stub.base_url,
                         extra_env={**stub.env(), **extra_env})
                     _emits, axi = classify_envelope(result.stdout, toon_module)
                     drives[(client_key, case)] = {
@@ -3099,12 +3143,14 @@ def _get_harness_isolation_drives():
             project_dir = _make_project_dir(client_key)
             try:
                 clean = drive_verb(script_path, _next_argv(project_dir),
-                                   project_dir, bin_dir, extra_env=env)
+                                   project_dir, bin_dir, extra_env=env,
+                                   board=stub.base_url)
                 planted = _plant_harness_lane_plan(project_dir)
                 sizes = {name: (Path(project_dir) / name).stat().st_size
                          for name in _HARNESS_DB_NAMES}
                 with_plan = drive_verb(script_path, _next_argv(project_dir),
-                                       project_dir, bin_dir, extra_env=env)
+                                       project_dir, bin_dir, extra_env=env,
+                                       board=stub.base_url)
             finally:
                 shutil.rmtree(project_dir, ignore_errors=True)
             drives[client_key] = {
@@ -3523,12 +3569,10 @@ class _QueueFileStubServer:
         self._thread.start()
 
     def env(self):
-        """The base-URL overrides `drive_verb` needs (arduino accepts
-        `CRUCIBLE_BASE` as its second choice), plus a blanked orchestrator env
-        so an ambient session cannot colour the `context` block."""
-        return {"CRUCIBLE_URL": self.base_url,
-                "CRUCIBLE_BASE": self.base_url,
-                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+        """A blanked orchestrator env so an ambient session cannot colour the
+        `context` block. The BOARD travels as `drive_verb(..., board=…)` now
+        (CR-CRU-139 §S2), declared in the drive's own project file."""
+        return {"WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
 
     def close(self):
         self._httpd.shutdown()
@@ -3588,15 +3632,17 @@ def _get_queue_file_drives():
                 cases = (
                     # The success path is the only one that reaches the wire,
                     # so it is the only one that needs the stub.
-                    ("success", [], stub.env()),
-                    ("unreadable", ["--from-file", str(absent_path)], None),
-                    ("malformed", ["--from-file", str(malformed_path)], None),
+                    ("success", [], stub.env(), stub.base_url),
+                    ("unreadable", ["--from-file", str(absent_path)], None,
+                     _UNREACHABLE_CRUCIBLE_URL),
+                    ("malformed", ["--from-file", str(malformed_path)], None,
+                     _UNREACHABLE_CRUCIBLE_URL),
                 )
-                for case, extra_argv, extra_env in cases:
+                for case, extra_argv, extra_env, board in cases:
                     seen = len(stub.requests)
                     result = drive_verb(script_path, base_argv + extra_argv,
                                         project_dir, fake_bin_dir,
-                                        extra_env=extra_env)
+                                        extra_env=extra_env, board=board)
                     _emits, axi = classify_envelope(result.stdout, toon_module)
                     drives[(client_key, case)] = {
                         "result": result, "axi": axi,

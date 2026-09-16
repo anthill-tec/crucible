@@ -164,8 +164,8 @@ def _resolved_base_url():
     resolver = getattr(axi, BOARD_RESOLVER, None)
     assert callable(resolver), (
         f"clients/_crucible_axi.py must export `{BOARD_RESOLVER}()` -- "
-        f"CR-CRU-139 §S2 replaced the five per-client base-URL constants with "
-        f"one shared resolver, and this suite reads the value back from it")
+        f"§S2 replaced the five per-client base-URL constants with one shared "
+        f"resolver, and this suite reads the value back from it")
     return resolver()
 
 

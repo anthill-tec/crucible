@@ -173,6 +173,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
@@ -194,8 +198,9 @@ COMPILE = "/api/v2/runs/compile"
 AGENT = "CR-CRU-111-C2-tier-probe"
 
 # Nothing listens on port 1 without root — the fleet's own idiom. `_post`/`_get`
-# are patched in every drive, so no request can leave this process; the env var
-# is the belt to that brace, and the live :3849 board is never touched.
+# are patched in every drive, so no request can leave this process; the DECLARED
+# board (CR-CRU-139 §S2, written into each fixture's own project file) is the
+# belt to that brace, and the live :3849 board is never touched.
 _UNREACHABLE_CRUCIBLE_URL = "http://127.0.0.1:1"
 
 
@@ -690,8 +695,13 @@ class _ClientDriveCase(unittest.TestCase):
         self._saved_env = {k: os.environ.get(k) for k in _ENV_KEYS}
         for key in _ENV_KEYS:
             os.environ.pop(key, None)
-        os.environ["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        os.environ["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # CR-CRU-139 §S2 — the unreachable board is DECLARED in this project's
+        # own `crucible.toml`, which is where a client reads its target now.
+        # The interlock confirms the fleet really resolves it before any drive
+        # runs: an un-steered drive would resolve the shipped default, and the
+        # `_get`/`_patch` pre-flight would reach a LIVE board with it.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  f"{self.CLIENT}-crucible.py")
 
     def tearDown(self):
         for key, value in self._saved_env.items():

@@ -103,6 +103,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
@@ -164,6 +168,12 @@ def setUpModule():
     (Path(_PROJECT_DIR) / ".env").write_text(
         "CRUCIBLE_PROJECT_KEY=cr111-tier-surface-key\n"
         "CRUCIBLE_PROJECT_NAME=cr111-tier-surface-project\n")
+    # CR-CRU-139 §S2 — the unreachable board is DECLARED in the project file
+    # these drives run against, never exported. A `--help` never reaches the
+    # wire; one that somehow did refuses instantly rather than touching a live
+    # board.
+    declare_and_require_board(_PROJECT_DIR, _UNREACHABLE_CRUCIBLE_URL,
+                              "a help drive")
 
 
 def tearDownModule():
@@ -179,8 +189,6 @@ def _drive(client, argv):
     `drive_verb` idiom, minus its fake-toolchain bin dir, which no `--help`
     drive can reach (argparse prints and exits before any verb body runs)."""
     env = os.environ.copy()
-    env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-    env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL  # arduino's 2nd-choice var
     return subprocess.run(
         [sys.executable, str(CLIENT_FILES[client])] + list(argv),
         cwd=_PROJECT_DIR, env=env, capture_output=True, text=True, timeout=60)

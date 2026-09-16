@@ -68,3 +68,26 @@ recommended = 20
 min = 5
 # 500 rows is four times the largest board this fleet has carried.
 max = 500
+
+# ── The BOARD this fleet posts to ──────────────────────────────────────────
+#
+# CR-CRU-139 §S2. A connection is configuration too. The board a client posts
+# to used to be `$CRUCIBLE_URL`, bound at import into five separate module
+# constants, so "point this checkout at another board" meant an export every
+# shell and every sub-agent had to remember — and forgetting was silent: the
+# run simply landed on the default, which on a machine carrying a production
+# instance is the production board. It is a DECLARATION here instead, resolved
+# through the same chain and at the same POINT OF USE as the limits above: the
+# PROJECT's own `crucible.toml` first, then the installed copy, then this
+# shipped data. Nothing to export, and a per-project answer that survives every
+# verb and every sub-agent.
+
+[client]
+# The board every verb of every client posts to. The shipped value is the
+# address this fleet has always defaulted to, so an install that declares
+# nothing reports exactly where it did before. An operator running a second
+# instance beside a production one declares that instance's address in the
+# project's own file — `url = "http://localhost:3850"` — and every client in
+# that project follows, with nothing exported.
+url = "http://localhost:3849"
+
