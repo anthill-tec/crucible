@@ -226,10 +226,18 @@ interface Fixture {
 describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
+  // CR-CRU-139 §S1 — every server this suite SPAWNS, killed unconditionally at
+  // teardown as well as on its own path. A child that outlives its test does
+  // not merely linger: it HOLDS A PORT, and an orphan is how a resolved
+  // listener becomes a bound one nobody is tracking.
+  const spawnedServers: Array<{ kill(): void }> = [];
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    while (spawnedServers.length > 0) {
+      spawnedServers.pop()!.kill();
+    }
     while (scratchDirs.length > 0) {
       rmSync(scratchDirs.pop()!, { recursive: true, force: true });
     }
@@ -557,6 +565,7 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
           stdout: "pipe",
           stderr: "pipe",
         });
+        spawnedServers.push(proc);
 
         let port = 0;
         let bootFailure = "";
