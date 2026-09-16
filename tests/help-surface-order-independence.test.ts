@@ -77,6 +77,21 @@
 // `time` and reddens the budget with a NaN. So if this guard goes red in those
 // shapes at once, suspect the reporter's format before suspecting a starved
 // run.
+//
+// WHAT IT DOES NOT PIN IS THE ESCAPING DEPTH, and that line is drawn from two
+// measured reports rather than from one runner's habit. CI installs
+// `oven-sh/setup-bun@v2` UNPINNED, so the runner that writes the report there
+// is NOT the 1.3.14 these budgets were measured against, and the two disagree
+// about `classname` alone: 1.3.14 joins already-escaped describe names with the
+// literal text " &gt; " and escapes that whole string AGAIN when it writes the
+// attribute (`… &amp;gt; tests/…`), while 1.4.2 — the Rust rewrite, whose own
+// suite asserts it "escapes the classname attribute exactly once" — joins RAW
+// names with " > " and escapes once (`… &gt; tests/…`). Separator, order and
+// the `name` attribute's single escaping are identical underneath. So the
+// attribution below decodes the attribute and splits on that shared separator
+// instead of hand-matching one runner's escaping, which is the whole of
+// CR-CRU-136: the same run that passes here reported `helpTestRan: false` on
+// CI, with order, counts and failures all correct.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -188,8 +203,36 @@ describe("the printed-help surfaces are collected on their merits, whatever ran 
       // every case in this run belongs to the wrapper's path, while classname
       // carries the enclosing describes innermost first, so its LAST segment
       // is the group's label — the required file itself.
+      //
+      // IT IS DECODED, NOT PATTERN-MATCHED. One pass peels exactly one layer of
+      // XML escaping — `&amp;` LAST, so a double-escaped ampersand loses one
+      // layer per pass instead of two — and `classname` is decoded to a FIXPOINT
+      // because its escaping DEPTH is the one thing about this format the two
+      // runners disagree on (see the header): 1.3.14 needs two passes, 1.4.2
+      // one. Underneath, both join on the same literal " > ", so that is what
+      // the file label is split out on, and the segment this reads is a
+      // repo-relative path holding no entity, so an extra pass cannot corrupt
+      // it. The NAME attribute is escaped exactly ONCE by both runners and gets
+      // exactly one pass, so a test name that really does contain `&amp;`
+      // survives being read.
+      const decodeXmlOnce = (value: string) =>
+        value
+          .replaceAll("&lt;", "<")
+          .replaceAll("&gt;", ">")
+          .replaceAll("&quot;", '"')
+          .replaceAll("&apos;", "'")
+          .replaceAll("&amp;", "&");
+      const decodeXml = (value: string) => {
+        let decoded = value;
+        let next = decodeXmlOnce(decoded);
+        while (next !== decoded) {
+          decoded = next;
+          next = decodeXmlOnce(decoded);
+        }
+        return decoded;
+      };
       const caseKey = (name: string, classname: string) =>
-        `${classname.split("&amp;gt;").at(-1)?.trim() ?? ""} › ${name.replaceAll("&apos;", "'")}`;
+        `${decodeXml(classname).split(" > ").at(-1)?.trim() ?? ""} › ${decodeXmlOnce(name)}`;
       const casesRun = [...report.matchAll(/<testcase name="([^"]*)" classname="([^"]*)"/g)].map(
         ([, name, classname]) => caseKey(name, classname),
       );
