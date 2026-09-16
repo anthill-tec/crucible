@@ -94,20 +94,40 @@ choice) wins, then the file, then the shipped default. `$CRUCIBLE_PORT` and `$CR
 "Retired environment variables" section gains them with the same "declare it in the table instead"
 wording. A retired variable that silently still works is worse than either state.
 
-**The resolved listener is DISCLOSED, exactly as the store already is (user ruling 2026-09-16).**
-`startServer` returns `storeResolution` on its handle and repeats it at ONE shared `healthPayload`
-site so `/api/health` and `/api/v2/health` cannot drift (`src/server.ts:218,241-242,291`,
-CR-CRU-068 §S1). The listener gains the same two disclosures and nothing new: a
-`listenerResolution { port, host, rule }` on the handle, and a `listener { port, host, rule }` block
-in that same payload, where `rule` names WHICH layer won — `opts`, `file` or `shipped`.
+**The listener is RESOLVED BY A PURE FUNCTION and then DISCLOSED, exactly as the store already is
+(user ruling 2026-09-16, option b; contract corrected 2026-09-16 after RED found the first wording
+self-contradictory).** The store's shape is the whole precedent and this copies it rather than
+inventing a sibling: `resolveStore(opts?)` is a PURE exported function with injectable `env`/`cwd`
+returning `{ path, rule }` (`src/server.ts:39-79`), `startServer` calls it, keeps the answer on its
+handle as `storeResolution` (`:94,:218,:291`), and repeats it at ONE shared `healthPayload` site so
+`/api/health` and `/api/v2/health` cannot drift (`:226-245`, CR-CRU-068 §S1).
 
-This exists because of a gap RED measured rather than for symmetry. Proving "with no file present
-it listens on the shipped default" by a real bind means binding `3849` — which is precisely the
-port a production instance holds on the two-instance machine this CR exists to serve, so the test
-would be flaky exactly where the mechanism is working. With the disclosure, every step of the
-precedence chain is observable at the seam operators already read, no reserved port is bound, and
-the installer's own "the installed server still listens on its configured port" criterion is
-answered from the same field instead of a second mechanism.
+So the listener gets the same three things:
+
+- **`resolveListener(opts?)`** — a pure exported function, `env` injectable like `resolveStore`'s,
+  returning `{ port, host, portRule, hostRule }`. It reads the file and the shipped default and
+  BINDS NOTHING. This is what makes the shipped-default case provable: call it with no file and no
+  argument and assert `port` is the shipped default with `portRule: "shipped"` — no socket, no
+  flakiness, and `3849` is never bound.
+- **`listenerResolution` on the handle**, the answer `startServer` actually used.
+- **A `listener` block at that same single `healthPayload` site**, so the two health routes cannot
+  disagree.
+
+**Two corrections RED's escalation forced, both of which were defects in my wording, not in its
+reading:**
+
+- **The rule is PER AXIS: `portRule` and `hostRule`, not one `rule` for two values.** Port and host
+  resolve independently, so a single field cannot describe a boot that takes its port from an
+  argument and its host from the file. One `rule` covering two axes was ambiguous the moment the
+  mixed case existed; the store has one axis and needs only one word.
+- **The disclosure describes the RESOLUTION, and it must never contradict the socket.** My first
+  wording asked for `portRule: "shipped"` on a boot that passed a port explicitly — irreconcilable
+  with the vocabulary in the same breath, and the `port: 0` reading that would rescue it is worse:
+  it would have `listenerResolution.port` report `3849` while the server was really on a kernel
+  port, which is a disclosure that lies about where the server listens. The pure function removes
+  the need for the trick entirely. An explicit argument — including `port: 0` — is `explicit`, the
+  same word `resolveStore` already uses for an explicit `dbPath`, and what the handle discloses for
+  a running server always matches the socket it bound.
 
 ### §S1a The INSTALLER writes the connection, so nothing needs an environment
 
@@ -260,18 +280,26 @@ discovered later on the wrong dashboard.
       default commentary the limits tables carry.
 - [ ] A server booted with a `[server] port` set listens on THAT port, proven by a real request to
       it.
-- [ ] With no file present the server listens on the SHIPPED default. Proven through the disclosure
-      rather than by binding `3849`: `listenerResolution.port` equals the shipped file's declared
-      port and `listenerResolution.rule` is `shipped`, on a real boot whose actual listener is a
-      self-allocated port supplied via `opts`. Binding the real default would be flaky on exactly
-      the two-instance machine this CR serves, which is why the disclosure exists.
-- [ ] `startServer` discloses `listenerResolution { port, host, rule }` on its handle, and the ONE
-      shared `healthPayload` site carries the same values as a `listener` block — so `/api/health`
-      and `/api/v2/health` cannot drift, the way CR-CRU-068 §S1 already binds the `store` block.
-      Asserted by fetching BOTH routes and comparing them to each other and to the handle.
-- [ ] `listenerResolution.rule` names which layer won, across all three: `opts` for an explicit
-      argument, `file` for a `[server]` table, `shipped` for neither — one boot per rule, each
-      asserted against the file it was given.
+- [ ] With no file present the SHIPPED default is what resolves — asserted on the PURE
+      `resolveListener()` with no file and no argument: `port` equals the shipped file's declared
+      port, `portRule` is `shipped`. No socket is bound, so `3849` is never touched; binding the
+      real default would be flaky on exactly the two-instance machine this CR serves.
+- [ ] `resolveListener(opts?)` is exported and pure, with `env` injectable the way `resolveStore`'s
+      is, and binds nothing — asserted by calling it directly for every layer and by the absence of
+      any listener afterwards.
+- [ ] `portRule` and `hostRule` are PER AXIS and each names the layer that won: `explicit` for an
+      argument (the word `resolveStore` already uses), `file` for a `[server]` table, `shipped` for
+      neither. The MIXED case is asserted explicitly — a port from the argument and a host from the
+      file yields `portRule: "explicit"` with `hostRule: "file"`, which is the case a single `rule`
+      field could not express.
+- [ ] `startServer` discloses `listenerResolution { port, host, portRule, hostRule }` on its handle,
+      and the ONE shared `healthPayload` site carries the same values as a `listener` block — so
+      `/api/health` and `/api/v2/health` cannot drift, the way CR-CRU-068 §S1 already binds the
+      `store` block. Asserted by fetching BOTH routes and comparing them to each other and to the
+      handle.
+- [ ] What a RUNNING server discloses always matches the socket it bound: for every boot in these
+      tests, `listenerResolution.port` equals the handle's real `server.port`. A disclosure that
+      names a port the server is not listening on is the defect this criterion forbids.
 - [ ] An explicit `startServer({ port })` still wins over the file — the test seam is unchanged.
 - [ ] `$CRUCIBLE_PORT` and `$CRUCIBLE_HOST` are no longer read: a server booted with both exported
       to junk values still listens per its file/default. Asserted by an actual boot, not by grep.
