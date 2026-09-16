@@ -55,6 +55,12 @@ SERVER_STAGE_NAME = "server"
 # CR-CRU-071 AC9 gives that ordering a second job: `[unit]` runs AFTER
 # `[server]`, so by the time it decides whether to restart, the stage that
 # re-provisioned has already reported that it did.
+# CR-CRU-138 §S2 -- the SERVER's own operator-editable `crucible.toml` is laid
+# down by `[manifest]` rather than by a stage of its own: configuration
+# lay-down ALREADY lives there (it calls `manifest.lay_down_operator_config`
+# for the client file) and that same stage writes the document which must now
+# declare the server one. A hotfix does not widen the install's public stage
+# vocabulary, so this tuple is unchanged.
 STAGE_ORDER = (SERVER_STAGE_NAME, "fleet", "manifest", "unit")
 
 # The INVERSE sequence (CR-CRU-069 §S1) -- DESTRUCTIVE-LAST, deliberately not a
@@ -271,6 +277,84 @@ def config_path(target_dir: str) -> str:
     `<target-dir>/crucible-clients.json`. The one locus both the [config]
     uninstall stage and the interactive purge prompt derive it from."""
     return os.path.join(target_dir, manifest.MANIFEST_FILENAME)
+
+
+def server_config_path() -> str:
+    """The SERVER's operator-editable configuration, beside its own database
+    (CR-CRU-138 §S2).
+
+    `src/limits.ts:158-159` resolves it as `join(dirname(store), "crucible.toml")`
+    and `store_dir()` already mirrors the rule that finds that store, so this
+    is the server's own path computed in python rather than a second opinion
+    about where the server looks. Nothing wrote into that directory before
+    this CR, which is why an operator could edit every server limit and change
+    nothing.
+    """
+    return os.path.join(store_dir(), manifest.CONFIG_FILENAME)
+
+
+# Where `@anthill-tec/crucible-server` ships its own limit declarations inside
+# the published package (its `package.json` `files` list) -- the SOURCE the
+# `[server-config]` stage copies the operator's file from, so the file laid
+# down carries the declarations of the server version actually provisioned
+# rather than whatever this orchestrator was built beside.
+_SERVER_SHIPPED_CONFIG_RELPATH = ("src", manifest.CONFIG_FILENAME)
+
+
+def _provisioned_server_config_source() -> str | None:
+    """`src/crucible.toml` inside the PROVISIONED server package, or None when
+    no server is provisioned on this machine.
+
+    The candidates are `_installed_server_metadata_candidates()`' own package
+    roots -- the single locus that already answers "where did `bun add -g`
+    unpack the server?", and the pair `_server_uninstall_stage` probes with --
+    so "provisioned" means here exactly what it means everywhere else in this
+    module. None is the answer for `--no-service`, for a board that lives on
+    another host, and for a Bun layout that hides the tree: all three are the
+    same fact (no local server package), and all three make the stage decline
+    rather than fail.
+    """
+    for metadata in _installed_server_metadata_candidates():
+        source = os.path.join(os.path.dirname(metadata),
+                              *_SERVER_SHIPPED_CONFIG_RELPATH)
+        if os.path.isfile(source):
+            return source
+    return None
+
+
+def server_config_plan() -> dict:
+    """What `[manifest]` must do about the SERVER's operator-editable file
+    (CR-CRU-138 §S2): `{"path", "source", "reason"}`.
+
+    `path` is where the file belongs, `source` is the template to copy there
+    (None when no server is provisioned locally) and `reason` is the sentence
+    an operator is owed when there is nothing to copy. The DECISION is made
+    here, where `store_dir()` and the provisioning probes live; the stage that
+    executes it only copies bytes, so `manifest.py` never has to import this
+    module back.
+
+    A missing source is `--no-service`, `$CRUCIBLE_NO_SERVICE`, or a board
+    running on another host -- one fact (no local server package) with three
+    causes, and none of them is an error: the install declines that one file
+    and says why instead of failing or, worse, staying silent. The silence is
+    what let the original hole survive a whole release.
+    """
+    destination = server_config_path()
+    source = _provisioned_server_config_source()
+    if source is not None:
+        return {"path": destination, "source": source, "reason": None}
+    return {
+        "path": destination,
+        "source": None,
+        "reason": (
+            f"no Crucible server is provisioned on this machine "
+            f"({_abbreviate_home(_provisioned_server_package_dir())} does not "
+            f"exist), so the server's operator-editable "
+            f"{manifest.CONFIG_FILENAME} was not written at "
+            f"{_abbreviate_home(destination)}: nothing here would read it. A "
+            f"board running on another host keeps that file on THAT machine, "
+            f"beside its own database."),
+    }
 
 
 def _installed_server_metadata_candidates() -> list[str]:
@@ -914,6 +998,8 @@ def _unit_stage(target_dir: str, force: bool, no_service: bool = False,
     return {"path": unit_path,
             "converged": not changed and not force and provisioned,
             "restarted": restarted}
+
+
 def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     """[fleet] sub-installer — lay the eight packaged fleet files down under
     `<target-dir>/clients/` (CR-CRU-090 §S1).
@@ -1035,6 +1121,14 @@ def _stage_options(runner, no_bun_bootstrap: bool, no_service: bool,
         options["no_service"] = no_service
     if "server_advanced" in parameters:
         options["server_advanced"] = server_advanced
+    # CR-CRU-138 §S2 -- the `[manifest]` stage lays the SERVER's operator file
+    # down as well as the client's, and is handed the DECISION rather than the
+    # means to make it: where the file belongs, what to copy there (or None),
+    # and why there is nothing to copy. `store_dir()` and the provisioning
+    # probes live in THIS module, and `manifest` may not import it back, so
+    # the plan is computed here and threaded like every other opt-in option.
+    if "server_config" in parameters:
+        options["server_config"] = server_config_plan()
     return options
 
 
@@ -1045,7 +1139,9 @@ def run_install(target_dir, stage_runners=None, force=False,
     `stages` is a list of `{"name", "path" (~-abbreviated), "converged"}` in
     `STAGE_ORDER` up to (and excluding) the first failing stage, plus any
     stage-specific output the runner reported (the `[server]` stage's resolved
-    absolute `bun` path — CR-CRU-066 §S2). A stage exception halts the sequence
+    absolute `bun` path — CR-CRU-066 §S2; the `[manifest]` stage's
+    `server_config`, which is the SERVER's operator-editable file it wrote or
+    the reason it wrote none — CR-CRU-138 §S2). A stage exception halts the sequence
     and surfaces as `ok=False` plus a warning — the failure is recorded
     visibly, never swallowed.
 
@@ -1119,6 +1215,25 @@ def run_install(target_dir, stage_runners=None, force=False,
         bun = result.get("bun")
         if bun:
             stage["bun"] = str(bun)
+        # CR-CRU-138 §S2 -- what became of the SERVER's operator-editable
+        # configuration: `{"path": <written file> | None, "reason": <why not>
+        # | None}`. It rides in the stage's own output exactly as the Bun path
+        # does, rather than in a `skipped` flag: the `[manifest]` stage did
+        # write the manifest and the client's configuration, so a row claiming
+        # it was skipped would be a false record for the operator who reads it
+        # while hunting the missing file.
+        server_config = result.get("server_config")
+        if server_config is not None:
+            written = server_config.get("path")
+            # The ABSOLUTE path, deliberately unlike the row's own `path`: this
+            # one is an instruction ("edit THIS file"), and it points outside
+            # `$HOME` whenever `$XDG_DATA_HOME` does, so an abbreviation would
+            # be a lie as often as a courtesy. The `reason` below already
+            # carries a ~-abbreviated rendering for reading.
+            stage["server_config"] = {
+                "path": str(written) if written else None,
+                "reason": server_config.get("reason"),
+            }
         # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
         # subscriber, so an operator watching an upgrade must see that it
         # happened on purpose rather than infer it from a broken stream.
@@ -1167,7 +1282,7 @@ def _server_uninstall_stage(target_dir: str, purge: bool) -> dict:
     return {"path": server_path, "converged": False, "bun": bun}
 
 
-def _operator_config_is_untouched(path: str) -> bool:
+def _operator_config_is_untouched(path: str, source: str | None = None) -> bool:
     """Whether the laid-down `crucible.toml` at `path` is still exactly the
     bytes the install wrote (CR-CRU-131 §S1c).
 
@@ -1177,18 +1292,29 @@ def _operator_config_is_untouched(path: str) -> bool:
     fail-safe direction, since the cost of keeping a replaceable artifact is a
     stale file and the cost of the other mistake is an operator's
     configuration.
+
+    CR-CRU-138 §S2 -- `source` names the template `path` was copied FROM, so
+    the SERVER's file is judged against the server package's own
+    `src/crucible.toml` and the client's against this package's shipped data.
+    THE one comparison, given two sources, rather than a second rule that
+    could come to disagree with this one about what an edit is. A server
+    already de-provisioned (the `[server]` stage runs before `[config]`) has
+    no source left to compare against, which lands on the same fail-safe
+    answer: keep the file.
     """
+    if source is None:
+        source = manifest.shipped_config_path()
     try:
-        return Path(path).read_bytes() == Path(
-            manifest.shipped_config_path()).read_bytes()
+        return Path(path).read_bytes() == Path(source).read_bytes()
     except OSError:
         return False
 
 
 def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
-    """[config] inverse -- removes the two artifacts the [manifest] install
-    stage wrote at `<target-dir>`: `crucible-clients.json` and the
-    operator-editable `crucible.toml`. ONLY under `purge`.
+    """[config] inverse -- removes what the [manifest] install stage wrote:
+    `crucible-clients.json` and the operator-editable `crucible.toml` at
+    `<target-dir>`, plus (CR-CRU-138 §S2) the SERVER's operator-editable
+    `crucible.toml` beside its own database. ONLY under `purge`.
 
     Without `purge` the stage is a NO-OP that reports the path it RETAINED: a
     plain uninstall destroys nothing and stays reversible by reinstalling, and
@@ -1204,27 +1330,45 @@ def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
     so instead of leaving it to be discovered.
     """
     path = config_path(target_dir)
-    operator_config = manifest.operator_config_path(target_dir)
+    # Both operator-editable files, each with the template it was copied FROM
+    # (CR-CRU-138 §S2): the client's at `<target-dir>`, the server's beside its
+    # own database. One rule, applied twice -- a purge that protected one
+    # operator's edits and silently destroyed the other's would be the worse
+    # kind of half-fix.
+    operator_configs = (
+        (manifest.operator_config_path(target_dir),
+         manifest.shipped_config_path()),
+        (server_config_path(), _provisioned_server_config_source()),
+    )
     if not purge:
         return {"path": path, "converged": True, "retained": True}
     removed = False
     if os.path.exists(path):
         os.remove(path)
         removed = True
-    retained = False
-    if os.path.exists(operator_config):
-        if _operator_config_is_untouched(operator_config):
+    retained: list[str] = []
+    for operator_config, source in operator_configs:
+        if not os.path.exists(operator_config):
+            continue
+        # A source that is GONE (the server was de-provisioned by the stage
+        # before this one) cannot prove the file is still the install's own,
+        # so the file stays: unprovable is treated as edited, never the
+        # reverse.
+        if source is not None and _operator_config_is_untouched(
+                operator_config, source):
             os.remove(operator_config)
             removed = True
         else:
-            retained = True
+            retained.append(operator_config)
     result = {"path": path, "converged": not removed}
     if retained:
         result["retained"] = True
+        kept = [_abbreviate_home(survivor) for survivor in retained]
         result["reason"] = (
-            f"kept {_abbreviate_home(operator_config)}: it carries edits, and "
-            f"an operator's configuration is data rather than a replaceable "
-            f"artifact")
+            f"kept {', '.join(kept)}: "
+            + ("it carries" if len(kept) == 1 else "they carry")
+            + " edits, and an operator's configuration is data rather than a "
+              "replaceable artifact")
     return result
 
 
@@ -1235,14 +1379,41 @@ def _store_uninstall_stage(target_dir: str, purge: bool) -> dict:
 
     The store is the one irreplaceable artifact, so retention is the default
     and the stage otherwise only reports where the data it kept lives.
+
+    CR-CRU-138 §S2 -- the server's operator-editable `crucible.toml` lives in
+    this very directory, and `[config]` (which runs first) has already decided
+    its fate: an untouched copy is gone by now, so anything still there is an
+    operator's own file and SURVIVES. The directory is then emptied rather
+    than removed. Without this the protection would be theatre -- the file
+    would be kept by one stage and deleted by the next one, three lines later.
     """
     store_path = store_dir()
     if not purge:
         return {"path": store_path, "converged": True, "retained": True}
     if not os.path.isdir(store_path):
         return {"path": store_path, "converged": True}
-    shutil.rmtree(store_path)
-    return {"path": store_path, "converged": False}
+    survivor = server_config_path()
+    if not os.path.isfile(survivor):
+        shutil.rmtree(store_path)
+        return {"path": store_path, "converged": False}
+    for name in os.listdir(store_path):
+        member = os.path.join(store_path, name)
+        if member == survivor:
+            continue
+        if os.path.isdir(member) and not os.path.islink(member):
+            shutil.rmtree(member)
+        else:
+            os.remove(member)
+    return {
+        "path": store_path,
+        "converged": False,
+        "retained": True,
+        "reason": (
+            f"removed the store's data but kept "
+            f"{_abbreviate_home(survivor)}: it carries edits, and an "
+            f"operator's configuration is data rather than a replaceable "
+            f"artifact"),
+    }
 
 
 def _unit_uninstall_stage(target_dir: str, purge: bool) -> dict:

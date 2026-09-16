@@ -94,8 +94,8 @@ def shipped_config_path() -> str:
     return os.path.join(_CLIENTS_CANDIDATES[0], CONFIG_FILENAME)
 
 
-def lay_down_operator_config(target_dir: str) -> bool:
-    """Lay the operator-editable `crucible.toml` down under `target_dir`, and
+def lay_down_config(source: str, destination: str) -> bool:
+    """Copy an operator-editable configuration template to `destination`, and
     report whether this call WROTE it.
 
     NEVER overwrites — not even under `--force`, which is the one place this
@@ -104,16 +104,28 @@ def lay_down_operator_config(target_dir: str) -> bool:
     upgrade that resets configuration is the defect §S1c exists to prevent.
     A missing SOURCE fails definitively with the path named, exactly as the
     fleet stage fails, rather than leaving a deployment with nothing to read.
+
+    THE single lay-down (CR-CRU-138 §S2): the client's file at `<target-dir>`
+    and the server's beside its own database are the same rule applied to two
+    destinations, so a change to what "lay an operator's file down" means
+    cannot reach one of them and miss the other.
     """
-    destination = operator_config_path(target_dir)
     if os.path.lexists(destination):
         return False
-    source = shipped_config_path()
     if not os.path.isfile(source):
         raise FileNotFoundError(
             f"packaged limit defaults missing at source: {source}")
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
     Path(destination).write_bytes(Path(source).read_bytes())
     return True
+
+
+def lay_down_operator_config(target_dir: str) -> bool:
+    """Lay the CLIENT fleet's operator-editable `crucible.toml` down under
+    `target_dir`, from this package's own shipped declarations, and report
+    whether this call WROTE it."""
+    return lay_down_config(shipped_config_path(),
+                           operator_config_path(target_dir))
 
 
 def _package_version() -> str:
@@ -125,30 +137,41 @@ def _package_version() -> str:
         return "0.0.0+dev"
 
 
-def build_manifest(install_dir: str) -> dict:
+def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
     """Build the discovery manifest for clients laid down under `install_dir`.
 
-    Returns a dict with EXACTLY the top-level keys `version`, `clients`,
-    `status`, `config`. `clients` maps each of the five stacks to its installed
-    client path under `install_dir`; `status` references the STATUS-CONTRACT;
-    `config` is the operator-editable configuration the install laid down
-    (CR-CRU-131 §S1c — a file the installer WRITES belongs here like everything
-    else it lays down, or automation cannot discover the file it is meant to
-    edit). `config` names the ARTIFACT, not its payload: limits are what
-    happens to be in that file today, and anything that legitimately joins it
-    later costs no consumer a rename.
+    Returns a dict with the top-level keys `version`, `clients`, `status` and
+    `config`, plus `server_config` when the install laid
+    the server's file down. `clients` maps each of the five stacks to its
+    installed client path under `install_dir`; `status` references the
+    STATUS-CONTRACT; `config` is the operator-editable configuration the
+    install laid down (CR-CRU-131 §S1c — a file the installer WRITES belongs
+    here like everything else it lays down, or automation cannot discover the
+    file it is meant to edit). `config` names the ARTIFACT, not its payload:
+    limits are what happens to be in that file today, and anything that
+    legitimately joins it later costs no consumer a rename.
+
+    CR-CRU-138 §S2 — `server_config` is the SERVER's operator-editable file,
+    beside the server's own database. It is declared ONLY when a path is
+    given, which is only when the install really wrote one: a board on another
+    host owns that file, and publishing a path nothing here wrote would be the
+    dangling-path defect CR-CRU-090 closed. Its absence is therefore a fact
+    about this machine, not an omission.
     """
     clients_dir = os.path.join(install_dir, "clients")
     clients = {
         stack: os.path.join(clients_dir, f"{stack}-crucible.py")
         for stack in CLIENT_STACKS
     }
-    return {
+    document = {
         "version": _package_version(),
         "clients": clients,
         "status": os.path.join(clients_dir, "STATUS-CONTRACT.md"),
         "config": operator_config_path(install_dir),
     }
+    if server_config:
+        document["server_config"] = server_config
+    return document
 
 
 def _serialize(manifest_dict: dict) -> str:
@@ -165,7 +188,8 @@ def write_manifest(target_dir: str, manifest_dict: dict) -> str:
     return path
 
 
-def run_manifest_stage(target_dir: str, force: bool = False) -> dict:
+def run_manifest_stage(target_dir: str, force: bool = False,
+                       server_config: dict | None = None) -> dict:
     """The default `manifest` stage runner: lay the operator's configuration
     down, then (re)write the discovery manifest that declares it.
 
@@ -179,9 +203,35 @@ def run_manifest_stage(target_dir: str, force: bool = False) -> dict:
     file, or a changed document) and True only when the configuration was
     already there AND an identical manifest already sits on disk — the AC's
     "re-running converges (no duplicate installs)" signal.
+
+    CR-CRU-138 §S2 — the SERVER's operator-editable configuration is laid down
+    HERE too, for the same reason the client's is: this is the stage that owns
+    configuration lay-down and the one that publishes what was written. It
+    lands beside the server's own database rather than under `target_dir`, so
+    `server_config` arrives as a PLAN computed by the caller
+    (`install.server_config_plan()` — `{"path", "source", "reason"}`); this
+    module never resolves the server's store itself, which is what keeps it
+    free of an import back into `install`. A plan with no `source` means no
+    server is provisioned on this machine: nothing is written, nothing is
+    declared, and the stage REPORTS the reason as `server_config` in its
+    result so the install output states it. A missing plan (an older caller,
+    or a stage double) leaves the behaviour exactly as it was.
     """
     wrote_config = lay_down_operator_config(target_dir)
-    manifest = build_manifest(target_dir)
+    server_report: dict | None = None
+    if server_config is not None:
+        source = server_config.get("source")
+        if source:
+            written = server_config["path"]
+            if lay_down_config(source, written):
+                wrote_config = True
+            server_report = {"path": written, "reason": None}
+        else:
+            server_report = {"path": None,
+                             "reason": server_config.get("reason")}
+    manifest = build_manifest(
+        target_dir,
+        server_config=server_report["path"] if server_report else None)
     path = os.path.join(target_dir, MANIFEST_FILENAME)
     fresh = _serialize(manifest)
     converged = (
@@ -191,4 +241,7 @@ def run_manifest_stage(target_dir: str, force: bool = False) -> dict:
         and Path(path).read_text(encoding="utf-8") == fresh
     )
     write_manifest(target_dir, manifest)
-    return {"path": path, "converged": converged}
+    result = {"path": path, "converged": converged}
+    if server_report is not None:
+        result["server_config"] = server_report
+    return result
