@@ -81,7 +81,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { RETENTION_DISPOSABLE_KINDS, Store } from "../src/store.ts";
+import { RETENTION_DISPOSABLE_KINDS, SCHEMA_VERSION, Store } from "../src/store.ts";
 import { retentionDisclosure } from "../src/server.ts";
 import { SERVER_LIMIT_NAMES } from "../src/limits.ts";
 import {
@@ -953,5 +953,356 @@ describe("CR-CRU-131 §S1b — the PRECEDENCE an operator has to know is documen
       ),
     );
     expect(report(overclaimed)).toBe("");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-134 — the SCHEMA figures this document prints are derived too
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ── Why this sits in this file ────────────────────────────────────────────
+//
+// The defect is the one §S1b above was written for, one section over: a number
+// that lives in code, retyped into prose, with nothing asserting the two agree.
+// The store's schema version had moved eight migrations past the figure the
+// RUNBOOK's health-payload and boot-banner examples print. This file is the
+// only one in the tree that parses `docs/RUNBOOK.md` as structured data, so the
+// schema figures are measured HERE, by the walker that already reads this
+// document, rather than by a second walker that would have to be kept in step
+// with it (CR-CRU-134 §S1, AC6).
+//
+// ── What is READ FROM CODE rather than believed ───────────────────────────
+//
+//   the current schema version   `SCHEMA_VERSION` (src/store.ts), CROSS-CHECKED
+//                                against what a real `Store` ends up carrying
+//                                in `PRAGMA user_version` — so the guard cannot
+//                                measure the document against a version no
+//                                store is ever at
+//   the versions the document    parsed out of the examples themselves: the
+//   claims                       health payload's `schemaVersion` field and the
+//                                boot banner's `schema` figure
+//
+// Not one figure is written down here. The guard's own source is scanned for a
+// transcribed one (AC3), which is why every synthetic document below builds its
+// versions by interpolation.
+//
+// ── Why the migration banner is measured SEPARATELY ───────────────────────
+//
+// `src/server.ts` prints the migration banner as `v<from> -> v<to>`, and `to`
+// is always the boot's target — the current version. `from` is whatever the
+// store was at, so it is the one version in this document that CANNOT be
+// current, and a scanner that read it as a claim about today's schema would
+// report a correct example as wrong. So the arrow line is excluded from the
+// figure scan and answers to its own report, which asks the question §S2
+// actually asks: does this describe a migration the code can perform? It
+// passes when the banner arrives at the current version — or when the example
+// is MARKED as an illustration, the CR's explicit second branch, in which case
+// the guard knows it is one and checks no version in it.
+//
+// ── Safety ────────────────────────────────────────────────────────────────
+//
+// Unchanged from above: every document other than the RUNBOOK is a string built
+// in memory, and the only Store opened is `":memory:"`.
+
+/** This guard's own source — scanned for a transcribed figure (AC3). */
+const GUARD = "tests/docs-runbook-documents-every-limit.test.ts";
+
+/**
+ * What an UNVERSIONED store reads as. `PRAGMA user_version` defaults to zero,
+ * and a store carrying it predates versioning entirely (src/store.ts) — it is
+ * the ABSENCE of a version rather than a figure that can drift, so it cannot go
+ * stale the way a schema figure can. It is named rather than written into the
+ * synthetic banners below so that those carry no schema digit at all and the
+ * transcription scan can stay absolute.
+ */
+const UNVERSIONED = 0;
+
+/**
+ * The version a store actually ends up at: a real `Store`, migrated, asked for
+ * the version it is carrying. `SCHEMA_VERSION` is the DECLARATION; this is the
+ * OBSERVATION, and the guard requires both so that a declaration the migration
+ * chain does not actually reach could not silently become the document's
+ * target.
+ */
+function observedSchemaVersion(): number {
+  // A scratch config directory, for the same reason the retention disclosure
+  // test takes one: the resolver looks beside the store, and nothing here may
+  // read or write the real one.
+  serverConfigDir();
+  return new Store(":memory:").schemaVersion;
+}
+
+interface SchemaFigure {
+  /** Which EXAMPLE stated it — named in the offender line so a failure is actionable. */
+  readonly kind: string;
+  readonly line: number;
+  readonly version: number;
+  readonly text: string;
+}
+
+/** The migration banner, by the grammar `src/server.ts` prints it in. */
+const MIGRATION_BANNER = /migrated store schema v(\d+)\s*->\s*v(\d+)/;
+
+/**
+ * The two shapes this document states the CURRENT version in. Both must be
+ * present: the report says so when one is missing, because a document that
+ * stopped showing an example would otherwise make this guard pass by having
+ * nothing left to measure.
+ */
+const SCHEMA_FIGURE_FORMS: readonly { readonly kind: string; readonly pattern: RegExp }[] = [
+  { kind: "the health payload's `schemaVersion`", pattern: /"schemaVersion"\s*:\s*(\d+)/g },
+  { kind: "the boot banner's `schema` figure", pattern: /schema v(\d+)/g },
+];
+
+function schemaFigures(md: string): SchemaFigure[] {
+  const out: SchemaFigure[] = [];
+  md.split("\n").forEach((line, index) => {
+    // The arrow line states a FROM version that is deliberately not current.
+    if (MIGRATION_BANNER.test(line)) return;
+    for (const form of SCHEMA_FIGURE_FORMS) {
+      for (const match of line.matchAll(form.pattern)) {
+        out.push({
+          kind: form.kind,
+          line: index + 1,
+          version: Number(match[1]),
+          text: collapse(line),
+        });
+      }
+    }
+  });
+  return out;
+}
+
+/** Every documented current-version figure that is not the store's own. */
+function schemaFigureReport(md: string, current: number): string[] {
+  const figures = schemaFigures(md);
+  const out: string[] = [];
+  for (const form of SCHEMA_FIGURE_FORMS) {
+    if (!figures.some((figure) => figure.kind === form.kind)) {
+      out.push(
+        `${form.kind}: the document shows no such example at all — with none there is nothing ` +
+          `for this guard to measure, so a green result would be an empty walk`,
+      );
+    }
+  }
+  for (const figure of figures) {
+    if (figure.version !== current) {
+      out.push(
+        `${figure.kind}: documented as v${String(figure.version)} at line ${String(figure.line)}; ` +
+          `a store carries v${String(current)} — ${figure.text.slice(0, 120)}`,
+      );
+    }
+  }
+  return out;
+}
+
+interface MigrationExample {
+  readonly line: number;
+  readonly from: number;
+  readonly to: number;
+  readonly text: string;
+  /** Whether its section says the versions in it are an illustration. */
+  readonly marked: boolean;
+}
+
+/** An example the document presents as an illustration rather than as a reading. */
+const ILLUSTRATION = /illustrat|for example only|example versions|not (a )?(real|live|current) version/i;
+
+/** Everything from the last heading above a line down to the line itself. */
+function contextBefore(lines: readonly string[], index: number): string {
+  let start = 0;
+  for (let i = index; i >= 0; i -= 1) {
+    if (/^#{1,6}\s/.test(lines[i]!)) {
+      start = i;
+      break;
+    }
+  }
+  return lines.slice(start, index + 1).join("\n");
+}
+
+function migrationExamples(md: string): MigrationExample[] {
+  const lines = md.split("\n");
+  const out: MigrationExample[] = [];
+  lines.forEach((line, index) => {
+    const match = MIGRATION_BANNER.exec(line);
+    if (match === null) return;
+    out.push({
+      line: index + 1,
+      from: Number(match[1]),
+      to: Number(match[2]),
+      text: collapse(line),
+      marked: ILLUSTRATION.test(contextBefore(lines, index)),
+    });
+  });
+  return out;
+}
+
+/**
+ * The migration example, measured against the migration the code can perform:
+ * a boot migrates to its TARGET, which is the current version, and migrations
+ * only ever run forward. An example marked as an illustration is spared — the
+ * CR's second branch — and the absence of any example at all is reported, so
+ * deleting the banner is not a way to pass.
+ */
+function migrationExampleReport(md: string, current: number): string[] {
+  const examples = migrationExamples(md);
+  const out: string[] = [];
+  if (examples.length === 0) {
+    out.push(
+      "the document shows no migration banner at all — an operator reading one off their own " +
+        "console has nothing to match it against, and this guard has nothing to measure",
+    );
+  }
+  for (const example of examples) {
+    if (example.marked) continue;
+    if (example.to !== current) {
+      out.push(
+        `the migration banner at line ${String(example.line)} arrives at v${String(example.to)}; ` +
+          `a boot migrates to its TARGET, which is v${String(current)}, so this is a path the ` +
+          `code cannot take — state the version it reaches, or mark the example as an ` +
+          `illustration — ${example.text.slice(0, 120)}`,
+      );
+    }
+    if (example.from >= example.to) {
+      out.push(
+        `the migration banner at line ${String(example.line)} runs from v${String(example.from)} ` +
+          `to v${String(example.to)}; a migration only ever runs forward`,
+      );
+    }
+  }
+  return out;
+}
+
+describe("CR-CRU-134 §S1 — the schema guard's own instruments", () => {
+  test(
+    "GUARD — the version is READ from the software twice, the declaration and a real store's " +
+      "own, and this guard's source transcribes no figure at all",
+    () => {
+      // The declaration and the observation. A `SCHEMA_VERSION` the migration
+      // chain did not actually reach would make every assertion below measure
+      // the document against a version no store is ever at.
+      expect(SCHEMA_VERSION).toBeGreaterThan(0);
+      expect(observedSchemaVersion()).toBe(SCHEMA_VERSION);
+
+      // AC3 — no figure is transcribed into the guard. Every synthetic document
+      // below builds its versions by interpolation, so a literal one appearing
+      // here would be exactly the copy this CR exists to forbid.
+      const source = text(GUARD);
+      expect(source).toContain("migrationExampleReport"); // the file this names
+      const transcribed = source
+        .split("\n")
+        .map((line, index) => ({ line, at: index + 1 }))
+        .filter(
+          ({ line }) =>
+            /schema v\d/.test(line) ||
+            /"schemaVersion"\s*:\s*\d/.test(line) ||
+            /v\d+\s*->\s*v\d+/.test(line),
+        )
+        .map(({ line, at }) => `line ${String(at)}: ${collapse(line).slice(0, 120)}`);
+      expect(report(transcribed)).toBe("");
+    },
+  );
+
+  test(
+    "CONTROL — figures that ARE the store's own are passed in silence, a stale one is caught by " +
+      "example and line, and a document showing none is reported rather than passed",
+    () => {
+      const current = SCHEMA_VERSION;
+      const correct = [
+        "## Schema versions and migration",
+        "",
+        "```sh",
+        `# → {"store":{"path":"…","rule":"cwd-data","schemaVersion":${String(current)},"migration":null}}`,
+        "```",
+        "",
+        "```",
+        `[crucible] store /path/to/crucible.db (rule: cwd-data, schema v${String(current)})`,
+        `[crucible] migrated store schema v${String(UNVERSIONED)} -> v${String(current)}`,
+        "```",
+      ].join("\n");
+      // A document that agrees: nothing whatever is said about it.
+      expect(schemaFigureReport(correct, current)).toEqual([]);
+      expect(migrationExampleReport(correct, current)).toEqual([]);
+      // …and both examples were actually FOUND, so that silence is agreement
+      // rather than a scan that matched nothing.
+      expect(schemaFigures(correct).map((figure) => figure.kind).sort()).toEqual(
+        SCHEMA_FIGURE_FORMS.map((form) => form.kind).sort(),
+      );
+
+      // One figure moved, everything else identical: caught, named, and the
+      // correct example beside it is still passed in silence.
+      const stale = correct.replace(
+        `"schemaVersion":${String(current)}`,
+        `"schemaVersion":${String(current - 1)}`,
+      );
+      const offenders = schemaFigureReport(stale, current);
+      expect(offenders.length).toBe(1);
+      expect(offenders[0]).toContain("the health payload's `schemaVersion`");
+      expect(offenders[0]).toContain(`v${String(current - 1)}`);
+      expect(offenders[0]).toContain(`v${String(current)}`);
+      expect(offenders.filter((line) => line.includes("boot banner"))).toEqual([]);
+
+      // A document that shows no example at all does not pass: both forms are
+      // reported missing, and so is the migration banner.
+      const silent = [
+        "## Schema versions and migration",
+        "",
+        "The store carries its schema version in `PRAGMA user_version`.",
+      ].join("\n");
+      expect(schemaFigureReport(silent, current).length).toBe(SCHEMA_FIGURE_FORMS.length);
+      expect(migrationExampleReport(silent, current).length).toBe(1);
+    },
+  );
+
+  test(
+    "CONTROL — a migration banner that arrives where no boot can is CAUGHT, the same banner is " +
+      "spared once its section marks it an illustration, and a backwards one is caught too",
+    () => {
+      const current = SCHEMA_VERSION;
+      const documentOf = (intro: string, from: number, to: number): string =>
+        [
+          "## Schema versions and migration",
+          "",
+          intro,
+          "",
+          "```",
+          `[crucible] migrated store schema v${String(from)} -> v${String(to)}`,
+          "```",
+        ].join("\n");
+      const plain = "The startup lines look like this:";
+      const marked = "The versions below are illustrative — they are not read from a live store:";
+
+      // Arrives at a version no boot migrates to: caught, naming both.
+      const stale = migrationExampleReport(documentOf(plain, UNVERSIONED, current - 1), current);
+      expect(stale.length).toBe(1);
+      expect(stale[0]).toContain(`v${String(current - 1)}`);
+      expect(stale[0]).toContain(`v${String(current)}`);
+
+      // The SAME banner, one sentence different: spared, because the guard is
+      // told it is an illustration. The marker is the only variable here.
+      expect(migrationExampleReport(documentOf(marked, UNVERSIONED, current - 1), current)).toEqual([]);
+
+      // A banner that arrives at the current version needs no marker at all.
+      expect(migrationExampleReport(documentOf(plain, UNVERSIONED, current), current)).toEqual([]);
+
+      // Backwards is caught on its own account, not as a version mismatch.
+      const backwards = migrationExampleReport(documentOf(plain, current, current), current);
+      expect(backwards.length).toBe(1);
+      expect(backwards[0]).toContain("only ever runs forward");
+    },
+  );
+});
+
+describe("CR-CRU-134 §S1 — docs/RUNBOOK.md's schema figures are the store's own", () => {
+  test("every documented current-version figure is the version a store actually carries", () => {
+    const current = observedSchemaVersion();
+    expect(current).toBe(SCHEMA_VERSION);
+    expect(report(schemaFigureReport(text(RUNBOOK), current))).toBe("");
+  });
+});
+
+describe("CR-CRU-134 §S2 — the migration example describes a migration that exists", () => {
+  test("the documented banner arrives where a boot arrives, or says it is an illustration", () => {
+    expect(report(migrationExampleReport(text(RUNBOOK), observedSchemaVersion()))).toBe("");
   });
 });
