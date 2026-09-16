@@ -257,7 +257,7 @@ once the table exists.
 ```sh
 curl -fsSL http://127.0.0.1:3849/api/health
 # → {"ok":true,"status":"healthy","version":"…","uptime_s":…,
-#    "store":{"path":"…","rule":"…","schemaVersion":5,"migration":null},
+#    "store":{"path":"…","rule":"…","schemaVersion":13,"migration":null},
 #    "counts":{…}}
 ```
 
@@ -278,8 +278,8 @@ The store carries its schema version in `PRAGMA user_version`, and the server
 reports it as `store.schemaVersion` on both health routes and at startup:
 
 ```
-[crucible] store /path/to/crucible.db (rule: cwd-data, schema v5)
-[crucible] migrated store schema v0 -> v5 (pre-upgrade backup: /path/to/crucible.db.pre-upgrade-1787213052079)
+[crucible] store /path/to/crucible.db (rule: cwd-data, schema v13)
+[crucible] migrated store schema v0 -> v13 (pre-upgrade backup: /path/to/crucible.db.pre-upgrade-1787213052079)
 ```
 
 - **Migration is automatic and transactional.** Each step's schema change and
