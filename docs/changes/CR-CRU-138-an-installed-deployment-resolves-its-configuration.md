@@ -122,6 +122,23 @@ the manifest and the client config, so the marker would be a false record in the
 worse than the silent skip this section fixes, because an operator debugging a missing file would
 then be reading a lie. The skip belongs to the LAY-DOWN, not to the stage.
 
+**A consequence §S1 forces, and the guard the client half never had.** Making the install root a
+configuration candidate means a client loaded FROM A CHECKOUT derives `<checkout>` as its install
+dir, so a developer's gitignored `<checkout>/crucible.toml` (present on the reporting workstation,
+3807 bytes, `.gitignore:10`) answers for every client run from the tree. That is intended for a
+developer, and fatal for a suite: four tests in
+`tests/client/test_client_limits_resolve_from_configuration.py` pass on CI — where no such file
+exists — and fail on any machine that has one.
+
+CR-CRU-131 §S1c made exactly this argument, for the SERVER only: *"on a developer's machine
+`data/crucible.toml` exists and a suite run from the repo root resolves its cap; on a fresh clone or
+in CI it does not, and the same suite resolves none. Green here, red there, surfacing at gate time
+wearing an unrelated face."* It produced `tests/no-suite-resolves-the-repo-configuration.test.ts`
+for the server and nothing for the clients. So this CR adds the missing half: **no python suite may
+resolve the checkout's own `crucible.toml`**, asserted by a guard that names the offending path, and
+every fixture that loads the client module does so from a COPY under a temp root rather than from
+the checkout.
+
 ### §S3 A test installs, then resolves
 
 The missing coverage is the defect. One test exercises the real seam end to end: run the installer
