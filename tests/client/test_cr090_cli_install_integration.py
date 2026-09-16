@@ -18,7 +18,7 @@ The six guards, each an entry-point observation:
 
 - The exit code plus the WIRING: `cli.main` returns 0 and the target dir it was
   ASKED for is the one that ends up holding both `clients/` and the manifest.
-- AC2 through the entry point: `<target-dir>/clients/` holds EXACTLY the eight
+- AC2 through the entry point: `<target-dir>/clients/` holds EXACTLY the nine
   packaged files, each byte-identical to `manifest.source_clients_dir()`'s
   copy. Bytes, never sizes -- a truncated copy passes a size check.
 - AC3 through the entry point: the manifest ACTUALLY WRITTEN at
@@ -39,7 +39,7 @@ The six guards, each an entry-point observation:
   this one: `cmd_install` publishes only `{name, path}` (plus the `[server]`
   stage's `bun`) per stage row, so `converged` is NOT a field of the printed
   envelope. At the entry point convergence is therefore observable as the
-  ABSENCE OF A REWRITE -- the eight files' mtimes survive the second run and
+  ABSENCE OF A REWRITE -- the nine files' mtimes survive the second run and
   move under `--force`. Backdating to a sentinel mtime first makes that
   independent of filesystem clock resolution. Kept light on purpose: cycle 264
   owns the deep convergence contract; this is only its entry-point echo.
@@ -72,7 +72,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # §S1 -- the packaged fleet, exactly. Five clients plus the two shared modules
 # they load BY FILE PATH from their own directory plus the status contract the
-# manifest publishes as `status`.
+# manifest publishes as `status` plus (CR-CRU-138 §S4) the distribution's own
+# limit declarations, which travel as package data beside the module that
+# reads them.
 EXPECTED_FLEET_FILES = frozenset({
     "bun-crucible.py",
     "python-crucible.py",
@@ -82,6 +84,12 @@ EXPECTED_FLEET_FILES = frozenset({
     "_crucible_axi.py",
     "toon.py",
     "STATUS-CONTRACT.md",
+    # CR-CRU-138 §S4 -- the distribution's own limit declarations, package
+    # data beside the module that reads them. `_crucible_axi.py` resolves
+    # them from its OWN directory, so a fleet laid down without this file is
+    # a fleet whose every verb raises the moment the operator's editable
+    # `<install>/crucible.toml` is absent.
+    "crucible.toml",
 })
 
 CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
@@ -131,8 +139,20 @@ def _import_fresh(*module_names):
 def _fast_provision_server_stage(target_dir, force):
     """A `[server]` stage double that PROVISIONS instantly: no subprocess, no
     network, no Bun, no global `bun add -g`. Matches the `(target_dir, force)`
-    runner protocol, so `_stage_options` injects nothing extra."""
-    return {"path": os.path.join(target_dir, "server"), "converged": False}
+    runner protocol, so `_stage_options` injects nothing extra.
+
+    It reports a `bun` path because the REAL stage always does (CR-CRU-066 --
+    the resolved executable the install ran), and `cli.py` adds that field to
+    the printed row CONDITIONALLY. A stub that omitted it left the four rows
+    carrying identical keys, which is the only condition under which
+    `toon.py:289` `_extract_tabular_fields` emits the TABULAR form -- so this
+    fixture printed an envelope shape a real install has never produced, and
+    every assertion made against it was made against the stub rather than
+    against what an operator sees. That is this CR's own defect one layer
+    down: two halves each tested against something that was not the other.
+    """
+    return {"path": os.path.join(target_dir, "server"), "converged": False,
+            "bun": os.path.join(target_dir, "bun", "bin", "bun")}
 
 
 def _fast_unit_stage(target_dir, force):
@@ -144,12 +164,23 @@ def _fast_unit_stage(target_dir, force):
 
 
 def _parse_stage_rows(stdout: str) -> list[tuple[str, str]]:
-    """The `stages[N]{name,path}` rows of a printed TOON-AXI install envelope,
-    IN PRINTED ORDER, as `(name, path)` pairs.
+    """The `stages[N]` rows of a printed TOON-AXI install envelope, IN PRINTED
+    ORDER, as `(name, path)` pairs.
 
-    Reads only what the operator reads. The tabular header declares the field
-    order, and each row is `name,path` -- so the returned list's order IS the
-    order the envelope presents the stages in.
+    Reads only what the operator reads, and reads BOTH shapes TOON emits,
+    because which one an install prints is not this suite's to decide: the
+    tabular `stages[N]{name,path}:` form is used only when EVERY row carries
+    identical keys, and a real install has never satisfied that -- the
+    `[server]` stage reports its resolved `bun` path (CR-CRU-066) and the
+    `[manifest]` stage its `server_config` report (CR-CRU-138 §S2), so
+    production envelopes are the LIST form. A parser that understood only the
+    table was reading the shape this suite's own stub happened to produce,
+    which is how it would have gone green on an envelope no operator sees.
+
+    In the list form a row OPENS at `- name: <n>` and its own keys sit one
+    level in; `path` is taken ONLY at that level, never from a nested block --
+    `server_config:` carries a `path:` of its own, and a parser that took the
+    first one it met would report the stage's path as the nested one.
     """
     lines = stdout.splitlines()
     header = next(
@@ -159,15 +190,30 @@ def _parse_stage_rows(stdout: str) -> list[tuple[str, str]]:
     )
     if header is None:
         return []
-    rows = []
+    header_indent = len(lines[header]) - len(lines[header].lstrip())
+    tabular = "{" in lines[header]
+    rows: list[list[str]] = []
+    key_indent = None
     for line in lines[header + 1:]:
-        if not line.startswith("    "):  # dedent ends the tabular block
+        if not line.strip():
             break
-        name, _, path = line.strip().partition(",")
-        if not path:
+        indent = len(line) - len(line.lstrip())
+        if indent <= header_indent:  # dedent ends the block
             break
-        rows.append((name, path))
-    return rows
+        entry = line.strip()
+        if tabular:
+            name, _, path = entry.partition(",")
+            if not path:
+                break
+            rows.append([name, path])
+            continue
+        if entry.startswith("- name:"):
+            key_indent = indent + 2
+            rows.append([entry.split(":", 1)[1].strip(), ""])
+        elif (rows and indent == key_indent
+                and entry.startswith("path:")):
+            rows[-1][1] = entry.split(":", 1)[1].strip()
+    return [(name, path) for name, path in rows]
 
 
 class _CliInstallCase(unittest.TestCase):
@@ -221,7 +267,7 @@ class _CliInstallCase(unittest.TestCase):
         return code, buffer.getvalue()
 
     def assertFleetLanded(self, stdout):
-        """The eight files are on disk under the REQUESTED target -- asserted
+        """The nine files are on disk under the REQUESTED target -- asserted
         as a precondition wherever a later step would otherwise crash on a
         missing path, so the failure names the defect instead of raising
         FileNotFoundError."""
@@ -234,7 +280,7 @@ class _CliInstallCase(unittest.TestCase):
         landed = set(os.listdir(clients_dir))
         self.assertEqual(
             EXPECTED_FLEET_FILES, landed,
-            f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the eight "
+            f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the nine "
             f"packaged fleet files after `cli.main install`. "
             f"missing={sorted(EXPECTED_FLEET_FILES - landed)} "
             f"unexpected={sorted(landed - EXPECTED_FLEET_FILES)}. "
@@ -298,10 +344,10 @@ class CliMainInstallWiringTest(_CliInstallCase):
 
 
 class CliMainInstallFleetBytesTest(_CliInstallCase):
-    """AC2, through the entry point -- exactly the eight packaged files land
+    """AC2, through the entry point -- exactly the nine packaged files land
     under `<target-dir>/clients/`, byte-identical to their source."""
 
-    def test_cli_main_install_lands_exactly_the_eight_fleet_files(self):
+    def test_cli_main_install_lands_exactly_the_packaged_fleet_files(self):
         code, stdout = self.run_cli_install()
         self.assertCliOk(code, stdout)
         self.assertFleetLanded(stdout)
@@ -462,10 +508,10 @@ class CliMainInstallSecondRunTest(_CliInstallCase):
         self.assertEqual(
             before, self.fleet_mtimes(),
             f"AC5/AC8 -- a second `cli.main install` over an unchanged target "
-            f"must CONVERGE: bytes already match, so not one of the eight "
+            f"must CONVERGE: bytes already match, so not one of the nine "
             f"files is rewritten. envelope:\n{second_stdout}")
 
-    def test_force_re_copies_all_eight_through_the_entry_point(self):
+    def test_force_re_copies_every_fleet_file_through_the_entry_point(self):
         first_code, first_stdout = self.run_cli_install()
         self.assertCliOk(first_code, first_stdout)
         self.assertFleetLanded(first_stdout)
@@ -478,8 +524,8 @@ class CliMainInstallSecondRunTest(_CliInstallCase):
         unchanged = sorted(name for name in before if before[name] == after[name])
         self.assertEqual(
             [], unchanged,
-            f"AC5/AC8 -- `--force` through the entry point must re-copy ALL "
-            f"eight files unconditionally; these were left alone: "
+            f"AC5/AC8 -- `--force` through the entry point must re-copy EVERY "
+            f"fleet file unconditionally; these were left alone: "
             f"{unchanged}. envelope:\n{force_stdout}")
 
 

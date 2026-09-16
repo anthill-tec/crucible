@@ -67,8 +67,10 @@ HOW EACH FAILS IF THE CODE DOES NOTHING:
         defect seen from its third side.
   §S2  nothing ever writes `store_dir()/crucible.toml`; every assertion in that
         class fails at `require_server_config`, naming the directory and what
-        it actually holds. The skip-with-a-reason test fails because no stage
-        in the install output declares itself skipped at all.
+        it actually holds. The skip-with-a-reason test fails because the
+        `[manifest]` stage row carries no `server_config` report at all --
+        neither a path nor a reason -- so an operator whose board lives on
+        another host is told nothing about the file that was not written.
   §S3  both lifecycle tests fail on their §S1 resolution assertion; the escape
         detector is fixture-level and passes today (nothing escapes), which is
         what it is for. The L3 test fails because docs/RUNBOOK.md documents no
@@ -158,6 +160,13 @@ CONFIG_NAME = "crucible.toml"
 #: so every expectation below is READ BACK off it rather than written out.
 SHIPPED_CLIENT_DATA = REPO_ROOT / "clients" / CONFIG_NAME
 SHIPPED_SERVER_DATA = REPO_ROOT / "src" / CONFIG_NAME
+
+#: §S4 -- the manifest key the fleet's OWN shipped data is declared under.
+#: FLEET content, deliberately NOT the operator's `config`: one is package
+#: data replaced on every upgrade, the other is an operator's file that
+#: survives a purge once they have edited it, and automation that cannot tell
+#: them apart will eventually edit the wrong one.
+FLEET_CONFIG_MANIFEST_KEY = "shipped_config"
 
 CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_rows")
 SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention")
@@ -270,6 +279,34 @@ def _set_value(path, name, value):
     return value
 
 
+def _overwrite_field(path, name, field, value):
+    """Overwrite one of the DOCUMENTED fields of a limit's table IN PLACE --
+    the edit the shipped file's own header tells an operator never to make
+    ("Do NOT edit `description`, `recommended`, `min` or `max`").
+
+    It is written here precisely because §S4 is about a file that today is
+    BOTH the operator's and the distribution's: an operator who makes this
+    edit is rewriting the build's package data, and the only way to assert
+    they cannot is to have one make it. As with `_set_value`, the result is
+    proved by parsing the file back off disk.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    table = re.search(r"(?ms)^\[limits\.%s\].*?(?=^\[|\Z)" % (re.escape(name),),
+                      text)
+    assert table is not None, "no `[limits.%s]` table to edit in %s" % (name, path)
+    block = table.group(0)
+    edited_block = re.sub(r"(?m)^(\s*%s\s*=).*$" % (re.escape(field),),
+                          "\\g<1> %d" % (value,), block, count=1)
+    assert edited_block != block, (
+        "no `%s = …` to overwrite in `[limits.%s]` of %s" % (field, name, path))
+    Path(path).write_text(
+        text[:table.start()] + edited_block + text[table.end():],
+        encoding="utf-8")
+    assert _limits_in(path)[name][field] == value, (
+        "the overwrite did not land in %s" % (path,))
+    return value
+
+
 # ===========================================================================
 # L2 -- the escape detector (§S3)
 # ===========================================================================
@@ -349,6 +386,26 @@ def _escape_snapshot(locations):
     return {label: probe(path) for label, path, probe in locations}
 
 
+def _watch_verdict(before, now):
+    """What one watched location actually WITNESSED -- `CHANGED`, `unchanged`,
+    or `absent throughout`.
+
+    The third is not the second, and a failure report that renders them the
+    same way invites a reader to credit a watch that never had anything to
+    watch. On this workstation `~/.local/share/crucible` does not exist at all
+    (the board runs from `<repo>/data/crucible.db`), so that probe is a stable
+    non-existence here and proves nothing LOCALLY -- while proving a real
+    negative on a machine where the store does exist. Saying which is which
+    costs one comparison and stops the detector from being read as stronger
+    evidence than it is.
+    """
+    if before != now:
+        return "CHANGED"
+    if not before[""][0]:
+        return "absent throughout (nothing to watch on this machine)"
+    return "unchanged"
+
+
 # ===========================================================================
 # L1 -- the process-scoped sandbox (§S3), inherited by every case below
 # ===========================================================================
@@ -425,15 +482,23 @@ class _InstalledDeploymentCase(unittest.TestCase):
         self.server_config = os.path.join(self.store_dir, CONFIG_NAME)
         self.manifest_file = os.path.join(
             self.target_dir, self.manifest.MANIFEST_FILENAME)
-        self.installed_axi = os.path.join(
-            self.target_dir, self.install.FLEET_DIRNAME, "_crucible_axi.py")
-        self.installed_client = os.path.join(
-            self.target_dir, self.install.FLEET_DIRNAME, "bun-crucible.py")
+        self.fleet_dir = os.path.join(self.target_dir, self.install.FLEET_DIRNAME)
+        self.installed_axi = os.path.join(self.fleet_dir, "_crucible_axi.py")
+        self.installed_client = os.path.join(self.fleet_dir, "bun-crucible.py")
+        # §S4 -- the distribution's OWN data, beside the module that reads it:
+        # the first of `_SHIPPED_DATA_CANDIDATES`, which no install lays down
+        # today, which is why the second (the operator's file) answers.
+        self.fleet_config = os.path.join(self.fleet_dir, CONFIG_NAME)
 
     # -- L2 ----------------------------------------------------------------
 
     def assert_nothing_escaped(self):
         after = _escape_snapshot(self.real_locations)
+        # Every watch's own verdict, reported alongside the failure: a location
+        # that was ABSENT THROUGHOUT witnessed nothing and must not be read as
+        # a location that was watched and stayed put.
+        verdicts = {label: _watch_verdict(self.escape_before[label], after[label])
+                    for label, _path, _probe in self.real_locations}
         for label, _path, _probe in self.real_locations:
             before, now = self.escape_before[label], after[label]
             if before == now:
@@ -449,7 +514,8 @@ class _InstalledDeploymentCase(unittest.TestCase):
                 " landed here came from a hardcoded path, an `expanduser`"
                 " evaluated before the patch, or a subprocess handed a stale"
                 " environment -- and it landed on the OPERATOR's machine."
-                " Changed: %r" % (label, self.root, moved))
+                " Changed: %r. Every watch this run: %r"
+                % (label, self.root, moved, verdicts))
 
     # -- driving the REAL entry points --------------------------------------
 
@@ -1032,27 +1098,49 @@ class TheInstallerLaysDownTheServersOperatorFileTest(_InstalledDeploymentCase):
             "`--purge` removes it; leaving it makes the modified-file "
             "protection unobservable")
 
-    def test_without_a_provisioned_server_the_stage_is_skipped_with_a_stated_reason(self):
+    def manifest_stage(self, stages):
+        rows = [stage for stage in stages if stage.get("name") == "manifest"]
+        self.assertEqual(
+            1, len(rows),
+            "the install must report exactly one `[manifest]` stage row -- the "
+            "stage the configuration lay-down lives in: %r" % (stages,))
+        return rows[0]
+
+    def test_without_a_provisioned_server_the_laydown_reports_it_did_not_happen_and_why(self):
         """A silent skip is how the first hole stayed invisible: the operator of
         a machine whose board lives on another host must be TOLD that no server
-        configuration was written, and why."""
+        configuration was written, and why.
+
+        The lay-down lives in `[manifest]` -- the stage that publishes the
+        paths, which really did do its own work -- so the report is that
+        stage's own `server_config` field rather than a stage declaring itself
+        skipped: `{"path": <written file> | None, "reason": <sentence> | None}`,
+        the shape `[server]` already uses for its resolved bun path. What is
+        REQUIRED is unchanged: a machine that wrote no server configuration
+        must say so, naming the server it did not find provisioned.
+        """
         stages = self.install_once()
 
         self.assertFalse(
             os.path.exists(self.server_config),
             "nothing provisioned a server here, so no server configuration is "
             "owed at %s" % (self.server_config,))
-        skipped = [stage for stage in stages if stage.get("skipped")]
-        self.assertEqual(
-            1, len(skipped),
-            "§S2: exactly one stage must report itself SKIPPED -- the "
-            "server-configuration stage, because no server is provisioned on "
-            "this machine. The install reported %r" % (stages,))
-        reason = skipped[0].get("reason") or ""
+        reported = self.manifest_stage(stages).get("server_config")
+        self.assertIsInstance(
+            reported, dict,
+            "§S2: the `[manifest]` stage must report the server-configuration "
+            "lay-down as `{'path': …, 'reason': …}` whether or not it "
+            "happened -- a lay-down nobody reports is a lay-down nobody can "
+            "tell from a failure. The install reported %r" % (stages,))
+        self.assertIsNone(
+            reported.get("path"),
+            "no server is provisioned on this machine, so no path may be "
+            "claimed: %r" % (reported,))
+        reason = reported.get("reason") or ""
         self.assertTrue(
             re.search(r"server|provision", reason, re.IGNORECASE),
-            "the skip must STATE ITS REASON, naming the server it did not find "
-            "provisioned: reason=%r" % (reason,))
+            "the skipped lay-down must STATE ITS REASON, naming the server it "
+            "did not find provisioned: reason=%r" % (reason,))
 
 
 # ===========================================================================
@@ -1219,6 +1307,344 @@ class TheKernelIsolationScriptIsDocumentedAndCannotDriftTest(_InstalledDeploymen
                 "%s runs %s: the portable layers are L1+L2, which gate every "
                 "push; L3 stays an operator's own paranoia"
                 % (workflow.name, scripts[0]))
+
+
+# ===========================================================================
+# §S4 -- the installed fleet carries its OWN shipped defaults, and the
+#        operator's file is never them
+# ===========================================================================
+
+class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase):
+    """`_SHIPPED_DATA_CANDIDATES` (clients/_crucible_axi.py:130-136) is
+    `(<install>/clients/crucible.toml, <install>/crucible.toml)`, and on an
+    installed fleet the FIRST never exists -- `[fleet]` copies eight files
+    (install.py:212-221) and the distribution's data is not one of them. So
+    `shipped_data_path()` resolves the SECOND: the OPERATOR's editable file.
+
+    One file was therefore doing two incompatible jobs, and both consequences
+    were observed on a healthy 0.2.0 install before it was removed:
+
+      * delete it -- an ordinary `uninstall --purge` -- and every client verb
+        raises `RuntimeError: no shipped limit defaults found at …`. Not a
+        degraded default: a crash, on a machine that still has a whole fleet
+        installed;
+      * keep it, and an operator editing "their" file is editing what the code
+        treats as the BUILD's recommendations, so `recommended` itself becomes
+        operator-mutable -- which
+        `test_a_shipped_declaration_carries_no_value_of_its_own`
+        (tests/client/test_client_limits_resolve_from_configuration.py:434)
+        exists to forbid and cannot see, because it runs against a CHECKOUT
+        where the two files are genuinely different files.
+
+    So the fleet carries the distribution's own `crucible.toml` at
+    `<install>/clients/crucible.toml`, beside the module that reads it, as
+    PACKAGE DATA: replaced wholesale on upgrade like every other file that
+    stage copies, declared in the manifest as FLEET content under
+    `shipped_config` rather than as configuration, and never left absent while
+    the module that cannot work without it is still installed.
+    """
+
+    LIMIT = "truncate_field_chars"
+
+    #: Package data a hand has been laid on -- the state a re-install must
+    #: erase rather than preserve, which is the whole difference between this
+    #: file and the operator's.
+    MODIFIED_MARKER = "# hand-modified package data, cycle 472\n"
+
+    def require_fleet_config(self):
+        self.assertTrue(
+            os.path.isfile(self.fleet_config),
+            "CR-CRU-138 §S4: the `[fleet]` stage must lay the distribution's "
+            "own `%s` down at %s -- beside `_crucible_axi.py`, the module that "
+            "reads it, and the FIRST of `_SHIPPED_DATA_CANDIDATES`. Without it "
+            "an installed client's only package data is the OPERATOR's file, "
+            "which is not the distribution's to read. `%s` holds %r"
+            % (CONFIG_NAME, self.fleet_config, self.fleet_dir,
+               sorted(os.listdir(self.fleet_dir))
+               if os.path.isdir(self.fleet_dir) else None))
+        return self.fleet_config
+
+    def test_the_install_lays_the_distributions_own_data_down_beside_the_module_that_reads_it(self):
+        """The laid-down copy is BYTE-IDENTICAL to the distribution's own data
+        (`manifest.shipped_config_path()`), and `shipped_data_path()` answers
+        with THAT path.
+
+        Asserted on WHICH path it resolved rather than on it not raising:
+        today it does not raise either -- it answers with the operator's file,
+        and a test satisfied by 'something came back' would have passed
+        throughout the defect.
+        """
+        self.install_once()
+        source = self.manifest.shipped_config_path()
+        self.require_fleet_config()
+        self.assertEqual(
+            Path(source).read_bytes(), Path(self.fleet_config).read_bytes(),
+            "the laid-down package data must be the distribution's OWN bytes "
+            "(%s): the file an operator edits and the declarations the fleet "
+            "falls back to are two different data, and only a byte copy of the "
+            "source keeps the second one the BUILD's" % (source,))
+
+        # The operator's file is made to DIFFER, so neither assertion below
+        # can be satisfied by the candidate that answers today.
+        declaration = _limits_in(self.require_install_config())[self.LIMIT]
+        (configured,) = _legal_values(declaration, 1)
+        _set_value(self.install_config, self.LIMIT, configured)
+        self.assertNotEqual(
+            Path(source).read_bytes(), Path(self.install_config).read_bytes(),
+            "fixture sanity: the operator's file must now differ from the "
+            "shipped source, or the two candidates are indistinguishable")
+
+        os.chdir(self.elsewhere)
+        axi = self.axi_from_the_install()
+        resolved = axi.shipped_data_path()
+        self.assertEqual(
+            os.path.realpath(self.fleet_config), os.path.realpath(resolved),
+            "§S4: an installed client's PACKAGE DATA is the copy beside its own "
+            "module. `shipped_data_path()` answered %r -- the operator's "
+            "editable file, doing a second job it cannot do: the aliasing this "
+            "section exists to end" % (resolved,))
+        self.assertNotEqual(
+            os.path.realpath(self.install_config), os.path.realpath(resolved),
+            "the operator's file must never be what the distribution reads as "
+            "its own declarations")
+
+    def test_with_the_operator_file_purged_every_limit_still_runs_at_its_shipped_recommendation(self):
+        """The exact state `uninstall --purge` leaves -- the operator's file
+        gone, the fleet still installed -- driven on a REAL install rather than
+        described. Today the first limit touched raises `RuntimeError: no
+        shipped limit defaults found at …`, which is why CR-CRU-131's
+        degradation rule (every limit at its recommendation, the verb still
+        succeeding) is not reachable from an installed deployment at all.
+        """
+        self.install_once()
+        self.require_install_config()
+        os.remove(self.install_config)
+        self.assertFalse(os.path.exists(self.project_config))
+
+        os.chdir(self.elsewhere)
+        axi = self.axi_from_the_install()
+        shipped = _limits_in(SHIPPED_CLIENT_DATA)
+        for name in CLIENT_LIMITS:
+            try:
+                resolved = axi.resolve_limit(name)
+            except Exception as exc:  # the CRASH is the defect under test
+                self.fail(
+                    "§S4: with the operator's `%s` purged from %s, resolving "
+                    "`%s` raised %s: %s. A distribution carries its own "
+                    "defaults; an operator's file is not them, and removing "
+                    "one must DEGRADE to the build's recommendations rather "
+                    "than take every client verb down with it"
+                    % (CONFIG_NAME, self.target_dir, name,
+                       type(exc).__name__, exc))
+            self.assertEqual(
+                shipped[name]["recommended"], resolved,
+                "`%s` must run at the recommendation the distribution's own "
+                "data declares" % (name,))
+
+        self.assertEqual(
+            os.path.realpath(self.fleet_config),
+            os.path.realpath(axi.shipped_data_path()),
+            "…and the path those recommendations were read from is the fleet's "
+            "package data, which is present whether or not any operator file "
+            "is -- which is what `shipped_data_path()`'s own docstring already "
+            "promises")
+
+        # …and through a REAL verb, because a limit that resolves in isolation
+        # while the client's boot path raises is a crash an operator meets and
+        # a unit assertion never sees.
+        plans = {"ok": True, "plans": [
+            {"planId": "plan-1", "cr": "CR-SHIPPED-001", "wave": "6",
+             "status": "open", "cycles": []},
+        ]}
+        try:
+            client = self.bun_client_from_the_install()
+            with mock.patch.object(client, "_get", return_value=plans):
+                code, out, err = _run_main(
+                    client, ["status", "--project-dir", self.project_dir])
+        except Exception as exc:  # noqa: BLE001 -- see above
+            self.fail(
+                "§S4: `status` raised %s: %s on an install whose operator file "
+                "was purged. `uninstall --purge` must not leave a fleet whose "
+                "every verb crashes" % (type(exc).__name__, exc))
+        self.assertEqual(
+            0, code, "stdout=%r stderr=%r" % (out, err))
+        self.assertIn("verb: status", out)
+
+    def test_an_operator_edit_moves_the_resolved_value_but_never_the_builds_recommendation(self):
+        """An operator's file decides what a limit RUNS at and nothing else.
+        `recommended`, `min` and `max` keep reading as the build's own
+        declarations, and the shipped table still carries no `value`.
+
+        That rule is already pinned by
+        `test_a_shipped_declaration_carries_no_value_of_its_own`
+        (tests/client/test_client_limits_resolve_from_configuration.py:434) and
+        by `test_setting_a_value_leaves_recommended_reading_as_the_shipped_recommendation`
+        (:446) -- but both run against a CHECKOUT, where the shipped data and
+        the operator's file are genuinely different files. On an INSTALLED
+        deployment they are ONE file, so an operator's `value` lands inside the
+        shipped table and an operator's `recommended` overwrites the build's.
+        The rule is therefore re-asserted here, where it is actually violated.
+        """
+        self.install_once()
+        self.require_install_config()
+        shipped = _limits_in(SHIPPED_CLIENT_DATA)
+        chosen = {}
+        for name in CLIENT_LIMITS:
+            configured, redefined = _legal_values(shipped[name], 2)
+            chosen[name] = _set_value(self.install_config, name, configured)
+            self.assertNotEqual(
+                redefined, shipped[name]["recommended"],
+                "fixture sanity: the operator's redefinition must differ from "
+                "the build's own recommendation")
+            # The edit the shipped header forbids, made anyway -- and today it
+            # rewrites the distribution's package data, because that is the
+            # file the code reads as its own.
+            _overwrite_field(self.install_config, name, "recommended", redefined)
+            _overwrite_field(self.install_config, name, "min",
+                             shipped[name]["min"] - 1)
+            _overwrite_field(self.install_config, name, "max",
+                             shipped[name]["max"] + 1)
+
+        os.chdir(self.elsewhere)
+        axi = self.axi_from_the_install()
+        table = axi.shipped_limits()
+        for name in CLIENT_LIMITS:
+            self.assertEqual(
+                chosen[name], axi.resolve_limit(name),
+                "the operator's `value` must MOVE the number `%s` runs at: "
+                "that is the one job their file has" % (name,))
+            for field in ("recommended", "min", "max"):
+                self.assertEqual(
+                    shipped[name][field], table[name][field],
+                    "§S4: `%s`'s `%s` must keep reading as the BUILD's own "
+                    "declaration (%r). The operator's file redefined it and "
+                    "the change was believed, because that file IS what this "
+                    "deployment reads as its package data -- one upgrade from "
+                    "an operator no longer able to tell our number from theirs"
+                    % (name, field, shipped[name][field]))
+            self.assertIsNone(
+                table[name].get("value"),
+                "a shipped declaration carries no `value` of its own "
+                "(tests/client/test_client_limits_resolve_from_configuration"
+                ".py:434); `%s` picked one up out of the operator's file"
+                % (name,))
+
+    def test_the_manifest_declares_the_fleet_copy_as_shipped_data_under_its_own_key(self):
+        """Automation cannot discover what the manifest does not declare, and
+        the two files are not the same KIND of thing: `config` is the
+        operator's, survives a purge once edited, and is theirs to change;
+        `shipped_config` is the build's, replaced on every upgrade, and editing
+        it is editing a file the next install will overwrite. One key each, or
+        automation eventually edits the wrong one."""
+        self.install_once()
+        self.require_install_config()
+        self.assertTrue(os.path.isfile(self.manifest_file))
+        document = json.loads(
+            Path(self.manifest_file).read_text(encoding="utf-8"))
+        # The DECLARATION is asserted before the file is required to exist, so
+        # this test's failure names the key the manifest is missing rather
+        # than repeating the laydown failure its siblings already report.
+
+        self.assertEqual(
+            self.install_config, document.get("config"),
+            "the OPERATOR's configuration keeps the `config` key, unchanged: %r"
+            % (document,))
+        declaring = sorted(key for key, value in document.items()
+                           if isinstance(value, str) and value == self.fleet_config)
+        self.assertEqual(
+            [FLEET_CONFIG_MANIFEST_KEY], declaring,
+            "§S4: `%s` must declare the fleet's shipped `%s` (%s) under "
+            "EXACTLY the key `%s` -- FLEET content, distinct from the "
+            "operator's `config`. It declares %r"
+            % (self.manifest.MANIFEST_FILENAME, CONFIG_NAME, self.fleet_config,
+               FLEET_CONFIG_MANIFEST_KEY, document))
+        self.assertNotEqual(
+            "config", declaring[0],
+            "package data and an operator's configuration must not share a key")
+        self.assertTrue(
+            os.path.isfile(document[FLEET_CONFIG_MANIFEST_KEY]),
+            "the manifest declares `%s` at %s and nothing is there -- the "
+            "dangling-path defect CR-CRU-090 closed"
+            % (FLEET_CONFIG_MANIFEST_KEY,
+               document.get(FLEET_CONFIG_MANIFEST_KEY)))
+
+    def test_no_uninstall_leaves_the_installed_module_without_the_shipped_data_beside_it(self):
+        """The INVARIANT, asserted rather than a lifecycle invented for it.
+
+        `_crucible_axi.py` cannot resolve a single limit without the package
+        data beside it, so any path that removes one while leaving the other
+        manufactures precisely the `RuntimeError: no shipped limit defaults
+        found at …` state this section exists to end -- the state the operator
+        of the reported 0.2.0 install actually met. `[fleet]` has no uninstall
+        inverse today (install.py:75-77), so the rule costs nothing now and
+        fails the day one is added that forgets this file.
+
+        Asserted after a PLAIN uninstall and after a PURGE, because the two
+        run different stages over the same directory.
+        """
+        self.install_once()
+        self.require_fleet_config()
+
+        for purge in (False, True):
+            self.uninstall_once(purge=purge)
+            if not os.path.isfile(self.installed_axi):
+                continue
+            self.assertTrue(
+                os.path.isfile(self.fleet_config),
+                "§S4: `uninstall%s` left %s installed with no `%s` beside it. A "
+                "module that cannot say what this distribution enforces is "
+                "worse than an absent one: every client verb RAISES instead of "
+                "degrading, which is the reported defect exactly"
+                % (" --purge" if purge else "", self.installed_axi, CONFIG_NAME))
+
+        # …and the purge really ran, so the loop above was not vacuous: an
+        # UNTOUCHED operator file is an artifact like any other and `--purge`
+        # removes it (the existing CR-CRU-131 §S1c rule, unchanged).
+        self.assertFalse(
+            os.path.exists(self.install_config),
+            "fixture sanity: `--purge` must have removed the untouched "
+            "operator file at %s, or nothing destructive ran here at all"
+            % (self.install_config,))
+
+    def test_a_reinstall_replaces_the_fleet_copy_wholesale_while_the_operators_edit_survives(self):
+        """Two files, two opposite rules, in ONE run -- because the defect was
+        that one file carried both. Package data is REPLACED, like the other
+        eight files `[fleet]` copies; the operator's configuration SURVIVES
+        (the existing `_operator_config_is_untouched` rule,
+        crucible_axi/install.py:1170-1186, unchanged)."""
+        self.install_once()
+        self.require_fleet_config()
+        Path(self.fleet_config).write_text(
+            self.MODIFIED_MARKER + Path(self.fleet_config).read_text(
+                encoding="utf-8"), encoding="utf-8")
+
+        declaration = _limits_in(self.require_install_config())[self.LIMIT]
+        (configured,) = _legal_values(declaration, 1)
+        _set_value(self.install_config, self.LIMIT, configured)
+        edited = Path(self.install_config).read_bytes()
+
+        self.install_once()
+
+        source = self.manifest.shipped_config_path()
+        self.assertEqual(
+            Path(source).read_bytes(), Path(self.fleet_config).read_bytes(),
+            "§S4: a re-install must replace the fleet's `%s` WHOLESALE -- it is "
+            "package DATA, not operator state, and a modified copy is a "
+            "distribution lying about what it enforces" % (CONFIG_NAME,))
+        self.assertNotIn(
+            self.MODIFIED_MARKER.strip(),
+            Path(self.fleet_config).read_text(encoding="utf-8"),
+            "the hand modification survived the upgrade: package data that "
+            "accumulates local state is no longer the build's")
+        self.assertEqual(
+            edited, Path(self.install_config).read_bytes(),
+            "…and in the SAME run the OPERATOR's file is untouched: an upgrade "
+            "that resets configuration is the defect CR-CRU-131 §S1c exists to "
+            "prevent, and the two rules must hold at once or the files are "
+            "still one file wearing two names")
+        self.assertEqual(
+            configured, _limits_in(self.install_config)[self.LIMIT]["value"],
+            "the operator's own value must still be the one their file sets")
 
 
 if __name__ == "__main__":
