@@ -73,10 +73,11 @@ crucible-axi serve              # loopback default; see docs/RUNBOOK.md
 curl -fsSL http://127.0.0.1:3849/api/health
 ```
 
-`crucible-axi serve` execs the provisioned server by absolute path, honours
-`CRUCIBLE_HOST` / `CRUCIBLE_PORT` (overridable per run with `--host` /
-`--port`), and passes the server's exit code straight through so a shell — or a
-process supervisor — sees the real failure.
+`crucible-axi serve` execs the provisioned server by absolute path and passes
+the server's exit code straight through, so a shell — or a process supervisor —
+sees the real failure. The listener is a `[server]` table in the server's own
+`crucible.toml`, not an export: `--host` / `--port` **write** that table and
+then boot, so the choice survives the shell (see `docs/RUNBOOK.md`).
 
 On a systemd machine the install also provisions a **`--user` service**, so the
 server survives logout and comes back on login without a terminal held open:

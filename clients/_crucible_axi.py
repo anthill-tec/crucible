@@ -660,8 +660,21 @@ def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     plus optional agent_id/cr/cycle_id and env (WORKFLOW_WAVE, WORKFLOW_ROLE).
 
     Absent env keys are OMITTED; a supplied `cycle_id=None` is kept as an
-    EXPLICIT null (the §S3 orphan signal), never silently dropped."""
+    EXPLICIT null (the §S3 orphan signal), never silently dropped.
+
+    §S4 -- and the BOARD, when the verb resolved one that is not the
+    distribution's own declaration. The silent failure this project carries is
+    a run reported into the wrong board: removing the export that caused it
+    does not make the effect visible, so the envelope names the target at the
+    moment it happens. Named only when it DIFFERS from `shipped_board()`,
+    under the same omit-absent rule every other key here follows -- a key
+    emitted on every exit carries no signal, because an operator scanning for
+    "which board?" would have to read the value on every line to find the one
+    line that differs."""
     ctx = {"projectKey": project_key}
+    board = resolve_base_url()
+    if board != shipped_board():
+        ctx["board"] = board
     if agent_id:
         ctx["agentId"] = agent_id
     if cycle_id is not AXI_UNSET:

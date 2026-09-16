@@ -75,17 +75,23 @@ export const RETIRED_LIMIT_ENV: readonly string[] = [
  * The `CRUCIBLE_*` variables that are NOT limits and are EXPLICITLY OUT OF
  * SCOPE of the retirement (CR-CRU-131 Context; PRD §4.13).
  *
- * They answer *where am I* and *who am I* — the store to open, the port to
- * listen on, the project a client belongs to — and they must be answerable
- * BEFORE any file can be found, because finding the file is what they decide.
+ * They answer *where am I* and *who am I* — the store to open and the project
+ * a client belongs to — and they must be answerable BEFORE any file can be
+ * found, because finding the file is what they decide.
  * A limit is the opposite: it carries a description, a recommendation and a
  * supportable range, and it is only ever needed once the process is already
  * running against a known store. That is the whole distinction, and it is why
  * a scan for retired names must exclude these BY NAME rather than by prefix.
+ *
+ * `CRUCIBLE_PORT` was a third entry here until CR-CRU-139 §S4, and it never
+ * belonged: the listener is not asked BEFORE a file can be found, it is asked
+ * after — by a process that has already opened the file `$CRUCIBLE_DB`
+ * located. It was a connection setting listed among the bootstrap ones, which
+ * is what kept the RUNBOOK documenting a knob `src/server.ts` had stopped
+ * reading; `RETIRED_CONNECTION_ENV` below is where it lives now.
  */
 export const BOOTSTRAP_ENV: readonly string[] = [
   "CRUCIBLE_DB",
-  "CRUCIBLE_PORT",
   "CRUCIBLE_PROJECT_KEY",
 ];
 

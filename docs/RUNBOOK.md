@@ -229,9 +229,25 @@ gone — nothing reads them, and exporting one changes nothing:
 - `$CRUCIBLE_PROJECT_INACTIVE_MS` is RETIRED and no longer read; set a `value`
   in the `[limits.project_inactive_ms]` table instead.
 
-`CRUCIBLE_DB`, `CRUCIBLE_PORT` and `CRUCIBLE_PROJECT_KEY` are untouched and
-still read — they answer *where am I* and *who am I*, and must work before any
-configuration file can be found. See "Environment variables" below.
+Four more carried the **connection** — the server's listener and the clients'
+board. They are gone for the same reason and one sharper: a limit left to its
+default behaves as documented, whereas a forgotten connection export fails
+*silently*, landing a run on the default board, which on a machine carrying a
+production instance is the production board:
+
+- `$CRUCIBLE_PORT` is RETIRED and no longer read; declare `port` in the
+  `[server]` table of the server's own file instead.
+- `$CRUCIBLE_HOST` is RETIRED and no longer read; declare `host` in that same
+  `[server]` table instead.
+- `$CRUCIBLE_URL` is RETIRED and no longer read; declare `url` in the
+  `[client]` table of the project's own `crucible.toml` instead.
+- `$CRUCIBLE_BASE` is RETIRED and no longer read; it was the second spelling
+  of the same board and it is replaced by the same `[client] url`.
+
+`CRUCIBLE_DB` and `CRUCIBLE_PROJECT_KEY` are untouched and still read — they
+answer *where am I* and *who am I*, and must be answerable **before** any
+configuration file can be found, because finding the file is what they decide.
+See "Environment variables" below.
 
 ## Retention
 
@@ -508,30 +524,94 @@ rather than handing you a false assurance. It is deliberately **not** part of
 CI: `bwrap` is not guaranteed on a runner, and a runner's `$HOME` dies with the
 container anyway — the value of this script is protecting a real workstation.
 
-## Environment variables (port / bind / database)
+## Environment variables, and the connection that is no longer one
 
 The server is **loopback-only by default** — the API is unauthenticated and
 `dataPath` ingest reads server-side files, so it binds to `127.0.0.1` unless you
-explicitly opt into wider exposure. Three environment variables configure the listener and
-the store:
+deliberately widen it.
+
+Two environment variables remain, and neither of them configures the
+connection. They are the two questions that have to be answered *before* a
+configuration file can be found at all, which is exactly why they could not
+become lines in one:
 
 | Env var | Default | Meaning |
 |---------|---------|---------|
-| `CRUCIBLE_PORT` | `3849` | TCP port the server listens on |
-| `CRUCIBLE_HOST` | `127.0.0.1` | Bind address (loopback default) |
-| `CRUCIBLE_DB` | *(see "Database path")* | SQLite database file to open; overrides both the adopt-an-existing-`./data/crucible.db` rule and the `$XDG_DATA_HOME` / `~/.local/share` default |
+| `CRUCIBLE_DB` | *(see "Database path")* | SQLite database the server opens; overrides both the adopt-an-existing-`./data/crucible.db` rule and the `$XDG_DATA_HOME` / `~/.local/share` default. It is also how the server locates its own `crucible.toml`, which sits beside that database |
+| `CRUCIBLE_PROJECT_KEY` | *(the project's `.env`)* | The project a client reports its runs under — identity, read from the same project `.env` the clients already read, before any project directory's file is consulted |
 
-```sh
-# custom port, still loopback
-CRUCIBLE_PORT=4000 crucible-axi serve
+### The listener — `[server]`, in the server's own file
 
-# expose beyond loopback (do this only behind a trusted network / proxy —
-# the API is unauthenticated)
-CRUCIBLE_HOST=0.0.0.0 CRUCIBLE_PORT=3849 crucible-axi serve
+The listener is declared in the `crucible.toml` beside the server's database —
+the same file its limits live in, found by the same rule that finds the
+database. Copy this table into it:
 
-# the same two knobs as per-run flags
-crucible-axi serve --host 127.0.0.1 --port 4000
+```toml
+[server]
+host = "127.0.0.1"
+port = 3849
 ```
 
-Keep the default `127.0.0.1` bind unless you have a specific, secured reason to
-widen it.
+Those are the shipped defaults, so a server with no file of its own binds
+exactly where it always did. Keep `host` at `127.0.0.1` unless you have a
+specific, secured reason to widen it: `0.0.0.0` hands an unauthenticated
+file-reading API to the network.
+
+`crucible-axi serve --host <addr> --port <n>` **writes** `host` and `port`
+into that `[server]` table and then boots the server, printing the file it
+wrote and each value it put there — the setting is typed on the command line
+rather than exported, and it is not a per-run twin of anything. The choice
+therefore survives the shell, and the next plain `crucible-axi serve` honours
+it. An explicit `startServer({ port, hostname })` argument — the in-process
+test seam — is the only thing that outranks the file.
+
+```sh
+# move the listener: writes host + port into the server's crucible.toml,
+# names the file and the values on stdout, then boots
+crucible-axi serve --host 127.0.0.1 --port 3850
+
+# and afterwards the declaration is the setting — nothing to re-type
+crucible-axi serve
+```
+
+### The board — `[client]`, in the project's own file
+
+Where the clients post is the project's own setting, declared in the
+`crucible.toml` of the project directory they run in, beside the `.env` they
+already read:
+
+```toml
+[client]
+url = "http://localhost:3849"
+```
+
+That is the shipped default too. The value is re-read at the point of use, so
+an edit takes effect on the next verb with nothing restarted and nothing
+exported — and a verb that resolves a board other than the shipped one names
+it as `context.board` in its own envelope, so a run that landed somewhere
+unexpected is legible in the output of the command that sent it.
+
+### A development board beside a production one
+
+This is the case the two declarations exist for, and it is a pair of file
+edits. In the development server's own `crucible.toml`, beside its own
+database:
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 3850
+```
+
+…and in the `crucible.toml` of every project whose runs belong on that board:
+
+```toml
+[client]
+url = "http://127.0.0.1:3850"
+```
+
+Nothing else changes: the production install keeps its own file, its own
+database and its own port, and no shell has to remember anything. Pick the
+second port from the range `[server] port_range_min` / `port_range_max`
+declare — the installer probes that same range by binding each candidate, so a
+port outside it is one no install would ever have chosen.

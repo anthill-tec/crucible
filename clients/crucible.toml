@@ -38,6 +38,22 @@
 # the server never reads this one, so a server limit written here would be
 # inert: documentation must not teach a knob that provably does nothing where
 # it sits.
+#
+# ── Two settings that are NOT here, and cannot be ─────────────────────────
+#
+# CR-CRU-139 §S3. A reader who has just found `[client] url` below is owed the
+# boundary, or the next change "finishes the job" by moving a value that
+# precedes this file's own discovery.
+#
+# `CRUCIBLE_PROJECT_KEY` stays in the environment because it is IDENTITY
+# rather than configuration: a client reads it from the project `.env` beside
+# this file to learn which project a run belongs to, and it is answered before
+# there is a resolved project directory whose file could carry it.
+#
+# `CRUCIBLE_DB` stays in the environment for the same class of reason on the
+# other side of the fence, and is named here only to complete the boundary: it
+# is the path at which the SERVER finds its own `crucible.toml`, so it
+# necessarily precedes the reading of any such file. No client reads it.
 
 [limits.truncate_field_chars]
 description = "Visible characters of a long text field before the envelope cuts it and appends a size hint naming the true length; `--full` defeats it per call."

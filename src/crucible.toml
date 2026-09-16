@@ -47,6 +47,24 @@
 # and an explicit `startServer({ port, hostname })` argument (the in-process
 # test seam) is the only thing that outranks the file.
 
+# ── Two settings that are NOT in this file, and cannot be (§S3) ───────────
+#
+# A reader who has just found `[server] port` here is owed the boundary, or the
+# next change "finishes the job" by moving a value that precedes this file's
+# own discovery.
+#
+# `CRUCIBLE_DB` stays in the environment because it is what FINDS this file:
+# the operator's copy is the `crucible.toml` beside the database, so the store
+# path is answered before any table below it can be read. A `db` line here
+# could only ever be read by a process that had already found the file it was
+# written in.
+#
+# `CRUCIBLE_PROJECT_KEY` stays in the environment for the matching reason on
+# the CLIENT's side, and is named here only to complete the boundary: it is
+# IDENTITY, read from a project's `.env` to say which project a run belongs
+# to, before that project's own directory has been resolved to a file. The
+# server never reads it — it is told the key on every request.
+
 [server]
 # The address this server binds. It stays LOOPBACK unless an operator
 # deliberately widens it: the HTTP API is unauthenticated, and `dataPath`
