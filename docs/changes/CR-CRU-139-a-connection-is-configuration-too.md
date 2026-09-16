@@ -46,6 +46,40 @@ board**, with no error, because `http://localhost:3849` is a working default.
 
 That is the same class of defect as CR-CRU-138: a real, load-bearing value that no file owns.
 
+## The role of this CR: the setting is made NON-PROGRAMMATICALLY
+
+This is the point, and it is not "move three values for tidiness". **An operator must be able to
+decide which port the server listens on and which board a client posts to by EDITING A FILE** —
+the commented `crucible.toml` already laid down beside each side — and by nothing else:
+
+- **not** by exporting an environment variable into every shell, every terminal tab, every
+  sub-agent dispatch and every CI step, where the only record of the decision is a shell history;
+- **not** by editing source — today the client's target is a module constant
+  (`CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")`), so "point this
+  checkout at another board" reads as a code change to a shipped file;
+- **not** by inventing a launcher wrapper that supplies the env for you, which is the same secret
+  kept in a second place.
+
+A configuration file is the artifact an operator OWNS, can read back, can diff, and can hand to
+someone else. That is what `crucible.toml` is for, and CR-CRU-131 already settled the principle for
+the six limits — this CR finishes the job for the connection.
+
+### The scenario this must satisfy (user, 2026-09-16)
+
+**Two Crucible instances on one machine.** The Crucible and Model B projects dog-food the
+DEVELOPMENT instance; every other project on the workstation uses the PRODUCTION one. The
+production instance is installed and managed separately — not this repo's concern.
+
+The separation on the data axis already works and needs nothing: a server booted from this repo
+adopts `<repo>/data/crucible.db` (the `cwd-data` rule — measured here, schema 13), while an
+installed production server creates its own store under `~/.local/share/crucible/`. **Only the port
+and the client's target are unresolved**, and today both are only expressible as exports.
+
+So the acceptance bar is behavioural, not structural: with the two files edited and NOTHING
+exported, a verb run from this checkout reaches the development board, and the same verb run from
+another project reaches production. A reader must be able to answer "which board does this project
+talk to?" by opening one file.
+
 ## Scope
 
 ### §S1 The server's listener is declared in its own `crucible.toml`

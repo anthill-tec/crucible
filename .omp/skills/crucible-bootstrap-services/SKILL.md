@@ -1,20 +1,42 @@
 ---
 name: crucible-bootstrap-services
-description: "Crucible project service lifecycle for the Mainline orchestrator — RESTORE at every /bootstrap mainline (board server on :3849, vidushi registration, both Lavish sessions, the three Chrome tabs under the omp group via the relay, one storyboard poll) and TEAR DOWN at every /shutdown (close the tabs, end the Lavish sessions, stop the poll, unregister, stop the board). Use whenever bootstrapping, shutting down, or after an omp restart in ~/Documents/data_projects/crucible."
+description: "Crucible project service lifecycle for the Mainline orchestrator — RESTORE at every /bootstrap mainline (the DEVELOPMENT board on :3850 — :3849 is the separate production install and is never touched — vidushi registration, both Lavish sessions, the three Chrome tabs under the omp group via the relay, one storyboard poll) and TEAR DOWN at every /shutdown (close the tabs, end the Lavish sessions, stop the poll, unregister, stop the board). Use whenever bootstrapping, shutting down, or after an omp restart in ~/Documents/data_projects/crucible."
 ---
 
 # Crucible — service lifecycle (bootstrap restore / shutdown teardown)
 
 Run this as part of `/bootstrap mainline` for `~/Documents/data_projects/crucible`, after the role rules are loaded and BEFORE the status report to the user. Hub-supervised processes and relay tab handles die with every omp restart, so all of it is re-done each run. The Sandesh notifier is part of the restore — see step 6, and read its correction before deciding anything about it.
 
-## 1. Board server (`:3849`)
+## 1. Board server — the DEVELOPMENT instance, on `:3850`
 
 ```
-hub ps                                   # is crucible-board running?
-hub start name=crucible-board application=bun args=[run, src/server.ts] cwd=<repo> ready.port=3849
-curl -s http://127.0.0.1:3849/api/v2/health   # {"ok":true,"status":"healthy",...}
+hub ps                                   # is crucible-board-dev running?
+hub start name=crucible-board-dev application=bun args=[run, src/server.ts] cwd=<repo> \
+     env={CRUCIBLE_PORT: "3850"} ready.port=3850
+curl -s http://127.0.0.1:3850/api/v2/health   # {"ok":true,"status":"healthy",...}
 ```
 Plain `bun run` (no `--watch`); restart after every merge to develop so it serves the merged code.
+
+**TWO INSTANCES ON THIS MACHINE (user ruling 2026-09-16).** `:3849` belongs to the **production**
+install, which every OTHER project on the workstation uses and which is **not this session's
+concern** — never start, stop or write to it. This repo (and Model B) dog-food the **development**
+instance on **`:3850`**. The data axis already separates itself and needs nothing: a server booted
+from this repo adopts `<repo>/data/crucible.db` (the `cwd-data` rule), while the production install
+keeps its own store under `~/.local/share/crucible/`.
+
+**Consequence for every client call, until CR-CRU-139 lands:** the clients' base URL is a module
+constant defaulting to `http://localhost:3849` (`clients/bun-crucible.py:91` and its four
+siblings), read from `os.environ` and **NOT** from the project `.env`. So **every** verb and
+**every** sub-agent brief must carry `CRUCIBLE_URL=http://127.0.0.1:3850` — treat it as mandatory
+alongside the assigned `--agent` id. Forgetting it is silent once production is up: the run lands
+on the PRODUCTION board with no error, because 3849 is a working default. CR-CRU-139 (wave 7,
+`seq 7001`, next) moves this into `crucible.toml` so it becomes a per-project fact an operator
+sets by editing a file — no export, no source patch.
+
+**And when the port moves, the UI moves with it.** Step 4's tabs point at the board; a port change
+with a stale tab leaves the user looking at a dead page (done wrong 2026-09-16). Re-point the
+`board` handle in the same turn, and wait for real rendered text before reporting it healthy — a
+`domcontentloaded` read of this SPA returns ~370 chars and looks EMPTY.
 
 ## 1b. CDP relay (`:9224`) — restore it BEFORE the tabs
 
@@ -78,7 +100,7 @@ for (const url of [boardUrl, storyboardUrl, flowchartUrl]) {
 // 5. attach handles by unique target (still NO `url`) — marks them controllable, so the relay
 //    gathers them into Chrome's "omp" group
 for (const [name, target] of [
-  ["board", "127.0.0.1:3849/"],
+  ["board", "127.0.0.1:3850/"],   // the DEV board; :3849 is production
   ["storyboard", "session/<storyboard-session-id>"],
   ["flowchart", "session/<flowchart-session-id>"],
 ]) await browser.open({ name, app: { relay: true, target } });
@@ -170,11 +192,12 @@ for (const name of ["storyboard", "flowchart", "board"]) {
 }
 await browser.close({ all: true });                           // then drop the handles
 ```
-`browser.close` alone never closes a relay page (docs: "Connected and relay pages remain open"), so `page.close()` inside `tab.run` is the step that removes the tab from the omp group. Verify with `GET http://127.0.0.1:9224/json/list` — no `127.0.0.1:4387` or `127.0.0.1:3849` pages remain.
+`browser.close` alone never closes a relay page (docs: "Connected and relay pages remain open"), so `page.close()` inside `tab.run` is the step that removes the tab from the omp group. Verify with `GET http://127.0.0.1:9224/json/list` — no `127.0.0.1:4387` or `127.0.0.1:3850` pages remain (a `:3849` page is production's, leave it).
 
 **Close by URL, not by held handle, and never by assumption.** Handles go stale across an omp
 restart and a dead handle falls back to the user's visible tab. Snapshot `/json/list` first, select
-ONLY pages matching `127.0.0.1:(3849|4387)` (plus anything this session itself opened, e.g. a
+ONLY pages matching `127.0.0.1:(3850|4387)` — never a `:3849` page, which belongs to the
+production install and is not ours to close — plus anything this session itself opened, e.g. a
 release-checking `npmjs.com/package/@anthill-tec` or `github.com/anthill-tec/crucible/actions`
 tab), then attach a read-only anchor (`target` + NO `url`) and close those URLs through its
 Puppeteer connection. Re-snapshot and prove the delta: the count drops by exactly the number
@@ -201,7 +224,7 @@ Must run while the board is still up.
 hub stop name=crucible-board
 hub stop name=omp-relay          # only if THIS session started it
 ```
-State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exited, `:3849` answers
+State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exited, `:3850` answers
 nothing, and 9224 has no listener. The relay is stopped AFTER the tabs are closed — closing a tab
 needs the relay alive.
 
