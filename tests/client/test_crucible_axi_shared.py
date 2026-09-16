@@ -108,10 +108,31 @@ def _load_toon_module():
 
 class SharedAxiEmitEnvelopeTest(unittest.TestCase):
     """`emit_axi` must write a §S1-schema TOON envelope on stdout and route
-    the legacy human-readable line to stderr only."""
+    the legacy human-readable line to stderr only.
+
+    CR-CRU-135 §S1 -- every test here binds a project directory of its OWN
+    making first. `emit_axi` appends `limit_disclosure_warnings()` to the
+    envelope it writes (CR-CRU-131 §S1b, by design: no verb may silently omit
+    a disclosure it owes its operator), and that call resolves `crucible.toml`
+    under the bound project dir -- or, with nothing bound, under whatever
+    `os.getcwd()` happens to be. Asserting an exact `warnings[]` without
+    binding is therefore asserting the ambient working directory's contents:
+    green on a developer machine carrying a root `crucible.toml`, red on CI's
+    fresh clone. The isolation is the one
+    `test_client_limits_resolve_from_configuration.py` already uses."""
+
+    def setUp(self):
+        """A project directory this test owns, carrying a readable `[limits]`
+        table that declares no `value` at all -- so every limit runs at its
+        shipped recommendation, nothing is REFUSED, and `limit_disclosures()`
+        is empty on every machine rather than by accident on some."""
+        self.project_dir = tempfile.mkdtemp(prefix="crucible-axi-envelope-")
+        self.addCleanup(shutil.rmtree, self.project_dir, ignore_errors=True)
+        (Path(self.project_dir) / "crucible.toml").write_text("[limits]\n")
 
     def test_emit_axi_prints_toon_decodable_envelope_with_verb_ok_and_result_fields(self):
         axi_mod = _load_axi_module()
+        axi_mod.bind_project_dir(self.project_dir)
         toon = _load_toon_module()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -134,6 +155,7 @@ class SharedAxiEmitEnvelopeTest(unittest.TestCase):
 
     def test_emit_axi_ok_false_envelope_reflects_the_supplied_ok_value(self):
         axi_mod = _load_axi_module()
+        axi_mod.bind_project_dir(self.project_dir)
         toon = _load_toon_module()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -146,6 +168,7 @@ class SharedAxiEmitEnvelopeTest(unittest.TestCase):
 
     def test_emit_axi_writes_legacy_line_to_stderr_not_stdout(self):
         axi_mod = _load_axi_module()
+        axi_mod.bind_project_dir(self.project_dir)
         stdout, stderr = io.StringIO(), io.StringIO()
         legacy = "unregister: ok=True agent=CR-X-2"
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -156,6 +179,7 @@ class SharedAxiEmitEnvelopeTest(unittest.TestCase):
 
     def test_emit_axi_carries_warnings_array_verbatim_into_the_envelope(self):
         axi_mod = _load_axi_module()
+        axi_mod.bind_project_dir(self.project_dir)
         toon = _load_toon_module()
         warnings = [{"code": "no-wave", "detail": "WORKFLOW_WAVE unset for CR-Q"}]
         stdout = io.StringIO()
