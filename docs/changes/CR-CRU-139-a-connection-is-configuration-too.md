@@ -303,24 +303,35 @@ discovered later on the wrong dashboard.
 - [ ] An explicit `startServer({ port })` still wins over the file — the test seam is unchanged.
 - [ ] `$CRUCIBLE_PORT` and `$CRUCIBLE_HOST` are no longer read: a server booted with both exported
       to junk values still listens per its file/default. Asserted by an actual boot, not by grep.
-- [ ] `clients/crucible.toml` declares `[client] url`.
-- [ ] With a project-dir `crucible.toml` naming a second board, every one of the five clients posts
-      THERE — asserted by running a verb against a second server on a different port and reading
-      which one recorded the run.
-- [ ] Project dir beats install dir beats shipped default for `url`, by the same chain CR-CRU-138
-      §S1 built (one test, both files present, different values).
-- [ ] `$CRUCIBLE_URL` and `$CRUCIBLE_BASE` are no longer read; a junk export changes nothing.
-- [ ] No client module holds its own base-URL constant: the value resolves from `_crucible_axi.py`
-      alone, and a grep for `CRUCIBLE_URL =` across `clients/` returns nothing.
-- [ ] `CRUCIBLE_DB` and `CRUCIBLE_PROJECT_KEY` still work exactly as today, and both shipped tomls
-      state why they are not in the file.
-- [ ] A verb whose resolved URL is not the shipped default names that URL in its envelope `context`.
-- [ ] `docs/RUNBOOK.md`: the three newly retired variables join "Retired environment variables"
-      with the same wording; the "Environment variables (port / bind / database)" section is
-      corrected to the two that remain; and the dev-beside-production setup is documented as a
-      `[client] url` / `[server] port` pair rather than an export.
-- [ ] `tests/docs-runbook-documents-every-limit.test.ts` still passes, and the new figures are
-      derived from the shipped tomls rather than retyped (CR-CRU-134's rule).
+
+**C2 — a client's board is its project's configuration** (§S2, and every site that steers by the
+retired variables; retire and migrate in ONE cycle, which is the ordering lesson C1 paid for)
+
+- [ ] A checkout whose project-dir `crucible.toml` names a board has every one of the five clients
+      post THERE, for every verb, with nothing exported — proven by running verbs against two live
+      boards and reading which one recorded each run.
+- [ ] Project dir beats install dir beats shipped default, by the chain CR-CRU-138 §S1 already
+      built.
+- [ ] `$CRUCIBLE_URL` and `$CRUCIBLE_BASE` are dead: exported to junk, nothing changes. No client
+      holds its own base-URL constant.
+- [ ] No file under `tests/` steers a client or a server by any of the four retired variables, and
+      the suites that did still prove what they always proved — including the offline-degradation
+      contract (a client formats output with no board reachable) and the two tests that read or
+      patched a client's base-URL constant.
+- [ ] This checkout carries a committed `crucible.toml` naming the development board, so the
+      orchestrator's own verbs reach it with nothing exported. The CR proves itself on its author.
+
+**C4 — the board is named, and the documentation matches** (§S4, docs, close-out)
+
+- [ ] A verb whose resolved board is not the shipped default names that board in its envelope
+      `context`, beside `projectKey`.
+- [ ] `docs/RUNBOOK.md` documents the connection as configuration: the retired variables listed as
+      retired, the environment section reduced to the two that remain (`CRUCIBLE_DB`,
+      `CRUCIBLE_PROJECT_KEY`) with the shipped tomls saying why those two cannot move, and
+      dev-beside-production shown as a pair of file edits rather than exports.
+- [ ] The guards that currently require the retired variables to be documented move with the
+      RUNBOOK in the same cycle and still pin a real rule.
+- [ ] Figures in the docs are derived from the shipped tomls, never retyped (CR-CRU-134's rule).
 
 **§S1a — the installer sets it, so an operator never has to**
 
@@ -376,61 +387,11 @@ discovered later on the wrong dashboard.
       on its configured port — asserted by reading the rendered unit text AND by the server's own
       `/api/health`.
 
-**§S1b — tests override in-process or with their own file, never the environment**
-
-- [ ] No file under `tests/` sets `CRUCIBLE_URL`, `CRUCIBLE_BASE`, `CRUCIBLE_PORT` or
-      `CRUCIBLE_HOST` in a child environment. The **58 setter sites across 28 files** (measured
-      2026-09-16) migrate to `startServer({ port })` (in-process TS), a `[server] port` file in the
-      subprocess server's own store dir (the five python suites §S1b names), or a `[client] url`
-      file in the fixture's temp root. A repo-wide grep is the assertion.
-- [ ] Each of the five subprocess-server suites — `test_cr092_next_decision_resolver.py`,
-      `test_cycle_add_targets_the_plan_it_means.py`, `test_gate_names_the_release_it_gates.py`,
-      `test_next_lane_carries_release_and_wave.py`, `test_plan_file_names_the_release_it_plans.py`
-      — starts its server on a `_free_port()` declared in the `crucible.toml` beside its own temp
-      database, and the server is proven to listen THERE by a real request.
-- [ ] At least one migrated client test proves it exercises the REAL resolution path: the temp
-      `crucible.toml` it wrote is the file the client reports resolving.
-- [ ] `_UNREACHABLE_CRUCIBLE_URL`-style offline-degradation tests keep working through the file, so
-      the degradation contract (CR-CRU-131: a client still formats output with no board reachable)
-      is unchanged.
-- [ ] The two doc guards that currently REQUIRE the retired variables to be documented are updated
-      to the new reality, not deleted: `tests/docs-db-path-resolution.test.ts:117-122` (the env
-      table listing `CRUCIBLE_PORT`/`CRUCIBLE_HOST`) and
-      `tests/cr009-release-bundle.test.ts:1435-1440` (the RUNBOOK's `CRUCIBLE_PORT=… crucible-axi
-      serve` examples). Each still pins a real rule — that the RUNBOOK documents how to set the
-      listener — and the rule's subject becomes the config file.
-- [ ] `crucible_axi/cli.py`'s `serve` no longer composes `$CRUCIBLE_HOST`/`$CRUCIBLE_PORT` into a
-      child environment (`cli.py:277`); `--host`/`--port` flags, where kept, write to or read from
-      the file rather than exporting.
-
-**§S1b — the four shipped contracts this CR reverses, each re-subjected**
-
-- [ ] `tests/client/test_cr070_systemd_unit.py:793-845` (CR-CRU-070 AC1, "the unit forwards the
-      CRUCIBLE env contract it cannot inherit") becomes a ONE-variable assertion: the rendered unit
-      forwards `CRUCIBLE_DB` and carries no `CRUCIBLE_PORT`/`CRUCIBLE_HOST` at all — neither with a
-      value nor as the empty assignment its own inverse case forbids. The test is re-subjected, not
-      deleted: the rule "a `--user` unit inherits nothing, so what it needs it must carry" still
-      holds, and the store is now the only thing it needs.
-- [ ] `tests/client/test_cr066_serve_and_target_dir.py:354-390`
-      (`ServeEnvironmentForwardingTest`, CR-CRU-066 "AC5 (env)") becomes: `serve` composes NO
-      listener environment for the child, and the child listens per its own configuration file —
-      asserted on the real composed env of the launch call, the same way it asserts forwarding today.
-- [ ] `tests/client/test_cr054_http_core_lift.py:141-145` — which reads each client's base-URL
-      constant back dynamically (`CRUCIBLE_URL`, arduino's `CRUCIBLE`) — reads the resolved value
-      from the shared `_crucible_axi.py` seam instead, and still proves all five clients agree.
-- [ ] `tests/client/test_gate_multi_suite_coverage.py:565`, which redirects the gate by
-      `mock.patch.object(module, "CRUCIBLE_URL", …)`, redirects it through the resolver or a temp
-      `crucible.toml` instead — the fixture still points the gate at its stub board, by the
-      mechanism operators use.
-
 **Close-out**
 
-- [ ] Citations into the files this CR edits are re-verified and re-recorded ONCE, at close-out:
-      76 `path:line` pins across the test tree point into `src/server.ts`, `src/limits.ts`,
-      `clients/_crucible_axi.py`, `crucible_axi/install.py`, `crucible_axi/cli.py` and
-      `crucible_axi/manifest.py` (measured 2026-09-16), and this CR moves lines in all six. One
-      sweep at the end — never a mid-cycle re-pin per drift, which cost CR-CRU-138 three separate
-      approval round-trips.
+- [ ] Citations into the files this CR edits are re-verified and re-recorded ONCE, at close-out —
+      never a mid-cycle re-pin per drift, which cost CR-CRU-138 three approval round-trips.
+      (C1 done: `src` head 724 → 736, measured; `public` and `clients` unmoved.)
 
 ## Non-goals
 
