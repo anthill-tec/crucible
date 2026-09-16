@@ -1,5 +1,5 @@
 """CR-CRU-090 C1 (§S1, ACs 1, 2 and 6) + C2 (§S1 "Rules", AC5) -- the `fleet`
-stage: the eight client files land under `<target-dir>/clients/` BEFORE the
+stage: the nine packaged fleet files land under `<target-dir>/clients/` BEFORE the
 manifest that names them, and land only when they are actually stale.
 
 Why these three assertions, and why they are the whole of this cycle:
@@ -20,7 +20,7 @@ actually makes.
   `[unit]` stays LAST), `fleet` strictly before `manifest`, a runner registered
   under that key, and a real `run_install` reporting a `fleet` stage whose
   `path` is the clients dir.
-- AC2 pins the PAYLOAD as bytes: exactly the eight packaged files, no extras,
+- AC2 pins the PAYLOAD as bytes: exactly the nine packaged files, no extras,
   each byte-identical to its source. Bytes, not sizes -- a truncated or
   rewritten copy is the failure a size check would pass. The five clients load
   `_crucible_axi.py` and `toon.py` BY FILE PATH from their own directory, so
@@ -34,7 +34,7 @@ actually makes.
 
 C2 (§S1's "Rules" block, AC5) pins the CONVERGENCE half of the same stage: a
 destination file whose bytes already match its source is not rewritten, the
-stage reports `converged: True` only when ALL eight already matched, `--force`
+stage reports `converged: True` only when ALL of them already matched, `--force`
 re-copies unconditionally and reports `converged: False`, and destination files
 the install does not manage are never touched.
 
@@ -49,7 +49,7 @@ of the copied directory. That is the clients-only-copy defect's only trap.
 
 C7 (the FIX round on §S1's own stated rules) pins the two guarantees the stage
 DECLARED but did not enforce: the copy is CONFINED to `<target-dir>/clients/`
--- a pre-existing symlink at one of the eight destination names is replaced,
+-- a pre-existing symlink at one of the packaged destination names is replaced,
 never followed, because both `os.path.isfile` and `Path.write_bytes` traverse a
 link and would otherwise write a client's bytes into a file the operator never
 pointed `--target-dir` at -- and a landed file carries its SOURCE's mode bits,
@@ -100,6 +100,12 @@ EXPECTED_FLEET_FILES = frozenset({
     "_crucible_axi.py",
     "toon.py",
     "STATUS-CONTRACT.md",
+    # CR-CRU-138 §S4 -- the distribution's own limit declarations. They are
+    # PACKAGE DATA and travel with the fleet for the same reason `toon.py`
+    # does: `_crucible_axi.py` resolves them from its OWN directory, so a
+    # fleet landed without this file cannot say what it enforces the moment
+    # the operator's editable `<install>/crucible.toml` is absent.
+    "crucible.toml",
 })
 
 # The MERGED four-stage pipeline (CR-CRU-090 §S1 `[fleet]` + CR-CRU-070
@@ -237,9 +243,9 @@ class FleetStageOrderContractTest(_ScratchInstallCase):
             f"warnings={warnings}")
 
 
-class FleetStageLandsTheEightFilesTest(_ScratchInstallCase):
+class FleetStageLandsThePackagedFilesTest(_ScratchInstallCase):
     """AC2 -- after a real `run_install`, `<target-dir>/clients/` holds exactly
-    the eight packaged files, each byte-identical to its source."""
+    the nine packaged files, each byte-identical to its source."""
 
     def setUp(self):
         super().setUp()
@@ -254,7 +260,7 @@ class FleetStageLandsTheEightFilesTest(_ScratchInstallCase):
             f"manifest paths dangle. ok={self.ok} stages={self.stages} "
             f"warnings={self.warnings}")
 
-    def test_exactly_the_eight_packaged_files_land_with_no_extras(self):
+    def test_exactly_the_packaged_files_land_with_no_extras(self):
         if not os.path.isdir(self.clients_dir()):
             self.fail(
                 f"AC2 -- {self.clients_dir()!r} does not exist at all, so the "
@@ -263,9 +269,10 @@ class FleetStageLandsTheEightFilesTest(_ScratchInstallCase):
         landed = set(os.listdir(self.clients_dir()))
         self.assertEqual(
             landed, set(EXPECTED_FLEET_FILES),
-            f"AC2 -- <target-dir>/clients/ must hold EXACTLY the eight "
+            f"AC2 -- <target-dir>/clients/ must hold EXACTLY the nine "
             f"packaged files (five clients + the two shared modules they load "
-            f"by path + STATUS-CONTRACT.md), no extras. "
+            f"by path + STATUS-CONTRACT.md + the shipped crucible.toml), no "
+            f"extras. "
             f"missing={sorted(set(EXPECTED_FLEET_FILES) - landed)} "
             f"unexpected={sorted(landed - set(EXPECTED_FLEET_FILES))}")
 
@@ -309,7 +316,7 @@ class FleetStageLandsTheEightFilesTest(_ScratchInstallCase):
             sorted(EXPECTED_FLEET_FILES), shallow=False)
         self.assertEqual(
             (sorted(mismatch), sorted(errors)), ([], []),
-            f"AC2 -- filecmp must report every one of the eight files as a "
+            f"AC2 -- filecmp must report every one of the packaged files as a "
             f"content MATCH; mismatch={sorted(mismatch)} "
             f"errors={sorted(errors)} matched={sorted(match)}")
 
@@ -391,7 +398,7 @@ class FleetBeforeManifestIsEnforcedTest(_ScratchInstallCase):
 # converged one is provably untouched.
 PINNED_MTIME_NS = 1_000_000 * 1_000_000_000
 
-# A destination file that is NOT one of the eight -- the install manages the
+# A destination file that is NOT one of the packaged ones -- the install manages the
 # fleet, never the directory.
 UNMANAGED_FILENAME = "operator-note.txt"
 UNMANAGED_CONTENT = b"operator's own note; the install does not manage me\n"
@@ -423,7 +430,7 @@ class _FleetConvergenceCase(_ScratchInstallCase):
         return (SOURCE_CLIENTS_DIR / name).read_bytes()
 
     def land_the_fleet(self):
-        """First install: the eight land. Returns the reported fleet stage."""
+        """First install: the packaged files land. Returns the reported fleet stage."""
         ok, stages, warnings = self.run_install_with_stubbed_server()
         self.assertTrue(
             ok,
@@ -444,13 +451,13 @@ class _FleetConvergenceCase(_ScratchInstallCase):
         self.assertTrue(
             stage["converged"],
             f"AC5 baseline -- a second, unchanged run must leave the target "
-            f"CONVERGED: all eight files already match their sources "
+            f"CONVERGED: every packaged file already matches its source "
             f"byte-for-byte, so the {FLEET_STAGE_NAME!r} stage must report "
             f"converged:True. Got {stage!r}; ok={ok} warnings={warnings}")
         return stage
 
     def pin_landed_mtimes(self):
-        """Stamp all eight landed files with PINNED_MTIME_NS."""
+        """Stamp every landed file with PINNED_MTIME_NS."""
         for name in sorted(EXPECTED_FLEET_FILES):
             path = self.landed_path(name)
             self.assertTrue(
@@ -460,7 +467,7 @@ class _FleetConvergenceCase(_ScratchInstallCase):
             os.utime(path, ns=(PINNED_MTIME_NS, PINNED_MTIME_NS))
 
     def landed_mtimes(self):
-        """name -> st_mtime_ns for every one of the eight present on disk."""
+        """name -> st_mtime_ns for every packaged file present on disk."""
         return {
             name: os.stat(self.landed_path(name)).st_mtime_ns
             for name in sorted(EXPECTED_FLEET_FILES)
@@ -485,7 +492,7 @@ class FleetStageConvergesOnASecondRunTest(_FleetConvergenceCase):
             f"operator can never tell a no-op install from a real laydown. "
             f"Got {stage!r}; ok={ok} warnings={warnings}")
 
-    def test_a_converged_second_run_rewrites_not_one_of_the_eight_files(self):
+    def test_a_converged_second_run_rewrites_not_one_packaged_file(self):
         """The bytes-level rule behind `converged`: a destination file whose
         bytes already match its source is NOT rewritten. Measured against a
         pinned past mtime, so the assertion cannot pass by clock luck."""
@@ -494,8 +501,9 @@ class FleetStageConvergesOnASecondRunTest(_FleetConvergenceCase):
         before = self.landed_mtimes()
         self.assertEqual(
             sorted(before), sorted(EXPECTED_FLEET_FILES),
-            f"fixture invariant -- all eight files must be on disk and pinned "
-            f"before the second run; pinned={sorted(before)}")
+            f"fixture invariant -- all {len(EXPECTED_FLEET_FILES)} packaged "
+            f"files must be on disk and pinned before the second run; "
+            f"pinned={sorted(before)}")
 
         ok, stages, warnings = self.run_install_with_stubbed_server()
         after = self.landed_mtimes()
@@ -527,7 +535,7 @@ class FleetForceRecopiesUnconditionallyTest(_FleetConvergenceCase):
             f"converged:False even on a target that converged a moment ago; "
             f"got {stage!r}; ok={ok} warnings={warnings}")
 
-    def test_force_rewrites_all_eight_files_it_would_otherwise_skip(self):
+    def test_force_rewrites_every_file_it_would_otherwise_skip(self):
         self.reach_convergence()
         self.pin_landed_mtimes()
 
@@ -535,15 +543,17 @@ class FleetForceRecopiesUnconditionallyTest(_FleetConvergenceCase):
         after = self.landed_mtimes()
         self.assertEqual(
             sorted(after), sorted(EXPECTED_FLEET_FILES),
-            f"fixture invariant -- all eight must still be on disk after a "
-            f"forced run; present={sorted(after)}")
+            f"fixture invariant -- all {len(EXPECTED_FLEET_FILES)} packaged "
+            f"files must still be on disk after a forced run; "
+            f"present={sorted(after)}")
         skipped = sorted(
             name for name, mtime in after.items()
             if mtime == PINNED_MTIME_NS)
 
         self.assertEqual(
             skipped, [],
-            f"AC5 -- `--force` must REWRITE all eight, so not one may still "
+            f"AC5 -- `--force` must REWRITE every packaged file, so not one "
+            f"may still "
             f"carry the pinned mtime {PINNED_MTIME_NS} ns that convergence "
             f"would have preserved; skipped={skipped} "
             f"stage={self.fleet_stage(stages) if stages else None} "
@@ -557,7 +567,7 @@ class FleetForceRecopiesUnconditionallyTest(_FleetConvergenceCase):
 
 
 class FleetConvergenceIsAllOrNothingTest(_FleetConvergenceCase):
-    """AC5 -- `converged: True` is claimed ONLY when every one of the eight
+    """AC5 -- `converged: True` is claimed ONLY when every packaged file
     already matched. One stale file flips the whole stage to False and is
     restored, for a client entry point and for a shared module alike."""
 
@@ -583,7 +593,7 @@ class FleetConvergenceIsAllOrNothingTest(_FleetConvergenceCase):
             stage["converged"],
             f"AC5 -- convergence is ALL-OR-NOTHING: with {name} no longer "
             f"matching its source, the {FLEET_STAGE_NAME!r} stage must report "
-            f"converged:False, never True because the other seven matched; "
+            f"converged:False, never True because all the others matched; "
             f"got {stage!r}; ok={ok} warnings={warnings}")
         self.assertEqual(
             Path(self.landed_path(name)).read_bytes(), self.source_bytes(name),
@@ -608,7 +618,7 @@ class FleetConvergenceIsAllOrNothingTest(_FleetConvergenceCase):
 
     def test_one_tampered_shared_module_flips_the_stage_to_non_converged(self):
         """The same rule for a shared module the five clients load by file
-        path -- so convergence is a property of the eight, not of whatever
+        path -- so convergence is a property of the whole packaged set, not of whatever
         subset a `*-crucible.py` shaped check happens to notice."""
         self._assert_one_stale_file_breaks_convergence(TAMPERED_SHARED_MODULE)
 
@@ -629,7 +639,7 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
         self.land_the_fleet()
         self.assertTrue(
             self.unmanaged.is_file(),
-            f"§S1 -- {UNMANAGED_FILENAME!r} is not one of the eight, so the "
+            f"§S1 -- {UNMANAGED_FILENAME!r} is not a packaged file, so the "
             f"[fleet] stage must leave it alone; it is gone from "
             f"{self.clients_dir()!r} (contents="
             f"{sorted(os.listdir(self.clients_dir()))})")
@@ -638,7 +648,7 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
             f"§S1 -- an unmanaged destination file must keep its own bytes")
 
     def test_an_unmanaged_file_does_not_defeat_convergence(self):
-        """The eight all match, so the stage converges -- the extra file is
+        """Every packaged file matches, so the stage converges -- the extra file is
         not in the source set and therefore cannot be 'divergent'."""
         self.land_the_fleet()
         self.pin_landed_mtimes()
@@ -649,8 +659,8 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
         self.assertTrue(
             stage["converged"],
             f"AC5 -- an unmanaged {UNMANAGED_FILENAME!r} sitting beside the "
-            f"eight must not make the {FLEET_STAGE_NAME!r} stage claim "
-            f"non-convergence: convergence is decided over the eight source "
+            f"packaged set must not make the {FLEET_STAGE_NAME!r} stage claim "
+            f"non-convergence: convergence is decided over the packaged source "
             f"files only. Got {stage!r}; ok={ok} warnings={warnings}")
         self.assertEqual(
             self.unmanaged.read_bytes(), UNMANAGED_CONTENT,
@@ -664,7 +674,7 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
 
 # --- CR-CRU-090 C3 (§S3, AC3) -- every path the manifest publishes resolves --
 
-# BACKFILL, not RED: the `fleet` stage (C1/C2) already lays the eight files
+# BACKFILL, not RED: the `fleet` stage (C1/C2) already lays the packaged files
 # down, so this guard passes on its first execution. Its worth was proved by
 # MUTATION instead: with `"fleet"` removed from `install.STAGE_ORDER`, or with
 # the stage skipping `STATUS-CONTRACT.md`, or with `build_manifest` publishing
@@ -825,7 +835,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
 
 # --- CR-CRU-090 C4 (§S1, AC4) -- a copied client actually RUNS ---------------
 
-# BACKFILL, not RED: the `fleet` stage (C1/C2) already lays all eight files
+# BACKFILL, not RED: the `fleet` stage (C1/C2) already lays every packaged file
 # down, so this guard passes on its first execution. Its worth was proved by
 # MUTATION: dropping `"_crucible_axi.py"` from `install.FLEET_FILES` kills the
 # `--help` guards (all five copied clients die at import), and dropping
@@ -879,7 +889,7 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
     so a stage that laid down five `*-crucible.py` files and nothing else would
     satisfy "the clients are there" and yield five entry points that die on
     import. AC2's byte-comparison would catch that particular shape, but only
-    because it enumerates the eight names; nothing there proves the copied
+    because it enumerates the packaged names; nothing there proves the copied
     tree is EXECUTABLE.
 
     Two hygiene rules make the pass meaningful rather than accidental:
@@ -1055,7 +1065,7 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
 # The stage's docstring and §S1 both state "the copy is confined to
 # `<target-dir>/clients/`". On the C1/C2 implementation that is an INTENTION,
 # not a guarantee: `os.path.isfile()` and `Path.write_bytes()` BOTH traverse a
-# symlink, so a pre-existing link at one of the eight destination names makes a
+# symlink, so a pre-existing link at a packaged destination name makes a
 # single `run_install` read -- and write ~70 KB of client source into -- a file
 # outside the target dir entirely, leaving the link in place so every later run
 # does it again. Two link shapes are exercised, because they escape through
@@ -1071,7 +1081,7 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
 # at source) land 0o644 and an operator running
 # `~/.crucible/clients/rust-crucible.py` directly gets "Permission denied".
 # Source modes are read at RUNTIME, never hardcoded: the repo fleet's modes are
-# deliberately mixed (three of the eight executable), and hardcoding them here
+# deliberately mixed (three of them executable), and hardcoding them here
 # would just re-assert the fixture.
 
 SENTINEL_TEMPLATE = (
@@ -1119,7 +1129,7 @@ class FleetStageConfinementAndModeTest(_FleetConvergenceCase):
         return sentinel
 
     def stand_in_source_dir(self):
-        """A scratch SOURCE fleet holding all eight files with DIFFERENT modes
+        """A scratch SOURCE fleet holding every packaged file with DIFFERENT modes
         from the repo's, so `manifest.source_clients_dir()` can be pointed at
         it and the landed modes compared against a known, non-coincidental
         set. `shutil.copyfile` copies bytes only, so every file starts at the
@@ -1171,7 +1181,7 @@ class FleetStageConfinementAndModeTest(_FleetConvergenceCase):
                     f"its source's bytes")
         self.assertEqual(
             [], violations,
-            f"§S1 -- a symlink at one of the eight destination names must be "
+            f"§S1 -- a symlink at a packaged destination name must be "
             f"REPLACED by a regular file, never followed: `os.path.isfile` "
             f"and `Path.write_bytes` both traverse a link, so the stage "
             f"writes the client's bytes outside {self.clients_dir()!r} while "

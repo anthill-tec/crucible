@@ -124,6 +124,19 @@ def cmd_install(args) -> int:
             fields["reason"] = stage["reason"]
         if stage.get("restarted"):
             fields["restarted"] = True
+        # CR-CRU-138 §S2 -- the `[manifest]` stage reports what became of the
+        # SERVER's operator-editable `crucible.toml`, and the operator must
+        # SEE it: a machine whose board runs elsewhere gets no such file, and
+        # a silent absence is the defect that survived a whole release. Only
+        # the meaningful half is printed -- the path when one was written, the
+        # reason when none was -- because a row carrying `reason: null` beside
+        # a path reads as a fault where there is none.
+        server_config = stage.get("server_config")
+        if server_config:
+            written = server_config.get("path")
+            fields["server_config"] = (
+                {"path": install.abbreviate_home(str(written))} if written
+                else {"reason": server_config.get("reason")})
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,

@@ -1948,10 +1948,42 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // tests/project-namespace-tripwire.test.ts -t 'never below its develop
 // baseline'` on the pre-fix tree reported `clients: 858` against the
 // then-recorded `848`.
+// UPDATED 2026-09-16 by CR-CRU-138 §S1 — this hotfix's own close-out step,
+// taken ONCE at the end and MEASURED, not transcribed. `clients` 858 -> 862
+// (+4): +3 for §S1 itself, then +1 in VERIFY's fix round, where the
+// `_SHIPPED_DATA_CANDIDATES` comment stopped documenting §S4's defect as the
+// intended design and had to name the CR that closed it. Re-measured after that
+// edit rather than left at the mid-cycle figure — the drift this table exists to
+// catch is exactly a count recorded before the last prose change.
+//
+// All of them land in `clients/_crucible_axi.py`, the only production file §S1
+// touches: the section banner and the paragraph explaining
+// why the configuration chain is derived from the running module's own location
+// rather than from `os.getcwd()`, and the note on `_limits_unreadable` naming
+// every candidate it tried. `src` and `public` are untouched by this CR and
+// re-measure at 724 and 477 — §S2/§S4 are python, and the `docs/RUNBOOK.md` and
+// `scripts/sandboxed-install-tests.sh` edits are in neither a tree nor a
+// counted extension, so they move no head by construction.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 861 is far above the 601 floor, no
+// head came out below its baseline, and the three `develop` floors stay at
+// 512/378/601 — a floor never moves for a re-record.
+//
+// RECORDED BECAUSE IT COST SOMETHING: the three NEW `tests/client/` files this
+// CR adds also tripped AC7/AC7a, because their assertion MESSAGES quoted
+// `CR-CRU-138` (6 literals in the install-then-resolve suite, 1 each in the
+// lay-down suite and the checkout guard). The fix was to strip the namespace
+// from the assertion arguments and leave every docstring's lineage intact --
+// NOT to add `PRE_CR_ASSERTION_RESIDUE` entries, because that table is a
+// shrinking ceiling and an entry for a new file would re-admit real board ids
+// into its assertions, which is what the by-name pin exists to forbid.
+// Measured with this file's own classifier: `bun test
+// tests/project-namespace-tripwire.test.ts -t 'never below its develop
+// baseline'` reported `clients: 861` against the then-recorded `858`.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 858 },
+  clients: { exts: [".py"], develop: 601, head: 862 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

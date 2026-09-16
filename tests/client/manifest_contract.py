@@ -24,4 +24,21 @@ Not named `test_*`, so unittest discovery never collects it as a suite.
 #: in the manifest like everything else it lays down, or automation cannot
 #: discover the file it is meant to edit. Purely ADDITIVE: every pre-existing
 #: field keeps its exact shape and value.
-EXPECTED_MANIFEST_KEYS = frozenset({"version", "clients", "status", "config"})
+#:
+#: `shipped_config` joined in CR-CRU-138 §S4: the distribution's OWN limit
+#: declarations, laid down with the fleet at `<install>/clients/crucible.toml`
+#: as package data. It is a different KIND of thing from `config` -- the build's
+#: file, replaced wholesale on every upgrade, against the operator's, which
+#: survives one -- and automation that cannot tell them apart eventually edits
+#: the wrong one. Declared UNCONDITIONALLY, like `status`: the fleet stage lays
+#: it down on every install.
+#:
+#: `server_config` (CR-CRU-138 §S2) is deliberately NOT here. It is CONDITIONAL
+#: -- published only when the server was really provisioned locally, because
+#: the file is written beside the server's own database and there is none to
+#: write beside otherwise. Listing it unconditionally would require publishing
+#: a path that does not exist, which is the dangling-path defect CR-CRU-090
+#: closed. It is asserted in the provisioned case, where it is owed.
+EXPECTED_MANIFEST_KEYS = frozenset({
+    "version", "clients", "status", "config", "shipped_config",
+})
