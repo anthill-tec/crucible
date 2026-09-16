@@ -102,6 +102,13 @@
   .st.on{color:var(--ember);border-color:var(--ember)}
   .st.pd{color:var(--ink-dim)}
   .scroll{max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  /* Layout repair 2026-09-10 — the 10 overlapping-text findings at 961px. CAUSE: both CR tables
+     live in .scroll boxes clipped to 190px/148px; at compact widths the cells wrap taller, so the
+     last rows fell outside the clip and the checker read them as covered by the following sibling.
+     FIX: stop clipping below 1000px instead of restyling the tables, leaving the design grammar
+     untouched — that refresh is deferred until after 0.2.0 ships (user ruling 2026-09-10). */
+  td,th{overflow-wrap:anywhere}
+  @media (max-width:1000px){ .scroll{max-height:none !important;overflow:visible} }
   .yes{color:var(--ok)}.no{color:var(--ink-dim)}
   .q{border:1px solid var(--ember-dim);border-left:4px solid var(--ember);border-radius:8px;
     background:rgba(255,122,26,.05);padding:12px 15px;margin:11px 0}
@@ -500,21 +507,37 @@
       <tr><th>#</th><th>Call</th><th>When, and why it sits here</th><th></th></tr>
       <tr><td class="mono">0</td><td class="mono">register --role ORCHESTRATOR</td>
         <td>Identity before any write. Already enforced — an unregistered id gets <code>HTTP 409</code>; it refused me twice today.</td><td class="yes">exists</td></tr>
-      <tr><td class="mono">1</td><td class="mono">release-propose --label 0.2.0 --target 2026-10-15</td>
-        <td><b>Design phase, once per planned release.</b> The super container must exist before a CR can target it. <code>--target</code> is the declared date (optional, revisable); the strip still <b>orders by version</b>.</td><td class="no">new</td></tr>
+      <tr><td class="mono">1</td><td class="mono">release-propose --label 0.2.0 --target 2026-09-12</td>
+        <td><b>Design phase, once per planned release.</b> The super container must exist before a CR can target it. <code>--target</code> is the declared date &mdash; <b>REQUIRED as of CR-CRU-118</b>, no longer optional, because it is the axis burn-down reads; still revisable, and a revision <b>retires its predecessor</b> rather than editing it, so a moved target stays auditable. The strip still <b>orders by version</b>.</td><td class="yes">shipped &middot; 091</td></tr>
       <tr><td class="mono">2</td><td class="mono">cr-plan --cr … --release … --wave … --title …</td>
-        <td><b>As each CR is authored.</b> Declares both memberships + the brief title. Re-running with different values is a legitimate <b>re-plan</b>, not an error.</td><td class="no">new</td></tr>
+        <td><b>As each CR is authored.</b> Declares both memberships + the brief title. Re-running with different values is a legitimate <b>re-plan</b>, not an error. <code>--release</code> is <b>required</b> (server answers <code>400</code>; the client lists the live proposals and exits 2 rather than guessing), and CR-CRU-118 adds the one label it could not accept before: a <b>shipped</b> release, where that release's own <code>crs</code> already names the CR &mdash; historical membership as a derivation.</td><td class="yes">shipped &middot; 091/104</td></tr>
       <tr><td class="mono">2b</td><td class="mono">cr-depends --cr … --on A,B,C…</td>
-        <td><b>When a CR's dependencies are known</b>, and again whenever they change. Carries the <b>whole set</b>; re-sending REPLACES it, so a dropped dep is a declaration and not an accident. Deps are their own axis, so a re-plan at step 2 never restates or loses them. ORCHESTRATOR-gated and cycle-refusing. <b>APPROVED 2026-09-04 — shape A of three.</b></td><td class="no">new</td></tr>
-      <tr><td class="mono">3</td><td class="mono">wave-sequence --release … --wave … --crs A,B,C…</td>
-        <td><b>When the wave's order is decided</b>, and again whenever it changes. Carries the <b>whole ordered list</b>; array position becomes <code>seq</code>.</td><td class="no">new</td></tr>
+        <td><b>When a CR's dependencies are known</b>, and again whenever they change. Carries the <b>whole set</b>; re-sending REPLACES it, so a dropped dep is a declaration and not an accident. Deps are their own axis, so a re-plan at step 2 never restates or loses them. ORCHESTRATOR-gated and cycle-refusing. <b>APPROVED 2026-09-04 — shape A of three.</b></td><td class="yes">shipped &middot; 106</td></tr>
+      <tr><td class="mono">3</td><td class="mono">wave-sequence --release … --wave … --crs A,B,C… [--track N]</td>
+        <td><b>When the wave's order is decided</b>, and again whenever it changes. Carries the <b>whole ordered list</b>; array position becomes <code>seq</code>. A member the list omits is appended and <b>named</b> in an <code>unsequenced-members</code> warning.</td><td class="yes">shipped &middot; 091</td></tr>
       <tr><td class="mono">4</td><td class="mono">cr-supersede · cr-void</td>
-        <td><b>Gap-analysis phase</b> — see §11. Declarations, never deletions.</td><td class="no">new</td></tr>
+        <td><b>Gap-analysis phase</b> — see §11. Declarations, never deletions.</td><td class="yes">shipped &middot; 091</td></tr>
       <tr><td class="mono">5</td><td class="mono">plan-file → cycle-add → cycle-activate → cycle-done → cr-close → cr-merged</td>
-        <td>Execution, unchanged. The roadmap is fully declared before a cycle runs.</td><td class="yes">exists</td></tr>
-      <tr><td class="mono">5b</td><td class="mono">next [--track N]</td><td><b>Throughout execution</b> — the orchestrator asks what is actionable; validates the declared sequence against live state (§13).</td><td class="no">new</td></tr>
+        <td>The roadmap is fully declared before a cycle runs. The chain itself is NOT unchanged since this was
+          written: CR-CRU-111 replaced the single <code>test</code> verb with the six <b>tier verbs</b>
+          (<code>unit · module · integration · e2e · regression · bdd</code>), and CR-CRU-112 made ONE
+          <code>pre-merge-gate</code> invocation cover every suite the project declares — including this repo's
+          python client suite, dispatched to <code>python-crucible.py</code>.</td><td class="yes">shipped &middot; 111/112</td></tr>
+      <tr><td class="mono">5b</td><td class="mono">next [--track N]</td><td><b>Throughout execution</b> — the orchestrator asks what is actionable; validates the declared sequence against live state (§13). CR-CRU-114 added <code>--release</code> and <code>--wave</code>: the wave predicate reads <code>wave</code> ALONE, so every lane gets one verdict, and a crossed wave is announced as <code>waveCompleted</code> until the new wave lands its first CR.</td><td class="yes">shipped &middot; 092/114</td></tr>
+      <tr><td class="mono">5c</td><td class="mono">gate-run --release … · gate-report --release …</td>
+        <td><b>The release's own tracked trace</b> (DN D3). CR-CRU-115 added <code>--release</code> at ten gate-verb
+          sites across five clients: it posts the event's top-level <code>version</code>, which is what the server
+          RETIRES when the matching release records — so "a release is in flight" is readable with no new record
+          kind. Same CR killed the green-biased seal: a run with no resolved outcome is a HOLD, not a
+          <code>passed</code>.</td><td class="yes">shipped &middot; 115</td></tr>
       <tr><td class="mono">6</td><td class="mono">milestone --type release --label … --crs … --packages …</td>
         <td>The cut. Freezes membership as settled fact and consumes the proposal from step 1.</td><td class="yes">exists</td></tr>
+      <tr><td class="mono">&mdash;</td><td class="mono">queue-file --from-file docs/changes/README.md</td>
+        <td><b>NOT part of this chain, and being retired.</b> The bulk table-replace door exists because this project
+          is Crucible's source and its first user; the five per-CR routes above replaced it. Two measured data losses
+          came through it (a CR arriving with no release and an invented <code>seq</code>; a VOID disposition
+          destroyed on a re-import). DEPRECATED by user ruling 2026-09-10 — the warning ships in CR-CRU-118, removal
+          plus a per-CR sync in 0.3.0.</td><td class="no">deprecated</td></tr>
     </table>
 
     <p class="sub" style="margin:12px 0 6px"><b>Step 3 is one call, and that is the load-bearing decision.</b>
@@ -528,9 +551,10 @@
       <p class="sub" style="margin:0 0 7px"><b>Why this gap exists, stated plainly.</b> The chain above has no step that
         declares <code>dependsOn</code>, yet <b>93 of the board's 102 rows carry dependencies</b>. They arrived through
         the orchestrator's own <b>bulk queue post</b> &mdash; migration tooling built to move this project's
-        README-table roadmap onto the board, and no part of this approved API. So today a dependency can only be
-        declared by the migration door, which means a project authored natively in Crucible <b>cannot declare one at
-        all</b>. That is the hole your ruling names.</p>
+        README-table roadmap onto the board, and no part of this approved API. So at the time of this approval a dependency could only be
+        declared by the migration door, which meant a project authored natively in Crucible <b>could not declare one at
+        all</b>. That was the hole your ruling named &mdash; and it is CLOSED: <code>cr-depends</code> shipped as
+        CR-CRU-106, and the migration door it worked around is now itself deprecated (see the last row above).</p>
       <p class="sub" style="margin:0 0 7px"><b>Three shapes were offered. You approved A.</b></p>
       <table>
         <tr><th>Shape</th><th>Call</th><th>Trade</th></tr>

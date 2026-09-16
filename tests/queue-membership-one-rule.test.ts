@@ -115,6 +115,29 @@ function unproposedHelp(release: string): string[] {
  *  in its own field+index shape rather than a third wording of it. */
 const RELEASE_REQUIRED = "`release` is required — the release this cr targets";
 
+/** CR-CRU-118 §S3 — the notice the BULK door raises on every call, announcing
+ *  that it is deprecated in favour of the per-CR verbs. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a call raised BESIDE §S3's standing deprecation notice.
+ *
+ * The notice is a property of the DOOR — this route is being retired — and not
+ * of the membership declaration this suite compares. `cr-plan` is not being
+ * retired and raises no such finding, so a parity table that demanded it do so
+ * would be asserting a falsehood about what parity means here: §S1's claim is
+ * that one membership RULE is reached from both entry points, never that the
+ * two doors are the same door. It is therefore excluded from the comparison
+ * rather than expected of both. Do NOT "restore" it.
+ *
+ * EXCLUDED, never filtered FOR: every remaining assertion keeps its
+ * exhaustiveness, so an unexpected finding arriving from either door still
+ * parts the two answers or fails an empty-set pin.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
+
 /** CR-CRU-099 §S1/AC4a — the lane rule's tail, shared verbatim by the bulk
  *  post's indexed refusal, `wave-sequence`'s field refusal and
  *  `replaceQueue`'s own guard. The PREFIXES differ (§S1: each route keeps its
@@ -205,8 +228,17 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     return key;
   }
 
+  /** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+   *  Nothing in this suite is ABOUT that date; the fixtures need a live
+   *  proposal to exist, so one plausible target serves all of them. */
+  const FIXTURE_TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+
   async function propose(key: string, label: string): Promise<void> {
-    const res = await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label });
+    const res = await post(`/api/v2/projects/${key}/release-proposals`, {
+      agentId: ORCH,
+      label,
+      targetAt: FIXTURE_TARGET_AT,
+    });
     expect(res.status).toBe(200);
   }
 
@@ -216,6 +248,25 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     agentId: string | undefined = ORCH,
   ): Promise<{ status: number; body: AnyBody }> {
     return post(queuePath(key), agentId === undefined ? { entries } : { agentId, entries });
+  }
+
+  /**
+   * CR-CRU-118 §S2 — a row the board ALREADY HOLDS. The bulk route refuses to
+   * INSERT a cr that names no release, so the release-less rows this suite
+   * uses as the board a refusal must leave untouched are HELD rather than
+   * posted. They are given no release they do not have: what they stand for is
+   * exactly a row the mandate has not reached yet.
+   */
+  function hold(key: string, rows: Array<Record<string, unknown>>): void {
+    handle!.store.replaceQueue(
+      key,
+      rows.map((row) => ({
+        cr: String(row.cr),
+        ...(row.title !== undefined ? { title: String(row.title) } : {}),
+        wave: String(row.wave),
+        dependsOn: Array.isArray(row.dependsOn) ? row.dependsOn.map(String) : [],
+      })),
+    );
   }
 
   async function entries(key: string): Promise<QueueEntryWire[]> {
@@ -241,9 +292,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         // The queue a refusal must leave EXACTLY as it stands: this route is a
         // FULL REPLACE, so a refusal that ran the write is visible here as a
         // lost row (CR-CRU-099 AC4a's technique).
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
 
         const res = await bulk(key, [
           { cr: "CR-104-HELD", wave: "5", dependsOn: [] },
@@ -294,7 +343,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
           agentId: ORCH,
           type: "release",
           label: "0.1.0",
-          crs: [],
+          crs: ["CR-SHIPPED-1"],
         });
         expect([200, 201]).toContain(shipped.status);
         const proposals = await get(`/api/v2/projects/${key}/release-proposals`);
@@ -323,7 +372,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
           { cr: "CR-104-B", title: "second", wave: "5", dependsOn: [], release: "0.2.0" },
         ]);
         expect([200, 202]).toContain(res.status);
-        expect(res.body.warnings ?? []).toEqual([]);
+        expect(besideTheDeprecationNotice(res.body.warnings)).toEqual([]);
         const board = await entries(key);
         expect(board.map((e) => e.release)).toEqual(["0.2.0", "0.2.0"]);
         expect(board.map((e) => e.seq)).toEqual([5001, 5002]);
@@ -337,6 +386,14 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
       async () => {
         boot();
         const key = await seed("cru104-ac13-open");
+        // CR-CRU-118 §S2 — the rows are HELD, then re-posted anonymously: the
+        // gate this AC is about keys on the DECLARATION, and the membership
+        // rule that now refuses an unheld release-less cr refuses it for every
+        // caller alike, so holding them keeps the two rules apart.
+        hold(key, [
+          { cr: "CR-104-QF1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-104-QF2", title: "another row", wave: "6", dependsOn: ["CR-104-QF1"] },
+        ]);
         const res = await bulk(
           key,
           [
@@ -459,7 +516,11 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
       // wording, two shapes (§S1).
       meaning: res.body.error?.replace(/^entry at index \d+: /, ""),
       help: res.body.help,
-      warnings: (res.body.warnings ?? [])
+      // §S3's deprecation notice is dropped before the comparison: it is a
+      // finding about the DOOR, not about the declaration, and only one of
+      // these two doors is being retired. Everything else a route raised is
+      // still compared in full.
+      warnings: besideTheDeprecationNotice(res.body.warnings)
         .map((w) => `${w.code}|${w.message}|${(w.crs ?? []).join(",")}`)
         .sort(),
       // Compared as the BOOLEAN FACT, not as the field: `cr-plan` publishes
@@ -539,9 +600,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     {
       name: "AC1/AC3 — a release nobody proposed: REFUSED by both, nothing written",
       board: async (key) => {
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
       },
       declaration: { cr: "CR-104-NEW", release: "0.9.0", wave: "5", title: "into thin air" },
       expected: {
@@ -564,9 +623,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         "wrong with the declaration is its type",
       board: async (key) => {
         await propose(key, "2");
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
       },
       declaration: { cr: "CR-104-NEW", release: 2, wave: "5", title: "a coerced label" },
       expected: {
@@ -586,9 +643,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         "hold: `cr-plan` refuses the empty string by type, and the migration door used to carry it " +
         "as far as the live-proposal gate and answer 404 `release  has no live proposal`",
       board: async (key) => {
-        expect([200, 202]).toContain(
-          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
-        );
+        hold(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }]);
       },
       declaration: { cr: "CR-104-NEW", release: "", wave: "5", title: "no label at all" },
       expected: {

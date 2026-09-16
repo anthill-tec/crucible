@@ -2,6 +2,7 @@
 
 import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
+import { configuredRetention, resolveLimit } from "./limits.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
@@ -37,9 +38,24 @@ export interface ProjectPatch {
   type?: Project["type"];
   sutRoot?: string;
   liveness?: Partial<LivenessConfig>;
-  retention?: number;
+  /**
+   * CR-CRU-131 §S2 — this project's OWN cap, in three distinguishable states.
+   * A number (including `0`, a declared cap of zero) SETS it; `null` CLEARS
+   * it, so the project falls back on the fleet default the server's
+   * `crucible.toml` resolves; ABSENT leaves whatever the project already had.
+   * The three are separated by key PRESENCE, never by truthiness — `0`,
+   * `null` and absent are all falsy and mean three different things.
+   */
+  retention?: number | null;
   /** CR-CRU-008 §S4 — guarded run deletion config gate. */
   allowRunDeletion?: boolean;
+  /**
+   * CR-CRU-130 §S4 — the milestone vocabulary this project DECLARES, replaced
+   * WHOLE by each patch (a declaration is a statement of the project's words,
+   * never an append). The reserved pair is the server's and is refused at the
+   * route boundary, so it never reaches here.
+   */
+  milestoneTypes?: string[];
 }
 
 /**
@@ -80,6 +96,9 @@ interface ProjectRow {
   archived_at: number | null;
   // CR-CRU-008 §S4 — guarded run deletion config gate; NULL = never set.
   allow_run_deletion: number | null;
+  // CR-CRU-130 §S4 — this project's DECLARED milestone vocabulary, joined in
+  // from `project_milestone_types`; NULL = declared nothing.
+  milestone_types?: string | null;
 }
 
 interface AgentRow {
@@ -314,6 +333,19 @@ export interface QueueEntryInput {
  */
 export interface QueueSeqReport {
   defaultedSeq: string[];
+  /**
+   * CR-CRU-119 §S1 — the SUBSET of `defaultedSeq` whose position this write did
+   * NOT invent: the entry kept the seq it already held (`upsertQueueEntry`'s
+   * `moved ? nextFreeSlot(…) : held!.seq` took the second branch) and only that
+   * held value's SCALE collides with a sibling. `defaultedSeq` keeps naming
+   * every cr the finding is about — the trigger set is untouched (§S2) — and
+   * this list says which of them the word "defaulted" would be false about, so
+   * the route can build the two causes' sentences and the machine-readable
+   * discriminator beside them. Always empty from `replaceQueue`: that writer
+   * names a row ONLY when neither a declared nor a held-in-wave seq existed, so
+   * every cr it reports is one whose position it chose.
+   */
+  preservedSeq: string[];
 }
 
 /** CR-CRU-091 §S3/§S8 — one `cr-plan` upsert: the declaration, nothing else. */
@@ -600,6 +632,55 @@ export interface PlanOpError {
   cycleRef?: number;
 }
 
+/**
+ * CR-CRU-116 §S1/§S2 — a WAVE-scope refusal: `PlanOpError`'s shape one
+ * container up, narrowed to the two codes `CycleTransitionError` already
+ * declares (:589-596). No third code string exists in this scope. `waveRef`
+ * and `crRef` carry what the refusal NAMES — both read off the queue entry,
+ * never off `plan.wave` — so the route builds its help[] without re-deriving
+ * anything.
+ */
+export interface WaveScopeError {
+  error: string;
+  code: "already-active" | "out-of-order";
+  waveRef: string;
+  crRef: string;
+}
+
+/** CR-CRU-116 §S1 — the two queue columns the wave question reads, plus the
+ *  declared-dead axis and the position that orders a blocker. */
+interface WaveScopeRow {
+  cr: string;
+  wave: string;
+  seq: number;
+  lifecycle_json: string | null;
+}
+
+/** CR-CRU-116 §S1 — the only plan facts `queueStatusOf` reads. */
+interface PlanStatusFacts {
+  planId: number;
+  status: string;
+  merge?: unknown;
+}
+
+/**
+ * CR-CRU-126 §S1 — the ONLY event columns a commit boundary is derived from.
+ * `context` carries the answer, `timestamp`/`row_id` carry the order; the wide
+ * columns `SELECT *` used to marshal (37 MB per scan) are read by nobody here.
+ * `context` is non-null by construction: the query filters on it.
+ */
+interface BoundaryEventRow {
+  timestamp: number;
+  /**
+   * CR-CRU-129 §S1 — the id, not the rowid: the boundary now merges rows from
+   * `events` AND the two record tables, and a per-table rowid is not
+   * comparable across them. The store's own insert sequence — the tail of the
+   * id it mints — is, and it is the same order a single table's rowid gave.
+   */
+  id: string;
+  context: string;
+}
+
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
 export type TestRun = RunSchema;
 
@@ -628,19 +709,144 @@ export interface RecordEventMeta {
 export type ChangeKind = "projects" | "agents" | "events";
 export type ChangeListener = (kind: ChangeKind, projectKey?: string) => void;
 
-/** §S4 — default raw-event retention cap per project. */
-const DEFAULT_RETENTION = 100;
+/**
+ * CR-CRU-129 §S2 — the ONLY kinds retention may ever evict.
+ *
+ * Telemetry: numerous, reproducible, and exactly what a capped ring buffer is
+ * for. Everything else the store writes is a RECORD — something that happened
+ * once and stays true, with no external source to rebuild it from — and lives
+ * in a table of its own (`milestones`, `gates`), which is why the sweep below
+ * cannot reach it by construction rather than by an exemption predicate.
+ *
+ * EXPORTED on purpose: a private constant is a promise the store makes to
+ * itself, and this one has to be checkable from outside
+ * (tests/retention-disposable-kinds.test.ts). Adding a structural kind here is
+ * how this project lost every release it had ever shipped on 2026-09-13.
+ */
+export const RETENTION_DISPOSABLE_KINDS: ReadonlySet<string> = new Set([
+  "test",
+  "compile",
+  "lifecycle",
+]);
+
+/** The `IN (?, ?, …)` half of the sweep's predicate, derived from the set above. */
+const DISPOSABLE_KIND_PARAMS: readonly string[] = [...RETENTION_DISPOSABLE_KINDS];
+const DISPOSABLE_KIND_PLACEHOLDERS = DISPOSABLE_KIND_PARAMS.map(() => "?").join(", ");
+
+/**
+ * CR-CRU-129 §S2 — the cap a project that declares none falls back on.
+ *
+ * A limit is CONFIGURATION, never a constant in source (user ruling,
+ * 2026-09-13): the per-project value already is (`projects.retention`,
+ * `ProjectPatch.retention`) and the fallback resolves from the same kind of
+ * place. CR-CRU-131 §S1 makes that place a FILE — the server's own
+ * `crucible.toml` — read PER SWEEP, not cached, so a long-lived board sees an
+ * operator's change without a restart.
+ *
+ * `undefined` means NO CAP, and retention is the DOCUMENTED exception to §S1b
+ * (see {@link configuredRetention}): an absent or malformed file is an
+ * operator who configured NOTHING, and keeping more events costs only disk, so
+ * unbounded is the honest answer — disclosed at boot by name rather than grown
+ * quietly. An out-of-range `value` is a different fact and is refused onto
+ * `recommended`. A project's OWN `retention: 0` still wins (`??`, never
+ * `||`): zero is a declared cap, not an absent one.
+ */
+export function defaultRetention(): number | undefined {
+  return configuredRetention();
+}
+
+// ── CR-CRU-130 §S4/§S5 — the milestone vocabulary, defined in ONE place ────
+//
+// A milestone type is a project's own word for a dated goal, so it belongs in
+// the same seam as the cap above: configuration, resolved here, read
+// everywhere. The validator, the refusal's help[], the clients' `--type` help
+// and the board all READ this definition rather than holding a copy of it —
+// which is what §S5's constructional scan asserts, and why the seed lives
+// here and not in the route file.
+
+/**
+ * §S4 — the two types the SERVER derives behaviour from, and the ONLY
+ * declaration of that pair in the codebase.
+ *
+ * `release` carries the releases and release-proposals reads, the `crs`
+ * membership the queue's COMPLETED_UNTRACKED status derives from, `packages`
+ * and provenance repair; `cr-merged` carries the landing evidence a release's
+ * own `crs` is measured against. A project may neither declare, shadow nor
+ * remove either — its narration would land in `listReleases` and re-break the
+ * membership derivation CR-CRU-129 repaired.
+ */
+export const RESERVED_MILESTONE_TYPES = ["release", "cr-merged"] as const;
+
+export type ReservedMilestoneType = (typeof RESERVED_MILESTONE_TYPES)[number];
+
+/**
+ * §S4 — what each reserved name PROTECTS, so a refusal can say why the name is
+ * taken instead of leaving the caller to guess that its value was malformed.
+ * Keyed by the pair above, so a name cannot be reserved without a reason.
+ */
+const RESERVED_MILESTONE_TYPE_DERIVATIONS: Record<ReservedMilestoneType, string> = {
+  release:
+    "the releases and proposals reads, the crs membership the queue's COMPLETED_UNTRACKED " +
+    "status derives from, its packages and its provenance repair",
+  "cr-merged":
+    "the landing evidence a release's own crs is measured against — the provenance the " +
+    "release ceremony reads",
+};
+
+/**
+ * §S4 — the vocabulary a project that has declared NOTHING still records.
+ *
+ * These were server constants until this CR; they were always this project's
+ * own words, so they are seeded from configuration — the declaration a project
+ * starts with rather than a list the server owns. Seeded, not reserved: a
+ * project is free to declare over them, and nothing recording them today
+ * breaks.
+ */
+export const SEEDED_MILESTONE_TYPES: readonly string[] = [
+  "gap-analysis",
+  "design-review",
+  "stage-flip",
+  "custom",
+];
+
+/**
+ * §S4 — the accepted set, resolved ONCE: what the project DECLARED, the seed
+ * it starts from, and the reserved pair the server keeps for itself. Order is
+ * the reading order of the refusal that publishes it; duplicates collapse, so
+ * a project re-declaring a seeded name changes nothing.
+ */
+export function milestoneVocabulary(declared: readonly string[]): string[] {
+  return [...new Set([...SEEDED_MILESTONE_TYPES, ...declared, ...RESERVED_MILESTONE_TYPES])];
+}
+
+/**
+ * §S4 — the first reserved name a declaration tries to take, with what that
+ * name protects. `null` when the declaration takes none. A declaration is
+ * judged WHOLE: one reserved name refuses the list it arrived in, so a
+ * legitimate type smuggled in beside a reserved one is never left declared.
+ */
+export function reservedMilestoneTypeConflict(
+  types: readonly string[],
+): { type: string; derives: string } | null {
+  for (const type of types) {
+    const derives = RESERVED_MILESTONE_TYPE_DERIVATIONS[type as ReservedMilestoneType];
+    if (derives !== undefined) return { type, derives };
+  }
+  return null;
+}
 
 /**
  * CR-CRU-017 §S1 — how long an OPEN run may live before the sweep abandons it.
  * Read per sweep, not cached: the deadline is operational configuration, and a
  * long-lived process must see a change without a restart.
+ *
+ * CR-CRU-131 §S1 — the fallback is no longer a literal. This function was the
+ * pattern CR-CRU-129 held up as the one to copy while its own default was
+ * `DEFAULT_RUN_ABANDON_MS = 30 * 60_000`, a number nobody could reach; it now
+ * resolves from the server's `crucible.toml` like every other limit.
  */
-const DEFAULT_RUN_ABANDON_MS = 30 * 60_000;
-
 function runAbandonAfterMs(): number {
-  const raw = Number(process.env.CRUCIBLE_RUN_ABANDON_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RUN_ABANDON_MS;
+  return resolveLimit("run_abandon_ms");
 }
 
 /** CR-CRU-002 §S4 — project keys are UUIDs; ingest routes validate against this. */
@@ -838,6 +1044,560 @@ function backfillInferredEventRoles(db: Database): void {
   for (const row of pending) {
     update.run(row.role, row.id);
   }
+}
+
+// ===========================================================================
+// CR-CRU-129 §S1 — a milestone is a RECORD, not an event
+// ===========================================================================
+//
+// `events` is a capped ring buffer, and on 2026-09-13 one CR's worth of TDD
+// ingests evicted the `release` records for every version this project had
+// ever shipped. A test run is numerous, reproducible and exactly what a cap is
+// for; a milestone or a gate is a record of something that happened once and
+// stays true. Records therefore live in tables of their own, which retention
+// cannot reach.
+//
+// Each table carries the EVENT IDENTITY every read already serves (`id`,
+// `project_key`, `agent_id`, `tier`, `codec`, `timestamp`, `role`,
+// `role_inferred`, `cycle_id`) plus the record's own fields. `type`/`label`
+// (milestone) and `version` (gate) get real COLUMNS because they are what the
+// reads FILTER on — `listReleases`, `listReleaseProposals`, the proposal
+// consumption and the gate retirement each used to re-parse every row's blob
+// to find them. They are DERIVED at the one row-insert seam from the payload,
+// exactly as `cycle_id` is derived from `context`, so the two representations
+// cannot disagree.
+//
+// CR-CRU-130 §S1 joins `target_at`/`delivered_at` to that list for the same
+// reason: "what is outstanding, and what slipped" are FILTERS, and a filter
+// over a blob is a table scan that re-parses every row. Everything else a
+// record carries — `releasedAt`, `crs`, `packages`, the gate object — stays in
+// the generic `payload` blob it has always ridden in, so a record round-trips
+// byte-identically and nothing is re-derived by the move.
+
+/** The two record tables, in their CURRENT shape. Idempotent, like every DDL here. */
+function createRecordTables(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS milestones (
+      id TEXT PRIMARY KEY,
+      project_key TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      codec TEXT,
+      timestamp INTEGER NOT NULL,
+      -- The filtered fields, derived from the payload at the insert seam.
+      type TEXT,
+      label TEXT,
+      -- CR-CRU-130 §S1 — a milestone is a dated GOAL, so the two dates that say
+      -- what it is FOR are filtered here too, on the same terms and at the same
+      -- seam: when it is DUE and when it was MET. NULL is the real state
+      -- "undated"/"outstanding", never 0 and never the row's timestamp.
+      target_at INTEGER,
+      delivered_at INTEGER,
+      -- releasedAt / crs / packages ride here, verbatim.
+      payload TEXT,
+      context TEXT,
+      role TEXT,
+      role_inferred INTEGER,
+      -- CR-CRU-073 §S1 / CR-CRU-091 §S1 — no longer live, still auditable.
+      retired_at INTEGER,
+      cycle_id INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_milestones_project_type
+      ON milestones (project_key, type);
+
+    CREATE TABLE IF NOT EXISTS gates (
+      id TEXT PRIMARY KEY,
+      project_key TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      codec TEXT,
+      timestamp INTEGER NOT NULL,
+      -- The release this gate gated, derived from the payload at the insert
+      -- seam; NULL on a versionless gate.
+      version TEXT,
+      -- The gate object itself rides here, verbatim.
+      payload TEXT,
+      context TEXT,
+      role TEXT,
+      role_inferred INTEGER,
+      retired_at INTEGER,
+      cycle_id INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gates_project_version
+      ON gates (project_key, version);
+  `);
+}
+
+/**
+ * CR-CRU-130 §S1 — WHEN a milestone was met, from whichever spelling the
+ * record carries.
+ *
+ * `releasedAt` is not a second date beside `deliveredAt`: it is the same date
+ * under the release-only name it was born with, so a `release` written before
+ * this CR — and every row the migration below reads — answers "delivered"
+ * without its payload being rewritten. ONE rule, used at the insert seam, at
+ * the read mapper and by the migration step, so no two of them can disagree
+ * about what a row means. `null` rather than `undefined`: the callers are a
+ * SQL bind and a column comparison, and NULL is what "outstanding" is stored
+ * as.
+ */
+function deliveredAtOf(record: { deliveredAt?: number; releasedAt?: number }): number | null {
+  return record.deliveredAt ?? record.releasedAt ?? null;
+}
+
+/**
+ * CR-CRU-130 §S1 — the questions the two dates exist to answer, as a filter on
+ * the record read `listMilestonesByType` already is: what is OUTSTANDING, and
+ * what is due before or after a given instant (epoch SECONDS, the unit the
+ * dates themselves use).
+ *
+ * Each field is OPTIONAL and independently combinable, with the type filter
+ * included: "what is outstanding" is a question across types, while "which of
+ * this type is outstanding" is a narrowing within one. An omitted field
+ * constrains nothing — never a default, which would silently answer a
+ * different question than the one asked.
+ */
+export interface MilestoneDateFilter {
+  /** `false` → not yet met; `true` → met. Omitted → both. */
+  delivered?: boolean;
+  /** Due strictly BEFORE this instant. Undated records are due at no time. */
+  targetBefore?: number;
+  /** Due strictly AFTER this instant. Undated records are due at no time. */
+  targetAfter?: number;
+}
+
+/**
+ * A record table projected into the `EventRow` shape, so ONE mapper
+ * (`Store.toEvent`) serves all three tables and a union stays column-
+ * compatible. The run-only columns a record never carries are NULL by
+ * construction rather than absent: `toEvent` distinguishes a stored NULL from
+ * a missing key, and a record has no name, no summary, no tree and no run
+ * lifecycle to serve.
+ */
+function recordProjection(table: "milestones" | "gates", kind: "milestone" | "gate"): string {
+  return `SELECT id, project_key, agent_id, '${kind}' AS kind, tier, NULL AS stack, codec,
+                 timestamp, NULL AS name, NULL AS total, NULL AS passed, NULL AS failed,
+                 NULL AS pending, NULL AS duration_ms, NULL AS tree, NULL AS coverage,
+                 NULL AS compile, context, NULL AS action, NULL AS first_seen, payload,
+                 role, role_inferred, NULL AS started_at, NULL AS runtime_ms, NULL AS status,
+                 retired_at, cycle_id
+          FROM ${table}`;
+}
+
+const MILESTONE_ROWS = recordProjection("milestones", "milestone");
+const GATE_ROWS = recordProjection("gates", "gate");
+
+/**
+ * CR-CRU-130 §S2 — WHEN A RELEASE RECORD IS STILL A PLAN, as a column
+ * predicate, written ONCE because three reads must draw the line identically:
+ * the proposals read publishes exactly these, `listReleases` publishes exactly
+ * the rest, and a ship delivers exactly one of these in place. Two copies of
+ * this line would drift, and the drift would be a label in both reads or in
+ * neither.
+ *
+ * A plan is a release that DECLARED A DATE IT AIMS AT and has neither been
+ * delivered nor left any evidence of shipping. All three halves are
+ * load-bearing:
+ *
+ *   `delivered_at IS NULL` — the obvious half, and the one §S2 names: a
+ *     shipped release is settled history, said by the date directly instead of
+ *     by a second type name.
+ *   `target_at IS NOT NULL` — the half a naive reading omits, and §S0 forbids
+ *     omitting. A release recorded with NO dates at all is the pre-CR-CRU-080
+ *     shape, which this project really holds and `listReleases`' own doc
+ *     already accounts for: "a release recorded before §S4 carries none, so
+ *     its ingest instant stands in for its ship instant". It is settled
+ *     history whose ship date was never captured — NOT a plan, because nothing
+ *     ever aimed it anywhere. Splitting on delivery alone would silently drop
+ *     every such release out of `GET …/releases`, which is a wire change §S0
+ *     forbids and a repair path (CR-CRU-081 §S3) would then be unable to find
+ *     the record it exists to correct.
+ *   NO PROVENANCE — "derived from delivery OR ITS EVIDENCE", and the reason
+ *     the two columns are not enough. THE ABSENCE OF A DATE IS NOT THE ABSENCE
+ *     OF A SHIP. A dateless ship is reachable in production, measured
+ *     2026-09-13 at three layers: `scripts/release.sh:733` adds
+ *     `--released-at` only `if [ -n "$ship_date" ]`, and `release_ship_date`
+ *     (`:405`) prints nothing and exits 0 whenever git cannot resolve the sha
+ *     (shallow clone, unfetched tag object); all five clients declare
+ *     `--released-at` optional; and the route carries `releasedAt` only when
+ *     well-formed, because CR-CRU-080 §S4 deliberately left a dateless release
+ *     legitimate. Were plan-hood decided by the date alone, such a ship would
+ *     leave its label LIVE: `GET …/release-proposals` would keep publishing a
+ *     release that has already shipped and CR-CRU-118's gate would keep
+ *     admitting new CRs into it. So the EVIDENCE ends plan-hood too — a
+ *     `commit`, a NON-EMPTY `crs` set or a NON-EMPTY `packages` list are facts
+ *     about a shipment that happened, and none of them can be true of
+ *     something still planned.
+ *
+ *     NON-EMPTY is load-bearing, and the array LENGTH is what is read rather
+ *     than the key's presence: an EMPTY `crs` or `packages` is the ABSENCE of
+ *     a shipment fact, not a quiet one, so `{targetAt, crs: []}` stays a PLAN
+ *     instead of inverting into settled history on a key that says nothing.
+ *     `json_array_length(payload, '$.x')` is the two-argument form on purpose
+ *     — it answers 0 for an absent key, a null and a non-array alike, so a
+ *     malformed payload degrades to "no evidence" rather than raising.
+ *
+ *     The write side (`ships`, in `recordMilestoneEvent`) is deliberately NOT
+ *     spelled the same way, and that was measured rather than assumed: see it
+ *     for why a literal mirror forks one record into two. What the two halves
+ *     share is the OUTCOME — an empty-handed write merges onto the plan and
+ *     the row this predicate still calls a plan stays one.
+ *     `deliveredAt` stays honestly ABSENT in that case rather than being
+ *     invented from the ingest instant: the record then says "it shipped, and
+ *     when is unknown", which is exactly what is true of it.
+ *
+ * THE ASYMMETRY THIS LEAVES, ruled 2026-09-13 and deliberate: such a record —
+ * and the pre-080 legacy release beside it — answers SETTLED to `listReleases`
+ * and UNDELIVERED to `listMilestonesByType`'s `delivered` filter, which asks a
+ * different question and answers it on the column alone (see that read, which
+ * names this one). "Is it still a plannable plan?" and "does it carry a
+ * delivered date?" are both true of it in those two senses. That is ambiguous
+ * DATA, not an inconsistent model, and it is pinned in
+ * `tests/release-before-and-after-delivery.test.ts` so it cannot invert in
+ * silence.
+ *
+ * Retirement is deliberately NOT part of it: a superseded plan is neither a
+ * live plan nor settled history, so each read states its own `retired_at` rule
+ * beside this one rather than having it decided here.
+ */
+const RELEASE_IS_A_PLAN =
+  `delivered_at IS NULL AND target_at IS NOT NULL
+   AND json_extract(payload, '$.commit') IS NULL
+   AND IFNULL(json_array_length(payload, '$.crs'), 0) = 0
+   AND IFNULL(json_array_length(payload, '$.packages'), 0) = 0`;
+
+/** One record the migration looked at, and what became of it. */
+export interface MilestoneRecordMigrationEntry {
+  /** The event id it came from — a record KEEPS its identity across the move. */
+  readonly id: string;
+  readonly kind: "milestone" | "gate";
+  /** The milestone type; absent for a gate. */
+  readonly type?: string;
+  readonly result: "moved" | "already-present";
+}
+
+/** A record this migration can PROVE is missing, and why it can prove it. */
+export interface MilestoneRecordLoss {
+  /** The record kind that is gone, e.g. `cr-merged`. */
+  readonly what: string;
+  /** The cr id / label that is gone. */
+  readonly id: string;
+  /** The SURVIVING evidence that names it — what makes this a loss, not a guess. */
+  readonly reason: string;
+}
+
+export interface MilestoneRecordMigrationReport {
+  readonly entries: readonly MilestoneRecordMigrationEntry[];
+  readonly tally: { moved: number; alreadyPresent: number; unrecoverable: number };
+  readonly unrecoverable: readonly MilestoneRecordLoss[];
+}
+
+/** A pre-129 milestone/gate row, as history left it in `events`. */
+interface LegacyRecordRow {
+  id: string;
+  project_key: string;
+  agent_id: string;
+  kind: string;
+  tier: string;
+  timestamp: number;
+  payload: string | null;
+  codec?: string | null;
+  context?: string | null;
+  role?: string | null;
+  role_inferred?: number | null;
+  retired_at?: number | null;
+  cycle_id?: number | null;
+}
+
+function payloadField(payload: string | null, key: string): string | null {
+  if (payload === null) return null;
+  const parsed = JSON.parse(payload) as Record<string, unknown>;
+  const value = parsed[key];
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * CR-CRU-129 §S1 — MOVE every milestone and gate row out of `events` into the
+ * table it should always have had, and report what became of each one.
+ *
+ * A separate exported function rather than the chain step's body, because a
+ * step's `apply(db): void` can report neither a per-record result nor a tally,
+ * and the AC requires both.
+ *
+ * MOVE, never copy: a moved row is DELETEd from `events` in the same
+ * transaction that inserts it, so nothing is left behind to be evicted later
+ * or read twice. IDEMPOTENT: a second run finds no candidates, writes nothing
+ * and reports `moved: 0`; a row already present at the destination (a half-
+ * applied first run) is reported `already-present` and still leaves `events`.
+ *
+ * What is already EVICTED cannot be recovered — the CR says so. What this
+ * refuses to do is report success over the survivors: a surviving `release`
+ * names the crs it shipped, and a named cr with no surviving `cr-merged`
+ * record is landing evidence that was evicted. That is MEASURED from the data
+ * in hand, so a complete store reports nothing at all.
+ */
+export function migrateMilestoneRecords(db: Database): MilestoneRecordMigrationReport {
+  createRecordTables(db);
+  const entries: MilestoneRecordMigrationEntry[] = [];
+  let moved = 0;
+  let alreadyPresent = 0;
+
+  if (tableExists(db, "events")) {
+    const rows = db
+      .query<LegacyRecordRow, []>(
+        `SELECT * FROM events WHERE kind IN ('milestone', 'gate')
+          ORDER BY timestamp ASC, rowid ASC`,
+      )
+      .all();
+    const heldMilestone = db.query<{ n: number }, [string]>(
+      `SELECT COUNT(*) AS n FROM milestones WHERE id = ?`,
+    );
+    const heldGate = db.query<{ n: number }, [string]>(
+      `SELECT COUNT(*) AS n FROM gates WHERE id = ?`,
+    );
+    const insertMilestone = db.query(
+      `INSERT INTO milestones (id, project_key, agent_id, tier, codec, timestamp, type, label,
+         payload, context, role, role_inferred, retired_at, cycle_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertGate = db.query(
+      `INSERT INTO gates (id, project_key, agent_id, tier, codec, timestamp, version,
+         payload, context, role, role_inferred, retired_at, cycle_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const drop = db.query(`DELETE FROM events WHERE id = ?`);
+
+    db.transaction(() => {
+      for (const row of rows) {
+        const isGate = row.kind === "gate";
+        const held = (isGate ? heldGate : heldMilestone).get(row.id)!.n > 0;
+        const type = isGate ? null : payloadField(row.payload, "type");
+        if (!held) {
+          if (isGate) {
+            insertGate.run(
+              row.id,
+              row.project_key,
+              row.agent_id,
+              row.tier,
+              row.codec ?? null,
+              row.timestamp,
+              payloadField(row.payload, "version"),
+              row.payload,
+              row.context ?? null,
+              row.role ?? null,
+              row.role_inferred ?? null,
+              row.retired_at ?? null,
+              row.cycle_id ?? null,
+            );
+          } else {
+            insertMilestone.run(
+              row.id,
+              row.project_key,
+              row.agent_id,
+              row.tier,
+              row.codec ?? null,
+              row.timestamp,
+              type,
+              payloadField(row.payload, "label"),
+              row.payload,
+              row.context ?? null,
+              row.role ?? null,
+              row.role_inferred ?? null,
+              row.retired_at ?? null,
+              row.cycle_id ?? null,
+            );
+          }
+        }
+        drop.run(row.id);
+        if (held) alreadyPresent += 1;
+        else moved += 1;
+        entries.push({
+          id: row.id,
+          kind: isGate ? "gate" : "milestone",
+          ...(type !== null ? { type } : {}),
+          result: held ? "already-present" : "moved",
+        });
+      }
+    })();
+  }
+
+  const unrecoverable = measureEvictedMergeEvidence(db);
+  if (unrecoverable.length > 0) {
+    console.error(
+      `[crucible] CR-CRU-129 migration: ${unrecoverable.length} cr-merged record(s) named by a ` +
+        `surviving release are NOT in this store — their landing evidence was evicted before the ` +
+        `move and cannot be recovered from it: ${unrecoverable.map((loss) => loss.id).join(", ")}`,
+    );
+  }
+  return {
+    entries,
+    tally: { moved, alreadyPresent, unrecoverable: unrecoverable.length },
+    unrecoverable,
+  };
+}
+
+/**
+ * The evidence-driven half of the report: every cr a surviving `release`
+ * record names that has NO surviving `cr-merged` record. Read from the
+ * DESTINATION, so it covers rows a previous run already moved, and reported
+ * once per cr (the first release that names it is the one that proves it).
+ *
+ * PER PROJECT, like every other read in this store. A board holds many
+ * projects, and unscoped these two scans answer across all of them: another
+ * project's `cr-merged` record would mask a genuine loss, and a loss's
+ * `reason` could name a release the project never shipped. So the surviving
+ * evidence is keyed by project and a release is only ever measured against
+ * its OWN, and `seen` is keyed the same way — the same cr id in two projects
+ * is two records, not one already reported.
+ */
+function measureEvictedMergeEvidence(db: Database): MilestoneRecordLoss[] {
+  const merged = new Map<string, Set<string>>();
+  for (const row of db
+    .query<{ project_key: string; label: string | null }, []>(
+      `SELECT project_key, label FROM milestones WHERE type = 'cr-merged'`,
+    )
+    .all()) {
+    if (row.label === null) continue;
+    let held = merged.get(row.project_key);
+    if (held === undefined) merged.set(row.project_key, (held = new Set<string>()));
+    held.add(row.label);
+  }
+  const losses: MilestoneRecordLoss[] = [];
+  const seen = new Set<string>();
+  for (const row of db
+    .query<
+      { id: string; project_key: string; label: string | null; payload: string | null },
+      []
+    >(
+      `SELECT id, project_key, label, payload FROM milestones WHERE type = 'release'
+        ORDER BY timestamp ASC, rowid ASC`,
+    )
+    .all()) {
+    if (row.payload === null) continue;
+    const crs = (JSON.parse(row.payload) as { crs?: unknown }).crs;
+    if (!Array.isArray(crs)) continue;
+    const mergedHere = merged.get(row.project_key);
+    for (const cr of crs) {
+      if (typeof cr !== "string" || mergedHere?.has(cr) === true) continue;
+      const key = `${row.project_key}\u0000${cr}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      losses.push({
+        what: "cr-merged",
+        id: cr,
+        reason:
+          `release ${row.label ?? "(unlabelled)"} (${row.id}) still names it in its own crs, ` +
+          `so it landed — but no cr-merged record for it survives in this store, which means ` +
+          `that record was EVICTED rather than never written`,
+      });
+    }
+  }
+  return losses;
+}
+
+/**
+ * CR-CRU-130 §S2 — collapse the two-type release model into ONE record per
+ * (project, label): the body of the 12→13 step below.
+ *
+ * THE RULE, and it invents nothing:
+ *
+ *   DELIVERED is whatever the `release` row already said — the `delivered_at`
+ *     §S1's step derived from `deliveredAt`/`releasedAt`. A label with no
+ *     release row is OUTSTANDING and stays so.
+ *   THE TARGET is the LIVE proposal's; failing that the NEWEST superseded or
+ *     consumed one's; failing that whatever the release itself declared. A
+ *     label that never declared a target keeps none — a 0 here would read as
+ *     "due in 1970" on every surface that renders a date.
+ *
+ * WHY THE RULE IS WRITTEN THIS WAY, measured on the live store 2026-09-13: it
+ * holds `0.2.0`/`0.3.0` as proposals matching NO release, and `0.1.0`-`0.1.3`
+ * as releases with no proposal left. So the two shapes a careless step would
+ * assume — "every proposal has a release" and "every release once had a
+ * proposal" — are the two shapes this project's own data does NOT have. A join
+ * drops the first pair; an assumed proposal fabricates a target for the four.
+ *
+ * WHAT IS DELETED, and why that is not a loss. A proposal a release CONSUMED,
+ * or one a REVISION superseded, is not a second milestone: it is an earlier
+ * point in the surviving record's life, and §S2 says a label holds ONE. Its
+ * one irreplaceable fact — the target it declared — is carried onto the
+ * survivor by the rule above BEFORE its row goes, which is what makes the
+ * collapse lossless. Leaving the rows standing would republish the ghost pair
+ * this CR exists to remove.
+ *
+ * IDEMPOTENT by its own subject: it reads the rows still carrying the retired
+ * type, and after one pass there are none, so a re-run writes nothing at all.
+ */
+function unifyReleaseRecords(db: Database): void {
+  // Both representations are matched, because a board may hold either: the
+  // `type` COLUMN CR-CRU-129 derived, and the payload blob it derived it from.
+  const KIND = `COALESCE(type, json_extract(payload, '$.type'))`;
+  const proposals = db
+    .query<ProposalRow, []>(
+      `SELECT id, project_key, label, retired_at,
+              json_extract(payload, '$.targetAt') AS target_at
+         FROM milestones WHERE ${KIND} = 'release-proposal' AND label IS NOT NULL
+        ORDER BY timestamp DESC, rowid DESC`,
+    )
+    .all();
+  if (proposals.length === 0) return;
+  const byLabel = new Map<string, ProposalRow[]>();
+  for (const row of proposals) {
+    const groupKey = `${row.project_key}\u0000${row.label ?? ""}`;
+    byLabel.set(groupKey, [...(byLabel.get(groupKey) ?? []), row]);
+  }
+  // The release the label already has, if any: the OLDEST, which is the record
+  // its history belongs to. A label holding two release rows is a pre-existing
+  // duplicate this step must not resolve by guessing — it carries the target
+  // onto one and leaves both standing, so the duplication stays visible
+  // instead of being silently halved.
+  const releaseFor = db.query<{ id: string }, [string, string]>(
+    `SELECT id FROM milestones
+      WHERE project_key = ? AND label = ? AND ${KIND} = 'release'
+      ORDER BY timestamp ASC, rowid ASC LIMIT 1`,
+  );
+  const carryTarget = db.query(
+    `UPDATE milestones SET target_at = ?, payload = json_set(payload, '$.targetAt', ?)
+      WHERE id = ?`,
+  );
+  const promote = db.query(
+    `UPDATE milestones
+        SET type = 'release', payload = json_set(payload, '$.type', 'release'),
+            retired_at = NULL, target_at = ?
+      WHERE id = ?`,
+  );
+  const drop = db.query(`DELETE FROM milestones WHERE id = ?`);
+  db.transaction(() => {
+    for (const [groupKey, members] of byLabel) {
+      const [projectKey, label] = groupKey.split("\u0000") as [string, string];
+      // The LIVE proposal's target, else the newest one's — the rows arrive
+      // newest-first, so the first of each is the one the rule names.
+      const survivor = members.find((row) => row.retired_at === null) ?? members[0]!;
+      const release = releaseFor.get(projectKey, label);
+      if (release === null) {
+        // OUTSTANDING: the plan becomes the undelivered release it always was.
+        promote.run(survivor.target_at, survivor.id);
+      } else if (survivor.target_at !== null) {
+        // CONSUMED: the release keeps everything it holds and gains the target
+        // the plan declared. A plan that declared none leaves the release's
+        // own target, or its absence, exactly as it stands.
+        carryTarget.run(survivor.target_at, survivor.target_at, release.id);
+      }
+      for (const row of members) {
+        if (release !== null || row.id !== survivor.id) drop.run(row.id);
+      }
+    }
+  })();
+}
+
+/** One `release-proposal` row as CR-CRU-130 §S2's step reads it. */
+interface ProposalRow {
+  id: string;
+  project_key: string;
+  label: string | null;
+  retired_at: number | null;
+  target_at: number | null;
 }
 
 type MigrationBody = Omit<MigrationStep, "from" | "to">;
@@ -1136,6 +1896,165 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return columnsOf(db, "events").has("cycle_id");
     },
   },
+  {
+    description:
+      "events: CR-126 §S1b cycle_id backfill — history's binding, derived from context.cycleId",
+    apply(db) {
+      if (!tableExists(db, "events")) return;
+      const eventCols = columnsOf(db, "events");
+      if (!eventCols.has("cycle_id") || !eventCols.has("context")) return;
+      // CR-CRU-126 §S1b — CR-CRU-094 added the column and left history NULL, so
+      // §S1's indexed `cycle_id` filter silently drops those rows out of their
+      // own plan's commit boundary. This is not fabrication: it is the rule
+      // `insertEvent` already applies (`context?.cycleId ?? cycleId ?? null`),
+      // applied retroactively to the rows that predate it.
+      //
+      // An UPDATE, never an insert/delete/rebuild, so every table's count and
+      // every event id is identical before and after. IDEMPOTENT by the
+      // `cycle_id IS NULL` predicate alone: a row a previous pass bound is no
+      // longer NULL, so a re-run cannot re-derive it (the CR-073 step above
+      // backfills on exactly this shape).
+      //
+      // NO CAST, on purpose. `json_extract` preserves the JSON type, so a
+      // non-numeric `cycleId` comes back as TEXT, and SQLite's INTEGER affinity
+      // converts text only when it is a well-formed integer literal — anything
+      // else is stored as it stands. `CAST(... AS INTEGER)` would instead turn
+      // such a row into cycle 0 and hand it to whichever plan owns cycle 0.
+      db.exec(
+        `UPDATE events SET cycle_id = json_extract(context, '$.cycleId') WHERE cycle_id IS NULL`,
+      );
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      const cols = columnsOf(db, "events");
+      if (!cols.has("cycle_id") || !cols.has("context")) return false;
+      // The data half, as CR-073's step does it: no row may still be owed a
+      // binding its own blob already carries.
+      const owed = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM events
+            WHERE cycle_id IS NULL AND json_extract(context, '$.cycleId') IS NOT NULL`,
+        )
+        .get()!.n;
+      return owed === 0;
+    },
+  },
+  {
+    description:
+      "milestones + gates: CR-129 §S1 — milestone and gate rows MOVE out of the capped `events` buffer into record tables of their own",
+    apply(db) {
+      // The move happens on an ORDINARY BOOT: every existing board is carrying
+      // its records in the ring buffer right now, and a reporting function
+      // nothing calls would leave them there. The report is discarded here
+      // because a step returns nothing — `migrateMilestoneRecords` is exported
+      // for the caller that wants it, and names any evicted merge evidence on
+      // stderr either way.
+      migrateMilestoneRecords(db);
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "milestones") || !tableExists(db, "gates")) return false;
+      if (!tableExists(db, "events")) return true;
+      // The data half, as the CR-073 and CR-126 steps do it: no record may
+      // still be sitting in the buffer this step exists to empty.
+      const pending = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM events WHERE kind IN ('milestone', 'gate')`,
+        )
+        .get()!.n;
+      return pending === 0;
+    },
+  },
+  {
+    description:
+      "milestones: CR-130 §S1 — a milestone's dates become columns, DERIVED from the payload it already carries: `targetAt` when it is due, `deliveredAt` (or `releasedAt`, the same date under its old name) when it was met",
+    apply(db) {
+      if (!tableExists(db, "milestones")) return;
+      // The columns first — a board whose record table predates this CR has
+      // neither, while one whose table was CREATED by the step above already
+      // has both from the current DDL. Either way the DERIVATION below runs:
+      // adding a column leaves every existing row NULL, which is the state
+      // this step exists to correct.
+      const present = columnsOf(db, "milestones");
+      if (!present.has("target_at")) db.exec(`ALTER TABLE milestones ADD COLUMN target_at INTEGER`);
+      if (!present.has("delivered_at")) {
+        db.exec(`ALTER TABLE milestones ADD COLUMN delivered_at INTEGER`);
+      }
+      // DERIVED, never invented: the two UPDATEs read the row's own payload
+      // and write nothing where it says nothing, so a release aimed at no
+      // declared target and a `cr-merged` row keep NULL in both columns rather
+      // than a 0 that would read as "due in 1970" on every surface.
+      //
+      // An UPDATE of two columns and nothing else — no insert, no delete, no
+      // table rebuild — so every row's id, timestamp, identity columns and
+      // payload BLOB are byte-identical afterwards. That is the only form of
+      // "nothing was lost" that can be asserted rather than eyeballed, and the
+      // CR's Risk section demands it: this history was already lost once.
+      //
+      // IDEMPOTENT by the `IS NULL` predicate alone, exactly as the CR-073 and
+      // CR-126 backfills above: a row a previous pass derived is no longer
+      // NULL, so a re-run cannot re-derive it.
+      //
+      // NO CAST, for the reason the CR-126 step states: `json_extract`
+      // preserves the JSON type, and SQLite's INTEGER affinity converts text
+      // only when it is a well-formed integer literal, where `CAST` would turn
+      // anything else into 0 — the one value these columns must never hold.
+      db.exec(
+        `UPDATE milestones SET target_at = json_extract(payload, '$.targetAt')
+          WHERE target_at IS NULL AND json_extract(payload, '$.targetAt') IS NOT NULL`,
+      );
+      db.exec(
+        `UPDATE milestones
+            SET delivered_at = COALESCE(json_extract(payload, '$.deliveredAt'),
+                                        json_extract(payload, '$.releasedAt'))
+          WHERE delivered_at IS NULL
+            AND COALESCE(json_extract(payload, '$.deliveredAt'),
+                         json_extract(payload, '$.releasedAt')) IS NOT NULL`,
+      );
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "milestones")) return false;
+      const cols = columnsOf(db, "milestones");
+      if (!cols.has("target_at") || !cols.has("delivered_at")) return false;
+      // The data half, as the CR-073, CR-126 and CR-129 steps do it: no record
+      // may still be owed a date its own blob already carries.
+      const owed = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM milestones
+            WHERE (target_at IS NULL AND json_extract(payload, '$.targetAt') IS NOT NULL)
+               OR (delivered_at IS NULL
+                   AND COALESCE(json_extract(payload, '$.deliveredAt'),
+                                json_extract(payload, '$.releasedAt')) IS NOT NULL)`,
+        )
+        .get()!.n;
+      return owed === 0;
+    },
+  },
+  {
+    description:
+      "milestones: CR-130 §S2 — a release is ONE record before and after delivery: every `release-proposal` becomes the UNDELIVERED half of the `release` it names, and one a shipped release already consumed becomes that release's declared target rather than a second row",
+    apply(db) {
+      if (!tableExists(db, "milestones")) return;
+      const cols = columnsOf(db, "milestones");
+      if (!cols.has("target_at") || !cols.has("delivered_at")) return;
+      unifyReleaseRecords(db);
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "milestones")) return false;
+      // The data half, as every backfill above states it: the retired type may
+      // survive in NEITHER representation — not the `type` column CR-CRU-129
+      // derived, and not the payload blob it was derived FROM. A step that
+      // rewrote only the column would leave the board's own record saying
+      // `release-proposal` to anything that reads the blob.
+      const owed = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM milestones
+            WHERE type = 'release-proposal'
+               OR json_extract(payload, '$.type') = 'release-proposal'`,
+        )
+        .get()!.n;
+      return owed === 0;
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -1178,6 +2097,19 @@ function writePreUpgradeBackup(db: Database, dbPath: string): string {
   const backupPath = `${dbPath}.pre-upgrade-${Date.now()}`;
   db.exec(`VACUUM INTO '${backupPath.replaceAll("'", "''")}'`);
   return backupPath;
+}
+
+/**
+ * CR-CRU-121 §S1 — `filePlan` refuses by RETURNING, and a returned value
+ * cannot roll a transaction back. The composed write therefore carries its
+ * refusal out on a throw and hands the caller the identical `PlanOpError` the
+ * standalone call would have returned. Private to this module: it never
+ * crosses the route boundary.
+ */
+class PlanRegistrationRefused extends Error {
+  constructor(readonly refusal: PlanOpError) {
+    super(refusal.error);
+  }
 }
 
 export class Store {
@@ -1423,6 +2355,17 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
         ON events (project_key, timestamp);
 
+      -- CR-CRU-126 §S1 — the cycle-scoped seek deriveCommitBoundary issues,
+      -- which without it re-scanned every event in the project once per closed
+      -- plan. COMPOSITE on purpose, and timestamp is the third column for a
+      -- measured reason: the derivation orders by it, and an index carrying
+      -- only (project_key, cycle_id) leaves the planner preferring the
+      -- timestamp index above (it makes the ORDER BY sort-free) — so the seek
+      -- never happens and the scan survives the fix. With timestamp here the
+      -- one index serves BOTH the equality filter and the ordering.
+      CREATE INDEX IF NOT EXISTS idx_events_project_cycle
+        ON events (project_key, cycle_id, timestamp);
+
       -- CR-CRU-017 §S1 — OPEN and settled RUNS. A new table, never a retrofit:
       -- the base pass creates it whole for every store, old or new (which is
       -- why the §S0 chain step only touches the events table).
@@ -1490,6 +2433,16 @@ export class Store {
         PRIMARY KEY (project_key, cycle_id)
       );
 
+      -- CR-CRU-130 §S4 — the milestone vocabulary a project DECLARES, one row
+      -- per project holding the declaration verbatim. A new TABLE, never a
+      -- retrofitted column: the base pass creates it whole for every store,
+      -- old or new (the queue_entries / runs precedent), so an open vocabulary
+      -- costs no chain step and no schema version.
+      CREATE TABLE IF NOT EXISTS project_milestone_types (
+        project_key TEXT PRIMARY KEY,
+        types_json TEXT NOT NULL
+      );
+
       -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). The table
       -- itself arrived ADDITIVELY (CREATE TABLE IF NOT EXISTS, no chain step):
       -- a full-replace POST rewrites a project's rows wholesale, so
@@ -1514,6 +2467,10 @@ export class Store {
         PRIMARY KEY (project_key, cr)
       );
     `);
+    // CR-CRU-129 §S1 — the two RECORD tables, written by the same base pass
+    // for every store, old or new, so a brand-new store and the end of the
+    // chain agree and the chain step only ever has rows to MOVE.
+    createRecordTables(this.db);
   }
 
   /**
@@ -1554,9 +2511,20 @@ export class Store {
     return stored;
   }
 
+  /**
+   * CR-CRU-130 §S4 — the declared vocabulary, joined in wherever a project is
+   * read, so `Project.milestoneTypes` is served by the same projection that
+   * serves every other configured field.
+   */
+  private static readonly PROJECT_SELECT =
+    `SELECT projects.*,
+            (SELECT types_json FROM project_milestone_types
+              WHERE project_key = projects.key) AS milestone_types
+       FROM projects`;
+
   getProject(key: string): Project | null {
     const row = this.db
-      .query<ProjectRow, [string]>(`SELECT * FROM projects WHERE key = ?`)
+      .query<ProjectRow, [string]>(`${Store.PROJECT_SELECT} WHERE key = ?`)
       .get(key);
     return row ? Store.toProject(row) : null;
   }
@@ -1568,12 +2536,22 @@ export class Store {
   listProjects(archived = false): Project[] {
     const rows = this.db
       .query<ProjectRow, []>(
-        `SELECT * FROM projects
+        `${Store.PROJECT_SELECT}
          WHERE archived_at IS ${archived ? "NOT NULL" : "NULL"}
          ORDER BY created_at ASC`,
       )
       .all();
     return rows.map(Store.toProject);
+  }
+
+  /**
+   * CR-CRU-130 §S4 — the milestone types this project may record: what it
+   * DECLARED, over the seed it starts from, plus the reserved pair. The ONE
+   * read every caller uses — the validator, the refusal that publishes the set
+   * and the help[] the refusal hands back.
+   */
+  acceptedMilestoneTypes(key: string): string[] {
+    return milestoneVocabulary(this.getProject(key)?.milestoneTypes ?? []);
   }
 
   /** CR-CRU-012 §S1b — is the project currently archived? (false if unknown). */
@@ -1620,12 +2598,24 @@ export class Store {
         : existing.liveness;
     const existingAllow =
       existing.allowRunDeletion !== undefined ? (existing.allowRunDeletion ? 1 : 0) : null;
+    // CR-CRU-130 §S4 — the declaration is replaced WHOLE or left alone; it
+    // lives in its own table, so it is compared as the text that table holds.
+    const existingTypesJson =
+      existing.milestoneTypes !== undefined ? JSON.stringify(existing.milestoneTypes) : null;
+    const nextTypesJson =
+      patch.milestoneTypes !== undefined ? JSON.stringify(patch.milestoneTypes) : existingTypesJson;
     const next = {
       name: patch.name ?? existing.name,
       type: patch.type ?? existing.type,
       sutRoot: patch.sutRoot ?? existing.sutRoot,
       livenessJson: nextLiveness !== undefined ? JSON.stringify(nextLiveness) : null,
-      retention: patch.retention ?? existing.retention ?? null,
+      // CR-CRU-131 §S2 — PRESENCE decides, not truthiness: a patch that names
+      // `retention` writes exactly what it named (`null` CLEARS the override,
+      // `0` is a cap of zero), and one that does not name it leaves the stored
+      // cap alone — including a stored zero, which `??` on the patched value
+      // would have silently wiped.
+      retention:
+        patch.retention !== undefined ? patch.retention : (existing.retention ?? null),
       // CR-CRU-008 §S4 — guarded-deletion config gate (1/0; NULL = never set).
       allowRunDeletion:
         patch.allowRunDeletion !== undefined ? (patch.allowRunDeletion ? 1 : 0) : existingAllow,
@@ -1637,8 +2627,17 @@ export class Store {
       next.livenessJson ===
         (existing.liveness !== undefined ? JSON.stringify(existing.liveness) : null) &&
       next.retention === (existing.retention ?? null) &&
-      next.allowRunDeletion === existingAllow;
+      next.allowRunDeletion === existingAllow &&
+      nextTypesJson === existingTypesJson;
     if (unchanged) return false;
+    if (patch.milestoneTypes !== undefined && nextTypesJson !== existingTypesJson) {
+      this.db
+        .query(
+          `INSERT INTO project_milestone_types (project_key, types_json) VALUES (?, ?)
+           ON CONFLICT(project_key) DO UPDATE SET types_json = excluded.types_json`,
+        )
+        .run(key, JSON.stringify(patch.milestoneTypes));
+    }
     this.db
       .query(
         `UPDATE projects SET name = ?, type = ?, sut_root = ?, liveness = ?, retention = ?,
@@ -1692,7 +2691,15 @@ export class Store {
       rollups: 0,
     };
     this.db.transaction(() => {
-      counts.events = this.db.query(`DELETE FROM events WHERE project_key = ?`).run(key).changes;
+      // CR-CRU-129 §S1 — the project's records die with it too. Folded into
+      // the SAME `events` count: `ProjectDeleteCounts` is the CR-CRU-052 wire
+      // shape and stays it, and the number still means "every event row this
+      // project had" wherever the row was stored.
+      counts.events = ["events", "milestones", "gates"].reduce(
+        (total, table) =>
+          total + this.db.query(`DELETE FROM ${table} WHERE project_key = ?`).run(key).changes,
+        0,
+      );
       counts.agents = this.db.query(`DELETE FROM agents WHERE project_key = ?`).run(key).changes;
       counts.plans = this.db.query(`DELETE FROM plans WHERE project_key = ?`).run(key).changes;
       counts.planCycles = this.db
@@ -1702,6 +2709,9 @@ export class Store {
       // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
       // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
       this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
+      // CR-CRU-130 §S4 — and so does the vocabulary it declared, for the same
+      // reason and on the same terms: not a reported count.
+      this.db.query(`DELETE FROM project_milestone_types WHERE project_key = ?`).run(key);
       this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
     })();
     // Emitted only after the transaction COMMITS — a rolled-back teardown
@@ -1725,6 +2735,11 @@ export class Store {
       // absent/false on the wire, matching the AC).
       ...(row.allow_run_deletion !== null
         ? { allowRunDeletion: row.allow_run_deletion === 1 }
+        : {}),
+      // CR-CRU-130 §S4 — key ABSENT until the project declares a vocabulary of
+      // its own; the seeded words it starts with are not its declaration.
+      ...(row.milestone_types !== null && row.milestone_types !== undefined
+        ? { milestoneTypes: JSON.parse(row.milestone_types) as string[] }
         : {}),
     };
   }
@@ -2075,12 +3090,13 @@ export class Store {
    * fields the caller actually re-derived are written over. Without it the
    * dedup replay is untouched, so no ordinary re-post can rewrite a release.
    *
-   * CR-CRU-091 §S1 — a PROPOSED release (`type === "release-proposal"`) is its
-   * own record kind on this same path, carrying an optional `targetAt`. It is
-   * NOT a `release` with `releasedAt` omitted, and the two fields are strictly
-   * type-scoped in both directions: `targetAt` is stripped from anything that
-   * is not a proposal, `releasedAt`/`crs`/`packages` from anything that is not
-   * a release. A shipped release then CONSUMES the proposal it fulfils.
+   * CR-CRU-130 §S2 — a PROPOSED release is not a record kind of its own: it is
+   * a `release` carrying a `targetAt` and no delivery, which SUPERSEDES
+   * CR-CRU-091 §S1's `release-proposal` type and the consumption that went
+   * with it. So a ship for a label already held outstanding UPDATES that
+   * record — same id, same label, same declared target, now carrying the date
+   * it was met and the commit, `crs` and `packages` that met it — instead of
+   * inserting a second row and retiring the first.
    */
   recordMilestoneEvent(
     projectKey: string,
@@ -2094,18 +3110,40 @@ export class Store {
       crs?: string[];
       packages?: PackageRef[];
       /**
-       * CR-CRU-091 §S1 — a `release-proposal`'s declared target, epoch SECONDS.
-       * Ignored (stripped) for every other type.
+       * CR-CRU-130 §S1 — when this milestone is DUE, epoch SECONDS. Carried
+       * for EVERY type; absent means undated.
        */
       targetAt?: number;
+      /**
+       * CR-CRU-130 §S1 — when this milestone was MET, epoch SECONDS. Carried
+       * for every type; absent means outstanding. A `release` that states only
+       * `releasedAt` states this date under its old name, and the seam below
+       * reads it as such.
+       */
+      deliveredAt?: number;
       repairProvenance?: boolean;
     },
-  ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
+  ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink; refused?: boolean } {
     this.touchAgent(projectKey, agentId);
-    if (type === "release" && meta?.label !== undefined && meta.commit !== undefined) {
-      const held = this.listReleases(projectKey).find(
-        (r) => r.label === meta.label && r.commit === meta.commit,
-      );
+    if (type === "release" && meta?.label !== undefined) {
+      // CR-CRU-130 §S2 — the DELIVERED records for the label, which is what
+      // `listReleases` now answers. Both rules below are rules about settled
+      // history — a replay of a release already held, and the provenance such
+      // a replay may not shrink — so an outstanding record is rightly invisible
+      // to them: it has shipped nothing yet, and there is nothing to lose.
+      const forLabel = this.listReleases(projectKey).filter((r) => r.label === meta.label);
+      const held =
+        meta.commit !== undefined ? forLabel.find((r) => r.commit === meta.commit) : undefined;
+      // CR-CRU-129 §S4 — a REPLAY may not quietly shrink what it replaces.
+      // Scoped to the NON-repair path on purpose: a repair was ASKED for, so
+      // CR-CRU-086 §S3's legitimate shrink is still APPLIED and REPORTED (the
+      // measured 58→51 case). A replay asked for nothing — it exists to
+      // restore what is missing — so writing less than the record it replaces
+      // is pure loss, and is refused here, before anything is written.
+      if (meta.repairProvenance !== true && meta.crs !== undefined) {
+        const refusal = this.refuseShrinkingReplay(forLabel, meta.crs, held !== undefined);
+        if (refusal !== undefined) return refusal;
+      }
       if (held !== undefined) {
         // CR-CRU-081 §S3 — the ONE way a held release changes: the caller
         // asked for it, in this call, on purpose. Everything else replays.
@@ -2131,10 +3169,85 @@ export class Store {
     const releasedAt = type === "release" ? meta?.releasedAt : undefined;
     const crs = type === "release" ? meta?.crs : undefined;
     const packages = type === "release" ? meta?.packages : undefined;
-    // CR-CRU-091 §S1 — the mirror of the three lines above: a declared target
-    // belongs to a PROPOSAL and nothing else. A `release` carries `releasedAt`
-    // (when it shipped); a target it was once aimed at is not a fact about it.
-    const targetAt = type === "release-proposal" ? meta?.targetAt : undefined;
+    // CR-CRU-130 §S1 — NOT the mirror of the three lines above, any more.
+    //
+    // CR-CRU-091 §S1 recorded the narrower stance here, and enforced it with
+    // `type === "release-proposal" ? meta?.targetAt : undefined`, which
+    // silently DISCARDED a target sent for any other type. The user's
+    // 2026-09-13 ruling supersedes it: a milestone is a dated GOAL, so what it
+    // was aimed at and when it landed are both facts about it whatever its
+    // type, and the distance between the two is the only thing that can tell
+    // anyone a deliverable slipped. The gate went with the claim that
+    // justified it, because a comment left asserting the opposite of shipped
+    // behaviour is the defect CR-CRU-128 spent a FIX round deleting.
+    //
+    // `releasedAt` above is NOT a fourth provenance field beside this one: it
+    // is THIS date under its old, release-only name, so a release stating only
+    // when it shipped states when it was delivered. Both spellings are carried
+    // — the old one verbatim, so every wire shape a client reads stays
+    // byte-identical (§S0), the new one because it is the one every type
+    // shares.
+    const targetAt = meta?.targetAt;
+    const deliveredAt = meta?.deliveredAt ?? releasedAt;
+    const version = type === "release" ? meta?.label : undefined;
+    // CR-CRU-130 §S2 — ONE RECORD, TWO POINTS IN ITS LIFE.
+    //
+    // A release that is already held OUTSTANDING for this label — proposed, or
+    // written straight through this door with a target and no delivery — is
+    // the record this ship DELIVERS, not a row to insert beside. `retired_at`
+    // used to stand in for the delivery a record had no column for; now that
+    // `deliveredAt` says it, the pair is one row that gains a date, so its id,
+    // its label and the target it declared all survive the ship. That distance
+    // between target and delivery is the only thing that can say a deliverable
+    // slipped, and a second row destroys it.
+    //
+    // A SHIP IS A DELIVERY DATE OR THE EVIDENCE OF ONE — the same rule
+    // `RELEASE_IS_A_PLAN` draws the line with, applied to the incoming write
+    // rather than to the stored row. A dateless ship is reachable in
+    // production (measured; see that predicate), and it must deliver the plan
+    // it fulfils rather than insert a second row beside it — leaving the
+    // record saying "it shipped, and when is unknown" instead of leaving the
+    // label live.
+    //
+    // Scoped to a ship on purpose: a write carrying neither a date nor any
+    // provenance is a PLAN, and the one-live-plan rule belongs to
+    // `recordReleaseProposal`, which is the door that owns it.
+    //
+    // AND NOT THE READ PREDICATE'S LITERAL MIRROR, ruled 2026-09-13 after it
+    // was measured. `RELEASE_IS_A_PLAN` reads an EMPTY `crs`/`packages` as no
+    // evidence; the presence test here is deliberately kept wider, because the
+    // alternative to delivering is not doing nothing — it is INSERTING A
+    // SECOND ROW. Narrowing this to the array LENGTH turns a raw
+    // `{label, packages: []}` beside a live plan from one record into two, and
+    // puts that one label in `GET …/releases` AND `GET …/release-proposals` at
+    // the same time (measured: 2 records / proposals [0.9.0] / releases
+    // [0.9.0], against 1 / [0.9.0] / [] as it stands). Left wide, the empty
+    // write MERGES onto the plan and the row stays a plan, because the READ
+    // still refuses to call an empty set evidence. The two halves have to
+    // agree on the OUTCOME — one record, correctly classified — not on the
+    // spelling of their predicates.
+    const ships =
+      deliveredAt !== undefined ||
+      meta?.commit !== undefined ||
+      crs !== undefined ||
+      packages !== undefined;
+    if (version !== undefined && ships) {
+      const outstanding = this.liveUndeliveredRelease(projectKey, version);
+      if (outstanding !== undefined) {
+        return {
+          event: this.deliverRelease(outstanding, version, {
+            ...(deliveredAt !== undefined ? { deliveredAt } : {}),
+            ...(meta?.commit !== undefined ? { commit: meta.commit } : {}),
+            ...(releasedAt !== undefined ? { releasedAt } : {}),
+            ...(crs !== undefined ? { crs } : {}),
+            ...(packages !== undefined ? { packages } : {}),
+            ...(targetAt !== undefined ? { targetAt } : {}),
+            ...(meta?.context !== undefined ? { context: meta.context } : {}),
+          }),
+          changed: true,
+        };
+      }
+    }
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -2149,19 +3262,18 @@ export class Store {
       ...(crs !== undefined ? { crs } : {}),
       ...(packages !== undefined ? { packages } : {}),
       ...(targetAt !== undefined ? { targetAt } : {}),
+      ...(deliveredAt !== undefined ? { deliveredAt } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
-    const version = type === "release" ? meta?.label : undefined;
     if (version !== undefined) {
       const at = Date.now();
       this.db.transaction(() => {
         this.insertEvent(event);
         this.stampGatesRetired(projectKey, version, at);
-        // CR-CRU-091 §S1 — the SAME transaction consumes the proposal this
-        // release fulfils: either the shipped release and the retirement of
-        // its proposal are both true, or neither is. One gate renders, and
-        // one release record renders, never a pair.
-        this.stampProposalRetired(projectKey, version, at);
+        // CR-CRU-130 §S2 — and NOTHING is retired for the label itself. The
+        // second statement that used to stand here consumed the proposal this
+        // release fulfilled, because the pair was two rows of two types; the
+        // pair is one row now, and delivery is the date it carries.
       })();
     } else {
       this.insertEvent(event);
@@ -2171,7 +3283,11 @@ export class Store {
 
   /**
    * CR-CRU-091 §S1/§S7/AC21 — `release-propose`: record or REVISE the live
-   * `release-proposal` for one label.
+   * proposal for one label.
+   *
+   * CR-CRU-130 §S2 — what it writes is an UNDELIVERED `release` record, not a
+   * kind of its own, so the ship that follows updates THIS row rather than
+   * inserting beside it.
    *
    * Beside `recordMilestoneEvent` rather than inside it, because it adds the
    * one rule a generic milestone write must not have: at most one LIVE
@@ -2184,11 +3300,22 @@ export class Store {
    * Converged (§S7) when a live proposal with the same `label` AND the same
    * `targetAt` is already held: nothing is written and the held event is
    * returned, so a re-run of a whole generation script mutates nothing (AC12).
+   *
+   * CR-CRU-118 §S4 — `targetAt` is REQUIRED here, not optional: every release
+   * proposal declares the date it aims at. The requiredness is the METHOD's,
+   * deliberately — `recordMilestoneEvent(…, "release", …)` still writes an
+   * undelivered record without one, because §S4 mandates this door rather
+   * than the row shape, and widening it to the kind would refuse callers no
+   * criterion named. It is also what makes the convergence comparison below
+   * honest: with absence impossible, `live.targetAt === meta.targetAt` only
+   * ever weighs two numbers, where an omitted target used to compare against
+   * a held one, MISS convergence, and take the revision branch — retiring a
+   * declared date on behalf of a call that mentioned no date.
    */
   recordReleaseProposal(
     projectKey: string,
     agentId: string,
-    meta: { label: string; targetAt?: number; context?: RunContext },
+    meta: { label: string; targetAt: number; context?: RunContext },
   ): { event: RunEvent; changed: boolean } {
     const live = this.listReleaseProposals(projectKey).find((p) => p.label === meta.label);
     if (live !== undefined && live.targetAt === meta.targetAt) {
@@ -2202,9 +3329,13 @@ export class Store {
       kind: "milestone",
       tier: "unit",
       timestamp: Date.now(),
-      type: "release-proposal",
+      // CR-CRU-130 §S2 — a PROPOSED release IS a release: the same type, a
+      // declared `targetAt`, and no `deliveredAt` until it ships. The record
+      // this writes is the very one the ship UPDATES, which is what makes the
+      // two points one record.
+      type: "release",
       label: meta.label,
-      ...(meta.targetAt !== undefined ? { targetAt: meta.targetAt } : {}),
+      targetAt: meta.targetAt,
       ...(meta.context !== undefined ? { context: meta.context } : {}),
     };
     if (live === undefined) {
@@ -2216,6 +3347,56 @@ export class Store {
       })();
     }
     return { event, changed: true };
+  }
+
+  /**
+   * CR-CRU-129 §S4 — REFUSE a replay that would lose provenance the project
+   * already holds for this release, having written nothing.
+   *
+   * WHAT IS COMPARED. `forLabel` is every record held for the label, whatever
+   * commit each is held under, because what a release is known to have shipped
+   * is a fact about the LABEL: a rebuild against a damaged store posts the
+   * commit the tag resolves to NOW, which is exactly the case where the dedup
+   * misses and a smaller set would be inserted beside the record it should
+   * have replaced. Membership, never size — a derivation that ADDS two ids
+   * while dropping nine is not a bigger set, it is a loss with a disguise, so
+   * the answer is the ids the stored sets hold and this one does not.
+   *
+   * WHAT IS NOT A SHRINK. An EQUAL set (the idempotent re-run) and a LARGER
+   * one (a rebuild that legitimately found more) remove nothing and proceed
+   * untouched — a guard keyed on "a record already exists" would break every
+   * re-run of the ceremony.
+   *
+   * THE ONE EXEMPTION, and it is CR-CRU-086 §S1's rule rather than a new one:
+   * an EMPTY derivation is NO ANSWER, not the answer. Where this post is the
+   * held record's own replay (`replaysHeldRecord` — same type/label/commit)
+   * the dedup writes nothing anyway, so a caller that answered nothing loses
+   * nothing and converges. Where it would INSERT — a commit the store holds no
+   * record under — that same empty answer would make the label read as a
+   * record carrying no provenance at all, which is the extreme shrink and is
+   * refused like every other.
+   *
+   * Reported in the SAME `ProvenanceShrink` vocabulary an applied repair
+   * carries, because it is the same finding: one shrink object, two verdicts.
+   */
+  private refuseShrinkingReplay(
+    forLabel: RunEvent[],
+    crs: string[],
+    replaysHeldRecord: boolean,
+  ): { event: RunEvent; changed: boolean; shrink: ProvenanceShrink; refused: true } | undefined {
+    if (forLabel.length === 0) return undefined;
+    if (crs.length === 0 && replaysHeldRecord) return undefined;
+    const stored = new Set<string>();
+    for (const record of forLabel) for (const cr of record.crs ?? []) stored.add(cr);
+    const offered = new Set(crs);
+    const removed = [...stored].filter((cr) => !offered.has(cr));
+    if (removed.length === 0) return undefined;
+    return {
+      event: forLabel[0]!,
+      changed: false,
+      refused: true,
+      shrink: { before: stored.size, after: offered.size, removed },
+    };
   }
 
   /**
@@ -2276,13 +3457,25 @@ export class Store {
     if (offeredNothing) return { event: held, changed: false };
     const repaired: RunEvent = {
       ...held,
-      ...(releasedAt !== undefined ? { releasedAt } : {}),
+      // CR-CRU-130 §S1 — the ship date IS the delivered date, so a re-derived
+      // `releasedAt` moves BOTH spellings; moving one alone would leave the
+      // record disagreeing with itself about when it landed.
+      ...(releasedAt !== undefined ? { releasedAt, deliveredAt: releasedAt } : {}),
       ...(derivedCrs !== undefined ? { crs: derivedCrs } : {}),
       ...(derivedPackages !== undefined ? { packages: derivedPackages } : {}),
     };
     const payload = Store.payloadColumn(repaired);
     if (payload === Store.payloadColumn(held)) return { event: held, changed: false };
-    this.db.query(`UPDATE events SET payload = ? WHERE id = ?`).run(payload, held.id);
+    // CR-CRU-129 §S1 — the release is a record now; the repair edits it where
+    // it lives. `type`/`label` are untouched: an in-place provenance repair
+    // never changes what a release IS, only what it is known to have shipped.
+    //
+    // CR-CRU-130 §S1 — `delivered_at` travels WITH the payload it is derived
+    // from, in the one statement, because this is the only write that edits a
+    // record's dates after the insert seam has run.
+    this.db
+      .query(`UPDATE milestones SET payload = ?, delivered_at = ? WHERE id = ?`)
+      .run(payload, deliveredAtOf(repaired), held.id);
     // CR-CRU-086 §S3 — a legitimate shrink stays possible (the measured 58→51
     // case, where nine CRs have no landing record) and is APPLIED, but it
     // never leaves in silence: what it dropped travels back with it.
@@ -2298,54 +3491,132 @@ export class Store {
   }
 
   /**
-   * CR-CRU-073 §S1 — stamp `retired_at` on every LIVE gate whose stored
-   * `version` equals `version`. The version rides the generic payload blob, so
-   * the match is done on the parsed value (same JS-parse pattern as
-   * listReleases / listEventsForCycle rather than a JSON SQL predicate).
+   * CR-CRU-130 §S2 — the record a ship DELIVERS: the LIVE, UNDELIVERED
+   * `release` held for this label, or `undefined` when the label was never
+   * planned and the ship is the first thing said about it.
+   *
+   * The same predicate `listReleaseProposals` publishes, deliberately narrowed
+   * to one label in SQL rather than filtered out of that read in JS: the ship
+   * asks about one label and the project may hold many, and the two answers
+   * must be the same record — a ship that delivered a row the proposals read
+   * does not publish would leave the plan standing beside its own delivery.
+   * Newest first, so a label that somehow holds two live plans is delivered at
+   * the one a reader sees, never at an older one behind it.
    */
-  private stampGatesRetired(projectKey: string, version: string, at: number): void {
-    const rows = this.db
-      .query<{ id: string; payload: string | null }, [string]>(
-        `SELECT id, payload FROM events
-         WHERE project_key = ? AND kind = 'gate' AND retired_at IS NULL`,
+  private liveUndeliveredRelease(projectKey: string, label: string): RunEvent | undefined {
+    const row = this.db
+      .query<EventRow, [string, string]>(
+        `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release' AND label = ?
+         AND ${RELEASE_IS_A_PLAN} AND retired_at IS NULL AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC LIMIT 1`,
       )
-      .all(projectKey);
-    const update = this.db.query(`UPDATE events SET retired_at = ? WHERE id = ?`);
-    for (const row of rows) {
-      if (row.payload === null) continue;
-      const parsed = JSON.parse(row.payload) as { version?: unknown };
-      if (parsed.version === version) update.run(at, row.id);
-    }
+      .get(projectKey, label);
+    return row === null ? undefined : Store.toEvent(row);
   }
 
   /**
-   * CR-CRU-091 §S1 — stamp `retired_at` on the LIVE `release-proposal` whose
-   * `label` equals the shipped release's, i.e. consume the proposal the
-   * release fulfils. Called inside the release insert's own transaction.
+   * CR-CRU-130 §S2 — write the DELIVERY onto the record that was outstanding:
+   * the date it was met, and the provenance of the thing that met it.
    *
-   * No new column: `retired_at` (CR-CRU-073) already means *no longer live,
-   * still auditable*, and `listEvents`' filter on it is UNSCOPED, so a
-   * consumed proposal leaves the live feed while `getEvent` still serves it.
-   * That reuse is only safe because the gate-specific query is itself scoped
-   * to `kind = 'gate'` — reading `retired_at` as gate-only would break this.
+   * An UPDATE of one row, never an insert — `repairReleaseProvenance`'s idiom
+   * and for the same reason, so the record's id, its ingest timestamp, its
+   * label and the `targetAt` it declared are all the ones it already had. That
+   * is what "one record, two points in its life" means when it is asserted
+   * rather than described: the shipped event a caller gets back carries the
+   * proposal's id.
    *
-   * `type` and `label` ride the generic payload blob, so the match is done on
-   * the parsed value (the same JS-parse pattern `stampGatesRetired` uses); a
-   * proposal for any other label is untouched.
+   * `delivered_at` travels WITH the payload it is derived from, in the one
+   * statement, so the column and the blob cannot disagree (CR-CRU-129's rule
+   * at the insert seam, applied to the one write that edits a record after
+   * it). `context` travels too — a ship declares its own cycle, and dropping
+   * it here would lose a binding the pre-§S2 insert kept.
+   *
+   * The gates the release retires are stamped in the SAME transaction the
+   * insert path stamps them in (CR-CRU-073 §S1): either the delivery and the
+   * gate retirement are both true, or neither is.
+   */
+  private deliverRelease(
+    held: RunEvent,
+    version: string,
+    delivery: {
+      /** ABSENT when the ship stated no date — never invented (§S2). */
+      deliveredAt?: number;
+      commit?: string;
+      releasedAt?: number;
+      crs?: string[];
+      packages?: PackageRef[];
+      targetAt?: number;
+      context?: RunContext;
+    },
+  ): RunEvent {
+    const delivered: RunEvent = { ...held, ...delivery };
+    const at = Date.now();
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `UPDATE milestones SET payload = ?, target_at = ?, delivered_at = ?, context = ?,
+             cycle_id = ? WHERE id = ?`,
+        )
+        .run(
+          Store.payloadColumn(delivered),
+          delivered.targetAt ?? null,
+          deliveredAtOf(delivered),
+          delivered.context !== undefined ? JSON.stringify(delivered.context) : null,
+          delivered.context?.cycleId ?? delivered.cycleId ?? null,
+          held.id,
+        );
+      this.stampGatesRetired(held.projectKey, version, at);
+    })();
+    this.emit("events", held.projectKey);
+    return delivered;
+  }
+
+  /**
+   * CR-CRU-073 §S1 — stamp `retired_at` on every LIVE gate whose stored
+   * `version` equals `version`.
+   *
+   * CR-CRU-129 §S1 — ONE statement against the `gates` record table: `version`
+   * is a real column there, derived at the insert seam from the same field the
+   * payload carries, so the scan-and-JS-parse this replaced is gone.
+   */
+  private stampGatesRetired(projectKey: string, version: string, at: number): void {
+    this.db
+      .query(
+        `UPDATE gates SET retired_at = ?
+          WHERE project_key = ? AND version = ? AND retired_at IS NULL`,
+      )
+      .run(at, projectKey, version);
+  }
+
+  /**
+   * CR-CRU-091 §S1 — stamp `retired_at` on the LIVE, UNDELIVERED release for
+   * `label`, i.e. supersede the plan a REVISION replaces. Called inside the
+   * revision's own transaction, immediately before the successor's insert.
+   *
+   * No new column: `retired_at` (CR-CRU-073) already means *no longer THE LIVE
+   * RECORD, still auditable*, and `listEvents`' filter on it is UNSCOPED, so a
+   * superseded plan leaves the live feed while `getEvent` still serves it.
+   *
+   * CR-CRU-130 §S2 — ONE call site now, not two. Shipping no longer stamps
+   * this column: delivery is `deliveredAt`, said by the date directly, on the
+   * SAME record. What is left is the column's own meaning, unchanged — a
+   * predecessor a revision has replaced, exactly as a gate is retired by its
+   * release. The predicate follows the unified model: the rows a label may
+   * hold live are its UNDELIVERED `release` records, and a delivered one is
+   * history that no revision may retire out from under `listReleases`.
+   *
+   * CR-CRU-129 §S1 — ONE statement against the `milestones` record table,
+   * scoped by the `type` and `label` COLUMNS derived at the insert seam; a
+   * record for any other label is untouched.
    */
   private stampProposalRetired(projectKey: string, label: string, at: number): void {
-    const rows = this.db
-      .query<{ id: string; payload: string | null }, [string]>(
-        `SELECT id, payload FROM events
-         WHERE project_key = ? AND kind = 'milestone' AND retired_at IS NULL`,
+    this.db
+      .query(
+        `UPDATE milestones SET retired_at = ?
+          WHERE project_key = ? AND type = 'release' AND label = ?
+            AND delivered_at IS NULL AND retired_at IS NULL`,
       )
-      .all(projectKey);
-    const update = this.db.query(`UPDATE events SET retired_at = ? WHERE id = ?`);
-    for (const row of rows) {
-      if (row.payload === null) continue;
-      const parsed = JSON.parse(row.payload) as { type?: unknown; label?: unknown };
-      if (parsed.type === "release-proposal" && parsed.label === label) update.run(at, row.id);
-    }
+      .run(at, projectKey, label);
   }
 
   /**
@@ -2462,7 +3733,7 @@ export class Store {
    * §S1 — the auto-abort sweep, riding CR-CRU-011's liveness machinery rather
    * than a second staleness clock: an open run whose agent has TOMBSTONED (or
    * whose agent row is gone) is aborted `agent died`; one that has outlived
-   * `CRUCIBLE_RUN_ABANDON_MS` is aborted `abandoned`. Idempotent — an aborted
+   * the `run_abandon_ms` limit is aborted `abandoned`. Idempotent — an aborted
    * run leaves `run_state = 'aborted'` and is never swept again.
    */
   sweepOpenRuns(now: number = Date.now()): RunEvent[] {
@@ -2546,26 +3817,47 @@ export class Store {
     };
   }
 
+  /**
+   * CR-CRU-129 §S1 — newest-first across the THREE tables an event can now
+   * live in, reproducing the `ORDER BY timestamp DESC, rowid DESC` each table
+   * is read in: within one millisecond the later-inserted row still comes
+   * first. The tiebreak is the store's own monotonic insert sequence, which is
+   * the tail of the id it mints (`evt-<ms>-<seq>`); an id from anywhere else
+   * ranks 0 and keeps the timestamp order it arrived in.
+   */
+  private static insertOrdinal(id: string): number {
+    const tail = Number(id.slice(id.lastIndexOf("-") + 1));
+    return Number.isFinite(tail) ? tail : 0;
+  }
+
+  private static newestFirst(a: EventRow, b: EventRow): number {
+    return b.timestamp - a.timestamp || Store.insertOrdinal(b.id) - Store.insertOrdinal(a.id);
+  }
+
+  /**
+   * CR-CRU-129 §S1 — the pane/timeline feed, unchanged on the wire: it still
+   * carries milestones and gates, which now come from their own tables rather
+   * than from the capped buffer. Each table is read newest-first up to `limit`
+   * and the three are merged, so the answer is the same `limit` newest rows it
+   * has always been.
+   */
   listEvents(projectKey?: string, limit = 50): RunEvent[] {
     // CR-CRU-012 §S1b — archived projects' events are excluded (not deleted).
     // CR-CRU-073 §S1 — the pane/timeline feed EXCLUDES retired gates
     // (retired_at IS NOT NULL); getEvent still serves them for audit.
-    const rows =
-      projectKey === undefined
-        ? this.db
-            .query<EventRow, [number]>(
-              `SELECT * FROM events WHERE ${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL
-               ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
-            )
-            .all(limit)
-        : this.db
-            .query<EventRow, [string, number]>(
-              `SELECT * FROM events WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
-               AND retired_at IS NULL
-               ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
-            )
-            .all(projectKey, limit);
-    return rows.map(Store.toEvent);
+    const scope = projectKey === undefined ? "" : "project_key = ? AND ";
+    const args: (string | number)[] = projectKey === undefined ? [limit] : [projectKey, limit];
+    const newest = (source: string): EventRow[] =>
+      this.db
+        .query<EventRow, (string | number)[]>(
+          `${source} WHERE ${scope}${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL
+           ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
+        )
+        .all(...args);
+    return [...newest(`SELECT * FROM events`), ...newest(MILESTONE_ROWS), ...newest(GATE_ROWS)]
+      .sort(Store.newestFirst)
+      .slice(0, limit)
+      .map(Store.toEvent);
   }
 
   /**
@@ -2575,20 +3867,26 @@ export class Store {
    * other cycles' runs are filtered out. `context` is JSON in the column, so
    * the match is done on the parsed value (same pattern as
    * deriveCommitBoundary).
+   *
+   * CR-CRU-129 §S1 — over all three tables: a gate carries a cycle binding
+   * (CR-CRU-056 gates parity) and belongs in its cycle's fetch wherever the
+   * row is stored.
    */
   listEventsForCycle(projectKey: string, cycleId: number): RunEvent[] {
-    const rows = this.db
-      .query<EventRow, [string]>(
-        `SELECT * FROM events WHERE project_key = ? AND context IS NOT NULL
-         AND ${Store.NOT_ARCHIVED_SUBQUERY}
-         ORDER BY timestamp DESC, rowid DESC`,
-      )
-      .all(projectKey);
-    return rows
+    const linked = (source: string): EventRow[] =>
+      this.db
+        .query<EventRow, [string]>(
+          `${source} WHERE project_key = ? AND context IS NOT NULL
+           AND ${Store.NOT_ARCHIVED_SUBQUERY}
+           ORDER BY timestamp DESC, rowid DESC`,
+        )
+        .all(projectKey);
+    return [...linked(`SELECT * FROM events`), ...linked(MILESTONE_ROWS), ...linked(GATE_ROWS)]
       .filter((row) => {
         const context = JSON.parse(row.context!) as RunContext;
         return context.cycleId === cycleId;
       })
+      .sort(Store.newestFirst)
       .map(Store.toEvent);
   }
 
@@ -2611,16 +3909,26 @@ export class Store {
    * order is the tiebreaker: `Array#sort` is stable.
    */
   listReleases(projectKey: string): RunEvent[] {
+    // CR-CRU-129 §S1 — a QUERY BY TYPE against the record table, not a scan of
+    // every milestone re-parsing its blob: `type` is a real column, derived at
+    // the insert seam from the same field the payload carries.
+    //
+    // CR-CRU-130 §S2 — and settled history is now everything that is NOT a
+    // plan, which is the half of the pair a second type name used to say.
+    // `RELEASE_IS_A_PLAN` is the one place that line is drawn (see it for why
+    // an undelivered release with NO target is history rather than a plan);
+    // both halves are column predicates, so this is still an indexed read and
+    // not a re-parse of the blob.
     const rows = this.db
       .query<EventRow, [string]>(
-        `SELECT * FROM events WHERE project_key = ? AND kind = 'milestone'
+        `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release'
+         AND NOT (${RELEASE_IS_A_PLAN})
          AND ${Store.NOT_ARCHIVED_SUBQUERY}
          ORDER BY timestamp DESC, rowid DESC`,
       )
       .all(projectKey);
     return rows
       .map(Store.toEvent)
-      .filter((event) => event.type === "release")
       .sort((a, b) => {
         // `releasedAt` is epoch SECONDS (git's `%ct`); the ingest `timestamp`
         // is epoch MS and stands in for a release that carries no ship date.
@@ -2633,14 +3941,18 @@ export class Store {
   /**
    * CR-CRU-091 §S1 — the LIVE release proposals, ordered by VERSION.
    *
-   * Beside `listReleases`, never inside it: that read filters on
-   * `event.type === "release"`, so a proposal cannot leak into settled history
-   * — and this one filters on `release-proposal`, so a shipped release cannot
-   * leak into the plan. Same archived-project exclusion.
+   * CR-CRU-130 §S2 — a PROPOSED release is no longer a record kind of its own:
+   * it is a `release` milestone carrying a `targetAt` and no `deliveredAt`, so
+   * this read is the UNDELIVERED half of the very rows `listReleases` answers
+   * the delivered half of. Beside that read and never inside it, for the
+   * reason §S1 gave and this CR keeps: settled history and a plan are
+   * different answers, and one query returning both would render the pair.
+   * Same archived-project exclusion.
    *
-   * LIVE means `retired_at IS NULL`: a proposal a real release has consumed is
-   * no longer a plan, and returning it here would render the pair §S1 forbids.
-   * It stays auditable through `getEvent`.
+   * LIVE means `retired_at IS NULL`: a record a REVISION has superseded is no
+   * longer the live one for its label, and returning it here would render two
+   * plans for one label. It stays auditable through `getEvent`. Delivery is no
+   * longer said by that column — it is said by `delivered_at`, directly.
    *
    * ORDER IS VERSION, ASCENDING (AC1: proposing `0.3.0` then `0.2.1` yields
    * `0.2.1`, `0.3.0`) — deliberately NOT the declared target and NOT arrival
@@ -2653,56 +3965,184 @@ export class Store {
   listReleaseProposals(projectKey: string): RunEvent[] {
     const rows = this.db
       .query<EventRow, [string]>(
-        `SELECT * FROM events WHERE project_key = ? AND kind = 'milestone'
+        `${MILESTONE_ROWS} WHERE project_key = ? AND type = 'release'
+         AND ${RELEASE_IS_A_PLAN}
          AND retired_at IS NULL AND ${Store.NOT_ARCHIVED_SUBQUERY}
          ORDER BY timestamp DESC, rowid DESC`,
       )
       .all(projectKey);
     return rows
       .map(Store.toEvent)
-      .filter((event) => event.type === "release-proposal")
       .sort((a, b) => compareVersionLabels(a.label ?? "", b.label ?? ""));
   }
 
-  /** Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a project. */
-  countEvents(projectKey?: string): number {
-    if (projectKey === undefined) {
-      return this.db
-        .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM events`)
-        .get()!.n;
+  /**
+   * CR-CRU-129 §S3 — the records of ONE milestone type, newest-first.
+   *
+   * The general form of `listReleases`/`listReleaseProposals`, which each
+   * answer one hardcoded type: this one takes the type as an ARGUMENT and
+   * therefore serves a vocabulary nobody compiled in. C1 stored `type` as
+   * unconstrained TEXT with no CHECK, so the STORE is already open on those
+   * terms, and CR-CRU-130 makes the vocabulary project-definable — a read that
+   * validated its argument against today's six types would have to be edited
+   * again the first time a project names a seventh. There is no known-type
+   * lookup here and there must not be one: an unrecorded type is an EMPTY
+   * answer, not an error.
+   *
+   * WHOLE, not windowed (§S3). The answer is every matching record, because
+   * the question it replaces — `cr_merged_crs` scanning the newest N events —
+   * was wrong precisely in being bounded: a window over a table that also
+   * holds telemetry drops records silently as the telemetry grows. Nothing
+   * here is paged, and the `(project_key, type)` index means the query touches
+   * the rows it returns rather than the table they sit in.
+   *
+   * RETIREMENT IS NOT FILTERED, deliberately. `listReleaseProposals` excludes
+   * retired rows because a consumed proposal is no longer a plan — that is a
+   * judgement about ONE type, and a type-agnostic read cannot make it for a
+   * type it has never heard of. `retiredAt` rides on the row (`toEvent`), so
+   * the caller that knows what retirement means for its type decides.
+   *
+   * Archived projects are excluded through the same subquery every other
+   * project-scoped read uses: nothing is deleted, and unarchiving restores it.
+   *
+   * CR-CRU-130 §S1 — the SAME read answers "what is outstanding" and "what is
+   * due before/after", through `dates`. EXTENDED rather than joined by a
+   * second record read, because a second read would have to be kept unwindowed
+   * and projection-free in parallel with this one and would drift the first
+   * time only one of them was corrected. `type` becomes OPTIONAL (`null`) for
+   * exactly the same reason the route above makes it so: what is outstanding
+   * is a question ACROSS types, including types this build has never heard of.
+   * The filters are COLUMN predicates, so the answer is still the rows the
+   * `(project_key, type)` index leads to rather than a scan that re-parses
+   * every blob.
+   */
+  listMilestonesByType(
+    projectKey: string,
+    type: string | null,
+    dates?: MilestoneDateFilter,
+  ): RunEvent[] {
+    const where: string[] = ["project_key = ?"];
+    const args: (string | number)[] = [projectKey];
+    if (type !== null) {
+      where.push("type = ?");
+      args.push(type);
+    }
+    // CR-CRU-130 §S2 — A DATE QUESTION IS A QUESTION ABOUT LIVE RECORDS, and
+    // that is the ONE thing the dates add to the read's retirement rule above.
+    //
+    // THE PRESENCE OF A DATE FILTER IS WHAT LICENSES THE JUDGEMENT, which is
+    // why the clause appears here and nowhere else — a reader finding
+    // `retired_at IS NULL` only under a filter would otherwise read it as a
+    // bug. The doc above declines to filter retirement because a type-agnostic
+    // read cannot know what retirement MEANS for a type it has never heard of.
+    // That reasoning is untouched and still decides the unfiltered read, which
+    // stays the AUDIT read. But a caller asking `delivered`/`targetBefore`/
+    // `targetAfter` has said which question it is asking, and every one of
+    // them is about goals the project still holds: what is outstanding, what
+    // is due, what slipped. A superseded record holds none of them — it is
+    // history, not something pending — and that is true whatever its type, so
+    // the read CAN make the judgement here where it could not above.
+    //
+    // §S2 makes it concrete: a revised release proposal used to leave a
+    // `release-proposal` row behind, invisible to a `release` read; it now
+    // leaves an undelivered `release`, which without this clause would answer
+    // "outstanding" for a target nobody aims at any more — two live plans for
+    // one label, the very thing `retired_at` is stamped to prevent. Both
+    // halves are pinned together in
+    // `tests/undelivered-release-is-the-plannable-target.test.ts` consumer 5:
+    // the dated read answers the live record alone, the unfiltered one answers
+    // the predecessor too, still carrying the target it declared.
+    if (dates !== undefined && Object.keys(dates).length > 0) {
+      where.push("retired_at IS NULL");
+    }
+    if (dates?.delivered !== undefined) {
+      // ABSENCE is the signal, so the test is NULL-ness rather than a
+      // comparison with a sentinel: a record has been delivered exactly when
+      // it holds a date saying so.
+      //
+      // THE COLUMN ALONE, deliberately — this filter asks "does it carry a
+      // delivered date?", which is a different question from the one
+      // `RELEASE_IS_A_PLAN` answers ("is this release still a plannable
+      // plan?"). A release that shipped without stating a date, and the
+      // pre-CR-CRU-080 legacy release beside it, answer SETTLED there and
+      // UNDELIVERED here, and both are true of them. See that predicate for
+      // the ruling; the asymmetry is pinned by a test so it cannot invert.
+      where.push(dates.delivered ? "delivered_at IS NOT NULL" : "delivered_at IS NULL");
+    }
+    if (dates?.targetBefore !== undefined) {
+      // `target_at IS NOT NULL` is stated rather than relied on: SQLite would
+      // exclude a NULL from `< ?` anyway, but an UNDATED milestone is due at
+      // no time at all, and saying so keeps the intent readable next to the
+      // rule the `delivered` clause above states in the other direction.
+      where.push("target_at IS NOT NULL AND target_at < ?");
+      args.push(dates.targetBefore);
+    }
+    if (dates?.targetAfter !== undefined) {
+      where.push("target_at IS NOT NULL AND target_at > ?");
+      args.push(dates.targetAfter);
     }
     return this.db
-      .query<{ n: number }, [string]>(
-        `SELECT COUNT(*) AS n FROM events WHERE project_key = ?`,
+      .query<EventRow, (string | number)[]>(
+        `${MILESTONE_ROWS} WHERE ${where.join(" AND ")}
+         AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
       )
-      .get(projectKey)!.n;
+      .all(...args)
+      .map(Store.toEvent);
   }
 
+  /**
+   * Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a
+   * project. CR-CRU-129 §S1 — across the three tables an event now lives in,
+   * so the number still means everything not yet folded away.
+   */
+  countEvents(projectKey?: string): number {
+    const count = (table: string): number =>
+      projectKey === undefined
+        ? this.db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n
+        : this.db
+            .query<{ n: number }, [string]>(
+              `SELECT COUNT(*) AS n FROM ${table} WHERE project_key = ?`,
+            )
+            .get(projectKey)!.n;
+    return count("events") + count("milestones") + count("gates");
+  }
+
+  /**
+   * The by-id audit read. CR-CRU-129 §S1 — it MUST keep answering for a moved
+   * record: a RETIRED gate and a CONSUMED proposal are served by no live list,
+   * and the store's own contract already promises they stay auditable here.
+   */
   getEvent(id: string): RunEvent | null {
-    const row = this.db
-      .query<EventRow, [string]>(`SELECT * FROM events WHERE id = ?`)
-      .get(id);
-    return row ? Store.toEvent(row) : null;
+    for (const source of [`SELECT * FROM events`, MILESTONE_ROWS, GATE_ROWS]) {
+      const row = this.db.query<EventRow, [string]>(`${source} WHERE id = ?`).get(id);
+      if (row !== null) return Store.toEvent(row);
+    }
+    return null;
   }
 
   deleteEvent(id: string, projectKey: string): boolean {
-    const row = this.db
-      .query<{ project_key: string }, [string]>(
-        `SELECT project_key FROM events WHERE id = ?`,
-      )
-      .get(id);
-    if (row === null || row.project_key !== projectKey) {
-      return false;
+    for (const table of ["events", "milestones", "gates"]) {
+      const row = this.db
+        .query<{ project_key: string }, [string]>(
+          `SELECT project_key FROM ${table} WHERE id = ?`,
+        )
+        .get(id);
+      if (row === null) continue;
+      if (row.project_key !== projectKey) return false;
+      this.db.query(`DELETE FROM ${table} WHERE id = ?`).run(id);
+      this.emit("events", projectKey);
+      return true;
     }
-    this.db.query(`DELETE FROM events WHERE id = ?`).run(id);
-    this.emit("events", projectKey);
-    return true;
+    return false;
   }
 
   clearEvents(projectKey: string): number {
-    const { changes } = this.db
-      .query(`DELETE FROM events WHERE project_key = ?`)
-      .run(projectKey);
+    let changes = 0;
+    for (const table of ["events", "milestones", "gates"]) {
+      changes += this.db.query(`DELETE FROM ${table} WHERE project_key = ?`).run(projectKey)
+        .changes;
+    }
     this.emit("events", projectKey);
     return changes;
   }
@@ -2742,14 +4182,91 @@ export class Store {
       // CR-CRU-084 §S1/AC6 — and the packages the release delivered, in the
       // SAME blob for the SAME reason: no column, no migration.
       ...(event.packages !== undefined ? { packages: event.packages } : {}),
-      // CR-CRU-091 §S1 — a PROPOSAL's declared target rides the same blob, so
-      // the new record kind needs no column of its own either.
+      // CR-CRU-091 §S1 / CR-CRU-130 §S1 — a milestone's two dates ride the
+      // same blob as everything else it carries; the COLUMNS beside it are
+      // DERIVED from exactly these two keys at `insertRecord` below, which is
+      // what stops the two representations disagreeing.
       ...(event.targetAt !== undefined ? { targetAt: event.targetAt } : {}),
+      ...(event.deliveredAt !== undefined ? { deliveredAt: event.deliveredAt } : {}),
     };
     return Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
   }
 
+  /**
+   * CR-CRU-129 §S1 — a RECORD is written to its own table, never to the capped
+   * buffer, and therefore never triggers a retention sweep of its own. The
+   * change-notification is unchanged (`events`): the pane feed the listener
+   * drives still carries records, so the affected consumer surface is the same
+   * one it has always been.
+   *
+   * The filtered columns (`type`/`label`, `version`) are DERIVED here, at the
+   * one row-insert seam, from the very fields `payloadColumn` serialises — the
+   * `cycle_id` precedent below — so no caller can set one representation
+   * without the other and the column can never disagree with the blob.
+   */
+  private insertRecord(event: RunEvent): void {
+    const payload = Store.payloadColumn(event);
+    if (event.kind === "milestone") {
+      this.db
+        .query(
+          `INSERT INTO milestones (id, project_key, agent_id, tier, codec, timestamp, type,
+             label, target_at, delivered_at, payload, context, role, role_inferred, retired_at,
+             cycle_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          event.id,
+          event.projectKey,
+          event.agentId,
+          event.tier,
+          event.codec ?? null,
+          event.timestamp,
+          event.type ?? null,
+          event.label ?? null,
+          // CR-CRU-130 §S1 — the two dates, derived HERE from the very fields
+          // `payloadColumn` serialised, on the `type`/`label` terms above.
+          event.targetAt ?? null,
+          deliveredAtOf(event),
+          payload,
+          event.context !== undefined ? JSON.stringify(event.context) : null,
+          event.role ?? null,
+          event.role !== undefined ? (event.roleInferred === true ? 1 : 0) : null,
+          event.retiredAt ?? null,
+          event.context?.cycleId ?? event.cycleId ?? null,
+        );
+    } else {
+      this.db
+        .query(
+          `INSERT INTO gates (id, project_key, agent_id, tier, codec, timestamp, version,
+             payload, context, role, role_inferred, retired_at, cycle_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          event.id,
+          event.projectKey,
+          event.agentId,
+          event.tier,
+          event.codec ?? null,
+          event.timestamp,
+          event.version ?? null,
+          payload,
+          event.context !== undefined ? JSON.stringify(event.context) : null,
+          event.role ?? null,
+          event.role !== undefined ? (event.roleInferred === true ? 1 : 0) : null,
+          event.retiredAt ?? null,
+          event.context?.cycleId ?? event.cycleId ?? null,
+        );
+    }
+    this.emit("events", event.projectKey);
+  }
+
   private insertEvent(event: RunEvent): void {
+    // CR-CRU-129 §S1 — records take the other door; only telemetry lands in
+    // the capped table and only telemetry sweeps it.
+    if (event.kind === "milestone" || event.kind === "gate") {
+      this.insertRecord(event);
+      return;
+    }
     const payload = Store.payloadColumn(event);
     this.db
       .query(
@@ -2827,6 +4344,10 @@ export class Store {
         : "test";
     const payload =
       row.payload !== null ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
+    const deliveredAt = deliveredAtOf({
+      ...(typeof payload.deliveredAt === "number" ? { deliveredAt: payload.deliveredAt } : {}),
+      ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
+    });
     return {
       id: row.id,
       projectKey: row.project_key,
@@ -2842,8 +4363,14 @@ export class Store {
       // was stored in; a pre-§S4 release row simply has neither key.
       ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
       ...(Array.isArray(payload.crs) ? { crs: payload.crs as string[] } : {}),
-      // CR-CRU-091 §S1 — a proposal's declared target, from the same blob.
+      // CR-CRU-091 §S1 / CR-CRU-130 §S1 — the milestone's two dates, from the
+      // same blob. `deliveredAt` reads through `deliveredAtOf`, so a record
+      // that says only `releasedAt` — every release written before this CR —
+      // answers when it was met without its payload being rewritten. Each key
+      // is ABSENT when the record holds no such date: outstanding and undated
+      // are real states, and a fabricated 0 would read as delivered in 1970.
       ...(typeof payload.targetAt === "number" ? { targetAt: payload.targetAt } : {}),
+      ...(deliveredAt !== null ? { deliveredAt } : {}),
       // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
       // a release recorded before this CR simply has no key (AC4).
       ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),
@@ -2920,52 +4447,49 @@ export class Store {
   }
 
   // CR-CRU-013 §S1 — the ONLY kinds whose expired events fold into test-run
-  // rollups; every other kind (lifecycle, gate, milestone) is excluded.
+  // rollups; `lifecycle` (the third disposable kind) is excluded.
   private static readonly ROLLUP_ELIGIBLE_KINDS: ReadonlySet<string> = new Set([
     "test",
     "compile",
   ]);
 
+  /**
+   * §S4 — trim a project's DISPOSABLE events to its cap, oldest first.
+   *
+   * CR-CRU-129 §S2 — the sweep reaches `RETENTION_DISPOSABLE_KINDS` and
+   * NOTHING else. The two exemption predicates this replaced (`LIVE_GATE`,
+   * `LIVE_PROPOSAL`) are gone: a record is protected because retention cannot
+   * see it, not because a predicate happened to match it — which is why a
+   * VERSIONLESS gate, a RETIRED gate and a CONSUMED proposal, none of which
+   * either predicate covered, now survive too. The cap counts and evicts the
+   * same set, so telemetry alone decides when telemetry is over its cap.
+   */
   private enforceRetention(projectKey: string): void {
-    const cap = this.getProject(projectKey)?.retention ?? DEFAULT_RETENTION;
-    // CR-CRU-073 §S1 — a LIVE gate AWAITING its release (retired_at IS NULL
-    // AND a stored version) is EXEMPT from the count cap: it survives until
-    // its release ships and retires it, after which it prunes like any event.
-    // A VERSIONLESS gate is NOT exempt — it can never be retired, so exempting
-    // it would leak forever (the migration retires the pre-column strays for
-    // the same reason). `version` rides the payload blob, matched via
-    // json_extract (NULL payload / absent key → NOT NULL is false → prunable).
-    const LIVE_GATE = `(kind = 'gate' AND retired_at IS NULL AND json_extract(payload, '$.version') IS NOT NULL)`;
-    // CR-CRU-091 §S1/AC22 — a LIVE `release-proposal` is exempt on the same
-    // terms, and for a stronger reason than the gate's. A pruned `release` is
-    // rebuildable from its git tag (`repair-provenance`); a pruned proposal is
-    // AUTHORED INTENT with no external source and is gone for good. A CONSUMED
-    // proposal (retired_at set by the release that shipped it) is prunable
-    // again — the release it became now carries the fact.
-    const LIVE_PROPOSAL = `(kind = 'milestone' AND retired_at IS NULL AND json_extract(payload, '$.type') = 'release-proposal')`;
-    const EXEMPT = `(${LIVE_GATE} OR ${LIVE_PROPOSAL})`;
+    const cap = this.getProject(projectKey)?.retention ?? defaultRetention();
+    // No cap is configured anywhere — nothing is evicted (see defaultRetention).
+    if (cap === undefined) return;
+    const disposable = `kind IN (${DISPOSABLE_KIND_PLACEHOLDERS})`;
     const count = this.db
-      .query<{ n: number }, [string]>(
-        `SELECT COUNT(*) AS n FROM events WHERE project_key = ? AND NOT ${EXEMPT}`,
+      .query<{ n: number }, [string, ...string[]]>(
+        `SELECT COUNT(*) AS n FROM events WHERE project_key = ? AND ${disposable}`,
       )
-      .get(projectKey)!.n;
+      .get(projectKey, ...DISPOSABLE_KIND_PARAMS)!.n;
     const overflow = count - cap;
     if (overflow <= 0) {
       return;
     }
     const expired = this.db
-      .query<EventRow, [string, number]>(
-        `SELECT * FROM events WHERE project_key = ? AND NOT ${EXEMPT}
+      .query<EventRow, [string, ...(string | number)[]]>(
+        `SELECT * FROM events WHERE project_key = ? AND ${disposable}
          ORDER BY timestamp ASC, rowid ASC LIMIT ?`,
       )
-      .all(projectKey, overflow);
+      .all(projectKey, ...DISPOSABLE_KIND_PARAMS, overflow);
     // Fold + delete atomically so a crash can never leave an expired event
     // both counted in rollups and still present for a later re-fold.
     this.db.transaction(() => {
       for (const row of expired) {
-        // CR-CRU-013 §S1 — invert the single lifecycle-exclusion into a
-        // rollup-ELIGIBLE set {test, compile}: gate/milestone (like lifecycle)
-        // flow through retention but contribute NOTHING to test-run rollups.
+        // CR-CRU-013 §S1 — an evicted test/compile row still folds into its
+        // day rollup before it goes; `lifecycle` contributes nothing.
         if (Store.ROLLUP_ELIGIBLE_KINDS.has(row.kind)) {
           this.foldIntoRollup(row);
         }
@@ -3142,6 +4666,48 @@ export class Store {
   }
 
   /**
+   * CR-CRU-121 §S1 — file a plan and REGISTER its cr in the queue as ONE
+   * write: `plan-file --release` composes `cr-plan`'s declaration, and the two
+   * tables may never disagree about whether that declaration happened.
+   *
+   * Both halves already guard themselves BEFORE they write (`filePlan` returns
+   * the duplicate-open-plan refusal, `upsertQueueEntry` throws
+   * `QueueWaveOverflowError` out of `nextFreeSlot`), so each is safe ALONE.
+   * What is not safe is the pair: whichever runs second can still refuse after
+   * the first committed, leaving a queue row for a plan nobody filed — or a
+   * plan the roadmap never heard of. One transaction closes both directions,
+   * so a refusal the caller reads is also the state the board holds.
+   *
+   * The inner `emit`s may still fire for an attempt that rolled back; a change
+   * notification is a prompt to RE-READ, and the re-read sees the truth.
+   */
+  filePlanRegistering(
+    projectKey: string,
+    entry: QueuePlanInput,
+    plan: {
+      cr: string;
+      title?: string;
+      orchestrator?: string;
+      wave?: string;
+      track?: string;
+      cycles: Array<{ label: string; kind: CycleKind }>;
+    },
+  ): { plan: Plan; report: QueueSeqReport & { changed: boolean } } | PlanOpError {
+    const compose = this.db.transaction(() => {
+      const report = this.upsertQueueEntry(projectKey, entry);
+      const filed = this.filePlan(projectKey, plan);
+      if ("error" in filed) throw new PlanRegistrationRefused(filed);
+      return { plan: filed, report };
+    });
+    try {
+      return compose();
+    } catch (error) {
+      if (error instanceof PlanRegistrationRefused) return error.refusal;
+      throw error;
+    }
+  }
+
+  /**
    * §S0 — append a cycle to an OPEN plan; returns the new project-unique id.
    * CR-CRU-024 §S3.1 — with `before`, INSERT the new cycle immediately before
    * that sibling in `seq` order (fractional midpoint). The insertion point must
@@ -3300,6 +4866,129 @@ export class Store {
       ...(activatedAt !== null ? { activatedAt } : {}),
       ...(doneAt !== null ? { doneAt } : {}),
     };
+  }
+
+  /**
+   * CR-CRU-116 §S1/§S2 — the WAVE-scope refusals, the same pair
+   * `transitionCycle` answers one container down (:3238-3264) and in the SAME
+   * order: `already-active` before `out-of-order`. A wave is a container of
+   * crs exactly as a plan is a container of cycles, so opening work in one
+   * while another holds open work, or ahead of an unfinished earlier wave, is
+   * refused with the codes that scope already declares.
+   *
+   * Activeness is DERIVED, never stored: a wave is active while it holds a cr
+   * `queueStatusOf` reads as `IN_PROGRESS` — the ONE in-flight rule, shared
+   * verbatim with `deriveQueueStatus`, so `aborted` (which is not `open`)
+   * confers nothing. Every wave read here is the QUEUE's, never `plan.wave`:
+   * the two disagree in live data and a mislabelled plan must not be able to
+   * move the constraint.
+   *
+   * Two reads per call — the queue's rows and the project's plan rows — never
+   * a query per cr, because the wave question needs `wave` and `status` only
+   * (no cycles, no commit boundary).
+   */
+  waveScopeRefusal(projectKey: string, cr: string): WaveScopeError | undefined {
+    const rows = this.db
+      .query<WaveScopeRow, [string]>(
+        `SELECT cr, wave, seq, lifecycle_json FROM queue_entries WHERE project_key = ?`,
+      )
+      .all(projectKey);
+    const target = rows.find((row) => row.cr === cr);
+    // §S1 — OUTSIDE the constraint entirely: a cr the queue does not hold, and
+    // one whose `wave` is empty (the wire's way of declaring none). Neither is
+    // blocked, neither blocks, neither confers activeness on any wave.
+    if (target === undefined || target.wave === "") return undefined;
+    const targetWave = waveNumber(target.wave);
+    const statuses = this.queueStatuses(projectKey, rows);
+    // §S2 — the ONE ordering rule: `waveNumber`, which `waveSeqBase` and the
+    // queue's sort key already rest on. Position inside a wave breaks the tie.
+    const earlierThan = (a: WaveScopeRow, b: WaveScopeRow): boolean =>
+      waveNumber(a.wave) !== waveNumber(b.wave)
+        ? waveNumber(a.wave) < waveNumber(b.wave)
+        : a.seq < b.seq;
+    let active: WaveScopeRow | undefined;
+    let blocker: WaveScopeRow | undefined;
+    for (const row of rows) {
+      if (row.wave === "") continue;
+      const status = statuses.get(row.cr);
+      if (status === "IN_PROGRESS") {
+        if (
+          waveNumber(row.wave) !== targetWave &&
+          (active === undefined || earlierThan(row, active))
+        ) {
+          active = row;
+        }
+        continue;
+      }
+      // §S2 — UNFINISHED is neither landed nor declared dead, so a wave whose
+      // remainder is VOID/SUPERSEDED does not block its successor.
+      if (waveNumber(row.wave) >= targetWave) continue;
+      if (row.lifecycle_json !== null) continue;
+      if (status === "COMPLETED" || status === "COMPLETED_UNTRACKED") continue;
+      if (blocker === undefined || earlierThan(row, blocker)) blocker = row;
+    }
+    if (active !== undefined) {
+      return {
+        error:
+          `wave ${active.wave} is already active: ${active.cr} has an open plan — ` +
+          `only one wave holds open work at a time`,
+        code: "already-active",
+        waveRef: active.wave,
+        crRef: active.cr,
+      };
+    }
+    if (blocker !== undefined) {
+      return {
+        error:
+          `out-of-order wave: ${blocker.cr} in wave ${blocker.wave} is still unfinished, ` +
+          `so wave ${target.wave} does not open yet`,
+        code: "out-of-order",
+        waveRef: blocker.wave,
+        crRef: blocker.cr,
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * CR-CRU-116 §S1 — every queued cr's derived status from ONE plans read.
+   * `listQueue` derives per cr (a plans query each, cycles and commit
+   * boundary included) because it PUBLISHES plans; the wave question needs
+   * neither, and this runs on a write path, so the rows are grouped once and
+   * handed to the same `queueStatusOf` the read path uses. No second
+   * in-flight rule is written here.
+   */
+  private queueStatuses(
+    projectKey: string,
+    rows: readonly WaveScopeRow[],
+  ): Map<string, QueueStatus> {
+    const byCr = new Map<string, PlanStatusFacts[]>();
+    for (const row of this.db
+      .query<PlanRow, [string]>(
+        `SELECT plan_id, cr, status, merge_commit FROM plans
+         WHERE project_key = ? ORDER BY plan_id ASC`,
+      )
+      .all(projectKey)) {
+      const facts = Store.statusFactsOf(row);
+      const held = byCr.get(row.cr);
+      if (held === undefined) byCr.set(row.cr, [facts]);
+      else held.push(facts);
+    }
+    const shipped = new Set<string>();
+    for (const release of this.listReleases(projectKey)) {
+      for (const shippedCr of release.crs ?? []) {
+        shipped.add(shippedCr);
+      }
+    }
+    const statuses = new Map<string, QueueStatus>();
+    for (const row of rows) {
+      if (statuses.has(row.cr)) continue;
+      statuses.set(
+        row.cr,
+        Store.queueStatusOf(row.cr, byCr.get(row.cr) ?? [], shipped).status,
+      );
+    }
+    return statuses;
   }
 
   /**
@@ -3730,7 +5419,11 @@ export class Store {
             lifecycle,
           );
       });
-      return { defaultedSeq };
+      // CR-CRU-119 §S1 — `preservedSeq` is empty by construction here: this
+      // writer names a row only when it had NEITHER a declared nor a
+      // held-in-wave seq, so every cr it reports is one whose position it
+      // chose. A held value that survives the post is never named at all.
+      return { defaultedSeq, preservedSeq: [] };
     });
     const report = replace();
     this.emit("events", projectKey);
@@ -3841,7 +5534,7 @@ export class Store {
       held.wave === input.wave &&
       held.title === input.title
     ) {
-      return { changed: false, defaultedSeq: [] };
+      return { changed: false, defaultedSeq: [], preservedSeq: [] };
     }
     const moved = held === null || held.wave !== input.wave;
     const seq = moved
@@ -3904,7 +5597,17 @@ export class Store {
         )
         .all(projectKey, input.cr, input.wave, input.release)
         .some((row) => inWaveBlock(row.seq, row.wave) !== scale);
-    return { changed: true, defaultedSeq: mixed ? [input.cr] : [] };
+    // CR-CRU-119 §S1 — the trigger is one boolean, but it fires on TWO facts,
+    // and only one of them is a defaulting. `moved` is the write that CHOSE
+    // this position; `!scale` alone is a position the row already HELD, handed
+    // back by the seq resolution above untouched. Which of the two happened is
+    // read off `moved` here rather than re-derived downstream, because the
+    // route sees neither the held row nor the resolved seq.
+    return {
+      changed: true,
+      defaultedSeq: mixed ? [input.cr] : [],
+      preservedSeq: mixed && !moved ? [input.cr] : [],
+    };
   }
 
   /**
@@ -4100,7 +5803,51 @@ export class Store {
     cr: string,
     shipped: ReadonlySet<string>,
   ): { status: QueueStatus; planId?: number } {
-    const plans = this.listPlans(projectKey, { cr });
+    // CR-CRU-126 §S1 (DRIFT-2) — the STATUS FACTS, not whole plans. This ran
+    // `listPlans({cr})` once per queue row, so a 125-row queue reached the
+    // commit-boundary derivation 125 times over for plans whose boundary it
+    // never reads (and whose cycles it never reads either). The answer is
+    // unchanged by construction: `queueStatusOf` consumes `PlanStatusFacts`,
+    // which is exactly these four columns, in the same plan_id order.
+    return Store.queueStatusOf(cr, this.planStatusFacts(projectKey, cr), shipped);
+  }
+
+  /**
+   * CR-CRU-116 §S1 / CR-CRU-126 §S1 — a cr's plan rows as the status facts
+   * alone. The ONE place the `PlanRow` -> `PlanStatusFacts` mapping is written
+   * for a single cr; `queueStatuses` does the same for a whole project through
+   * `Store.statusFactsOf`, so the read path and the write path cannot drift.
+   */
+  private planStatusFacts(projectKey: string, cr: string): PlanStatusFacts[] {
+    return this.db
+      .query<PlanRow, [string, string]>(
+        `SELECT plan_id, cr, status, merge_commit FROM plans
+         WHERE project_key = ? AND cr = ? ORDER BY plan_id ASC`,
+      )
+      .all(projectKey, cr)
+      .map((row) => Store.statusFactsOf(row));
+  }
+
+  /** CR-CRU-126 §S1 — one plan row reduced to what `queueStatusOf` reads. */
+  private static statusFactsOf(row: PlanRow): PlanStatusFacts {
+    return {
+      planId: row.plan_id,
+      status: Store.planStatusOf(row.status),
+      ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
+    };
+  }
+
+  /**
+   * CR-CRU-116 §S1 — the derivation ABOVE over the plan facts alone, so the
+   * in-flight rule (`a plan of status open exists`) is written ONCE and read
+   * by both callers: `deriveQueueStatus` on the read path, per cr, and
+   * `queueStatuses` on the plans-write path, batched. Neither restates it.
+   */
+  private static queueStatusOf(
+    cr: string,
+    plans: readonly PlanStatusFacts[],
+    shipped: ReadonlySet<string>,
+  ): { status: QueueStatus; planId?: number } {
     if (plans.length === 0) {
       // No plan to link, and none is invented (AC5) — the key is omitted.
       return shipped.has(cr) ? { status: "COMPLETED_UNTRACKED" } : { status: "PENDING" };
@@ -4224,6 +5971,16 @@ export class Store {
     return active.length;
   }
 
+  /**
+   * CR-CRU-024 §S6 / CR-CRU-116 §S1 — the stored plan status, read the ONE
+   * way: `closed` and `aborted` verbatim, anything else `open`. `toPlan`
+   * publishes it and `queueStatuses` derives over it, so the two cannot
+   * disagree about what an aborted plan is.
+   */
+  private static planStatusOf(stored: string): Plan["status"] {
+    return stored === "closed" ? "closed" : stored === "aborted" ? "aborted" : "open";
+  }
+
   private toPlan(row: PlanRow): Plan {
     const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
       (cycle) => ({
@@ -4259,8 +6016,7 @@ export class Store {
       // status (including the new "aborted") to "open", which hid aborted plans
       // from the history lens and let the one-open-plan-per-cr rule mis-see
       // them as open. "open"/"closed" behaviour is unchanged.
-      status:
-        row.status === "closed" ? "closed" : row.status === "aborted" ? "aborted" : "open",
+      status: Store.planStatusOf(row.status),
       cycles,
       ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
@@ -4278,21 +6034,60 @@ export class Store {
     if (plan.status !== "closed" || plan.merge === undefined || plan.closedAt === undefined) {
       return undefined;
     }
-    const cycleIds = new Set(plan.cycles.map((cycle) => cycle.id));
-    const rows = this.db
-      .query<EventRow, [string]>(
-        `SELECT * FROM events WHERE project_key = ? AND context IS NOT NULL
-         ORDER BY timestamp ASC, rowid ASC`,
-      )
-      .all(plan.projectKey);
+    // CR-CRU-126 §S1 — one INDEXED seek per cycle, projecting the three
+    // columns the answer needs, replacing the `SELECT *` scan of every event
+    // in the project. The wide columns (`tree`/`coverage`/`compile`/`payload`)
+    // were the dominant cost — ~37 MB marshalled per scan to read two strings.
+    //
+    // Equality on `cycle_id`, one cycle at a time, rather than one `IN (…)`
+    // over the plan's cycles: MEASURED 2026-09-12, with no ANALYZE stats (and
+    // this store runs none), the `IN` form makes SQLite fall back to
+    // `idx_events_project_timestamp` — a full project scan again — because the
+    // sort-free ordering outbids a multi-seek it has no statistics for. The
+    // equality form plans to `idx_events_project_cycle` unconditionally, and
+    // sort-free, since the index carries `timestamp` third.
+    //
+    // The membership test is the `cycle_id` COLUMN, which CR-CRU-094 §S1
+    // derives at the one row-insert seam from `context.cycleId`, so the two
+    // cannot disagree; `context IS NOT NULL` still excludes the lifecycle rows
+    // (§S2) that carry a cycle binding but no run context.
+    //
+    // CR-CRU-129 §S1 — over the record tables too: a gate carries a cycle
+    // binding and a run context (CR-CRU-056 gates parity), so it contributed
+    // to this boundary before the move and must keep contributing after it.
+    // Their seeks are equality on `cycle_id` like the one above, over tables
+    // holding a project's records rather than its telemetry.
+    const rows: BoundaryEventRow[] = [];
+    for (const source of [
+      `SELECT timestamp, id, context FROM events`,
+      `SELECT timestamp, id, context FROM milestones`,
+      `SELECT timestamp, id, context FROM gates`,
+    ]) {
+      for (const cycle of plan.cycles) {
+        for (const row of this.db
+          .query<BoundaryEventRow, [string, number]>(
+            `${source}
+             WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
+             ORDER BY timestamp ASC, rowid ASC`,
+          )
+          .all(plan.projectKey, cycle.id)) {
+          rows.push(row);
+        }
+      }
+    }
+    // A multi-cycle plan's runs INTERLEAVE in time, and first/last are the
+    // earliest and latest across the whole plan — so the per-cycle, per-table
+    // seeks are merged back into the one insertion order the single scan had.
+    rows.sort((left, right) =>
+      left.timestamp !== right.timestamp
+        ? left.timestamp - right.timestamp
+        : Store.insertOrdinal(left.id) - Store.insertOrdinal(right.id),
+    );
     let branch: string | undefined;
     let firstRunCommit: string | undefined;
     let lastRunCommit: string | undefined;
     for (const row of rows) {
-      const context = JSON.parse(row.context!) as RunContext;
-      if (typeof context.cycleId !== "number" || !cycleIds.has(context.cycleId)) {
-        continue;
-      }
+      const context = JSON.parse(row.context) as RunContext;
       if (context.git === undefined) {
         continue;
       }

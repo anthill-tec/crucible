@@ -5,12 +5,23 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
+import { resolveLimit } from "./limits.ts";
+import {
+  authHints,
+  hints,
+  cycleHints,
+  identityHints,
+  milestoneHints,
+  projectDeleteHints,
+  roadmapHints,
+  waveHints,
+} from "./hints.ts";
 import {
   compareContainers,
   declaredTracks,
   normalizeTrack,
   QueueWaveOverflowError,
+  reservedMilestoneTypeConflict,
   Store,
   TRACK_LANE_RULE,
   UUID_RE,
@@ -19,11 +30,13 @@ import {
   waveOverflowMessage,
   waveSeqBase,
 } from "./store.ts";
-import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type {
+  MilestoneDateFilter,
+  PlanOpError,
   ProjectPatch,
   QueueEntryInput,
+  QueuePlanInput,
   QueueSeqReport,
   RecordEventMeta,
   RunRecord,
@@ -37,6 +50,7 @@ import type {
   CycleStatus,
   LivenessConfig,
   PackageRef,
+  Plan,
   Project,
   QueueEntry,
   QueueLifecycle,
@@ -123,6 +137,8 @@ interface V2Body {
   // the four fields only the new routes read.
   release?: unknown;
   targetAt?: unknown;
+  /** CR-CRU-130 §S1 — when the milestone was MET, epoch seconds. */
+  deliveredAt?: unknown;
   by?: unknown;
   reason?: unknown;
   // CR-CRU-106 §S1 — `cr-depends`' whole payload: the complete dependency
@@ -139,71 +155,32 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-// ── §S2+§S4 (CR-CRU-005) — content negotiation + TOON truncation ────────────
-
-const TOON_MAX_BYTES = 64 * 1024;
-
-/** §S2 — `?fmt=toon` OR an Accept header containing `toon` selects TOON. */
-function wantsToon(req: Request, url: URL): boolean {
-  if (url.searchParams.get("fmt") === "toon") return true;
-  return (req.headers.get("accept") ?? "").includes("toon");
-}
-
-/** §S4 — pointer to the untruncated JSON variant of the same call. */
-function jsonVariantUrl(url: URL): string {
-  const variant = new URL(url);
-  variant.searchParams.set("fmt", "json");
-  return `${variant.pathname}?${variant.searchParams.toString()}`;
-}
+// ── §S2 (CR-CRU-005) — the shared response gate ─────────────────────────────
+//
+// CR-CRU-132 §S1 (2026-09-14) DELETED the server's TOON rendering: the
+// content-negotiation branch, its 64 KB truncation helper, the JSON-variant
+// pointer, the byte ceiling and the `src/toon.ts` adapter are all gone.
+// Measured before the deletion: no client and nothing in `public/` ever
+// negotiated the alternative encoding — only the tests that asserted it
+// existed did.
 
 /**
- * §S4 — shrink the payload's largest top-level array (keeping head items,
- * halving until the TOON body fits 64 KB), marked with a `truncated: true`
- * scalar and a `full:` pointer at the JSON variant of the same URL.
- */
-function truncatedToon(payload: Record<string, unknown>, url: URL): string {
-  let largestKey: string | undefined;
-  let largestLen = 0;
-  for (const [key, value] of Object.entries(payload)) {
-    if (Array.isArray(value) && value.length > largestLen) {
-      largestKey = key;
-      largestLen = value.length;
-    }
-  }
-  if (largestKey === undefined) {
-    // Nothing shrinkable — emit oversize rather than drop data silently.
-    return `${toToon(payload)}\n`;
-  }
-  const items = payload[largestKey] as unknown[];
-  let keep = items.length;
-  let text: string;
-  do {
-    keep = Math.floor(keep / 2);
-    text = `${toToon({
-      ...payload,
-      [largestKey]: items.slice(0, keep),
-      truncated: true,
-      full: `GET ${jsonVariantUrl(url)}`,
-    })}\n`;
-  } while (Buffer.byteLength(text, "utf8") > TOON_MAX_BYTES && keep > 0);
-  return text;
-}
-
-/**
- * §S2 — the shared response gate every v2 GET routes through: TOON when
- * negotiated (with §S4 truncation), JSON otherwise. JSON never truncates.
+ * §S2 — the shared response gate every v2 GET routes through: JSON, always,
+ * exactly as every write already answered. A GET still carrying the retired
+ * `?fmt=toon` parameter, or an Accept header naming the retired media type,
+ * is INERT rather than refused — it gets this same JSON body, which was
+ * always the untruncated variant and is now the only one. `?fmt=json` keeps
+ * working for callers who wrote it down.
+ *
+ * `req` and `url` are DELIBERATELY RETAINED though nothing reads them today:
+ * every one of the 16 call sites keeps one uniform shape, and the next
+ * negotiation-shaped concern (or anything else that must look at the request
+ * or its query string before a body goes out) has one obvious place to read
+ * them from. This is not forgotten cleanup — dropping them would mean editing
+ * all 16 call sites for no behavioural gain, and it is precisely this
+ * signature's sameness that makes "no payload moved" trivially checkable.
  */
 function reply(req: Request, url: URL, payload: Record<string, unknown>, status = 200): Response {
-  if (req.method === "GET" && wantsToon(req, url)) {
-    let text = `${toToon(payload)}\n`;
-    if (Buffer.byteLength(text, "utf8") > TOON_MAX_BYTES) {
-      text = truncatedToon(payload, url);
-    }
-    return new Response(text, {
-      status,
-      headers: { "content-type": "text/toon; charset=utf-8" },
-    });
-  }
   return json(payload, status);
 }
 
@@ -342,12 +319,16 @@ async function handleProjectCreate(store: Store, req: Request): Promise<Response
   return json({ ok: true, changed: true, project });
 }
 
-// CR-CRU-007 §S5.1 — system-wide project-inactive timeout (ms), env-configurable.
-const DEFAULT_PROJECT_INACTIVE_MS = 3_600_000;
-
+/**
+ * CR-CRU-007 §S5.1 — the system-wide project-inactive timeout (ms).
+ *
+ * CR-CRU-131 §S1 — resolved from the server's own `crucible.toml` at the point
+ * of use rather than from `DEFAULT_PROJECT_INACTIVE_MS`, a literal no operator
+ * could reach. Read per request, not cached, so widening the window re-decides
+ * the next read without a restart.
+ */
 function projectInactiveMs(): number {
-  const raw = Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROJECT_INACTIVE_MS;
+  return resolveLimit("project_inactive_ms");
 }
 
 /**
@@ -681,7 +662,7 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const now = Date.now();
   // CR-CRU-017 §S1 — the auto-abort sweep rides CR-011's liveness, so it runs
   // exactly where liveness is computed: an open run whose agent has tombstoned
-  // (or which has outlived CRUCIBLE_RUN_ABANDON_MS) is aborted here, before the
+  // (or which has outlived the `run_abandon_ms` limit) is aborted here, before the
   // dashboard reads a dead agent with a run still "running".
   store.sweepOpenRuns(now);
   const agents = store.listAgents(project, now).map((agent) => ({
@@ -1144,21 +1125,12 @@ const GATE_OUTCOMES: ReadonlySet<string> = new Set([
   "cancelled",
 ]);
 
-/**
- * §S4b/§S4c — accepted milestone types ('cr-merged' joins the set).
- * CR-CRU-074 §S1 — 'release' joins it too: a shipped release is a recorded
- * event whose `label` is the version and `commit` the tagged sha. Purely
- * additive — every pre-existing type keeps its exact behaviour, and the
- * validation error still enumerates the whole accepted set.
- */
-const MILESTONE_TYPES: ReadonlySet<string> = new Set([
-  "gap-analysis",
-  "design-review",
-  "stage-flip",
-  "custom",
-  "cr-merged",
-  "release",
-]);
+// CR-CRU-130 §S4/§S5 — the accepted milestone types are NOT a literal here any
+// more. Two are reserved because the server derives behaviour from them and
+// every other one is a project's own configuration, so this route RESOLVES the
+// set per project (`store.acceptedMilestoneTypes`) from the single definition
+// in `src/store.ts`. A copy here would be a second vocabulary, which is how
+// the hint beside this refusal came to name a different set from the refusal.
 
 /** §S2 — the optional graceful context, cast verbatim (runMeta convention). */
 function eventContext(body: V2Body): { context?: RunContext } {
@@ -1222,6 +1194,28 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
 }
 
 /**
+ * CR-CRU-080 §S4 / CR-CRU-130 §S1 — a stated instant in epoch SECONDS, or
+ * nothing. The CR-CRU-073 §S1 never-coerce rule, in one place now that three
+ * fields (`releasedAt`, `targetAt`, `deliveredAt`) are held to it: a finite
+ * positive number is carried verbatim, and anything else — a string, a zero, a
+ * NaN — drops the FIELD rather than being coerced into a date nobody stated.
+ */
+function epochSeconds(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * CR-CRU-130 §S1 — the same instant, stated as a query parameter. An absent
+ * parameter and an unreadable one are the same answer — no bound — so a
+ * malformed `?targetBefore=soon` narrows nothing rather than silently
+ * answering as if the caller had asked for everything before 1970.
+ */
+function epochParam(url: URL, name: string): number | undefined {
+  const raw = url.searchParams.get(name);
+  return raw === null ? undefined : epochSeconds(Number(raw));
+}
+
+/**
  * CR-CRU-084 §S1 — a well-formed `packages` MEMBER: an object whose `registry`,
  * `name` and `version` are all non-empty strings. The same bar a `crs` member
  * has to clear (`typeof === "string" && length > 0`), applied to each of the
@@ -1247,12 +1241,16 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
 
+  // CR-CRU-130 §S4 — what THIS project may record: the words it declared, the
+  // seed it started from and the reserved pair, resolved once and used for
+  // both the membership test and the refusal that publishes the set.
+  const accepted = store.acceptedMilestoneTypes(pk.key);
   if (typeof body.type !== "string" || body.type.length === 0) {
-    return fail(400, "type is required", { help: hints.milestoneTypes });
+    return fail(400, "type is required", { help: milestoneHints.types(accepted) });
   }
-  if (!MILESTONE_TYPES.has(body.type)) {
-    return fail(400, `type must be one of: ${[...MILESTONE_TYPES].join(", ")}`, {
-      help: hints.milestoneTypes,
+  if (!accepted.includes(body.type)) {
+    return fail(400, `type must be one of: ${accepted.join(", ")}`, {
+      help: milestoneHints.types(accepted),
     });
   }
   // CR-CRU-056 §S2b — milestones are a workflow verb: a live registered
@@ -1269,10 +1267,15 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // never coerced — a finite positive number, and the non-empty strings of an
   // array. An EMPTY array is meaningful and kept: it says the reporter looked
   // and the queue held none of what the tag range merged.
-  const releasedAt =
-    typeof body.releasedAt === "number" && Number.isFinite(body.releasedAt) && body.releasedAt > 0
-      ? body.releasedAt
-      : undefined;
+  const releasedAt = epochSeconds(body.releasedAt);
+  // CR-CRU-130 §S1 — a milestone is a dated GOAL, so the route carries what it
+  // is due (`targetAt`) and when it was met (`deliveredAt`) for EVERY type it
+  // accepts, on exactly the same never-coerce terms as `releasedAt` above.
+  // Carried, not derived: an absent date stays absent all the way to the
+  // column, because "undated" and "outstanding" are the states these fields
+  // exist to express.
+  const targetAt = epochSeconds(body.targetAt);
+  const deliveredAt = epochSeconds(body.deliveredAt);
   const crs = Array.isArray(body.crs)
     ? body.crs.filter((cr: unknown): cr is string => typeof cr === "string" && cr.length > 0)
     : undefined;
@@ -1303,15 +1306,34 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // accident gets. The route carries the flag; deciding what a repair means
   // stays in the store, next to the dedup it is the exception to.
   const repairProvenance = body.repairProvenance === true;
-  const { event, changed, shrink } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+  const written = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
+    ...(targetAt !== undefined ? { targetAt } : {}),
+    ...(deliveredAt !== undefined ? { deliveredAt } : {}),
     ...(crs !== undefined ? { crs } : {}),
     ...(packages !== undefined ? { packages } : {}),
     ...(repairProvenance ? { repairProvenance } : {}),
     ...eventContext(body),
   });
+  // CR-CRU-129 §S4 — a REPLAY that would lose provenance the project already
+  // holds is REFUSED, and the refusal is the answer: nothing was written, so
+  // there is no event to echo. A client-class status, because the caller CAN
+  // act on it — re-derive the missing landings, or say `--repair-provenance`
+  // and take responsibility for the correction. The error NAMES the release
+  // and every id that would have gone, since a count alone cannot be acted
+  // on, and the `shrink` object beside it is the very one an applied repair
+  // carries: one vocabulary for one finding, two verdicts.
+  const { event, changed, shrink } = written;
+  if (written.refused === true && shrink !== undefined) {
+    return fail(
+      409,
+      `release ${String(body.label)} replay refused: it would drop ` +
+        `${shrink.removed.length} recorded CR(s) — ${shrink.removed.join(", ")}`,
+      { shrink },
+    );
+  }
   // CR-CRU-086 §S3 — a repair that SHRANK a stored `crs` carries what it
   // dropped back to the reporter, which is the only actor that can say it out
   // loud where a human will read it.
@@ -1410,14 +1432,87 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
         ? String(body.wave)
         : undefined;
   const track = typeof body.track === "string" ? body.track : undefined;
-  const plan = store.filePlan(pk.key, {
+  // CR-CRU-121 §S1 — the optional `release` that makes filing a plan a ROADMAP
+  // declaration too. ABSENT, nothing below happens and this route is what it
+  // was before this CR: no queue read beyond the wave scope, no queue write,
+  // no new response keys (D4's "a CR can be born mid-release" stays possible).
+  //
+  // PRESENT, the request IS `cr-plan`'s declaration, so it is answered by
+  // `cr-plan`'s OWN functions, in `cr-plan`'s order — the requiredness of a
+  // wave and a title, then membership, then the dependency ring — and a second
+  // wording of any of them is exactly the drift this CR exists to prevent.
+  // Each check refuses the WHOLE request, all of them before any write.
+  const release = body.release ?? undefined;
+  let entry: QueuePlanInput | undefined;
+  if (release !== undefined) {
+    if (typeof release !== "string" || release.length === 0) {
+      return fail(400, RELEASE_REQUIRED);
+    }
+    if (wave === undefined || wave.length === 0) {
+      return fail(400, "`wave` is required — the wave within the release");
+    }
+    if (title === undefined || title.length === 0) {
+      return fail(400, "`title` is required — the CR's brief");
+    }
+    const membership = declareMembership(
+      liveProposalLabels(store, pk.key),
+      { release, cr: body.cr },
+      undefined,
+      recordedReleaseClaiming(store, pk.key),
+    );
+    if ("fail" in membership) return membership.fail;
+    const cycle = refuseDependencyCycle(store.listQueue(pk.key), [body.cr]);
+    if (cycle !== null) return cycle;
+    entry = { cr: body.cr, release, wave, title };
+  }
+  // CR-CRU-116 §S1/§S2/§S3 — the WAVE scope, asked BEFORE the write so a
+  // refusal leaves nothing behind: one wave holds open work, and waves open in
+  // ascending order. `already-active` before `out-of-order`, both read off the
+  // QUEUE entry (never `body.wave`, which is the caller's snapshot), answered
+  // in this route's existing 400 shape with the code the cycle scope declares.
+  const waveScope = store.waveScopeRefusal(pk.key, body.cr);
+  if (waveScope !== undefined) {
+    return fail(400, waveScope.error, {
+      code: waveScope.code,
+      help:
+        waveScope.code === "already-active"
+          ? waveHints.alreadyActive(waveScope.waveRef, waveScope.crRef)
+          : waveHints.outOfOrder(waveScope.waveRef, waveScope.crRef),
+    });
+  }
+  const planInput = {
     cr: body.cr,
     ...(title !== undefined ? { title } : {}),
     ...(orchestrator !== undefined ? { orchestrator } : {}),
     ...(wave !== undefined ? { wave } : {}),
     ...(track !== undefined ? { track } : {}),
     cycles,
-  });
+  };
+  // CR-CRU-121 §S1 — when a release was declared, the queue row and the plan
+  // land in ONE transaction: a refusal from EITHER half (and `filePlan`'s
+  // duplicate-open-plan refusal is the reachable one) leaves NEITHER behind,
+  // so the board never holds a registration for a plan that was refused.
+  let registration: QueueSeqReport & { changed: boolean } | undefined;
+  let plan: Plan | PlanOpError;
+  if (entry === undefined) {
+    plan = store.filePlan(pk.key, planInput);
+  } else {
+    // `cr-plan`'s own catch: a wave whose seq block is full refuses in
+    // `wave-sequence`'s envelope, with nothing written.
+    let written: ReturnType<Store["filePlanRegistering"]>;
+    try {
+      written = store.filePlanRegistering(pk.key, entry, planInput);
+    } catch (error) {
+      if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+      throw error;
+    }
+    if ("error" in written) {
+      plan = written;
+    } else {
+      registration = written.report;
+      plan = written.plan;
+    }
+  }
   if ("error" in plan) return fail(400, plan.error, { help: hints.duplicateOpenPlan });
   return json(
     {
@@ -1431,6 +1526,16 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
       ...(plan.wave !== undefined ? { wave: plan.wave } : {}),
       ...(plan.track !== undefined ? { track: plan.track } : {}),
       cycles: plan.cycles,
+      // CR-CRU-121 §S1 — the union of both routes' answers, present EXACTLY
+      // when a release was declared: `converged` is `cr-plan`'s word for "this
+      // call wrote nothing new" (§S7), and `entry` is the queue row the board
+      // now holds, read back rather than echoed.
+      ...(registration !== undefined
+        ? {
+            converged: !registration.changed,
+            entry: store.listQueue(pk.key).find((row) => row.cr === plan.cr),
+          }
+        : {}),
     },
     201,
   );
@@ -1745,8 +1850,8 @@ function handlePlansList(store: Store, key: string, req: Request, url: URL): Res
  * CR-CRU-026 §S3.2 — GET /api/v2/plans: ALL non-archived projects' plans in
  * one additive global read (the home timeline's plan feed). Item shape is
  * IDENTICAL to the project-scoped list — both derive from store.listPlans()
- * (toPlan() already stamps projectKey) — and reply() gives the same
- * ?fmt=toon negotiation. GET-only: any other method falls through handleV2
+ * (toPlan() already stamps projectKey) — and both route through the same
+ * reply() JSON gate. GET-only: any other method falls through handleV2
  * to the server's generic 404 catch-all. store.listProjects() excludes
  * archived projects by default, which IS the exclusion rule here.
  */
@@ -1826,6 +1931,90 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
 }
 
 /**
+ * CR-CRU-129 §S3 — GET …/projects/<key>/milestones?type=<type>: the project's
+ * milestone RECORDS of one type, newest-first.
+ *
+ * Declared exactly as `releases`, `queue` and `release-proposals` are —
+ * `segments.length === 2` plus the collection name, existence validated the
+ * handleProjectReleases way (UUID shape, then the row), an archived project
+ * answering 200 with an empty list through the store's NOT_ARCHIVED exclusion.
+ * `milestones` is the collection these rows now live in, so that is what they
+ * are served under.
+ *
+ * CR-CRU-130 §S1 — and by DATE: `?delivered=true|false`, `?targetBefore=<epoch
+ * s>`, `?targetAfter=<epoch s>`, each combinable with `?type=`. The same read,
+ * extended, rather than a second one beside it: a parallel record read would
+ * have to be kept unwindowed and projection-free in step with this one, and
+ * would drift the first time only one of them was corrected.
+ *
+ * THE TYPE IS A PARAMETER, NOT A PATH SEGMENT AND NOT A CLOSED LIST. It is
+ * required — this route answers "the records of THIS type", and a call that
+ * names none is asking a different question (the whole timeline), which is
+ * what `GET /api/v2/events` is for — UNLESS the call names a date filter,
+ * because "what is outstanding" is a question across types by its nature and
+ * the answer has to include a project-defined one. It is never checked against
+ * the types the server happens to know: the store's `type` column is
+ * unconstrained TEXT and CR-CRU-130 makes the vocabulary project-definable, so
+ * a type this build has never heard of must answer with its records rather
+ * than a refusal, and a type nobody has recorded is an EMPTY answer rather
+ * than a 404 — "none yet" is an answer, not a missing resource (the `releases`
+ * precedent).
+ *
+ * WHOLE, NOT WINDOWED. There is no `limit` here and there must not be one.
+ * This route exists because `cr_merged_crs` had to scan the newest N events
+ * and filter client-side, and a bound is what made that read lose records
+ * silently as telemetry grew; a bounded answer here would reintroduce the
+ * defect one layer down.
+ *
+ * The rows are served as `getEvent` serves them — no per-type brief. A brief
+ * would have to enumerate the payload fields of every type that exists
+ * (`crs`, `releasedAt`, `targetAt`, …) and would therefore be lossy for the
+ * first type it did not anticipate, which is precisely the type this route
+ * promises to serve.
+ */
+function handleProjectMilestones(store: Store, key: string, req: Request, url: URL): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  const type = url.searchParams.get("type");
+  // CR-CRU-130 §S1 — the two dates are FILTERS on this same read. `delivered`
+  // is a literal `true`/`false` and nothing else (the never-coerce rule a
+  // truthy string would otherwise turn into "everything is delivered"); the
+  // two bounds are epoch SECONDS, the unit the dates themselves use.
+  const delivered = url.searchParams.get("delivered");
+  const targetBefore = epochParam(url, "targetBefore");
+  const targetAfter = epochParam(url, "targetAfter");
+  const dates: MilestoneDateFilter = {
+    ...(delivered === "true" ? { delivered: true } : {}),
+    ...(delivered === "false" ? { delivered: false } : {}),
+    ...(targetBefore !== undefined ? { targetBefore } : {}),
+    ...(targetAfter !== undefined ? { targetAfter } : {}),
+  };
+  const dated = Object.keys(dates).length > 0;
+  if ((type === null || type.length === 0) && !dated) {
+    // `type` stops being required exactly when a DATE filter is present: "what
+    // is outstanding" is a question ACROSS types, and the answer has to include
+    // a type this build has never heard of. A request naming NO parameter at
+    // all is still the whole-timeline question, which `GET /api/v2/events`
+    // answers — so the refusal CR-CRU-129 §S3 wrote stands, unchanged.
+    return fail(
+      400,
+      "`type` is required — the milestone type to read, e.g. `cr-merged` — unless the request " +
+        "names a date filter (`delivered`, `targetBefore`, `targetAfter`)",
+    );
+  }
+  const milestones = store.listMilestonesByType(
+    key,
+    type === null || type.length === 0 ? null : type,
+    dates,
+  );
+  return reply(req, url, { ok: true, milestones, totalCount: milestones.length });
+}
+
+/**
  * CR-CRU-014 §S1 — GET …/projects/<key>/queue. Existence is validated the
  * handleProjectReleases way (UUID shape, then the row); an archived project
  * still answers 200 but the store's NOT_ARCHIVED exclusion yields an empty
@@ -1877,18 +2066,35 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
  * accepted here (`src/hints.ts`'s cycle help names re-posting the queue as
  * the remedy, so this door is the documented escape hatch) and refused by
  * `cr-plan`/`wave-sequence`, pending a user ruling.
+ *
+ * CR-CRU-118 §S3 — and the door is DEPRECATED. It is transitional and will be
+ * REMOVED, so it says so itself: every answer it gives carries the
+ * `deprecated-route` `QueueWarning` (`DEPRECATED_ROUTE_NOTICE`) — on the
+ * SUCCESS path beside `defaulted-seq`/`inherited-release-less`, on its own
+ * refusals through the local `refuse` helper, and on the refusals shared
+ * helpers built, through `deprecateRefusal`. The notice names the three verbs
+ * that replace it: `cr-plan` (membership), `cr-depends` (dependencies) and
+ * `wave-sequence` (order). DEPRECATED IS NOT REMOVED — this route still
+ * writes and today's whole table still bootstraps through it — but nothing
+ * new should be built on it.
  */
 async function handleQueuePost(store: Store, key: string, req: Request): Promise<Response> {
+  // CR-CRU-118 §S3 — EVERY answer this door gives says that the door is
+  // deprecated, so its own refusals are built through one local helper rather
+  // than ten hand-spread `warnings` fields. `fail`'s signature exactly, so the
+  // wordings and help[] below are untouched by the notice riding beside them.
+  const refuse = (status: number, error: string, extra?: Record<string, unknown>): Response =>
+    fail(status, error, { ...extra, warnings: DEPRECATED_ROUTE_NOTICE });
   if (!UUID_RE.test(key)) {
-    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+    return refuse(400, "projectKey must be a UUID", { help: hints.unknownProject });
   }
   if (store.getProject(key) === null) {
-    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+    return refuse(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
   const body = (await readBody(req)) ?? {};
   const rawEntries = body.entries;
   if (!Array.isArray(rawEntries)) {
-    return fail(400, "queue body must carry an `entries` array");
+    return refuse(400, "queue body must carry an `entries` array");
   }
   // §S3/AC9 — "declares" means exactly what the forwarding spreads below
   // treat as declared: a value that is neither absent nor null. A post whose
@@ -1907,7 +2113,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   });
   if (declaresMembership) {
     const caller = requireOrchestrator(store, key, body);
-    if ("fail" in caller) return caller.fail;
+    if ("fail" in caller) return deprecateRefusal(caller.fail);
   }
   // CR-CRU-104 §S1 — the live proposals every DECLARED release below is
   // measured against, read ONCE: a hundred-row migration must not re-scan the
@@ -1916,23 +2122,31 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   const proposed = declaresMembership
     ? liveProposalLabels(store, key)
     : new Set<string>();
+  // …and SETTLED HISTORY, read once on the same terms: the derivation is one
+  // scan of the milestone table, never one per entry. BOTH rungs this route
+  // owns ask it — the membership gate below (CR-CRU-118 §S3a: a declared label
+  // naming the RECORDED release that shipped this cr) and the insert rung
+  // further down (§S2: a release-less row settled history already accounts
+  // for) — so it is resolved here, above them both, and there is exactly one
+  // of it.
+  const claimingRelease = recordedReleaseClaiming(store, key);
   const entries: QueueEntryInput[] = [];
   for (let index = 0; index < rawEntries.length; index++) {
     const raw: unknown = rawEntries[index];
     if (raw === null || typeof raw !== "object") {
-      return fail(400, `entry at index ${index} is not an object`);
+      return refuse(400, `entry at index ${index} is not an object`);
     }
     // Narrowed to a plain object at the JSON boundary; each field is validated
     // individually below before use.
     const fields = raw as Record<string, unknown>;
     if (typeof fields.cr !== "string" || fields.cr.length === 0) {
-      return fail(400, `entry at index ${index} is missing required field \`cr\``);
+      return refuse(400, `entry at index ${index} is missing required field \`cr\``);
     }
     if (fields.wave === undefined || fields.wave === null) {
-      return fail(400, `entry at index ${index} is missing required field \`wave\``);
+      return refuse(400, `entry at index ${index} is missing required field \`wave\``);
     }
     if (fields.dependsOn !== undefined && !Array.isArray(fields.dependsOn)) {
-      return fail(400, `entry at index ${index} has a non-array \`dependsOn\``);
+      return refuse(400, `entry at index ${index} has a non-array \`dependsOn\``);
     }
     const dependsOn = Array.isArray(fields.dependsOn)
       ? fields.dependsOn.map((dep) => String(dep))
@@ -1943,7 +2157,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     // non-integer is refused by name and index rather than rounded into a
     // position nobody chose.
     if (fields.seq !== undefined && fields.seq !== null && !Number.isInteger(fields.seq)) {
-      return fail(400, `entry at index ${index} has a non-integer \`seq\``);
+      return refuse(400, `entry at index ${index} has a non-integer \`seq\``);
     }
     // CR-CRU-104 §S1 — the membership this entry DECLARES, AS RECEIVED, put
     // through the ONE membership decision `cr-plan` and `wave-sequence` also
@@ -1963,10 +2177,11 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     // what may be stored — the declared label, and the NORMALISED lane.
     const membership = declareMembership(
       proposed,
-      { release: fields.release, track: fields.track },
+      { release: fields.release, track: fields.track, cr: fields.cr },
       index,
+      claimingRelease,
     );
-    if ("fail" in membership) return membership.fail;
+    if ("fail" in membership) return deprecateRefusal(membership.fail);
     const release = membership.release;
     const track = membership.track;
     // §S1 — `lifecycle` is the one declared field that is a STRUCTURE, so its
@@ -1989,7 +2204,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     let lifecycle: QueueLifecycle | undefined;
     if (fields.lifecycle !== undefined && fields.lifecycle !== null) {
       if ((state !== "SUPERSEDED" && state !== "VOID") || typeof at !== "number") {
-        return fail(
+        return refuse(
           400,
           `entry at index ${index} has a \`lifecycle\` that is not one: a lifecycle carries ` +
             `{state: "SUPERSEDED" | "VOID", by?, reason?, at: epoch ms}`,
@@ -2030,6 +2245,63 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       ...(lifecycle !== undefined ? { lifecycle } : {}),
     });
   }
+  // CR-CRU-118 §S2 — the membership split, and it runs on the WHOLE batch
+  // before a single row is written: this route is a full replace, so a
+  // refusal raised half way through a write would leave a board nobody
+  // authored. What the write would INVENT is refused; what it INHERITS is
+  // warned about.
+  //
+  // The board AS HELD, read once — the same snapshot `replaceQueue`'s
+  // carry-forward reads, so "the release this write will store" is decided
+  // here exactly as it is decided there (`entry.release ?? snapshot.release`).
+  // Nothing below re-implements the carry-forward; it only ASKS what the
+  // carry-forward will leave.
+  const held = new Map(store.listQueue(key).map((entry) => [entry.cr, entry]));
+  // Settled history is `claimingRelease`, resolved once above the entry loop
+  // because the membership gate reads the very same derivation (§S3a).
+  const inheritedReleaseLess: string[] = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
+    if (entry.release !== undefined) continue;
+    const snapshot = held.get(entry.cr);
+    if (snapshot === undefined) {
+      // INVENTED: a cr the board has never seen, arriving with no membership
+      // — the CR-CRU-117 incident, and the only thing this route refuses that
+      // it used to accept. Refused by field, cr AND index (this route's own
+      // shape), carrying the ONE requiredness sentence rather than a third
+      // wording of it, and the help[] §S5 requires.
+      //
+      // UNLESS a recorded release's own `crs` set already NAMES it (user
+      // ruling, 2026-09-10): then the write is not inventing membership, it is
+      // carrying a row settled history already accounts for. On an EMPTY board
+      // every entry is an insert, so without this rung a wiped-board restore —
+      // which has actually happened here, 2026-08-29 — was refused at its
+      // first landed row, one row per attempt. The question asked is a
+      // property of the ROW and never of the board's size, so clearing the
+      // board buys nothing: a shipped release cannot claim a CR that did not
+      // exist when it shipped.
+      if (claimingRelease(entry.cr) === undefined) {
+        return refuse(
+          400,
+          `entry at index ${index} (${entry.cr}): ${RELEASE_REQUIRED}`,
+          { help: roadmapHints.missingRelease },
+        );
+      }
+      // Admitted — and named, because it IS a release-less row this write
+      // carried, which is exactly what the warning below reports.
+      inheritedReleaseLess.push(entry.cr);
+      continue;
+    }
+    // INHERITED. A row the carry-forward will hand its held release back to
+    // is not release-less at all, and LANDED work is history whose provenance
+    // lives on a release record's own `crs` set (§S3a) — neither belongs on a
+    // migration list. Everything else does, INCLUDING a disposed row: a VOID
+    // cr carries no release either, which is why this set is larger than
+    // §S1's live census and must not be reconciled with it.
+    if (snapshot.release !== undefined) continue;
+    if (snapshot.status === "COMPLETED" || snapshot.status === "COMPLETED_UNTRACKED") continue;
+    inheritedReleaseLess.push(entry.cr);
+  }
   // CR-CRU-095 §S3/AC12c, AC12i — a post whose defaults would leave a wave's
   // block is refused in `wave-sequence`'s own envelope (message AND help[]);
   // the store wrote nothing.
@@ -2037,10 +2309,9 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   try {
     report = store.replaceQueue(key, entries);
   } catch (error) {
-    if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+    if (error instanceof QueueWaveOverflowError) return deprecateRefusal(waveOverflow(error));
     throw error;
   }
-  const { defaultedSeq } = report;
   const known = new Set(entries.map((entry) => entry.cr));
   const unknownDependencies = [
     ...new Set(
@@ -2053,8 +2324,17 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     unknownDependencies,
     // CR-CRU-091 §S2/AC23 — warn-and-write: the post landed, and the crs whose
     // position this write invented are named rather than left to read as
-    // authored ones.
-    warnings: defaultedSeqWarnings(defaultedSeq),
+    // authored ones. CR-CRU-118 §S2 adds the membership half of the same rung,
+    // ADDITIVELY: a post can invent a position and inherit a release-less row
+    // in the same call, so both findings arrive.
+    // CR-CRU-118 §S3 — the route-level notice leads, because it is a finding
+    // about the DOOR rather than about any row this call carried, and the
+    // per-row findings follow it unchanged.
+    warnings: [
+      ...DEPRECATED_ROUTE_NOTICE,
+      ...seqScaleWarnings(report),
+      ...inheritedReleaseLessWarnings(inheritedReleaseLess),
+    ],
   });
 }
 
@@ -2068,25 +2348,153 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
  * the same facts machine-readably.
  */
 interface QueueWarning {
-  code: "out-of-order" | "cross-wave-backwards" | "defaulted-seq" | "unsequenced-members";
+  code:
+    | "out-of-order"
+    | "cross-wave-backwards"
+    | "defaulted-seq"
+    | "unsequenced-members"
+    | "inherited-release-less"
+    | "deprecated-route";
   message: string;
   crs?: string[];
   containers?: string[];
+  /** CR-CRU-118 §S3 — the machine half of the deprecation notice: the per-CR
+   *  verbs that replace the door that raised it, beside `crs`/`containers` and
+   *  for the same reason. A client that had to regex an English sentence for
+   *  them would be deciding something (§S9). */
+  verbs?: string[];
+  /** CR-CRU-119 §S1 — the machine half of the seq finding's CAUSE, on
+   *  `defaulted-seq` alone: `invented` is a position this write chose (a new
+   *  entry, or one whose wave moved), `preserved` is one the entry already held
+   *  whose scale collides with a sibling's. The two read identically on `crs`,
+   *  so without this field a client would have to regex the prose to tell a
+   *  defaulting from a collision — deciding something (§S9). */
+  seqCause?: "invented" | "preserved";
 }
 
-/** §S2/AC23 — the warn-and-write rung, shared by the queue post and cr-plan. */
-function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
+/**
+ * §S2/AC23 — the warn-and-write rung, shared by the queue post and cr-plan.
+ *
+ * CR-CRU-119 §S1 — ONE trigger, TWO causes, and the single sentence this used
+ * to build was FALSE for one of them. A cr whose position the write INVENTED
+ * (a new entry, or one whose wave moved) keeps that sentence to the byte,
+ * because for that cause it was always correct. A cr that KEPT the position it
+ * already held gets one that says what actually happened: nothing was
+ * defaulted, and the held value's scale collides with a sibling's. `seqCause`
+ * carries the same split machine-readably (§S9 — the fleet renders findings
+ * and decides nothing, so telling the causes apart may not require parsing
+ * prose), and the `code` stays ONE: the cause is a property OF this finding,
+ * not a second finding, and the published vocabulary five clients render does
+ * not grow a member for it.
+ *
+ * The trigger set is untouched (§S2): every cr the store names still earns a
+ * finding, in the same call, naming the same crs.
+ */
+function seqScaleWarnings({ defaultedSeq, preservedSeq }: QueueSeqReport): QueueWarning[] {
+  const held = new Set(preservedSeq);
+  const invented = defaultedSeq.filter((cr) => !held.has(cr));
+  const preserved = defaultedSeq.filter((cr) => held.has(cr));
+  const warnings: QueueWarning[] = [];
+  if (invented.length > 0) {
+    warnings.push({
+      code: "defaulted-seq",
+      message:
+        `seq was defaulted for ${invented.join(", ")} while a sibling in the same wave or release carries ` +
+        `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
+        `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
+      crs: invented,
+      seqCause: "invented",
+    });
+  }
+  if (preserved.length > 0) {
+    warnings.push({
+      code: "defaulted-seq",
+      message:
+        `${preserved.join(", ")} kept the seq it already holds, and that position sits on a ` +
+        `DIFFERENT SCALE from a sibling in the same wave or release — this write chose nothing, ` +
+        `and the two scales interleave in an order nobody authored; run ` +
+        `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
+      crs: preserved,
+      seqCause: "preserved",
+    });
+  }
+  return warnings;
+}
+
+/**
+ * CR-CRU-118 §S2 — the warn half of the bulk route's split: the crs the write
+ * INHERITED release-less. Shaped like `defaultedSeq` because it is the same
+ * rung — the post LANDED, and the rows it could not give a membership are
+ * named rather than left to read as authored ones. `crs` is the migration
+ * list, and it shrinks to zero as those crs are planned into a release; the
+ * `message` is the ready-to-print line, so no client parses prose (§S9).
+ */
+function inheritedReleaseLessWarnings(crs: string[]): QueueWarning[] {
   if (crs.length === 0) return [];
   return [
     {
-      code: "defaulted-seq",
+      code: "inherited-release-less",
       message:
-        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave or release carries ` +
-        `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
-        `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
+        `${crs.join(", ")} were kept as they stand and still name no release — this post inherited ` +
+        `them release-less and invented nothing, but every live CR names the release it targets; ` +
+        `run cr-plan --cr <cr> --release <v> --wave <n> --title <brief> for each to empty this list`,
       crs,
     },
   ];
+}
+
+/**
+ * CR-CRU-118 §S3 — the per-CR verbs that replace the bulk door, in the CR's
+ * own order. `queue-file` is a TRANSITIONAL door being retired (DN D4's
+ * fallout §1): it posts the whole README table, drops the release qualifier
+ * that table prints, and is the route both measured membership incidents
+ * arrived through. Rather than teach it to parse membership — which would make
+ * a corpse comfortable instead of forcing its replacement to exist — the route
+ * SAYS what it is.
+ */
+const QUEUE_ROUTE_REPLACEMENT_VERBS = ["cr-plan", "cr-depends", "wave-sequence"];
+
+/**
+ * §S3 — the notice itself, raised on EVERY answer the bulk door gives.
+ *
+ * CONSTANT, so it is built once and shared: it carries no per-call fact, and
+ * a fresh object per request would allocate for nothing.
+ *
+ * ADDITIVE and never a replacement — it rides BESIDE `defaulted-seq` and
+ * `inherited-release-less` on the same call, because a notice that displaced
+ * another finding would HIDE it, which is strictly worse than no notice. On a
+ * SUCCEEDING call as well as a refused one: a warning only the failure path
+ * emits is invisible exactly when the route is being used as intended. And
+ * DEPRECATED IS NOT REMOVED — the route still writes, and today's whole table
+ * still bootstraps.
+ *
+ * `message` is the ready-to-print line the five clients render; `verbs` is the
+ * same fact machine-readably, so no client parses prose to find it (§S9).
+ */
+const DEPRECATED_ROUTE_NOTICE: readonly QueueWarning[] = [
+  {
+    code: "deprecated-route",
+    message:
+      `the bulk queue post is DEPRECATED and will be removed: declare membership per CR with ` +
+      `${QUEUE_ROUTE_REPLACEMENT_VERBS[0]}, dependencies with ${QUEUE_ROUTE_REPLACEMENT_VERBS[1]}, ` +
+      `and order with ${QUEUE_ROUTE_REPLACEMENT_VERBS[2]}`,
+    verbs: QUEUE_ROUTE_REPLACEMENT_VERBS,
+  },
+];
+
+/**
+ * §S3 — the notice riding a refusal a SHARED helper built: the membership
+ * gate's 400/404, the wave-overflow envelope, the caller-auth seam's 409. By
+ * the time this route sees those they are already Responses, and inventing a
+ * second wording of each refusal here is exactly what CR-CRU-104 §S1 forbids —
+ * so the finding is merged into the answer instead, ahead of whatever that
+ * answer already raised. Refusals only: the success path builds its own
+ * `warnings` array and pays no round trip.
+ */
+async function deprecateRefusal(res: Response): Promise<Response> {
+  const body = (await res.json()) as Record<string, unknown>;
+  const raised = Array.isArray(body.warnings) ? (body.warnings as QueueWarning[]) : [];
+  return json({ ...body, warnings: [...DEPRECATED_ROUTE_NOTICE, ...raised] }, res.status);
 }
 
 /** §S5 — a cr's container, as the warnings name it: `release/wave`. */
@@ -2222,6 +2630,11 @@ function unknownDependencies(entries: QueueEntry[], touched: Set<string>): strin
 interface MembershipDeclaration {
   release?: unknown;
   track?: unknown;
+  /** CR-CRU-118 §S3a — the cr whose SETTLED HISTORY may admit a label holding
+   *  no live proposal. A declaration that names no cr (`wave-sequence` carries
+   *  a whole ordered list, not one row) reaches only the live-proposal door,
+   *  which is exactly today's rule. */
+  cr?: string;
 }
 
 /**
@@ -2250,6 +2663,41 @@ function liveProposalLabels(store: Store, key: string): ReadonlySet<string> {
 }
 
 /**
+ * CR-CRU-118 §S2 — THE derivation, and the ONE place it is written: does
+ * settled history already claim this cr? It answers with the RECORDED release
+ * whose own `crs` set names it, or `undefined` when none does.
+ *
+ * A derivation from settled fact, and self-checking: it cannot admit a
+ * genuinely new CR, because a shipped release cannot claim one, and it cannot
+ * add scope to a closed release, because the release must already name the cr
+ * itself. It is emphatically NOT a test of whether the board is empty — that
+ * would be a licence ("clear the board, then post anything"); what makes a row
+ * admissible is a property of the ROW.
+ *
+ * Two doors read it. The bulk post's insert rung (§S2) asks it for the 62
+ * landed 0.1.x rows a wiped-board restore carries, which name no release
+ * because none was tracked when they shipped; `cr-plan --release 0.1.0` (§S3a)
+ * asks it for the same rows when their history is given back to them. Two
+ * independent copies of this rule would drift, and the drift would be silent.
+ *
+ * Resolved ONCE per request and returned as a lookup, the `liveProposalLabels`
+ * precedent: `listReleases` re-queries and re-JSON-parses the whole milestone
+ * table, and the bulk route asks per entry — a 115-row restore must not scan
+ * settled history 115 times. A release recorded without a label still CLAIMS,
+ * so it answers in the wording `handleCrLifecycle` already uses for one.
+ */
+function recordedReleaseClaiming(store: Store, key: string): (cr: string) => string | undefined {
+  const claiming = new Map<string, string>();
+  for (const release of store.listReleases(key)) {
+    const label = release.label ?? "an unlabelled release";
+    for (const cr of release.crs ?? []) {
+      if (!claiming.has(cr)) claiming.set(cr, label);
+    }
+  }
+  return (cr) => claiming.get(cr);
+}
+
+/**
  * CR-CRU-104 §S1 — the ONE membership-declaration decision, and the only
  * place the rules of declaring release membership are written: the
  * live-proposal requirement (CR-CRU-091 §S1/§S3 — the super container exists
@@ -2258,7 +2706,7 @@ function liveProposalLabels(store: Store, key: string): ReadonlySet<string> {
  * (CR-CRU-091 §S2/AC17, CR-CRU-099 §S1/AC4a). The slot/scale rules that
  * decide `seq` and whether a `defaulted-seq` warning is earned are the other
  * half, and are already one rule reached from both writers — `nextFreeSlot` /
- * `inWaveBlock` in the store, rendered by `defaultedSeqWarnings` here.
+ * `inWaveBlock` in the store, rendered by `seqScaleWarnings` here.
  *
  * Reached from EVERY route that declares membership: the bulk `POST …/queue`
  * (the MIGRATION door, per entry), `cr-plan` and `wave-sequence`. Until this
@@ -2277,6 +2725,7 @@ function declareMembership(
   proposed: ReadonlySet<string>,
   declared: MembershipDeclaration,
   at?: number,
+  claimingRelease?: (cr: string) => string | undefined,
 ): { release: string | undefined; track: string | undefined } | { fail: Response } {
   // CR-CRU-104 §S1 — the SHAPE of a declaration, refused before its meaning
   // is judged: you cannot ask whether a label holds a live proposal, or which
@@ -2328,12 +2777,32 @@ function declareMembership(
     track = normalized;
   }
   if (release !== undefined && !proposed.has(release)) {
-    const sentence = `release ${release} has no live proposal — it is not a plannable target`;
-    return {
-      fail: fail(404, at === undefined ? sentence : `entry at index ${at}: ${sentence}`, {
-        help: roadmapHints.unproposedRelease(release),
-      }),
-    };
+    // CR-CRU-118 §S3a — the SECOND door, and the only one this CR opens: a
+    // label naming a RECORDED release is accepted where that release's own
+    // `crs` set already names the cr. A derivation from settled fact, so it
+    // cannot add scope to a closed release (the release must already claim the
+    // cr) and cannot admit a genuinely new one (a shipped release claims none).
+    //
+    // ORDER IS THE RULE. A LIVE proposal wins above and asks for no `crs`
+    // membership at all — an in-flight release has shipped nothing yet — and a
+    // recorded release admits only what IT claims, so being historical buys a
+    // cr no label but its own. Anything else keeps CR-CRU-091 §S8's refusal
+    // VERBATIM, message and help alike: this CR adds a door and widens none.
+    //
+    // ONE derivation, read through `recordedReleaseClaiming` — the same lookup
+    // §S2's bulk-insert rung asks. A second copy of this rule would drift, and
+    // the drift would be silent: a restore admitting a row the backfill
+    // refused, or the reverse.
+    const claimedBy =
+      declared.cr === undefined ? undefined : claimingRelease?.(declared.cr);
+    if (claimedBy !== release) {
+      const sentence = `release ${release} has no live proposal — it is not a plannable target`;
+      return {
+        fail: fail(404, at === undefined ? sentence : `entry at index ${at}: ${sentence}`, {
+          help: roadmapHints.unproposedRelease(release),
+        }),
+      };
+    }
   }
   return { release, track };
 }
@@ -2395,16 +2864,38 @@ async function handleReleasePropose(store: Store, key: string, req: Request): Pr
   // §S1 — `targetAt` is epoch SECONDS, the unit `releasedAt` uses. Refused
   // rather than dropped when malformed: a declared target that silently
   // vanished would read back as "no target was ever declared".
-  let targetAt: number | undefined;
-  if (body.targetAt !== undefined && body.targetAt !== null) {
-    if (typeof body.targetAt !== "number" || !Number.isFinite(body.targetAt) || body.targetAt <= 0) {
-      return fail(400, "`targetAt` must be a positive number of epoch SECONDS");
-    }
-    targetAt = body.targetAt;
+  //
+  // CR-CRU-118 §S4 — and ABSENCE is refused too, HERE, at the door: the rule
+  // lives server-side rather than only in the five clients' argparse, because
+  // a rule that lives only in a flag is one any other caller walks past.
+  //
+  // THE ORDER MATTERS, AND THIS IS THE ORDER. Absence is decided before
+  // `recordReleaseProposal` is reached — therefore before its convergence
+  // check `live.targetAt === meta.targetAt` is ever consulted. A re-proposal
+  // that DROPS the target would otherwise compare a held number against
+  // `undefined`, MISS convergence, fall through to the revision branch, and
+  // retire the live row in favour of one carrying no target at all: a
+  // declared date destroyed by a call that mentioned no date. Refused at the
+  // door, the held target survives untouched, and downstream the comparison
+  // only ever weighs two numbers.
+  //
+  // The two findings keep SEPARATE sentences: a caller who typed nothing and
+  // a caller who typed "yesterday" need different next moves, so absence is
+  // not collapsed into the shape complaint below.
+  if (body.targetAt === undefined || body.targetAt === null) {
+    return fail(
+      400,
+      "`targetAt` is required — the date this release is aiming at, in epoch SECONDS",
+      { help: roadmapHints.missingTarget },
+    );
   }
+  if (typeof body.targetAt !== "number" || !Number.isFinite(body.targetAt) || body.targetAt <= 0) {
+    return fail(400, "`targetAt` must be a positive number of epoch SECONDS");
+  }
+  const targetAt: number = body.targetAt;
   const { event, changed } = store.recordReleaseProposal(pk.key, caller.agentId, {
     label: body.label,
-    ...(targetAt !== undefined ? { targetAt } : {}),
+    targetAt,
     ...eventContext(body),
   });
   return json({
@@ -2434,6 +2925,18 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // The REQUIREDNESS is this verb's own — its whole declaration is a release
   // — and the sentence is the one the gate answers for a declared value that
   // carries no label, so the two doors cannot fork it.
+  //
+  // CR-CRU-118 §S1/§S5 — ABSENCE carries the move that fixes it. The two
+  // branches answer ONE sentence and differ only in `help[]`, deliberately: a
+  // field that was never sent is answered with the route that lists the live
+  // proposals (the sibling refusal one field lower names the same route), while
+  // a value that WAS declared and carries no label is a SHAPE complaint whose
+  // remedy is the caller's own input — and whose help-less envelope is pinned
+  // as parity with the bulk door's identical refusal
+  // (tests/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
+  if (body.release === undefined || body.release === null) {
+    return fail(400, RELEASE_REQUIRED, { help: roadmapHints.missingRelease });
+  }
   if (typeof body.release !== "string" || body.release.length === 0) {
     return fail(400, RELEASE_REQUIRED);
   }
@@ -2446,9 +2949,18 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // CR-CRU-104 §S1 — the ONE membership rule, the same decision the migration
   // door passes through. `cr-plan` declares no track, so `release` is its
   // whole declaration.
-  const membership = declareMembership(liveProposalLabels(store, pk.key), {
-    release: body.release,
-  });
+  //
+  // CR-CRU-118 §S3a — and the cr it declares for, because a label holding no
+  // live proposal is still admissible where the RECORDED release that shipped
+  // that cr already names it. The derivation is handed in rather than re-asked
+  // inside the gate, the `liveProposalLabels` precedent: one scan of settled
+  // history per request, and the same one §S2's insert rung reads.
+  const membership = declareMembership(
+    liveProposalLabels(store, pk.key),
+    { release: body.release, cr: body.cr },
+    undefined,
+    recordedReleaseClaiming(store, pk.key),
+  );
   if ("fail" in membership) return membership.fail;
   // §S5 — the cycle refusal runs BEFORE the write. THIS verb edits no
   // `dependsOn`, so the stored graph already is the graph the write leaves
@@ -2471,7 +2983,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
     if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
     throw error;
   }
-  const { changed, defaultedSeq } = report;
+  const { changed } = report;
   const entries = store.listQueue(pk.key);
   const touched = new Set([body.cr]);
   return json({
@@ -2480,7 +2992,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
     entry: entries.find((entry) => entry.cr === body.cr),
     // §S7 — a converged call emits no warning it did not earn.
     warnings: changed
-      ? [...dependencyWarnings(entries, touched), ...defaultedSeqWarnings(defaultedSeq)]
+      ? [...dependencyWarnings(entries, touched), ...seqScaleWarnings(report)]
       : [],
     unknownDependencies: unknownDependencies(entries, touched),
   });
@@ -2808,6 +3320,10 @@ const PATCHABLE_FIELDS = new Set([
   "liveness",
   "retention",
   "allowRunDeletion",
+  // CR-CRU-130 §S4 — the project's own milestone vocabulary. A declared type
+  // is CONFIGURATION, so it is declared where every other project parameter
+  // is, and this set is what tells a refused caller the surface exists.
+  "milestoneTypes",
 ]);
 
 // CR-CRU-012 §S1 — wire liveness fields (spec's T1/T2/T3 thresholds, ms) →
@@ -2823,7 +3339,9 @@ const LIVENESS_WIRE_KEYS = {
  * (backend|frontend), sutRoot (camelCase, matching POST's wire contract),
  * liveness {t1_ms,t2_ms,t3_ms} (translated to the store's partial override
  * and MERGED with any existing one — updateProject owns the merge), and
- * retention (takes effect on the NEXT ingest, never retroactively).
+ * retention (takes effect on the NEXT ingest, never retroactively; CR-CRU-131
+ * §S2 — a number sets the project's own cap, `0` included, and `null` clears
+ * it back to the fleet default).
  * projectKey is immutable → 400; unknown fields → 400 naming the field, and
  * EVERYTHING validates before anything writes (no partial apply). An empty
  * body is the codebase's standard 200 {ok:true, changed:false} no-op.
@@ -2884,15 +3402,32 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       patch.liveness = liveness;
     }
   }
-  if (raw.retention !== undefined) {
-    if (
-      typeof raw.retention !== "number" ||
-      !Number.isInteger(raw.retention) ||
-      raw.retention < 1
-    ) {
-      return fail(400, "retention must be a positive integer");
+  if ("retention" in raw) {
+    // CR-CRU-131 §S2 — the cap's only door, and it now expresses everything the
+    // model allows. `null` CLEARS the override (the project falls back on the
+    // fleet default resolved from the server's own crucible.toml); `0` is a
+    // DECLARED cap of zero, which the store has always enforced
+    // (`enforceRetention` resolves with `??`, never `||`). Membership — not
+    // `!== undefined` and never truthiness — is what asks the question, because
+    // `0`, `null` and ABSENT are three different intents and all three are
+    // falsy: a patch that does not name retention must leave a stored zero at
+    // zero. What stays refused is what is not a cap, and each refusal names the
+    // forms that exist so an operator who sent one learns the others.
+    const value = raw.retention;
+    const accepted =
+      "retention must be a non-negative integer (0 caps at zero) or null to clear " +
+      "the override and inherit the fleet default";
+    if (value === null) {
+      patch.retention = null;
+    } else if (typeof value !== "number") {
+      return fail(400, `${accepted} — received a ${typeof value}`);
+    } else if (!Number.isInteger(value)) {
+      return fail(400, `${accepted} — ${value} is not a whole number of events`);
+    } else if (value < 0) {
+      return fail(400, `${accepted} — ${value} is negative`);
+    } else {
+      patch.retention = value;
     }
-    patch.retention = raw.retention;
   }
   if (raw.allowRunDeletion !== undefined) {
     // CR-CRU-008 §S4 — the guarded-deletion config gate is a plain boolean.
@@ -2900,6 +3435,30 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       return fail(400, "allowRunDeletion must be a boolean");
     }
     patch.allowRunDeletion = raw.allowRunDeletion;
+  }
+  if (raw.milestoneTypes !== undefined) {
+    // CR-CRU-130 §S4 — a DECLARATION of this project's own milestone
+    // vocabulary, replacing whatever it declared before. Judged WHOLE, like
+    // every other field on this route: a reserved name anywhere in the list
+    // refuses the list it arrived in, so a legitimate type beside it is never
+    // left declared by a request the caller was told was refused.
+    if (
+      !Array.isArray(raw.milestoneTypes) ||
+      !raw.milestoneTypes.every((type) => typeof type === "string" && type.length > 0)
+    ) {
+      return fail(400, "milestoneTypes must be an array of non-empty strings");
+    }
+    const declared = raw.milestoneTypes as string[];
+    const conflict = reservedMilestoneTypeConflict(declared);
+    if (conflict !== null) {
+      return fail(
+        400,
+        `milestoneTypes: "${conflict.type}" is a RESERVED milestone type and cannot be ` +
+          `declared, shadowed or removed — the server derives ${conflict.derives} from it`,
+        { help: milestoneHints.reservedType(conflict.type, conflict.derives) },
+      );
+    }
+    patch.milestoneTypes = [...new Set(declared)];
   }
 
   if (Object.keys(patch).length === 0) {
@@ -3239,6 +3798,12 @@ export function handleV2(
     // CR-CRU-074 §S3 — the project's recorded releases, newest-first.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "releases") {
       return handleProjectReleases(store, segments[0]!, req, url);
+    }
+    // CR-CRU-129 §S3 — the project's milestone RECORDS of one type. Beside
+    // `releases` because it is the same read generalised: `releases` answers
+    // the `release` type, this one answers whichever type the caller names.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "milestones") {
+      return handleProjectMilestones(store, segments[0]!, req, url);
     }
     // CR-CRU-014 §S1 — the project's CR execution queue (roadmap).
     if (segments.length === 2 && segments[1] === "queue") {

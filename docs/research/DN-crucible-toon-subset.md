@@ -8,10 +8,18 @@
 
 Crucible speaks TOON per the OFFICIAL spec — toonformat.dev / the toon-format
 GitHub org (github.com/toon-format). The spec, not this document, is the wire
-contract. Two pinned implementations:
+contract. Where it is spoken is the CLIENT side: the fleet's stdout AXI
+envelopes (CR-CRU-030). Two pinned implementations:
 
 - **Server (TypeScript):** `@toon-format/toon` `^4.1.0` (the first-party
-  reference implementation), pinned in `package.json`.
+  reference implementation), pinned in `package.json` — **but in
+  `devDependencies`, and the server does not speak TOON on the wire.**
+  CR-CRU-132 deleted the server's `?fmt=toon` / `Accept` rendering on
+  2026-09-14 (spec creep: nothing ever negotiated it), so every v2 HTTP
+  response is JSON and the server's runtime dependency set is empty. The pin
+  is still real, but its only role now is to be the reference DECODER for the
+  client-emit oracle below — which is precisely what keeps the client bullet
+  honest.
 - **Clients (Python):** `clients/toon.py` — our spec-conformant port, validated
   against the official library by the CR-CRU-046 §S4 round-trip oracle
   (`tests/toon-conformance.test.ts` + `tests/client/test_cr046_official_toon_roundtrip.py`).

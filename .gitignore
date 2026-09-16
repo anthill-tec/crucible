@@ -1,4 +1,13 @@
 data/
+# CR-CRU-131 §S1c — an operator's CONFIGURATION is not a tracked artifact.
+# `<project dir>/crucible.toml` is what the clients resolve, and in this
+# checkout the project dir IS the repo root, so this file is THIS PROJECT'S
+# operator state exactly as `data/crucible.toml` is the board's. Tracking it
+# would turn an operator's edit into a git diff on every install, which is the
+# whole reason the installer split exists. The SHIPPED declarations are tracked
+# — `src/crucible.toml` and `clients/crucible.toml`, one per distribution — so
+# the anchor matters: this pattern must never swallow those.
+/crucible.toml
 node_modules/
 .lavish/*.excalidraw
 coverage/
@@ -19,6 +28,12 @@ blob-report/
 .features-gen/
 __pycache__/
 .venv/
+# `uv run` resolves the project and writes this lock into the repo root. It has
+# no consumer here: release.yml installs with `pip install '.[dev]'`, nothing
+# references the file, and it has never been tracked — same class as `.venv/`
+# above. Left visible it also reports the integration tree as DIRTY (has WIP)
+# on every `worktree-flow status`, which is a false signal on a clean tree.
+uv.lock
 # A lean-ctx tool cache, written into the repo root by the MCP server when an
 # agent reads or searches this tree. Regenerable and machine-local, so it is
 # ignored rather than deleted — the point is that no `git add -A` can ever

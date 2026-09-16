@@ -19,11 +19,32 @@ export interface Project {
   sutRoot: string;
   createdAt: number;
   liveness?: Partial<LivenessConfig>;
-  /** §S4 — per-project raw-event retention cap override (default 100). */
+  /** §S4 — this project's OWN raw-event retention cap, in events per kind.
+   * CR-CRU-129 §S2 — THERE IS NO DEFAULT LITERAL. Absent, the sweep falls
+   * back on `defaultRetention()` (`src/store.ts`), which reads the
+   * `[limits.retention]` table of the server's own `crucible.toml` PER SWEEP
+   * and yields `undefined` — NO CAP, nothing evicted — when that file is
+   * absent or does not parse. Nothing sits in front of that file and nothing
+   * beneath it: the environment override that once did is retired.
+   * Unconfigured therefore means UNBOUNDED, and the boot banner discloses it
+   * by project name. The `default 100` this comment used to claim was
+   * `DEFAULT_RETENTION`, deleted by that section: on 2026-09-13 the literal
+   * silently evicted every release this project had shipped. A cap is
+   * configuration; re-introducing a constant here re-introduces the defect.
+   * `retention: 0` is a DECLARED cap and still wins over the fallback
+   * (`??`, never `||`). */
   retention?: number;
   /** CR-CRU-008 §S4 — guarded run deletion config gate (default false:
    * the run journal is an immutable audit log unless a human enables this). */
   allowRunDeletion?: boolean;
+  /** CR-CRU-130 §S4 — the milestone vocabulary this project DECLARED, and only
+   * that: the seeded words every project starts with are not its declaration,
+   * and the reserved pair is the server's, so neither appears here. ABSENT
+   * until the project declares one (`PATCH /api/v2/projects/<key>`). What a
+   * milestone POST is actually validated against — declared, seeded and
+   * reserved together — is `Store.acceptedMilestoneTypes`, resolved from the
+   * single definition in `src/store.ts`. */
+  milestoneTypes?: string[];
 }
 
 /**
@@ -237,14 +258,26 @@ export interface RunEvent {
    */
   releasedAt?: number;
   /**
-   * CR-CRU-091 §S1 — a `release-proposal` milestone's DECLARED target date, in
-   * epoch SECONDS — deliberately the SAME unit as `releasedAt` above, so one
-   * formatter serves both and neither surface renders 1970. Optional and
-   * revisable: a proposal with no declared target is a legitimate declared
-   * intent. ABSENT on every other event type (a `release` carries
-   * `releasedAt`, which is when it SHIPPED, not when it was aimed for).
+   * CR-CRU-091 §S1 / CR-CRU-130 §S1 — a milestone's DECLARED target date: when
+   * it is DUE, in epoch SECONDS — deliberately the SAME unit as `releasedAt`
+   * above, so one formatter serves both and neither surface renders 1970.
+   * Optional and revisable: a milestone with no declared target is undated,
+   * which is a legitimate state for a record of something that simply
+   * happened. CR-CRU-091 confined this to a `release-proposal`; CR-CRU-130 §S1
+   * carries it on EVERY type, because what a goal was aimed at is a fact about
+   * that goal whatever kind of goal it is.
    */
   targetAt?: number;
+  /**
+   * CR-CRU-130 §S1 — when the milestone was MET, in epoch SECONDS. Absent
+   * means OUTSTANDING, and the absence is the whole signal: a milestone
+   * defaulted to 0 or to its row's timestamp would read as delivered at the
+   * dawn of time. `releasedAt` above is this same date under its old,
+   * release-only name; both are carried so every wire shape a client already
+   * reads stays byte-identical (§S0), and a record holding only the old
+   * spelling still answers the new question.
+   */
+  deliveredAt?: number;
   /**
    * CR-CRU-080 §S4 — the CR ids a `release` shipped: the ceremony's tag-range
    * scan INTERSECTED with the project's registered queue at record time.

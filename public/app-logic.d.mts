@@ -221,9 +221,12 @@ export interface ReleasePackage {
 
 /** CR-CRU-078 §S4 — one wave CONTAINER of the focused release. `wave` is
  *  `null` for members declaring none: a real group, drawn without chrome.
- *  CR-CRU-096 §S1 — `active` is whether the wave belongs to the focused,
- *  IN-FLIGHT release (the view's `kind === "proposed"`), never whether some
- *  member is mid-run. */
+ *  CR-CRU-116 §S4 — `active` is whether THIS WAVE holds the work in flight:
+ *  true for the box whose membership holds an `IN_PROGRESS` member, false for
+ *  every other box, including every box of a release with nothing running.
+ *  The `wave: null` LOOSE group is always `false`, whatever it holds: §S1
+ *  places a CR with no declared wave outside the constraint entirely, so that
+ *  box is not a wave and can hold no wave's work in flight. */
 export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;
@@ -409,7 +412,7 @@ export interface LensPlanLike {
   // linkage semantics.
   projectKey?: string;
   cr: string;
-  status: "open" | "closed";
+  status: "open" | "closed" | "aborted";
   wave?: string;
   track?: string;
   cycles: LensPlanCycleLike[];
@@ -452,7 +455,7 @@ export interface LensCycleNode<E extends LensRunLike> {
 export interface LensCrNode<E extends LensRunLike> {
   cr: string;
   source: "declared" | "inferred";
-  status?: "open" | "closed";
+  status?: "open" | "closed" | "aborted";
   track?: string;
   merge?: { commit: string };
   // CR-CRU-020 §S1.1 — passthrough of Plan.closedAt (declared nodes only).

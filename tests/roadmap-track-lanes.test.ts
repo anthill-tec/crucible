@@ -1028,34 +1028,44 @@ describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep t
 
 // ── AC8 — the laned header's third segment, in words ───────────────────────
 
+// SUPERSEDED 2026-09-09 by CR-CRU-116 §S4 — the `· active` segment is dropped
+// from the four expectations below. AC8's subject is the THIRD segment, the
+// track count; the marker sat in these strings only because CR-CRU-096 AC1
+// made every box of an in-flight release active, so it was always there to
+// write down. §S4 makes activeness the wave's OWN work (a member IN_PROGRESS),
+// and these fixtures declare none — they are track-shape boards. The marker is
+// asserted where it belongs, in tests/roadmap-wave-active-marker.test.ts.
+
 describe("CR-CRU-085 AC8 — a laned wave's header states its track count in WORDS, as the design's third segment", () => {
-  test("the header reads `Wave <n> · active · <k> tracks`, and the k it states is the number of lanes drawn for that same fixture", async () => {
+  test("the header reads `Wave <n> · <k> tracks`, and the k it states is the number of lanes drawn for that same fixture", async () => {
     await mountApp({ queue: queueOf(TWO_TRACKS) });
-    expect(headerText(WAVE)).toContain(`wave ${WAVE} · active · ${fixtureTracks(TWO_TRACKS).length} tracks`);
+    expect(headerText(WAVE)).toContain(`wave ${WAVE} · ${fixtureTracks(TWO_TRACKS).length} tracks`);
     expect(headerTrackCount(WAVE)).toBe(laneEls(WAVE).length);
 
     // The same header on a three-track fixture states three — one derivation,
     // read off the data, never a second one that could disagree with the
     // lanes it labels.
     await mountApp({ queue: queueOf(THREE_TRACKS) });
-    expect(headerText(WAVE)).toContain(`wave ${WAVE} · active · ${fixtureTracks(THREE_TRACKS).length} tracks`);
+    expect(headerText(WAVE)).toContain(`wave ${WAVE} · ${fixtureTracks(THREE_TRACKS).length} tracks`);
     expect(headerTrackCount(WAVE)).toBe(laneEls(WAVE).length);
     expect(headerTrackCount(WAVE)).toBe(expectedLaneCount(THREE_TRACKS));
 
-    // AC4 — the header's other facts are untouched: identity, the active
-    // marker, and the WHOLE membership count.
+    // AC4 — the header's other facts are untouched: its identity and the WHOLE
+    // membership count.
     expect(countText(WAVE)).toBe(String(THREE_TRACKS.length));
     expect(waveEl(WAVE).getAttribute("data-cr-count")).toBe(String(THREE_TRACKS.length));
-    expect(headerText(WAVE)).toContain("· active");
   });
 
-  test("a wave that draws no lanes carries no track segment at all, on one track or none — and still states its identity, its active marker and its count", async () => {
+  test("a wave that draws no lanes carries no track segment at all, on one track or none — and still states its identity and its count", async () => {
     for (const members of [ONE_TRACK, NO_TRACKS]) {
       await mountApp({ queue: queueOf(members) });
       expect(laneEls(WAVE).length).toBe(expectedLaneCount(members));
       expect(headerTrackCount(WAVE)).toBeNull();
       expect(headerText(WAVE)).not.toMatch(/\btracks?\b/);
-      expect(headerText(WAVE)).toContain(`wave ${WAVE} · active`);
+      // The identity phrase WHOLE, so "no track segment" is bounded rather than
+      // merely unmatched: the header runs the label straight into the count
+      // span, and nothing else sits between them.
+      expect(headerText(WAVE)).toBe(`wave ${WAVE}${countText(WAVE)}`);
       expect(countText(WAVE)).toBe(String(members.length));
     }
 

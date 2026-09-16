@@ -69,6 +69,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -106,7 +108,25 @@ class ClientEmitSelfRoundTripThroughRealSeamTest(unittest.TestCase):
     representative AXI envelope (verb/ok/help[]/context/warnings), capture
     stdout, decode it back with `clients/toon.py`'s OWN decode (via the same
     `_toon()` accessor `_crucible_axi` itself uses), and deep-equal the
-    result against `{"axi": ...}` -- INCLUDING exact types, not just values."""
+    result against `{"axi": ...}` -- INCLUDING exact types, not just values.
+
+    CR-CRU-135 §S1 -- both tests bind a project directory of their OWN making
+    before driving the seam. `emit_axi` appends `limit_disclosure_warnings()`
+    to the envelope (CR-CRU-131 §S1b, by design), and that call resolves
+    `crucible.toml` under the bound project dir -- or, unbound, under whatever
+    `os.getcwd()` happens to be. The round-trip below deep-equals an EXACT
+    `warnings` list, so without binding it would be asserting the ambient
+    working directory's contents: green on a developer machine carrying a root
+    `crucible.toml`, red on CI's fresh clone."""
+
+    def setUp(self):
+        """A project directory this test owns, carrying a readable `[limits]`
+        table that declares no `value` at all -- so every limit runs at its
+        shipped recommendation, nothing is REFUSED, and the envelope carries
+        exactly the warnings this test supplied, on every machine."""
+        self.project_dir = tempfile.mkdtemp(prefix="crucible-toon-roundtrip-")
+        self.addCleanup(shutil.rmtree, self.project_dir, ignore_errors=True)
+        (Path(self.project_dir) / "crucible.toml").write_text("[limits]\n")
 
     def _representative_envelope(self):
         result_fields = {
@@ -123,6 +143,7 @@ class ClientEmitSelfRoundTripThroughRealSeamTest(unittest.TestCase):
 
     def test_emit_axi_stdout_self_round_trips_to_the_source_envelope(self):
         axi_mod = _load_axi_module()
+        axi_mod.bind_project_dir(self.project_dir)
         result_fields, context, warnings = self._representative_envelope()
 
         stdout = io.StringIO()
@@ -154,6 +175,7 @@ class ClientEmitSelfRoundTripThroughRealSeamTest(unittest.TestCase):
         STRING "4" (the real WORKFLOW_WAVE env shape), which must not be
         silently retyped as the int 4."""
         axi_mod = _load_axi_module()
+        axi_mod.bind_project_dir(self.project_dir)
         result_fields, context, warnings = self._representative_envelope()
 
         stdout = io.StringIO()

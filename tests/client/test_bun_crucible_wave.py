@@ -322,7 +322,7 @@ class PlanFileWaveTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 101}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a", "--wave", "5",
+                "plan-file", "--cr", "CR-X", "--cycle", "a", "--cycle-kind", "red-green", "--wave", "5",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -337,7 +337,7 @@ class PlanFileWaveTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 102}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a",
+                "plan-file", "--cr", "CR-X", "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -353,7 +353,7 @@ class PlanFileWaveTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 103}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a", "--wave", "5",
+                "plan-file", "--cr", "CR-X", "--cycle", "a", "--cycle-kind", "red-green", "--wave", "5",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -372,7 +372,7 @@ class PlanFileWaveTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 104}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a",
+                "plan-file", "--cr", "CR-X", "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -386,13 +386,21 @@ class PlanFileWaveTest(_BaseWaveTest):
     def test_wave_flag_does_not_disturb_existing_payload_fields(self):
         """Regression guard: adding `wave` must not clobber the pre-existing
         cr/cycles/title/track/orchestrator fields `cmd_plan_file` already
-        sends."""
+        sends.
+
+        REWRITTEN by CR-CRU-127: the INVOCATION moves off the legacy `--cycles`
+        (refused for filing under §S4a) onto the mandated `--cycle` +
+        `--cycle-kind` pairs, and the cycles the guard compares against carry
+        the kind each declared. The criterion — `--wave` disturbs nothing —
+        is unchanged, which is why every other field below is untouched."""
         os.environ["WORKFLOW_ROLE"] = "Track 2"
         server_resp = {"ok": True, "planId": "plan-81", "cr": "CR-Z",
                         "cycles": [{"label": "a", "id": 105}, {"label": "b", "id": 106}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-Z", "--cycles", "a,b",
+                "plan-file", "--cr", "CR-Z",
+                "--cycle", "a", "--cycle-kind", "red-green",
+                "--cycle", "b", "--cycle-kind", "verify",
                 "--title", "Some Title", "--wave", "7",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
@@ -400,7 +408,10 @@ class PlanFileWaveTest(_BaseWaveTest):
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         payload = self._post_payload(mock_post)
         self.assertEqual(payload.get("cr"), "CR-Z")
-        self.assertEqual(payload.get("cycles"), [{"label": "a"}, {"label": "b"}])
+        self.assertEqual(
+            payload.get("cycles"),
+            [{"label": "a", "kind": "red-green"},
+             {"label": "b", "kind": "verify"}])
         self.assertEqual(payload.get("title"), "Some Title")
         self.assertEqual(payload.get("track"), "Track 2")
         self.assertEqual(str(payload.get("wave")), "7")
@@ -429,7 +440,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 900}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-CRU-090", "--cycles", "a",
+                "plan-file", "--cr", "CR-CRU-090", "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -461,7 +472,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 901}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-CRU-091", "--cycles", "a", "--wave", "5",
+                "plan-file", "--cr", "CR-CRU-091", "--cycle", "a", "--cycle-kind", "red-green", "--wave", "5",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -481,7 +492,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 902}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-CRU-092", "--cycles", "a",
+                "plan-file", "--cr", "CR-CRU-092", "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -501,7 +512,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 903}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-CRU-093", "--cycles", "a", "--wave", "5",
+                "plan-file", "--cr", "CR-CRU-093", "--cycle", "a", "--cycle-kind", "red-green", "--wave", "5",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -538,7 +549,7 @@ class PlanFileNoTitleWarningTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 904}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-CRU-094", "--cycles", "a",
+                "plan-file", "--cr", "CR-CRU-094", "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -568,7 +579,7 @@ class PlanFileNoTitleWarningTest(_BaseWaveTest):
                         "cycles": [{"label": "a", "id": 905}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-CRU-095", "--cycles", "a",
+                "plan-file", "--cr", "CR-CRU-095", "--cycle", "a", "--cycle-kind", "red-green",
                 "--title", "Some Title", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 

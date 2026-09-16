@@ -23,11 +23,11 @@ THE API THIS RED PINS, and why each piece exists:
         normalise its `--track`. Without this the fleet would answer `2`
         differently on the read path (`next`) and the write path
         (`wave-sequence`), which is the exact inconsistency the fleet standard
-        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:349-352).
+        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:362-365).
 
     queue_tracks(queue) -> [str]
         §S3, as CR-CRU-108 §S2 leaves it: the tracks the queue READ published
-        (`declaredTracks`, src/store.ts:380), NOT a set the client derives.
+        (`declaredTracks`, src/store.ts:393), NOT a set the client derives.
         `len > 1` is still the whole definition of "multi-track", and the
         values are still echoed as stored rather than re-spelled — the rule
         simply has one home now, on the server that owns the normalisation.
@@ -369,7 +369,7 @@ class CanonicalTrackTest(_NextTestBase):
                 self.assertIsNone(
                     AXI.canonical_track(spelling),
                     f"{spelling!r} names no lane; `normalizeTrack` returns null "
-                    f"for it (src/store.ts:349-352) so the helper must too, "
+                    f"for it (src/store.ts:362-365) so the helper must too, "
                     f"rather than inventing a track")
 
     def test_no_value_at_all_is_refused_rather_than_defaulted(self):
@@ -434,8 +434,12 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
               {"agentId": cls.AGENT, "projectKey": cls.key, "status": "online",
                "role": "ORCHESTRATOR",
                "identity": {"displayName": cls.AGENT, "source": "manual"}})
+        # CR-CRU-118 §S4 -- the route refuses a proposal naming no target
+        # date. Nothing here is about the date; the fixture needs the release
+        # to be a plannable target at all, so it declares one plausible date.
         _http(cls.base, f"/api/v2/projects/{cls.key}/release-proposals",
-              {"label": cls.RELEASE, "agentId": cls.AGENT})
+              {"label": cls.RELEASE, "agentId": cls.AGENT,
+               "targetAt": 1788220800})  # 2026-09-01T00:00:00Z
 
         # One cr per spelling, each in its OWN wave, so every declaration is a
         # complete `wave-sequence` call over the whole wave (§S4) rather than a
@@ -502,8 +506,9 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
     # CR-CRU-108 §S2/AC4 — `test_the_live_track_list_is_what_the_server_holds`
     # was deleted here: it called `queue_tracks(<entries>)` and pinned the
     # distinct-set computation this CR RETIRES. Its live-data claim survives
-    # behaviourally in `test_the_other_lane_is_reachable_by_its_own_spelling`
-    # below, which resolves the second stored lane by its own spelling.
+    # behaviourally in `test_the_answer_is_about_the_lane_asked_for_never_a_
+    # siblings` below, which asks for the second stored lane by its own
+    # spelling and gets an answer about THAT lane.
 
     def test_the_server_refuses_exactly_what_the_helper_refuses(self):
         """The other half of one rule: a value naming no lane is refused by
@@ -544,14 +549,27 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
             [a["cr"] for a in answers], [answers[0]["cr"]] * len(answers),
             f"every spelling must reach the same lane; got {answers!r}")
 
-    def test_the_other_lane_is_reachable_by_its_own_spelling(self):
+    def test_the_answer_is_about_the_lane_asked_for_never_a_siblings(self):
         """Multi-track, against real stored values: `--track 3` answers about
-        track-3, never track-2."""
+        track-3, never track-2.
+
+        WHICH answer that is moved with CR-CRU-114 §S1/§S3. Every cr in this
+        fixture sits in its OWN wave, and the wave predicate reads `wave`
+        alone, so the resolved wave is the first actionable row's — track-2's.
+        track-3 holds nothing there, and a lane with nothing scheduled inside
+        an unfinished wave is `awaiting-assignment`. Naming `CR-TRK-OTHER`
+        instead would walk into a later wave — the silent crossing this CR
+        exists to end, and work whose `plan-file` the wave-scope guard would
+        refuse. The claim under test is unchanged: the answer is ABOUT the
+        lane asked for, and never track-2's."""
         fields = AXI.resolve_next(self.entries, track="Track 3",
                                   tracks=_published_tracks(self.entries))[2]
-        self.assertEqual(fields.get("decision"), "NEXT")
-        self.assertEqual(fields.get("cr"), "CR-TRK-OTHER")
+        self.assertEqual(fields.get("decision"), "DRAINED")
+        self.assertEqual(fields.get("reason"), "awaiting-assignment")
         self.assertEqual(fields.get("track"), "track-3")
+        self.assertNotIn(
+            "cr", fields,
+            "a drained lane names no cr — least of all the other lane's")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -738,14 +756,28 @@ class NextDecisionTest(_NextTestBase):
         self.assertNotIn("track", fields)
 
     def test_declared_release_and_track_ride_the_answer_verbatim(self):
-        """AC14's positive half, on the same fixture shape."""
+        """AC14's positive half, on the same fixture shape.
+
+        The TRACK half moved with CR-CRU-114 §S4 and is re-pinned here rather
+        than re-worded around: `track` rides an answer only when the project
+        declares MORE THAN ONE lane, because one declared lane is no lane to
+        choose between and echoing the row's stored value would tell a reader
+        a lane was resolved when none was. Its positive half is asserted where
+        it is now true —
+        `TrackCanonicalisationAgreesWithTheServerTest.test_next_resolves_every_spelling_against_the_stored_lane`,
+        over two published lanes. The RELEASE half is untouched: a declared
+        release still rides its own answer verbatim, and an absent one is
+        still omitted (the test above)."""
         entries = [_entry("CR-DECLARED", 10, wave="5", release="0.2.0",
                           track="track-1"),
                    _entry("CR-BARE", 20)]
         fields = self.fields(entries)
         self.assertEqual(fields.get("cr"), "CR-DECLARED")
         self.assertEqual(fields.get("release"), "0.2.0")
-        self.assertEqual(fields.get("track"), "track-1")
+        self.assertNotIn(
+            "track", fields,
+            "this queue publishes ONE lane, so no lane was resolved: a stored "
+            "track echoed here would name a container the answer never chose")
         self.assertEqual(fields.get("seq"), 10)
         self.assertEqual(fields.get("wave"), "5")
 
@@ -1546,15 +1578,132 @@ class NextBlockCitationsTest(unittest.TestCase):
         # between this commit and §S2's cutover, which moves the block's
         # citation to match. Split across two commits because the client file
         # is held by the cutover; the split is deliberate, not a defect.
-        ("LANDED_STATUSES", "src/store.ts", 4098, 4098,
+        # Re-pinned 2026-09-09 (CR-CRU-116 §S1), 4098 -> 4256. This drift IS
+        # ours and it is the ordinary case: §S1 extracted the ONE in-flight
+        # rule into `Store.queueStatusOf` and put `waveScopeRefusal` and
+        # `queueStatuses` ABOVE `deriveQueueStatus`, moving it down by exactly
+        # that much. The CR that shifted the file re-pins it — and this guard
+        # is the only thing in the repo that caught it, because it lives in
+        # the PYTHON suite that no bun-side run reaches.
+        # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 4267 -> 4294: the seq-cause
+        # split added citation lines above `deriveQueueStatus` in
+        # src/store.ts. The drift IS ours, and this guard is the only thing
+        # in the repo that caught it, because it lives in the PYTHON suite
+        # that no bun-side run reaches.
+        # Re-pinned 2026-09-12 (CR-CRU-121 GREEN), 4294 -> 4349: composing
+        # cr-plan's queue write into `plan-file` added 55 lines ABOVE
+        # `deriveQueueStatus` in src/store.ts, moving it down by exactly that
+        # much. The drift IS ours and it is the ordinary case: the CR that
+        # shifted the file re-pins it — and this guard is once again the only
+        # thing in the repo that caught it, because it lives in the PYTHON
+        # suite that no bun-side run reaches.
+        # Re-pinned 2026-09-12 (CR-CRU-126 FIX), 4349 -> 4411: this CR inserted
+        # in TWO places ABOVE `deriveQueueStatus` in src/store.ts — the
+        # `idx_events_project_cycle` declaration inside `createBaseTables` and
+        # the appended `MIGRATIONS` backfill body — moving it down 62 lines.
+        # The drift IS ours and it is the ordinary case: the CR that shifted
+        # the file re-pins it, and the CR's own gap analysis (DRIFT-9)
+        # predicted exactly this row. The new number was LOCATED at HEAD, not
+        # computed from the old one plus a delta. The three sibling entries
+        # were re-measured at both ends in the same pass and none had moved.
+        # Re-pinned 2026-09-13 (CR-CRU-129 C4 close-out), 4411 -> 5020: this
+        # CR's four cycles added 609 lines ABOVE `deriveQueueStatus` in
+        # src/store.ts — §S1's milestone and gate RECORDS with their tables,
+        # migrations and queries, and §S2's retention resolution. The drift IS
+        # ours and it is the ordinary case: the CR that shifted the file re-pins
+        # it, ONCE, at close-out after the last content edit — the number was
+        # LOCATED at HEAD (`private deriveQueueStatus(` is unique in the file),
+        # never computed from the old one plus a delta. BOTH halves move in the
+        # same commit: the production comment this row mirrors
+        # (`clients/_crucible_axi.py`) carries the same 5020, so
+        # `test_the_table_covers_every_citation_the_block_carries` never goes
+        # red. The three sibling entries were re-measured at BOTH ends in the
+        # same pass and none had moved (STATUS-CONTRACT.md 65-68,
+        # normalizeTrack 362-365, _next_start_help 1559-1580).
+        # Re-pinned 2026-09-13 (CR-CRU-130 C4 close-out), 5020 -> 5784: this
+        # CR's four cycles added 764 lines ABOVE `deriveQueueStatus` in
+        # src/store.ts — §S1's dated milestone, §S2/§S4b's release record that
+        # survives delivery, and the reads a delivered release is answered
+        # from. The drift IS ours and it is the ordinary case: the CR that
+        # shifted the file re-pins it, ONCE, at close-out after the last
+        # content edit — the number was LOCATED at HEAD (`grep -c 'private
+        # deriveQueueStatus('` answers 1, so the hit is unique), never computed
+        # from the old one plus a delta. BOTH halves move in the same commit:
+        # the production comment this row mirrors (`clients/_crucible_axi.py`)
+        # carries the same 5784, so
+        # `test_the_table_covers_every_citation_the_block_carries` never goes
+        # red. The two sibling entries that did NOT move were re-measured at
+        # BOTH ends in the same pass (STATUS-CONTRACT.md 65-68, _next_start_help
+        # 1559-1580); the third, `normalizeTrack`, moved and is re-pinned below.
+        # Re-pinned 2026-09-14 (CR-CRU-131 C1), 5784 -> 5790: §S1 added six
+        # lines ABOVE `deriveQueueStatus` in src/store.ts — the `./limits.ts`
+        # import (+1), `defaultRetention`'s rewritten doc comment and its
+        # resolution through the file (+2), and `runAbandonAfterMs` losing its
+        # `DEFAULT_RUN_ABANDON_MS` literal for a doc block that says why (+3).
+        # The drift IS ours and it is the ordinary case: the CR that shifted
+        # the file re-pins it. The number was LOCATED at HEAD (`private
+        # deriveQueueStatus(` is a unique hit), never computed from the old one
+        # plus a delta. BOTH halves move in the same commit: the production
+        # comment this row mirrors (`clients/_crucible_axi.py`) carries the
+        # same 5790, so `test_the_table_covers_every_citation_the_block_carries`
+        # never goes red. Re-pinned MID-CR rather than at close-out because C1
+        # must hand over a green suite; the sibling entries moved too and are
+        # re-pinned in the same pass.
+        # Re-pinned 2026-09-14 (CR-CRU-131 C2), 5790 -> 5787: §S1b retired the
+        # environment-variable layer, DELETING three lines ABOVE
+        # `deriveQueueStatus` in src/store.ts — two from `defaultRetention`'s
+        # `$CRUCIBLE_DEFAULT_RETENTION` read and one from `runAbandonAfterMs`'s.
+        # The first drift this row has taken UPWARD, and the rule is unchanged:
+        # the CR that shifted the file re-pins it. The number was LOCATED at
+        # HEAD (`private deriveQueueStatus(` is a unique hit), never computed
+        # from the old one minus a delta. BOTH halves move in the same commit:
+        # the production comment this row mirrors (`clients/_crucible_axi.py`)
+        # carries the same 5787, so
+        # `test_the_table_covers_every_citation_the_block_carries` never goes
+        # red. Re-pinned MID-CR, as C1's own row was and for the same reason:
+        # C2 must hand over a green suite. The three sibling entries were
+        # re-measured at BOTH ends in the same pass and none had moved.
+        # Re-pinned 2026-09-14 (CR-CRU-131 §S2), 5787 -> 5801: §S2 added
+        # fourteen lines ABOVE this construct — eight on `ProjectPatch`, where
+        # `retention` now names its three distinguishable states, and six in
+        # `updateProject`, where the cap is merged by key PRESENCE so an
+        # unrelated patch cannot wipe a cap of zero. Re-read at the line
+        # rather than inferred from the shift. The production docstring this
+        # row mirrors (`LANDED_STATUSES` in `clients/_crucible_axi.py`)
+        # carries the same :5801.
+        ("LANDED_STATUSES", "src/store.ts", 5801, 5801,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
-        # Re-pinned 2026-09-07 (CR-CRU-094 C4), 345-348 -> 349-352. This drift
-        # IS ours, and it is the ordinary case the rule above describes:
-        # §S1/§S2 (cycles 358/359) added the `EventRow.cycle_id` field, the
-        # appended migration body and `recordLifecycleEvent`'s note to
-        # `src/store.ts` ABOVE `normalizeTrack`, moving it down four lines.
-        # The CR that shifted the file re-pins it.
-        ("canonical_track", "src/store.ts", 349, 352,
+        # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
+        # QueueSeqReport/preservedSeq additions and the seq-cause split
+        # inserted comment and code lines above `normalizeTrack` in
+        # src/store.ts. The CR that shifted the file re-pins it.
+        # Re-pinned 2026-09-13 (CR-CRU-130 C4 close-out), 362-365 -> 372-375:
+        # §S4's declared milestone vocabulary added exactly ten lines ABOVE
+        # `normalizeTrack` in src/store.ts — `ProjectPatch.milestoneTypes` with
+        # its doc comment (+7) and `ProjectRow.milestone_types` with its (+3).
+        # Both ends were LOCATED at HEAD (`grep -c 'export function
+        # normalizeTrack('` answers 1, so the head is a unique hit, and the
+        # closing brace was read off the file), never computed from the old
+        # pair plus the shift. BOTH halves move in the same commit: the
+        # production docstring this row mirrors (`canonical_track` in
+        # `clients/_crucible_axi.py`) carries the same 372-375.
+        # Re-pinned 2026-09-14 (CR-CRU-131 C1), 372-375 -> 373-376: the one
+        # line §S1 added to src/store.ts's import block (`./limits.ts`) sits
+        # ABOVE `normalizeTrack`. Both ends were LOCATED at HEAD (`export
+        # function normalizeTrack(` is a unique hit; the closing brace was read
+        # off the file), never computed from the old pair plus the shift. BOTH
+        # halves move in the same commit: the production docstring this row
+        # mirrors (`canonical_track` in `clients/_crucible_axi.py`) carries the
+        # same 373-376.
+        # Re-pinned 2026-09-14 (CR-CRU-131 §S2), 373-376 -> 381-384: the eight
+        # lines §S2 added to `ProjectPatch` — `retention`'s three
+        # distinguishable states (a number sets, `null` clears, absent leaves
+        # alone) — sit ABOVE this construct. Head AND tail re-read at the
+        # lines rather than inferred from the shift. BOTH halves move in the
+        # same commit: the production docstring this row mirrors
+        # (`canonical_track` in `clients/_crucible_axi.py`) carries the same
+        # 381-384.
+        ("canonical_track", "src/store.ts", 381, 384,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is
@@ -1594,7 +1743,41 @@ class NextBlockCitationsTest(unittest.TestCase):
         # `stack` key on its ingest and its gate's composition over the
         # declared suites all sit ABOVE this block, drifting it
         # 1526-1542 -> 1552-1568. Same rule, same guard, seventh time.
-        ("_next_start_help", "clients/python-crucible.py", 1552, 1568,
+        # Re-pinned 2026-09-10 (CR-CRU-115 cycle 407): cycle 403 added
+        # `--release` to BOTH gate subparsers, and the three lines it put in
+        # `pre-merge-gate`'s block sit ABOVE this one, drifting it
+        # 1552-1568 -> 1555-1571 (measured at both ends, not inferred from the
+        # shift). Same rule, same guard, eighth time — and the first time the
+        # drift reached a merge gate, because CR-CRU-115 never dispatched this
+        # suite; the gate caught what the dispatch list missed.
+        # Re-pinned 2026-09-12 (CR-CRU-121 GREEN): the shared
+        # `add_plan_file_release_arg(pf)` delegation — the one line that gives
+        # `plan-file` the release argument it composes cr-plan's queue write
+        # from — was declared INSIDE this very block, moving its tail one line
+        # down, 1555-1571 -> 1555-1572 (measured at both ends, not inferred
+        # from the shift; the head is unchanged). The narrowest possible
+        # drift, ninth time — the CR that shifted the construct re-pins it.
+        # Re-pinned 2026-09-13 (CR-CRU-127 GREEN): TWO changes INSIDE this
+        # very block, both of them the kind mandate's — the shared
+        # `add_plan_file_cycle_kind_arg(pf)` delegation (one line, beside the
+        # `--cycle` it pairs with) and `--cycles`' own help, rewritten to say
+        # it is REFUSED for filing (§S4a) and wrapped over four lines instead
+        # of two. Tail 1572 -> 1576, head unchanged, measured at both ends
+        # after the last edit rather than inferred from the shift. Tenth time
+        # — the CR that shifted the construct re-pins it.
+        # Re-pinned 2026-09-13 (CR-CRU-128 GREEN): §S1 gave `auto-ingest`'s
+        # `--agent` the nominated description, four lines ABOVE this block,
+        # drifting it 1555-1576 -> 1559-1580. Measured at BOTH ends after the
+        # last production edit, not inferred from the shift. Eleventh time —
+        # the CR that shifted the file re-pins it. Worth recording: CR-CRU-128's
+        # own census anchors on (source, scope, flag) precisely to avoid this
+        # rot; this row is the only line-pinned guard left in the repo.
+        # Re-pinned 2026-09-14 (CR-CRU-131 C1), 1559-1580 -> 1567-1588: §S1b
+        # made `_resolve_project_dir` BIND the resolved root into the shared
+        # loader, adding eight lines ABOVE this block. Measured at BOTH ends
+        # after the last production edit, not inferred from the shift. Twelfth
+        # time — the CR that shifted the file re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1567, 1588,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

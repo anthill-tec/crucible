@@ -256,30 +256,48 @@ describe("Store#onChange", () => {
 });
 
 describe("Store — retention + rollup (§S4)", () => {
-  test("105 inserts: all 5 expired same-day events (3 wave-tagged + 2 untagged) fold into ONE UTC-day rollup — context.wave no longer splits the bucket (CR-CRU-033 §S1), 100 raw remain", () => {
+  // CR-CRU-129 §S2 — this test used to insert 105 rows and assert 100 survived,
+  // riding `DEFAULT_RETENTION = 100`, a limit compiled into the store. That
+  // constant is DELETED: a cap is configuration. So the cap is CONFIGURED here
+  // and every count below is derived from the value read back off the project —
+  // a test that names the limit it checks freezes the same defect from the
+  // other side, which is what the §S2 AC forbids.
+  const CHOSEN_CAP = 100;
+  const OVERFLOW = 5;
+
+  test("all expired same-day events (3 wave-tagged + the rest untagged) fold into ONE UTC-day rollup — context.wave no longer splits the bucket (CR-CRU-033 §S1) — and exactly the configured cap remains raw", () => {
     const store = new Store(":memory:");
     const pk = seedProject(store);
+    store.updateProject(pk, { retention: CHOSEN_CAP });
+    const cap = store.getProject(pk)?.retention as number;
+    expect(typeof cap).toBe("number");
 
-    for (let i = 0; i < 105; i++) {
+    for (let i = 0; i < cap + OVERFLOW; i++) {
       store.recordTestEvent(
         pk,
         "a1",
         { summary: summary(), tree: emptyTree },
         // The first 3 still carry context.wave — §S1 means this tag is now
-        // irrelevant to bucketing, it no longer splits the rollup.
+        // irrelevant to bucketing, it no longer splits the rollup. They are
+        // among the OVERFLOW oldest, so they are the rows that expire.
         i < 3 ? { context: { wave: "w1" } } : undefined,
       );
     }
 
     const events = store.listEvents(pk, 1000);
-    expect(events.length).toBe(100);
+    expect(events.length).toBe(cap);
 
     const rollups = store.listRollups(pk);
-    // §S1: bucket key is always the event's UTC day, so ALL 5 expired
+    // §S1: bucket key is always the event's UTC day, so ALL the expired
     // same-day events (wave-tagged or not) fold into a single rollup.
     expect(rollups.length).toBe(1);
     expect(rollups[0]!.bucket).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(rollups[0]).toMatchObject({ runs: 5, passed: 5, failed: 0, duration_ms: 25 });
+    expect(rollups[0]).toMatchObject({
+      runs: OVERFLOW,
+      passed: OVERFLOW,
+      failed: 0,
+      duration_ms: OVERFLOW * summary().duration_ms,
+    });
   });
 });
 

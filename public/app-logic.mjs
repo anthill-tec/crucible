@@ -791,11 +791,18 @@ export function workflowLens({ plans, events }) {
   // CR-CRU-013 §S6 — wave labels a qualifying no-mistakes gate has sealed:
   // a `passed` OR `checks-passed` gate event flips the wave to `gated`;
   // `failed`/`cancelled` do NOT. Inferred from events only (zero wave API).
+  // CR-CRU-117 §S1 — a gate posted while its run is still going is NOT a
+  // verdict: `gate.inFlight === true` is the explicit mark (settled in
+  // DN-crucible-wave-track-release.md D3) and excludes the event whatever
+  // its outcome, step count or `push` block says. Never a heuristic — both
+  // "nine rows" and "has a push" are properties this defect proved
+  // unreliable. An UNMARKED gate is a seal (old events carry no mark).
   const gatedWaveLabels = new Set(
     (events ?? [])
       .filter(
         (e) =>
           e.kind === "gate" &&
+          e.gate?.inFlight !== true &&
           (e.gate?.outcome === "passed" || e.gate?.outcome === "checks-passed"),
       )
       .map((e) => e.context?.wave)
@@ -918,13 +925,34 @@ export function workflowLens({ plans, events }) {
   // Wave labels holding ANY declared plan (open or closed) — the superseded
   // check below must see them even after §S1.3 strips open CR nodes.
   const declaredWaveLabels = new Set((plans ?? []).map((p) => p.wave ?? ""));
+  // CR-CRU-125 §S1 — History is keyed on the CR, not on the plan RECORD: a cr
+  // holding an `aborted` plan beside an `open` one (the sanctioned abort +
+  // re-file recovery path) is LIVE, and the Active view already narrates it.
+  // Derived GLOBALLY off the raw `plans` like `declaredWaveLabels` above,
+  // because a re-filed plan takes its wave from the caller and need not share
+  // the abandoned attempt's wave. Keyed on `cr` so it reaches INFERRED nodes
+  // (`:898-918`) too: they carry no `status` at all, so the plan-record filter
+  // below can never exclude them.
+  // The `c.status !== "open"` clause this set stands beside (`:955`) is
+  // retained DELIBERATELY, and not because it still decides anything: §S1
+  // mandates that the existing condition stay as-is beneath the new one, and
+  // the mutation analysis run against this change proved it an EQUIVALENT
+  // mutant — a declared node is built `{cr: plan.cr, status: plan.status}`
+  // (`:857-861`) and `liveCrs` below is every open plan's `cr`, so
+  // `status === "open"` implies its `cr` is in `liveCrs`; no fixture can
+  // separate the two and deleting the clause changes no test. It stays as
+  // defence in depth — a later reader should neither treat it as
+  // load-bearing nor delete it as dead.
+  const liveCrs = new Set(
+    (plans ?? []).filter((p) => p.status === "open").map((p) => p.cr),
+  );
   for (const wave of orderedWaves) {
     const declared = wave.crs.filter((c) => c.source === "declared");
     // CR-CRU-020 §S1.3 — the history lens is closed-plans-only: an OPEN
     // plan's CR node renders solely in the ACTIVE view. The wave itself
     // keeps rendering — its boundary state below still reads ALL declared
     // plans (open ones included), so state inference is unaffected.
-    wave.crs = wave.crs.filter((c) => c.status !== "open");
+    wave.crs = wave.crs.filter((c) => c.status !== "open" && !liveCrs.has(c.cr));
     // CR-CRU-020 §S1.1 — CR groups newest-first within the wave: closed
     // plans by closedAt descending; nodes without a closedAt (inferred, or
     // closed before the field existed) keep filing order (stable sort).
@@ -1359,19 +1387,21 @@ export function focusedReleaseView(gate, releases, entries) {
     members = rows.filter((entry) => entry?.release === version);
   }
 
-  // CR-CRU-096 §S1/AC1 — each box carries whether its wave belongs to the
-  // focused, IN-FLIGHT release. That is this view's existing `kind` and
-  // nothing new: a proposal is in flight, a shipped tag is settled. It is a
-  // release fact, so it is decided here rather than re-derived from the
-  // entries' run state by the renderer.
-  // AC1a — the `false` branch of `active` is UNREACHABLE by construction, and
-  // stays only because the attribute is C1's published fact. `active` is
-  // `kind === "proposed"`, and the zone renders wave boxes at all only on the
-  // not-shipped branch (`public/app.js:3076-3082`), so every box that ever
-  // renders publishes `"true"`. A shipped or unfocused release publishes
-  // `false` by rendering NO WAVE BOX AT ALL: the ABSENCE of boxes is the
-  // observable, and no test can falsify the branch itself.
-  const active = kind === "proposed";
+  // CR-CRU-116 §S4 (2026-09-09) — each box carries whether ITS OWN WAVE is
+  // the wave with work in flight. This SUPERSEDES CR-CRU-096 §S1/AC1's
+  // release-level reading (`const active = kind === "proposed"`, copied into
+  // every box): a release holds SEVERAL waves, so one release fact marked all
+  // of them at once and the board drew `· active` on every box.
+  //
+  // The rule is the one §S1's wave guard uses, read off the `IN_PROGRESS`
+  // status the queue already publishes — this view writes no second in-flight
+  // rule of its own. The box whose wave holds a running member carries the
+  // marker; no other box does.
+  //
+  // The `false` branch is now REACHABLE and asserted rather than reasoned
+  // about: a focused release with nothing running carries NO marker on any
+  // box, and that is a state, not an error
+  // (tests/roadmap-wave-active-marker.test.ts).
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
@@ -1380,7 +1410,7 @@ export function focusedReleaseView(gate, releases, entries) {
     if (box === undefined) {
       box = {
         wave,
-        active,
+        active: false,
         entries: [],
         rows: [],
         hiddenCount: 0,
@@ -1392,6 +1422,23 @@ export function focusedReleaseView(gate, releases, entries) {
       waves.push(box);
     }
     box.entries.push(entry);
+    // §S4 — the wave's own activeness, decided on the pass that already walks
+    // every member, so it can never be a scan out of step with membership.
+    //
+    // The `wave: null` LOOSE group is EXCLUDED, and the exclusion is §S1's,
+    // not this module's: "a CR with no declared wave is outside this
+    // constraint entirely — never blocked, never blocking, and never confers
+    // activeness on any wave". The store says the same thing in one line
+    // (`if (row.wave === "") continue;`, src/store.ts:3388 — re-pinned
+    // 2026-09-10 from :3377 (CR-CRU-118 §S4a added 11 comment lines above it),
+    // and before that 2026-09-09 from :3374, the `let active` declaration
+    // three lines above it, miscited on arrival rather than staled later),
+    // and a view that
+    // flipped the flag anyway would publish `active: true` on a container the
+    // server holds outside the rule — a release whose only runner declares no
+    // wave would report an active wave that does not exist. The two halves of
+    // one fact must not disagree.
+    if (wave !== null && entry?.status === "IN_PROGRESS") box.active = true;
   }
 
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the

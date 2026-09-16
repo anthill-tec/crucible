@@ -105,8 +105,9 @@ The **`--role` flag declares the agent's role**, and that stored declaration is 
 classifies the agent everywhere (the dashboard's agent rail, the role filters, the
 run attribution). The role is never inferred from the agentId's shape.
 
-- `--role` is **required** on `register` across all five `*-crucible.py` clients and
-  `cli/crucible-axi.ts`, and is constrained to the enumeration
+- `--role` is **required** on `register` across all five `*-crucible.py` clients — the
+  whole fleet, since CR-CRU-132 retired the orphaned sixth surface — and is constrained
+  to the enumeration
   `RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report`. Omitting it, or passing a value
   outside the enumeration, fails argument parsing with a non-zero exit and the accepted
   values listed — no registration is sent.

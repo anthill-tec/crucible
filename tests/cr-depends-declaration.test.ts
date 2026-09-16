@@ -77,6 +77,10 @@ const RED_AGENT = "red-1";
 const ROLELESS = "legacy-pre-cr044";
 const RELEASE = "9.9.0";
 const WAVE = "5";
+/** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+ *  Nothing in this suite is ABOUT that date; the fixtures need a live
+ *  proposal to exist, so one plausible target serves all of them. */
+const TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
 
 // The three rows every cycle case is built from, plus the two ids the board
 // never holds: a dependency TARGET that was never planned (AC5, accepted and
@@ -194,7 +198,7 @@ describe("CR-CRU-106 §S1/§S2/§S2a — cr-depends: the verb, its gates and its
    *  `cr-plan`, never the migration door, so nothing here depends on the bulk
    *  post to exist. Every row starts with NO dependencies. */
   async function planThreeRows(key: string): Promise<void> {
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     for (const cr of [A, B, C]) {
@@ -349,11 +353,23 @@ describe("CR-CRU-106 §S1/§S2/§S2a — cr-depends: the verb, its gates and its
     // The migration door is the only writer that can seed an already-cyclic
     // board, and it does not refuse a cycle (CR-CRU-104's open ruling). This
     // is the "real cycle on a real board" AC4 names, never a mock.
+    //
+    // CR-CRU-118 §S2 — the rows DECLARE the release they target, and the
+    // proposal is recorded first: this door now refuses to INVENT membership
+    // for a cr the board has never seen. The ring is what this fixture is
+    // about and it still arrives through the migration door; the membership
+    // is what every live row owes, stated rather than left for the route to
+    // fabricate.
+    expect(
+      (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT }))
+        .status,
+    ).toBe(200);
     const seeded = await post(`/api/v2/projects/${key}/queue`, {
+      agentId: ORCH,
       entries: [
-        { cr: A, title: "a", wave: WAVE, dependsOn: [B] },
-        { cr: B, title: "b", wave: WAVE, dependsOn: [A] },
-        { cr: C, title: "c", wave: WAVE, dependsOn: [] },
+        { cr: A, title: "a", wave: WAVE, dependsOn: [B], release: RELEASE },
+        { cr: B, title: "b", wave: WAVE, dependsOn: [A], release: RELEASE },
+        { cr: C, title: "c", wave: WAVE, dependsOn: [], release: RELEASE },
       ],
     });
     expect(seeded.status).toBe(200);

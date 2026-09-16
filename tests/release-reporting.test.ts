@@ -122,6 +122,14 @@ case "$1" in
   rev-list)
     [ -n "$CR074_TAG" ] || exit 128
     echo "$CR074_SHA"; exit 0 ;;
+  log)
+    # CR-CRU-130 §S2 — the SHIP DATE the ceremony now requires before it will
+    # report a release at all. A real clone always answers this; a stub falling
+    # through to the permissive catch-all below answered EMPTY, which is
+    # exactly the shallow-clone shape §S2 made fatal, so modelling it is what
+    # keeps this fixture a real git rather than a degraded one. The dateless
+    # branch has its own case, in tests/release-reporting-live.test.ts.
+    echo "$CR074_SHIP"; exit 0 ;;
   tag)
     [ -n "$CR074_TAG" ] || exit 0
     echo "$CR074_TAG"; exit 0 ;;
@@ -242,6 +250,8 @@ function makeWorld(): World {
         CR074_BRANCH: `release/${VERSION}`,
         CR074_TAG: opts.tag ?? VERSION,
         CR074_SHA: TAGGED_SHA,
+        // CR-CRU-130 §S2 — the tag's own commit date, in epoch SECONDS.
+        CR074_SHIP: "1787149125",
         CR074_PUSH_FAIL: opts.pushFail ? "1" : "0",
         CR074_REPORT_FAIL: opts.reportFail ? "1" : "0",
       };

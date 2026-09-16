@@ -85,12 +85,18 @@ _STACK = "arduino"
 
 
 def _project_dir(args):
+    """CR-CRU-131 §S1b — the resolved root is BOUND into the shared module,
+    which reads this project's `crucible.toml` beside the `.env` checked below
+    for the three display limits. Bound HERE, on this client's own boot path,
+    because project-dir resolution stays client-specific and the shared module
+    takes it ALREADY RESOLVED."""
     d = (getattr(args, "project_dir", None)
          or os.environ.get("ARDUINO_CRUCIBLE_PROJECT_DIR") or os.getcwd())
     d = os.path.abspath(d)
     if not os.path.exists(os.path.join(d, ".env")):
         sys.exit(f"[crucible] no .env at {d} — pass --project-dir <subproject> "
                  f"(the dir holding .env + tests/native, e.g. sheetal-firmware)")
+    _axi().bind_project_dir(d)
     return d
 
 
@@ -1019,10 +1025,13 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _post_gate(project_dir, agent_id, gate, context=None):
-    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+def _post_gate(project_dir, agent_id, gate, context=None, release=None):
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
+    `release` is the label of the release the gate gates; it rides on to the
+    builder untouched and reaches the wire as the event's top-level
+    `version`."""
     return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
-                            context)
+                            context, release)
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
@@ -1275,8 +1284,14 @@ def main():
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycle", action="append",
                     help="One cycle label, never split; repeat --cycle per cycle.")
-    pf.add_argument("--cycles", help='Legacy comma-split form; prefer one --cycle per label.')
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _axi().add_plan_file_release_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
 
     ca = sub.add_parser("cycle-activate", parents=[common],
@@ -1303,6 +1318,7 @@ def main():
                               "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _axi().add_cycle_add_target_args(cad)
     cad.set_defaults(func=cmd_cycle_add)
 
     cp = sub.add_parser("checkpoint", parents=[common],
@@ -1378,6 +1394,7 @@ def main():
                           "git-flow project that merges directly has no PR for it "
                           "to watch — without --skip the gate blocks until "
                           "ci_timeout.")
+    _axi().add_gate_release_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
     grp = sub.add_parser("gate-report", parents=[common],
@@ -1388,12 +1405,17 @@ def main():
     grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields untruncated (§S11).")
+    _axi().add_gate_release_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
     ms = sub.add_parser("milestone", parents=[common],
                         help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type. The vocabulary is this project's own, not this "
+                         "CLI's: PATCH /api/v2/projects/<key> {milestoneTypes: [...]} "
+                         "declares it, GET /api/v2/projects reads back what this project "
+                         "declared, and a refused milestone names the live accepted set "
+                         "back to you.")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

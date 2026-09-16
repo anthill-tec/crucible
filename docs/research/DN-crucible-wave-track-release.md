@@ -149,3 +149,291 @@ commitment CR-CRU-077 AC2 makes at the render layer and CR-CRU-091 §S5 makes on
 track or none, the reader takes no `--track` and never prompts for one; with more than one it
 refuses to guess and names the live tracks. Deriving the lane from a single-track project is not
 an inference, it is the only lane there is.
+
+## Drift found while releasing 0.2.0 (measured 2026-09-09)
+
+Added after the 0.2.0 release ceremony exposed three gaps. **The definition above is untouched** —
+every item here is drift between that locked definition and what shipped, or a decision the
+definition implies that was never built. Nothing below introduces a new concept, which is why no
+PRD section is owed.
+
+### D1 — wave completion is REQUIRED, and a wave is a CONTAINER, not a union of lanes
+
+USER RULING 2026-09-09, which settles the fork this section originally left open and corrects the
+ontology a first draft of it got wrong:
+
+- **A wave is a GROUPING (container) of CRs. A track affects ORDERING AND SCHEDULING.** The two
+  are different kinds of thing. A wave is shared across tracks in a multi-track project exactly as
+  it is in a solo one — it is one container either way, not a set of per-track slices that happen
+  to be added together.
+- **Therefore wave completion is a question about the CONTAINER'S MEMBERS ONLY.** The predicate is:
+  no actionable CR carries that wave. Track does not appear in it — not as a filter, not as a
+  union, not as a special case for one lane or many. A scheduling attribute has no vote in a
+  membership question.
+- **`wave-complete` is required in every project, solo or multi-track.** CRs are organised into
+  waves even in a solo project, so the answer must exist there too. This QUALIFIES — it does not
+  contradict — this DN's observation that a trackless project's waves carry little meaning: waves
+  still GROUP the CRs; what a solo project lacks is lanes, not waves.
+- **It is a DERIVED answer.** No record, no milestone type, no new verb. A derived state needs no
+  timestamp and nothing can forget to post it.
+
+Read "every CR finished" the way this DN already words it — *"everything in the lane landed or was
+declared dead"*. A wave holding a `VOID` or `SUPERSEDED` CR can still complete; that CR is
+finished in the only sense the roadmap tracks (it is no longer wanted). Literal "all COMPLETED"
+would leave such a wave permanently open — wave 5 of this project included, since CR-CRU-113 was
+voided.
+
+So the two axes stay separate all the way down, which is the same separation CR-CRU-091 §S2 makes
+between `status` and `lifecycle`:
+
+```
+WAVE   grouping     → which CRs belong together      → answers "is this wave complete?"
+TRACK  scheduling   → which lane executes, in what order → answers "what do I do next?"
+```
+
+### D2 — what shipped instead: a scheduling attribute deciding a membership question
+
+This DN states a lane is a `(release, wave, track)` slice. The shipped resolver
+(`clients/_crucible_axi.py:1821`, `resolve_next`) filters by **track only**, and then answers the
+wave question from that track-filtered set:
+
+```python
+lane = entries if wanted is None else [
+    e for e in entries if canonical_track(e.get("track")) == wanted]   # a SCHEDULING filter
+...
+if not actionable:
+    return (True, 0, _drained_answer("wave-complete", lane), warnings)  # a MEMBERSHIP claim  :1848
+```
+
+`next` accordingly takes `--track` and has no `--wave`. One defect, two faces:
+
+1. **Solo project — unreachable.** With no track filter the set is the ENTIRE queue, so
+   `wave-complete` fires only when nothing anywhere is actionable. Measured here: at the
+   wave-5/wave-6 boundary `next` answered `NEXT cr=CR-CRU-015 seq=62 wave 6`. The wave ended and
+   nothing said so; the orchestrator learns it only by noticing the answer names a different wave.
+2. **Multi-track project — false.** A track whose own entries have all landed would report
+   `wave-complete` while the wave still holds actionable CRs scheduled on another track. Latent
+   today (Crucible is single-track), guaranteed the first time a second track is declared.
+
+Both follow from the same category error: the wave answer is computed over a track-filtered set.
+Correcting it means the wave predicate reads `wave` and nothing else, while `--track` keeps doing
+its own job — choosing which CR is next, and in what order.
+
+The reason vocabulary needs nothing new: `DRAINED_REASONS` at `:1523` is already
+`("wave-complete", "awaiting-assignment", "no-roadmap")`, and a lane with nothing scheduled whose
+wave is NOT complete is `awaiting-assignment` — which is what that reason already means.
+
+**The fix needs no server change.** Every queue entry already publishes its `wave`
+(`src/types.ts:407`), so the predicate is computable from the SAME single read the resolver already
+performs — `:1498` states the contract as "ONE read (`GET …/queue`) in, ONE decision out". The
+correction lives in the shared client module, where all five clients inherit it at once.
+
+### D3 — a release's IN-FLIGHT state already has a carrier: the gate
+
+This DN states the release workflow "is already partially tracked, **as a gate**", and that a
+release is "recorded at publish/tag time rather than declared in advance". Both hold. What is
+missing is not an API for "a release started" but a FIELD on the record that already exists:
+
+- `CR-CRU-073 §S1` (`src/store.ts:2013-2016`) retires a gate by matching its first-class `version`
+  to a release's `label`, "never parsed back out of the free-text intent".
+- No client ever sends `version`: `post_gate` (`clients/_crucible_axi.py:4647`) posts
+  `{projectKey, agentId, gate}` + optional `context` in all five clients, and `gate-report` has no
+  `--version`/`--label` flag.
+- Verified on a live event: `evt-1788925414091-197`, `version: <ABSENT>`, `retiredAt: <none>`.
+
+So CR-CRU-073's retirement mechanism is unreachable through the fleet, and a gate cannot say which
+release it is gating. A gate stamped with the release version IS the in-flight record this DN
+intends — "no API to declare a release started" is that missing stamp, not a missing route. A
+`release-started` milestone type would be a SECOND mechanism for something this DN already assigns
+to the gate.
+
+Two further defects in the gate proxy, found in the same ceremony, belong to the same contract
+(`gate-run` seals a gate without first establishing the snapshot is terminal AND
+release-identified):
+
+| | defect | cite |
+|---|---|---|
+| a | interim POSTs guarded by `0 < nsteps < 9`, but `axi status` always emits 9 rows (unrun ones `pending`), so streaming NEVER fires | `_crucible_axi.py:4801`, `:1315` |
+| b | `axi run`'s 8-minute bounded hold returns with `error:` and no `outcome`; `gate_from_axi(final=True)` falls back to `"failed" if any_failed else "passed"` and seals **`passed`** mid-run | `:1306-1310`, `:4811-4819` |
+
+(b) put a false `outcome=passed` gate on this project's board during the 0.2.0 review, and because
+of D3 that event can never be retired by the release it belongs to. `pending` and
+`awaiting_approval` are not `failed`, so the fallback is structurally biased toward green, and the
+`error` key the snapshot DOES carry is ignored — so "was this a real terminus?" is answerable from
+data already in hand.
+
+**CR-CRU-117's in-flight mark — SETTLED 2026-09-10, before any RED.** The mark rides **inside the
+`gate` object itself** (a new key on the gate body the client already builds), not a top-level field
+beside `version` and not a fourth member of the outcome vocabulary. Costed at CR-117's gap analysis:
+`Store.recordGateEvent(gate: unknown, …)` stores the gate object **verbatim** and `handleGates`
+validates only `intent`, `outcome` and steps-is-an-array — so an in-gate field reaches both readers
+(`workflowLens`, `boundaryGate`) with **zero server change**, while a top-level field costs a
+`src/v2.ts` carry plus a `src/store.ts` field, and a new outcome member costs both `GATE_OUTCOMES`
+sets, every enumerating reader, and five clients' fixtures. CR-CRU-017's run lifecycle
+(`visibleOpenRuns` → `RunningCard`) already means "still going" for a DIFFERENT surface, but
+`resolveRunClose` ends a run on ANY ingest carrying a `runId`, so reusing it would need
+carry-without-close on a seam three routes share — a second mechanism for a job D3 already assigns
+to the gate, which this DN's own rule treats as a defect. Declined for that reason, not evaluated
+further.
+
+### D4 — every live CR names a release, and every release names its target date
+
+**User-ruled 2026-09-10**, after the user caught `CR-CRU-117` sitting on the board scheduled but
+undrawable. This one DOES touch the locked definition — additively, and only the parts already
+declared there.
+
+**The inconsistency.** `declareMembership` enforces every rule about a release a CR DOES name: the
+label's shape, and that it corresponds to a live proposal or a recorded release ("so a migration
+could store membership in a release nobody proposed"). It has nothing to say about naming NONE.
+Absence bypasses the only gate there is. Because roadmap zone 2 is release-scoped, the result is a
+CR the scheduler offers and the roadmap cannot draw — measured live, not hypothesised.
+
+The escape hatch was deliberate: there was no release after 0.2.0 to name. That is now a data
+problem with a data answer (propose the next release), not a reason to keep membership optional.
+
+**The two rules.**
+
+1. **A live CR's release is REQUIRED.** Declaring a CR without one is refused, not warned. Landed
+   history is exempt — its provenance already lives on the release record's `crs` set, and
+   retroactive repair of shipped records is a standing non-goal.
+2. **A release proposal's TARGET DATE is required.** `targetAt` exists (CR-CRU-091 §S1, epoch
+   seconds, deliberately the same unit as `releasedAt` — "when it was aimed for" vs "when it
+   shipped") and is optional today. Making it mandatory is what turns a release from a label into a
+   commitment with a burn-down axis.
+
+**Why the existing mechanism is already the right one.** A proposal revision RETIRES its predecessor
+and inserts a new row rather than editing in place, because — in the store's own words — an in-place
+edit "would destroy the fact that the target MOVED, precisely the signal a slipping plan needs to
+leave behind". So slippage is auditable by construction, and burn-down needs no new record kind.
+
+**Burn-down and velocity analytics are NOT part of this decision** (user-stated 2026-09-10). What is
+being fixed is the integrity rule; the analytics that consume `targetAt` come later and are cheap
+precisely because the substrate already keeps its history.
+
+### A CR can be BORN mid-release — user-stated, 2026-09-10
+
+Recorded because the mandate must not assume otherwise. The typical Model-B flow pre-defines specs in
+a design phase, but this project dogfoods itself, so release-specific features are discovered *while
+the release runs*: 0.2.0 grew an entire second wave — CR-CRU-114, 115, 116, 117 — designed and
+implemented **on the release branch**, in response to real-time discovery during the ceremony.
+
+Consequences the rules must respect:
+
+- Membership is declarable **at birth into the release already in flight**, which the live-proposal
+  mechanism supports today: 0.2.0's proposal is live, so a CR discovered on its branch can name it.
+- A mandate that required a CR to exist before its release was cut would forbid exactly the mode
+  this project runs in. The rule is "name a release", never "name it before the branch".
+- In Crucible a release is a MILESTONE (definition §3). In Model-B it is also a distinct release
+  PROCESS with its own task set. D3 already routes the in-flight half to the gate; D4 routes the
+  membership half to the proposal. Neither adds a record kind.
+
+### D4's fallout — the transitional door closes, and history needs a different one
+
+All user-ruled 2026-09-10, in the same conversation as D4.
+
+**1. The bulk queue route is TRANSITIONAL and is deprecated.** `queue-file` → `POST …/queue` exists
+because this project is simultaneously Crucible's source and its first user: the board had to be
+bootstrapped from a Markdown table that predated every roadmap verb. That migration is over, and the
+route's cost is now measured in incidents — TWO, both data loss: `CR-CRU-117` reached the board with
+no release and no authored seq (2026-09-10), and `CR-CRU-082`'s VOID disposition was destroyed when
+the board was repopulated through it (2026-08-29, recorded in that entry's own lifecycle reason).
+
+The replacement is not new — **it shipped in CR-CRU-091 §S8 and CR-CRU-106 §S1**: five per-CR routes,
+each passing the membership gate, each carrying an author, none able to erase a field it did not send.
+
+| verb | route | declares |
+|---|---|---|
+| `cr-plan` | `POST …/queue/plan` | one CR's release + wave |
+| `cr-depends` | `POST …/queue/depends` | one CR's whole dependency set |
+| `wave-sequence` | `POST …/queue/sequence` | one wave's authored order |
+| `cr-supersede` / `cr-void` | `POST …/queue/<cr>/supersede\|void` | lifecycle disposition |
+| `release-propose` | `POST …/release-proposals` | the release and its target date |
+
+Registering a CR is therefore three calls, and every failure mode the bulk door produced is
+unreachable through them. Deprecation lands as a WARNING first (CR-CRU-118); REMOVAL plus a
+file-driven sync that issues those per-CR calls is 0.3.0 work.
+
+**2. CR-CRU-022's burn-down scope source is RE-BASED onto per-CR declaration writes** — user-ruled
+2026-09-10. Its §S3 and AC2 derived scope-change snapshots from `POST /queue` being called twice
+(`queue_snapshots` + a `scope-change` step); the bulk route's retirement takes that source with it.
+
+The ruled source is the DECLARATION itself: each `cr-plan` / `wave-sequence` / `cr-depends` /
+`cr-supersede` / `cr-void` write is a scope event with an author, so a burn-down step becomes a fact
+somebody declared rather than a diff between two snapshots nobody signed. It is also strictly finer:
+a snapshot pair cannot say WHICH of five changes moved the line, and a declaration always can.
+CR-CRU-022's spec is amended accordingly; the amendment is dated in that CR.
+
+**3. Historical membership is a DERIVATION, not a plan — and today no door accepts it.** Measured on
+this tree: `declareMembership` validates a declared label against `liveProposalLabels` alone and
+answers `404 release X has no live proposal — it is not a plannable target`. A shipped release's
+proposal is consumed by its own insert (`stampProposalRetired`), which that gate's own comment calls
+"settled history". So `cr-plan --release 0.1.0` is refused BY DESIGN, and the bulk door shares the
+gate — there is no gated way to state that a landed CR belonged to a shipped release.
+
+The rule that opens it without opening anything else: **a declared label naming a RECORDED release is
+accepted only where that release's own `crs` set already names the CR.** That is a derivation from
+settled fact with a built-in self-check — it cannot add new scope to a closed release, because the
+release itself has to already claim the CR. Measured: all **62** landed release-less rows are named
+by a recorded release (`0.1.0` → 60, `0.1.2` → 1, `0.1.3` → 1; `0.1.1` names none, and no row needs
+it). Zero not derivable.
+
+**4. The 62 are BACK-FILLED, not exempted** (user-ruled, reversing this DN's first draft). The release
+record stays the single source of truth and the queue row inherits what it already says, so the
+mandate ends with zero exceptions and 0.1.x history becomes drawable. The backfill is a data step that
+runs once rule 3 ships.
+
+### What this drift section decides
+
+- **Nothing about the locked definition** in D1–D3. Wave stays temporal and abstract; release stays a
+  concrete activity set terminating in a published package; no release boundary is derived from
+  wave structure.
+- **A wave is a container of CRs; a track is scheduling.** Wave completion is derived from
+  membership alone, required in every project, and never recorded as an event (D1, user-ruled).
+- **The release's in-flight visibility is a gate-identity problem, not a new record kind** (D3).
+- **D4 DOES extend the definition, additively**: membership in a release is mandatory for live work,
+  and a release proposal must declare its target date. Both use mechanisms already shipped
+  (`declareMembership`'s gate, CR-CRU-091's `targetAt`); neither adds a record kind, a route, or a
+  migration of shipped history. Burn-down analytics are explicitly out.
+- **A CR may be born mid-release** and named into the release already in flight — the mode this
+  project actually runs in, and the reason the rule is "name a release", not "name it first".
+- **No open questions remain in this section.** CRs may be derived from it directly.
+
+## Amendment 2026-09-14 — a proposal is not a record kind any more (CR-CRU-129, CR-CRU-130)
+
+**The locked definition in D1–D3 is untouched.** A wave stays temporal and abstract and is not a
+delivery bucket; a release stays three things at once — a grouping, a workflow, a milestone. What
+changed is where those facts are STORED and how the in-flight state is DERIVED.
+
+1. **A milestone is a record, not an event (CR-CRU-129).** `release`, `cr-merged` and the rest left
+   the capped `events` buffer for their own tables. The incident that forced it is recorded in
+   `PRD-crucible-v2.md` §4.7: one day's TDD ingests evicted every release this project had shipped.
+   Nothing in this DN's model changes — a release is still recorded at publish time and still
+   carries its version, packages and `crs` — but the record now outlives the telemetry around it.
+
+2. **`release-proposal` is RETIRED as a type (CR-CRU-130).** A proposed release is a `release`
+   milestone carrying a `targetAt` and no `deliveredAt`; shipping updates that SAME record in place.
+   `listReleaseProposals` is the undelivered releases and `listReleases` the delivered ones, derived
+   from delivery rather than from two type names. This DN's D3 conclusion holds and is strengthened:
+   the in-flight state was never a new record kind, and now it is not even a second row.
+
+3. **This supersedes one sentence above.** Item 3 of D4's fallout says *"a shipped release's proposal
+   is consumed by its own insert (`stampProposalRetired`)"*. That is no longer how a ship settles a
+   label: shipping sets `deliveredAt`, and `retired_at` keeps only its own meaning — "no longer the
+   live record", which is what it does for a superseded predecessor and for a gate its release
+   retired. The GATE behaviour that sentence explains is unchanged: `cr-plan --release 0.1.0` is
+   still refused for a shipped release, and the derivation in rule 3 (accept a label naming a
+   recorded release only where that release's own `crs` already names the CR) is still the door that
+   opens history.
+
+4. **A ship settles its label even when its date is unknown.** Measured 2026-09-13: a release can be
+   posted with no `releasedAt` from three independent layers (the ceremony omits the flag when git
+   cannot resolve the tag — a shallow clone or unfetched tag object; all five clients declare it
+   optional; the route never requires it, by CR-CRU-080 §S4's own rule). So settlement is derived
+   from delivery OR ITS EVIDENCE — a commit, a non-empty `crs` or `packages` — and `deliveredAt`
+   stays honestly absent. Deriving it from the date alone would leave a shipped label plannable, and
+   `cr-plan` would keep admitting CRs into a released version.
+
+5. **A milestone type is definable (CR-CRU-130).** A project declares its own types; `release` and
+   `cr-merged` are RESERVED because the server derives behaviour from them. This does not touch the
+   wave/track/release ontology — it means a project can record its own dated goals beside the ones
+   Crucible reasons about.

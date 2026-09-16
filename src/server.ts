@@ -8,7 +8,8 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Store } from "./store.ts";
+import { limitDisclosures, serverConfigPath } from "./limits.ts";
+import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 
 const pkg = JSON.parse(
@@ -294,6 +295,43 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   };
 }
 
+/**
+ * CR-CRU-129 §S2 — an unconfigured cap means NO cap, and the boot SAYS SO.
+ *
+ * Deleting `DEFAULT_RETENTION = 100` made retention opt-in, and an opt-in
+ * nobody is told about is how the next silent growth starts: a project with no
+ * `retention` of its own, on a board whose own `crucible.toml` declares no
+ * `[limits.retention]` either, prunes NOTHING for ever without a word. So the
+ * disclosure goes on the same channel that already names the store and a
+ * schema rewrite — the boot banner — and it names both the projects that are
+ * unbounded and the FILE and the LIMIT that would bound them — §S1b retired
+ * the environment override this advice used to name, and advice naming it
+ * would send an operator to a lever that moves nothing.
+ *
+ * `null` when a cap resolves, because a line that is always printed discloses
+ * nothing. The operator's fallback silences it for every project at once; a
+ * project's own `retention` — including `0`, which is a DECLARED cap — silences
+ * it for that project alone.
+ *
+ * The kinds are read off `RETENTION_DISPOSABLE_KINDS` rather than listed here,
+ * so the warning can never describe a sweep the store no longer performs.
+ */
+export function retentionDisclosure(store: Store): string | null {
+  if (defaultRetention() !== undefined) return null;
+  const uncapped = store.listProjects().filter((project) => project.retention === undefined);
+  if (uncapped.length === 0) return null;
+  const kinds = [...RETENTION_DISPOSABLE_KINDS].sort().join(", ");
+  const named = uncapped.map((project) => project.name).join(", ");
+  const file = serverConfigPath();
+  return (
+    `[crucible] WARNING: event retention is UNBOUNDED for ${uncapped.length} project(s) ` +
+    `(${named}) — neither a per-project \`retention\` nor a \`[limits.retention]\` table in ` +
+    `${file} resolves a cap, so ${kinds} events are never evicted and the store grows without ` +
+    `limit. Declare \`[limits.retention]\` in ${file} to bound every project, or configure ` +
+    `\`retention\` on each project named above.`
+  );
+}
+
 if (import.meta.main) {
   const handle = startServer();
   console.log(`[crucible] listening on http://localhost:${handle.server.port}`);
@@ -310,6 +348,21 @@ if (import.meta.main) {
       `[crucible] migrated store schema v${migrated.from} -> v${migrated.to}` +
         (migrated.backupPath === null ? "" : ` (pre-upgrade backup: ${migrated.backupPath})`),
     );
+  }
+  // CR-CRU-131 §S1b — a limits file that could not be read, and every `value`
+  // refused for leaving the range declared beside it, on the same channel that
+  // already names the store: a refusal nobody is told about is a board running
+  // at a number its operator did not choose. Silent when the file is readable
+  // and every value is legal.
+  for (const disclosure of limitDisclosures()) {
+    console.log(disclosure);
+  }
+  // CR-CRU-129 §S2 — retention became opt-in when the literal default went, so
+  // a board on which nothing bounds it discloses that at boot instead of
+  // growing quietly. Silent when a cap resolves.
+  const unbounded = retentionDisclosure(handle.store);
+  if (unbounded !== null) {
+    console.log(unbounded);
   }
   // CR-CRU-024 §S5.2 — a graceful stop checkpoints EVERY active cycle's timer
   // (all plans, all projects) before exit, so an orderly shutdown never loses

@@ -126,16 +126,24 @@ def _resolve_project_dir(arg_value):
     git repository containing the current directory (`git rev-parse --show-toplevel`),
     falling back to the current directory when not inside a git repo. The `.env` holding
     CRUCIBLE_PROJECT_KEY must live at that resolved root.
+
+    CR-CRU-131 §S1b — the resolved root is BOUND into the shared module, which reads
+    this project's `crucible.toml` beside that `.env` for the three display limits.
+    Bound HERE, on the client's own boot path, because project-dir resolution stays
+    client-specific and the shared module takes it ALREADY RESOLVED.
     """
     if arg_value:
-        return arg_value
-    env_value = os.environ.get("RUST_CRUCIBLE_PROJECT_DIR")
-    if env_value:
-        return env_value
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else os.getcwd()
+        root = arg_value
+    elif (env_value := os.environ.get("RUST_CRUCIBLE_PROJECT_DIR")):
+        root = env_value
+    else:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+        )
+        root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
+                else os.getcwd())
+    _axi().bind_project_dir(root)
+    return root
 
 
 def _read_env(project_dir):
@@ -2165,10 +2173,13 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _post_gate(project_dir, agent_id, gate, context=None):
-    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+def _post_gate(project_dir, agent_id, gate, context=None, release=None):
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
+    `release` is the label of the release the gate gates; it rides on to the
+    builder untouched and reaches the wire as the event's top-level
+    `version`."""
     return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
-                            context)
+                            context, release)
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
@@ -2519,7 +2530,11 @@ def main():
         "auto-ingest",
         help="Ingest only: junit if present, else `cargo check` stderr as compile errors.",
     )
-    a.add_argument("--agent", required=True)
+    a.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     a.add_argument("--crate", required=True, help="Crate name (for compile fallback)")
     a.add_argument(
         "--features",
@@ -2532,7 +2547,11 @@ def main():
         "regression-ingest",
         help="Per-crate coverage regression: clean + llvm-cov nextest + ingest parsed.",
     )
-    g.add_argument("--agent", required=True)
+    g.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     g.add_argument(
         "--crates",
         required=True,
@@ -2549,7 +2568,9 @@ def main():
         "test",
         help="cargo nextest run -p <crate>. With --agent: also ingest junit afterwards.",
     )
-    t.add_argument("--crate", required=True)
+    t.add_argument("--crate", required=True,
+                   help="Cargo package to run (`-p`); required — this verb never falls back "
+                        "to the whole workspace")
     t.add_argument("--features", help="Comma-separated feature flags")
     t.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
     t.add_argument("--test", help="Single test binary, e.g. window_pipeline_e2e")
@@ -2564,7 +2585,9 @@ def main():
         "check",
         help="cargo check -p <crate>. With --agent: ingest stderr as rustc compile errors.",
     )
-    c.add_argument("--crate", required=True)
+    c.add_argument("--crate", required=True,
+                   help="Cargo package to check (`-p`); required — this verb never falls back "
+                        "to the whole workspace")
     c.add_argument("--features", help="Comma-separated feature flags")
     c.add_argument("--tests", action="store_true", help="Add --tests flag (check tests too)")
     c.add_argument("--agent", help="If set, ingest stderr as compile errors")
@@ -2575,7 +2598,9 @@ def main():
         "clippy",
         help="cargo clippy -p <crate>. With --agent: ingest stderr as compile errors.",
     )
-    cl.add_argument("--crate", required=True)
+    cl.add_argument("--crate", required=True,
+                    help="Cargo package to lint (`-p`); required — this verb never falls back "
+                         "to the whole workspace")
     cl.add_argument("--features", help="Comma-separated feature flags")
     cl.add_argument("--tests", action="store_true", help="Add --tests flag (lint tests too)")
     cl.add_argument(
@@ -2797,13 +2822,18 @@ def main():
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycle", action="append",
                     help="One cycle label, never split; repeat --cycle per cycle.")
-    pf.add_argument("--cycles",
-                    help='Legacy comma-split form; prefer one --cycle per label.')
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     _add_workflow_agent_arg(
         pf, extra=" The registered id is also stored as the plan's orchestrator "
                   "(the free-text --orchestrator label is retired).")
     pf.add_argument("--wave",
                     help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _axi().add_plan_file_release_arg(pf)
     _add_project_dir_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
 
@@ -2848,6 +2878,7 @@ def main():
                               "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _axi().add_cycle_add_target_args(cad)
     _add_workflow_agent_arg(cad)
     _add_project_dir_arg(cad)
     cad.set_defaults(func=cmd_cycle_add)
@@ -2973,6 +3004,7 @@ def main():
                           "git-flow project that merges directly has no PR for it "
                           "to watch — without --skip the gate blocks until "
                           "ci_timeout.")
+    _axi().add_gate_release_arg(gr)
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
@@ -2987,12 +3019,17 @@ def main():
                          "the verb fails; there is no fallback.")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
+    _axi().add_gate_release_arg(grp)
     _add_project_dir_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type. The vocabulary is this project's own, not this "
+                         "CLI's: PATCH /api/v2/projects/<key> {milestoneTypes: [...]} "
+                         "declares it, GET /api/v2/projects reads back what this project "
+                         "declared, and a refused milestone names the live accepted set "
+                         "back to you.")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

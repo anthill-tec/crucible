@@ -70,7 +70,8 @@ This RED slice pins the exact package layout + API GREEN must build:
     crucible_axi/manifest.py
         build_manifest(install_dir) -> dict
             {"version": <str>, "clients": {<stack>: <path>, ...},
-             "status": <path ending in "STATUS-CONTRACT.md">}
+             "status": <path ending in "STATUS-CONTRACT.md">,
+             "config": <path ending in "crucible.toml">}
             "clients" covers exactly {"bun","python","rust","mvn","arduino"}.
         write_manifest(target_dir, manifest_dict) -> str
             Writes "crucible-clients.json" (single JSON document, overwriting
@@ -102,6 +103,13 @@ TOON_PATH = REPO_ROOT / "clients" / "toon.py"
 STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
 
 EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino"}
+
+# The manifest's top-level key set, DECLARED ONCE in `manifest_contract` and
+# imported here rather than restated: three suites pin it, and three copies of
+# one consumer contract is a schema change that can land on two of them
+# (CR-CRU-131 §S1c).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
 
 
 def _ensure_repo_root_on_path():
@@ -538,7 +546,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         with open(written_path) as f:
             on_disk = json.load(f)
         self.assertEqual(on_disk, manifest)
-        self.assertEqual(set(on_disk.keys()), {"version", "clients", "status"})
+        self.assertEqual(set(on_disk.keys()), set(EXPECTED_MANIFEST_KEYS))
 
 
 class InstallIdempotencyTest(unittest.TestCase):
@@ -595,7 +603,7 @@ class InstallIdempotencyTest(unittest.TestCase):
         # JSON documents, which json.loads rejects -- this must stay a single
         # parseable document.
         reparsed = json.loads(second_content)
-        self.assertEqual(set(reparsed.keys()), {"version", "clients", "status"})
+        self.assertEqual(set(reparsed.keys()), set(EXPECTED_MANIFEST_KEYS))
 
     def test_running_install_twice_reports_manifest_stage_converged_on_second_run(self):
         install = _import_fresh("crucible_axi.install")

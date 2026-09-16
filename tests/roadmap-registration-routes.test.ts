@@ -43,7 +43,6 @@
 //
 // Every server here is booted on an OS-assigned port against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
-import { decode } from "@toon-format/toon";
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -110,6 +109,22 @@ interface AnyBody {
 const ORCH = "orchestrator-1";
 const RED_AGENT = "red-1";
 const ROLELESS = "legacy-pre-cr044";
+
+/** CR-CRU-118 §S3 — the route-level notice the BULK queue post raises on EVERY
+ *  call, announcing that the door is deprecated in favour of the per-CR verbs.
+ *  The five routes this suite is about raise no such thing. */
+const DEPRECATED_ROUTE_CODE = "deprecated-route";
+
+/**
+ * What a call raised BESIDE §S3's standing deprecation notice.
+ *
+ * EXCLUDED, never filtered FOR: `toEqual([])` on the remainder still says "and
+ * nothing else happened", which is what the assertion claimed before §S3
+ * landed and what catches an unexpected finding nobody is watching for.
+ */
+function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): WarningWire[] {
+  return (warnings ?? []).filter((warning) => warning.code !== DEPRECATED_ROUTE_CODE);
+}
 
 /** The store's private `Database`, reached the way tests/agent-lifecycle.test.ts
  *  and tests/v2-projects-activity.test.ts already reach it, to plant a column
@@ -231,17 +246,21 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     return `/api/v2/projects/${key}/queue/${cr}/${verb}`;
   }
 
+  /** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at,
+   *  so the route refuses one that names none. The fixtures below whose
+   *  subject is something else (the role gate, the queue routes, ordering,
+   *  idempotence of a DIFFERENT verb) need a live proposal to exist, not a
+   *  particular date, so the helper supplies one plausible date for all of
+   *  them; the tests whose subject IS the target pass their own. */
+  const FIXTURE_TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+
   async function propose(
     key: string,
     label: string,
-    targetAt?: number,
+    targetAt: number = FIXTURE_TARGET_AT,
     agentId: string = ORCH,
   ): Promise<{ status: number; body: AnyBody }> {
-    return post(proposalsPath(key), {
-      agentId,
-      label,
-      ...(targetAt !== undefined ? { targetAt } : {}),
-    });
+    return post(proposalsPath(key), { agentId, label, targetAt });
   }
 
   async function plan(
@@ -332,12 +351,15 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
 
     test(
       "GET …/release-proposals lists LIVE proposals ASCENDING by version, with the " +
-        "waves already planned against each",
+        "waves already planned against each and the target each one declared",
       async () => {
         boot();
         const key = await seed("s8-proposal-read");
-        await propose(key, "0.3.0");
-        await propose(key, "0.2.1");
+        // Two DIFFERENT targets, deliberately in the opposite order to the
+        // version sort, so a listing that paired a row with a neighbour's
+        // date could not pass.
+        await propose(key, "0.3.0", 1_790_812_800); // 2026-10-01
+        await propose(key, "0.2.1", 1_788_220_800); // 2026-09-01
         await plan(key, "CR-CRU-070", "0.2.1", 4, "an earlier wave");
         await plan(key, "CR-CRU-071", "0.2.1", 5, "a later wave");
 
@@ -345,8 +367,14 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         expect(read.body.proposals!.map((p) => p.label)).toEqual(["0.2.1", "0.3.0"]);
         expect(read.body.proposals![0]!.waves).toEqual(["4", "5"]);
         expect(read.body.proposals![1]!.waves).toEqual([]);
-        // A proposal carrying no target declares none — never a fabricated 0.
-        expect("targetAt" in read.body.proposals![1]!).toBe(false);
+        // CR-CRU-118 §S4 — every proposal declares the date it aims at, and
+        // the listing carries each row's OWN target, re-sorted with it. (This
+        // replaces the assertion that a target-LESS proposal reported no
+        // `targetAt`: §S4 makes such a proposal unwritable, so that subject
+        // no longer exists on this route.)
+        expect(read.body.proposals!.map((p) => p.targetAt)).toEqual([
+          1_788_220_800, 1_790_812_800,
+        ]);
       },
     );
 
@@ -514,7 +542,14 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     /** The five §S8 write routes, each with a valid body minus the caller. */
     function routes(key: string): Array<{ name: string; path: string; body: Record<string, unknown> }> {
       return [
-        { name: "release-propose", path: proposalsPath(key), body: { label: "0.9.9" } },
+        {
+          name: "release-propose",
+          path: proposalsPath(key),
+          // CR-CRU-118 §S4 — "a VALID body" now includes the target, so the
+          // ORCHESTRATOR row of this table reaches 200 and the three refusal
+          // rows still refuse on the ROLE, which is checked first.
+          body: { label: "0.9.9", targetAt: FIXTURE_TARGET_AT },
+        },
         {
           name: "cr-plan",
           path: planPath(key),
@@ -1201,9 +1236,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac10-out-of-order");
         await propose(key, "0.2.0");
+        // CR-CRU-118 §S2 — the seeded rows DECLARE the release they target: the
+        // migration door no longer invents membership for a cr the board has
+        // never held. The subject is unchanged — only the bulk door can author
+        // a `dependsOn`, which is why the graph still rides it.
         await seedGraph(key, [
-          { cr: "CR-A", wave: 5, dependsOn: [] },
-          { cr: "CR-B", wave: 5, dependsOn: ["CR-A"] },
+          { cr: "CR-A", wave: 5, dependsOn: [], release: "0.2.0" },
+          { cr: "CR-B", wave: 5, dependsOn: ["CR-A"], release: "0.2.0" },
         ]);
         await plan(key, "CR-A", "0.2.0", 5, "the dependency");
         await plan(key, "CR-B", "0.2.0", 5, "the dependant");
@@ -1229,9 +1268,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac10-cross-wave");
         await propose(key, "0.2.0");
+        // CR-CRU-118 §S2 — as above: the graph still arrives through the only
+        // door that can author one, and its rows now name the release every
+        // live row owes. Both containers below are still 0.2.0/4 and 0.2.0/5,
+        // which is the whole subject.
         await seedGraph(key, [
-          { cr: "CR-EARLY", wave: 4, dependsOn: ["CR-LATE"] },
-          { cr: "CR-LATE", wave: 5, dependsOn: [] },
+          { cr: "CR-EARLY", wave: 4, dependsOn: ["CR-LATE"], release: "0.2.0" },
+          { cr: "CR-LATE", wave: 5, dependsOn: [], release: "0.2.0" },
         ]);
         await plan(key, "CR-LATE", "0.2.0", 5, "the later one");
 
@@ -1297,13 +1340,16 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac15");
         await propose(key, "0.2.0");
+        // CR-CRU-118 §S2 — the dependency graph this fixture is about rides
+        // the migration door, and its rows declare the release they target
+        // rather than leaving the write to invent one.
         const res = await post(queuePath(key), {
           agentId: ORCH,
           entries: [
-            { cr: "CR-X", wave: 5, dependsOn: [] },
-            { cr: "CR-C", wave: 5, dependsOn: ["CR-X"] },
-            { cr: "CR-D", wave: 5, dependsOn: ["CR-X"] },
-            { cr: "CR-E", wave: 5, dependsOn: [] },
+            { cr: "CR-X", wave: 5, dependsOn: [], release: "0.2.0" },
+            { cr: "CR-C", wave: 5, dependsOn: ["CR-X"], release: "0.2.0" },
+            { cr: "CR-D", wave: 5, dependsOn: ["CR-X"], release: "0.2.0" },
+            { cr: "CR-E", wave: 5, dependsOn: [], release: "0.2.0" },
           ],
         });
         expect(res.status).toBe(200);
@@ -1343,9 +1389,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const key = await seed("ac21");
         const first = await propose(key, "0.4.0", 1_787_000_000);
         expect(first.body.converged).toBe(false);
+        // CR-CRU-130 §S2 — the record a proposal writes IS a `release`, an
+        // undelivered one; identical retarget to the AC22 case below. The
+        // case's subject — a revision retires rather than editing in place —
+        // is untouched.
         const firstEventId = handle!.store
           .listEvents(key, 200)
-          .find((e) => e.type === "release-proposal")!.id;
+          .find((e) => e.type === "release")!.id;
 
         const revised = await propose(key, "0.4.0", 1_790_000_000);
         expect(revised.status).toBe(200);
@@ -1460,10 +1510,19 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
 
   // ── AC22 — a live proposal outlives the retention cap ─────────────────────
 
-  describe("AC22 — a live proposal survives pruning; a consumed one does not", () => {
+  // CR-CRU-129 §S1 NARROWS this AC. It read "a live proposal survives pruning;
+  // a consumed one does not", and the second half is now false BY DESIGN: a
+  // `release-proposal` is a record in its own table and retention reaches no
+  // record, consumed or not. That half is dropped rather than re-pinned. What
+  // is kept is the ROUTE-level half that still holds and that §S1 strengthens —
+  // and beside it the thing consuming a proposal has always meant and still
+  // does (CR-CRU-091 §S1): it leaves the LIVE read while staying auditable
+  // through the by-id read. That is a property of `retired_at`, not of the cap.
+  describe("AC22 — a live proposal outlives the count cap, and a consumed one leaves the live read while staying auditable", () => {
     test(
       "with the count cap driven below the event total the live release-proposal " +
-        "survives and is still readable, while a CONSUMED proposal prunes away",
+        "survives and is still readable; once its release ships it leaves GET …/release-proposals " +
+        "and is still served by id",
       async () => {
         boot();
         const key = await seed("ac22");
@@ -1471,28 +1530,41 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         expect(capped.status).toBe(200);
 
         await propose(key, "0.5.0", 1_790_000_000);
+        // CR-CRU-130 §S2 — the record a proposal writes IS a `release`, an
+        // undelivered one. The lookup follows the model; the case's subject —
+        // what the retention cap may and may not prune — is untouched.
         const proposalId = handle!.store
           .listEvents(key, 200)
-          .find((e) => e.type === "release-proposal")!.id;
+          .find((e) => e.type === "release")!.id;
 
-        // Drive the count far past the cap with ordinary, prunable events.
+        // Drive the count far past the cap with ordinary, prunable TELEMETRY —
+        // the only thing the cap reaches now, and what makes the survival
+        // below a real answer rather than a sweep that never ran.
+        const filler: string[] = [];
         for (let index = 0; index < 8; index += 1) {
-          const res = await post("/api/v2/milestones", {
-            projectKey: key,
-            agentId: ORCH,
-            type: "custom",
-            label: `filler-${index}`,
-          });
-          expect(res.status).toBe(201);
+          filler.push(
+            handle!.store.recordTestEvent(key, ORCH, {
+              summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },
+              tree: [],
+            }).id,
+          );
         }
+        // The sweep RAN: the oldest filler row is gone.
+        expect(handle!.store.getEvent(filler[0]!)).toBeNull();
 
         // A pruned proposal has no git tag to rebuild it from, so it survives.
         expect((await get(proposalsPath(key))).body.proposals!.map((p) => p.label)).toEqual([
           "0.5.0",
         ]);
-        expect(handle!.store.getEvent(proposalId)?.type).toBe("release-proposal");
+        // DELETED by CR-CRU-130 §S2: `expect(getEvent(proposalId)?.type)
+        // .toBe("release-proposal")`. Its claim was that a live proposal is a
+        // record of its own KIND, which is the two-type model §S2 retires. The
+        // survival it was standing next to is asserted above, on the wire, and
+        // by id below — neither of which needs a second type name to be true.
 
-        // Once the release SHIPS, the proposal is consumed — and prunable again.
+        // Once the release SHIPS, that record is DELIVERED: no longer a plan,
+        // so it leaves the live strip — and is the same row, still there to
+        // audit.
         const shipped = await post("/api/v2/milestones", {
           projectKey: key,
           agentId: ORCH,
@@ -1502,16 +1574,18 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
           releasedAt: 1_790_000_000,
         });
         expect(shipped.status).toBe(201);
-        for (let index = 0; index < 8; index += 1) {
-          await post("/api/v2/milestones", {
-            projectKey: key,
-            agentId: ORCH,
-            type: "custom",
-            label: `after-${index}`,
-          });
-        }
-        expect(handle!.store.getEvent(proposalId)).toBeNull();
         expect((await get(proposalsPath(key))).body.proposals).toEqual([]);
+        // DELETED by CR-CRU-130 §S2: `expect(consumed?.type).toBe(
+        // "release-proposal")` and `expect(typeof consumed?.retiredAt).toBe(
+        // "number")`. Together they asserted the CONSUMPTION — a proposal row
+        // surviving beside the release that fulfilled it, marked retired — and
+        // that pair is exactly what §S2 abolishes. What replaces them is the
+        // same claim under one record: the id the cap did not prune is still
+        // served, and it is now DELIVERED rather than retired.
+        const delivered = handle!.store.getEvent(proposalId);
+        expect(delivered?.id).toBe(proposalId);
+        expect(delivered?.deliveredAt).toBe(1_790_000_000);
+        expect(delivered?.retiredAt).toBeUndefined();
       },
     );
   });
@@ -1526,24 +1600,30 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
       async () => {
         boot();
         const key = await seed("ac23");
-        const seeded = await post(queuePath(key), {
-          agentId: ORCH,
-          entries: [
-            { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
-            { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
-            { cr: "CR-C", wave: 5, dependsOn: [], seq: 30 },
-          ],
-        });
-        expect(seeded.status).toBe(200);
-        expect(seeded.body.entries!.map((e) => e.seq)).toEqual([10, 20, 30]);
+        await propose(key, "0.2.0");
+        // The board AS IT ALREADY STANDS — the legacy positional seqs this
+        // fixture is about — written through the STORE (CR-CRU-118 §S2: the
+        // bulk door now refuses to INVENT membership, and these three rows are
+        // history rather than the subject). Their release-lessness is
+        // deliberate and preserved: the mixture the warning reports below is
+        // the WAVE axis, exactly as it was.
+        handle!.store.replaceQueue(key, [
+          { cr: "CR-A", wave: "5", dependsOn: [], seq: 10 },
+          { cr: "CR-B", wave: "5", dependsOn: [], seq: 20 },
+          { cr: "CR-C", wave: "5", dependsOn: [], seq: 30 },
+        ]);
+        expect((await queueEntries(key)).map((e) => e.seq)).toEqual([10, 20, 30]);
 
+        // …and the ROW THIS WRITE INVENTS a position for declares the release
+        // it targets, because it is a live cr the board has never held. The
+        // three held rows carry theirs forward untouched.
         const added = await post(queuePath(key), {
           agentId: ORCH,
           entries: [
             { cr: "CR-A", wave: 5, dependsOn: [] },
             { cr: "CR-B", wave: 5, dependsOn: [] },
             { cr: "CR-C", wave: 5, dependsOn: [] },
-            { cr: "CR-NEW", wave: 5, dependsOn: [] },
+            { cr: "CR-NEW", wave: 5, dependsOn: [], release: "0.2.0" },
           ],
         });
         expect(added.status).toBe(200);
@@ -1561,17 +1641,25 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     );
 
     test("a post where NO entry carries an explicit seq emits NO such warning", async () => {
+      // The BULK door raises CR-CRU-118 §S3's standing deprecation notice on
+      // every call; it is excluded below rather than the seq finding being
+      // filtered FOR, so "and nothing else happened" keeps its full strength.
       boot();
       const key = await seed("ac23-quiet");
+      await propose(key, "0.2.0");
+      // CR-CRU-118 §S2 — two crs the board has never held, so they declare the
+      // release they target. Nothing else moves: neither carries a seq, so
+      // both land in wave 5's own block and the seq axis stays silent, which
+      // is the whole subject.
       const posted = await post(queuePath(key), {
         agentId: ORCH,
         entries: [
-          { cr: "CR-A", wave: 5, dependsOn: [] },
-          { cr: "CR-B", wave: 5, dependsOn: [] },
+          { cr: "CR-A", wave: 5, dependsOn: [], release: "0.2.0" },
+          { cr: "CR-B", wave: 5, dependsOn: [], release: "0.2.0" },
         ],
       });
       expect(posted.status).toBe(200);
-      expect(posted.body.warnings).toEqual([]);
+      expect(besideTheDeprecationNotice(posted.body.warnings)).toEqual([]);
     });
 
     test(
@@ -1581,16 +1669,17 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         boot();
         const key = await seed("ac23-cr-plan");
         await propose(key, "0.2.0");
-        // The only way into the mixed-scale case: an explicitly authored seq
-        // riding the bulk post, outside wave 5's own block.
-        const seeded = await post(queuePath(key), {
-          agentId: ORCH,
-          entries: [
-            { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
-            { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
-          ],
-        });
-        expect(seeded.status).toBe(200);
+        // The mixed-scale case: sibling rows HOLDING an explicitly authored
+        // seq outside wave 5's own block. Written through the STORE, which is
+        // where the board they represent came from — CR-CRU-118 §S2 stopped the
+        // bulk door inventing membership for a cr it has never held, and these
+        // two are the fixture's history, not its subject. Release-less exactly
+        // as before, so the axis the warning fires on has not moved.
+        handle!.store.replaceQueue(key, [
+          { cr: "CR-A", wave: "5", dependsOn: [], seq: 10 },
+          { cr: "CR-B", wave: "5", dependsOn: [], seq: 20 },
+        ]);
+        expect((await queueEntries(key)).map((e) => e.seq)).toEqual([10, 20]);
 
         const added = await plan(key, "CR-NEW", "0.2.0", 5, "unauthored position");
         expect(added.status).toBe(200);
@@ -1740,10 +1829,26 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
       }
     }
 
-    async function toonReply(key: string): Promise<{ res: Response; text: string }> {
-      const res = await send("GET", `${queuePath(key)}?fmt=toon`);
-      return { res, text: await res.text() };
-    }
+    // CR-CRU-132 §S2 — the `toonReply()` helper and the TWO tests it alone
+    // fed are DELETED with the encoding they read.
+    //
+    // SUPERSEDED CLAIM: CR-CRU-108 §S1/AC3 — "the `?fmt=toon` reply carries
+    // `tracks` under the SAME name, asserted by READING the TOON text
+    // (a `content-type: text/toon` header, a `^tracks\[2\]: ` grammar line,
+    // an independent `decode()` by the reference library) rather than by
+    // trusting `reply()`", together with its trackless twin "a trackless
+    // queue's TOON reply STATES `tracks: []` so the empty fact survives the
+    // encoding". SUPERSEDED BY CR-CRU-132 §S1: the server no longer renders
+    // TOON, so there is no second encoding for a cross-encoding check to
+    // read. The independence check retires WITH the encoding it checked.
+    //
+    // THE FACT IT PROVED IS NOT LOST. `tracks` being published under a
+    // stable name — legacy `2` beside normalised `track-2`, both values,
+    // sorted, the row unrewritten, and the trimmed/collapsed padded lane —
+    // stays proven by the JSON-only AC2 tests immediately above, which
+    // assert `publishedTracks(body)` off the real read. What the deleted
+    // pair added over them was the cross-ENCODING confirmation, and that is
+    // exactly what this CR removes.
 
     function publishedTracks(body: AnyBody): unknown {
       return body.tracks;
@@ -1841,49 +1946,6 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         // both still carry the padding they were handed.
         expect(body.entries!.find((e) => e.cr === "CR-PAD")!.track).toBe(" track-2 ");
         expect(rowsByCr(key).get("CR-PAD")!.track).toBe(" track-2 ");
-      },
-    );
-
-    test(
-      "AC3 — the ?fmt=toon reply carries `tracks` under the SAME name, asserted by READING the " +
-        "TOON text: a top-level two-member array line that decodes to the JSON reply's own list",
-      async () => {
-        boot();
-        const key = await seed("cru108-ac3-toon");
-        await seedWave(key, ["CR-LEGACY", "CR-NORM"]);
-        expect((await sequence(key, RELEASE, 5, ["CR-NORM"], "2")).status).toBe(200);
-        plantTrack(key, "CR-LEGACY", "2");
-
-        const { res, text } = await toonReply(key);
-
-        expect(res.status).toBe(200);
-        expect(res.headers.get("content-type")).toBe("text/toon; charset=utf-8");
-        // IN THE TEXT — not read back off `reply()`'s JSON twin.
-        expect(text).toMatch(/^tracks\[2\]: /m);
-        const decoded = decode(text) as { tracks?: unknown };
-        expect(decoded.tracks).toEqual(["2", "track-2"]);
-        // The SAME field under the SAME name — one fact, two encodings.
-        expect(decoded.tracks).toEqual(publishedTracks((await get(queuePath(key))).body));
-      },
-    );
-
-    test(
-      "AC3 — a trackless queue's ?fmt=toon reply STATES `tracks: []`, so the empty fact survives " +
-        "the TOON encoding instead of vanishing from it",
-      async () => {
-        boot();
-        const key = await seed("cru108-ac3-toon-empty");
-        await seedWave(key, ["CR-NOLANE"]);
-
-        const { res, text } = await toonReply(key);
-
-        expect(res.status).toBe(200);
-        expect(text).toMatch(/^tracks: \[\]$/m);
-        const decoded = decode(text) as { tracks?: unknown; entries?: unknown[] };
-        expect(decoded.tracks).toEqual([]);
-        // The read really returned an entry — an empty queue would make
-        // `tracks: []` true for the wrong reason.
-        expect(decoded.entries).toHaveLength(1);
       },
     );
   });

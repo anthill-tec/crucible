@@ -69,6 +69,10 @@ interface AnyBody {
 const ORCH = "orchestrator-1";
 const RELEASE = "9.9.0";
 const WAVE = "5";
+/** CR-CRU-118 §S4 — a release proposal declares the date it is aiming at.
+ *  Nothing in this suite is ABOUT that date; the fixtures need a live
+ *  proposal to exist, so one plausible target serves all of them. */
+const TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
 
 // Three rows planned in this order, so A sits BEFORE B and B before C in the
 // wave. A dependency that points FORWARD (A on B) is the out-of-order finding;
@@ -142,7 +146,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
 
   /** The three rows through the approved API, in A, B, C order, no deps. */
   async function planThreeRows(key: string): Promise<void> {
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     for (const cr of [A, B, C]) {
@@ -258,16 +262,22 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
     const key = await seed("s2b-shared");
     // Only the migration door can seed a board that already holds a ring
     // (CR-CRU-104's open ruling), which is what a re-plan then trips over.
+    //
+    // CR-CRU-118 §S2 — the proposal is recorded FIRST and the rows declare the
+    // release they target: the door no longer INVENTS membership for a cr the
+    // board has never held. The ring still arrives through the migration door,
+    // which is the only property this fixture needs from it.
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
+      200,
+    );
     const seeded = await post(`/api/v2/projects/${key}/queue`, {
+      agentId: ORCH,
       entries: [
-        { cr: A, title: "a", wave: WAVE, dependsOn: [B] },
-        { cr: B, title: "b", wave: WAVE, dependsOn: [A] },
+        { cr: A, title: "a", wave: WAVE, dependsOn: [B], release: RELEASE },
+        { cr: B, title: "b", wave: WAVE, dependsOn: [A], release: RELEASE },
       ],
     });
     expect(seeded.status).toBe(200);
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
-      200,
-    );
 
     const refused = await plan(key, A);
     expect(refused.status).toBe(409);
@@ -280,7 +290,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
   test("AC7 — a `dependsOn` riding a cr-plan body is IGNORED: not stored on a new row, not written over a declared set on a re-plan", async () => {
     boot();
     const key = await seed("ac7-plan");
-    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE })).status).toBe(
+    expect((await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT })).status).toBe(
       200,
     );
     for (const cr of [B, C]) expect((await plan(key, cr)).status).toBe(200);
@@ -340,10 +350,20 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
       // declared RELEASE must be a live proposal on `cr-plan`. Both halves are
       // measured here, on one board, so the difference is a fact and never a
       // silently inherited one.
+      // CR-CRU-118 §S2 — both rows declare the release they target, against a
+      // proposal recorded first. That SHARPENS the contrast this test draws
+      // rather than blunting it: the release axis is satisfied, so the only
+      // thing left unknown is the dependency TARGET, and the door still
+      // accepts and flags it.
+      expect(
+        (await post(`/api/v2/projects/${key}/release-proposals`, { agentId: ORCH, label: RELEASE, targetAt: TARGET_AT }))
+          .status,
+      ).toBe(200);
       const posted = await post(`/api/v2/projects/${key}/queue`, {
+        agentId: ORCH,
         entries: [
-          { cr: A, title: "a", wave: WAVE, dependsOn: [UNKNOWN_TARGET] },
-          { cr: B, title: "b", wave: WAVE, dependsOn: [] },
+          { cr: A, title: "a", wave: WAVE, dependsOn: [UNKNOWN_TARGET], release: RELEASE },
+          { cr: B, title: "b", wave: WAVE, dependsOn: [], release: RELEASE },
         ],
       });
       expect(posted.status).toBe(200);

@@ -12,18 +12,30 @@
 // loop, not the rendering, is what that time buys.
 //
 // WHY YIELDING WITHOUT THE SLEEP IS SOUND, measured rather than assumed:
-// production schedules exactly two classes of timer (`public/app.js`,
-// `public/app-logic.mjs`, and the van/van-x bundles) —
-//   • 0ms: `setTimeout(remeasure, 0)` (app.js:3428), `setTimeout(boot, 0)`
-//     (app.js:5477) and van-x's own scheduler, which passes no delay at all;
-//   • 5000ms: `setInterval(refetch, 5000)` (app.js:413),
-//     `setTimeout(connectStream, 5000)` (app.js:406) and
-//     `setInterval(watchdogTick, 5000)` (app.js:5467).
-// There is NO debounce in between, so a 20ms sleep buys nothing a 0ms macrotask
-// yield does not already give: every render-relevant callback is queued at 0ms.
-// The 5000ms channel is deliberately NOT covered here — a test that needs a
-// poll tick waits for it explicitly (`waitForPollTick`), and that wait is a
-// real one because the interval it observes is real.
+// everything production schedules to RENDER is queued at 0ms — the
+// `setTimeout(remeasure, 0)` behind a measured pane (app.js ~L3459), the
+// `setTimeout(boot, 0)` that mounts the app (app.js ~L5516), and van-x's own
+// scheduler, which passes no delay at all. Every OTHER timer in `app.js` is a
+// clock or a retry, not a render step: the 5000ms recovery/poll channel
+// (`setInterval(refetch, 5000)` ~L413, `setTimeout(connectStream, 5000)`
+// ~L406, `setInterval(watchdogTick, 5000)` ~L5506), the 1s/10s display ticks
+// (~L698, ~L687), the 10s locate-blink cleanup (~L3905), and the 5ms
+// try-again-after-render chains behind `revealDeclaredMarker` /
+// `revealCycleRow` / `revealDrillTarget` / `scrollFocusedRowIntoView`
+// (~L3949, ~L4082, ~L4098, ~L5147).
+//
+// So a 20ms sleep buys no RENDER a 0ms macrotask yield does not already give,
+// and none of the delayed channels is covered here BY DESIGN: a test that
+// needs a poll tick waits for it explicitly (`waitForPollTick`) and a test
+// that needs a reveal waits for that reveal (`waitForDom`) — real waits on
+// real events, rather than a fixed sleep that happens to be long enough.
+//
+// THE CALL EXPRESSIONS ARE THE HANDLES, the line numbers only approximate
+// anchors: this argument rests on that INVENTORY being complete, so it is
+// re-checked by searching `setTimeout(`/`setInterval(` across `public/app.js`
+// and `public/app-logic.mjs`, never by trusting a number an unrelated edit can
+// move. Re-taken in full 2026-09-10 (CR-CRU-117 cycle 412), when the two 0ms
+// citations had drifted past their lines.
 //
 // THE STOPPING RULE IS DELIBERATELY UNCHANGED — the loop still yields the event
 // loop a FIXED number of times, because a cleverer rule was measured WRONG.
@@ -44,7 +56,7 @@ export interface SettleOptions {
   /** Macrotask yields — the caller's own tick count, unchanged. */
   ticks?: number;
   /** Sleep per yield. 0 replaces the copied 20ms; a bare yield is enough
-   *  because nothing production schedules lands between 0ms and 5000ms, and
+   *  because every render production schedules lands at 0ms (see above), and
    *  measured 3.5% of one representative file's wall time (213ms of 6110ms)
    *  once the step was gone — the rest of that file was a real 5.7s poll wait,
    *  which is why waiting files are INTEGRATION rather than tuned here. */

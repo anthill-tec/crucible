@@ -99,16 +99,25 @@ _STACK = "bun"
 
 def _resolve_project_dir(arg_value):
     """--project-dir > $BUN_CRUCIBLE_PROJECT_DIR > git repo of CWD > CWD.
-    The `.env` holding CRUCIBLE_PROJECT_KEY must live at the resolved root."""
+    The `.env` holding CRUCIBLE_PROJECT_KEY must live at the resolved root.
+
+    CR-CRU-131 §S1b — the resolved root is BOUND into the shared module, which
+    reads this project's `crucible.toml` beside that `.env` for the three
+    display limits. Bound HERE, on the client's own boot path, because
+    project-dir resolution stays client-specific and the shared module takes it
+    ALREADY RESOLVED."""
     if arg_value:
-        return arg_value
-    env_value = os.environ.get("BUN_CRUCIBLE_PROJECT_DIR")
-    if env_value:
-        return env_value
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else os.getcwd()
+        root = arg_value
+    elif (env_value := os.environ.get("BUN_CRUCIBLE_PROJECT_DIR")):
+        root = env_value
+    else:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+        )
+        root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
+                else os.getcwd())
+    _axi().bind_project_dir(root)
+    return root
 
 
 def _resolve_package_dir(arg_value, project_dir):
@@ -456,31 +465,100 @@ def _wipe(reports_dir):
             pass
 
 
+# CR-CRU-133 §S2 — the vocabulary a project states a declared target's
+# report-path mechanism in (`package.json`'s `crucible.reportPath.<target>`,
+# beside the script table the target is already declared in). `flag` — or NO
+# entry at all — is the DEFAULT: `bun test`'s own flag contract, which is every
+# target this project declares today except `test:e2e`. `env:<VAR>` names the
+# environment variable the target's OWN runner reads the path from.
+REPORT_MECHANISM_FLAG = "flag"
+REPORT_MECHANISM_ENV_PREFIX = "env:"
+
+
+def _bun_test_report_flags(junit_path, coverage, coverage_dir):
+    """The FLAG mechanism: `bun test`'s own report/coverage flag contract,
+    spelled in ONE place (CR-CRU-133 §S2) so an invocation can SELECT it
+    without naming any runner's flags itself."""
+    flags = ["--reporter=junit", f"--reporter-outfile={junit_path}"]
+    if coverage:
+        flags += ["--coverage", "--coverage-reporter=lcov",
+                  f"--coverage-dir={coverage_dir}"]
+    return flags
+
+
 def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
-    """Build the `bun test` invocation. Targeted (file paths) or whole-suite."""
+    """Build the `bun test` invocation. Targeted (file paths) or whole-suite.
+
+    This one IS `bun test` — the runner is this client's own choice, not a
+    project's declaration — so it takes the flag contract unconditionally."""
     cmd = [bun, "test"]
     if targets:
         cmd += list(targets)
-    cmd += ["--reporter=junit", f"--reporter-outfile={junit_path}"]
-    if coverage:
-        cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
-    return cmd
+    return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)
 
 
-def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir):
+def _report_path_variable(mechanism):
+    """CR-CRU-133 §S2 — the environment variable a declared mechanism names, or
+    None when the declaration is the flag default (`flag`, or no entry at all).
+
+    An unrecognised value is NOT honoured as a variable name: it falls back to
+    the default and SAYS so, because a typo'd declaration that silently starved
+    the report is the class of failure this CR exists to end."""
+    text = (mechanism or "").strip()
+    if text.startswith(REPORT_MECHANISM_ENV_PREFIX):
+        variable = text[len(REPORT_MECHANISM_ENV_PREFIX):].strip()
+        if variable:
+            return variable
+    if text and text != REPORT_MECHANISM_FLAG:
+        print(f"[crucible] WARN: unknown crucible.reportPath mechanism "
+              f"{mechanism!r} — falling back to {REPORT_MECHANISM_FLAG!r}",
+              file=sys.stderr)
+    return None
+
+
+def _declared_report_mechanism(package_dir, script):
+    """CR-CRU-133 §S2 — the mechanism the PROJECT declared for this target's
+    report path, read from `crucible.reportPath.<target>` in the same manifest
+    the script table lives in. `None` (no entry) is the flag default, so every
+    declaration that exists today keeps its meaning with no edit."""
+    crucible = _package_manifest(package_dir).get("crucible") or {}
+    return (crucible.get("reportPath") or {}).get(script)
+
+
+def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
+                        mechanism=None):
     """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
     is run BY NAME (`bun run test:unit`), never by re-parsing its body.
 
     That is the whole point of a declaration: the project can change what the
     script does without this client noticing, and the client never classifies
-    what the project declared. The reporter flags ride after the script name,
-    where `bun run` forwards them to it, so a declared target is ingested by
-    the same junit path every other run here takes."""
-    cmd = [bun, "run", script,
-           "--reporter=junit", f"--reporter-outfile={junit_path}"]
-    if coverage:
-        cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
-    return cmd
+    what the project declared.
+
+    CR-CRU-133 §S1/§S2 — that includes how the target is TOLD where to write its
+    report. This client needs the XML at `junit_path`; WHICH mechanism carries
+    it there is the declaration's business, never an inference about the runner
+    standing behind the name. Returns `(cmd, env)` — the invocation, and the
+    environment OVERLAY it must be spawned with: empty under the flag default,
+    one variable under `env:<VAR>`, and under the latter the invocation carries
+    nothing the target's runner never agreed to accept."""
+    variable = _report_path_variable(mechanism)
+    if variable:
+        return [bun, "run", script], {variable: junit_path}
+    return ([bun, "run", script]
+            + _bun_test_report_flags(junit_path, coverage, coverage_dir), {})
+
+
+def _render_invocation(cmd, report_env=None):
+    """CR-CRU-133 §S3 — the invocation as an operator must TYPE it, which under
+    the env mechanism is not the argv alone: the report path rides an
+    environment overlay THIS client supplied, so a message printing only
+    `bun run test:e2e` hands back a command that writes its report somewhere
+    else under any non-default `--reports` dir. The overlay renders as sorted
+    `VAR=value` prefixes so the string is stable; under the flag default the
+    overlay is empty and the rendering is the argv, unchanged."""
+    prefix = "".join(f"{name}={value} "
+                     for name, value in sorted((report_env or {}).items()))
+    return prefix + " ".join(cmd)
 
 
 def _parse_junit_file(junit_path):
@@ -861,9 +939,9 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
 #
 # There is deliberately NO client-side abort. `POST /runs/<id>/abort` is §S2 and
 # does not exist yet; §S1 already ships the server-side sweep that settles an
-# open run (reason `agent died` when its agent tombstones, `abandoned` past
-# CRUCIBLE_RUN_ABANDON_MS). So the signal/no-result paths STATE that the run was
-# left to that sweep rather than inventing a route.
+# open run (reason `agent died` when its agent tombstones, `abandoned` past the
+# server's `run_abandon_ms` limit). So the signal/no-result paths STATE that the
+# run was left to that sweep rather than inventing a route.
 
 NO_LIFECYCLE_ENV = "BUN_CRUCIBLE_NO_LIFECYCLE"
 _TRUTHY = ("1", "true", "yes", "on")
@@ -916,7 +994,8 @@ def _run_left_open_warning(run_id, cause):
                    f"The client posts no abort: the server settles it with "
                    f"its own auto-abort — reason `agent died` as soon as "
                    f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is "
+                   f"older than the `run_abandon_ms` limit the server resolves "
+                   f"from the crucible.toml beside its database. The run is "
                    f"abandoned, not lost"),
     }
 
@@ -1188,11 +1267,22 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
+    report_env = {}
     try:
-        cmd = (_bun_run_script_cmd(bun, script, junit_path, coverage_on,
-                                   coverage_dir) if script
-               else _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir))
-        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
+        if script:
+            # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
+            # builder returns both the command and the environment overlay the
+            # target's DECLARATION asked the report path to be carried in.
+            cmd, report_env = _bun_run_script_cmd(
+                bun, script, junit_path, coverage_on, coverage_dir,
+                _declared_report_mechanism(package_dir, script))
+            env.update(report_env)
+        else:
+            cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
+        # §S3 — the echo names the invocation INCLUDING the overlay this client
+        # supplied, so what is printed is what actually ran.
+        invocation = _render_invocation(cmd, report_env)
+        print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
         # §S2c — capture the run output (failure detail lives only there).
         log_path = getattr(args, "log", None)
         if args.agent and not log_path:
@@ -1244,12 +1334,26 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
                 warnings.append(_run_left_open_warning(
                     run_id, "the runner produced no JUnit XML, so there was "
                             "nothing to ingest"))
+            # CR-CRU-133 §S3/AC5 — a DECLARED target that produced nothing is
+            # named: which script starved, the exact command that ran it, and
+            # the path the report was expected at. It rides the ADDITIVE
+            # `remedy=`/`cause=` keywords of the shared helpers, so neither
+            # helper's shape changes for the other four clients.
+            starved = None
+            if script:
+                starved = (f"declared target `{script}` exited "
+                           f"{result.returncode} and wrote no report at "
+                           f"{junit_path} — re-run `{invocation}` in "
+                           f"{package_dir} and make `{script}` write its JUnit "
+                           f"XML to that path")
             _emit_axi(verb, False,
-                      {"help": _axi().no_report_help(verb, "junit.xml")},
+                      {"help": _axi().no_report_help(verb, "junit.xml",
+                                                     remedy=starved)},
                       _axi_context(project_dir, agent_id=args.agent),
                       warnings + [_axi().no_report_warning(
                           verb, "junit.xml", result.returncode,
-                          getattr(result, "stdout", None) or "")],
+                          getattr(result, "stdout", None) or "",
+                          cause=starved)],
                       f"{verb}: ok=False — no JUnit XML, nothing to ingest")
             return 1
 
@@ -1660,16 +1764,6 @@ def cmd_queue_file(args):
 # `cr-close`    now also emits a `type:"cr-merged"` milestone on a successful
 #               close (withheld on a failed close). §S4c / AC 141.
 
-# Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
-# snapshot has no resolved outcome of its own, so gate-run synthesises one from
-# the current step set — it must still be a member of this set (server 400s
-# otherwise).
-GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
-
-# §S2b cadence — the ONLY concrete throttle constant this codebase defines
-# (CR-CRU-008 `_Narrator` default). gate-run reuses it for its interim-poll
-# cadence so at most one interim gate posts per >=2-second window.
-
 _TOON_MOD = None
 
 
@@ -1839,48 +1933,13 @@ def _fleet_context(cr=None):
     return ctx
 
 
-def _map_axi_step_status(status):
-    """Map a no-mistakes axi step status onto a gate step status."""
-    return {
-        "completed": "passed",
-        "skipped": "skipped",
-        "failed": "failed",
-        "running": "running",
-    }.get(status, status or "passed")
-
-
-def _gate_from_axi(decoded, intent, final):
-    """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
-
-    An in-flight snapshot (`final=False`) synthesises a valid interim outcome
-    from its steps; the sealing snapshot (`final=True`) takes the run's own
-    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
-    run = decoded.get("run") if isinstance(decoded, dict) else None
-    run = run or {}
-    axi_steps = run.get("steps") or []
-    steps = []
-    any_failed = False
-    for s in axi_steps:
-        st = s.get("status")
-        if st == "failed":
-            any_failed = True
-        steps.append({"name": s.get("step"), "status": _map_axi_step_status(st)})
-    if final:
-        raw = decoded.get("outcome")
-        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
-    else:
-        outcome = "failed" if any_failed else "checks-passed"
-    gate = {"intent": intent, "outcome": outcome, "steps": steps}
-    head = run.get("head")
-    if final and head:
-        gate["push"] = {"commit": head}
-    return gate, len(steps)
-
-
-def _post_gate(project_dir, agent_id, gate, context=None):
-    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+def _post_gate(project_dir, agent_id, gate, context=None, release=None):
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
+    `release` is the label of the release the gate gates; it rides on to the
+    builder untouched and reaches the wire as the event's top-level
+    `version`."""
     return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
-                            context)
+                            context, release)
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
@@ -2013,22 +2072,30 @@ def _add_declared_tier_args(p):
     _add_no_lifecycle_arg(p)
 
 
-def _package_scripts(args):
-    """The `package.json` script table — bun's declaration surface, read in ONE
-    place for both the by-name lookup (§S6) and the enumeration a gate composes
-    over (CR-CRU-112 §S1), so the two cannot disagree about what is declared."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+def _package_manifest(package_dir):
+    """The `package.json` a bun package declares itself in, read in ONE place —
+    the script table (§S6 / CR-CRU-112 §S1) and the report-path declaration
+    beside it (CR-CRU-133 §S2) are two readings of the same file, and a second
+    reader is a second answer about what the project declared."""
     manifest = os.path.join(package_dir, "package.json")
     try:
         with open(manifest, encoding="utf-8") as handle:
-            return (json.load(handle) or {}).get("scripts") or {}
+            return json.load(handle) or {}
     except OSError:
         return {}
     except ValueError as error:
         print(f"[crucible] WARN: {manifest} is not readable JSON ({error}) — "
               f"no declared tier target can be read from it", file=sys.stderr)
         return {}
+
+
+def _package_scripts(args):
+    """The `package.json` script table — bun's declaration surface, read in ONE
+    place for both the by-name lookup (§S6) and the enumeration a gate composes
+    over (CR-CRU-112 §S1), so the two cannot disagree about what is declared."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    return _package_manifest(package_dir).get("scripts") or {}
 
 
 def _read_declared_script(args, target):
@@ -2109,6 +2176,14 @@ _CLI_DESCRIPTION = (
     "\n"
     "Tool-specific (bun test / JUnit-XML / lcov / tsc), never project-specific: the\n"
     "project path, the bun package dir and the bun binary are all parameterizable.\n"
+    "\n"
+    "A tier verb this client has no run of its own for runs the `test:<tier>` script\n"
+    "the project declares in package.json, by name. How that script is told where to\n"
+    "write its JUnit report is declared beside it, under `crucible.reportPath.<target>`:\n"
+    "`flag` (the default — `bun test`'s own report flags are appended) or `env:<VAR>`\n"
+    "(the variable the script's own runner reads the path from, so nothing is appended\n"
+    "that the runner never agreed to accept).\n"
+    "\n"
     "Run `<verb> --help` for a verb's own flags."
 )
 
@@ -2150,7 +2225,8 @@ def main():
                         "ingests are server-stamped with this cycle.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
-                   choices=["claude-md", "package-json", "git-repo", "manual"])
+                   choices=["claude-md", "package-json", "git-repo", "manual"],
+                   help="Identity discovery source per agent-protocol (default: claude-md)")
     r.add_argument("--message", help="Optional status message")
     _add_project_dir_arg(r)
     r.set_defaults(func=cmd_register)
@@ -2203,7 +2279,11 @@ def main():
         add_args=(_add_project_dir_arg,))
 
     a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")
-    a.add_argument("--agent", required=True)
+    a.add_argument("--agent", required=True,
+                   help="Agent id to ingest under — REQUIRED. A free-form identifier that "
+                        "must already be registered (`register --agent <id> --role <role>`); "
+                        "a cycle-bound agent's ingests are server-stamped with its registered "
+                        "cycle.")
     _add_reports_arg(a)
     _add_package_dir_arg(a)
     _add_project_dir_arg(a)
@@ -2238,14 +2318,19 @@ def main():
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycle", action="append",
                     help="One cycle label, never split; repeat --cycle per cycle.")
-    pf.add_argument("--cycles",
-                    help='Legacy comma-split form; prefer one --cycle per label.')
+    _axi().add_plan_file_cycle_kind_arg(pf)
+    pf.add_argument(
+        "--cycles",
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     _add_workflow_agent_arg(
         pf, extra=" The registered id is also stored as the plan's orchestrator "
                   "(the free-text --orchestrator label is retired).")
     pf.add_argument("--wave",
                     help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE; "
                          "neither -> filed wave-less (no hard block).")
+    _axi().add_plan_file_release_arg(pf)
     _add_project_dir_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
 
@@ -2291,6 +2376,7 @@ def main():
                               "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _axi().add_cycle_add_target_args(cad)
     _add_workflow_agent_arg(cad)
     _add_project_dir_arg(cad)
     cad.set_defaults(func=cmd_cycle_add)
@@ -2384,6 +2470,7 @@ def main():
                           "git-flow project that merges directly has no PR for it "
                           "to watch — without --skip the gate blocks until "
                           "ci_timeout.")
+    _axi().add_gate_release_arg(gr)
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
@@ -2398,12 +2485,17 @@ def main():
                          "the verb fails; there is no fallback.")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
+    _axi().add_gate_release_arg(grp)
     _add_project_dir_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
     ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
     ms.add_argument("--type", required=True,
-                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+                    help="Milestone type. The vocabulary is this project's own, not this "
+                         "CLI's: PATCH /api/v2/projects/<key> {milestoneTypes: [...]} "
+                         "declares it, GET /api/v2/projects reads back what this project "
+                         "declared, and a refused milestone names the live accepted set "
+                         "back to you.")
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")

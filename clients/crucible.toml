@@ -1,0 +1,70 @@
+# Crucible CLIENT limits — the file you edit, and the file the fleet ships.
+#
+# CR-CRU-131 §S1c. A limit is CONFIGURATION, never a constant compiled into
+# source (PRD §4.13), and the last resort is a DATA FILE in the distribution
+# rather than a number in a resolver. This file is that data: it ships inside
+# `crucible-axi` beside `_crucible_axi.py`, the module that reads it, and the
+# installer lays a copy down at the target directory for you to edit.
+#
+# ── How to change a limit ──────────────────────────────────────────────────
+#
+# Add a `value = …` line to the limit's table. Do NOT edit `description`,
+# `recommended`, `min` or `max`: those four are DOCUMENTATION — the record of
+# what we ship and stand behind — and overwriting `recommended` in place
+# destroys, in the very file you are reading, the means of telling our number
+# from yours after the next upgrade.
+#
+#     [limits.<name>]
+#     …the four documented fields, untouched…
+#     value = 40          # <- yours, beside ours
+#
+# With no `value`, a limit runs at its `recommended`. With one, it runs at
+# `value`, range-checked against the `min`/`max` beside it. A `value` outside
+# that range is REFUSED — never clamped — and disclosed, naming the limit,
+# your value, the range and the recommendation; the limit then runs at
+# `recommended` until the file is corrected. Read at the POINT OF USE: an edit
+# takes effect on the next call and nothing needs restarting.
+#
+# A client reads the `crucible.toml` in the PROJECT DIRECTORY it is working in,
+# beside the `.env` the clients already read; the installed copy is the fleet's
+# last resort when a project declares nothing.
+#
+# ── Why only the CLIENT's three limits are here ────────────────────────────
+#
+# A limit is owned by the process that ENFORCES it, and the two sides are
+# separate packages, installable on different hosts at independently resolved
+# versions. The SERVER's limits are read from the `crucible.toml` beside its
+# own DATABASE and ship in its own distribution. No client reads that file and
+# the server never reads this one, so a server limit written here would be
+# inert: documentation must not teach a knob that provably does nothing where
+# it sits.
+
+[limits.truncate_field_chars]
+description = "Visible characters of a long text field before the envelope cuts it and appends a size hint naming the true length; `--full` defeats it per call."
+recommended = 200
+# A width of 0 shows nothing at all, so the floor is more than "positive": 20
+# characters is the least that can carry a recognisable fragment of an error
+# before the hint.
+min = 20
+# Past a few thousand characters a "field" is a document, and the reader's
+# context is what these limits exist to protect.
+max = 4000
+
+[limits.error_detail_chars]
+description = "Maximum characters of the warning detail reported for a run that produced NO report, so a starved runner's output cannot flood the envelope carrying its cause."
+recommended = 500
+# The composed PREFIX is never truncated, so a floor beneath its own length
+# would be a bound the envelope could not honour; 100 leaves the prefix intact
+# plus room for a fragment of the cause.
+min = 100
+# 20k is past the point where a machine caller is reading a detail rather than
+# the runner's own stream.
+max = 20000
+
+[limits.roadmap_list_rows]
+description = "Rows of a roadmap list emitted before it is truncated; `totalCount` always reports the TRUE total and `--full` emits the list whole."
+recommended = 20
+# Fewer than a handful of rows is a list that cannot show a wave.
+min = 5
+# 500 rows is four times the largest board this fleet has carried.
+max = 500

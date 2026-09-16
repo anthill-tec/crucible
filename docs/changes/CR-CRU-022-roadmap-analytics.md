@@ -42,7 +42,16 @@ never rewritten history.
 `GET /api/v2/projects/<key>/analytics/burndown` returns
 `{points:[{ts, remainingWeighted, event: "plan-closed"|"scope-change"|null,
 cr?}], boundaries:[{wave, label, ts?}]}` — remaining weighted CRs over time
-from queue snapshots + plan close events, release-boundary rows annotated.
+from **per-CR declaration writes** + plan close events, release-boundary rows annotated.
+
+**Scope source re-based 2026-09-10 (user ruling; DN D4 fallout §2).** This section originally derived
+scope change from `queue_snapshots` — two `POST /queue` calls compared. That route (`queue-file`, the
+bulk migration door) is DEPRECATED in favour of the five per-CR routes and is removed in 0.3.0, so the
+snapshot pair would have been a source that stops arriving. The source is now the DECLARATION itself:
+each `cr-plan` / `wave-sequence` / `cr-depends` / `cr-supersede` / `cr-void` write is a scope event
+carrying an author, so a burn-down step is a fact somebody declared rather than a diff between two
+unsigned snapshots — and strictly finer, because a snapshot pair cannot say WHICH change moved the
+line while a declaration always can. No `queue_snapshots` table is introduced.
 
 ### §S4 Forecast (Monte Carlo, confidence-gated)
 `GET /api/v2/projects/<key>/analytics/forecast` runs N=1000 draws over the
@@ -80,7 +89,7 @@ uPlot leading candidate).
 
 ## Acceptance criteria
 - [ ] `GET /analytics/velocity` on a fixture with 6 closed cycles (known timestamps, 2 linked runs each, queue sizes XS/S/M) returns the hand-computed `cyclesPerDay`, `weightedCrsPerWeek`, `execMsPerCycle`, `gateMsPerCycle`, `sampleCycles: 6` (exact values asserted).
-- [ ] `POST /queue` twice → `queue_snapshots` holds the first entry set with a `snapped_at`; `GET /analytics/burndown` renders the scope change as a step (`event: "scope-change"`) and each plan close as a burn (`event: "plan-closed"`, remainingWeighted drops by that CR's weight).
+- [ ] Two per-CR declaration writes that change scope — a `cr-plan` adding a CR to the release and a `cr-void` taking one out — each render as their own `scope-change` step in `GET /analytics/burndown`, EACH NAMING THE CR AND THE VERB that moved the line; every plan close renders as a burn (`event: "plan-closed"`, remainingWeighted drops by that CR's weight). Asserted with no `queue_snapshots` table in the schema — an implementation that reintroduces snapshot-diffing fails this AC (re-based 2026-09-10, DN D4 fallout §2).
 - [ ] `GET /analytics/forecast` with ≥15 closed cycles returns `status: "ok"` with `p50Ts ≤ p80Ts` for every wave, waves ordered by dependency (a wave's p50 never precedes its dependency wave's); with <15 closed cycles returns `status: "insufficient_history"` and NO `perWave`/`release` band values.
 - [ ] `scheduleHealth` is computed against the **release's declared target** (CR-091) per the DN §7 rule — `P80 ≤ target` → `ahead`, `P50 ≤ target < P80` → `at-risk`, `P50 > target` → `behind` (three fixtures, one per verdict, exact values via the seeded forecast). With **no** declared target the field is **absent** from the response, never defaulted. This CR adds **no** target field of its own — an implementation that introduces a per-wave `targetDate` on the queue entry fails this AC.
 - [ ] Roadmap pane renders `roadmap-progress` with the sparkline, velocity text containing the exec/gate split, and the P50/P80 band; clicking the band swaps the pane to `analytics-pane` (tabs hidden, back chip `← roadmap`) containing `burndown-chart`, the velocity detail and the per-wave forecast rows; closing restores the Roadmap view (CR-016 one-rule assertions); the `insufficient_history` fixture renders the sample count and NO date text.

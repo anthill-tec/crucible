@@ -1,6 +1,8 @@
 // CR-CRU-007 §S5 AC4 — the v2 projects listing (GET /api/v2/projects) gains
 // server-computed `active: boolean` + `lastActivity: number` per project,
-// driven by CRUCIBLE_PROJECT_INACTIVE_MS (default 3_600_000ms). Activity
+// driven by the `project_inactive_ms` limit in the SERVER's own crucible.toml
+// (default 3_600_000ms; CR-CRU-131 §S1b retired the environment override that
+// used to carry it). Activity
 // rule (user-locked round 13): active while >=1 live (online/stale) agent;
 // with none left, inactive once now-lastActivity EXCEEDS the timeout.
 // lastActivity = max(project's last event timestamp, agents' last-seen).
@@ -18,6 +20,33 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { startServer } from "../src/server.ts";
 import type { Store } from "../src/store.ts";
+import { shippedLimits } from "../src/limits.ts";
+import {
+  declare,
+  restoreServerLimitsFixture,
+  serverConfigDir,
+  writeConfig,
+} from "./helpers/server-limits-fixture.ts";
+
+/**
+ * CR-CRU-131 §S1b — the project-inactive window is CONFIGURATION, and since C2
+ * the only surface that configures it is the SERVER's own `crucible.toml`.
+ * `$CRUCIBLE_PROJECT_INACTIVE_MS`, which this suite used to set, is retired: a
+ * limit read from the environment carries no `description`, no `recommended`
+ * and no supportable range, which is the condition PRD §4.13 exists to end.
+ * Every verdict asserted below is unchanged — only the surface has moved.
+ *
+ * `min` is RE-STATED beside the value, and legitimately: the shipped floor is
+ * a supportability judgement for a real fleet, while the short-window test
+ * below deliberately drives a five-second window. §S1b's validator reads `min`
+ * off the VERY TABLE the operator edits, so a bound moved in the file is
+ * configuration, not a bypass of it.
+ */
+function configureInactiveWindow(ms: number): void {
+  writeConfig(serverConfigDir(), {
+    project_inactive_ms: declare(shippedLimits().project_inactive_ms!, ms, { min: ms }),
+  });
+}
 
 interface ProjectWithActivity {
   key: string;
@@ -51,13 +80,11 @@ function backdateEventTimestamp(store: Store, eventId: string, msAgo: number): v
 
 describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
-  const originalTimeoutEnv = process.env.CRUCIBLE_PROJECT_INACTIVE_MS;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
-    if (originalTimeoutEnv === undefined) delete process.env.CRUCIBLE_PROJECT_INACTIVE_MS;
-    else process.env.CRUCIBLE_PROJECT_INACTIVE_MS = originalTimeoutEnv;
+    restoreServerLimitsFixture();
   });
 
   function base(): string {
@@ -68,7 +95,7 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
     "project A (1 online agent, seen 5s ago) and C (no live agents, 10min-old activity) are active; " +
       "project B (no live agents, 2h-old activity, timeout exceeded) is inactive; badge order A, C, B",
     async () => {
-      process.env.CRUCIBLE_PROJECT_INACTIVE_MS = "3600000";
+      configureInactiveWindow(3_600_000);
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const store = handle.store;
 
@@ -136,7 +163,7 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
   );
 
   test("boundary: now - lastActivity exactly AT the configured timeout is still active (only EXCEEDING flips it)", async () => {
-    process.env.CRUCIBLE_PROJECT_INACTIVE_MS = "3600000";
+    configureInactiveWindow(3_600_000);
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const store = handle.store;
 
@@ -158,11 +185,11 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
     expect(project?.active).toBe(true);
   });
 
-  test("respects a custom CRUCIBLE_PROJECT_INACTIVE_MS (not just the 3_600_000 default)", async () => {
+  test("respects a custom `project_inactive_ms` in the server's file (not just the 3_600_000 default)", async () => {
     // A short 5s timeout: a project whose last activity is 10s old must read
-    // inactive under this override, even though it would be active under the
+    // inactive under this setting, even though it would be active under the
     // 1h default used by every other test in this file.
-    process.env.CRUCIBLE_PROJECT_INACTIVE_MS = "5000";
+    configureInactiveWindow(5_000);
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const store = handle.store;
 

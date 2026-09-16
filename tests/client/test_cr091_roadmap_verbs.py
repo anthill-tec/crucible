@@ -56,6 +56,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 TOON_PATH = CLIENTS_DIR / "toon.py"
@@ -142,6 +147,7 @@ class _RoadmapVerbTestBase(unittest.TestCase):
             fh.write(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
             # arduino's `_load_env` requires the name too; harmless elsewhere.
             fh.write("CRUCIBLE_PROJECT_NAME=cr091-roadmap-project\n")
+        install_project_limits(self.tmpdir)
         self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
         for k in ENV_KEYS:
             os.environ.pop(k, None)
@@ -219,14 +225,18 @@ class _WireTests:
     smuggles an extra field or invents a path fails here without a server."""
 
     def test_release_propose_posts_the_S8_body_to_the_S8_path(self):
+        # CR-CRU-118 §S4 -- `--target` is required, so the §S8 body a client
+        # can post at all now carries `targetAt`. The subject is unchanged:
+        # the body is §S8's field set plus `agentId` and NOTHING else.
         _code, _axi, post_mock, _get = self.drive(
-            ["release-propose", "--label", "0.4.0", "--agent", "orc"],
+            ["release-propose", "--label", "0.4.0", "--target", "2026-10-01",
+             "--agent", "orc"],
             post_return={"ok": True, "converged": False,
                          "proposal": {"label": "0.4.0"}})
         body = self.assert_posted(post_mock, PROPOSALS_PATH)
         self.assertEqual(
-            body, {"label": "0.4.0", "agentId": "orc"},
-            f"{self.CLIENT}: release-propose's body is §S8's {{label, targetAt?}} "
+            body, {"label": "0.4.0", "targetAt": 1790812800, "agentId": "orc"},
+            f"{self.CLIENT}: release-propose's body is §S8's {{label, targetAt}} "
             f"plus agentId; got {body!r}")
 
     def test_release_propose_target_rides_as_epoch_seconds_named_targetAt(self):
@@ -317,7 +327,8 @@ class _WireTests:
                     mock.patch.object(self.module, "_get", create=True,
                                       return_value=_proposals_response()):
                 for argv in (
-                        ["release-propose", "--label", "0.4.0"],
+                        ["release-propose", "--label", "0.4.0",
+                         "--target", "2026-09-01"],
                         ["cr-plan", "--cr", "CR-X", "--release", "0.2.0",
                          "--wave", "5", "--title", "t"],
                         ["wave-sequence", "--release", "0.2.0", "--wave", "5",
@@ -504,7 +515,8 @@ class _EnvelopeContractTests:
 
     def _each_verb(self):
         return (
-            (["release-propose", "--label", "0.4.0", "--agent", "orc"],
+            (["release-propose", "--label", "0.4.0", "--target", "2026-09-01",
+             "--agent", "orc"],
              {"ok": True, "converged": True,
               "proposal": {"label": "0.4.0"}},
              "release-propose"),
@@ -564,7 +576,8 @@ class _EnvelopeContractTests:
 
     def test_release_propose_help_names_the_label_just_proposed(self):
         _code, axi, _post, _get = self.drive(
-            ["release-propose", "--label", "0.4.0", "--agent", "orc"],
+            ["release-propose", "--label", "0.4.0", "--target", "2026-09-01",
+             "--agent", "orc"],
             post_return={"ok": True, "converged": False,
                          "proposal": {"label": "0.4.0"}})
         self.assertTrue(
@@ -621,7 +634,8 @@ class _EnvelopeContractTests:
         """§S7/AC12 — the client keys on `ok` + `converged`, never on the
         status code (§S8 settles that every success is 200)."""
         code, axi, _post, _get = self.drive(
-            ["release-propose", "--label", "0.4.0", "--agent", "orc"],
+            ["release-propose", "--label", "0.4.0", "--target", "2026-09-01",
+             "--agent", "orc"],
             post_return={"ok": True, "converged": True,
                          "proposal": {"label": "0.4.0"}})
         self.assertEqual(code, 0)
@@ -700,6 +714,7 @@ class _RefusalTests:
     def _all_verb_argv(self):
         return (
             ("release-propose", ["release-propose", "--label", "0.4.0",
+                                 "--target", "2026-09-01",
                                  "--agent", "orc"]),
             ("cr-plan", ["cr-plan", "--cr", "CR-X", "--release", "0.2.0",
                          "--wave", "5", "--title", "t", "--agent", "orc"]),

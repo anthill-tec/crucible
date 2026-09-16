@@ -267,6 +267,15 @@ const EXEMPT_CONSTANTS: Record<string, { file: string; reason: string }> = {
       "in it, fed to the checkers as a pure function so the tripwire can be proven to fire " +
       "without editing a real file. The planted namespaces name no project that exists.",
   },
+  RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10: {
+    file: join("tests", "queue-release-membership-mandatory.test.ts"),
+    reason:
+      "AC5's dated snapshot, in the shrinking-ceiling form PRE_CR_ASSERTION_RESIDUE uses — " +
+      "CR-CRU-118 §S1's board invariant names the live queue entries that still carry no " +
+      "release, measured 2026-09-10, plus the one excluded by its VOID disposition rather " +
+      "than by migration. The census is a claim about THIS project's board, so the ids are " +
+      "the subject and cannot be synthesised; every other row that suite drives is synthetic.",
+  },
 };
 
 function exemptConstantSpans(relPath: string, text: string): Span[] {
@@ -288,11 +297,25 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // without this file being touched. Enumerated 2026-09-03 by scanning every
 // assertion in tests/; each entry was read at its use site to confirm the
 // ids are authored by the test that consumes them.
+//
+// TWO entries added 2026-09-12 by CR-CRU-126 (`CR-BACKFILL`, `CR-BOUND`), each
+// read at its use site like every entry above, and added because the guard
+// FAILED on the day the two test files were written — the deny-by-default rule
+// working, not a hole being widened. `CR-BACKFILL` also spells the fixture
+// BRANCH of the §S1b suite, `feature/CR-BACKFILL-1`, which replaced a
+// `feature/CR-CRU-096`: the spec quotes that branch because it is our own live
+// board's plan-99 reading, the observation the CR was filed over, and the
+// fixture merely mirrored it — so the fixture was free to differ, and now
+// does. Neither new file takes a `PRE_CR_ASSERTION_RESIDUE` entry, which is
+// the point: the ceiling is for literals an assertion is ABOUT, and both of
+// these were decoration.
 const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-AAA": "test_crucible_axi_shared.py — two-agent warning fixture",
   "CR-AUTH": "cycle/plan fixtures for an authored-but-unplanned CR",
   "CR-AUTHORED": "§S5's synthetic wave-block rows (AC4's remedy)",
+  "CR-BACKFILL": "§S1b's NULL-column store, its plan and its fixture branch",
   "CR-BBB": "test_crucible_axi_shared.py — the second agent of the pair",
+  "CR-BOUND": "§S1's commit-boundary output-contract fixture",
   "CR-DEAD": "next-resolver fixture for a CR that no longer exists",
   "CR-DECLARED": "§S5's synthetic declaration-order rows (AC4's remedy)",
   "CR-DEFERRED": "§S5's synthetic wave-6 rows (AC4's remedy)",
@@ -467,9 +490,9 @@ function collectHelpSurfaces(): HelpSurface[] {
 
 // THE RESIDUE THIS CR DOES NOT TOUCH — pinned, enumerated, dated, never
 // implied. Measured 2026-09-03 by this file's own checker: 220 real-namespace
-// literals sit in assertions across these 41 files. Not one is in
+// literals sit in assertions across 41 of the files listed below. Not one is in
 // CR-CRU-097's scope — §S3 named three files (all now at zero) and AC7a four
-// more (carved out above); these 41 are a pre-existing instance of the SAME
+// more (carved out above); those 41 are a pre-existing instance of the SAME
 // class, found by building the tripwire. Churning 41 unrelated files from
 // inside a tripwire CR is exactly the scope creep §S5 refused, so they are
 // recorded here instead of edited, and reported as a finding.
@@ -478,6 +501,12 @@ function collectHelpSurfaces(): HelpSurface[] {
 // grow, and a file absent from this table must be at ZERO. That is the
 // forward guarantee — a new test asserting on a real project's CR id fails
 // here, in the file that introduced it, on the day it is written.
+//
+// ONE file has been ADDED since that measurement, and exactly one: CR-CRU-124's
+// on 2026-09-12, dated and reasoned at its own line below. The guarantee above
+// is what produced it — the guard failed on the day that file was written — so
+// the entry records the reading taken then and nothing else, and the ceiling it
+// sets may only shrink.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
   [join("tests", "ci-toolchain-provisioning.test.ts")]: 1,
@@ -506,6 +535,32 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "client", "test_crucible_axi_shared.py")]: 3,
   [join("tests", "client", "test_crucible_axi_stages.py")]: 8,
   [join("tests", "client", "test_crucible_axi_wheel_packaging.py")]: 1,
+  // ADDED 2026-09-12 by CR-CRU-124 — the FIRST entry this table has taken
+  // since it was measured on 2026-09-03 (41 files then, 42 now), and it is
+  // taken deliberately rather than by rewriting the RED contract it records.
+  // Seven literals, MEASURED by this file's own checker on the day the file
+  // was written, in two roles:
+  //   • FOUR are the assertion's SUBJECT. §S2/AC3 pins the cr-ABSENT ambiguity
+  //     wording VERBATIM — the one path this CR must leave untouched — so the
+  //     two-plan fixture board (:410, :411) and the expected sentence it must
+  //     produce (:418, :419) name the same two real crs. Synthesising them
+  //     would pin a sentence the client never emits, i.e. weaken the only
+  //     regression that proves the old wording survived. This is the case AC5
+  //     and the dated snapshots above exist for, and NOT the CR-CRU-118 /
+  //     CR-CRU-122 case, where the literal was decoration inside an `expect`
+  //     MESSAGE and was reworded away; no literal in this file sits in a
+  //     message.
+  //   • THREE are fixture SETUP that the span walk deliberately over-reports.
+  //     `self.assertEqual(message.count("(plan "), ...)` at :375/:376 opens a
+  //     bracket INSIDE a string literal, so that assertion's span never closes
+  //     and runs to end-of-file, swallowing the mock board at :674 and the
+  //     contradicting `--cr` fixture at :716/:723. No assertion reads any of
+  //     the three. That is the walk's documented fail-loud direction — an
+  //     over-report in the file that wrote the message, never a silent hole —
+  //     so it is recorded here rather than papered over by editing a fixture
+  //     the CR's own RED authored. The ceiling shrinks to 4 the day the walk
+  //     is taught to skip string literals, and a ceiling may always shrink.
+  [join("tests", "client", "test_cycle_add_targets_the_plan_it_means.py")]: 7,
   [join("tests", "client", "test_mvn_crucible_axi.py")]: 10,
   [join("tests", "client", "test_python_crucible_axi.py")]: 9,
   [join("tests", "client", "test_queue_file_verb.py")]: 23,
@@ -1276,10 +1331,627 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // `clients/` 672 -> 687, CR-CRU-107 687 -> 691 and CR-CRU-111 694 -> 747. The
 // `develop` baselines are UNCHANGED at 512/378/601 and stay the floors — a
 // floor never moves for a re-pin.
+// UPDATED 2026-09-09 by CR-CRU-116 — the CR's own close-out step, planned
+// rather than escalated, landing in the same commit as its last prose change
+// because the cycle after this one is VERIFY and read-only. TWO trees move and
+// they move for DIFFERENT cycles of the one CR; `clients/` does not move at all
+// and re-measures at the recorded 785.
+//
+// `src/` HEAD moves 563 -> 573, +10 — §S1/§S2/§S3's wave-scope guard (cycle
+// 393). The three files the sections were scoped to, and no others:
+//   `src/store.ts`            251 -> 259  (+8)   the guard and its refusals
+//   `src/v2.ts`               189 -> 190  (+1)   the plans-POST wiring
+//   `src/hints.ts`             39 ->  40  (+1)   the help line
+//
+// `public/` HEAD moves 435 -> 436, +1 — §S4's per-wave `active` (cycle 394):
+//   `public/app-logic.mjs`     85 ->  86  (+1)
+//   `public/app.js`           225 -> 225  (+0)
+//   `public/app-logic.d.mts`   53 ->  53  (+0)
+// That +1 is the SUPERSESSION itself. `focusedReleaseView`'s retired comment
+// (`const active = kind === "proposed"`) cited CR-CRU-096 once; its replacement
+// cites CR-CRU-116 §S4 AND names the CR-CRU-096 AC1 reading it retires, so one
+// citation becomes two — the pin measures provenance, and provenance growing at
+// a direction change is the rule working. The renderer's `data-active` comment
+// and the `FocusedReleaseWave.active` JSDoc each SWAPPED CR-CRU-096 for
+// CR-CRU-116, which is why both files are flat. Every one of the six is prose
+// on a `//` or ` * ` line, none in a string.
+//
+// RECORDED BECAUSE IT COST SOMETHING: the `src/` half of this re-record was
+// due at the end of cycle 393 and was missed, because that cycle was verified
+// by running the two suites it edited and not this guard — which is a THIRD
+// file, and the only one that measures a tree rather than a behaviour. A cycle
+// that adds prose to a guarded tree runs this file before it is called done.
+// UPDATED 2026-09-09 by CR-CRU-116's FIX round (cycle 396), which CORRECTS the
+// note above: `clients/` does move after all. VERIFY found the plans route's
+// refusal arriving at an orchestrator stripped of the two fields that make it
+// actionable — the client emitted only `cr` on a failed `plan-file`, so §S3's
+// `help[]` and the `already-active` / `out-of-order` `code` survived in the
+// legacy stderr line alone, which is the one channel a machine caller does not
+// read. Fixing that is a prose change in a guarded tree, so it re-records here
+// in its own commit rather than leaving the head stale for a second time.
+//
+// `clients/` HEAD moves 785 -> 789, +4, all of it `_crucible_axi.py`
+// (151 -> 155) and nothing in the five stack clients, which delegate:
+//   `server_failure_body`   +2   the ONE parse of the server's refusal, and
+//                                the §S9 division that says why the client
+//                                lifts the fields rather than deriving them
+//   `server_failure_code`   +1   why a transport failure gets no invented code
+//   `cmd_plan_file`         +1   the failure branch that now forwards both
+// All four are prose on a `#` or docstring line, none in a string. `src/` and
+// `public/` are untouched by this commit and re-measure at 573 and 436. The
+// `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-10 by CR-CRU-117 — the CR's own close-out step, planned
+// rather than escalated, and TAKEN ONCE at the very end of the cycle: the
+// figure moved twice while the cycle ran (a mid-cycle VERIFY pass measured
+// 802/438, the FIX round 800/442), so a pin taken any earlier would have been
+// re-recorded twice for one CR. TWO trees move; `src/` does not move at all
+// and re-measures at the recorded 573 — §S1 is a frontend read and §S2 a
+// client one, and neither section touches the server.
+//
+// `public/` HEAD moves 436 -> 442, +6 — §S1's in-flight mark, at every place
+// the frontend reads a gate:
+//   `public/app.js`           225 -> 230  (+5)
+//   `public/app-logic.mjs`     86 ->  87  (+1)
+//   `public/app-logic.d.mts`   53 ->  53  (+0)
+// The five in `app.js` are one per reader — `gateOutcomeClass` (the mark
+// itself), `gateCardText` (why the `pushed` clause is dropped when a run is
+// still going), `GateCardRow` (the home compact one-liner), `gateBodyContent`
+// (the drill-in banner making the same claim in bigger type) and
+// `scopedGateEvents` (an in-flight gate is a snapshot, not a verdict). The one
+// in `app-logic.mjs` is `workflowLens`'s guard, and it is on BOTH sides of
+// that seam deliberately: the lens and the renderers must read the mark the
+// same way or the drill-in disagrees with the row that opened it.
+//
+// `clients/` HEAD moves 789 -> 800, +11 — and this is the first entry in this
+// note's history whose two halves move in OPPOSITE directions:
+//   `clients/_crucible_axi.py`     155 -> 168  (+13)
+//   `clients/bun-crucible.py`      144 -> 142   (-2)
+// The +13 is §S1/§S2's honest ladder, declared ONCE in the shared module the
+// five stack clients delegate to, which is why none of them moves:
+//   `GATE_STEP_STATUS_UNKNOWN`     +1   what a ladder says about a row the
+//                                       snapshot reported nothing for
+//   `GATE_POSTED_INTERIM`          +1   why `interim` is now the ORDINARY
+//                                       state of a long run
+//   `GATE_ALREADY_ON_BOARD`        +1   what the HUMAN channel says once a
+//                                       poll has already posted a ladder
+//   `map_axi_step_status`          +1   the three cases, middle one the point
+//   `gate_from_axi`                +1   `inFlight` lives INSIDE the gate
+//   `_RESOLVED_AXI_STEP_STATES`    +1   which step states are resolved
+//   `axi_snapshot_in_flight`       +2   the question, and CR-CRU-115 §S3's
+//                                       consequence cited by name
+//   `axi_ladder_identity`          +1   what makes two polls the SAME ladder
+//   `stream_axi_ladder`            +1   the poll loop itself
+//   `gate_run_result_fields`       +1   `outcome` as the SEALING verdict
+//   `unsealed_run_report`          +1   an exit that sealed nothing
+//   `cmd_gate_run`                 +1   labelled by the loop, never sealed here
+// The -2 is a DELETION and not a re-word: `bun-crucible.py` carried its own
+// green-biased gate builder that no caller reached, and removing it took that
+// block's two citations with it (`CR-CRU-013 §S1`'s outcome vocabulary and
+// `CR-CRU-008`'s narrator default). Provenance leaving with the code it
+// documented is the rule working, not a leak — which is exactly why the
+// equality pin and the `develop` FLOOR are two different numbers: the head is
+// re-recorded DOWN on that file while the floor stays at 601 and still holds.
+// All 19 added citations are prose on a `//`, `#` or docstring line and none
+// is in a string — AC3a's live-code checker ("no CR literal sits at a
+// live-code position in any client") passes over this same working tree in
+// this same run, so both halves are measured together.
+//
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show 142afbc:<path>` — the commit before the CR's first
+// production change, not `develop`, because the 573/436/789 being replaced is
+// CR-CRU-116's close-out figure — file by file; the +6 and the +11 decompose
+// exactly into the per-file deltas above and every other `src/`, `public/`
+// and `clients/` file re-measures at its pre-CR count. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors — a floor never
+// moves for a re-pin.
+// UPDATED 2026-09-10 by CR-CRU-118 — its close-out step, taken ONCE at the end
+// and MEASURED rather than transcribed. That distinction cost something: the
+// orchestrator carried 591/801/442 through four cycles' dispatch briefs, its
+// own VERIFY measured 594/802/443, and the true close-out figure is 595 —
+// because the last FIX added a citation to `handleQueuePost`'s header AFTER
+// VERIFY read the tree. A pin transcribed from any of those three readings
+// leaves this guard red for a NEW reason and reads as a fresh regression, so
+// the rule this entry adds to the note is: re-record from a measurement taken
+// after the final prose change, never from a figure carried in a brief.
+// ALL THREE trees move — the first entry in this note's history where none is
+// flat, because the CR reaches the server, the renderer and the client fleet.
+//
+// `src/` HEAD moves 573 -> 595, +22:
+//   `src/v2.ts`               190 -> 209  (+19)  the two doors and the notice
+//   `src/hints.ts`             40 ->  42   (+2)  `missingRelease`, `missingTarget`
+//   `src/store.ts`            259 -> 260   (+1)  `recordReleaseProposal`'s
+//                                               requiredness is the METHOD's,
+//                                               not the record kind's
+// The 19 in `v2.ts` are the CR's whole surface: §S2's three-way split (refuse
+// an insert, admit what settled history claims, warn about what is inherited),
+// `recordedReleaseClaiming` as the ONE derivation §S3a's door reuses,
+// `inherited-release-less` and `deprecated-route` as the fifth and sixth
+// `QueueWarning` codes, the absent-`targetAt` refusal ordered ahead of the
+// store's convergence check, and the route header that now says the door is
+// deprecated.
+//
+// `public/` HEAD moves 442 -> 443, +1 — `public/app-logic.mjs` 87 -> 88, a
+// citation re-pin, not new prose: §S4a inserted 11 comment lines into
+// `src/store.ts` and shifted every line number below them, so a `store.ts:NNNN`
+// reference here named the wrong construct.
+//
+// `clients/` HEAD moves 800 -> 802, +2 — all `_crucible_axi.py`: `--target`
+// becoming required, and the same `store.ts` line-shift re-pin.
+//
+// RECORDED BECAUSE IT COST SOMETHING, and it is not the count. `NextBlockCitationsTest`
+// is the ONLY line-number guard in this repo and it watches one block of
+// `_crucible_axi.py`, so §S4a's 11 inserted lines broke exactly one citation
+// LOUDLY and an unknown number SILENTLY. The sweep that followed found six
+// more stale `src/store.ts:NNNN` references drifting by 300-460 lines, none
+// caused by this CR — e.g. `tests/queue-registration.test.ts:1328` cites
+// `:3599` for an expression now at `:3897`. Those are left alone (CR-CRU-078:
+// repair citations only on touch) and recorded so a fifth incident does not
+// rediscover them. The generalisation this note cannot fix: a line-number
+// citation has no guard outside that single block, and adding prose above a
+// symbol invalidates every one of them.
+//
+// Measured with THIS file's own classifier over the working tree against
+// `git show 56067e0:<path>` — the commit before the CR's first change. The
+// `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
+//
+// CR-CRU-119 moved `src` 595 → 600 (measured at close-out, not transcribed
+// from a mid-cycle note, per this project's established citation-drift
+// discipline): five new citations — src/store.ts:318, :3915, :4093 and
+// src/v2.ts:2200, :2212 — naming the CR that reconciled the defaulted-seq
+// message split. `clients` is unchanged.
+//
+// UPDATED 2026-09-12 by CR-CRU-120 — moved `public` 443 → 454: eleven new
+// citations in public/app.js naming the CR that extended the anchor-fetch
+// and reveal mechanism to active cycles. `src` and `clients` re-measured
+// unchanged.
+//
+// UPDATED 2026-09-12 by CR-CRU-121 — moved `src` 600 → 605 and `clients`
+// 802 → 805, both measured at close-out by running this guard, never
+// transcribed from the VERIFY report. The five new `src` citations name the
+// CR that made filing a plan register its release: src/v2.ts:1424, :1480,
+// :1518 (the optional `release`, the one-transaction composition, and the
+// union response) and src/store.ts:1228, :3213 (the throwing inner refusal
+// and the composed write). The three new `clients` citations are all
+// _crucible_axi.py:601, :2775, :5152 — the shared `--release` help text, the
+// body field it rides on, and the fleet's one declaration site. `public` is
+// untouched by this CR and re-measured unchanged at 454; all three `develop`
+// floors stay where they are.
+//
+// UPDATED 2026-09-12 by CR-CRU-122 — moved `public` 454 -> 469, measured at
+// close-out by running this guard against the working tree, never transcribed
+// from the VERIFY report that first reported the drift. The fifteen new
+// citations name the CR that gave the app ONE shared loading spinner at its
+// six backend-delay sites: fourteen in public/app.js — §S1's `Spinner`
+// component (:539), §S2's run-detail loading branch (:5573), §S3's per-suite
+// lazy-load flag, its raise/lower pair and its row (:4890, :4936, :5427), and
+// §S4's five project-manager pending flags with the controls they disable
+// (:1555, :1606, :1614, :1667, :1706, :1804, :1821, :1890, :1944) — plus one
+// in public/styles.css (:1102), the `@keyframes app-spin` rule that spins it.
+// `src` and `clients` are untouched by this CR and re-measured unchanged at
+// 605 and 805; all three `develop` floors stay where they are.
+//
+// UPDATED 2026-09-12 by CR-CRU-124 — moved `clients` 805 -> 814, measured at
+// close-out by running this guard against the working tree, never transcribed
+// from the VERIFY report that first reported the drift. All nine new citations
+// sit in the ONE shared module §S1-§S4 changed, clients/_crucible_axi.py, and
+// eight of them name this CR: `resolve_single_plan`'s §S1 narrowing rule
+// (:256), the §S3 table of verbs that own a `--plan` escape (:379), the §S2
+// ambiguity message that names only the candidates it MEANS (:410), the
+// §S3/§S4 help text for the two targeting flags (:646), the `--plan` target's
+// own docstring (:2486) and the §S3/§S4 notes on how it and `--kind` reach the
+// wire (:2536, :2539), and the one fleet registrar that declares both flags
+// (:5273). The ninth names CR-CRU-030 (:266): it is the line in the same §S1
+// docstring recording WHY the cr-ABSENT wording that CR pinned is left exactly
+// as it stands — the pin the orchestrator's ruling preserved, written where
+// the next reader of the narrowing rule will meet it. The five clients each
+// changed ONE line and none of those lines is prose. `src` and `public` are
+// untouched by this CR and re-measured unchanged at 605 and 469 — the 469 was
+// true at THAT close-out and is superseded by the entry below, which is the
+// CR that moved it; all three `develop` floors stay where they are.
+//
+// UPDATED 2026-09-12 by CR-CRU-123 — moved `public` 469 -> 476, measured at
+// close-out by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL) over the working tree, never transcribed
+// from the VERIFY report that first reported the drift. The +7 is two files:
+// public/app.js 255 -> 259 (six citations added, two carried off by a deleted
+// block) and public/styles.css 73 -> 76. Four of the nine additions name this
+// CR: §S1's streaming join at both ends (app.js:637, the reactive binding that
+// reads it, and app.js:1043, the predicate itself), §S2's narration standing
+// where the retired 🗺 shortcut stood (app.js:2541), and §S1's
+// `app-agent-streaming` keyframes block (styles.css:1756). The other five are
+// the lineage those same new blocks cite, which is why they are prose and not
+// decoration: CR-CRU-014 / CR-CRU-076 / CR-CRU-079 in the §S2 narration (the
+// door's origin, the tab that displaced it, the pathname contract that
+// outlived it — the first and third re-stated from the two lines the deleted
+// shortcut took with it), and CR-CRU-122 / CR-CRU-025 in the keyframes block
+// (the two existing motion signals the new one is deliberately NOT). `src` and
+// `clients` are untouched by this CR and re-measured unchanged at 605 and 814
+// — both were true at THAT close-out and are superseded by the entry below,
+// which is the CR that moved them; all three `develop` floors stay where they
+// are. The CR's other edits are all under `tests/`, which is not one of the
+// three trees this table counts, so they move no head.
+//
+// UPDATED 2026-09-12 by CR-CRU-126 — moved `src` 605 -> 614 and `clients`
+// 814 -> 815, both measured at close-out by running this guard's OWN
+// machinery (`listFiles` + `extractCitableText` + CR_LITERAL) over the
+// working tree, never transcribed from the VERIFY report that first reported
+// the drift. Stated because it was CHECKED and not assumed: this re-record's
+// own three readings — 614 / 476 / 815 — agree with that report's exactly.
+// TWO trees move, because the CR's prose lands in TWO of them: §S1/§S1b
+// rewrite the plan read in `src/store.ts`, and §S3's read-timeout note lands
+// in `clients/_crucible_axi.py`.
+//
+// `src` +9 is ONE file, src/store.ts 265 -> 274. Six of the nine name this
+// CR: the projected event row a boundary is derived from (:648), §S1b's
+// backfill of the column CR-CRU-094 added and left NULL (:1202), and §S1's
+// four seams on the read path — the status-facts narrowing that replaced a
+// per-queue-row `listPlans` (:4416), the `PlanRow` -> `PlanStatusFacts`
+// mapping for one cr (:4426) and for one row (:4441), and the indexed
+// per-cycle seek that replaced the project-wide `SELECT *` scan (:4647). The
+// other three are the lineage those same new blocks cite, which is why they
+// are prose and not decoration: CR-CRU-094 twice (:1202 and :4660 — the CR
+// that added `events.cycle_id`, and the insert-seam derivation the new
+// membership test rests on) and CR-CRU-116 once (:4426, the status-facts
+// shape §S1 narrowed to).
+//
+// A SEVENTH CR-CRU-126 literal was added to src/store.ts and is deliberately
+// NOT among the nine: `-- CR-CRU-126 §S1` at :1538 is a SQL comment INSIDE
+// the schema template literal, which to a `.ts` file's classifier is a
+// string, i.e. a live-code position. The arithmetic is +10 authored, +9
+// counted, and it is written down here so the next reader does not
+// re-discover the gap as a defect.
+//
+// `clients` +1 is ONE file, clients/_crucible_axi.py 182 -> 183: §S3's note
+// on the READ-phase timeout (:127), the one a slow board actually produces,
+// which `urlopen` raises as a bare `TimeoutError` and not as a `URLError`.
+// The five stack clients delegate and none of them moves.
+//
+// `public` is untouched by this CR and re-measured unchanged at 476. The CR's
+// remaining edits are under `tests/`, `scripts/` and `docs/`, and CONFIRMED
+// rather than assumed: `PROSE_CITATIONS` below has exactly the keys `src`,
+// `public` and `clients`, and `listFiles` walks only those, so none of those
+// three directories is counted — which is why this very re-record, whose
+// commit touches one file under `tests/`, moves no head. All three `develop`
+// floors are UNCHANGED at 512/378/601 and stay the floors — a floor never
+// moves for a re-pin.
+//
+// UPDATED 2026-09-13 by CR-CRU-125 — moved `public` 476 -> 477, measured at
+// close-out by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL) over the working tree, never
+// transcribed from the VERIFY report that first reported the drift — and
+// re-measured a SECOND time after this CR's last content edit, because that
+// edit lands in `public` too and only the measurement catches it.
+//
+// The +1 is ONE file and ONE literal: public/app-logic.mjs:928, the §S1
+// provenance comment above the `liveCrs` set, recording that History is
+// keyed on the CR and not on the plan RECORD. The clause appended to that
+// same comment at close-out — the one recording that the retained
+// `status !== "open"` condition beneath it is a provably subsumed
+// equivalent mutant, kept as defence in depth because §S1 mandates it —
+// names NO cr id, deliberately: CR_LITERAL counts OCCURRENCES and not
+// distinct ids, so one more id in that prose would have made this figure
+// 478.
+//
+// The CR's OTHER `public` edit carries no citation and was left uncommented
+// for exactly that reason: `.mts` is in this tree's ext list below, so a
+// provenance comment on the widened declaration in public/app-logic.d.mts
+// would have counted just the same. `src` and `clients` are untouched by
+// this CR and re-measured unchanged at 614 and 815; all three `develop`
+// floors stay where they are — a floor never moves for a re-pin.
+//
+// ONE RE-RECORD, TWO CLEARED FAILURES — written down so a future reader does
+// not mis-triage the cascade as a second, unrelated defect. While the head
+// above read 476 the full regression showed TWO failures: the AC8
+// measurement below, and tests/help-surface-order-independence.test.ts,
+// which spawns a CHILD `bun test` over THIS file (its `HELP_FILE` IS
+// tests/project-namespace-tripwire.test.ts, :90-91 there) and asserts the
+// child reported `failed: []` (:244 there). A stale head here therefore
+// fails there too, at one remove. That file is CORRECT and fires for the
+// right reason; it needed no change and got none.
+//
+// UPDATED 2026-09-13 by CR-CRU-127 — moved `clients` 815 -> 828, measured at
+// close-out by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL) over the working tree, never transcribed
+// from the VERIFY report that first reported the drift, and re-measured AFTER
+// the CR's last content edit because the same fix round rewords six assertion
+// messages under `tests/client/`. Those rewordings move no head — `tests/` is
+// not one of the three trees below — but the measurement is what establishes
+// that rather than the reasoning.
+//
+// The +13 is ONE file, clients/_crucible_axi.py 183 -> 196: the fleet's shared
+// shim, which is where §S1 put the SINGLE declaration of `--cycle-kind` and
+// the single composition of the payload cycles, so the five stack clients
+// delegate and none of them moves (each re-measured unchanged —
+// arduino 106, mvn 135, python 122, rust 126, bun 142, toon 1).
+//
+// NINE of the thirteen name this CR: `--cycle-kind`'s one help text (:682) and
+// its one declaration site (:5367), the three refusals the mandate adds
+// (:1254), the per-cycle kind on the composed payload (:1268, :2974), §S4a's
+// withdrawal of `--cycles` from filing (:1282, :2876), the pairing rule the
+// resolver now states (:2864) and the ruling that the kind is REQUIRED with no
+// client-side default (:2937) — the defect itself, which is a route-side
+// default silently mislabelling a cycle. The other FOUR are the lineage those
+// same new blocks cite, which is why they are prose and not decoration:
+// CR-CRU-107 (the repeatable `--cycle` this mandate pairs with), CR-CRU-121,
+// CR-CRU-124 and CR-CRU-078, one occurrence each.
+//
+// `src` and `public` are untouched by this CR and re-measured UNCHANGED at 614
+// and 477 — checked, not assumed, by the same run that produced the 828. The
+// CLI-only ruling of 2026-09-13 is why `src` cannot have moved: the mandate is
+// enforced entirely client-side, so the CR edits no server file at all. All
+// three `develop` floors stay at 512/378/601 — a floor never moves for a
+// re-record.
+//
+// UPDATED 2026-09-13 by CR-CRU-129 — the CR's close-out step, taken ONCE at
+// the very end of cycle 450 and deliberately deferred until then: the heads
+// moved in all four of this CR's implementation cycles, so a pin taken at any
+// earlier point would have been re-recorded three times for one CR. Measured
+// by running this guard's OWN machinery (`listFiles` + `extractCitableText` +
+// CR_LITERAL) over the working tree AFTER the last content edit, never
+// transcribed from a mid-cycle brief — the brief this close-out started from
+// carried 640/831, and neither figure is what the classifier yields.
+//
+// TWO trees move. `src` 614 -> 648, +34, and every one of the four moved files
+// is a file §S1/§S2 rewrote: src/store.ts 274 -> 301 (+27), the milestone and
+// gate RECORDS with their tables, migrations and queries, plus §S2's per-sweep
+// retention resolution; src/v2.ts 214 -> 218 (+4), the routes those records
+// are read and written through; src/server.ts 23 -> 25 (+2), §S2/AC6's
+// unbounded-retention boot disclosure; src/types.ts 50 -> 51 (+1), this
+// close-out's own other job — `Project.retention`'s doc comment, which still
+// claimed a `default 100` that §S2 DELETED, and whose correction cites the
+// section that deleted it.
+//
+// `clients` 828 -> 836, +8, ALL of it clients/_crucible_axi.py 196 -> 204: the
+// fleet's shared shim, which is where §S3 put the SINGLE type-scoped landing
+// query and §S4 the SINGLE read of a refused replay, so the five stack clients
+// delegate and none of them moves — each re-measured UNCHANGED in the same run
+// (arduino 106, mvn 135, python 122, rust 126, bun 142, toon 1), checked and
+// not assumed. The +8 is a NET figure and the arithmetic is worth writing
+// down: NINE occurrences are added (eight naming this CR — §S3's record type,
+// its type-scoped argument and its query-not-scan read; §S4's structured
+// client-class status, its pure refusal, its one-release report and the
+// refused-vs-failed distinction — plus one CR-CRU-086 lineage reference, the
+// bucket §S4's refusal shares) and ONE is removed: the CR-CRU-126 lineage in
+// the LANDED_STATUSES citation, which this same commit re-pins :4411 -> :5020
+// and which now names this CR as the shifter instead.
+//
+// `public` does not move at all and re-measures at the recorded 477: this CR
+// reaches the store, the routes and the fleet shim, and edits no renderer
+// file. GROWTH IS THE DIRECTION THE RULE PERMITS — both moved heads are ABOVE
+// their floors by a wide margin (648 >= 512, 836 >= 601) and the three
+// `develop` floors stay at 512/378/601, unchanged, as always for a re-record.
+// `scripts/` is NOT one of the trees below and never has been; the three keys
+// of this table are the whole of what AC8 measures, so this CR's `scripts/`
+// edits move no head by construction.
+//
+// UPDATED 2026-09-13 by CR-CRU-130 — the CR's close-out step, taken ONCE at
+// the very end of cycle 454 and deliberately deferred until then: the head
+// moved in all four of this CR's implementation cycles, so a pin taken at any
+// earlier point would have been re-recorded three times for one CR, which is
+// exactly what happened on CR-CRU-128 before the deferral became the rule.
+// Measured by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL, imported from `tests/helpers/source-scan`)
+// over the working tree AFTER the last content edit and AFTER this commit's own
+// `clients/_crucible_axi.py` re-pins, never transcribed from a mid-cycle brief.
+//
+// ONE tree moves. `src` 648 -> 710, +62, and every one of the four moved files
+// is a file this CR rewrote:
+//   src/store.ts   301 -> 345  (+44)  §S1's dated milestone, §S2/§S4b's release
+//                                     record that survives delivery, and §S4's
+//                                     declared milestone vocabulary
+//   src/v2.ts      218 -> 230  (+12)  the routes those records are written and
+//                                     read through, and §S4's reserved-pair
+//                                     refusal at the route boundary
+//   src/types.ts    51 ->  56   (+5)  `ProjectPatch.milestoneTypes` and the
+//                                     milestone/release shapes the routes answer on
+//   src/hints.ts    42 ->  43   (+1)  §S2's target-clause hint
+// The six other `src` files (codecs/compile, codecs/index, codecs/junit,
+// codecs/playwright, toon, server) re-measure UNCHANGED at 1/2/3/3/2/25, and
+// 44 + 12 + 5 + 1 = 62 is the whole of the move — checked, not assumed.
+//
+// `public` and `clients` do NOT move and re-measure at the recorded 477 and
+// 836. `public` is untouched by this CR entirely. `clients` IS touched — C3
+// and C4 edited all five stack clients and `_crucible_axi.py` — and the head
+// is flat anyway, which is a measurement rather than an assumption: each of
+// the seven files re-measures at its recorded count (axi 204, arduino 106, mvn
+// 135, python 122, rust 126, bun 142, toon 1). The client edits added the
+// `--type` READ route's help without adding a CR literal, and this commit's
+// own `_crucible_axi.py` re-pins REPLACE the CR-CRU-129 lineage on the
+// LANDED_STATUSES citation with this CR's — one literal out, one in, net zero.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS — the moved head is ABOVE its floor
+// by a wide margin (710 >= 512), no head came out below its baseline, and the
+// three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. `scripts/` is NOT one of the trees below and never has been, so
+// this CR's `scripts/release.sh` edits move no head by construction.
+//
+// UPDATED 2026-09-14 by CR-CRU-131 C1 — and taken MID-CR rather than at
+// close-out, which is a departure from CR-CRU-130's deferral rule and is
+// stated as one. C1 lands `src/limits.ts` and the client loader in one commit
+// and must hand over a green suite; a head left three cycles stale is a guard
+// that reports nothing until the CR ends. C2 and C3 both edit these trees
+// again, so this figure WILL move and the close-out re-record still happens —
+// this pin buys a green handover, not an exemption from the final one.
+// Measured by running this guard's OWN machinery (`listFiles` +
+// `extractCitableText` + CR_LITERAL, imported from `tests/helpers/source-scan`)
+// over the working tree AFTER C1's last content edit and AFTER this commit's
+// own `clients/_crucible_axi.py` re-pins, never transcribed from a brief.
+//
+// TWO trees move. `src` 710 -> 722, +12, across the new module and the three
+// enforcement sites §S1 rewires — no other file:
+//   src/limits.ts    0 ->   7  (+7)  the loader itself: the ownership split,
+//                                     the documentation/`value` schema, the
+//                                     range refusal and retention's exception
+//   src/store.ts   345 -> 348  (+3)  `defaultRetention` and `runAbandonAfterMs`
+//                                     now resolving from the file
+//   src/v2.ts      230 -> 231  (+1)  `projectInactiveMs`, same
+//   src/server.ts   25 ->  26  (+1)  the boot disclosure of a refused limit
+// The seven other `src` files (types, hints, codecs/compile, codecs/index,
+// codecs/junit, codecs/playwright, toon) re-measure UNCHANGED at
+// 56/43/1/2/3/3/2, and 7 + 3 + 1 + 1 = 12 is the whole of the move — checked,
+// not assumed.
+//
+// `clients` 836 -> 846, +10, and every one of the six `.py` clients moves
+// because every one of them BINDS its resolved project dir into the shared
+// loader on its own boot path (§S1b) — a limit that resolved in isolation but
+// was never bound on a client's boot path would be green in a unit test and
+// unwired in production:
+//   clients/_crucible_axi.py  204 -> 209  (+5, NET) the loader, the three
+//                                      rewired display limits, and this
+//                                      commit's own citation re-pins, which
+//                                      REPLACE a CR-CRU-129 lineage rather
+//                                      than adding one
+//   arduino 106 -> 107, mvn 135 -> 136, python 122 -> 123, rust 126 -> 127,
+//   bun 142 -> 143            (+1 each) the `bind_project_dir` note on each
+//                                      client's own project-dir resolver
+// `clients/toon.py` re-measures UNCHANGED at 1, and 5 + 1 + 1 + 1 + 1 + 1 = 10
+// is the whole of the move.
+//
+// `public` does not move at all and re-measures at the recorded 477: this CR
+// reaches the store, the routes, the boot banner and the client fleet, and
+// edits no renderer file.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS — both moved heads are ABOVE their
+// floors by a wide margin (722 >= 512, 846 >= 601), no head came out below its
+// baseline, and the three `develop` floors stay at 512/378/601, unchanged, as
+// always for a re-record. The repo-root `crucible.toml` this CR lays down is
+// not a `.ts`/`.js`/`.py` file in any of the three trees, so it moves no head
+// by construction.
+//
+// §S1c RE-RECORD: `src` 722 -> 721, -1, and the whole of the move is ONE
+// citation that LEFT the tree rather than one that was deleted. §S1c makes the
+// shipped declarations PACKAGE DATA, so the `SHIPPED` table at src/limits.ts:90
+// — and with it the note that `retention`'s recommendation was "carried forward
+// from CR-CRU-129's close-out rather than invented" — moved verbatim into
+// `src/crucible.toml`. A `.toml` is in none of the three trees' extension
+// lists, so the lineage is intact where the number now lives and simply is not
+// counted here. Re-stating it in `src/limits.ts` as well would be the second
+// copy of a datum this whole section exists to end.
+//
+// Measured at BOTH ends: every other `src` file re-measures unchanged, 721 is
+// still far above the 512 floor, and `public` (477) and `clients` (846)
+// re-measure at their recorded heads — this CR edits no renderer, and the
+// client-side move takes `_SHIPPED_LIMITS` out of `clients/_crucible_axi.py`
+// while its CR-CRU-131 §S1c lineage stays in the prose that replaces it.
+// §S2 RE-RECORD (C4) — `src` 721 -> 725, +4, and every one of the four is a
+// citation ADDED by §S2's production prose; none left any tree. This is the
+// THIRD mid-CR re-record of this head (C1 710 -> 722, §S1c 722 -> 721, now
+// §S2 721 -> 725), and the close-out re-record after the CR's LAST content
+// edit still stands — these three bought green handovers, not an exemption.
+// Three intermediate re-records in one CR is itself worth a reader's notice:
+// a head re-recorded once per cycle reports drift only BETWEEN cycles, which
+// is a limitation of the instrument rather than of any one cycle.
+//
+// TWO files move, and no other `src` file does:
+//   src/store.ts   348 -> 350  (+2)  `ProjectPatch.retention`'s three
+//                                     distinguishable states (number / `null`
+//                                     clears / absent leaves alone), and
+//                                     `updateProject` merging by key PRESENCE
+//                                     rather than `??`, which would wipe a
+//                                     stored cap of zero
+//   src/v2.ts      231 -> 233  (+2)  the PATCH route's clear-and-zero
+//                                     rationale, and the jsdoc line that now
+//                                     states what the field accepts
+// The nine other `src` files re-measure UNCHANGED (limits 6, server 26, types
+// 56, hints 43, toon 2, codecs/compile 1, codecs/index 2, codecs/junit 3,
+// codecs/playwright 3), and 2 + 2 = 4 is the whole of the move — measured with
+// this guard's OWN machinery over the working tree after §S2's last content
+// edit, never transcribed.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 725 is far above the 512 floor, no
+// head came out below its baseline, and the three `develop` floors stay at
+// 512/378/601. The head rising because citations were ADDED is the healthy
+// case — this guard exists to catch a head FALLING because lineage was
+// deleted. `public` re-measures at its recorded 477: §S2 edits one route, one
+// store method and one type, and reaches no renderer.
+//
+// `clients` 846 -> 847, +1, and the one is the SECOND half of §S2's line-pin
+// re-pin. The eight and six lines above moved two constructs `_crucible_axi.py`
+// cites by line — `deriveQueueStatus` :5787 -> :5801 and `normalizeTrack`
+// 373-376 -> 381-384 (heads and tails re-read at the lines, never inferred
+// from the shift) — and the §S2 lineage explaining the drift was ADDED beside
+// C2's rather than written over it. Holding this head at 846 was possible and
+// was REFUSED (user ruling, 2026-09-14): swapping C2's provenance out for
+// §S2's is net zero only to the counter, and to a reader it is the loss of the
+// reason C2 touched that file — the very thing the citation convention exists
+// to keep. The head is a MEASUREMENT of the tree, not a budget to be balanced,
+// so 847 is recorded because 847 is what the tree holds. `clients/toon.py` and
+// the six `.py` clients re-measure unchanged; `_crucible_axi.py` 209 -> 210 is
+// the whole of the move.
+//
+// `clients` 847 -> 848 at the CR's FIX cycle, and the one is again
+// `_crucible_axi.py` (210 -> 211). `emit_axi` gained the §S1b paragraph saying
+// why the client's limit disclosures are appended THERE — at the one exit every
+// verb of every client passes through — rather than at five call sites, and the
+// `limit_declarations` that went (no caller on either side of the wire) carried
+// no lineage line to lose. GROWTH again, and again because a reason was written
+// down rather than because a count was balanced.
+//
+// ── WHAT THIS GUARD CANNOT SEE: A NET-ZERO PROVENANCE SWAP ─────────────────
+//
+// State it here so nobody credits the guard with catching it. What is measured
+// is a per-tree AGGREGATE against a recorded head. A change that DELETES one
+// citation and ADDS another in the same tree moves the aggregate by zero and
+// passes in silence — and it is the deletion, not the total, that this guard
+// exists to catch: the lost line is the reason some earlier CR touched that
+// file, which is the whole point of the citation convention.
+//
+// Not hypothetical. Exactly that swap was proposed during CR-CRU-131 — holding
+// `clients` at 846 by writing §S2's lineage OVER C2's rather than beside it —
+// and it was caught by a HUMAN RULING (2026-09-14), not by this test, which
+// would have reported green either way. The `847` above is the record of that
+// ruling going the other way.
+//
+// So: a passing head is evidence that no tree SHED provenance on net. It is not
+// evidence that every citation present is the one that was there before. A
+// reviewer wanting the stronger claim has to read the diff; a guard wanting it
+// would have to count citations per FILE and per CR ID, which is a different
+// instrument and a different CR.
+//
+// ── A HEAD THAT FELL, AND WHY IT IS THE PERMITTED KIND ────────────────────
+//
+// `src` 725 -> 724 at CR-CRU-132, and this is the FALLING head the guard is
+// actually for, so it is accounted for citation by citation rather than simply
+// re-recorded. Two go and one arrives. `src/toon.ts` is DELETED whole and takes
+// both of its lineage lines with it — `CR-CRU-046 §S1` (the CR that replaced
+// CR-005's hand-written subset serializer with the official library) and the
+// `CR-CRU-005` that line names as what it superseded. Nothing is lost by that:
+// the module's whole subject was the server-side TOON encoding CR-CRU-132
+// removes, and both citations survive in the CR archive and in
+// `docs/research/DN-crucible-toon-subset.md`, which CR-CRU-132 §S3 updated in
+// the same commit rather than leaving to point at a file that no longer exists.
+// In `src/v2.ts` the deleted negotiation block's `(CR-CRU-005)` header is
+// REPLACED, not dropped — the surviving gate comment still cites CR-005 as the
+// origin of the shared `reply()` seam — and `CR-CRU-132` is ADDED beside it,
+// recording why the branch under it went. Net -2 +1 = -1.
+//
+// This is the direction the rule permits a head to move only when the deletion
+// is the POINT: 724 is still far above the 512 floor, and the lineage did not
+// evaporate, it moved to the documents that now own the subject. `cli/` is
+// deleted in the same CR (§S4, the orphaned bun fleet CLI) and moves no figure
+// here, because it is none of the three trees this guard measures — stated so a
+// reader does not go looking for its contribution in the arithmetic above.
+// `public` and `clients` re-measure unchanged at 477 and 848: CR-CRU-132
+// reaches no renderer and no `.py` file. Re-confirmed at the same pass and not
+// inferred: `deriveQueueStatus` holds at `src/store.ts:5801` and
+// `normalizeTrack` at `:381-384`, both read at the line — `src/store.ts` is
+// untouched by this CR.
+//
+// `clients` 848 -> 858 at CR-CRU-133. `src` and `public` are unchanged — the
+// CR touches no `.ts`/`.js` file. All ten arrive in `clients/bun-crucible.py`
+// (the RED/GREEN/FIX cycle's own lineage comments: §S2's declaration-shape
+// rationale, §S3's remedy/cause composition, and the citations naming
+// CR-CRU-064/065/111 that the new code and tests explain themselves with) and
+// in `tests/client/test_declared_target_report_mechanism.py`'s own module
+// docstring. Measured directly against this file's own `extractCitableText`
+// + `CR_LITERAL` classifier, not estimated: `bun test
+// tests/project-namespace-tripwire.test.ts -t 'never below its develop
+// baseline'` on the pre-fix tree reported `clients: 858` against the
+// then-recorded `848`.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 563 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 785 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
+  clients: { exts: [".py"], develop: 601, head: 858 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

@@ -5,7 +5,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 **Design contract:** [../research/PRD-crucible-v2.md](../research/PRD-crucible-v2.md)
 **Evidence base:** [../research/DN-crucible-api-reconstruction.md](../research/DN-crucible-api-reconstruction.md)
-**Target release:** 0.1.0
+**Target release:** 0.2.0
 
 | CR | Title | Type | Status | Depends on | Wave |
 |---|---|---|---|---|---|
@@ -71,11 +71,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is selected by "last non-empty line", which fits python and node but not maven | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
 | [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (runs the server) and exposes no run command; provision-and-exit + a `serve` verb + bun guarantee | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
-| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 6 (post-0.2.0) |
+| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 7 (post-0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
-| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 6 (post-0.2.0) |
-| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 6 (post-0.2.0) |
-| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 6 |
+| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 7 (post-0.2.0) |
+| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 7 (post-0.2.0) |
+| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 7 (post-0.2.0) |
 | [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened | bugfix | COMPLETED (0.2.0) | 043, 066 | 5 (0.2.0) |
 | [CR-CRU-069](CR-CRU-069-uninstall-inverts-install.md) | Install has no inverse: `crucible-axi uninstall` + `install.sh` teardown | feature | COMPLETED (0.2.0) | 009, 066 | 5 (0.2.0) |
 | [CR-CRU-070](CR-CRU-070-systemd-user-unit.md) | systemd `--user` unit: install script provisions and reverses it | feature | COMPLETED (0.2.0) | 066, 069 | 5 (0.2.0) |
@@ -119,9 +119,57 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | COMPLETED (0.2.0) | 097 | 5 (0.2.0) |
 | [CR-CRU-111](CR-CRU-111-the-client-can-say-which-tier-it-ran.md) | the client can say which tier it ran | feature | COMPLETED (0.2.0) | 016, 075 | 5 (0.2.0) |
 | [CR-CRU-112](CR-CRU-112-the-gate-covers-every-declared-suite.md) | the gate covers every declared suite | patch | COMPLETED (0.2.0) | 047, 111 | 5 (0.2.0) |
+| [CR-CRU-116](CR-CRU-116-only-one-wave-is-active.md) | only one wave is active, and Crucible refuses the alternative | feature | COMPLETED (0.2.0) | 091, 104 | 6 (0.2.0) |
+| [CR-CRU-114](CR-CRU-114-the-lane-knows-its-release-and-wave.md) | the lane knows its release and wave | feature | COMPLETED (0.2.0) | 091, 092, 116 | 6 (0.2.0) |
+| [CR-CRU-115](CR-CRU-115-a-gate-names-the-release-it-gates.md) | a gate names the release it gates, and never seals a run that is still going | bugfix | COMPLETED (0.2.0) | 013, 073 | 6 (0.2.0) |
+| [CR-CRU-117](CR-CRU-117-an-in-flight-gate-is-not-a-seal.md) | an in-flight gate is not a seal | bugfix | COMPLETED (0.2.0) | 013, 115 | 6 (0.2.0) |
+| [CR-CRU-118](CR-CRU-118-every-cr-names-a-release.md) | every live CR names a release, and every release names its target date | feature | COMPLETED (0.2.0) | 091, 099, 104 | 6 (0.2.0) |
+| [CR-CRU-119](CR-CRU-119-a-preserved-position-is-not-a-defaulted-one.md) | a preserved position is not a defaulted one | bugfix | COMPLETED (0.2.0) | 091, 095 | 6 (0.2.0) |
+| [CR-CRU-120](CR-CRU-120-an-active-cycles-runs-are-not-reachable.md) | an active cycle's runs are not reachable | bugfix | COMPLETED (0.2.0) | 011, 025, 032 | 6 (0.2.0) |
+| [CR-CRU-121](CR-CRU-121-filing-a-plan-should-register-its-release.md) | filing a plan should register its release | feature | COMPLETED (0.2.0) | 011, 091, 118 | 6 (0.2.0) |
+| [CR-CRU-122](CR-CRU-122-a-loading-delay-deserves-a-spinner.md) | a loading delay deserves a spinner | feature | COMPLETED (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-123](CR-CRU-123-the-project-pane-shows-activity-not-a-duplicate-door.md) | the Project pane shows activity, not a duplicate door | feature | COMPLETED (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-124](CR-CRU-124-cycle-add-cannot-target-the-plan-it-means.md) | `cycle-add` cannot target the plan it means | bugfix | COMPLETED (0.2.0) | 054 | 6 (0.2.0) |
+| [CR-CRU-125](CR-CRU-125-history-narrates-a-cr-that-is-still-live.md) | History narrates a CR that is still live | bugfix | COMPLETED (0.2.0) | 020 | 6 (0.2.0) |
+| [CR-CRU-126](CR-CRU-126-a-plan-read-scans-every-event-once-per-plan.md) | a plan read scans every event, once per plan | bugfix | COMPLETED (0.2.0) | — | 6 (0.2.0) |
+| [CR-CRU-127](CR-CRU-127-a-filed-cycle-declares-its-kind.md) | a filed cycle declares its kind | bugfix | COMPLETED (0.2.0) | 011, 107, 121, 124 | 6 (0.2.0) |
+| [CR-CRU-128](CR-CRU-128-every-flag-describes-itself.md) | every flag describes itself | patch | COMPLETED (0.2.0) | 030, 075, 127 | 6 (0.2.0) |
+| [CR-CRU-129](CR-CRU-129-a-release-is-a-record-not-an-event.md) | a milestone is a record, not an event | fix | COMPLETED (0.2.0) | 074, 080, 081, 086, 091 | 6 (0.2.0) |
+| [CR-CRU-130](CR-CRU-130-a-milestone-is-a-dated-goal.md) | a milestone is a dated goal, and its type is definable | feature | COMPLETED (0.2.0) | 074, 091, 129 | 6 (0.2.0) |
+| [CR-CRU-131](CR-CRU-131-a-limit-is-configuration-everywhere.md) | a limit is configuration, everywhere | fix | COMPLETED (0.2.0) | 129 | 6 (0.2.0) |
+| [CR-CRU-132](CR-CRU-132-the-server-stops-speaking-toon.md) | the server stops speaking TOON | fix | COMPLETED (0.2.0) | 005, 046 | 6 (0.2.0) |
+| [CR-CRU-133](CR-CRU-133-a-declared-target-is-run-on-its-own-terms.md) | a declared target is run on its own terms | fix | COMPLETED (0.2.0) | 046, 131 | 6 (0.2.0) |
+| [CR-CRU-134](CR-CRU-134-a-figure-in-prose-is-derived-or-it-drifts.md) | a figure in prose is derived, or it drifts | fix | COMPLETED (0.2.0) | 131 | 6 (0.2.0) |
+| [CR-CRU-135](CR-CRU-135-a-tests-warnings-are-not-its-working-directorys.md) | a test's warnings are not its working directory's | fix | COMPLETED (0.2.0) | 030, 131 | 6 (0.2.0) |
+| [CR-CRU-136](CR-CRU-136-a-classname-is-decoded-not-guessed.md) | a classname is decoded, not guessed | fix | COMPLETED (0.2.0) | 133 | 6 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
+- 2026-09-16 — **six more retyped figures in `docs/RUNBOOK.md`, beyond the schema version CR-CRU-134
+  fixed** (candidate patch CR, found by CR-CRU-134's §S3 census). Highest-value: the port `3849`
+  (5 sites) and host `127.0.0.1` (6 sites) are both retyped from `src/server.ts:249,252`'s `??`
+  fallbacks; also the liveness tombstone `300000` (`src/types.ts:11`), the `error_detail_chars`
+  floor `100`, the `run_abandon_ms` min/max/recommended trio inside the fenced warning example at
+  line 170 (plus its invented `30000` refused-value needs marking as illustrative once the trio
+  around it is derived), and the sixth — string-shaped, not numeric — the `PATH=<bun
+  dir>:/usr/local/bin:/usr/bin:/bin` value owned by `crucible_axi/install.py:765`. All but the
+  last follow the exact pattern CR-CRU-134 fixed for schema figures — extend
+  `tests/docs-runbook-documents-every-limit.test.ts` further, never a new walker. Full table with
+  every figure in the document and its verdict (derived/marked/out-of-scope) is in CR-CRU-134 §S3.
+- 2026-09-13 — **the cycle-kind mandate is enforced only in the clients; the ROUTE still accepts a
+  kindless cycle** (candidate CR, split off `CR-CRU-127` by user ruling at gap-analysis time, not
+  discovered later). CR-127 makes `plan-file` refuse a cycle with no declared kind client-side and
+  closes the legacy `--cycles` door with it, which fixes every real filing path — all five clients.
+  `POST …/plans` stays permissive and keeps `parseCycleInput`'s `red-green` default, pinned as a
+  regression in CR-127 §S4 so the gap is deliberate rather than assumed. **Why it was split:** the
+  route half was MEASURED at ~110 extra call sites across 30 test files — 63% of the whole CR — to
+  defend a path whose only present-day non-fleet callers are the tests themselves, because the SPA
+  never POSTs a plan (`WorkflowActive` reads `scopedPlans()`; no POST exists in `public/app.js`).
+  **What is still open:** a curl, a new tool, or a sixth stack can file a kindless cycle and the
+  board stores it `red-green` — CR-127's own defect surviving on the one door it does not close. The
+  cost is known and unchanged if it is taken later: the refusal belongs in `handlePlanFile`
+  (`src/v2.ts:1378`) and NOT in `parseCycleInput` (`:1359`), which `handleCycleAppend` shares at
+  `:1551` and whose default CR-CRU-124 §S4/AC3 pins by full-body equality.
 - **Primary architecture document** (design effort, NOT a CR, NOT in 0.2.0). Crucible has
   `PRD-crucible-v2.md` and 10 DNs but no Architecture document at the top of the chain, so per the
   Model-B ontology (Architecture → PRDs for complex features / DNs for micro features → CR → source
@@ -231,16 +279,27 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   inline scope edit. Worked around by adopting the finer granularity rather than aborting the plan:
   destroying a board record to fix a label is the worse trade.
 
-- **`cycle-add` / `checkpoint` / `abort` cannot target a CR that has an aborted plan** (candidate
-  patch CR, hit 2026-09-02 executing CR-CRU-095). They resolve via
-  `resolve_plan(..., open_only=False)` (`clients/_crucible_axi.py:1731+`), so after `abort` +
-  `plan-file` the aborted plan and the open one BOTH match `--cr` and the verb refuses as ambiguous —
-  with no `--plan <id>` escape. Compounding it, the ambiguity message at
-  `clients/_crucible_axi.py:375-379` filters candidates by `open_only` but NOT by the `--cr` the
-  caller passed, so it says "80 plans — pass --cr to pick one" to a caller who already did. Fix:
-  prefer the single open plan when `--cr` matches one open and N non-open plans (or take
-  `open_only=True` for `cycle-add`), and list only the `--cr`-matching candidates. Worked around
-  in 095 by folding the client cycle into cycle 305 rather than hand-rolling the POST.
+- **CLOSED by CR-CRU-124 (2026-09-12) — `cycle-add` can now target the plan it means.** The note
+  read: *"`cycle-add` / `checkpoint` / `abort` cannot target a CR that has an aborted plan (candidate
+  patch CR, hit 2026-09-02 executing CR-CRU-095). They resolve via `resolve_plan(…, open_only=False)`,
+  so after `abort` + `plan-file` the aborted plan and the open one BOTH match `--cr` and the verb
+  refuses as ambiguous — with no `--plan <id>` escape. Compounding it, the ambiguity message filters
+  candidates by `open_only` but NOT by the `--cr` the caller passed, so it says '80 plans — pass
+  --cr to pick one' to a caller who already did. Fix: prefer the single open plan when `--cr` matches
+  one open and N non-open plans, and list only the `--cr`-matching candidates."*
+  CR-CRU-124 shipped both halves the note proposed, plus two the note did not foresee: §S1's
+  open-plan preference in `resolve_single_plan`, §S2's `--cr`-scoped message that names `--plan <id>`
+  instead of re-demanding the flag the caller already passed, §S3's `--plan <id>` escape (which skips
+  the plans GET entirely — verified live at 0.12 s against a 113-plan board where every other cycle
+  verb was timing out at 10 s), and §S4's `--kind`.
+  **One deviation from the note's proposed fix, taken as a recorded ruling:** the open-plan
+  preference fires ONLY when `--cr` was supplied. With no `--cr` two or more candidates keep refusing
+  exactly as before, because CR-CRU-030's pin in `test_bun_crucible_cycle_add.py`
+  (`test_ambiguous_multiple_plans_without_cr_returns_nonzero_without_posting`) is a deliberate
+  safety contract — *"must be non-zero, not a guess"* — and a convenience win is not a reason to
+  retire it. The first ruling on that point was the opposite and was reversed the same day, after
+  the GREEN agent refused to edit the pin and escalated instead. `checkpoint` and `abort` keep
+  `open_only=True` and were left untouched (§S4 non-goal).
 - **`queue-file` drops lifecycle dispositions on import** (candidate patch CR, hit 2026-09-02).
   Repopulating a cleared board via `queue-file` resurrected `CR-CRU-082` (VOID in the README) as
   `PENDING` with `lifecycle: null`, so it read as actionable. VOID/supersede are `cr-void` /
@@ -330,6 +389,25 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   asymmetry is invisible from the envelope: the gate prints `files: 152` and says nothing about the
   65 it never looked at.
 
+- 2026-09-12 — **no permanent browser-level pin on a CSS animation's actual MOTION** (candidate patch
+  CR, raised by CR-CRU-123's VERIFY). Every permanent assertion on `public/styles.css` in the bun
+  suites reads the stylesheet as TEXT (`STYLES_RULES`, `ruleBodiesForClass`, `animationsIn`), so a
+  malformed gradient stop, a `background-image` the cascade resolves to `none`, or a `@keyframes`
+  whose two stops are identical would all pass green while nothing moved on screen. CR-CRU-123's
+  `app-stream-flow` shimmer was proven real only by THROWAWAY Chromium probes: GREEN measured
+  `background-position` travelling -60% → -13.68% over 400ms, and VERIFY independently re-measured
+  -58.07% → -5.96% → +48.07% over 900ms with a RESOLVED gradient and the idle sibling at
+  `animationName: none`. Both probes were deleted at the end of their runs — the evidence did not
+  survive its own cycle, which is the actual gap. `tests/roadmap-visual-grammar.test.ts` already owns
+  the harness that could hold it (real playwright Chromium serving the real stylesheet) and already
+  pins motion for the roadmap (`animationName !== "none"` on a running CR). Estimated ~30 lines:
+  assert `animationName`, a `background-image` containing `gradient`, and `background-position`
+  differing across two samples. Deliberately NOT folded into CR-CRU-123 — its ACs as written are
+  met and measured, and bolting a browser suite onto a closing cycle is scope creep.
+  **Harness gotcha, measured by VERIFY:** a bare `chromium.launch()` from outside `node_modules`
+  resolves playwright-core 1.63.0 instead of the project's 1.61.1 and dies on a missing browser
+  build — drive it through the project's own dependency the way the existing suite does.
+
 - **CHECKED AND FOUND CORRECT — the unregistered-caller 409 is not misleading. Do not re-file it.**
   2026-08-28: the orchestrator was refused three times in one session
   (`agent vidushi is not registered with this project`) after long dispatches pruned its
@@ -341,6 +419,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   the same conclusion in the spec itself. The three 409s were operational friction — re-register and
   continue — not a diagnostic defect. What IS real is the participation record being destroyed by
   pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
+  **Recurred 2026-09-12, twice in one session** (executing CR-CRU-123), confirming the disposition
+  above rather than reopening it: `plan-file` was refused 409 after a ~40-minute RED dispatch, and
+  the `cycle-done`/`cycle-activate` pair was refused again after an 8-minute one. Both times
+  `register --agent vidushi --role ORCHESTRATOR` then the same call succeeded unchanged. The
+  operational rule this yields — worth stating even though the refusal is correct — is that ANY
+  orchestrator board write issued after a long wait should be preceded by a re-register, because the
+  orchestrator is silent by construction while its agents work and silence is exactly what prunes
+  it.
 
 - 2026-09-03 — **an out-of-order `cycle-activate` prescribes a transition no client can perform.**
   `cycle-activate 319` on a plan with 316 still pending refuses with
@@ -487,6 +573,259 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (`ForwardMarryingGuardTest`, which the CR promoted from a characterisation to a real assertion).
 
 ## Notes
+
+- ✅ **2026-09-10 — THREE USER RULINGS, taken on the `crucible-release-membership` review surface**
+  (artifact deleted afterwards, per the surface-not-a-record rule):
+  **D1 — the flowchart's design refresh waits until after 0.2.0 ships.** CR-CRU-117 rewrites the same
+  in-flight-gate story, so both frames get refreshed in one pass rather than twice. What WAS applied
+  now is the queued non-design work: 10 `overlapping-text` layout findings at 961px (cause: both CR
+  tables sit in `.scroll` boxes clipped to 190px/148px, so at compact widths the last rows fell
+  outside the clip — fixed by not clipping below 1000px, leaving the grammar untouched) and §10's
+  API-status rewrite, where `release-propose`, `cr-plan`, `cr-depends`, `wave-sequence`,
+  `cr-supersede`/`cr-void` and `next` were all still marked **`new`** while every one of them has
+  shipped.
+  **D2 — CR-CRU-022's burn-down scope source is per-CR DECLARATION WRITES**, not `queue_snapshots`.
+  Amended in that CR and in DN D4 fallout §2: each declaring write is a scope event with an author, so
+  a burn-down step is a fact somebody declared rather than a diff between two unsigned snapshots — and
+  strictly finer, because a snapshot pair cannot say WHICH change moved the line. Its AC now FAILS an
+  implementation that reintroduces snapshot-diffing.
+  **D3 — next action: gap-analyse CR-CRU-117 and dispatch.**
+- 🔌 **2026-09-10 — the flowchart session had NO POLLER since bootstrap**, so feedback queued there on
+  2026-09-09 sat undelivered for a day: the 10 layout findings and "update §10 to reflect the API
+  design changes". Same class of failure as the storyboard's "Remove this queue!", which was also
+  waiting in a completed job. **Orchestrator rule: every OPEN Lavish session needs its own live poller,
+  and a poll that returns feedback must be re-armed immediately** — an artifact nobody polls is a
+  review surface with the wire cut.
+
+- 🚧 **2026-09-10 — USER RULING: a plan's cycle SET is authorized as a whole; never add to it unasked.**
+  Violated during CR-CRU-117: plan 124 was filed and authorized with four cycles, and the orchestrator
+  then added **412** (close VERIFY findings) and **413** (re-record the citation heads) on its own
+  authority. 413 was skipped and folded into close-out, where it always belonged — re-recording a
+  guard's head figure is orchestrator bookkeeping, not a unit of dispatched RED→GREEN work. The rule:
+  if VERIFY returns CHANGES-NEEDED and the fixes need a cycle, **ASK first**, naming what the cycle
+  would carry. A CR's cycle count is a thing the user approved, not a thing the orchestrator grows.
+  Note the estimate/plan mismatch this exposed: the spec's "Estimated size" counts IMPLEMENTATION
+  cycles only, while a filed plan carries verify and fix too — CR-114 ran 4 cycles, CR-115 5, CR-116 6,
+  against three-cycle estimates. The estimate is not wrong so much as measuring a different thing.
+- 🆕 **CR CANDIDATE (user-raised 2026-09-10) — `cycle-add` should WARN when it grows an authorized plan.**
+  Derived directly from the ruling above: the practice is unsafe, so the tool should say so rather than
+  relying on orchestrator discipline. Today `cycle-add` appends silently — `cmd_cycle_add` POSTs
+  `{label, agentId}` and emits an envelope with `warnings: []`, so nothing distinguishes "this plan's
+  cycles were just filed" from "this plan was authorized and is now being extended mid-flight". The
+  shape to design: a fifth `QueueWarning`-style code (the four today are `out-of-order`,
+  `cross-wave-backwards`, `defaulted-seq`, `unsequenced-members`) on the cycles POST when the target
+  plan already has cycles in a terminal state (`done`/`skipped`) — i.e. the plan is demonstrably
+  in-flight rather than being filed. Open questions for the design note: whether an OPEN plan with only
+  `pending` cycles should warn at all (that is still filing), and whether the warning should also fire
+  on the `active`-cycle case (an extension mid-cycle is the most suspect of the three). Fleet surface is
+  one line per client — `add_cr_depends_verb`-style registrar parity, per CR-CRU-075.
+- 🆕 **CR CANDIDATE (user-deferred 2026-09-10) — the citation guard's diagnostic exemption is
+  TypeScript-only.** `CR-CRU-109 §S3/AC10` ruled that *an `expect()` message is a diagnostic, not an
+  assertion*, and exempted it — but the checker recognises only TypeScript's `expect(actual, message)`
+  shape. Python's `unittest` puts its message in the THIRD POSITIONAL argument
+  (`assertNotEqual(a, b, msg)`), which `assertedLiterals` reads as asserted content. So the identical
+  sentence is legal in a `.ts` file and a violation in a `.py` file — measured at CR-CRU-117 cycle 412,
+  where `tests/client/test_a_step_status_nobody_gave_is_not_green.py` tripped the AC7 residue ceiling
+  for naming `CR-CRU-115` in a failure message explaining the bias under test. **User ruling: fix the
+  instance now (reword the message), defer the class.** The class fix teaches the checker the
+  `unittest` message convention for `assertEqual`/`assertNotEqual`/`assertTrue`/`assertIn` and friends
+  (note `assertTrue(x, msg)` is the SECOND argument, so the rule is per-method, not a fixed position) —
+  and it must NOT simply exempt every third argument, since `assertAlmostEqual(a, b, places)` and
+  `subTest` kwargs occupy the same slot. Pairs naturally with the existing **citation-guard
+  generalisation** candidate. Precedent for the self-test: the guard already proves its own exemptions
+  on a planted `SYNTHETIC_TRIPWIRE_FIXTURE` rather than on real files.
+
+- 🗑️ **2026-09-10 — USER RULING: the Lavish storyboard no longer tracks CRs, and the close-out
+  storyboard-parity step is RETIRED.** `.lavish/crucible-v2-design.html`'s `section#execution` — the
+  "CR queue & status" table, 71 KB carrying all 115 CR rows — predated the Crucible implementation and
+  has been DELETED from the artifact on the user's instruction (queued as annotation *"Remove this
+  queue!"* against that section). The trackers are this file and the BOARD; a third copy in a design
+  artifact was a copy to keep in sync for no reader. The storyboard keeps only what it is for: the
+  decided design, frame by frame (23 CR ids survive as design-lineage citations in prose, which is
+  provenance, not tracking).
+  **Consequences for the orchestrator's close-out**: no more storyboard row-sync, no more set-diff
+  parity check between the storyboard and this table. The artifact is still opened at bootstrap for
+  DESIGN review, and the flowchart still owes its CR-CRU-116 refresh. Also fixed while in there: an
+  unclosed `<section id="storyboard">` (pre-existing; browsers auto-closed it) and seven dead
+  `#execution` CSS rules.
+- 🗑️ **2026-09-10 — USER RULING: `.lavish/crucible-in-release-waves.html` is DELETED.** It was the
+  design exercise that captured the release-related features, and it is SUPERSEDED by the DNs those
+  exercises produced (`DN-crucible-wave-track-release.md` D1-D4, `DN-crucible-roadmap-view.md`). Its
+  session was ended and the file removed. Earlier notes in this file cite it as the surface a ruling
+  was taken on — those citations stand as history; the rulings themselves live in the DN, which is why
+  the artifact was disposable. **Standing pattern, now explicit: a Lavish artifact is a REVIEW
+  SURFACE, not a record.** Once its decisions are recorded in a DN, spec or this queue, the artifact
+  is deleted rather than maintained.
+
+- 🚪 **2026-09-10 — USER RULINGS: `queue-file` is DEPRECATED, the 62 landed rows are BACK-FILLED, and
+  CR-CRU-118 is rescoped.** Recorded as DN `D4's fallout` (`DN-crucible-wave-track-release.md`).
+  (1) The bulk queue door is transitional — it exists because this project is Crucible's source AND
+  its first user — and its replacement shipped long ago in CR-CRU-091 §S8 + CR-CRU-106: `cr-plan`
+  (`POST …/queue/plan`), `cr-depends` (`…/queue/depends`), `wave-sequence` (`…/queue/sequence`),
+  `cr-supersede`/`cr-void` (`…/queue/<cr>/…`), `release-propose` (`…/release-proposals`). Registering
+  a CR is three gated calls; every failure mode the bulk door produced is unreachable through them.
+  Deprecation WARNS in CR-CRU-118; removal + a file-driven sync is 0.3.0.
+  (2) CR-CRU-118 §S3 no longer teaches the bulk parser to carry membership — building comfort into a
+  retiring door — and gains **§S3a**, the historical-membership derivation.
+  (3) **A measured blocker**: `declareMembership` accepts only labels with a LIVE proposal
+  (`v2.ts` — `404 release X has no live proposal`), and a shipped release's proposal is consumed by
+  its own insert, so `cr-plan --release 0.1.0` is refused BY DESIGN. The 62-row backfill therefore
+  cannot run until §S3a ships: a label naming a RECORDED release is accepted only where that
+  release's own `crs` already names the CR — derivation with a self-check, unable to add scope to a
+  closed release. Coverage measured: 62/62 derivable (`0.1.0` → 60, `0.1.2` → 1, `0.1.3` → 1).
+  (4) **CR-CRU-022's burn-down scope source must be re-based**: its §S3/AC2 derive `queue_snapshots`
+  from `POST /queue` being called twice, which retires with the route. Recorded as design work for
+  that CR rather than left to its gap analysis.
+  (5) CR-CRU-075 exists SOLELY to give the fleet parity on `queue-file`; its per-client tests assert
+  every client must expose it, so they invert at removal, not at deprecation.
+- 📅 **2026-09-10 — 0.2.0's target date declared: 2026-09-12** (`targetAt: 1789171200`), estimated
+  from measured close-out velocity — 44 CRs over 2026-08-20→09-10 = **2.0/day** calendar (the last 8
+  days run 3.9/day, deliberately not used: today's three CRs each cost 4-6 cycles). Remaining scope
+  was 117 + 118 plus the ceremony. **0.3.0 is proposed at ~2026-10-03** on the same basis (4 known
+  CRs — 015/018/022/098 — all larger surfaces, plus the burn-down and citation-sweep CRs and expected
+  mid-release discovery ≈ 8-10 CRs), and is NOT yet recorded: the user ruled it is declared after
+  0.2.0 ships.
+
+- 🔬 **2026-09-10 — CITATION CENSUS of `clients/`, measured at CR-CRU-115 cycle 407, and it upgrades
+  the recorded candidate CR from an estimate to a count.** `clients/` carries **11** `path:line`
+  citations over 8 distinct targets: **6 accurate, 5 STALE**. The stale set is `mvn-crucible.py:641`
+  replicated across arduino/bun/python/rust (ONE defect, four sites — the line now holds
+  `status = "fail"`) plus `PRD-crucible-v2.md:291`, which points into the cycle-kinds sentence while
+  its prose names LANE/track (the Tracks ruling is at `:293`, and its sibling `DN-model-b-language.md:53`
+  IS correct, which is how the pair reads plausible).
+  **Guard coverage is accidental, not designed: 4 guarded, 7 unguarded.** `NextBlockCitationsTest`
+  (`tests/client/test_cr092_next_decision_resolver.py`) is the ONLY thing in the repo that validates a
+  line number, and its scope is `cmd_next`'s block alone — it exists there only because CR-CRU-092
+  built it there. `docs-retired-mirror-references` checks file EXISTENCE under `tests/` only; the
+  tripwire COUNTS prose citations per tree (`clients` head 789) and validates none of them. So the one
+  citation the release gate caught is the one that happens to live inside `cmd_next`; the other five
+  are equally stale and **no run in this repo will ever go red on them**.
+  **The candidate CR now has a second half**: generalising the head/tail bracketing table over all of
+  `clients/` is cheap (the extractor and the idiom both exist) and would catch this class before a gate
+  does. Recorded, not done — a four-client citation sweep in front of a release gate is how a one-line
+  fix becomes a second red run.
+- ⚠️ **2026-09-10 — ORCHESTRATOR RULE: a cycle's dispatch list must include every guard the cycle's
+  edits can move, not every guard in the CR's own blast radius.** CR-CRU-115 cycle 403 shifted all five
+  client files; `test_cr092_next_decision_resolver.py` holds the only line-number guard in the repo and
+  sat in CR-CRU-114's blast radius, so it entered no CR-CRU-115 dispatch list. GREEN, VERIFY and FIX
+  each ran every suite they were given, all green — and `pre-merge-gate` was the first run to reach the
+  guard (3934/1). Fourth citation-guard incident of the day; the second where the guard that would have
+  caught it lived in a file the orchestrator did not name.
+
+- 🔬 **2026-09-10 — CR-CRU-115 gap analysis: §S2 SPLIT OUT to CR-CRU-117, three ACs rescoped.**
+  Measured, not reasoned. (1) Repairing the interim guard client-only would **permanently false-gate
+  waves**: the interim outcome is `checks-passed`, and `workflowLens` (`public/app-logic.mjs`) flips a
+  wave to `gated` on `passed` OR `checks-passed` from a Set nothing removes from — so a two-second-old
+  in-flight snapshot gates a wave, and a later `failed` seal cannot undo it. There is no legal
+  "in progress" outcome (`checks-passed, passed, failed, cancelled`), so the interim/seal distinction
+  needs a reader change → CR-CRU-117. (2) `no-mistakes axi status` on this project's own release run
+  resolves **`outcome: passed-with-skips`**, which is in NO vocabulary — not the server's
+  `GATE_OUTCOMES`, not the client tuple, not the renderer's gating rule — so today's fallback silently
+  rewrites it to `passed`. CR-115 now maps it by an explicit pass-family table and reports the raw
+  value; making it first-class is a **candidate CR** (three trees: `src/v2.ts`, the client tuple,
+  `public/app-logic.mjs` + `public/app.js`). (3) The integration AC named `cmd_gate_*`, which are
+  single-statement delegators — the identical trap that forced CR-CRU-114's AC to be rescoped; the
+  greppable seam is each client's `_post_gate`. (4) Recorded consequence: stamping `version` makes a
+  gate retention-protected (`LIVE_GATE` in `src/store.ts`), so a release that never ships leaves a
+  permanently live gate. (5) The fleet's existing interim fixtures (3/6/8 growing rows across four
+  client suites) encode a shape the real tool never emits — that agreement between fixture and guard
+  is why the fault reached a release.
+- ✅ **2026-09-10 — USER RULING: CR-CRU-117 is 0.2.0, wave 6.** Declared `cr-plan --release 0.2.0
+  --wave 6`, dependencies authored through `cr-depends`, and wave 6's order re-authored as
+  `116, 114, 115, 117` (seq 6001-6004). Wave 6 now holds FOUR CRs, all in 0.2.0, and 0.2.0's declared
+  scope is no longer complete: 117 is the remaining work.
+- ⚠️ **2026-09-10 — CR-CRU-117 was on the board WITHOUT ever being AUTHORED, and it took the user to
+  catch it.** Its `wave: 6` / `seq: 6004` arrived from the destructive `queue-file` bulk POST the
+  orchestrator ran by reflex to publish one row — which sends only `{cr, title, wave, dependsOn}`. So
+  the entry existed, `next` offered it, and it carried NO `release`, was absent from wave 6's declared
+  sequence, and — because zone 2 is release-scoped — **rendered nowhere on the roadmap**. The board
+  answering `NEXT` on a CR the roadmap cannot draw is exactly the blind spot the CR-CRU-116 review
+  named as Q2. Rule reaffirmed: publish ONE row with `cr-plan` + `cr-depends` + `wave-sequence`, never
+  with `queue-file`.
+- ℹ️ **2026-09-10 — that same accidental `queue-file` run also CLOSED a recorded divergence.** The
+  board had held `015/018/022/098` at wave 6 while this file had already re-waved them to 7; the bulk
+  POST published the file's rows, so the board now reads wave **7** for all four, matching the table.
+  Recorded because it was luck, not intent — the same run dropped `CR-CRU-113`'s VOID row, which was
+  absent from the file.
+- 🌊 **2026-09-09 — WAVE 6 IS 0.2.0's SECOND WAVE; the release-machinery CRs land on the release
+  branch without the feature ceremony (user rulings).** Three decisions, taken on the Lavish
+  proposal `.lavish/crucible-in-release-waves.html`, after the 0.2.0 release ceremony exposed the
+  defects behind them. (1) **Wave 6 carries 0.2.0's release-machinery CRs** — CR-CRU-114 and
+  CR-CRU-115 — and `015, 018, 022, 098` move to **wave 7**, release still undeclared. A release
+  bundles the CRs of one or more waves, so a second wave inside 0.2.0 is the model's own shape, not
+  a workaround; renumbering keeps wave order monotonic with release order so `next` behaves until
+  CR-CRU-114 ships. (2) **A wave with no release stays invisible on the roadmap** — membership is
+  declared, never inferred; no backlog zone, the visual contract keeps its three zones. (3) **0.2.0's
+  in-release scope is CR-CRU-114 + CR-CRU-115 + the `cr-close` wording task**; the **release task
+  set** the wave/track/release DN names is DEFERRED past 0.2.0 and recorded, not dropped — it is what
+  would make the ceremony itself trackable, and it is why this release was invisible to the board
+  between the proposal and the tag. **Execution mode:** plans and cycles exactly as normal —
+  `plan-file` → `cycle-activate` → RED/GREEN/VERIFY → `pre-merge-gate` → `cr-close` — but **no
+  `git flow feature start/finish`**: commits land directly on `release/0.2.0`, which merges to master
+  AND develop at `finish`. The cycle machinery never touches git, so nothing in Crucible changes for
+  this mode.
+- 🌊 **2026-09-09 — USER REQUIREMENT: only ONE wave is active at any time, and Crucible PLACES that
+  constraint.** Not a convention orchestrators are trusted to keep — a refusal the server issues.
+  Filed as **CR-CRU-116**, which lifts the rule that already exists one container down:
+  `transitionCycle` refuses a second active sibling (`code: "already-active"`,
+  `src/store.ts:3241-3249`) and refuses activating ahead of a seq-earlier pending sibling
+  (`code: "out-of-order"`, `:3255-3263`). The wave-scope refusals reuse both codes verbatim rather
+  than mint new vocabulary. Activeness stays DERIVED — a wave is active while it holds an open plan
+  or an `IN_PROGRESS` CR; no wave record, no `wave-activate` verb, consistent with wave completion
+  being derived too. **CR-CRU-116 is the only wave-6 CR that touches `src/`**, which is what keeps
+  CR-CRU-114's and CR-CRU-115's "empty `src`/`public` diff" ACs honest. CR-CRU-114 is the READ side
+  of the same rule and now says so.
+- 🎨 **2026-09-09 — USER DECISION OWED: the workflow flowchart's first wave panel depicts a rule
+  CR-CRU-116 abolishes.** `.lavish/crucible-workflow-flowchart.html:175-184` draws a marked wave
+  (`Wave 5 · active`) holding five `cr pend` rows and NO runner — under §S4 a wave with nothing
+  `IN_PROGRESS` carries no marker. The panel is right about geometry and wrong only about the marker.
+  It could not be reconciled by changing the code: CR-CRU-096 AC11a makes a runner ADDITIVE
+  (`scheduled = actionable.slice(0,5)` plus every `IN_PROGRESS`), so a marked live board draws SIX
+  rows against AC27's `rowCount === 5` comparison — measured, not argued. CR-CRU-116 therefore deletes
+  AC27's two marker lines and leaves the artifact untouched, because refreshing an approved design
+  surface is the user's call. **Nothing is blocked by this**; it is a design-refresh item.
+- 🔧 **2026-09-09 — TASK, not a CR: `cr-close` and `cr-merged` assume a merge.** `--commit`'s help
+  reads "Merge commit sha" and the closing milestone is typed `cr-merged`; under the mode above a CR
+  lands as an ordinary commit. The data is already correct (any sha is recorded), only the wording
+  assumes a merge, and per the CR-vs-task test a help string plus a definition has no design surface.
+  Fix the help text and define `cr-merged` as "the CR landed on its target branch" — minting a second
+  milestone type for the same event would be the parallel mechanism this project keeps refusing.
+- 📎 **2026-09-09 — CANDIDATE CR (measured, and it caused a red gate): `path:line` citations drift
+  silently everywhere except one guarded block.** CR-CRU-116 shifted `src/v2.ts` by +8 from line 8,
+  `src/store.ts` by +31 from `:603` and a further +127 from `:3336`, and `src/hints.ts` by +19 from
+  `:276`. Cycle 397 compared every `store.ts:N` / `hints.ts:N` / `v2.ts:N` / `app-logic.mjs:N` /
+  `app.js:N` citation in `clients/`, `tests/`, `src/`, `public/` and `docs/` against the CR's base and
+  HEAD: **267 cited ranges now hold different content than they did at base.** Three were spot-checked
+  as demonstrably accurate at base and wrong now — `src/store.ts:1911` (`tier: meta?.tier ?? "unit"`,
+  cited four times from `tests/client/`) is now `:1942`; `src/v2.ts:711`; `src/v2.ts:2053` (cited from
+  `public/app-logic.mjs:1327`). Only `clients/_crucible_axi.py`'s `next` block is guarded, by
+  `NextBlockCitationsTest`, which is why the gate went red on exactly that one and nowhere else.
+  Follow-up: generalise that guard repo-wide, or DECIDE and document that only the `next` block is
+  pinned. The status quo is a convention enforced in one file out of hundreds.
+- 🧪 **2026-09-09 — CANDIDATE CR: two concurrent python client runs merge into one ingest.**
+  `test-reports/` is a single shared dir and `_regression_run` wipes only at ITS own start, so a run
+  overlapping another absorbs both XML sets. Measured in cycle 397: an ingest reported **3276 pass / 2
+  pending — exactly 2×** the suite, because `test-reports/` held two complete 449-file sets from one
+  invocation 68 s apart (the orchestrator's `pre-merge-gate` running beside the agent's own run). Both
+  sets were 0-failure so no green was false, but every board figure from an overlapping run is
+  inflated. Fix: a per-invocation reports subdir (PID or uuid suffix). **Orchestrator rule until then:
+  never run the gate concurrently with an agent's ingesting run.**
+- ⚠️ **2026-09-09 — CANDIDATE CR: no verb can re-wave a release-less CR, and the bulk route would
+  wipe membership.** `cr-plan` and `wave-sequence` both REQUIRE `--release`, so the four CRs re-waved
+  to 7 above cannot be re-waved on the board while their release is undeclared. The only other path is
+  the bulk queue POST, and that is destructive: the route stores membership **as received**
+  (`src/v2.ts:1964-1971`) while `queue-file` sends only `{cr, title, wave, dependsOn}`, so re-posting
+  the table would drop **every release assignment and every lifecycle disposition** on the board. The
+  queue table above is therefore the authored truth for those four rows and the board keeps wave 6
+  for them until a post-0.2.0 release is proposed or the re-wave path exists. This supersedes the
+  earlier "`queue-file` drops lifecycle dispositions" note by naming the second field it also drops.
+- 📌 **2026-09-09 — STANDING DECISION 1 is now satisfied BY THE GATE, not beside it.** The standing
+  step `python-crucible.py regression --start-dir tests/client` was adopted 2026-09-08 as a second
+  command run alongside `pre-merge-gate`. CR-CRU-112 shipped the mechanism it was asking for: the
+  gate's own envelope now carries `suites[4]`, one of them `test:client` / `stack: python` /
+  `client: python-crucible.py`, 1633 tests, inside ONE invocation (measured on `release/0.2.0`:
+  3830 passed / 0 failed / 1 pending / 3831 across 229 files, 4 suites, `tsc` exit 0). Running the
+  python step separately is now redundant, not required.
 - 🚨 **2026-09-08 (CR-CRU-110 dispatch — AGENT-ID STANDARD BREACHED, recorded because the board
   now carries the evidence).** The four phase agents of plan 118 registered as `Cr110Red`,
   `Cr110Green`, `Cr110Verify` and `Cr110Fix`. The standard is

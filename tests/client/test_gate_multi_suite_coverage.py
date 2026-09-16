@@ -35,7 +35,7 @@ colour means nothing:
   RED  `EachSuiteIngestsThroughItsOwnStacksClientTest` (AC5, both methods).
          Two independent faces, because a stack FIELD is passable while broken:
          (i) `clients/python-crucible.py` sends NO `stack` key on any ingest
-         body at all today (`clients/bun-crucible.py:937` is the fleet's only
+         body at all today (`clients/bun-crucible.py:1020` is the fleet's only
          `stack` statement), so no run in this repo has ever carried the python
          stack; (ii) nothing invokes the python client from the gate, proven
          not by a field but by the ancestry of the process that actually ran
@@ -155,6 +155,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -199,7 +200,7 @@ EXCLUDED_SUITE = "test:e2e"
 
 # The stacks the two gate-covered suites belong to. `stack` is the server's own
 # {tier, stack, context} field (`src/v2.ts:713`), and bun is the only value the
-# fleet sends today (`clients/bun-crucible.py:937`).
+# fleet sends today (`clients/bun-crucible.py:1020`).
 BUN_STACK = "bun"
 PYTHON_STACK = "python"
 
@@ -965,11 +966,36 @@ class NoSuiteIsGainedByHidingFilesTest(unittest.TestCase):
     the same regex would be a second decision that can disagree with the one
     the repo actually ships. The run is filtered to that guard's own describe
     block, so this PIN costs one `bun test` of two assertions and never the
-    file's real-bun fixture block."""
+    file's real-bun fixture block.
+
+    TOOLCHAIN DEPENDENCY, declared rather than assumed (2026-09-09, found by
+    the 0.2.0 release CI). Driving the real guard means this python test needs
+    the BUN toolchain, and CR-CRU-112 declares `tests/client` as the PYTHON
+    suite -- so in an environment with no bun (exactly what the release
+    workflow's `test-python` job is: "Python client suite (no server
+    required)") the drive raised `FileNotFoundError` and the case ERRORed. It
+    passed everywhere it had been run before only because every one of those
+    environments happened to have bun.
+
+    It SKIPS there instead, and the skip costs no coverage: the property is
+    asserted by `tests/suite-integrity.test.ts` itself, which CI runs in the
+    `test-bun` job -- the job that owns that toolchain. What this case adds is
+    the CROSS-suite confirmation, which is meaningful only where both
+    toolchains exist. A suite that cannot run without another stack's
+    toolchain is not really that stack's suite, which is CR-CRU-112's own
+    thesis pointed at itself."""
 
     GUARD = "no pathIgnorePatterns exclusion"
 
     def test_the_repo_declares_zero_discovery_exclusions_by_its_own_guard(self):
+        if shutil.which("bun") is None:
+            self.skipTest(
+                "no `bun` on PATH: this AC6 cross-check drives"
+                " `tests/suite-integrity.test.ts`'s own guard, and"
+                " `tests/client` is the PYTHON suite. The property itself is"
+                " asserted by that bun test in the job that owns the bun"
+                " toolchain; re-implementing its regex here would be a second"
+                " decision that can disagree with the one the repo ships.")
         result = subprocess.run(
             ["bun", "test", "tests/suite-integrity.test.ts", "-t", self.GUARD],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=180)

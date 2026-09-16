@@ -804,13 +804,19 @@ describe("CR-CRU-094 §S1/AC1 — the cycle binding rides the run as a column", 
     }
     const db = new Database(dbPath);
     try {
-      const row = db
-        .query<{ cycle_id: number | null }, [string]>(
-          "SELECT cycle_id FROM events WHERE id = ?",
-        )
-        .get(eventId);
-      if (row === null) throw new Error(`no events row for ${eventId}`);
-      return row.cycle_id;
+      // CR-CRU-129 §S1 — a GATE's row lives in `gates` and a milestone's in
+      // `milestones`; the column this AC is about is derived at the SAME
+      // insert seam for all three, which is the point of reading all three
+      // here rather than asserting the gate landed in the telemetry table.
+      for (const table of ["events", "gates", "milestones"]) {
+        const row = db
+          .query<{ cycle_id: number | null }, [string]>(
+            `SELECT cycle_id FROM ${table} WHERE id = ?`,
+          )
+          .get(eventId);
+        if (row !== null) return row.cycle_id;
+      }
+      throw new Error(`no stored row for ${eventId}`);
     } finally {
       db.close();
     }

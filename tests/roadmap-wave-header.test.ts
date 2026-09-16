@@ -19,13 +19,32 @@
 // happy-dom, with the box model stubbed because happy-dom runs no layout.
 //
 // WHAT IS ASSERTED, AND WHY IT IS THE PUBLISHED SURFACE AND NOT A FUNCTION
-// NAME. "This wave belongs to the focused, in-flight release" is a decision,
-// so it belongs in the pure module (`focusedReleaseView`,
-// public/app-logic.mjs:1154, already answers `kind === "proposed"` vs
-// `"shipped"` — stamping each wave box there is the shape that matches this
-// codebase). But GREEN may put it anywhere: every assertion below reads the
-// PUBLISHED `data-active` attribute and the RENDERED header text, never an
-// internal name.
+// NAME. "Which wave holds the work in flight" is a decision, so it belongs in
+// the pure module (`focusedReleaseView`, public/app-logic.mjs, which already
+// stamps each wave box). But GREEN may put it anywhere: every assertion below
+// reads the PUBLISHED `data-active` attribute and the RENDERED header text,
+// never an internal name.
+//
+// ── SUPERSEDED 2026-09-09 by CR-CRU-116 §S4 ───────────────────────────────
+//
+// CR-CRU-096 AC1 read activeness as a RELEASE fact — `focusedReleaseView`'s
+// `kind === "proposed"`, stamped identically on every box — and this file
+// pinned that reading: "a wave publishes `data-active` from its RELEASE, not
+// from whether some CR is mid-run". That was right while a release held ONE
+// wave. It is wrong the moment one holds two, because a release-level flag
+// marks every box at once, so a two-wave release drew `· active` twice.
+//
+// CR-CRU-116 §S4 retires that reading. Activeness is a per-WAVE fact from the
+// derivation §S1 uses: the box whose wave holds an `IN_PROGRESS` member
+// carries the marker, and no other box does — so a focused release with
+// nothing running marks no wave at all, and that is a state rather than an
+// error. The assertions below keep their SUBJECTS (which box publishes
+// `data-active`; whether the header says the same thing in a WORD; that
+// activeness is never signalled with motion) and are rewritten on the new
+// premise. The one test whose only subject WAS the retired rule — "a CR that
+// is actually running is not what makes the wave active" — is DELETED rather
+// than inverted; the replacement behaviour is asserted whole in
+// tests/roadmap-wave-active-marker.test.ts.
 //
 // AC29 — EVERY FIXTURE ID IS SYNTHETIC (`CR-W1-01`, `CR-W2-01`, `CR-Q-1`,
 // `CR-S-A`). Crucible is project-INDEPENDENT: a criterion that only holds
@@ -428,23 +447,29 @@ function animatingSelectors(css: string): string[] {
 
 const ANIMATING = animatingSelectors(STYLES_SRC);
 
-// ── §S1/AC1 — "active" means THIS WAVE BELONGS TO THE IN-FLIGHT RELEASE ────
+// ── §S4/AC1 — "active" means THIS WAVE HOLDS THE WORK IN FLIGHT ────────────
+//
+// SUPERSEDES CR-CRU-096 §S1/AC1's release-level reading (2026-09-09, CR-CRU-116
+// §S4) — see the supersession note at the head of this file.
 
-describe("CR-CRU-096 §S1/AC1 — a wave publishes `data-active` from its RELEASE, not from whether some CR is mid-run", () => {
-  test("every wave of the focused in-flight release publishes data-active=true with NO CR IN_PROGRESS", async () => {
+describe("CR-CRU-116 §S4 — a wave publishes `data-active` from ITS OWN work in flight, not from its release", () => {
+  test("a focused in-flight release whose waves hold NO CR IN_PROGRESS publishes data-active=false on EVERY wave, and still renders them all", async () => {
     await mountApp();
 
-    // The fixture really is the §S1 case: in flight, nothing running.
+    // The board CR-CRU-096 read as active throughout: in flight, nothing
+    // running. §S4 reads it as no wave's work.
     expect(flow().getAttribute("data-kind")).toBe("proposed");
     expect(flow().getAttribute("data-version")).toBe("0.4.0");
     expect(QUEUE.some((entry) => entry.status === "IN_PROGRESS")).toBe(false);
 
+    // Being IN FLIGHT is what draws the boxes; holding the work is what marks
+    // one. The first is unchanged, so both boxes still render.
     expect(waveNames()).toEqual(["1", "2"]);
-    expect(activeAttr("1")).toBe("true");
-    expect(activeAttr("2")).toBe("true");
+    expect(activeAttr("1")).toBe("false");
+    expect(activeAttr("2")).toBe("false");
   });
 
-  test("a SHIPPED focus publishes no active wave, and an UNFOCUSED release's waves are not published at all — focus decides, and only the focus", async () => {
+  test("a SHIPPED focus publishes no wave box at all, and an UNFOCUSED release's waves are not published either — focus decides WHICH waves render, their own work decides which is active", async () => {
     await mountApp();
 
     // 0.5.0 is a live proposal too, but it is not the focus: zone 2 draws one
@@ -454,41 +479,31 @@ describe("CR-CRU-096 §S1/AC1 — a wave publishes `data-active` from its RELEAS
 
     await clickGate("0.1.0");
     expect(flow().getAttribute("data-kind")).toBe("shipped");
-    // AC1a — the observable AC1's second clause actually has: a SHIPPED focus
-    // publishes `false` by rendering NO WAVE BOX AT ALL. `data-active` is
-    // `kind === "proposed"` and zone 2 draws boxes only when the focus is not
-    // shipped, so a rendered box can never carry `false`; asserting the
-    // absence of boxes is the only thing here that can fail for the reason it
-    // claims. Counting `[data-active="true"]` boxes would pass vacuously on
-    // zero boxes of ANY kind.
+    // A shipped focus draws NO wave box at all — zone 2 renders them on the
+    // not-shipped branch only — so the ABSENCE of boxes is what there is to
+    // read here, not a value some box publishes. (Under §S4 a rendered box
+    // really can carry `false`; that is asserted above, on boxes that render.)
     expect(waveEls()).toEqual([]);
     expect(waveNames()).toEqual([]);
 
-    // Focus the OTHER proposal: its wave is now the in-flight one, and 0.4.0's
-    // two waves are gone rather than lingering as active.
+    // Focus the OTHER proposal: its wave is the one that renders now, and
+    // 0.4.0's two are gone rather than lingering. It holds nothing mid-run, so
+    // it renders UNMARKED — being the focused release is not being the wave
+    // with the work.
     await clickGate("0.5.0");
     expect(waveNames()).toEqual(["3"]);
-    expect(activeAttr("3")).toBe("true");
-  });
-
-  test("a CR that is actually running is not what makes the wave active: with one IN_PROGRESS in wave 1, wave 2 — which has none — is still active", async () => {
-    await mountApp({ queue: QUEUE_WITH_RUNNER });
-
-    // Non-vacuity: exactly one member is mid-run, and it is in wave 1.
-    const running = QUEUE_WITH_RUNNER.filter((entry) => entry.status === "IN_PROGRESS");
-    expect(running.map((entry) => entry.cr)).toEqual(["CR-W1-23"]);
-    expect(running[0]!.wave).toBe("1");
-
-    expect(activeAttr("1")).toBe("true");
-    expect(activeAttr("2")).toBe("true");
+    expect(UNFOCUSED_WAVE.some((entry) => entry.status === "IN_PROGRESS")).toBe(false);
+    expect(activeAttr("3")).toBe("false");
   });
 });
 
 // ── §S1/AC2 — the marker is a WORD in the header, and tracks `data-active` ──
 
 describe("CR-CRU-096 §S1/AC2 — the header renders the `· active` marker exactly when data-active=true", () => {
-  test("an active wave's header states `Wave <n> · active`, not the bare `Wave <n>`", async () => {
-    await mountApp();
+  test("the header of the wave holding the running CR states `Wave <n> · active`, and the wave beside it says nothing about being active ANYWHERE in its box", async () => {
+    // §S4 — the marker's premise is now the wave's own work, so the board that
+    // can carry it is the one with a runner: `CR-W1-23`, in wave 1.
+    await mountApp({ queue: QUEUE_WITH_RUNNER });
 
     const one = headerText("1");
     expect(one).toContain("wave 1");
@@ -496,33 +511,42 @@ describe("CR-CRU-096 §S1/AC2 — the header renders the `· active` marker exac
     // §S8 — the marker is a WORD, so the fact survives greyscale; the border is
     // the second channel, never the only one.
     expect(headerSaysActive("1")).toBe(true);
-    expect(headerSaysActive("2")).toBe(true);
+    // And the wave WITHOUT the work says it nowhere — not in its header, and
+    // not anywhere else in its box either, which is the direction a `toContain`
+    // on the marked box cannot answer.
+    expect(headerSaysActive("2")).toBe(false);
+    expect(boxText("2")).not.toContain("active");
   });
 
-  test("the marker tracks the published attribute across every focus: every wave that renders publishes true and says `active`, and the shipped focus — AC1a's `false` — renders no header to say anything", async () => {
-    await mountApp();
+  test("the marker tracks the published attribute across every focus: a rendered wave says `active` exactly when it publishes true — BOTH directions seen — and the shipped focus renders no header to say anything", async () => {
+    await mountApp({ queue: QUEUE_WITH_RUNNER });
 
     let sawActive = false;
+    let sawInactive = false;
     for (const version of ["0.4.0", "0.1.0", "0.5.0"]) {
       await clickGate(version);
       const shipped = flow().getAttribute("data-kind") === "shipped";
-      // AC1a — the honest observable: `data-active` is `kind === "proposed"`
-      // and boxes render only for a non-shipped focus, so no rendered header
-      // can ever be paired with `false`. The `false` side of the
-      // biconditional is the ABSENCE of boxes, which is what is asserted for
-      // the shipped focus rather than a value no box can publish.
+      // A shipped focus renders no box, so there is no header to pair with any
+      // value; that absence is asserted rather than a value read off nothing.
       if (shipped) {
         expect(waveEls()).toEqual([]);
         continue;
       }
       expect(waveNames().length).toBeGreaterThan(0);
       for (const wave of waveNames()) {
-        expect(activeAttr(wave)).toBe("true");
-        expect(headerSaysActive(wave)).toBe(true);
-        sawActive = true;
+        // The BICONDITIONAL, and §S4 is what makes it assertable at all: while
+        // `active` was the release's, no rendered box could publish `false`, so
+        // only one side of it ever ran.
+        const publishesActive = activeAttr(wave) === "true";
+        expect(headerSaysActive(wave)).toBe(publishesActive);
+        if (publishesActive) sawActive = true;
+        else sawInactive = true;
       }
     }
+    // Non-vacuity on BOTH sides: 0.4.0's wave 1 holds the runner, while its
+    // wave 2 and 0.5.0's wave 3 hold none.
     expect(sawActive).toBe(true);
+    expect(sawInactive).toBe(true);
   });
 });
 
@@ -562,12 +586,24 @@ describe("CR-CRU-096 §S2/AC3 — the header draws the count that is already pub
 
 // ── §S1/AC4 — motion stays reserved for IN_PROGRESS (CR-078 AC24) ──────────
 
-describe("CR-CRU-096 §S1/AC4 — an active wave with no running CR renders NO animation", () => {
-  test("the active wave box and its header match no animating rule in the shipped stylesheet", async () => {
-    await mountApp();
+// CR-CRU-116 §S4 rewrites AC4's PREMISE and keeps its subject. AC4 was written
+// as "an ACTIVE wave with no running CR renders no animation", which under the
+// retired release-level reading was the case that separated the two facts.
+// Activeness now IS holding a running CR, so that premise describes no board
+// that can exist. What AC4 is actually for survives whole and is what is
+// asserted: activeness is signalled by a WORD and a BORDER and NEVER by
+// motion — the wave box and its header animate nothing, and the motion in the
+// stylesheet belongs to the running CR's NODE (CR-078 AC24).
 
-    // The precondition is the AC: an ACTIVE wave with nothing running.
-    expect(QUEUE.some((entry) => entry.status === "IN_PROGRESS")).toBe(false);
+describe("CR-CRU-096 §S1/AC4 (premise per CR-CRU-116 §S4) — an ACTIVE wave's box renders NO animation; motion belongs to the running CR's node", () => {
+  test("the active wave box and its header match no animating rule in the shipped stylesheet", async () => {
+    await mountApp({ queue: QUEUE_WITH_RUNNER });
+
+    // The precondition: the wave is ACTIVE, and it is active because a member
+    // of it is mid-run — the only way a wave is active now.
+    const running = QUEUE_WITH_RUNNER.filter((entry) => entry.status === "IN_PROGRESS");
+    expect(running.map((entry) => entry.cr)).toEqual(["CR-W1-23"]);
+    expect(running[0]!.wave).toBe("1");
     expect(activeAttr("1")).toBe("true");
 
     // Parser sanity + non-vacuity: the stylesheet really does animate
@@ -595,7 +631,7 @@ describe("CR-CRU-096 §S1/AC4 — an active wave with no running CR renders NO a
   });
 
   test("the active-wave marker's second channel is a BORDER: the stylesheet's `[data-active=\"true\"]` rule colours an edge and declares no animation", async () => {
-    await mountApp();
+    await mountApp({ queue: QUEUE_WITH_RUNNER });
     expect(activeAttr("1")).toBe("true");
 
     const activeRules = Array.from(

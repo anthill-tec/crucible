@@ -65,6 +65,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 
@@ -196,6 +201,7 @@ class _BaseEnvelopeTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="bun-crucible-toon-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        install_project_limits(self.tmpdir)
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)
@@ -304,7 +310,9 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         }
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-X", "--cycles", "a,b",
+                "plan-file", "--cr", "CR-X",
+                "--cycle", "a", "--cycle-kind", "red-green",
+                "--cycle", "b", "--cycle-kind", "verify",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -334,7 +342,8 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
                         "cycles": [{"label": "a", "id": 201}]}
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, _err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-Y", "--cycles", "a",
+                "plan-file", "--cr", "CR-Y",
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
@@ -347,7 +356,8 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": "bad cr"}):
             code, out, err = _run_main(self.module, [
-                "plan-file", "--cr", "CR-BAD", "--cycles", "a",
+                "plan-file", "--cr", "CR-BAD",
+                "--cycle", "a", "--cycle-kind", "red-green",
                 "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 

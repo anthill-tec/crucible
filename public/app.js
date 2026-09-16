@@ -536,6 +536,16 @@
         () => `density: ${densityMode.val}`,
       );
 
+    // CR-CRU-122 §S1 — the ONE loading spinner in the app: a single element,
+    // spun by the `app-spin` keyframes in styles.css, rendered inline wherever
+    // a user-initiated wait on the backend is in flight (run detail's first
+    // fetch, a suite's lazy-load, and the three project-manager actions).
+    // It FOLLOWS `app-run-pulse`'s convention — a semantic class plus its own
+    // keyframes — without reusing it: a pulse says "this is happening live",
+    // a spinner says "wait, this is loading". Defined once and called at every
+    // site; a per-site copy would be a second source of the same signal.
+    const Spinner = () => span({ "data-testid": "spinner", class: "app-spinner" });
+
     // Shared app logo — the workspace top bar renders the SAME element/class/
     // text as home (§S5 fidelity #6).
     const Logo = () =>
@@ -624,10 +634,14 @@
       return div(
         {
           "data-testid": "agent-row",
+          // CR-CRU-123 §S1 — the streaming join is read INSIDE this reactive
+          // binding, deliberately not hoisted beside `busy` above: both would
+          // satisfy the AC today (the rows rebuild on every poll), but only
+          // the binding re-runs when the `openRuns` slice itself changes.
           class: () =>
             `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
-            }`,
+            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`,
           onclick: () => {
             state.selectedAgent =
               state.selectedAgent === agent.agentId ? null : agent.agentId;
@@ -1026,6 +1040,27 @@
       );
     }
 
+    // CR-CRU-123 §S1 — the THIRD predicate over the open-run slice, beside
+    // `visibleOpenRuns()` (project/agent filters) and `runningRunsFor()`
+    // (cycle): is THIS agent mid-run? An open run naming the agent is the
+    // signal, gated on liveness — `sweepOpenRuns` settles stale open runs on
+    // read, so a run CAN still name a dead agent in the window before the
+    // next sweep, and a tombstone has nothing in flight (AC6).
+    //
+    // AC8 — the join is scoped to the CURRENT project as well as the agent,
+    // the same `run.projectKey === state.route.projectKey` term
+    // `runningRunsFor()` already carries. Agent ids are REUSED across projects
+    // on this board (`vidushi` orchestrates all three), so an agentId-only
+    // join would light this pane's row for another project's run — the exact
+    // dishonest signal this CR exists to remove.
+    function isStreamingAgent(agent) {
+      if (agent.liveness === "tombstoned") return false;
+      return state.openRuns.some(
+        (run) =>
+          run.projectKey === state.route.projectKey && run.agentId === agent.agentId,
+      );
+    }
+
     // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
     // `RED f/t ➜ GREEN t/t · Cycle: "<label>" · <stem> · <tier> · closed in
     // <duration>` — the Cycle segment ONLY when the GREEN run's context.cycle
@@ -1061,9 +1096,18 @@
     // heuristic marker) with the active→done span from the §S0b timestamps.
     const KIND_GLYPHS = { "red-green": "⟲", verify: "☑", fix: "✚" };
 
+    // CR-CRU-120 §S1 — the open span carries its cycle id, mirroring
+    // `declared-marker` (CR-CRU-025 §S1), so the reveal can locate an ACTIVE
+    // cycle's own boundary by cycleId. Purely additive: rendered content is
+    // byte-unchanged, and the row still mounts only when `timelineRows` finds
+    // a linked event (CR-CRU-011 §S6 #3's no-container-when-empty rule).
     const CycleSpanOpenRow = (cycle, plan) =>
       div(
-        { "data-testid": "cycle-span-open", class: "app-cycle-span-open" },
+        {
+          "data-testid": "cycle-span-open",
+          "data-cycle-id": cycle.id,
+          class: "app-cycle-span-open",
+        },
         `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle · ${cycle.label} · ${plan.cr} · active`,
       );
 
@@ -1141,6 +1185,23 @@
       return "pass";
     };
 
+    // CR-CRU-117 §S1 — the mark, read here exactly as `workflowLens` and
+    // `boundaryGate` read it: `gate.inFlight === true`, a key INSIDE the gate
+    // object (settled 2026-09-10, DN-crucible-wave-track-release D3).
+    //
+    // The cards are the THIRD reader, and the only one that shows a gate to a
+    // human rather than deriving a verdict from it, so it LABELS instead of
+    // excluding: the feed is history, and dropping a real event from it would
+    // be the worse lie. An in-flight snapshot must carry `checks-passed` (the
+    // server's vocabulary has no word for "in progress"), so without the
+    // qualification below the card reads — and, via `gateOutcomeClass`, paints
+    // — as the green seal that never happened.
+    const gateInFlight = (g) => g?.inFlight === true;
+    const gateInFlightClause = (g) => (gateInFlight(g) ? " · in flight" : "");
+    // The class stem an in-flight gate takes INSTEAD of pass/fail/cancel: it is
+    // not a verdict, so it may not borrow a verdict's colour.
+    const gateClassStem = (g) => (gateInFlight(g) ? "inflight" : gateOutcomeClass(g?.outcome));
+
     // §S2 exact seal text: 🛡 Wave <n> gate · no-mistakes <outcome> · <N>
     // steps · <fixed> findings fixed · pushed <shortcommit>. `<fixed>` is the
     // SUM of every submitted step's findings.fixed (the only "fixed" figure
@@ -1149,7 +1210,12 @@
       const g = e.gate ?? {};
       const steps = g.steps ?? [];
       const fixed = steps.reduce((n, s) => n + (s.findings?.fixed ?? 0), 0);
-      return `🛡 Wave ${e.context?.wave ?? ""} gate · no-mistakes ${g.outcome} · ${steps.length} steps · ${fixed} findings fixed · pushed ${shortCommit(g.push?.commit)}`;
+      // CR-CRU-117 §S1 — the `pushed` clause is dropped when there is no
+      // commit to name (every in-flight gate): `pushed ` with nothing after it
+      // claims a push that has not happened. A seal always carries one, so its
+      // text is unchanged.
+      const commit = shortCommit(g.push?.commit);
+      return `🛡 Wave ${e.context?.wave ?? ""} gate · no-mistakes ${g.outcome}${gateInFlightClause(g)} · ${steps.length} steps · ${fixed} findings fixed${commit ? ` · pushed ${commit}` : ""}`;
     };
 
     // §S2 — full-width gate seal (workspace). The trailing ⊙ Detail badge is
@@ -1158,7 +1224,7 @@
       div(
         {
           "data-testid": "gate-card",
-          class: `app-transition-marker app-gate-card app-gate-${gateOutcomeClass(e.gate?.outcome)}`,
+          class: `app-transition-marker app-gate-card app-gate-${gateClassStem(e.gate)}`,
         },
         // §S2 — the exact seal text is isolated in its own child so the
         // whole-card textContent (which also carries the ⊙ Detail badge) never
@@ -1177,15 +1243,23 @@
         ),
       );
 
-    // §S4b/§S4c — home compact gate one-liner (distinct testid).
+    // §S4b/§S4c — home compact gate one-liner (distinct testid). CR-CRU-117
+    // §S1 — same mark, same suppression as the full card: home shows the row,
+    // qualified, and never a dangling ` · ` where a commit would be.
+    const gateCompactText = (e) => {
+      const g = e.gate ?? {};
+      const commit = shortCommit(g.push?.commit);
+      return `🛡 no-mistakes ${g.outcome}${gateInFlightClause(g)}${commit ? ` · ${commit}` : ""}`;
+    };
+
     const GateCardCompact = (e) =>
       div(
         {
           "data-testid": "gate-card-compact",
-          class: `app-gate-compact app-gate-${gateOutcomeClass(e.gate?.outcome)}`,
+          class: `app-gate-compact app-gate-${gateClassStem(e.gate)}`,
           onclick: () => openDrillin(e.id),
         },
-        `🛡 no-mistakes ${e.gate?.outcome} · ${shortCommit(e.gate?.push?.commit)}`,
+        gateCompactText(e),
       );
 
     // §S4b — slim workspace milestone row: ◇ glyph · type · label · CR badge
@@ -1502,7 +1576,14 @@
     // then refetch BOTH slices: the core refetch updates the home projects
     // row live (same contract the SSE projects frame drives), and the
     // archived refetch keeps the fold count/rows tracking the move.
-    async function postProjectLifecycle(key, action) {
+    //
+    // CR-CRU-122 §S4 — `pending` is the CALLER'S flag (one per row, created
+    // beside the row's other states) rather than a shared one: two rows may
+    // be mid-POST at once and neither may spin the other. It is raised here
+    // and lowered in the `finally`, so a POST that never arrives leaves no
+    // permanently spinning, permanently disabled control behind.
+    async function postProjectLifecycle(key, action, pending) {
+      pending.val = true;
       try {
         await fetch(`/api/v2/projects/${encodeURIComponent(key)}/${action}`, {
           method: "POST",
@@ -1511,6 +1592,8 @@
         });
       } catch {
         // Reachability is the watchdog's concern; keep stale data visible.
+      } finally {
+        pending.val = false;
       }
       refetch();
       refetchArchived();
@@ -1521,7 +1604,7 @@
     // confirm; only that second click POSTs), parameters line beneath
     // (sutRoot · liveness · retention · immutable key as TEXT, never bound
     // to an input).
-    const ManagerRowView = (project, startEdit) =>
+    const ManagerRowView = (project, startEdit, archivePending) =>
       div(
         div(
           { class: "app-manager-row-head" },
@@ -1545,11 +1628,23 @@
                   {
                     "data-testid": "manager-archive-confirm",
                     class: "app-chip app-manager-archive-confirm",
-                    onclick: () => {
+                    // CR-CRU-122 §S4 — disabled for the whole POST: a
+                    // disabled button dispatches no click at all, which is
+                    // what closes the double-submit gap this CR's audit found.
+                    disabled: archivePending,
+                    onclick: async () => {
+                      // The confirm used to be dismissed HERE, before the POST
+                      // was even sent, which unmounted the very control that
+                      // must show the wait. The dismissal MOVED into the
+                      // settle path (CR-CRU-122's implementation note): the
+                      // control stays mounted, disabled and spinning until the
+                      // POST completes — failure included, since
+                      // postProjectLifecycle swallows it and returns.
+                      await postProjectLifecycle(project.key, "archive", archivePending);
                       managerArchivePending.val = null;
-                      postProjectLifecycle(project.key, "archive");
                     },
                   },
+                  () => (archivePending.val ? Spinner() : ""),
                   "confirm archive",
                 )
               : "",
@@ -1594,6 +1689,8 @@
         const n = Number(s);
         return Number.isFinite(n) ? n : undefined;
       };
+      // CR-CRU-122 §S4 — the PATCH, in flight.
+      const savePending = van.state(false);
       const save = async () => {
         const body = {};
         if (name.val !== (project.name ?? "")) body.name = name.val;
@@ -1618,6 +1715,7 @@
           body.allowRunDeletion = allowDeletion.val;
         }
         if (Object.keys(body).length > 0) {
+          savePending.val = true;
           try {
             await fetch(`/api/v2/projects/${encodeURIComponent(project.key)}`, {
               method: "PATCH",
@@ -1626,8 +1724,15 @@
             });
           } catch {
             // Reachability is the watchdog's concern; keep stale data visible.
+          } finally {
+            savePending.val = false;
           }
         }
+        // CR-CRU-122 §S4 — the form closes in the SETTLE path, never before
+        // it: `editing` is lowered only once the PATCH above has come back
+        // (or failed), so the save control the user pressed stays mounted,
+        // disabled and spinning for the whole wait instead of vanishing with
+        // its own request still on the wire.
         editing.val = false;
         refetch();
       };
@@ -1717,7 +1822,17 @@
             onchange: (e) => (allowDeletion.val = e.target.checked),
           }),
         ),
-        button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
+        button(
+          {
+            "data-testid": "manager-edit-save",
+            class: "app-chip on",
+            // CR-CRU-122 §S4 — no second PATCH while the first is in flight.
+            disabled: savePending,
+            onclick: save,
+          },
+          () => (savePending.val ? Spinner() : ""),
+          "save",
+        ),
         button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
           { class: "app-card-meta app-manager-params" },
@@ -1728,6 +1843,27 @@
 
     const ManagerProjectRow = (project) => {
       const editing = van.state(false);
+      // CR-CRU-122 §S4 — this row's archive POST, in flight. Created HERE,
+      // beside `editing` and outside the swapping binding below, for the same
+      // reason the edit-field states are: a state created INSIDE that binding
+      // is rebuilt every time it re-runs, so a view↔edit swap mid-POST would
+      // reset the flag and drop both the spinner and the disabled guard.
+      //
+      // What that buys, exactly, and what it does NOT (measured, not assumed):
+      // it survives the BINDING, not the row. `ManagerProjectRow` is itself
+      // re-invoked by the manager pane's own binding,
+      // `() => div([...state.projects].map(ManagerProjectRow))`, on every
+      // projects refresh — the 5s poll, or an SSE projects frame — and each
+      // re-invocation makes a FRESH `van.state(false)`, just as it discards
+      // `editing`. A refresh landing mid-POST therefore DOES lose the spinner
+      // and the disabled guard for the rest of that request. That is inherited
+      // from how the manager list rebuilds, it is a race only against a
+      // sub-second POST, and closing it is not this CR's business.
+      // `ManagerArchivedRow` carries the same limit through
+      // `archived.map(ManagerArchivedRow)`; `ManagerAddForm` does not — it is
+      // invoked ONCE, eagerly, as a static child of the pane, so its
+      // `submitPending` really does live as long as the manager is mounted.
+      const archivePending = van.state(false);
       // Edit-field states live HERE — outside the swapping binding below —
       // so input ticks never rebuild the form (see ManagerRowEdit's note).
       // startEdit re-seeds them from the project on every ✎ edit click, so
@@ -1766,15 +1902,19 @@
           class: "app-manager-row",
         },
         () =>
-          editing.val ? ManagerRowEdit(project, editing, edit) : ManagerRowView(project, startEdit),
+          editing.val
+            ? ManagerRowEdit(project, editing, edit)
+            : ManagerRowView(project, startEdit, archivePending),
       );
     };
 
     // "archived (N)" fold row — the project's name + type + the unarchive
     // action (POST …/unarchive, then the same refetch pair brings the home
     // badge back live).
-    const ManagerArchivedRow = (project) =>
-      div(
+    const ManagerArchivedRow = (project) => {
+      // CR-CRU-122 §S4 — this archived row's own unarchive POST, in flight.
+      const unarchivePending = van.state(false);
+      return div(
         {
           "data-testid": "manager-archived-row",
           "data-project-key": project.key,
@@ -1788,12 +1928,15 @@
             {
               "data-testid": "manager-unarchive",
               class: "app-chip",
-              onclick: () => postProjectLifecycle(project.key, "unarchive"),
+              disabled: unarchivePending,
+              onclick: () => postProjectLifecycle(project.key, "unarchive", unarchivePending),
             },
+            () => (unarchivePending.val ? Spinner() : ""),
             "unarchive",
           ),
         ),
       );
+    };
 
     // The fold itself: header text EXACTLY `archived (N)`, ABSENT at N=0
     // (never "archived (0)"), collapsed by default; rows render only while
@@ -1823,7 +1966,13 @@
       const name = van.state("");
       const type = van.state("backend");
       const sutRoot = van.state("");
+      // CR-CRU-122 §S4 — the POST, in flight: while it is, the add control
+      // spins and refuses a second click (a doubled add is how the same
+      // project gets created twice), and the `finally` guarantees the form
+      // comes back to life even when the POST never arrives.
+      const submitPending = van.state(false);
       const submit = async () => {
+        submitPending.val = true;
         try {
           await fetch("/api/v2/projects", {
             method: "POST",
@@ -1832,6 +1981,8 @@
           });
         } catch {
           // Reachability is the watchdog's concern; keep stale data visible.
+        } finally {
+          submitPending.val = false;
         }
         refetch();
       };
@@ -1853,7 +2004,16 @@
           placeholder: "sutRoot",
           oninput: (e) => (sutRoot.val = e.target.value),
         }),
-        button({ "data-testid": "manager-add-submit", class: "app-chip on", onclick: submit }, "add"),
+        button(
+          {
+            "data-testid": "manager-add-submit",
+            class: "app-chip on",
+            disabled: submitPending,
+            onclick: submit,
+          },
+          () => (submitPending.val ? Spinner() : ""),
+          "add",
+        ),
       );
     };
 
@@ -1995,12 +2155,30 @@
     // anchor-fetch confirmed the boundary is truly pruned (empty events, no
     // `cycle`). A real DOM node in the Runs pane, never a silent no-op or the
     // old inaccurate `title` channel. Reactive on state.anchorFeedback.
+    // CR-CRU-120 §S4 — the slot now carries `{cycleId, kind}`: a boundary the
+    // server could not resolve at all is `pruned` (CR-CRU-032's verbatim
+    // wording, unchanged), while a cycle it DID resolve with zero linked runs
+    // is `empty` — an honest, materially different verdict, since nothing has
+    // been lost and the pill keeps its live state. Both `cycleId` and `kind`
+    // are read here, so a new verdict on the same cycle re-renders this node.
+    const ANCHOR_FEEDBACK_TEXT = {
+      pruned:
+        "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.",
+      empty: "No runs have been recorded for this cycle yet — nothing to jump to.",
+    };
+
     const AnchorFetchFeedback = () => {
       const fb = state.anchorFeedback;
       if (fb === null || fb === undefined) return null;
+      const text = ANCHOR_FEEDBACK_TEXT[fb.kind];
+      if (text === undefined) return null;
       return div(
-        { "data-testid": "anchor-fetch-feedback", class: "app-anchor-fetch-feedback app-card-meta" },
-        "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.",
+        {
+          "data-testid": "anchor-fetch-feedback",
+          class: "app-anchor-fetch-feedback app-card-meta",
+          "data-cycle-id": fb.cycleId,
+        },
+        text,
       );
     };
 
@@ -2360,19 +2538,14 @@
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
         },
-        // CR-CRU-014 §S3 — the 🗺 roadmap chip: no slide-over, same
-        // destination as the /p/<key>/roadmap deep-link. CR-CRU-079 §S1
-        // supersedes CR-014's "one-rule tab swap": the chip is a DOOR onto the
-        // /p/<key>/roadmap ROUTE (navigate(), pushState) and the tab FOLLOWS
-        // the route — byte-identical pathname to the tab-strip door (AC2).
-        button(
-          {
-            "data-testid": "roadmap-chip",
-            class: "app-chip app-roadmap-chip",
-            onclick: () => selectWorkspaceTab("Roadmap"),
-          },
-          "🗺 roadmap",
-        ),
+        // CR-CRU-123 §S2 — a 🗺 shortcut stood HERE and is retired (user
+        // ruling, 2026-09-12). It shipped under CR-CRU-014 §S3 as a second
+        // door onto the /p/<key>/roadmap route; CR-CRU-076 then made Roadmap
+        // the LEFTMOST tab of the strip two inches away, and a duplicate door
+        // beside the original stopped earning its space. The surviving door is
+        // the tab, unchanged — CR-CRU-079 §S1's pathname/pushState contract is
+        // now driven through it. Nothing was removed from the stylesheet with
+        // it: the class it carried was styled nowhere.
         div({ class: "app-agent-subrows" }, () =>
           visibleAgents().length === 0
             ? div({ class: "app-empty" }, "no agents yet")
@@ -3062,11 +3235,12 @@
               "data-testid": "roadmap-wave",
               "data-wave": box.wave,
               "data-cr-count": String(box.entries.length),
-              // CR-CRU-096 §S1/AC1 — "active" is a RELEASE fact, not a run
-              // fact: this wave belongs to the focused, in-flight release
-              // (`focusedReleaseView`'s `kind === "proposed"`, stamped on the
-              // box). A wave with 22 merged and nothing running is still the
-              // active release's wave. Motion stays reserved for the CR that
+              // CR-CRU-116 §S4 (2026-09-09) — "active" is a per-WAVE fact:
+              // this wave, not merely its release, is the one holding work in
+              // flight (`focusedReleaseView` stamps the box whose membership
+              // holds an `IN_PROGRESS` member, and only that box). A focused
+              // release with nothing running marks no wave at all, which is a
+              // state and not an error. Motion stays reserved for the CR that
               // is actually running (CR-078 AC24), so the second channel here
               // is the border only.
               "data-active": box.active === true ? "true" : "false",
@@ -3906,8 +4080,14 @@
     // threaded through so a confirmed-pruned anchor-fetch can reflect the dim
     // verdict back onto it.
     const revealDeclaredMarker = (cycleId, attempts = 0, anchored = false, pillEl = null) => {
+      // CR-CRU-120 §S3 — a cycle's Runs boundary is its `declared-marker` once
+      // it has closed and its `cycle-span-open` header while it is still
+      // ACTIVE (both emitted by `timelineRows`, both carrying `data-cycle-id`).
+      // Either match scrolls + blinks identically; this function never needs to
+      // know which kind it found (same comma-selector shape as revealCycleRow).
       const marker = document.querySelector(
-        `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
+        `[data-testid="declared-marker"][data-cycle-id="${cycleId}"], ` +
+          `[data-testid="cycle-span-open"][data-cycle-id="${cycleId}"]`,
       );
       if (marker !== null) {
         marker.scrollIntoView();
@@ -3955,20 +4135,27 @@
         revealDeclaredMarker(cycleId, 0, true);
         return;
       }
+      // CR-CRU-120 §S4 — zero events with the cycle RESOLVED server-side is a
+      // different fact from a pruned boundary: this cycle exists and simply has
+      // ingested no runs yet (routine now that §S2 offers the affordance to an
+      // ACTIVE cycle, which has zero runs by construction). Honest feedback, and
+      // emphatically NOT the permanent pruned verdict — nothing has been lost.
+      if (body.cycle !== undefined && body.cycle !== null) {
+        state.anchorFeedback = { cycleId, kind: "empty" };
+        return;
+      }
       // Empty events + absent `cycle` field ⇒ server confirms the boundary is
       // truly gone (mirrors the §S1 "unknown cycleId" case). Surface §S3 feedback.
-      if (body.cycle === undefined || body.cycle === null) {
-        state.anchorFeedback = cycleId;
-        // §S3 (VERIFY 1B) — record the PERMANENT pruned verdict for this
-        // cycle so its `→ Runs` pill dims and STAYS dim across later renders
-        // and other pills' clicks (do NOT clear this the way anchorFeedback
-        // is cleared — the feedback text is transient, the dim is permanent).
-        if (!state.prunedCycles.includes(cycleId)) {
-          vanX.replace(state.prunedCycles, () => [...state.prunedCycles, cycleId]);
-        }
-        // Reflect the same verdict onto the clicked pill (now tab-detached).
-        reflectPrunedPill(pillEl);
+      state.anchorFeedback = { cycleId, kind: "pruned" };
+      // §S3 (VERIFY 1B) — record the PERMANENT pruned verdict for this
+      // cycle so its `→ Runs` pill dims and STAYS dim across later renders
+      // and other pills' clicks (do NOT clear this the way anchorFeedback
+      // is cleared — the feedback text is transient, the dim is permanent).
+      if (!state.prunedCycles.includes(cycleId)) {
+        vanX.replace(state.prunedCycles, () => [...state.prunedCycles, cycleId]);
       }
+      // Reflect the same verdict onto the clicked pill (now tab-detached).
+      reflectPrunedPill(pillEl);
     };
 
     // CR-CRU-025 §S1/§S0 — the trailing "→ Runs" affordance on a COMPLETED
@@ -4103,6 +4290,17 @@
     const cycleIsCompleted = (cycle) =>
       cycle.status === "done" || cycle.status === "skipped" || cycle.status === "failed";
 
+    // CR-CRU-120 §S2 — which cycles are OFFERED the `→ Runs` recovery
+    // affordance: every completed one (CR-CRU-025 §S1, unchanged) PLUS the
+    // ACTIVE one, whose runs are just as capable of sitting outside the loaded
+    // window. A `pending` cycle was never activated and so has zero runs by
+    // construction — the affordance exists only where runs could plausibly be.
+    // Defined ONCE and called identically at both `CycleToRunsBadge` render
+    // sites (`CycleRow`, `LensCycleRow`) so the two can never drift apart again
+    // — the Integration AC's whole point; never inline a status test at a site.
+    const cycleHasRunsBoundary = (cycle) =>
+      cycleIsCompleted(cycle) || cycle.status === "active";
+
     // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
     // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
     // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
@@ -4149,9 +4347,10 @@
             ? b({ class: "app-cycle-text" }, ...lineParts)
             : span({ class: "app-cycle-text" }, ...lineParts),
           ...(timer !== null ? [" ", timer] : []),
-          // CR-CRU-025 §S1 — trailing Runs-boundary affordance, AFTER the
-          // timer, on completed rows only (a separate node — never rebinding).
-          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          // CR-CRU-025 §S1 / CR-CRU-120 §S2 — trailing Runs-boundary
+          // affordance, AFTER the timer, on every row whose cycle could have
+          // runs (a separate node — never rebinding). ONE shared predicate.
+          ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
         ),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
@@ -4238,9 +4437,12 @@
         div(
           {
             "data-testid": "gate-outcome-banner",
-            class: `app-pill app-gate-banner app-gate-${gateOutcomeClass(g.outcome)}`,
+            class: `app-pill app-gate-banner app-gate-${gateClassStem(g)}`,
           },
-          `no-mistakes ${g.outcome}`,
+          // CR-CRU-117 §S1 — the drill-in banner is the same claim in bigger
+          // type, so it carries the same qualification: an in-flight ladder is
+          // shown as one, never as the verdict its `checks-passed` would read.
+          `no-mistakes ${g.outcome}${gateInFlightClause(g)}`,
         ),
         steps.map((s) =>
           div(
@@ -4285,11 +4487,16 @@
     // scoped plan closed — no CR active — AND a gate event exists). The
     // boundary gate is the LATEST scoped gate (latest wins). Returns null
     // when the live plan should own the zone (so no gate element mounts).
+    // CR-CRU-117 §S1 — a gate marked `gate.inFlight === true` is a snapshot
+    // of a run still going, not a verdict, so it is never a candidate for
+    // the boundary: it is dropped before "latest wins" and the zone falls
+    // back to the newest real verdict, or to the live plan when there is
+    // none. Unmarked gates (every pre-CR-117 event) are seals, unchanged.
     const boundaryGate = () => {
       const plans = scopedPlans();
       if (plans.length === 0) return null;
       if (plans.some((p) => p.status === "open")) return null; // a CR is active
-      const gates = scopedGateEvents();
+      const gates = scopedGateEvents().filter((e) => e.gate?.inFlight !== true);
       if (gates.length === 0) return null;
       return gates.reduce(
         (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
@@ -4366,10 +4573,11 @@
           ),
           span({ class: "app-cycle-label" }, cycle.label),
           ...(timer !== null ? [" ", timer] : []),
-          // CR-CRU-025 §S1/§S0 — the Runs-boundary badge, a SEPARATE node
-          // from the existing `cycle-toggle` drill-down glyph, on completed
-          // rows only.
-          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          // CR-CRU-025 §S1/§S0 / CR-CRU-120 §S2 — the Runs-boundary badge, a
+          // SEPARATE node from the existing `cycle-toggle` drill-down glyph,
+          // on every row whose cycle could have runs. The SAME shared
+          // predicate as `CycleRow`, called identically.
+          ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
@@ -4699,6 +4907,12 @@
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
       const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
+      // CR-CRU-122 §S3 — suiteName -> true while THAT suite's ?suite= fetch is
+      // in flight. It mirrors suiteLeaves' shape on purpose: one flag covers
+      // BOTH trigger paths (the suite row's own toggle and SynthHeatCell's
+      // click call the same loadSuite), and keying by suite keeps concurrent
+      // loads independent — one suite arriving never clears another's spinner.
+      const suiteLoading = van.state({});
       const focusedLeaf = van.state(null); // "suite::leaf" — failure focus
       const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
       const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
@@ -4739,6 +4953,10 @@
       // §S4.5 — a suite's leaves arrive only via ?suite=<name>.
       async function loadSuite(name) {
         if (suiteLeaves.val[name] !== undefined) return;
+        // CR-CRU-122 §S3 — raised before the fetch, lowered in the `finally`
+        // below: a flag cleared only on the success path would leave a
+        // permanently spinning row behind every failed load.
+        suiteLoading.val = { ...suiteLoading.val, [name]: true };
         try {
           const res = await fetch(
             `/api/v2/events/${encodeURIComponent(eventId)}?suite=${encodeURIComponent(name)}`,
@@ -4748,6 +4966,8 @@
           suiteLeaves.val = { ...suiteLeaves.val, [name]: match?.children ?? [] };
         } catch (err) {
           loadError.val = `suite "${name}" failed to load — ${String(err)}`;
+        } finally {
+          suiteLoading.val = { ...suiteLoading.val, [name]: false };
         }
       }
 
@@ -5224,6 +5444,9 @@
                 ),
                 span({ class: "app-suite-name" }, suite.name),
                 SuiteCountSpans(counts, foldedAllPass),
+                // CR-CRU-122 §S3 — this suite's own lazy-load, on this suite's
+                // own row, whichever path started it.
+                () => (suiteLoading.val[suite.name] === true ? Spinner() : ""),
               ),
               expanded ? SuiteLeafList(suite.name, leaves, presentation) : null,
             );
@@ -5367,7 +5590,10 @@
           return div({ class: "app-empty" }, loadError.val);
         const d = detail.val;
         if (d === null)
-          return div({ class: "app-empty" }, "loading run detail…");
+          // CR-CRU-122 §S2 — the ?depth=suites fetch is still in flight: the
+          // words stay, the spinner joins them (plain text alone read as a
+          // stalled surface, not as work in progress).
+          return div({ class: "app-empty" }, Spinner(), " loading run detail…");
         if (d.kind === "gate") return GateBody(d);
         if (d.kind === "compile") return CompileBody(d);
         return d.status === "aborted"

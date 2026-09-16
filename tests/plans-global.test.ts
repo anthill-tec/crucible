@@ -20,10 +20,12 @@
 //     projects by default (`archived = false` param) — the exclusion this
 //     CR needs is a straight consequence of iterating that list, not new
 //     store logic.
-//   - reply() (src/v2.ts:133) is the shared TOON/JSON negotiation gate every
-//     v2 GET route already uses — the SAME "?fmt=toon -> text/toon;
-//     charset=utf-8, first line 'ok: true'" convention pinned for sibling
-//     routes in tests/axi-negotiation.test.ts.
+//   - reply() (src/v2.ts) is the shared response gate every v2 GET route
+//     already uses. It WAS a TOON/JSON negotiation gate; CR-CRU-132 §S1
+//     deleted the TOON branch and it now answers JSON for every GET, which
+//     is why the `?fmt=toon` parity test this file used to carry is gone
+//     (see the DELETED marker further down, where the superseded claim is
+//     named).
 // So every pin below FAILS against current production: the route does not
 // exist yet, so every GET returns the generic 404 route-not-found shape
 // instead of {ok:true, plans:[...]}.
@@ -243,26 +245,20 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
     ]);
   });
 
-  // ── ?fmt=toon parity ──────────────────────────────────────────────────────
-
-  test("?fmt=toon renders the TOON form with the SAME negotiation contract as sibling v2 GET routes (text/toon; charset=utf-8, first line 'ok: true')", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const key = await createProject("global-plans-toon");
-    await filePlan(key, "CR-GLOBAL-TOON-1");
-
-    const toonRes = await getJson("/api/v2/plans?fmt=toon");
-    expect(toonRes.status).toBe(200);
-    expect(toonRes.headers.get("content-type")).toBe("text/toon; charset=utf-8");
-    const toonBody = await toonRes.text();
-    expect(toonBody.split("\n")[0]).toBe("ok: true");
-    expect(toonBody).toContain("CR-GLOBAL-TOON-1");
-
-    const jsonRes = await getJson("/api/v2/plans");
-    expect(jsonRes.status).toBe(200);
-    expect(jsonRes.headers.get("content-type") ?? "").toContain("application/json");
-    const jsonBody = (await jsonRes.json()) as PlansListResponse;
-    expect(jsonBody.ok).toBe(true);
-  });
+  // ── ?fmt=toon parity — DELETED by CR-CRU-132 §S2 ─────────────────────────
+  //
+  // SUPERSEDED CLAIM: CR-CRU-026 §S3.2 — "`GET /api/v2/plans` renders the
+  // TOON form with the SAME negotiation contract as sibling v2 GET routes:
+  // `content-type: text/toon; charset=utf-8`, first line `ok: true`."
+  // SUPERSEDED BY CR-CRU-132 §S1, which deletes the server's TOON rendering.
+  // The test's SUBJECT was the negotiation contract itself — it asserted the
+  // media type and the TOON body's first line — so it is deleted rather than
+  // retargeted; the JSON half it also carried was a parity restatement of
+  // the reads above, which already drive this route over JSON.
+  //
+  // This route being a normal v2 GET that answers JSON 200 is now pinned
+  // once, centrally, in tests/v2-json-only-responses.test.ts, which also
+  // uses `/api/v2/plans` for the body-byte-identity check.
 
   // ── method refusal — established sibling-route convention ────────────────
 

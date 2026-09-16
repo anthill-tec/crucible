@@ -120,8 +120,11 @@ Procedure, per request (never persisted):
 | `GET …/analytics/burndown` | `{points:[{ts, remainingWeighted, event, cr?}], boundaries:[…]}` |
 | `GET …/analytics/forecast` | `{perWave:[{wave, p50Ts, p80Ts, scheduleHealth?}], release:{…}, sampleCycles, status}` |
 
-Plus: `queue_snapshots` table; `targetDate?` on queue entries. TOON forms
-follow the standard `?fmt=toon` rules. SSE: analytics are read-side derived —
+Plus: `queue_snapshots` table; `targetDate?` on queue entries. These reads
+follow the same JSON-only contract as every other v2 GET — there is no TOON
+form to build: CR-CRU-132 deleted the server's `?fmt=toon` / `Accept`
+rendering on 2026-09-14, and the parameter is now inert rather than
+negotiated. SSE: analytics are read-side derived —
 no new event kinds; the UI recomputes on the existing plan/queue SSE ticks.
 
 ## 9 UI surfaces

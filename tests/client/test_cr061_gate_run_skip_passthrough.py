@@ -427,10 +427,11 @@ class _FakeOps:
     def agent_id(self, _args):
         return "cr061-direct-call-test-agent"
 
-    def post_gate(self, project_dir, agent_id, gate, context):
+    def post_gate(self, project_dir, agent_id, gate, context, release=None):
         self.post_gate_calls.append(
             {"project_dir": project_dir, "agent_id": agent_id,
-             "gate": copy.deepcopy(gate), "context": context})
+             "gate": copy.deepcopy(gate), "context": context,
+             "release": release})
         return {"ok": True}
 
     def emit(self, verb, ok, fields, context, warnings, legacy):

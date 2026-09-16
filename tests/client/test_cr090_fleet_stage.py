@@ -672,8 +672,13 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
 # class fails. That is exactly the 0.1.2 defect this CR exists for.
 
 # §S3 -- the manifest's shape is UNCHANGED by this CR, so the guard pins it:
-# these three top-level keys, no more, and exactly the five client stacks.
-EXPECTED_MANIFEST_KEYS = frozenset({"version", "clients", "status"})
+# exactly the published top-level keys, no more, and exactly the five client
+# stacks. The key set is DECLARED ONCE in `manifest_contract` and imported here
+# rather than restated: three suites pin it, and three copies of one contract is
+# a schema change that can land on two of them (CR-CRU-131 §S1c).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
+
 EXPECTED_CLIENT_STACKS = frozenset({
     "bun", "python", "rust", "mvn", "arduino",
 })
