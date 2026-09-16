@@ -784,7 +784,22 @@ class ClientLimitRangeTest(_ClientLimitsTestCase):
 class ClientLimitOwnershipTest(_ClientLimitsTestCase):
 
     def test_the_clients_crucible_toml_sits_beside_the_env_it_already_reads(self):
+        """§S1b, and still true under CR-CRU-138 §S1: a PROJECT's own file sits
+        beside the `.env` the clients already read, and it stays FIRST in the
+        resolution chain -- a machine carrying several projects needs the one it
+        is working in to decide.
+
+        What this no longer says is that the project's is the ONLY path a
+        client would ever look at. With no readable file there, an installed
+        client falls through to the configuration the installer laid down at
+        the install root; that half is asserted end-to-end in
+        tests/client/test_an_installed_deployment_resolves_its_configuration.py,
+        which installs and then resolves. So the file is written HERE before
+        the path is asserted: the claim is about PRECEDENCE among readable
+        files, not about there being one candidate.
+        """
         self.assertTrue((Path(self.project_dir) / ".env").exists())
+        self.write_raw("# the project's own configuration\n")
         self.assertEqual(os.path.join(self.project_dir, "crucible.toml"),
                          _seam(self.axi, "project_config_path")())
 
