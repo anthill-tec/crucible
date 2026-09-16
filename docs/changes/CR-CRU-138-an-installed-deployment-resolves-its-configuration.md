@@ -1,6 +1,6 @@
 # CR-CRU-138 — an installed deployment resolves the configuration it was given
 
-**Type** hotfix · **Wave** 6 (0.2.1) · **Depends on** CR-CRU-131 · **Status** PENDING
+**Type** hotfix · **Wave** 6 (0.2.1) · **Depends on** CR-CRU-131 · **Status** COMPLETED (0.2.1)
 
 ## Problem
 

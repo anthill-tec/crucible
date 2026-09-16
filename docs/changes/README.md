@@ -143,7 +143,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-135](CR-CRU-135-a-tests-warnings-are-not-its-working-directorys.md) | a test's warnings are not its working directory's | fix | COMPLETED (0.2.0) | 030, 131 | 6 (0.2.0) |
 | [CR-CRU-136](CR-CRU-136-a-classname-is-decoded-not-guessed.md) | a classname is decoded, not guessed | fix | COMPLETED (0.2.0) | 133 | 6 (0.2.0) |
 | [CR-CRU-137](CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md) | the pipeline's own defaults are chosen, not inherited | fix | PENDING | 087, 134, 136 | 7 (0.3.0) |
-| [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | PENDING | 131 | 6 (0.2.1) |
+| [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
 
 ## Deferred — post-0.2.0
 
