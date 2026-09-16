@@ -71,7 +71,7 @@ function requireResolves(dir: string, url: string): void {
  * resolve as its project root (its cwd, and any explicit project dir it is
  * given), and refuse unless the shared module really resolves it.
  */
-export function declareClientBoard(url: string, ...dirs: string[]): void {
+export function declareClientBoard(url: string, ...dirs: Array<string | undefined>): void {
   for (const dir of dirs.filter((d): d is string => Boolean(d))) {
     if (resolve(dir) === REPO_ROOT) {
       throw new Error(
