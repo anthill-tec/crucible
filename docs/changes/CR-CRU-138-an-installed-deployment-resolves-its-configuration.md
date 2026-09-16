@@ -148,6 +148,35 @@ is that the write path and the read path never meet on a real filesystem. A fake
 reintroduces precisely the blind spot that produced this hotfix, and would let the bug survive a
 green test for the second time.
 
+### §S4 The installed fleet carries its own shipped defaults, and the operator's file is never them
+
+Found while RED was running, measured on a HEALTHY 0.2.0 install before it was removed: the
+installed `clients/` directory holds the five clients, `_crucible_axi.py`, `toon.py` and
+`STATUS-CONTRACT.md` — and **no `crucible.toml`**. `_SHIPPED_DATA_CANDIDATES` is
+`(<install>/clients/crucible.toml, <install>/crucible.toml)`, so on an installed fleet the FIRST
+candidate never exists and `shipped_data_path()` resolves the SECOND — the operator's editable file.
+
+One file was therefore doing two incompatible jobs: the distribution's package data of last resort
+AND the operator's configuration. The consequences are not theoretical; both were observed:
+
+- Remove that file (an ordinary `uninstall --purge`) and every client verb raises
+  `RuntimeError: no shipped limit defaults found at …` — not a degraded default, a crash. Verified
+  by loading the installed `_crucible_axi.py` after the install was removed.
+- Before removal, an operator editing "their" file was also editing what the code treats as the
+  build's recommendations, so `recommended` itself became operator-mutable — which
+  `test_a_shipped_declaration_carries_no_value_of_its_own` exists to forbid.
+
+This is why §S1's hole was survivable rather than immediately fatal: the chain appeared to work on a
+fresh install because the operator file was being read, but as package data, at the wrong precedence
+and with the wrong meaning.
+
+So the fleet stage lays the distribution's `crucible.toml` down at `<install>/clients/crucible.toml`
+beside the module that reads it, as package data — replaced wholesale on upgrade, like every other
+file that stage copies, and declared in the manifest as fleet content rather than as configuration.
+The operator file at `<install>/crucible.toml` keeps its own single job, and the two paths stop
+aliasing. `shipped_data_path()` then resolves package data whether or not any operator file exists,
+which is what its own docstring already promises.
+
 ## Acceptance criteria
 
 - [ ] With an install at `<target>` whose `crucible.toml` sets `truncate_field_chars` to a legal
@@ -201,6 +230,21 @@ green test for the second time.
 - [ ] The RUNBOOK's limit TABLES stay derived, not retyped: `tests/docs-runbook-documents-every-limit.test.ts`
       continues to pass unchanged (CR-CRU-134's rule). If this CR's edits break it, the edit is
       wrong, not the test.
+- [ ] **§S4** After an install, `<install>/clients/crucible.toml` exists and is BYTE-IDENTICAL to the
+      distribution's own shipped data, so `shipped_data_path()` resolves package data rather than an
+      operator file.
+- [ ] **§S4** With the operator file at `<install>/crucible.toml` DELETED, every client limit still
+      resolves to its shipped recommendation and no verb raises. This is the exact state a
+      `uninstall --purge` leaves and it currently raises `RuntimeError`.
+- [ ] **§S4** Editing `<install>/crucible.toml` changes the RESOLVED value but leaves every limit's
+      `recommended`, `min` and `max` reading as the shipped declarations — the operator file cannot
+      redefine the build's own recommendation.
+- [ ] **§S4** The manifest declares the shipped `clients/crucible.toml` as FLEET content, distinct
+      from the operator `"config"` key, and a plain (non-purge) uninstall removes the fleet copy
+      while keeping the operator file.
+- [ ] **§S4** A reinstall replaces the fleet's `clients/crucible.toml` wholesale even when it was
+      modified — it is package data, not operator state — while an edited `<install>/crucible.toml`
+      still survives (the existing `_operator_config_is_untouched` rule, unchanged).
 
 ## Non-goals
 
