@@ -101,20 +101,27 @@ free. Every board and every temp root is torn down in the fixture's own
 is the one failure mode a suite of this shape can leave behind. Nothing is
 written inside the checkout.
 
-That leaves one hazard which is created BY the RED state itself, and it is
-handled rather than accepted. A drive that exports nothing today resolves
-`http://localhost:3849` from the module constant -- this machine's PRODUCTION
-board -- and `register`/`unregister` are writes. So the two families that
-export nothing, and every chain leg, are gated by an INTERLOCK: the fixture
-first asks the shared module, in process and over no socket, which board it
-would resolve for that project directory, and spawns the subprocess ONLY if the
-answer is the board this fixture is listening on. A gated drive is recorded as
-BLOCKED with the reason, and every assertion that depends on it fails naming
-that reason -- so the criterion is still red today, and no packet is ever
-addressed to 3849 on the way there.
+That leaves one hazard, and it is handled rather than accepted. A drive whose
+resolution is broken lands on `http://localhost:3849` -- this machine's
+PRODUCTION board -- and `register`/`unregister` are writes. So every drive, and
+every chain leg, is gated by an INTERLOCK: the fixture first asks the shared
+module, in process and over no socket, which board it would resolve for that
+project directory, and spawns the subprocess ONLY if the answer is the board
+that drive is meant to reach. A gated drive is recorded as BLOCKED with the
+reason, and every assertion that depends on it fails naming that reason -- so a
+broken resolution is loud, and no packet is ever addressed to 3849 on the way
+there.
 
-The two families that DO export a retired variable need no interlock: today the
-export is what the client obeys, and both name an address this fixture owns.
+EVERY family is gated, including the two that export a retired variable. In the
+RED state those two were steered by the export, so the interlock looked like a
+check with nothing to catch -- but the RED state is over, and what decides now
+is `resolve_base_url()` for all four alike. A regression in that one function
+would send the `junk_env` family's `register` -- a WRITE verb, creating an
+agent -- to the shipped `http://localhost:3849`, which on this machine is the
+PRODUCTION board, and the export the family is named for would not stop it,
+because nothing reads it. The check is in process and over no socket, so
+gating all four costs one function call per drive and removes the last path by
+which this suite can address 3849.
 
 Invocation:
     python3 -m unittest tests.client.test_a_clients_board_is_its_projects_configuration -v
@@ -131,6 +138,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -156,6 +164,39 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 CONFIG_NAME = "crucible.toml"
+
+#: The table §S2 adds to the fleet's shipped declarations, its one key, and the
+#: table family whose DOCUMENTED shape the new one is held to.
+CLIENT_TABLE = "client"
+URL_KEY = "url"
+LIMITS_TABLE = "limits"
+
+
+def _tables(path):
+    """The parsed TOML document at `path` -- stdlib `tomllib`, so what is
+    asserted about a shipped file is a fact about the FILE."""
+    with open(path, "rb") as handle:
+        return tomllib.load(handle)
+
+
+def _table_prose(text, table):
+    """The `#` prose INSIDE `[table]`: every comment line between its own
+    header and the next header of any depth, markers stripped and joined.
+
+    That is what an operator who has scrolled to a table reads before they
+    reach its keys, which is the thing being judged -- not the file's word
+    count and not a count of `#` characters.
+    """
+    inside, prose = False, []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            inside = stripped == "[%s]" % (table,)
+            continue
+        if inside and stripped.startswith("#"):
+            prose.append(stripped.lstrip("#").strip())
+    return " ".join(prose)
+
 
 #: Nothing listens on port 1 without root, so a loopback call refuses instantly
 #: rather than hanging (the census's own choice, same address).
@@ -349,12 +390,11 @@ def _board_drives():
                               "declared_board": board_url, "blocked": None,
                               "on_declared": [], "on_undeclared": []}
                     families[family][(client, verb)] = record
-                    if extra_env is None:
-                        ok, reason = would_resolve(
-                            AXI_MODULE_PATH, project_dir, board_url)
-                        if not ok:
-                            record["blocked"] = reason
-                            continue
+                    ok, reason = would_resolve(
+                        AXI_MODULE_PATH, project_dir, board_url)
+                    if not ok:
+                        record["blocked"] = reason
+                        continue
                     first, second = declared_to.mark(), undeclared.mark()
                     result, exported = drive(
                         script_path, _argv_for(verb, project_dir),
@@ -638,16 +678,54 @@ class TheChainIsProjectThenInstallThenShippedTest(BoardInterlockCase):
             f"— the value every client's deleted module constant defaulted to")
 
     def test_the_shipped_declaration_is_documented_the_way_the_limits_are(self):
-        """The file an operator EDITS has to say what the setting is for. The
-        limits tables each carry their sentence; a bare `url = ...` under an
-        undocumented heading is a knob nobody chose."""
-        text = (CLIENTS_DIR / CONFIG_NAME).read_text(encoding="utf-8")
-        table = text[text.index("[client]"):] if "[client]" in text else ""
-        self.assertTrue(
-            table.count("#") >= 1,
-            f"the `[client]` table in {CLIENTS_DIR / CONFIG_NAME} must carry "
-            f"the commented explanation the limits tables carry; got "
-            f"{table[:300]!r}")
+        """The file an operator EDITS has to say what the setting is for, in
+        the shape the rest of the file already uses.
+
+        "The way the limits are" is a measurable thing rather than a
+        sentiment: every limits table carries a `description` SENTENCE and the
+        shipped value that sentence is about, and the file's own header block
+        shows the operator the exact line they would write (`value = 40`). So
+        the bar is read off the limits in the SAME file -- CR-CRU-134's
+        derivation rule -- and not retyped here: prose of at least that
+        substance, naming the setting it documents, and showing the edit.
+
+        Counting `#` characters would pass for a one-word comment, or for an
+        actively misleading one, which is why it is not what this asserts.
+        """
+        path = CLIENTS_DIR / CONFIG_NAME
+        text = path.read_text(encoding="utf-8")
+        prose = _table_prose(text, CLIENT_TABLE)
+        descriptions = [
+            table["description"]
+            for table in _tables(path).get(LIMITS_TABLE, {}).values()
+            if isinstance(table, dict)
+            and isinstance(table.get("description"), str)]
+        self.assertNotEqual(
+            descriptions, [],
+            f"fixture sanity: {path} must carry the limits whose documented "
+            f"shape this assertion derives its bar from")
+        bar = min(len(sentence.split()) for sentence in descriptions)
+
+        self.assertGreaterEqual(
+            len(prose.split()), bar,
+            f"the `[{CLIENT_TABLE}]` table in {path} is documented in "
+            f"{len(prose.split())} words while the least-documented limit in "
+            f"the same file spends {bar} on its `description`. An operator "
+            f"reading this file is owed the same sentence for the board they "
+            f"post to as for a truncation width; got {prose!r}")
+        self.assertIn(
+            URL_KEY, prose,
+            f"the prose above `{URL_KEY} = ...` must NAME the setting it "
+            f"documents -- a paragraph that never says which key it is about "
+            f"cannot be matched to one by a reader editing the file; got "
+            f"{prose!r}")
+        self.assertRegex(
+            prose, rf"{URL_KEY}\s*=\s*\"https?://",
+            f"the limits are documented with the EDIT an operator would make "
+            f"(`value = 40`, in this file's own header), and `[{CLIENT_TABLE}]` "
+            f"owes the same: the literal line to write to point this checkout "
+            f"at another board. Prose that only describes the possibility "
+            f"leaves the reader guessing the syntax; got {prose!r}")
 
 
 class TheRetiredUrlVariablesAreDeadTest(BoardInterlockCase):
