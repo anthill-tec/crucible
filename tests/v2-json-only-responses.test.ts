@@ -143,7 +143,13 @@ const PLANTED_PROVENANCE = [
 // other call site is driven exactly once. See the branching-handler note below.
 const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: string[] }> = [
   { path: () => "/api/v2", keys: ["ok", "service", "version", "projects", "help"] },
-  { path: () => "/api/v2/health", keys: ["ok", "status", "version", "uptime_s", "counts", "store"] },
+  // CR-CRU-139 §S1 — `listener` is emitted LAST, after `store`, at the one
+  // shared `healthPayload` site: the boot's second resolution, disclosed beside
+  // its first so the two health routes cannot drift about either.
+  {
+    path: () => "/api/v2/health",
+    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener"],
+  },
   { path: () => "/api/v2/projects", keys: ["ok", "projects"] },
   { path: () => "/api/v2/plans", keys: ["ok", "plans"] },
   { path: () => "/api/v2/agents", keys: ["ok", "agents"] },

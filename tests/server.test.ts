@@ -29,9 +29,14 @@ describe("startServer — production boot + /api/health", () => {
 
     // CR-CRU-068 AC3 — `store` { path, rule } is ADDITIVE to the health payload:
     // the shape stays a CLOSED key set (never a subset check) so accidental
-    // payload growth is still caught; it is 6 keys now, not 5.
+    // payload growth is still caught.
+    // CR-CRU-139 §S1 — `listener` { port, host, portRule, hostRule } joins it as
+    // the second thing a boot RESOLVES and must therefore disclose: an operator
+    // asking a running board where it is listening, and which layer decided,
+    // gets an answer from the same payload that already names its store. So it
+    // is 7 keys now, not 6.
     expect(Object.keys(raw as object).sort()).toEqual(
-      ["counts", "ok", "status", "store", "uptime_s", "version"].sort(),
+      ["counts", "listener", "ok", "status", "store", "uptime_s", "version"].sort(),
     );
     expect(body.ok).toBe(true);
     expect(body.status).toBe("healthy");
