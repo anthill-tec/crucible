@@ -115,6 +115,14 @@ machine it is running on, takes the first port it can BIND, and writes that conc
 file it lays down. The client file's `[client] url` is written from the SAME resolved value, so one
 install's two files cannot disagree.
 
+The range is read from the RESOLVED server config file — the same
+`_provisioned_server_config_source()` an install already reads its template from — never from a
+constant in the installer. That is what makes exhaustion TESTABLE without an environment knob and
+without occupying a hundred real ports: an install test already stands up a temp provisioned
+server package, so it declares its own two bounds in that file and occupies the handful of ports
+between them. A range that could only be narrowed by an export would smuggle back the exact
+mechanism this CR retires.
+
 Keep it simple. Three rules, no more:
 
 - **Probe by BINDING, not by connecting.** A refused connection proves only that nothing is
@@ -133,6 +141,22 @@ Keep it simple. Three rules, no more:
 That is the whole mechanism. Production installs and takes a port; this repo's development instance
 installs and takes the next free one; neither knows about the other, and both record what they took.
 
+**The install's own write must not read as an operator's edit (user ruling 2026-09-16, option a).**
+`_operator_config_is_untouched` (`crucible_axi/install.py:1300-1326`) decides "did the operator
+change this?" by comparing the file's BYTES against the shipped template, and CR-CRU-138 §S2's
+uninstall/purge convergence depends on that answer. Writing a probed port in would make every
+installed file differ from its template forever — so the install's own value would be
+indistinguishable from an operator's, purge would take the retention branch on every machine that
+ever probed a port, and `converged` would go false for a reason no operator caused.
+
+So the `[manifest]` stage RECORDS the bytes it actually wrote, and that recorded value — not the
+shipped template — is what `_operator_config_is_untouched` compares against for a file the install
+authored. The rule's MEANING is unchanged ("is this still exactly what the install put here?"); only
+its baseline moves, from "the template" to "what was written", which is the same sentence once the
+installer is allowed to write. An operator's later edit still diverges from the recording and is
+still preserved. A file with no recording (an older install, a hand-placed file) falls back to the
+template comparison, so the existing fail-safe direction is untouched.
+
 **Nothing else needs to know the port — including the service.** `_unit_environment()` stops
 forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST` (`crucible_axi/install.py:863-879`): the unit only ever
 carried them because the server had no file to read. The unit boots the server, the server reads
@@ -142,19 +166,46 @@ the bootstrap, none in a skill — one datum, one file.
 ### §S1b A test overrides in-process or with its own file — never through the environment
 
 Tests are not production, and they do not need an environment layer to redirect a client: today
-~89 call sites across `tests/` inject `CRUCIBLE_URL` to point a client at an ephemeral-port
-server, and every one of those fixtures ALREADY owns a temp root and writes files into it.
+**58 setter sites across 28 files** under `tests/` inject one of these four variables to point a
+client or a server at an ephemeral port (measured 2026-09-16; the count excludes the `ENV_KEYS`
+hygiene tuples that only POP them, which are not setters and do not migrate). Every one of those
+fixtures ALREADY owns a temp root and writes files into it.
 
-Two mechanisms replace it, both stronger than an export:
+Three mechanisms replace it, each stronger than an export:
 
 - **In-process** — `startServer({ port })` already wins over everything (`src/server.ts:249`), and
-  stays the server-side seam. A test naming its own port is explicit, local and unambiguous.
-- **Its own config file** — a client test writes a `crucible.toml` carrying `[client] url` into the
-  temp project (or install) root its fixture already creates, and the CR-CRU-138 §S1 chain resolves
-  it. This has a property the export never had: the test exercises the REAL resolution path, so it
-  proves the mechanism operators use rather than a bypass only tests can reach.
+  stays the server-side seam for the TypeScript suites. A test naming its own port is explicit,
+  local and unambiguous.
+- **A server-side config file, for a server started as a SUBPROCESS** — five python suites spawn
+  the real server (`bun run src/server.ts`) on a `_free_port()`, and `startServer({ port })` is
+  in-process TypeScript they cannot reach. They already hand the child
+  `CRUCIBLE_DB=<tmpdir>/crucible.db`, and `serverConfigPath()` (`src/limits.ts:158`) resolves to
+  `dirname(db)/crucible.toml` — so the fixture writes `[server] port = <_free_port()>` into
+  `<tmpdir>/crucible.toml` and the subprocess reads its own file. The suites are
+  `test_cr092_next_decision_resolver.py`, `test_cycle_add_targets_the_plan_it_means.py`,
+  `test_gate_names_the_release_it_gates.py`, `test_next_lane_carries_release_and_wave.py` and
+  `test_plan_file_names_the_release_it_plans.py`.
+- **A client-side config file** — a client test writes a `crucible.toml` carrying `[client] url`
+  into the temp project (or install) root its fixture already creates, and the CR-CRU-138 §S1 chain
+  resolves it. This has a property the export never had: the test exercises the REAL resolution
+  path, so it proves the mechanism operators use rather than a bypass only tests can reach.
 
-Migrating those call sites is the bulk of this CR's work and is deliberate: it is the difference
+**Four shipped contracts are REVERSED by this CR, and each is re-subjected rather than deleted:**
+
+- `tests/client/test_cr070_systemd_unit.py:793-845` asserts the unit MUST carry
+  `Environment=CRUCIBLE_HOST/PORT` (CR-CRU-070 AC1), plus the inverse that an unset knob is not
+  emitted as an empty assignment. `CRUCIBLE_DB` STAYS, so this becomes a one-variable assertion —
+  the unit forwards the store and nothing else — not a deleted test.
+- `tests/client/test_cr066_serve_and_target_dir.py:354-390` (`ServeEnvironmentForwardingTest`,
+  "AC5 (env)") asserts `serve` forwards both to the child. Its subject becomes: `serve` composes no
+  listener environment, and the child listens per its own file.
+- `tests/client/test_cr054_http_core_lift.py:141-145` reads each client's base-URL module constant
+  back dynamically; `tests/client/test_gate_multi_suite_coverage.py:565` patches it
+  (`mock.patch.object(module, "CRUCIBLE_URL", …)`). §S2 deletes those constants, so both move to the
+  shared resolver in `_crucible_axi.py` — the value is still read back and still overridable, from
+  one place instead of five.
+
+Migrating the 58 sites is the bulk of this CR's work and is deliberate: it is the difference
 between configuration that is tested and configuration that is merely shipped.
 
 ### §S2 A client's target board is declared in its own `crucible.toml`
@@ -238,8 +289,12 @@ discovered later on the wrong dashboard.
       the instance is running on it — the file is unchanged and no client is orphaned. Probing
       happens only on a fresh install, where no port is configured.
 - [ ] Range exhaustion STOPS the install and PROMPTS the operator, naming the range and what
-      occupies it — asserted by occupying every port of a narrow test range and reading the prompt.
-      It never drifts outside the range and never falls back to the shipped default.
+      occupies it — asserted by declaring a NARROW range in the temp provisioned server's own
+      config file, occupying every port in it, and reading the prompt. It never drifts outside the
+      range and never falls back to the shipped default.
+- [ ] The range is read from the RESOLVED server config file, not from a constant in the installer:
+      a test that declares different bounds in that file gets an install that probes THOSE bounds.
+      This is what makes the exhaustion criterion above satisfiable without any environment knob.
 - [ ] A NON-interactive run cannot prompt, so exhaustion fails it definitively with the same
       message — the installer's existing interactive/non-interactive split, unchanged.
 - [ ] The declared range is `3800`–`3899` in the shipped file, and the install's chosen port lies
@@ -248,8 +303,19 @@ discovered later on the wrong dashboard.
 - [ ] Two installs on one machine, run with no knowledge of each other, land on DIFFERENT ports and
       each records its own: boot both, run a verb against each, assert each run landed on the board
       its own file names.
-- [ ] An operator-EDITED connection value SURVIVES a re-install (the `_operator_config_is_untouched`
-      rule, unchanged — configuration the operator changed is data, not an artifact).
+- [ ] An operator-EDITED connection value SURVIVES a re-install: configuration the operator changed
+      is data, not an artifact.
+- [ ] The `[manifest]` stage RECORDS the bytes it wrote for each config file it authored, and
+      `_operator_config_is_untouched` (`crucible_axi/install.py:1300-1326`) compares an authored
+      file against THAT recording rather than against the shipped template. Asserted three ways, on
+      a real install into a temp target: (1) a file the install wrote a probed port into is reported
+      UNTOUCHED, so `uninstall --purge` removes it and reports `converged`; (2) the same file after
+      an operator edit is reported touched, RETAINED by purge with the existing reason sentence; and
+      (3) a file with NO recording (an older install, or one placed by hand) still falls back to the
+      template comparison, so the fail-safe direction is unchanged.
+- [ ] CR-CRU-138 §S2/§S3's purge convergence still holds on a machine that probed a port — the
+      regression this recording exists to prevent: without it every installed file would read as
+      operator-edited forever and `converged` would go false with no operator involved.
 - [ ] `_unit_environment()` (`crucible_axi/install.py:863-879`) no longer forwards `CRUCIBLE_PORT`
       or `CRUCIBLE_HOST`; the rendered unit carries neither, and the installed server still listens
       on its configured port — asserted by reading the rendered unit text AND by the server's own
@@ -258,9 +324,15 @@ discovered later on the wrong dashboard.
 **§S1b — tests override in-process or with their own file, never the environment**
 
 - [ ] No file under `tests/` sets `CRUCIBLE_URL`, `CRUCIBLE_BASE`, `CRUCIBLE_PORT` or
-      `CRUCIBLE_HOST` in a child environment. The ~89 current call sites migrate to either
-      `startServer({ port })` (server side) or a `crucible.toml` written into the fixture's own temp
-      root (client side). A repo-wide grep is the assertion.
+      `CRUCIBLE_HOST` in a child environment. The **58 setter sites across 28 files** (measured
+      2026-09-16) migrate to `startServer({ port })` (in-process TS), a `[server] port` file in the
+      subprocess server's own store dir (the five python suites §S1b names), or a `[client] url`
+      file in the fixture's temp root. A repo-wide grep is the assertion.
+- [ ] Each of the five subprocess-server suites — `test_cr092_next_decision_resolver.py`,
+      `test_cycle_add_targets_the_plan_it_means.py`, `test_gate_names_the_release_it_gates.py`,
+      `test_next_lane_carries_release_and_wave.py`, `test_plan_file_names_the_release_it_plans.py`
+      — starts its server on a `_free_port()` declared in the `crucible.toml` beside its own temp
+      database, and the server is proven to listen THERE by a real request.
 - [ ] At least one migrated client test proves it exercises the REAL resolution path: the temp
       `crucible.toml` it wrote is the file the client reports resolving.
 - [ ] `_UNREACHABLE_CRUCIBLE_URL`-style offline-degradation tests keep working through the file, so
@@ -275,6 +347,35 @@ discovered later on the wrong dashboard.
 - [ ] `crucible_axi/cli.py`'s `serve` no longer composes `$CRUCIBLE_HOST`/`$CRUCIBLE_PORT` into a
       child environment (`cli.py:277`); `--host`/`--port` flags, where kept, write to or read from
       the file rather than exporting.
+
+**§S1b — the four shipped contracts this CR reverses, each re-subjected**
+
+- [ ] `tests/client/test_cr070_systemd_unit.py:793-845` (CR-CRU-070 AC1, "the unit forwards the
+      CRUCIBLE env contract it cannot inherit") becomes a ONE-variable assertion: the rendered unit
+      forwards `CRUCIBLE_DB` and carries no `CRUCIBLE_PORT`/`CRUCIBLE_HOST` at all — neither with a
+      value nor as the empty assignment its own inverse case forbids. The test is re-subjected, not
+      deleted: the rule "a `--user` unit inherits nothing, so what it needs it must carry" still
+      holds, and the store is now the only thing it needs.
+- [ ] `tests/client/test_cr066_serve_and_target_dir.py:354-390`
+      (`ServeEnvironmentForwardingTest`, CR-CRU-066 "AC5 (env)") becomes: `serve` composes NO
+      listener environment for the child, and the child listens per its own configuration file —
+      asserted on the real composed env of the launch call, the same way it asserts forwarding today.
+- [ ] `tests/client/test_cr054_http_core_lift.py:141-145` — which reads each client's base-URL
+      constant back dynamically (`CRUCIBLE_URL`, arduino's `CRUCIBLE`) — reads the resolved value
+      from the shared `_crucible_axi.py` seam instead, and still proves all five clients agree.
+- [ ] `tests/client/test_gate_multi_suite_coverage.py:565`, which redirects the gate by
+      `mock.patch.object(module, "CRUCIBLE_URL", …)`, redirects it through the resolver or a temp
+      `crucible.toml` instead — the fixture still points the gate at its stub board, by the
+      mechanism operators use.
+
+**Close-out**
+
+- [ ] Citations into the files this CR edits are re-verified and re-recorded ONCE, at close-out:
+      76 `path:line` pins across the test tree point into `src/server.ts`, `src/limits.ts`,
+      `clients/_crucible_axi.py`, `crucible_axi/install.py`, `crucible_axi/cli.py` and
+      `crucible_axi/manifest.py` (measured 2026-09-16), and this CR moves lines in all six. One
+      sweep at the end — never a mid-cycle re-pin per drift, which cost CR-CRU-138 three separate
+      approval round-trips.
 
 ## Non-goals
 
