@@ -67,8 +67,10 @@
 // The census is the one exception the AC names, and it is a READ: a board
 // invariant asserted against a synthetic board would be an invariant about a
 // fixture. It reads the live board the way tests/roadmap-visual-grammar.ts
-// does — the project named by the repo root's `.env`, reached at
-// `$CRUCIBLE_URL` (the fleet's own default, clients/bun-crucible.py:91) — over
+// does — the project named by the repo root's `.env`, reached at the board
+// this checkout DECLARES (`[client] url`, asked of the fleet's own resolver
+// through `declaredClientBoard`; CR-CRU-139 §S2 retired the exported channel
+// and the module constant this line used to cite) — over
 // GET only, and STATES its reason and returns when the board cannot be read,
 // because off this workstation `.env` is gitignored and the store it serves is
 // never committed. Every census failure message names WHAT IT MEASURED, so a
@@ -85,6 +87,7 @@ import { startServer, type ServerHandle } from "../src/server.ts";
 import { WAVE_SEQ_STRIDE, waveSeqBase } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
 import type { QueueLifecycle } from "../src/types.ts";
+import { declaredClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -287,7 +290,12 @@ async function liveBoardQueue(): Promise<{ entries: QueueEntryWire[]; at: string
   if (key === "") {
     return { skip: "the repo root's .env declares no CRUCIBLE_PROJECT_KEY" };
   }
-  const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+  // WHICH board: what this checkout declares, never a literal and never an
+  // exported variable. Undeclared SKIPS rather than falling through to the
+  // shipped default, which on this workstation is a production install.
+  const board = declaredClientBoard();
+  if ("skip" in board) return board;
+  const base = board.url;
   try {
     // BOUNDED. The live board is a real server doing real work — measured
     // 2026-09-10 at ~2.3s for this read while a sibling suite was spawning the
