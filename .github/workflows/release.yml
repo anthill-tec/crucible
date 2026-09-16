@@ -50,16 +50,18 @@ name: Release — publish crucible-axi (PyPI) + server (npm)
 
 on:
   push:
-    # `release/**` alongside them because the release branch was the ONE branch
-    # CI never ran on: pushes to it matched no trigger, so the branch that must
-    # be green before shipping was the only one nothing verified. Found on the
-    # 0.2.0 release — two real failures (a test reading the ambient working
-    # directory's config, and a junit `classname` parsed by a guessed escape)
-    # sat red on this branch and were seen only because a stray PR happened to
-    # fire the pull_request trigger. None of the publish jobs keys off `push`
-    # to a release branch (create-release needs master, the two real publishes
-    # need the `release` event), so this adds verification and no publish path.
-    branches: [develop, master, "release/**"]
+    # `release/**` and `hotfix/**` alongside them because those were the ONE
+    # class of branch CI never ran on: pushes to them matched no trigger, so the
+    # branches that must be green before shipping were the only ones nothing
+    # verified. Found on the 0.2.0 release — two real failures (a test reading
+    # the ambient working directory's config, and a junit `classname` parsed by
+    # a guessed escape) sat red on the release branch and were seen only because
+    # a stray PR happened to fire the pull_request trigger. A hotfix branch is
+    # the same thing under a different name: git flow ships it to master and
+    # tags it, so it is a release candidate and gets the same verification.
+    # Neither adds a real publish path — create-release needs master and the two
+    # registry publishes need the `release` event.
+    branches: [develop, master, "release/**", "hotfix/**"]
   pull_request:                   # packaging breakage surfaces on PRs, not on release day
   release:
     types: [published]
@@ -308,11 +310,12 @@ jobs:
     # `success` while doing it. It carries the same dependency list the two
     # registry publishes do — one graph, no second mechanism to disagree.
     needs: [build, test-bun, test-python, test-e2e]
-    # A RELEASE BRANCH IS THE ONLY PLACE THIS REHEARSAL BELONGS. Validating
-    # PyPI against TestPyPI first is the requirement (CR-CRU-009 §S6), and the
-    # branch under test is what it is meant to rehearse — so the ref, not the
-    # trigger, is what admits this job: a release-branch push does it without
-    # anyone remembering to dispatch by hand, a dispatch ON a release branch
+    # A RELEASE CANDIDATE IS THE ONLY PLACE THIS REHEARSAL BELONGS — which is
+    # `release/**` and `hotfix/**` alike, since git flow ships and tags a hotfix
+    # exactly as it does a release. Validating PyPI against TestPyPI first is the
+    # requirement (CR-CRU-009 §S6) and the branch under test is what it rehearses,
+    # so the REF, not the trigger, admits this job: a push on either branch class
+    # rehearses without anyone remembering to dispatch by hand, a dispatch ON one
     # still works, and a dispatch from develop or master no longer uploads
     # anything (it used to, because the old condition read the event alone).
     # The gate above is unchanged and still absolute: `needs:` holds the four
@@ -322,7 +325,8 @@ jobs:
     # '+' local segment for the sanity step below to reject), so each push
     # rehearses its own version; `skip-existing` covers a re-run of one commit.
     if: >-
-      startsWith(github.ref, 'refs/heads/release/') &&
+      (startsWith(github.ref, 'refs/heads/release/') ||
+       startsWith(github.ref, 'refs/heads/hotfix/')) &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: testpypi
@@ -412,14 +416,19 @@ jobs:
 
   dry-run-npm:
     needs: build
-    # Runs on a release-branch push as well as a dispatch: `npm publish
-    # --dry-run` writes nothing anywhere (it is in the audit's artifact-only
-    # list above), and a release branch is exactly where the npm packaging
-    # wants checking — the publish-npm job that fires on the `release` event
-    # is too late to learn the tarball was malformed.
+    # Runs on a push to either release-candidate branch class (`release/**`,
+    # `hotfix/**`) as well as a dispatch, for the same reason the TestPyPI
+    # rehearsal does: both answer one question — does this tree package
+    # correctly for the registry it ships to. `npm publish --dry-run` writes
+    # nothing anywhere (the audit block above lists it artifact-only), and a
+    # release candidate is where that wants checking: the publish-npm job that
+    # fires on the `release` event is too late to learn the tarball was
+    # malformed.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/'))
+      (github.event_name == 'push' &&
+       (startsWith(github.ref, 'refs/heads/release/') ||
+        startsWith(github.ref, 'refs/heads/hotfix/')))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
