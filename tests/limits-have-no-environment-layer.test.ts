@@ -340,7 +340,11 @@ describe("CR-CRU-131 §S1b — the uncapped-retention disclosure names the FILE 
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // ONE scan, both stacks: `src/` is the server's, `clients/` is the clients',
-// `public/` is what a browser is served. Prose counts as well as code, and
+// `public/` is what a browser is served, `bin/` is what an installed package
+// puts on an operator's PATH — a launcher's own header is the first thing a
+// reader of `crucible-server` meets, so a retired knob presented there as live
+// configuration outranks every document that says otherwise.
+// Prose counts as well as code, and
 // deliberately: `clients/bun-crucible.py:928` is not a comment, it is text a
 // CLIENT EMITS to a user — "older than CRUCIBLE_RUN_ABANDON_MS" — and
 // src/server.ts:303 is a comment that would go on teaching the next author a
@@ -351,7 +355,7 @@ describe("CR-CRU-131 §S1b — the uncapped-retention disclosure names the FILE 
 // retired. An operator who learned one from the source has to be able to find
 // out it is gone.
 
-const SHIPPED_TREES = ["src", "clients", "public"];
+const SHIPPED_TREES = ["src", "clients", "public", "bin"];
 const SCANNED_EXTS = [".ts", ".js", ".mjs", ".py", ".html", ".css"];
 
 interface Hit {
@@ -376,7 +380,7 @@ function hitsFor(names: readonly string[], corpus: Map<string, string>): Hit[] {
 }
 
 describe("CR-CRU-131 §S1b — no retired limit variable is named in the shipped tree", () => {
-  test("neither src/, clients/ nor public/ still names one, in code or in the prose it emits", () => {
+  test("no shipped tree — src/, clients/, public/, bin/ — still names one, in code or in the prose it emits", () => {
     const corpus = new Map(
       SHIPPED_TREES.flatMap((dir) => listFiles(dir, SCANNED_EXTS)).map((file) => [
         relative(REPO_ROOT, file),
@@ -488,7 +492,7 @@ describe("CR-CRU-139 §S4 — a name is bootstrap or retired by what the code RE
     expect(
       unread,
       `BOOTSTRAP_ENV claims ${JSON.stringify(unread)} answers "where am I / who am I" before a ` +
-        `configuration file can be found, but nothing in src/, clients/ or public/ READS it. A ` +
+        `configuration file can be found, but nothing in the shipped trees READS it. A ` +
         `list that names a dead variable as live is what every RUNBOOK guard is then driven ` +
         `from, so the documentation goes on teaching a knob that does nothing.`,
     ).toEqual([]);
