@@ -144,6 +144,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-136](CR-CRU-136-a-classname-is-decoded-not-guessed.md) | a classname is decoded, not guessed | fix | COMPLETED (0.2.0) | 133 | 6 (0.2.0) |
 | [CR-CRU-137](CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md) | the pipeline's own defaults are chosen, not inherited | fix | PENDING | 087, 134, 136 | 7 (0.3.0) |
 | [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
+| [CR-CRU-139](CR-CRU-139-a-connection-is-configuration-too.md) | a connection is configuration too | feature | PENDING | 131, 138 | 7 (0.3.0) |
 
 ## Deferred — post-0.2.0
 
