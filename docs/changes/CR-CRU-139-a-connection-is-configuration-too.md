@@ -107,37 +107,37 @@ down: the listener into the server's `[server]` table, the board URL into the fl
 therefore configured at install time, in the file, once — which is exactly the two-instance
 scenario above.
 
-**The installer DISCOVERS the port; it does not ask a human to pick one (user ruling
-2026-09-16).** The shipped `[server]` table declares a RANGE this project is willing to occupy —
-the same `description`/`min`/`max` shape the limits already use, so the range is documented where
-it is set. At install time the installer PROBES that range on the machine it is running on, takes
-the first port it can actually BIND, and writes that concrete port into the file it lays down. The
-client file's `[client] url` is written from the same resolved value, so the two halves of one
-install cannot disagree.
+**The installer DISCOVERS the port; nobody picks a number (user ruling 2026-09-16).** The shipped
+`[server]` table declares the RANGE this project may occupy — **`3800`–`3899`**, a hundred ports in
+the 3000s around the `3849` this project has always used — documented the way the limits are, so
+the range is read where it is set. At install time the installer probes that range on whatever
+machine it is running on, takes the first port it can BIND, and writes that concrete port into the
+file it lays down. The client file's `[client] url` is written from the SAME resolved value, so one
+install's two files cannot disagree.
 
-Three properties this must have, each a way the naive version fails:
+Keep it simple. Three rules, no more:
 
 - **Probe by BINDING, not by connecting.** A refused connection proves only that nothing is
-  listening *right now*; binding proves the port is available to us, and closing the probe socket
-  immediately before the server claims it is the standard accept-then-release window. A probe that
-  merely fails to connect will happily hand out a port another service has reserved.
-- **Idempotent across re-installs.** A re-install must KEEP the port already written — an install
-  that renumbers a running instance breaks every client whose file names the old one, and breaks
-  the systemd unit's health. Re-probe only when the configured port is unavailable AND not held by
-  our own server.
-- **Exhaustion is an error, never a silent fallback.** If no port in the declared range can be
-  bound, the install FAILS naming the range and what it found, rather than drifting outside the
-  range or falling back to the shipped default. A silent fallback is how two instances end up on
-  one port.
+  listening *right now*; binding proves the port is ours to take. A connect-based probe will hand
+  out a port another service has reserved but is not yet serving.
+- **A configured port is never re-probed.** If the file already names one, the install USES it —
+  a re-install that renumbers a running instance orphans every client whose file names the old
+  port. Probing happens on a FRESH install, where there is nothing to honour.
+- **Exhaustion STOPS the install and ASKS.** If no port in the range can be bound, the installer
+  halts and prompts the operator — naming the range and what occupies it — exactly as it already
+  prompts before a destructive purge. It never drifts outside the range and never falls back to the
+  shipped default: a silent fallback is how two instances end up on one port. A NON-interactive run
+  cannot prompt, so it fails definitively with the same message (the installer's existing
+  interactive/non-interactive split, unchanged).
 
-This is what makes the two-instance story require no coordination: production installs and takes a
-port; this repo's development instance installs and takes the next free one; neither knows about
-the other, and both record what they took.
+That is the whole mechanism. Production installs and takes a port; this repo's development instance
+installs and takes the next free one; neither knows about the other, and both record what they took.
 
-**`_unit_environment()` stops forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST`** (`crucible_axi/install.py:863-879`).
-The unit needed them only because the server had no file to read; with §S1 it does, and the
-forwarding becomes a second place the same datum can be set — the defect, not the feature. The
-unit keeps forwarding nothing but `PATH`, and `CRUCIBLE_DB` per §S3.
+**Nothing else needs to know the port — including the service.** `_unit_environment()` stops
+forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST` (`crucible_axi/install.py:863-879`): the unit only ever
+carried them because the server had no file to read. The unit boots the server, the server reads
+its own `crucible.toml`, and it binds what the install wrote there. No port in the unit, none in
+the bootstrap, none in a skill — one datum, one file.
 
 ### §S1b A test overrides in-process or with its own file — never through the environment
 
@@ -234,12 +234,17 @@ discovered later on the wrong dashboard.
       the install takes the NEXT one — and with a socket bound but not listening on it, the install
       still skips it. A connect-based probe passes the first case and fails the second, so both are
       asserted.
-- [ ] A RE-INSTALL keeps the port already written, even while the instance is running on it: the
-      file is unchanged and no client is orphaned. Re-probing happens only when the configured port
-      cannot be bound and is not held by our own server.
-- [ ] Range exhaustion FAILS the install, naming the range and what it found — it never drifts
-      outside the range and never falls back to the shipped default. Asserted by occupying every
-      port of a narrow test range.
+- [ ] A RE-INSTALL never re-probes: if the file already names a port the install USES it, even while
+      the instance is running on it — the file is unchanged and no client is orphaned. Probing
+      happens only on a fresh install, where no port is configured.
+- [ ] Range exhaustion STOPS the install and PROMPTS the operator, naming the range and what
+      occupies it — asserted by occupying every port of a narrow test range and reading the prompt.
+      It never drifts outside the range and never falls back to the shipped default.
+- [ ] A NON-interactive run cannot prompt, so exhaustion fails it definitively with the same
+      message — the installer's existing interactive/non-interactive split, unchanged.
+- [ ] The declared range is `3800`–`3899` in the shipped file, and the install's chosen port lies
+      inside it — asserted against the FILE's declared bounds, not a retyped pair of numbers
+      (CR-CRU-134's rule).
 - [ ] Two installs on one machine, run with no knowledge of each other, land on DIFFERENT ports and
       each records its own: boot both, run a verb against each, assert each run landed on the board
       its own file names.
