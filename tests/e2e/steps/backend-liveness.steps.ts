@@ -8,15 +8,49 @@
 import { expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { waitForHealth } from "./harness.ts";
-import { Step } from "./world.ts";
+import { After, Step } from "./world.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
-const STANDALONE_PORT = 39_878;
+
+/**
+ * A port the kernel has just confirmed is free, then released — the e2e mirror
+ * of the bun suites' `freePorts()`
+ * (tests/server-listener-is-configuration.test.ts) and the python suites'
+ * `_free_port()`.
+ *
+ * F10 used a FIXED 39878, which is a standing appointment with a collision: it
+ * is held for a whole scenario, and it is the same number for every checkout,
+ * every worker and every previous run that left a child behind. When it does
+ * collide, the child exits and the scenario fails on `waitForHealth` — a
+ * timeout that reads as a broken reconnect feature rather than as a busy port.
+ * No port on this machine is this suite's to assume, and the one number it must
+ * never reach for is :3849, the port a production install occupies.
+ */
+async function freePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close(() => {
+          reject(new Error("the kernel gave this probe no numbered port to allocate from"));
+        });
+        return;
+      }
+      const { port } = address;
+      probe.close(() => {
+        resolve(port);
+      });
+    });
+  });
+}
 
 // CR-CRU-052 §S5 — the SECOND leak site, found while proving the first one
 // closed. This step spawns its OWN server (not the config's `webServer`), and
@@ -74,6 +108,15 @@ for (const signal of ["exit", "SIGINT", "SIGTERM"] as const) {
   process.on(signal, killAllSpawned);
 }
 
+// ...and the same reaping at the end of every SCENARIO, which the signal
+// handlers above cannot do: they fire when the RUN ends, so a scenario that
+// throws between the spawn and its kill step leaves the child holding its port
+// for every scenario after it. The last step's own `finally` only covers a
+// scenario that reached that step. This hook covers the ones that did not.
+After(() => {
+  killAllSpawned();
+});
+
 function spawnServer(scratchCwd: string, port: number): ChildProcess {
   declareListener(scratchCwd, port);
   const child = spawn("bun", ["run", SERVER_ENTRY], {
@@ -92,11 +135,15 @@ function spawnServer(scratchCwd: string, port: number): ChildProcess {
 Step("a standalone Crucible server is running on its own port", async ({ world, $testInfo }) => {
   $testInfo.setTimeout(90_000);
   const scratchCwd = mkdtempSync(path.join(tmpdir(), "crucible-e2e-f10-"));
-  const baseUrl = `http://localhost:${STANDALONE_PORT}`;
-  const child = spawnServer(scratchCwd, STANDALONE_PORT);
+  // Allocated once and carried in the world: the restart below must bind the
+  // SAME port, because the page under test is already pointed at it.
+  const port = await freePort();
+  const baseUrl = `http://localhost:${port}`;
+  const child = spawnServer(scratchCwd, port);
   await waitForHealth(baseUrl, 15_000);
   world.standalone = { baseUrl, child };
   world.standaloneScratchCwd = scratchCwd;
+  world.standalonePort = port;
 });
 
 Step("I open that server's home page", async ({ page, world }) => {
@@ -133,7 +180,7 @@ Step(
   async ({ world }) => {
     const standalone = world.standalone as { baseUrl: string; child: ChildProcess };
     const scratchCwd = world.standaloneScratchCwd as string;
-    const child = spawnServer(scratchCwd, STANDALONE_PORT);
+    const child = spawnServer(scratchCwd, world.standalonePort as number);
     await waitForHealth(standalone.baseUrl, 15_000);
     world.standalone = { baseUrl: standalone.baseUrl, child };
   },
