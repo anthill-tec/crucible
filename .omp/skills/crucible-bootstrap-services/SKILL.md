@@ -1,42 +1,45 @@
 ---
 name: crucible-bootstrap-services
-description: "Crucible project service lifecycle for the Mainline orchestrator — RESTORE at every /bootstrap mainline (the DEVELOPMENT board on :3850 — :3849 is the separate production install and is never touched — vidushi registration, both Lavish sessions, the three Chrome tabs under the omp group via the relay, one storyboard poll) and TEAR DOWN at every /shutdown (close the tabs, end the Lavish sessions, stop the poll, unregister, stop the board). Use whenever bootstrapping, shutting down, or after an omp restart in ~/Documents/data_projects/crucible."
+description: "Crucible project service lifecycle for the Mainline orchestrator — RESTORE at every /bootstrap mainline (the DEVELOPMENT board, whose port its own crucible.toml declares — a separate production install is never touched — vidushi registration, both Lavish sessions, the three Chrome tabs under the omp group via the relay, one storyboard poll) and TEAR DOWN at every /shutdown (close the tabs, end the Lavish sessions, stop the poll, unregister, stop the board). Use whenever bootstrapping, shutting down, or after an omp restart in ~/Documents/data_projects/crucible."
 ---
 
 # Crucible — service lifecycle (bootstrap restore / shutdown teardown)
 
 Run this as part of `/bootstrap mainline` for `~/Documents/data_projects/crucible`, after the role rules are loaded and BEFORE the status report to the user. Hub-supervised processes and relay tab handles die with every omp restart, so all of it is re-done each run. The Sandesh notifier is part of the restore — see step 6, and read its correction before deciding anything about it.
 
-## 1. Board server — the DEVELOPMENT instance, on `:3850`
+## 1. Board server — the DEVELOPMENT instance
+
+**This skill names NO port and NO URL.** A skill drives the client scripts; the connection is
+CONFIGURATION, and it is declared in `crucible.toml` — `[server]` for the listener,
+`[client]` for the target board (CR-CRU-139). Read the value from there when you need it; never
+hardcode one here, and never pass a URL to a client.
 
 ```
-hub ps                                   # is crucible-board-dev running?
-hub start name=crucible-board-dev application=bun args=[run, src/server.ts] cwd=<repo> \
-     env={CRUCIBLE_PORT: "3850"} ready.port=3850
-curl -s http://127.0.0.1:3850/api/v2/health   # {"ok":true,"status":"healthy",...}
+hub ps                                                 # is crucible-board-dev running?
+hub start name=crucible-board-dev application=bun args=[run, src/server.ts] cwd=<repo>
+python3 clients/python-crucible.py status              # the client finds the board itself
 ```
 Plain `bun run` (no `--watch`); restart after every merge to develop so it serves the merged code.
+Take `ready.port` from `[server] port` in `src/crucible.toml` rather than writing a number into
+this file.
 
-**TWO INSTANCES ON THIS MACHINE (user ruling 2026-09-16).** `:3849` belongs to the **production**
-install, which every OTHER project on the workstation uses and which is **not this session's
-concern** — never start, stop or write to it. This repo (and Model B) dog-food the **development**
-instance on **`:3850`**. The data axis already separates itself and needs nothing: a server booted
-from this repo adopts `<repo>/data/crucible.db` (the `cwd-data` rule), while the production install
+**TWO INSTANCES ON THIS MACHINE (user ruling 2026-09-16).** A separate PRODUCTION install serves
+every OTHER project on the workstation; it is **not this session's concern** — never start, stop or
+write to it. This repo and Model B dog-food the DEVELOPMENT instance, whose port its own
+`crucible.toml` declares. The data axis already separates itself and needs nothing: a server booted
+from this repo adopts `<repo>/data/crucible.db` (the `cwd-data` rule), while a production install
 keeps its own store under `~/.local/share/crucible/`.
 
-**Consequence for every client call, until CR-CRU-139 lands:** the clients' base URL is a module
-constant defaulting to `http://localhost:3849` (`clients/bun-crucible.py:91` and its four
-siblings), read from `os.environ` and **NOT** from the project `.env`. So **every** verb and
-**every** sub-agent brief must carry `CRUCIBLE_URL=http://127.0.0.1:3850` — treat it as mandatory
-alongside the assigned `--agent` id. Forgetting it is silent once production is up: the run lands
-on the PRODUCTION board with no error, because 3849 is a working default. CR-CRU-139 (wave 7,
-`seq 7001`, next) moves this into `crucible.toml` so it becomes a per-project fact an operator
-sets by editing a file — no export, no source patch.
+**A client is never told where to post.** It resolves its own target from `clients/crucible.toml`
+through the project → install → shipped chain (CR-CRU-138 §S1). So a dispatch brief carries the
+assigned `--agent` id and nothing about connectivity. If a verb reaches the wrong board, the
+defect is in that file or in the resolver — not something a brief should paper over with an export.
 
-**And when the port moves, the UI moves with it.** Step 4's tabs point at the board; a port change
+**When the port changes, the UI moves with it.** Step 4's tabs point at the board, so a port change
 with a stale tab leaves the user looking at a dead page (done wrong 2026-09-16). Re-point the
-`board` handle in the same turn, and wait for real rendered text before reporting it healthy — a
-`domcontentloaded` read of this SPA returns ~370 chars and looks EMPTY.
+`board` handle in the same turn, deriving its URL from the same config value, and wait for real
+rendered text before reporting it healthy — a `domcontentloaded` read of this SPA returns ~370
+chars and looks EMPTY.
 
 ## 1b. CDP relay (`:9224`) — restore it BEFORE the tabs
 
@@ -100,7 +103,7 @@ for (const url of [boardUrl, storyboardUrl, flowchartUrl]) {
 // 5. attach handles by unique target (still NO `url`) — marks them controllable, so the relay
 //    gathers them into Chrome's "omp" group
 for (const [name, target] of [
-  ["board", "127.0.0.1:3850/"],   // the DEV board; :3849 is production
+  ["board", boardHost],   // boardHost derived from [server] port in src/crucible.toml
   ["storyboard", "session/<storyboard-session-id>"],
   ["flowchart", "session/<flowchart-session-id>"],
 ]) await browser.open({ name, app: { relay: true, target } });
@@ -192,12 +195,13 @@ for (const name of ["storyboard", "flowchart", "board"]) {
 }
 await browser.close({ all: true });                           // then drop the handles
 ```
-`browser.close` alone never closes a relay page (docs: "Connected and relay pages remain open"), so `page.close()` inside `tab.run` is the step that removes the tab from the omp group. Verify with `GET http://127.0.0.1:9224/json/list` — no `127.0.0.1:4387` or `127.0.0.1:3850` pages remain (a `:3849` page is production's, leave it).
+`browser.close` alone never closes a relay page (docs: "Connected and relay pages remain open"), so `page.close()` inside `tab.run` is the step that removes the tab from the omp group. Verify with `GET http://127.0.0.1:9224/json/list` — no Lavish page and no page on this project's declared board port remain (a production-install page is not ours, leave it).
 
 **Close by URL, not by held handle, and never by assumption.** Handles go stale across an omp
 restart and a dead handle falls back to the user's visible tab. Snapshot `/json/list` first, select
-ONLY pages matching `127.0.0.1:(3850|4387)` — never a `:3849` page, which belongs to the
-production install and is not ours to close — plus anything this session itself opened, e.g. a
+ONLY pages whose host:port matches the board port this project DECLARES (read it from
+`src/crucible.toml`) or the Lavish server — never a page belonging to the production install,
+which is not ours to close — plus anything this session itself opened, e.g. a
 release-checking `npmjs.com/package/@anthill-tec` or `github.com/anthill-tec/crucible/actions`
 tab), then attach a read-only anchor (`target` + NO `url`) and close those URLs through its
 Puppeteer connection. Re-snapshot and prove the delta: the count drops by exactly the number
@@ -224,7 +228,7 @@ Must run while the board is still up.
 hub stop name=crucible-board
 hub stop name=omp-relay          # only if THIS session started it
 ```
-State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exited, `:3850` answers
+State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exited, the declared board port answers
 nothing, and 9224 has no listener. The relay is stopped AFTER the tabs are closed — closing a tab
 needs the relay alive.
 
