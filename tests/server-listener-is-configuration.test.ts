@@ -768,4 +768,78 @@ describe("CR-CRU-139 §S1 — the resolved listener is DISCLOSED, as the store a
         "computed beside it",
     ).toEqual(v1);
   });
+
+  // ── `port: 0` — the one case where the RESOLVER does not have the last word
+  //
+  // The rules describe which LAYER decided; `0` is that layer asking the kernel
+  // to choose. So the disclosure must carry the port the kernel actually gave,
+  // or it reports a number nobody can connect to on every kernel-chosen boot —
+  // the precise lie §S1 forbids, wearing the shape of a faithfully reported
+  // configuration value. The two tests below are the ONLY thing standing
+  // between that and a boot whose socket correction has been deleted: every
+  // other test in this file names its own port, so `0` never reaches them.
+
+  test("AC: an explicit `startServer({ port: 0 })` is disclosed as the port the KERNEL chose, never as `0`", async () => {
+    const dir = serverConfigDir();
+    // Host only: the port must come from the argument, so `portRule` is the
+    // axis under test and the host is merely somewhere reachable.
+    writeServerToml(dir, { host: "127.0.0.1" });
+
+    const handle = boot({ port: 0, dbPath: ":memory:" });
+    const bound = boundPort(handle.server);
+    const fromHandle = listenerOf(handle);
+
+    // POSITIVE — the kernel's answer, on the handle.
+    expect(
+      bound,
+      "AC: `port: 0` asks the kernel for an ephemeral port, so the socket must hold a real one",
+    ).not.toBe(0);
+    expect(
+      fromHandle,
+      `AC: the boot bound 127.0.0.1:${bound}, so that is what it must DISCLOSE — the rule stays ` +
+        `\`explicit\` because the caller is who decided, but the port is the kernel's answer, ` +
+        `not the \`0\` that was asked with`,
+    ).toEqual({ port: bound, host: "127.0.0.1", portRule: "explicit", hostRule: "file" });
+
+    // POSITIVE — and the same numbers over the wire, from the live listener.
+    // This is the half that cannot be satisfied by a handle field alone: the
+    // request is made TO the disclosed port.
+    const overTheWire = listenerIn(await health("127.0.0.1", bound), "/api/health");
+    expect(
+      overTheWire,
+      "AC: the running server reports the same listener it is answering on — a disclosure a " +
+        "caller cannot connect to is worse than none",
+    ).toEqual(fromHandle);
+  });
+
+  test("AC: a file-declared `[server] port = 0` is disclosed the same way — the FILE asked the kernel, and the kernel's answer is reported", async () => {
+    const dir = serverConfigDir();
+    // The staged-boot fixture in tests/v2-json-only-responses.test.ts declares
+    // exactly this, so a subprocess server can be reached without naming a port
+    // this machine has reserved. It is load-bearing for that suite and untested
+    // by it: what it reads is the BANNER, which is this disclosure.
+    writeServerToml(dir, { host: "127.0.0.1", port: 0 });
+
+    const handle = boot({ dbPath: ":memory:" });
+    const bound = boundPort(handle.server);
+    const fromHandle = listenerOf(handle);
+
+    expect(
+      bound,
+      "AC: `port = 0` in the file is the same request as `port: 0` in the opts — the kernel " +
+        "chooses, and it must choose a real port",
+    ).not.toBe(0);
+    expect(
+      fromHandle,
+      `AC: the file asked for a kernel-chosen port and got ${bound}, so \`file\` is the rule and ` +
+        `${bound} is the port — reporting \`0\` would send an operator to a port that does not ` +
+        `exist while the server ran perfectly well beside it`,
+    ).toEqual({ port: bound, host: "127.0.0.1", portRule: "file", hostRule: "file" });
+
+    const overTheWire = listenerIn(await health("127.0.0.1", bound), "/api/health");
+    expect(
+      overTheWire,
+      "AC: ...and the live listener says the same thing the handle does",
+    ).toEqual(fromHandle);
+  });
 });
