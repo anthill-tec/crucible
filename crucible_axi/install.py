@@ -358,10 +358,10 @@ def server_config_plan() -> dict:
         "source": None,
         "reason": (
             f"no Crucible server is provisioned on this machine "
-            f"({_abbreviate_home(_provisioned_server_package_dir())} does not "
+            f"({abbreviate_home(_provisioned_server_package_dir())} does not "
             f"exist), so the server's operator-editable "
             f"{manifest.CONFIG_FILENAME} was not written at "
-            f"{_abbreviate_home(destination)}: nothing here would read it. A "
+            f"{abbreviate_home(destination)}: nothing here would read it. A "
             f"board running on another host keeps that file on THAT machine, "
             f"beside its own database."),
     }
@@ -1097,8 +1097,13 @@ DEFAULT_STAGE_RUNNERS: dict = {
 }
 
 
-def _abbreviate_home(path: str) -> str:
-    """Abbreviate a $HOME-rooted path to `~/...` (identity otherwise)."""
+def abbreviate_home(path: str) -> str:
+    """Abbreviate a $HOME-rooted path to `~/...` (identity otherwise).
+
+    PUBLIC because `cli` prints paths this module did not abbreviate for it
+    (CR-CRU-138 §S2): every path an operator reads is rendered by this one
+    rule, so no row can come to look different from its neighbours.
+    """
     home = os.path.expanduser("~")
     if path == home:
         return "~"
@@ -1210,7 +1215,7 @@ def run_install(target_dir, stage_runners=None, force=False,
             server_advanced = bool(result.get("advanced", False))
         stage = {
             "name": name,
-            "path": _abbreviate_home(str(result.get("path", ""))),
+            "path": abbreviate_home(str(result.get("path", ""))),
             "converged": bool(result.get("converged", False)),
         }
         # A stage that DECLINED says so, and says why (CR-CRU-070 AC4): a
@@ -1373,7 +1378,7 @@ def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
     result = {"path": path, "converged": not removed}
     if retained:
         result["retained"] = True
-        kept = [_abbreviate_home(survivor) for survivor in retained]
+        kept = [abbreviate_home(survivor) for survivor in retained]
         result["reason"] = (
             f"kept {', '.join(kept)}: "
             + ("it carries" if len(kept) == 1 else "they carry")
@@ -1420,7 +1425,7 @@ def _store_uninstall_stage(target_dir: str, purge: bool) -> dict:
         "retained": True,
         "reason": (
             f"removed the store's data but kept "
-            f"{_abbreviate_home(survivor)}: it carries edits, and an "
+            f"{abbreviate_home(survivor)}: it carries edits, and an "
             f"operator's configuration is data rather than a replaceable "
             f"artifact"),
     }
@@ -1505,7 +1510,7 @@ def run_uninstall(target_dir, stage_runners=None, purge=False):
             break
         stage = {
             "name": name,
-            "path": _abbreviate_home(str(result.get("path", ""))),
+            "path": abbreviate_home(str(result.get("path", ""))),
             "converged": bool(result.get("converged", False)),
         }
         if result.get("retained"):
