@@ -308,7 +308,22 @@ jobs:
     # `success` while doing it. It carries the same dependency list the two
     # registry publishes do — one graph, no second mechanism to disagree.
     needs: [build, test-bun, test-python, test-e2e]
-    if: github.event_name == 'workflow_dispatch'
+    # A RELEASE BRANCH IS THE ONLY PLACE THIS REHEARSAL BELONGS. Validating
+    # PyPI against TestPyPI first is the requirement (CR-CRU-009 §S6), and the
+    # branch under test is what it is meant to rehearse — so the ref, not the
+    # trigger, is what admits this job: a release-branch push does it without
+    # anyone remembering to dispatch by hand, a dispatch ON a release branch
+    # still works, and a dispatch from develop or master no longer uploads
+    # anything (it used to, because the old condition read the event alone).
+    # The gate above is unchanged and still absolute: `needs:` holds the four
+    # verification jobs, so a red tree publishes nothing to TestPyPI either way.
+    # Safe to repeat, because pyproject sets `local_scheme = "no-local-version"`
+    # and hatch-vcs derives a distinct dev version per commit (0.1.4.devN, and no
+    # '+' local segment for the sanity step below to reject), so each push
+    # rehearses its own version; `skip-existing` covers a re-run of one commit.
+    if: >-
+      startsWith(github.ref, 'refs/heads/release/') &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -334,6 +349,11 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          # A RE-RUN of one commit derives the same version it already uploaded,
+          # which TestPyPI answers 409. That is not a failure worth reddening a
+          # release branch over — the artifact it wanted there already is.
+          # Distinct commits still get distinct versions, so this hides nothing.
+          skip-existing: true
 
   publish-npm:
     # CR-CRU-062 §S4 — same gate as publish-pypi.
@@ -392,7 +412,14 @@ jobs:
 
   dry-run-npm:
     needs: build
-    if: github.event_name == 'workflow_dispatch'
+    # Runs on a release-branch push as well as a dispatch: `npm publish
+    # --dry-run` writes nothing anywhere (it is in the audit's artifact-only
+    # list above), and a release branch is exactly where the npm packaging
+    # wants checking — the publish-npm job that fires on the `release` event
+    # is too late to learn the tarball was malformed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
