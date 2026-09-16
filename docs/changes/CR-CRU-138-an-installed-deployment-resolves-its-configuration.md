@@ -105,6 +105,23 @@ stay untouched, which is a feature: they are doing their job. A stage cannot hon
 `skipped` while it also wrote the manifest and the client config, so the reason belongs in the
 stage's reported output rather than in a stage row invented to carry it.
 
+**The reported shape, fixed so two implementations cannot diverge.** The `[manifest]` row carries
+one key:
+
+```
+"server_config": {"path": <absolute str> | None, "reason": <str> | None}
+```
+
+Provisioned: `path` is the file written, `reason` is `None`. Not provisioned: `path` is `None` and
+`reason` is a sentence naming why, containing "server" and/or "provision" so it reads as an
+explanation rather than a status code. No row sets `skipped` for this work, and `converged` keeps
+its existing per-stage meaning.
+
+A `[manifest]` row reporting `skipped: True` was considered and REFUSED: that stage really did write
+the manifest and the client config, so the marker would be a false record in the install envelope —
+worse than the silent skip this section fixes, because an operator debugging a missing file would
+then be reading a lie. The skip belongs to the LAY-DOWN, not to the stage.
+
 ### §S3 A test installs, then resolves
 
 The missing coverage is the defect. One test exercises the real seam end to end: run the installer
