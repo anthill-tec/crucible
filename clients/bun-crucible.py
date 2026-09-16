@@ -2176,6 +2176,14 @@ _CLI_DESCRIPTION = (
     "\n"
     "Tool-specific (bun test / JUnit-XML / lcov / tsc), never project-specific: the\n"
     "project path, the bun package dir and the bun binary are all parameterizable.\n"
+    "\n"
+    "A tier verb this client has no run of its own for runs the `test:<tier>` script\n"
+    "the project declares in package.json, by name. How that script is told where to\n"
+    "write its JUnit report is declared beside it, under `crucible.reportPath.<target>`:\n"
+    "`flag` (the default — `bun test`'s own report flags are appended) or `env:<VAR>`\n"
+    "(the variable the script's own runner reads the path from, so nothing is appended\n"
+    "that the runner never agreed to accept).\n"
+    "\n"
     "Run `<verb> --help` for a verb's own flags."
 )
 
