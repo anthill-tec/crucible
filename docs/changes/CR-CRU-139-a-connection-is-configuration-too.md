@@ -318,8 +318,12 @@ retired variables; retire and migrate in ONE cycle, which is the ordering lesson
       the suites that did still prove what they always proved — including the offline-degradation
       contract (a client formats output with no board reachable) and the two tests that read or
       patched a client's base-URL constant.
-- [ ] This checkout carries a committed `crucible.toml` naming the development board, so the
-      orchestrator's own verbs reach it with nothing exported. The CR proves itself on its author.
+- [ ] This checkout's `crucible.toml` names the development board and the orchestrator's own verbs
+      reach it with nothing exported — the CR proving itself on its author. The file stays UNTRACKED
+      operator state (`.gitignore:10` unchanged): committing a board URL would make every
+      imperfectly-isolated suite resolve the live development board, which is CR-CRU-138's
+      "no suite resolves the checkout configuration" rule and the reason that guard exists. Corrected
+      2026-09-16 after RED found that "committed", as first written here, contradicted it.
 
 **C4 — the board is named, and the documentation matches** (§S4, docs, close-out)
 
