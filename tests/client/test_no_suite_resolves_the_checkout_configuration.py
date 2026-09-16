@@ -191,7 +191,7 @@ class NoSuiteResolvesTheCheckoutConfigurationTest(unittest.TestCase):
         resolved = axi.project_config_path()
         self.assertFalse(
             _inside_checkout(resolved),
-            "CR-CRU-138: a client resolved its configuration at %r, INSIDE this "
+            "a client resolved its configuration at %r, INSIDE this "
             "checkout. That file is untracked operator state: it exists here "
             "and not on a fresh clone or a runner, so every limit it sets "
             "decides this suite's outcome on one machine and nothing on the "

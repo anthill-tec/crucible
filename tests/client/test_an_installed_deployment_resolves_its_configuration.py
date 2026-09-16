@@ -589,7 +589,7 @@ class _InstalledDeploymentCase(unittest.TestCase):
     def require_server_config(self):
         self.assertTrue(
             os.path.isfile(self.server_config),
-            "CR-CRU-138 §S2: an install that provisioned the server must lay "
+            "§S2: an install that provisioned the server must lay "
             "the server's operator-editable `%s` down BESIDE ITS DATABASE, at "
             "%s -- the path `src/limits.ts:158-159` computes and the only file "
             "the server will ever read. `install.store_dir()` already knows "
@@ -677,7 +677,7 @@ class AnInstalledClientResolvesTheInstalledConfigurationTest(_InstalledDeploymen
 
         self.assertEqual(
             configured, axi.resolve_limit(self.LIMIT),
-            "CR-CRU-138 §S1: with NO project dir bound and the cwd outside the "
+            "§S1: with NO project dir bound and the cwd outside the "
             "install, a client must resolve `<install dir>/%s` -- the file the "
             "installer laid down at %s and the manifest already declares. It "
             "resolved the build's recommendation (%d) instead, which is an "
@@ -858,7 +858,7 @@ class AnInstalledClientResolvesTheInstalledConfigurationTest(_InstalledDeploymen
 
         def _refuse():
             raise AssertionError(
-                "CR-CRU-138 §S1: `os.getcwd()` must no longer appear in "
+                "§S1: `os.getcwd()` must no longer appear in "
                 "configuration-path resolution -- it is the whole reason the "
                 "reported path read `$HOME/crucible.toml`")
 
@@ -1036,7 +1036,7 @@ class TheInstallerLaysDownTheServersOperatorFileTest(_InstalledDeploymentCase):
             self.assertTrue(
                 os.path.isfile(document[key]),
                 "the manifest declares `%s` at %s and nothing is there -- the "
-                "dangling-path defect CR-CRU-090 closed"
+                "dangling-path defect the manifest contract closed"
                 % (key, document[key]))
 
     def test_an_operator_edited_server_config_survives_a_reinstall(self):
@@ -1354,7 +1354,7 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
     def require_fleet_config(self):
         self.assertTrue(
             os.path.isfile(self.fleet_config),
-            "CR-CRU-138 §S4: the `[fleet]` stage must lay the distribution's "
+            "§S4: the `[fleet]` stage must lay the distribution's "
             "own `%s` down at %s -- beside `_crucible_axi.py`, the module that "
             "reads it, and the FIRST of `_SHIPPED_DATA_CANDIDATES`. Without it "
             "an installed client's only package data is the OPERATOR's file, "
@@ -1564,7 +1564,7 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
         self.assertTrue(
             os.path.isfile(document[FLEET_CONFIG_MANIFEST_KEY]),
             "the manifest declares `%s` at %s and nothing is there -- the "
-            "dangling-path defect CR-CRU-090 closed"
+            "dangling-path defect the manifest contract closed"
             % (FLEET_CONFIG_MANIFEST_KEY,
                document.get(FLEET_CONFIG_MANIFEST_KEY)))
 
@@ -1639,7 +1639,7 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
         self.assertEqual(
             edited, Path(self.install_config).read_bytes(),
             "…and in the SAME run the OPERATOR's file is untouched: an upgrade "
-            "that resets configuration is the defect CR-CRU-131 §S1c exists to "
+            "that resets configuration is the defect the installer split exists to "
             "prevent, and the two rules must hold at once or the files are "
             "still one file wearing two names")
         self.assertEqual(

@@ -167,8 +167,8 @@ class _InstallerFixtureCase(unittest.TestCase):
             "`crucible.toml` at the target directory -- it already has a "
             "[config] stage and already writes one file there. Without it an "
             "installed deployment ships defaults the operator has no way to "
-            "override at the path they would look -- and, since CR-CRU-138 "
-            "§S1, at the path an installed client RESOLVES: the install root "
+            "override at the path they would look -- and, since the chain "
+            "landed, at the path an installed client RESOLVES: the install root "
             "it derives from its own location. `%s` holds: %r"
             % (self.target_dir,
                sorted(os.listdir(self.target_dir))
