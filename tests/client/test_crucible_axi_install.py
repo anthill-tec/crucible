@@ -656,10 +656,16 @@ class InstallIdempotencyTest(unittest.TestCase):
             f"publish; got {reparsed.get('server_config')!r}")
 
     def test_running_install_twice_reports_manifest_stage_converged_on_second_run(self):
+        """CR-CRU-143 §S2 -- declared unprovisioned like its siblings: the REAL
+        `[manifest]` stage runs here, and unpinned it asks the WORKSTATION
+        whether a server is provisioned, then lays the server's file down
+        beside the operator's live database. Convergence is a property of the
+        install, not of the machine it ran on."""
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
         with _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             manifest_result_1 = next(s for s in stages1 if s["name"] == "manifest")
@@ -677,10 +683,15 @@ class InstallIdempotencyTest(unittest.TestCase):
             "second run finds an identical manifest already on disk -- converged")
 
     def test_running_install_twice_both_runs_are_ok_true_for_every_stage(self):
+        """CR-CRU-143 §S2 -- declared unprovisioned like its siblings: the REAL
+        `[manifest]` stage runs here, so the stage sequence this asserts must
+        be the one a machine with no server provisioned reports too, and no run
+        of this suite may write beside the operator's live database."""
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
         with _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             ok2, stages2, _w2 = install.run_install(self.tmp)
