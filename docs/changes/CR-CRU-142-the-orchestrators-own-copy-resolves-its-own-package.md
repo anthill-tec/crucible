@@ -108,11 +108,17 @@ develop's own line numbers, not invented from this branch's.
       of scope for this CR.
 
 **§S3**
-- [ ] No `cli.py:NNN` citation in this branch's `tests/` tree points into the region the two
-      insertions shift — asserted by measurement, not assumption: `grep -rn 'cli\.py:[0-9]+' tests/`
-      is run after §S1 lands and every hit (if any) is checked against the line it names. Measured
-      before the branch cut: zero hits, because the `--host`/`--port` citations belong to
-      CR-CRU-139's serve rewrite, which is not in 0.2.2's lineage.
+- [ ] Every `cli.py:NNN` citation in this branch's `tests/` tree is checked against the line it
+      names after §S1 lands, and any that the two insertions shifted is re-pointed. **The "zero
+      hits" this AC first claimed was wrong, and wrongly measured**: it came from
+      `grep 'cli\.py:3[0-9][0-9]'`, a pattern narrowed to develop's serve citations. The honest
+      pattern `grep -rn 'cli\.py:[0-9]\+' tests/` returns FOUR — `cli.py:53`, `:56`, `:104` in
+      `test_cr066_serve_and_target_dir.py` (all above the first insertion at `:107`, unshifted) and
+      `cli.py:130` in `test_cr070_systemd_unit.py`, which IS in the shifted region and whose content
+      now sits at `:138`. All four are re-checked; the shifted one is corrected. (`cli.py:130` and
+      its two `install.py` siblings were ALREADY stale before this CR — CR-CRU-070 RED-phase
+      archaeology pointing at unrelated lines — so this CR invalidated no correct citation, but the
+      AC is only tickable once they name what they claim.)
 - [ ] The back-merge is where develop's three `cli.py:355-362` citations get re-checked — recorded
       here as a close-out obligation of `git flow hotfix finish`, against develop's own line
       numbers, never numbers carried over from this branch.
