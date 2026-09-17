@@ -93,7 +93,9 @@ identifier are the user's call and this CR does not choose them.
 ### §S4 — the queue header and CR-087's status tell the current truth
 
 `docs/changes/README.md:8` reads `**Target release:** 0.2.0`, which has shipped; it becomes the
-release now being planned. A release-boundary row marks 0.2.0 in the ordering per the queue idiom.
+release now being planned. No other table change: every prior release transition (0.1.0, 0.1.2,
+0.1.3) is marked ONLY by the `Wave` column's own parenthetical qualifier — there has never been a
+separate boundary row, and inventing one here would be new format with no precedent and no reader.
 
 ### §S5 — no workflow action is running on a deprecated runtime
 
@@ -121,6 +123,20 @@ Our invocations pass only inputs that survive these majors, and every job is `ru
 ubuntu-latest`, so no self-hosted runner needs a version floor. The bump is therefore expected to
 be pins only — if any target major forces an input or job-logic change, that is a finding to
 escalate, not to absorb silently.
+
+### §S6 — this CR's own edits do not leave stale line-number citations behind
+
+§S1's constant lands beside `_bun_test_report_flags` at `clients/bun-crucible.py:493`, and §S2's
+consolidation touches the same file. Measured: 136 `bun-crucible.py:NNN` citations across 79 test
+files sit at or below that point today, plus 2 `release.yml:NNN` citations in
+`tests/cr009-release-bundle.test.ts` (its `RELEASE_PAT`/`NPM_TOKEN` secret-name assertions) near
+§S1/§S2's edit sites, plus this CR's own two citations (`bun-crucible.py:489`, `release.yml:146`).
+None of it is asserted at runtime — a citation that drifts stays silently wrong, which is why this
+project's own history already shows the same defect shipping twice at smaller scale. This is a
+ONE-TIME close-out sweep after every other §S's edits have landed, not a per-cycle escalation.
+
+Out of scope: citations inside `docs/changes/*.md` for CRs already `COMPLETED` — those are
+historical record of what a prior author observed, like a DN's dated note, not a living index.
 
 ## Acceptance criteria
 
@@ -158,7 +174,6 @@ escalate, not to absorb silently.
 
 **§S4**
 - [ ] `docs/changes/README.md`'s `**Target release:**` names the release now being planned.
-- [ ] A release-boundary row for 0.2.0 exists in the queue ordering.
 
 **§S5**
 - [ ] Every `uses:` pin in `release.yml` resolves to a ref whose own `action.yml` declares a
@@ -173,14 +188,22 @@ escalate, not to absorb silently.
       or a pin silently downgraded, fails the suite. A guard covering only the actions listed today
       does not satisfy this.
 
+**§S6**
+- [ ] Every `bun-crucible.py:NNN` and `release.yml:NNN` line-number citation in the `tests/` tree,
+      plus this CR's own two citations, is re-checked after every other §S's edit has landed; a
+      citation whose target line no longer matches its comment's claim is corrected to the line
+      that now holds it. Evidenced by re-reading each corrected citation's new line and confirming
+      it names what the comment says — not by a line-count diff alone.
+
 ## Estimated size
 
-Small–medium. §S1 and §S2 carry the test work; §S3–§S5 are declarations and version bumps. No
-production server or client behaviour changes — `_bun_test_cmd` gains a flag, nothing else moves.
+Small–medium. §S1 and §S2 carry the test work; §S3–§S5 are declarations and version bumps; §S6 is a
+one-time close-out sweep once every other section's line-shifting edit has landed. No production
+server or client behaviour changes — `_bun_test_cmd` gains a flag, nothing else moves.
 
 ## Risk
 
-- **§S1 raises the default for 2518 tests.** A test that hangs now burns 30 s instead of 5 s. The
+- **§S1 raises the default for 2541 tests** (measured 2026-09-17). A test that hangs now burns 30 s instead of 5 s. The
   measured defence is that explicit annotations still win, so the suite's tight budgets (`5`, `50`,
   `0`) are untouched; the exposure is limited to a genuine hang in an unannotated test.
 - **§S2's npm interaction is genuinely unknown.** `packageManager` is read by npm as well as

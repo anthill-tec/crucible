@@ -20,8 +20,13 @@ hub start name=crucible-board-dev application=bun args=[run, src/server.ts] cwd=
 python3 clients/python-crucible.py status              # the client finds the board itself
 ```
 Plain `bun run` (no `--watch`); restart after every merge to develop so it serves the merged code.
-Take `ready.port` from `[server] port` in `src/crucible.toml` rather than writing a number into
-this file.
+Take `ready.port` from `[server] port` in **`data/crucible.toml`** — the file beside THIS board's
+store, which is where an operator's declaration lives (`src/limits.ts:166` resolves it from the
+store's directory). `src/crucible.toml` is the SHIPPED file (`SHIPPED_DATA_FILE`, `src/limits.ts:94`):
+it documents the defaults we stand behind and declares no port for this instance, so reading the
+port from there gives you production's number, not this one's. Neither number belongs in this file.
+Health tells you which layer answered: `portRule: "file"` = the declaration was read,
+`portRule: "shipped"` = nothing declared and you are about to collide with the production install.
 
 **TWO INSTANCES ON THIS MACHINE (user ruling 2026-09-16).** A separate PRODUCTION install serves
 every OTHER project on the workstation; it is **not this session's concern** — never start, stop or
@@ -103,7 +108,7 @@ for (const url of [boardUrl, storyboardUrl, flowchartUrl]) {
 // 5. attach handles by unique target (still NO `url`) — marks them controllable, so the relay
 //    gathers them into Chrome's "omp" group
 for (const [name, target] of [
-  ["board", boardHost],   // boardHost derived from [server] port in src/crucible.toml
+  ["board", boardHost],   // boardHost derived from [server] port in data/crucible.toml
   ["storyboard", "session/<storyboard-session-id>"],
   ["flowchart", "session/<flowchart-session-id>"],
 ]) await browser.open({ name, app: { relay: true, target } });
@@ -136,7 +141,7 @@ As a tracked async bash job (`async: true`, `timeout: 0`). Exactly one poll proc
 ```
 sandesh addressbook --project Crucible        # who can address me?
 sandesh projects                              # CROSS-PROJECT grant per project
-sandesh register --project Crucible --as 'Mainline - Crucible'   # only if inactive
+sandesh register --project Crucible --address 'Mainline - Crucible'   # only if inactive; NOT --as (that's unregister's flag)
 hub start name=sandesh-notify-crucible application=sandesh \
      args=[notify, --project, Crucible, --to, "Mainline - Crucible", --timeout, 14400]
 ```
@@ -200,7 +205,7 @@ await browser.close({ all: true });                           // then drop the h
 **Close by URL, not by held handle, and never by assumption.** Handles go stale across an omp
 restart and a dead handle falls back to the user's visible tab. Snapshot `/json/list` first, select
 ONLY pages whose host:port matches the board port this project DECLARES (read it from
-`src/crucible.toml`) or the Lavish server — never a page belonging to the production install,
+`data/crucible.toml`) or the Lavish server — never a page belonging to the production install,
 which is not ours to close — plus anything this session itself opened, e.g. a
 release-checking `npmjs.com/package/@anthill-tec` or `github.com/anthill-tec/crucible/actions`
 tab), then attach a read-only anchor (`target` + NO `url`) and close those URLs through its
@@ -225,7 +230,7 @@ Must run while the board is still up.
 ## 5. Board server + relay — LAST
 
 ```
-hub stop name=crucible-board
+hub stop name=crucible-board-dev
 hub stop name=omp-relay          # only if THIS session started it
 ```
 State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exited, the declared board port answers
