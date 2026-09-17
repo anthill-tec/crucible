@@ -142,8 +142,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-134](CR-CRU-134-a-figure-in-prose-is-derived-or-it-drifts.md) | a figure in prose is derived, or it drifts | fix | COMPLETED (0.2.0) | 131 | 6 (0.2.0) |
 | [CR-CRU-135](CR-CRU-135-a-tests-warnings-are-not-its-working-directorys.md) | a test's warnings are not its working directory's | fix | COMPLETED (0.2.0) | 030, 131 | 6 (0.2.0) |
 | [CR-CRU-136](CR-CRU-136-a-classname-is-decoded-not-guessed.md) | a classname is decoded, not guessed | fix | COMPLETED (0.2.0) | 133 | 6 (0.2.0) |
-| [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | PENDING | 131 | 6 (0.2.1) |
-| [CR-CRU-137](CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md) | the pipeline's own defaults are chosen, not inherited | hotfix | PENDING | 087, 134, 136 | 7 (0.2.2) |
+| [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
+| [CR-CRU-137](CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md) | the pipeline's own defaults are chosen, not inherited | hotfix | COMPLETED (0.2.2) | 087, 134, 136 | 7 (0.2.2) |
 | [CR-CRU-140](CR-CRU-140-evidence-a-filer-can-cite.md) | evidence a filer can cite | hotfix | PENDING | — | 7 (0.2.2) |
 | [CR-CRU-141](CR-CRU-141-a-ci-run-is-earned-by-what-changed.md) | a CI run is earned by what changed | hotfix | PENDING | 137 | 7 (0.2.2) |
 | [CR-CRU-142](CR-CRU-142-the-orchestrators-own-copy-resolves-its-own-package.md) | the orchestrator's own copy resolves its own package, not the install it just wrote | hotfix | PENDING | — | 7 (0.2.2) |
