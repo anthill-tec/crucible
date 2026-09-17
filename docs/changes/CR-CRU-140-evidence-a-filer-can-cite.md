@@ -59,6 +59,23 @@ The vocabulary question (whether the ingest surface should speak of `runs` consi
 tables be renamed) is deliberately **left open** and belongs to its own CR against the PRD, not to a
 hotfix.
 
+### §S3 — a route that advertises a read must be visible to it
+
+Found by VERIFY, not by design: §S1 makes all five event-id-returning routes advertise
+`GET /api/v2/events?project=&cycleId=`, and for `POST /api/v2/milestones` that advertisement is
+false in the ordinary case. `handleMilestones` takes its context from `eventContext(body)` alone,
+so a milestone filed by a registered, cycle-BOUND agent is stored with no cycle and does not appear
+in the read its own reply names. Measured both ways: without an explicit body `context` the
+advertised read answers `events: []`; with `context: {cycleId}` the same milestone is returned.
+
+`/runs` and `/gates` already resolve the binding through `resolveIngestAttach(...)` and store
+`attach.context`; `/milestones` never calls it. So this is not a new mechanism — it is CR-CRU-094's
+own contract ("the server stamps that binding onto every ingest you post") left unimplemented on one
+of the three stamped surfaces. The milestone route adopts the same call its two siblings use.
+
+An explicit body `context` keeps winning where one is supplied, exactly as on the sibling routes —
+this adds the binding as the fallback, it does not override a caller who stated a cycle.
+
 ## Acceptance criteria
 
 **§S1**
@@ -81,6 +98,19 @@ hotfix.
 - [ ] No table is renamed and no migration is introduced by this CR — asserted by the migration
       count/schema version being unchanged.
 
+**§S3**
+- [ ] A milestone filed by a cycle-BOUND agent with NO explicit body `context` is returned by the
+      read its own reply advertises — asserted end to end: register bound, post the milestone, take
+      the hint from the reply, follow it, find that event id. This is the case that measured
+      `events: []` before the fix.
+- [ ] An explicit body `context` still wins over the binding on `/milestones`, matching `/runs` and
+      `/gates` — asserted, not assumed.
+- [ ] `/milestones` resolves its attachment through the SAME `resolveIngestAttach(...)` seam its two
+      sibling stamped surfaces use; a second, parallel resolution path is a defect, not an
+      implementation choice.
+- [ ] Every route that advertises the evidence read is visible to it — asserted for all five, so the
+      next route to return an `event` id cannot advertise a read it is absent from.
+
 ## Estimated size
 
 Small. Help-hint entries, a RUNBOOK section, two schema comments, and the tests that hold them. No
@@ -95,6 +125,11 @@ new route, no new response field, no migration.
 ## Non-goals
 
 - Renaming `runs`/`events`, or any migration. Left open for its own CR against the PRD.
-- Changing what an ingest STORES, or adding a route. Both already do their jobs; this CR only makes
-  them findable.
+- Adding a route, or changing what an ingest stores — **with ONE carve-out, forced by VERIFY and
+  recorded rather than waved through**: `POST /api/v2/milestones` must honour the agent's cycle
+  binding the way `/runs` and `/gates` already do (§S3). That does change what a milestone ingest
+  stores. It is in scope because §S1 makes that route advertise a read, and VERIFY measured the
+  advertised read returning `events: []` for the ordinary bound-agent milestone — so without it this
+  CR would ship a hint that lies, which its own Risk section calls worse than no hint. Every other
+  ingest's stored shape is untouched.
 - Changing the board UI. It already renders this data correctly.
