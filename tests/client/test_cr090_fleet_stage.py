@@ -161,11 +161,32 @@ def _fast_unit_stage(target_dir, force):
 
 
 class _ScratchInstallCase(unittest.TestCase):
-    """Shared fixture: one throwaway target dir per test, under `/tmp`."""
+    """Shared fixture: one throwaway target dir per test, under `/tmp`.
+
+    CR-CRU-143 §S2 -- provisioned-ness is part of the sandbox, DECLARED here
+    rather than read off the machine. Every test below runs the REAL
+    `[manifest]` stage, and that stage lays the SERVER's operator-editable
+    `crucible.toml` down beside the server's own database -- a path outside the
+    scratch target entirely, which on a developer box that has run
+    `crucible-axi install` is the operator's live store. So the DEFAULT is the
+    unprovisioned answer, declared for every test, and the two classes whose
+    subject is the conditional key opt into the provisioned one by entering
+    `server_provisioning(True)` themselves (the nested patch wins and restores
+    to this default on exit).
+
+    Unprovisioned is the safe default AND the neutral one: no test outside
+    those two classes reads the manifest's conditional `server_config` key, and
+    convergence is unaffected either way -- `lay_down_config` NEVER overwrites,
+    so the server file only ever counts as written on a machine that did not
+    already have one.
+    """
 
     def setUp(self):
         self.target = tempfile.mkdtemp(prefix="cr090-fleet-target-")
         self.install, = _import_fresh("crucible_axi.install")
+        sandbox = contextlib.ExitStack()
+        self.addCleanup(sandbox.close)
+        sandbox.enter_context(self.server_provisioning(False))
 
     def tearDown(self):
         shutil.rmtree(self.target, ignore_errors=True)
@@ -212,6 +233,10 @@ class _ScratchInstallCase(unittest.TestCase):
 
         Yields the sandboxed destination, which is what the manifest publishes
         when the condition holds.
+
+        `setUp` enters this for EVERY test at `provisioned=False`, so no test
+        can reach the operator's store by forgetting to declare; a class whose
+        subject IS the conditional key re-enters it with its own answer.
         """
         config_filename = self.install.manifest.CONFIG_FILENAME
         destination = os.path.join(self.target, "server-store", config_filename)
