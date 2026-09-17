@@ -7,14 +7,14 @@ docs/changes/CR-CRU-044-phase-as-first-class-data.md §S3/§S4 (as corrected
 2026-07-28 -- see the table at line 91 of that doc, confirmed directly
 against this file's source, NOT re-derived):
 
-  bun `clients/bun-crucible.py:1856` already has `choices=[...]` (the enum is
+  bun `clients/bun-crucible.py:2227` already has `choices=[...]` (the enum is
   already correct) but ALSO `default="report"`, so `--role` is optional
   today. §S3's bun-specific work is "drop the default -> required". §S4
   wants the client `--help` to state the agentId is a free-form identifier
   (never a role channel) rather than only offering the id-template as an
   example.
 
-RED phase: `clients/bun-crucible.py:1856` today reads
+RED phase: `clients/bun-crucible.py:2227` today reads
     r.add_argument("--role", default="report",
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"])
 so every test below fails for a real behavioural reason (confirmed by

@@ -27,7 +27,8 @@ RED phase: as of this writing `cmd_register`/`cmd_unregister`/`cmd_plan_file`/
 ad-hoc human-readable line straight to stdout (confirmed by reading
 clients/bun-crucible.py) and never call `clients/toon.py`'s `encode()` at all
 for these verbs (`_toon()` today is only ever `.decode()`d, for the no-mistakes
-axi stream in `cmd_gate_run` -- see `bun-crucible.py:1127,1151`). Every test
+axi stream in `cmd_gate_run` -- the loader at `bun-crucible.py:1783`, the decode
+it now delegates to at `_crucible_axi.py:6207`). Every test
 below therefore fails: `toon.decode(stdout)` either raises (stdout is plain
 text, not TOON) or yields a dict with no top-level "axi" key -- real
 behavioral RED, not a missing-symbol accident. There is also no GET-plans

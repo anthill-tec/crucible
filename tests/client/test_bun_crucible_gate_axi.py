@@ -20,7 +20,7 @@ CR-CRU-013 §S4c/§S5) `print()` a single ad-hoc human-readable line to stdout
 (`f"gate-report: ok={ok} outcome=..."` / `f"gate-run: ok={ok} outcome=..."`)
 and never call `_emit_axi`/`clients/toon.py`'s `encode()` for either verb --
 confirmed by reading `cmd_gate_report`/`cmd_gate_run` directly
-(bun-crucible.py:1307-1401). Neither function references a `prefer-gate-run`
+(bun-crucible.py:1978-1990). Neither function references a `prefer-gate-run`
 warning anywhere. Every envelope-decode assertion below therefore fails
 (stdout is plain text, not TOON, or lacks a top-level "axi" key) -- real
 behavioral RED, not a missing-symbol accident.

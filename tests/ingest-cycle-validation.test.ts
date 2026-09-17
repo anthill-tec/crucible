@@ -221,6 +221,33 @@ async function eventsForProject(handle: ServerHandle, key: string): Promise<Even
   return body.events.filter((e) => (e as { kind?: string }).kind !== "lifecycle");
 }
 
+/**
+ * §S7's stale-cycle note, ID-AGNOSTICALLY, read from the declaration that
+ * ships it (`cycleHints.staleCycle`) rather than retyped: the lines two
+ * different cycle ids produce identically are the ones that carry no id, so
+ * they identify the note whatever cycle it was raised for.
+ *
+ * Needed because CR-CRU-140 §S1 made `help` UNCONDITIONAL on every reply that
+ * hands back an `event: <id>` — "S7 added no note" can no longer be spelled
+ * "the reply carries no help at all", and pinning the whole array instead
+ * would break on the next unconditional hint anyone adds.
+ */
+function s7NoteLines(): string[] {
+  const first = cycleHints.staleCycle(11111);
+  const second = cycleHints.staleCycle(22222);
+  const idAgnostic = first.filter((line, i) => line === second[i]);
+  expect(idAgnostic.length).toBeGreaterThan(0);
+  return idAgnostic;
+}
+
+/** No line of §S7's stale-cycle note appears in this reply's help[]. */
+function expectNoStaleCycleNote(help: string[] | undefined, cycleId?: number): void {
+  const lines = [...s7NoteLines(), ...(cycleId === undefined ? [] : cycleHints.staleCycle(cycleId))];
+  for (const line of lines) {
+    expect(help ?? []).not.toContain(line);
+  }
+}
+
 describe("§S7.1 — run ingest with an unknown context.cycleId is REFUSED (400), never stored on trust", () => {
   test("context.cycleId=9999 (no such cycle in any plan) -> 400, error names the unknown reference, help[] lists the open plan's cycle ids; no event stored", async () => {
     const handle = boot();
@@ -364,10 +391,9 @@ describe("§S7 — happy path with the ACTIVE cycle's id stays byte-unchanged ap
     expect(body.ok).toBe(true);
     expect(body.changed).toBe(true);
     expect(typeof body.event).toBe("string");
-    // A passing run against a valid, non-terminal cycle carries no help at
-    // all (runResponse only attaches `help` when non-empty) — the S7 closed-
-    // cycle note must NOT appear for the currently-active cycle.
-    expect(body.help).toBeUndefined();
+    // The S7 closed-cycle note must NOT appear for the currently-active
+    // cycle — neither its id-bearing line for cycle `b`, nor its id-free one.
+    expectNoStaleCycleNote(body.help, b);
 
     const events = await eventsForProject(handle, key);
     expect(events.length).toBe(1);
@@ -387,7 +413,7 @@ describe("§S7.3 — context.cycle (the free-form label) is NEVER validated; cyc
     const body = (await res.json()) as RunsPostResponse;
     expect(body.ok).toBe(true);
     expect(body.changed).toBe(true);
-    expect(body.help).toBeUndefined();
+    expectNoStaleCycleNote(body.help);
 
     const events = await eventsForProject(handle, key);
     expect(events.length).toBe(1);
@@ -405,7 +431,7 @@ describe("§S7.3 — context.cycle (the free-form label) is NEVER validated; cyc
     expect(res.status).toBe(200);
     const body = (await res.json()) as RunsPostResponse;
     expect(body.ok).toBe(true);
-    expect(body.help).toBeUndefined();
+    expectNoStaleCycleNote(body.help);
 
     const events = await eventsForProject(handle, key);
     expect(events.length).toBe(1);

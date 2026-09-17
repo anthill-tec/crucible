@@ -1671,7 +1671,21 @@ class NextBlockCitationsTest(unittest.TestCase):
         # rather than inferred from the shift. The production docstring this
         # row mirrors (`LANDED_STATUSES` in `clients/_crucible_axi.py`)
         # carries the same :5801.
-        ("LANDED_STATUSES", "src/store.ts", 5801, 5801,
+        # Re-pinned 2026-09-17 (0.2.2 close-out), 5801 -> 5821: CR-CRU-140 §S2
+        # added twenty lines ABOVE this construct, both blocks of them inside
+        # the schema DDL — the `events` header saying that table holds every
+        # INGESTED result (src/store.ts:2318, ten lines) and the `runs` header
+        # saying it holds only the OPEN in-flight row (:2389, ten lines).
+        # LOCATED at HEAD rather than computed from the old number plus the
+        # shift: `grep -c 'private deriveQueueStatus(' src/store.ts` answers 1,
+        # so the hit is unique, and it reads at :5821. BOTH halves move in this
+        # same commit: the production docstring this row mirrors
+        # (`LANDED_STATUSES` in `clients/_crucible_axi.py`) carries the same
+        # :5821, so `test_the_table_covers_every_citation_the_block_carries`
+        # never goes red. The three sibling entries were re-measured at BOTH
+        # ends in the same pass and none had moved — this release touched no
+        # other cited file above a cited construct.
+        ("LANDED_STATUSES", "src/store.ts", 5821, 5821,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split

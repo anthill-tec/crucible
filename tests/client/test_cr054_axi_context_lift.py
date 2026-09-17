@@ -159,7 +159,7 @@ class RunContextEnvGitLiftTest(unittest.TestCase):
     """`_run_context`'s real env-var + `subprocess.run` git-lookup logic
     (CR-CRU-008 SS2) is byte-identical across all five clients TODAY and NONE
     of them delegates it (confirmed: arduino-crucible.py:207,
-    bun-crucible.py:704, mvn-crucible.py:265, python-crucible.py:235,
+    bun-crucible.py:861, mvn-crucible.py:265, python-crucible.py:235,
     rust-crucible.py:266 each carry the FULL implementation) -- unlike
     `_axi_context`/`_emit_axi`/`_agent_id`, which already delegate (see the
     module docstring's exclusion note). It must move to
@@ -229,7 +229,7 @@ class RunContextEnvGitLiftTest(unittest.TestCase):
 class PlansPathUrlTemplateLiftTest(unittest.TestCase):
     """`_plans_path`'s real URL-template logic is byte-identical across all
     five clients TODAY (confirmed: arduino-crucible.py:248,
-    bun-crucible.py:1003, mvn-crucible.py:306, python-crucible.py:388,
+    bun-crucible.py:1556, mvn-crucible.py:306, python-crucible.py:388,
     rust-crucible.py:307). `_project_key` itself stays per-client (DN SS3,
     GENUINELY PER-CLIENT, per C2's own committed ESCALATION) -- only the URL
     TEMPLATE built from an already-resolved key is SHARED."""
@@ -265,7 +265,7 @@ class PlansPathUrlTemplateLiftTest(unittest.TestCase):
 class OpenPlansFilterLiftTest(unittest.TestCase):
     """`_open_plans`'s real open-status filter + hard-exit-on-GET-failure
     logic is byte-identical across all five clients TODAY (confirmed:
-    arduino-crucible.py:252, bun-crucible.py:1007, mvn-crucible.py:310,
+    arduino-crucible.py:252, bun-crucible.py:1563, mvn-crucible.py:310,
     python-crucible.py:392, rust-crucible.py:311)."""
 
     MARKER = '== "open"'
@@ -320,7 +320,7 @@ class ResolvePlanOrEmitOrchestrationLiftTest(unittest.TestCase):
     """`_resolve_plan_or_emit`'s real orchestration logic -- GET the plans,
     build the none/ambiguous legacy messages, and emit the ok:false envelope
     on any failure -- is byte-identical across all five clients TODAY
-    (confirmed: arduino-crucible.py:845, bun-crucible.py:1234,
+    (confirmed: arduino-crucible.py:845, bun-crucible.py:1650,
     mvn-crucible.py:1386, python-crucible.py:1047, rust-crucible.py:1712).
     The plan SELECTION itself (`resolve_single_plan`) is ALREADY shared
     (every client already calls `_axi().resolve_single_plan(...)`); what

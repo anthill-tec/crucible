@@ -34,7 +34,7 @@ the SAME idiom as every sibling harness here (`test_cr061_gate_run_skip_
 passthrough.py`, `test_cr054_drift_guard.py`, ...).
 
 RED phase: every test below fails against TODAY's tree --
-`arduino-crucible.py:1079`, `bun-crucible.py:1963`, `mvn-crucible.py:1896`,
+`arduino-crucible.py:1079`, `bun-crucible.py:2330`, `mvn-crucible.py:1896`,
 `python-crucible.py:1352` render `CR id, e.g. CR-CRU-008.` and
 `rust-crucible.py:2413` renders `CR id, e.g. CR-NAI-203.`
 

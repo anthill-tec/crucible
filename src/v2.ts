@@ -848,16 +848,37 @@ function attachEcho(event: RunEvent): { context?: { cycleId: number }; role?: Ag
   };
 }
 
+/**
+ * CR-CRU-140 §S1 — the ONE place a reply carrying `event: <id>` is built.
+ *
+ * Five routes hand a filer an id — /runs, /runs/parsed, /runs/compile, /gates
+ * and /milestones — and before this CR none of them said what to DO with it.
+ * The hint therefore hangs HERE rather than at each route: it is owed by the
+ * ACT of returning an id, not by any one route's circumstances, so it cannot
+ * be attached to four and forgotten on the fifth, and it cannot be made
+ * conditional on a failure (the measured hole: /gates and /milestones carried
+ * no help at all, and a clean /runs/parsed ingest carried none either — which
+ * is exactly the reader who has an id and no idea where it went).
+ */
+function evidenceResponse(
+  body: Record<string, unknown>,
+  options: { help?: string[]; status?: number } = {},
+): Response {
+  return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
+}
+
 function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
-  return json({
-    ok: true,
-    changed: true,
-    event: event.id,
-    run: summary,
-    verdict: runVerdict(summary),
-    ...attachEcho(event),
-    ...(help !== undefined ? { help } : {}),
-  });
+  return evidenceResponse(
+    {
+      ok: true,
+      changed: true,
+      event: event.id,
+      run: summary,
+      verdict: runVerdict(summary),
+      ...attachEcho(event),
+    },
+    { help },
+  );
 }
 
 /**
@@ -1103,16 +1124,18 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     report.errorCount > 0
       ? `COMPILE FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
       : `COMPILE OK — ${report.warningCount} warnings`;
-  return json({
-    ok: true,
-    changed: true,
-    event: event.id,
-    errors: report.errorCount,
-    warnings: report.warningCount,
-    verdict,
+  return evidenceResponse(
+    {
+      ok: true,
+      changed: true,
+      event: event.id,
+      errors: report.errorCount,
+      warnings: report.warningCount,
+      verdict,
+    },
     // §S3 — panel-routing reminder after a compile ingest.
-    help: hints.afterCompile,
-  });
+    { help: hints.afterCompile },
+  );
 }
 
 // ── CR-CRU-013 §S1+§S4b — gate/milestone event routes ───────────────────────
@@ -1190,7 +1213,10 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   });
   // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
   // exactly the same `context.cycleId` path as the run-ingest response.
-  return json({ ok: true, changed: true, event: event.id, ...attachEcho(event) }, 201);
+  return evidenceResponse(
+    { ok: true, changed: true, event: event.id, ...attachEcho(event) },
+    { status: 201 },
+  );
 }
 
 /**
@@ -1258,6 +1284,18 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  // CR-CRU-140 §S3 — milestones are the THIRD stamped surface, and were the
+  // one that never asked: this route read `eventContext(body)` alone, so a
+  // milestone filed by a registered, cycle-BOUND agent was stored with no
+  // cycle and was ABSENT from the cycle-evidence read its own §S1 help[]
+  // advertises — a hint that lies, which this CR's Risk calls worse than no
+  // hint. Nothing new is introduced here: it is the SAME CR-CRU-056 §S3 seam
+  // `/gates` and `/runs/compile` call, on the same terms. `validateUnbound`
+  // stays FALSE because this route never ran CR-CRU-024 §S7's
+  // explicit-context validation either, so an UNBOUND poster's context still
+  // passes through verbatim.
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
+  if (attach.fail !== undefined) return attach.fail;
   // CR-CRU-080 §S4 — the two provenance fields only the ceremony can compute
   // (it stands in the repo with git): `releasedAt`, the tag's own commit date
   // in epoch SECONDS, and `crs`, the CR ids its tag range merged, already
@@ -1315,7 +1353,12 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
     ...(crs !== undefined ? { crs } : {}),
     ...(packages !== undefined ? { packages } : {}),
     ...(repairProvenance ? { repairProvenance } : {}),
-    ...eventContext(body),
+    // CR-CRU-140 §S3 — the resolved attachment, on exactly the `/gates`
+    // terms: the binding is the FALLBACK, so a caller who stated a context
+    // keeps it (the seam merges the bound cycle into what was stated, and
+    // refuses outright when the two name different cycles), and an unbound
+    // poster's body context is carried verbatim as before.
+    ...(attach.context !== undefined ? { context: attach.context } : eventContext(body)),
   });
   // CR-CRU-129 §S4 — a REPLAY that would lose provenance the project already
   // holds is REFUSED, and the refusal is the answer: nothing was written, so
@@ -1337,9 +1380,9 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // CR-CRU-086 §S3 — a repair that SHRANK a stored `crs` carries what it
   // dropped back to the reporter, which is the only actor that can say it out
   // loud where a human will read it.
-  return json(
+  return evidenceResponse(
     { ok: true, changed, event: event.id, ...(shrink !== undefined ? { shrink } : {}) },
-    changed ? 201 : 200,
+    { status: changed ? 201 : 200 },
   );
 }
 

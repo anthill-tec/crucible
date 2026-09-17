@@ -48,13 +48,19 @@ internal whitespace runs collapsed -- wrapping is a rendering artefact of the
 terminal width, the words are the contract.
 
 BUN'S MODULE-DOCSTRING VERB TABLE (`clients/bun-crucible.py:34`, which reads
-`--cycles "a,b[,c...]"`) is deliberately NOT asserted here. MEASURED at
-`a7fe101`: `bun-crucible.py --help` renders `_CLI_DESCRIPTION`, never
-`__doc__` -- CR-CRU-097 §S2 severed that wiring on purpose ("deliberately NOT
-`__doc__`", `clients/bun-crucible.py:1925-1943`), and a drive of the root help
-finds zero occurrences of the table's `a,b[,c...]` string. It is a design
-record, not user-visible output, so a test asserting on it would pin prose. It
-is left to GREEN as a comment-only correction.
+`plan-file  File a cycle plan: --cr, --title, one --cycle "<label>" per cycle
+→`) is deliberately NOT asserted here. MEASURED at `a7fe101`, when that line
+still carried the superseded `--cycles` spelling: `bun-crucible.py --help`
+renders `_CLI_DESCRIPTION`, never `__doc__` -- CR-CRU-097 §S2 severed that
+wiring on purpose ("deliberately NOT `__doc__`",
+`clients/bun-crucible.py:2179-2201`), and a drive of the root help finds zero
+occurrences of the table's own wording (re-measured 2026-09-17: `per cycle`
+appears nowhere in the rendered help, which spells the same verb as "File a
+cycle plan; prints the ASSIGNED numeric cycle ids"). It is a design record,
+not user-visible output, so a test asserting on it would pin prose. GREEN duly
+made that comment-only correction, which is why the line quoted above is the
+repeatable form and the only `--cycles` left in that client is the argparse
+flag itself (`clients/bun-crucible.py:2336`).
 
 RED phase, against `a7fe101`:
   * every client renders `--cycles` BEFORE `--cycle` (measured: the options

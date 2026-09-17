@@ -557,7 +557,7 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
 // ── CR-CRU-047 §S3 — SECOND PASS. `--dots` is WITHDRAWN. ───────────────────
 //
 // ROOT CAUSE, corrected (2026-07-28, read this before the tests below).
-// `clients/bun-crucible.py:712`/`:784` ALREADY `env.pop("CLAUDECODE", None)`
+// `clients/bun-crucible.py:1177`/`:1316` ALREADY `env.pop("CLAUDECODE", None)`
 // before running the wrapped `bun test` — the client already defends itself
 // against bun's agent-quieting. The remaining gap is narrower: only
 // `CLAUDECODE` is popped, not `AGENT`/`REPL_ID` (also agent-quieting
@@ -796,7 +796,7 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
   );
 
   test(
-    "`test` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:712 extends beyond CLAUDECODE",
+    "`test` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:1177 extends beyond CLAUDECODE",
     async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const baseUrl = `http://localhost:${handle.server.port}`;
@@ -836,7 +836,7 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
   );
 
   test(
-    "`regression` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:784 extends beyond CLAUDECODE",
+    "`regression` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:1316 extends beyond CLAUDECODE",
     async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const baseUrl = `http://localhost:${handle.server.port}`;
