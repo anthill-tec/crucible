@@ -917,19 +917,22 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
             f"declared conditional ones); an undeclared key is internal state "
             f"leaking into a document other tools parse. Got "
             f"{sorted(self.document)}")
-        # The conditional key by its CONDITION (CR-CRU-143 §S1): this fixture
-        # declares a provisioned server, so `server_config` is OWED -- and owed
-        # as the path the install really wrote, not as a bare key.
+        # The conditional key by its CONDITION (CR-CRU-143 §S1, over the key
+        # CR-CRU-138 §S2 declares): this fixture declares a provisioned server,
+        # so `server_config` is OWED -- and owed as the path the install really
+        # wrote, not as a bare key. The lineage stays in the comment: an
+        # assertion message is live text, and CR-CRU-097's tripwire keeps real
+        # board ids out of it.
         self.assertIn(
             "server_config", self.document,
-            f"CR-CRU-138 §S2 -- this install provisioned a server "
+            f"this install provisioned a server "
             f"(SERVER_IS_PROVISIONED={self.SERVER_IS_PROVISIONED}), so the "
             f"manifest owes a `server_config` entry naming the operator-editable "
             f"file it laid down at {self.server_config_destination!r}; got "
             f"{sorted(self.document)}")
         self.assertEqual(
             self.server_config_destination, self.document["server_config"],
-            f"CR-CRU-138 §S2 -- `server_config` must publish the file the "
+            f"`server_config` must publish the file the "
             f"install actually wrote; published "
             f"{self.document['server_config']!r}")
         clients = self.document["clients"]
@@ -998,12 +1001,14 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
             f"{sorted(ALLOWED_MANIFEST_KEYS)}; got {sorted(document)}")
         self.assertEqual(
             destination, document.get("server_config"),
-            f"CR-CRU-138 §S2 -- with a server provisioned, the manifest must "
+            f"with a server provisioned, the manifest must "
             f"publish the operator-editable file at {destination!r}; got "
             f"{document.get('server_config')!r} (keys={sorted(document)})")
+        # CR-CRU-090 -- a published path that names nothing is the defect this
+        # C3 section exists over, so the key is judged by the file on disk.
         self.assertTrue(
             os.path.isfile(destination),
-            f"CR-CRU-090 -- the published `server_config` path must RESOLVE: "
+            f"the published `server_config` path must RESOLVE: "
             f"the stage must have laid the file down at {destination!r}, not "
             f"merely named it")
         self.assertIsNone(
@@ -1024,9 +1029,9 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
             f"{sorted(document)}")
         self.assertNotIn(
             "server_config", document,
-            f"CR-CRU-138 §S2 -- with NO server provisioned there is nothing to "
+            f"with NO server provisioned there is nothing to "
             f"write beside, so publishing `server_config` would publish a path "
-            f"that does not exist -- the dangling-path defect CR-CRU-090 "
+            f"that does not exist -- the dangling-path defect this suite "
             f"closed. Got {document.get('server_config')!r}")
         self.assertFalse(
             os.path.exists(destination),

@@ -654,11 +654,14 @@ class InstallIdempotencyTest(unittest.TestCase):
             f"{sorted(ALLOWED_MANIFEST_KEYS)} -- an undeclared key is internal "
             f"state leaking into the document consumers parse; got "
             f"{sorted(reparsed)}")
-        # The conditional key by its CONDITION: this run declared no provisioned
-        # server, so publishing `server_config` would name a file nothing wrote.
+        # The conditional key by its CONDITION (CR-CRU-138 §S2 declares it):
+        # this run declared no provisioned server, so publishing `server_config`
+        # would name a file nothing wrote. The lineage stays HERE, in the
+        # comment -- an assertion message is live text, and CR-CRU-097's
+        # tripwire keeps real board ids out of it.
         self.assertNotIn(
             "server_config", reparsed,
-            f"CR-CRU-138 §S2 -- no server is provisioned for this install, so "
+            f"no server is provisioned for this install, so "
             f"there is nothing to write beside and no `server_config` to "
             f"publish; got {reparsed.get('server_config')!r}")
 

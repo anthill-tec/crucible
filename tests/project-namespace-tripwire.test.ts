@@ -309,6 +309,16 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // does. Neither new file takes a `PRE_CR_ASSERTION_RESIDUE` entry, which is
 // the point: the ceiling is for literals an assertion is ABOUT, and both of
 // these were decoration.
+//
+// ONE entry added 2026-09-17 at the 0.2.2 close-out (`CR-EXPLICIT`), read at
+// its use site like every entry above and added for the same reason: the guard
+// FAILED on CR-CRU-140's new §S3 suite, which posted a body context naming
+// `CR-CRU-140` to /milestones and then asserted that field came back
+// unflattened. That literal is what the assertion is ABOUT — not decoration —
+// so stripping it from a message (CR-CRU-138's remedy, recorded below) does not
+// apply, and a residue entry would have PINNED a real board id into an
+// assertion. AC4's remedy is the one that fits: the fixture now states a
+// synthetic `cr` it invents itself, and the round trip it proves is unchanged.
 const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-AAA": "test_crucible_axi_shared.py — two-agent warning fixture",
   "CR-AUTH": "cycle/plan fixtures for an authored-but-unplanned CR",
@@ -321,6 +331,7 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-DEFERRED": "§S5's synthetic wave-6 rows (AC4's remedy)",
   "CR-DRIFT": "e2e agent-identity fixture",
   "CR-DT": "roadmap-drill-through fixtures — the rows and plans a landing chooses between",
+  "CR-EXPLICIT": "CR-CRU-140 §S3's explicit-body-context milestone fixture — the `cr` a caller states and gets back",
   "CR-GW": "workflow gate-widget fixture",
   "CR-NEW": "§S5's synthetic newly-planned rows (AC4's remedy)",
   "CR-NT": "f13 fidelity fixture — a no-title CR",
@@ -507,6 +518,20 @@ function collectHelpSurfaces(): HelpSurface[] {
 // is what produced it — the guard failed on the day that file was written — so
 // the entry records the reading taken then and nothing else, and the ceiling it
 // sets may only shrink.
+//
+// STILL ONE, after the 0.2.2 close-out on 2026-09-17, and stated because that
+// release DID trip this guard: CR-CRU-143's manifest work left 7 real literals
+// in assertion MESSAGES (6 in tests/client/test_cr090_fleet_stage.py, 1 in
+// tests/client/test_crucible_axi_install.py — each an `f"CR-CRU-138 §S2 -- …"`
+// or `f"CR-CRU-090 -- …"` prefix on a message whose siblings already read
+// `f"§S3 -- …"`). They were STRIPPED, on CR-CRU-138's precedent recorded below:
+// every one was decoration on a message, none was a literal its assertion was
+// about, and the lineage moved up into the comment above the assertion rather
+// than being deleted. No entry was added for them — a table that is a shrinking
+// ceiling must not grow a row for a file written after it was measured, because
+// that row would legally re-admit real board ids into that file's assertions.
+// CR-CRU-140's one leak was a different kind (the asserted VALUE) and took
+// AC4's synthetic-id remedy instead — recorded at SYNTHETIC_NAMESPACES above.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
   [join("tests", "ci-toolchain-provisioning.test.ts")]: 1,

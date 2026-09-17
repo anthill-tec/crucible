@@ -540,10 +540,13 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
         projectKey,
         agentId: "s3-explicit",
         type: "gap-analysis",
-        label: "CR-CRU-140",
+        label: "CR-EXPLICIT-1",
         // The caller states its own context, cycle included. The binding is a
-        // FALLBACK; it may not flatten what the caller said.
-        context: { cycleId, cr: "CR-CRU-140" },
+        // FALLBACK; it may not flatten what the caller said. The stated `cr` is
+        // SYNTHETIC (CR-CRU-097 AC4): the assertion below is ABOUT this value,
+        // and a value an assertion is about may not be a real board id, which
+        // decays under us.
+        context: { cycleId, cr: "CR-EXPLICIT-1" },
       }),
     );
     const eventId = reply.event as string;
@@ -556,7 +559,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
     // Both halves of what the caller stated survived: the cycle it named, and
     // the field the binding knows nothing about.
     expect(stored[0]!.context?.cycleId).toBe(cycleId);
-    expect(stored[0]!.context?.cr).toBe("CR-CRU-140");
+    expect(stored[0]!.context?.cr).toBe("CR-EXPLICIT-1");
   });
 
   for (const fixture of INGEST_ROUTES) {
