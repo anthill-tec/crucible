@@ -12,6 +12,16 @@ scripts (`~/.claude/scripts/*-crucible.py`), the reporting skills
 RED/GREEN/VERIFY/FIX agent definitions. This DN catalogs that evidence so the v2 rebuild
 can guarantee wire compatibility with every existing client, unmodified.
 
+**Reading note added 2026-09-16.** This document is a RECONSTRUCTION of the v1 contract as it
+stood on 2026-07-14, and it is read in the present tense throughout because that is what it
+catalogs. Some of what it records has since been deliberately retired — most visibly the base
+URL's `CRUCIBLE_BASE`/`CRUCIBLE_URL` override in §1, which CR-CRU-139 replaced with a `[client]`
+table in the client fleet's own `crucible.toml` (a connection is configuration, not an export),
+and whose cited constant `arduino-crucible.py:21` no longer exists. The lines are left as
+written on purpose: a DN's value is that it says what WAS true, and rewriting it to match today
+would destroy the evidence the v2 rebuild was derived from. For current behaviour read the PRD
+and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded it.
+
 ## 1 Service identity
 
 | Fact | Value | Evidence |

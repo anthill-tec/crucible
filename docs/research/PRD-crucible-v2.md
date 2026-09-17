@@ -41,8 +41,10 @@ around two commitments:
 ```
 
 - Single-user, localhost developer tool. No auth, no TLS, no multi-tenant (non-goals §7).
-  The server binds loopback (`127.0.0.1`) by default; `CRUCIBLE_HOST` opts into wider
-  exposure (the API is unauthenticated and `dataPath` ingest reads server-side files).
+  The server binds loopback (`127.0.0.1`) by default, and `[server] host` in its own
+  `crucible.toml` opts into wider exposure (the API is unauthenticated and `dataPath`
+  ingest reads server-side files). CR-CRU-139 retired `$CRUCIBLE_HOST`: the bind address
+  is configuration an operator EDITS, not an export a shell carries.
 - Server: Bun + TypeScript, zero runtime framework (Bun.serve router). Tests: `bun test`
   (this project eats its own dog food: it ingests its own runs via `bun-crucible.py`).
 - **API strategy (decided 2026-07-14, kickoff review):** the primary contract is a
@@ -567,9 +569,13 @@ documented file does not need a second way to say the same thing, and a second w
 second place to look when a value is not what you expected, so
 `$CRUCIBLE_DEFAULT_RETENTION`, `$CRUCIBLE_RUN_ABANDON_MS` and
 `$CRUCIBLE_PROJECT_INACTIVE_MS` are retired as overrides.
-The variables that are NOT limits are untouched: `CRUCIBLE_DB`, `CRUCIBLE_PORT` and
-`CRUCIBLE_PROJECT_KEY` answer *where am I and who am I*, which must be answerable before
-any file can be found. The `CRUCIBLE_*` prefix is reserved for Crucible's own
+The variables that are NOT limits and cannot move into a file are `CRUCIBLE_DB` and
+`CRUCIBLE_PROJECT_KEY`: they answer *where am I and who am I*, which must be answerable
+before any file can be found. CR-CRU-139 retired `$CRUCIBLE_PORT`, `$CRUCIBLE_HOST`,
+`$CRUCIBLE_URL` and `$CRUCIBLE_BASE` — a connection is configuration too, and neither
+side needs its own address to FIND its configuration: the server resolves its store
+first and reads the file beside it, and a client resolves its file from the project
+directory it was given. The `CRUCIBLE_*` prefix is reserved for Crucible's own
 configuration (§4.11). Precedence is therefore two layers, and only retention has both:
 the file, then a per-project value in the store.
 
