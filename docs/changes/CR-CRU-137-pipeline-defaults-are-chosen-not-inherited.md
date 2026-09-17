@@ -47,21 +47,27 @@ Measured against bun 1.4.2 (the pinned version), so §S1's mechanism is not assu
 
 ### §S1 — the suite's default per-test budget is the suite's own figure
 
-**Surfaces (verified 2026-09-16):** `.github/workflows/release.yml:146` runs bare `bun test`;
-`clients/bun-crucible.py:489-497` (`_bun_test_cmd`) builds the local gate's invocation and takes its
-flag contract from `_bun_test_report_flags` at `:478-486`, the "spelled in ONE place" pattern
-CR-CRU-133 §S2 established.
+**Surfaces (verified 2026-09-16; line numbers re-pointed at §S6 close-out):**
+`.github/workflows/release.yml:179` carries the `test-bun` step's `bun test` invocation — bare
+before this CR; `clients/bun-crucible.py:500-510` (`_bun_test_cmd`) builds the local gate's
+invocation and takes its flag contract from `_bun_test_report_flags` at `:489-497`, the "spelled in
+ONE place" pattern CR-CRU-133 §S2 established.
 
 The default per-test timeout becomes **30000 ms**, declared by this project rather than inherited
 from bun. 30 s is chosen against the two measured failures (5.1 s, 6.2 s) and the suite's most
 common existing annotation; a genuine hang still fails inside a bounded time instead of stalling a
 runner.
 
-Both invocation paths carry it: the client's command builder gains the flag beside the report
-contract, and the CI step names it too. CI does not shell through the client, so the two cannot be
-one physical constant — therefore the value is **derived, not retyped**, exactly as CR-CRU-134
-requires: a test reads the client's declared figure and asserts the workflow's step matches it, so a
-change to one that is not made to the other fails the suite.
+**THREE invocation paths carry it, not two** — corrected at VERIFY, which found the third by
+following the tier verbs rather than trusting this paragraph. (1) the client's command builder
+(`_bun_test_cmd`) gains the flag beside the report contract; (2) the CI step names it too; and
+(3) `scripts/run-test-target.ts`, which `bun-crucible.py`'s `unit`/`integration` verbs reach
+through `bun run test:<tier>`, spawns its own `bun test` and was running on bun's 5000 ms default
+— the very defect this section exists to end, left in place by a scope sentence that had counted
+only the two paths its author was looking at. CI does not shell through the client and the TS
+runner cannot import a Python constant, so these cannot be one physical constant — therefore the
+value is **derived, not retyped**, exactly as CR-CRU-134 requires: a test reads the declared figure
+and asserts each site matches it, so a change to one that is not made to the others fails the suite.
 
 The two annotations added by `6515b8f` to `tests/cr009-release-bundle.test.ts`
 (`NPM_PACK_TIMEOUT_MS = 60_000`) stay — `npm pack` cold start is a per-test fact, and 60 s remains
@@ -126,11 +132,14 @@ escalate, not to absorb silently.
 
 ### §S6 — this CR's own edits do not leave stale line-number citations behind
 
-§S1's constant lands beside `_bun_test_report_flags` at `clients/bun-crucible.py:493`, and §S2's
-consolidation touches the same file. Measured: 136 `bun-crucible.py:NNN` citations across 79 test
-files sit at or below that point today, plus 2 `release.yml:NNN` citations in
-`tests/cr009-release-bundle.test.ts` (its `RELEASE_PAT`/`NPM_TOKEN` secret-name assertions) near
-§S1/§S2's edit sites, plus this CR's own two citations (`bun-crucible.py:489`, `release.yml:146`).
+§S1's constant lands immediately ABOVE `_bun_test_report_flags`, not beside it: its comment block
+and `DEFAULT_TEST_TIMEOUT_MS` occupy `clients/bun-crucible.py:477-486` — the constant itself on
+`:486`, the helper's own `def` at `:489` — and §S2's consolidation touches the same file. Measured
+at close-out: 43 `bun-crucible.py:NNN` citation lines across 21 test SOURCE files (170 raw matches
+under `tests/`; the remainder sit inside gitignored `__pycache__` byte-caches, which are build
+output and not swept), plus 2 `release.yml:NNN` citations in `tests/cr009-release-bundle.test.ts`
+(its `RELEASE_PAT`/`NPM_TOKEN` secret-name assertions) near §S1/§S2's edit sites, plus this CR's own
+two citations (`bun-crucible.py:500`, `release.yml:179`).
 None of it is asserted at runtime — a citation that drifts stays silently wrong, which is why this
 project's own history already shows the same defect shipping twice at smaller scale. This is a
 ONE-TIME close-out sweep after every other §S's edits have landed, not a per-cycle escalation.
@@ -151,9 +160,21 @@ historical record of what a prior author observed, like a DN's dated note, not a
       `bun test` whose test is annotated above the default and observing it pass.
 - [ ] `tests/cr009-release-bundle.test.ts` still declares `NPM_PACK_TIMEOUT_MS = 60_000` and both
       `npm pack` tests still pass it.
+- [ ] `tests/client/test_gate_suite_outcome_reporting.py`'s `PRE_COMPOSITION_STEPS` fixture (the
+      pre-merge gate's own frozen whole-suite argv, asserted by
+      `test_a_single_suite_gate_runs_the_same_step_it_ran_before_the_composition`) is corrected to
+      DERIVE its expected `--timeout` value from `clients/bun-crucible.py`'s declared constant,
+      never a retyped `30000` — found during GREEN, missed by this CR's original AC list: §S1's own
+      "every invocation it builds" necessarily changes the whole-suite argv this fixture pins, and a
+      third physical copy of the number is exactly what AC3's derived-equality test exists to
+      prevent.
 - [ ] The full suite passes with no test relying on bun's 5000 ms default: run
       `bun test --timeout 5001` and `bun test --timeout 30000` and compare — no test may pass only
-      because of the larger figure other than ones carrying their own annotation.
+      because of the larger figure other than ones carrying their own annotation. Measured
+      2026-09-17 on this branch: **5001 → 2525 pass / 0 fail** and **30000 → 2525 pass / 0 fail**,
+      identical, so nothing depends on the larger budget. (Both were run before cycles 480-482
+      landed, hence 2525 rather than today's 2537; the figure that matters is that the two runs
+      agree, and the post-482 suite is filed green at 2537/0 as `run-8d2880cf`.)
 
 **§S2**
 - [ ] The bun version appears in exactly one location in the repository; a grep for the other
@@ -180,7 +201,11 @@ historical record of what a prior author observed, like a DN's dated note, not a
       supported runtime — evidenced by reading each pinned ref's `action.yml`, not by the version
       number looking new.
 - [ ] No job in a full `release.yml` run produces a Node-20 deprecation annotation — verified by
-      reading a real run's annotations after the change, not by diffing the workflow.
+      reading a real run's annotations after the change, not by diffing the workflow. Read the
+      evidence for what it is: a deprecation annotation is emitted per ACTION, not per job, and in
+      run `35192142593` three jobs were skipped by their own ref/event gates (`create-release`,
+      `publish-pypi`, `publish-npm`) — but all eight distinct `uses:` pins were exercised across
+      the seven that ran, which is what makes the zero meaningful.
 - [ ] The `dist` artifact still survives the `build` → publish handoff after the artifact actions
       move, evidenced by a real run's publish job consuming it.
 - [ ] `tests/ci-toolchain-provisioning.test.ts` asserts the pinned version of **every** action the
@@ -194,6 +219,12 @@ historical record of what a prior author observed, like a DN's dated note, not a
       citation whose target line no longer matches its comment's claim is corrected to the line
       that now holds it. Evidenced by re-reading each corrected citation's new line and confirming
       it names what the comment says — not by a line-count diff alone.
+- [ ] `tests/project-namespace-tripwire.test.ts`'s `PROSE_CITATIONS.clients.head` reflects the
+      actual measured count after this CR's edits land — found during C1 close-out: two new
+      `CR-CRU-137` literals in `clients/bun-crucible.py` moved the true count from 862 to 864,
+      reddening this guard and (via its own child-process pairing)
+      `tests/help-surface-order-independence.test.ts` too, on content grounds unrelated to §S1's
+      timeout work. Evidenced by re-running the classifier the guard names in its own comment.
 
 ## Estimated size
 

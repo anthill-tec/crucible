@@ -2,12 +2,27 @@
 // ALL v2 help[] wording lives HERE (src/v2.ts imports it) so the
 // agent-facing next-step text is auditable in one place.
 
+/**
+ * CR-CRU-140 §S1 — the ONE sentence that names the read answering "what did
+ * this cycle record". Written once and used twice — by the v2 root's
+ * orientation and by every reply that hands back an `event: <id>` — because a
+ * hint that drifts is worse than no hint (CR Risk), and two copies drift.
+ *
+ * It names the CYCLE query on purpose: the same reply also offers
+ * `GET /api/v2/events/<id>`, which answers the narrower "what was in THIS
+ * run". The reader whose question sent an orchestrator into the database on
+ * 2026-09-17 — "what has this cycle recorded" — needs this one.
+ */
+const cycleEvidence =
+  "GET /api/v2/events?project=<key>&cycleId=<id> — what one cycle recorded: its linked runs plus its declared boundary (ingested results are `events` rows; the `runs` table holds only the OPEN, in-flight row)";
+
 export const hints: Record<
   | "orientation"
   | "registered"
   | "roleRequired"
   | "afterRed"
   | "afterCompile"
+  | "readEvidence"
   | "unknownProject"
   | "archivedProject"
   | "coverageDropped"
@@ -36,6 +51,7 @@ export const hints: Record<
     "POST /api/v2/projects {name, key?, type?, sutRoot?} — create a project (key auto-generated when omitted)",
     "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent, latestGreenCoverage)",
     "POST /api/v2/agents/register {projectKey, agentId, role} — register an agent (role: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report)",
+    cycleEvidence,
     "GET /api/v2/health — service health",
   ],
   /** CR-CRU-044 §S1 — a registration that declared no usable role. */
@@ -56,6 +72,12 @@ export const hints: Record<
     "After GREEN, re-ingest — the dashboard shows the transition",
     "GET /api/v2/events/<id> — full failure detail (?depth=suites for counts, ?suite=<name> to expand one suite)",
   ],
+  /**
+   * CR-CRU-140 §S1 — attached by `evidenceResponse` to EVERY reply that hands
+   * back an `event: <id>`, so the answer that gives a filer an id also says
+   * how to read that evidence back.
+   */
+  readEvidence: [cycleEvidence],
   /** After a compile ingest. */
   afterCompile: [
     "compile events route to the compile panel — ingest the next test run to update the run verdict",

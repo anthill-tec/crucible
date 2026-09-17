@@ -489,6 +489,17 @@ def _wipe(reports_dir):
 REPORT_MECHANISM_FLAG = "flag"
 REPORT_MECHANISM_ENV_PREFIX = "env:"
 
+# CR-CRU-137 §S1 — the default per-test budget this project CHOOSES, rather
+# than the 5000 ms bun happens to ship. Two content assertions failed CI on
+# wall clock alone (5.1 s, 6.2 s) on trees whose suites were green; 30 s clears
+# them while a genuine hang still dies inside a bounded time. Declared ONCE
+# here and SELECTED by every invocation this client builds — `bunfig.toml`'s
+# `[test] timeout` is silently ignored by bun, so the CLI flag is the only
+# honoured channel. That is also why `.github/workflows/release.yml`'s
+# `test-bun` step names the same figure: CI does not shell through this client,
+# and a test asserts the two cannot drift apart.
+DEFAULT_TEST_TIMEOUT_MS = 30000
+
 
 def _bun_test_report_flags(junit_path, coverage, coverage_dir):
     """The FLAG mechanism: `bun test`'s own report/coverage flag contract,
@@ -505,8 +516,10 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
     """Build the `bun test` invocation. Targeted (file paths) or whole-suite.
 
     This one IS `bun test` — the runner is this client's own choice, not a
-    project's declaration — so it takes the flag contract unconditionally."""
-    cmd = [bun, "test"]
+    project's declaration — so it takes the flag contract unconditionally, and
+    with it (CR-CRU-137 §S1) the project's own default per-test budget: both
+    shapes, targeted and whole-suite, run on the same declared figure."""
+    cmd = [bun, "test", "--timeout", str(DEFAULT_TEST_TIMEOUT_MS)]
     if targets:
         cmd += list(targets)
     return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)

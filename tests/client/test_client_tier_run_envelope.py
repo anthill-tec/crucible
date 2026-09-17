@@ -78,8 +78,8 @@ code, and every drive in this file is built from them:
 
   client   compile ingest, and whether it is a FALLBACK from the tier verb
   bun      NOT from `regression` — that verb's no-JUnit exit ingests NOTHING
-           (`bun-crucible.py:1219`, "no JUnit XML, nothing to ingest"). bun's
-           compile fallback lives on the untiered `test` verb (`:1131`), so
+           (`bun-crucible.py:1370`, "no JUnit XML, nothing to ingest"). bun's
+           compile fallback lives on the untiered `test` verb (`:1231`), so
            this file drives THAT, and asserts it states `compile`.
   python   YES — `_regression_run`'s no-XML branch ingests the capture to
            /api/v2/runs/compile (`python-crucible.py:824`).

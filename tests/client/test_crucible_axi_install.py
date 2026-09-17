@@ -108,8 +108,17 @@ EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino"}
 # imported here rather than restated: three suites pin it, and three copies of
 # one consumer contract is a schema change that can land on two of them
 # (CR-CRU-131 §S1c).
+#
+# CR-CRU-143 -- the bound a site asserts against is the contract module's, not
+# a literal restated here: the unconditional floor plus the keys published only
+# under a stated condition.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
+from manifest_contract import (  # noqa: E402
+    ALLOWED_MANIFEST_KEYS,
+    EXPECTED_MANIFEST_KEYS,
+    missing_manifest_keys,
+    unexpected_manifest_keys,
+)
 
 
 def _ensure_repo_root_on_path():
@@ -118,20 +127,28 @@ def _ensure_repo_root_on_path():
         sys.path.insert(0, root_str)
 
 
-def _import_fresh(module_name):
-    """Import (or re-import) a `crucible_axi` module from the repo-root
-    checkout, purging any stale cache entry first so each test gets an
-    independent import attempt. Deliberately does NOT catch/skip -- during
-    RED this raises ModuleNotFoundError (the package does not exist yet),
-    which is the expected failure (same convention as the sibling
-    `_load_axi_module()`/`_load_toon_module()` helpers in
+def _import_fresh(*module_names):
+    """Import the named `crucible_axi` modules from the repo-root checkout,
+    purging the WHOLE `crucible_axi` package first so each test gets an
+    independent import graph (and so `crucible_axi.cli` holds the same
+    `crucible_axi.install` module object this suite patches) -- the convention
+    every sibling suite uses. Returns the modules in the order requested.
+
+    Purging one module NAME instead left the package half-superseded for
+    whatever ran next: `sys.modules['crucible_axi.install']` re-executed while
+    an already-imported `crucible_axi.cli` stayed bound to the previous copy,
+    so a later suite that stubbed the new copy's `DEFAULT_STAGE_RUNNERS` had
+    the REAL `[server]` stage run out of the old one. Deliberately does NOT
+    catch/skip -- during RED this raises ModuleNotFoundError (the package does
+    not exist yet), which is the expected failure (same convention as the
+    sibling `_load_axi_module()`/`_load_toon_module()` helpers in
     test_crucible_axi_shared.py, which load-by-path and let a missing-module
     error propagate as RED)."""
     _ensure_repo_root_on_path()
     for mod in list(sys.modules):
-        if mod == module_name or mod.startswith(module_name + "."):
+        if mod == "crucible_axi" or mod.startswith("crucible_axi."):
             del sys.modules[mod]
-    return importlib.import_module(module_name)
+    return tuple(importlib.import_module(name) for name in module_names)
 
 
 def _load_toon_module():
@@ -168,6 +185,24 @@ def _fast_unit_stage(target_dir, force):
     """A `[unit]` stage double that provisions nothing: no unit file, no
     `systemctl`. Matches the `(target_dir, force)` runner protocol."""
     return {"path": os.path.join(target_dir, UNIT_STAGE), "converged": False}
+
+
+@contextlib.contextmanager
+def _server_not_provisioned(install):
+    """CR-CRU-143 §S2 -- DECLARE, for the installs run inside this block, that
+    NO Crucible server is provisioned on this machine.
+
+    `_provisioned_server_config_source` IS the probe `install.server_config_plan()`
+    consults, and unpatched it asks the WORKSTATION: a developer box that has
+    run `crucible-axi install` answers yes, a CI runner answers no, and a test
+    reading the resulting manifest then means two different things in two
+    places. Pinned to the unprovisioned shape, the real `server_config_plan()`
+    still computes the plan -- including its own stated reason -- and the
+    `[manifest]` stage writes nothing outside the sandbox.
+    """
+    with mock.patch.object(install, "_provisioned_server_config_source",
+                           return_value=None):
+        yield
 
 
 @contextlib.contextmanager
@@ -273,7 +308,7 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
         m = re.search(r'(?m)^crucible-axi\s*=\s*"([^"]+)"\s*$', text)
         self.assertIsNotNone(m, "expected the crucible-axi script mapping")
         module_path, _, attr = m.group(1).partition(":")
-        mod = _import_fresh(module_path)
+        mod, = _import_fresh(module_path)
         self.assertTrue(
             hasattr(mod, attr),
             f"expected {module_path} to define {attr!r}")
@@ -295,7 +330,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_run_install_executes_server_fleet_manifest_unit_stages_in_order(self):
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         call_order = []
 
         def make_fake(name):
@@ -323,7 +358,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         """Negative/bound path: a stage failure must NOT silently continue to
         later stages -- would fail if GREEN swallowed stage exceptions and
         kept going regardless."""
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         call_order = []
 
         def failing_server(target_dir, force):
@@ -359,7 +394,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         self.assertFalse(ok, "a stage failure must surface as ok:false")
 
     def test_run_install_stage_results_carry_tilde_abbreviated_installed_path(self):
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         home = os.path.expanduser("~")
         fake_server_path = os.path.join(home, ".crucible", "server")
         fakes = {
@@ -395,8 +430,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         stubbed to RAISE if asked to run the server via `npx`, so the retired
         behaviour surfaces here as ok:false (and would hang for real), while
         the provision path returns ok:true with both stages present."""
-        install = _import_fresh("crucible_axi.install")
-        axi = _import_fresh("crucible_axi")
+        install, axi = _import_fresh("crucible_axi.install", "crucible_axi")
 
         def _fail_if_npx_server_run(*args, **kwargs):
             command = args[0] if args else kwargs.get("args", "")
@@ -416,8 +450,15 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         # `systemctl` (so it reports skipped-with-reason and writes nothing)
         # and points both unit-dir resolution rules at tmp, so the operator's
         # real `~/.config/systemd/user` is unreachable on two independent axes.
+        # CR-CRU-143 §S2 -- the REAL `[manifest]` stage runs here too, and
+        # unpinned it asks the WORKSTATION whether a server is provisioned and
+        # then copies that server's shipped `crucible.toml` into the operator's
+        # own store dir, beside their live database. The stage sequence this
+        # test asserts is the same under either answer, so the answer is
+        # DECLARED and the write stays inside the sandbox.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
                 _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch("crucible_axi.install.subprocess.run",
                            side_effect=_fail_if_npx_server_run) as mock_run, \
                 mock.patch("crucible_axi.install._server_already_installed",
@@ -460,8 +501,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         `install.DEFAULT_STAGE_RUNNERS` patched to injected fakes (no real
         npx/uv/skills/subprocess). Asserts the REAL observable outcome: one
         decodable TOON-AXI envelope on stdout, not merely a clean exit."""
-        install = _import_fresh("crucible_axi.install")
-        cli = _import_fresh("crucible_axi.cli")
+        install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
         toon = _load_toon_module()
 
         def make_fake(name):
@@ -508,7 +548,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_build_manifest_maps_all_five_client_stacks_to_installed_paths(self):
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         self.assertEqual(set(manifest["clients"].keys()), EXPECTED_CLIENT_STACKS)
         for stack, path in manifest["clients"].items():
@@ -524,12 +564,12 @@ class DiscoveryManifestTest(unittest.TestCase):
         """Negative/bound path -- exactly 5 keys, no extra/unknown stack
         sneaks in (would fail if a runaway implementation added e.g. a
         6th/'vscode' entry, since vscode is clientless per the CR context)."""
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         self.assertEqual(len(manifest["clients"]), 5)
 
     def test_build_manifest_carries_a_version_key_and_status_contract_reference(self):
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         self.assertIn("version", manifest)
         self.assertIsInstance(manifest["version"], str)
@@ -538,7 +578,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         self.assertIn("STATUS-CONTRACT.md", manifest["status"])
 
     def test_write_manifest_persists_valid_json_with_the_stable_schema(self):
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         written_path = manifest_mod.write_manifest(self.tmp, manifest)
 
@@ -580,11 +620,18 @@ class InstallIdempotencyTest(unittest.TestCase):
                 UNIT_STAGE: _fast_unit_stage}
 
     def test_running_install_twice_does_not_duplicate_the_manifest_file(self):
-        install = _import_fresh("crucible_axi.install")
+        """CR-CRU-143 §S2 -- run under a DECLARED provisioned-ness: no server
+        provisioned, so the manifest's conditional `server_config` key is owed
+        by nobody and the document under test is the same on every machine.
+        The contract is still asserted as a closed bound (§S1) rather than by
+        exact equality, so this stays a statement about the install rather than
+        about the host."""
+        install, = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
 
         with _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, _stages1, _w1 = install.run_install(self.tmp)
             with open(manifest_path) as f:
@@ -603,13 +650,38 @@ class InstallIdempotencyTest(unittest.TestCase):
         # JSON documents, which json.loads rejects -- this must stay a single
         # parseable document.
         reparsed = json.loads(second_content)
-        self.assertEqual(set(reparsed.keys()), set(EXPECTED_MANIFEST_KEYS))
+        self.assertEqual(
+            [], missing_manifest_keys(reparsed),
+            f"the rewritten manifest must still publish every unconditional "
+            f"key {sorted(EXPECTED_MANIFEST_KEYS)}; got {sorted(reparsed)}")
+        self.assertEqual(
+            [], unexpected_manifest_keys(reparsed),
+            f"the rewritten manifest must publish nothing outside "
+            f"{sorted(ALLOWED_MANIFEST_KEYS)} -- an undeclared key is internal "
+            f"state leaking into the document consumers parse; got "
+            f"{sorted(reparsed)}")
+        # The conditional key by its CONDITION (CR-CRU-138 §S2 declares it):
+        # this run declared no provisioned server, so publishing `server_config`
+        # would name a file nothing wrote. The lineage stays HERE, in the
+        # comment -- an assertion message is live text, and CR-CRU-097's
+        # tripwire keeps real board ids out of it.
+        self.assertNotIn(
+            "server_config", reparsed,
+            f"no server is provisioned for this install, so "
+            f"there is nothing to write beside and no `server_config` to "
+            f"publish; got {reparsed.get('server_config')!r}")
 
     def test_running_install_twice_reports_manifest_stage_converged_on_second_run(self):
-        install = _import_fresh("crucible_axi.install")
+        """CR-CRU-143 §S2 -- declared unprovisioned like its siblings: the REAL
+        `[manifest]` stage runs here, and unpinned it asks the WORKSTATION
+        whether a server is provisioned, then lays the server's file down
+        beside the operator's live database. Convergence is a property of the
+        install, not of the machine it ran on."""
+        install, = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
         with _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             manifest_result_1 = next(s for s in stages1 if s["name"] == "manifest")
@@ -627,10 +699,15 @@ class InstallIdempotencyTest(unittest.TestCase):
             "second run finds an identical manifest already on disk -- converged")
 
     def test_running_install_twice_both_runs_are_ok_true_for_every_stage(self):
-        install = _import_fresh("crucible_axi.install")
+        """CR-CRU-143 §S2 -- declared unprovisioned like its siblings: the REAL
+        `[manifest]` stage runs here, so the stage sequence this asserts must
+        be the one a machine with no server provisioned reports too, and no run
+        of this suite may write beside the operator's live database."""
+        install, = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
         with _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             ok2, stages2, _w2 = install.run_install(self.tmp)

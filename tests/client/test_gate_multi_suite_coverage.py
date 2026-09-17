@@ -35,7 +35,7 @@ colour means nothing:
   RED  `EachSuiteIngestsThroughItsOwnStacksClientTest` (AC5, both methods).
          Two independent faces, because a stack FIELD is passable while broken:
          (i) `clients/python-crucible.py` sends NO `stack` key on any ingest
-         body at all today (`clients/bun-crucible.py:1020` is the fleet's only
+         body at all today (`clients/bun-crucible.py:1033` is the fleet's only
          `stack` statement), so no run in this repo has ever carried the python
          stack; (ii) nothing invokes the python client from the gate, proven
          not by a field but by the ancestry of the process that actually ran
@@ -211,7 +211,7 @@ EXCLUDED_SUITE = "test:e2e"
 
 # The stacks the two gate-covered suites belong to. `stack` is the server's own
 # {tier, stack, context} field (`src/v2.ts:713`), and bun is the only value the
-# fleet sends today (`clients/bun-crucible.py:1020`).
+# fleet sends today (`clients/bun-crucible.py:1033`).
 BUN_STACK = "bun"
 PYTHON_STACK = "python"
 

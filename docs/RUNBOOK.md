@@ -314,6 +314,29 @@ same line is logged at startup beside the listen banner. Because rule
 where it was launched: check this field first whenever data looks missing, and
 compare it across instances before assuming anything was lost.
 
+## Reading what a cycle recorded
+
+```sh
+curl -fsSL 'http://127.0.0.1:3849/api/v2/events?project=<key>&cycleId=<id>'
+# → {"ok":true,"events":[{"id":"…","kind":"test",…}],"cycle":{"id":…,…}}
+```
+
+`GET /api/v2/events?project=<key>&cycleId=<id>` answers **what one cycle
+recorded** — that cycle's linked runs, newest first, plus the cycle's declared
+boundary as `cycle`. Without `cycleId` the same route serves the recent-N feed
+for the whole project (`&limit=<n>`), which is a different question: use
+`cycleId` whenever you are checking whether a particular agent filed.
+
+Every ingest reply carries this call in its `help[]` beside the `event` id it
+returns, and `GET /api/v2` lists it too — so the id a filer quotes can always
+be read back through the API.
+
+**Do not hand-query the database for this.** An ingested result is a row in
+`events`; the `runs` table holds only the OPEN, in-flight row of a run started
+via `POST /api/v2/runs/start` and not yet settled. Reading `runs` to find out
+what an agent filed finds nothing and has already produced one false
+accusation (CR-CRU-140).
+
 ## Schema versions and migration
 
 The store carries its schema version in `PRAGMA user_version`, and the server

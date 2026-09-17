@@ -1,7 +1,7 @@
 """CR-CRU-131 §S1b -- what a CLIENT TELLS A USER about an abandoned run names
 the LIMIT, not a retired environment variable.
 
-`_run_left_open_warning` (clients/bun-crucible.py:979) builds the `{code,
+`_run_left_open_warning` (clients/bun-crucible.py:992) builds the `{code,
 detail}` entry that rides the AXI envelope when a run this client OPENED is
 interrupted before it could be closed. Its detail currently ends:
 
@@ -38,7 +38,7 @@ There is exactly ONE scan for a retired name across the shipped tree, and it is
 on the bun side (tests/limits-have-no-environment-layer.test.ts), walking
 `src/`, `clients/` and `public/` together -- one walker, both stacks, the "no
 seventh walker" discipline CR-CRU-128 §S2 established. It is what catches the
-module comment at clients/bun-crucible.py:943. This file asserts BEHAVIOUR: what
+module comment at clients/bun-crucible.py:956. This file asserts BEHAVIOUR: what
 a user is told.
 
 Invocation:

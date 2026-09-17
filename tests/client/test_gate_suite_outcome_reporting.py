@@ -41,7 +41,7 @@ suite whose colour means nothing:
   RED  `UnrunnableLocalRunnerFailsTheGateTest`. The same crash class as the
          first shape at a DIFFERENT unguarded call site — `run_gate_suites` →
          `_captured_suite_run` → the client's own `_run_logged`
-         (`bun-crucible.py:316`) — so a declared suite the gate runs in its own
+         (`bun-crucible.py:310`) — so a declared suite the gate runs in its own
          process, whose runner is missing, kills the gate too, and kills it
          BEFORE any suite has run at all. Included because AC3's shapes are
          otherwise both on the dispatched side, and a GREEN that guards only
@@ -257,8 +257,21 @@ PRE_COMPOSITION_ENVELOPE_KEYS = ("context", "help", "ok", "run", "tier", "verb",
 PRE_COMPOSITION_RUN = {"passed": 2, "failed": 0, "pending": 0, "total": 2,
                        "files": 1}
 PRE_COMPOSITION_HELP = ["cycle-done <id>", "status"]
+
+# CR-CRU-137 §S1 — the snapshot above is recorded VERBATIM as it was measured,
+# and what it pins is WHICH collection the gate runs (the whole-suite `bun
+# test`, never a narrowed `bun run <script>`), not which flags bun is handed.
+# §S1 added the project's own default per-test budget to every command
+# `_bun_test_cmd` builds, so the expected argv carries it too — READ off the
+# client's own declaration rather than retyped, because §S1's whole mechanism
+# is that the figure lives in one place and every consumer derives it. Change
+# the constant and this pin moves with it; retype it here and the suite would
+# gain a third figure free to drift.
+_BUN_CLIENT = _load_module(_GATE.CLIENTS_DIR / "bun-crucible.py",
+                           "cr112_c5_bun_client_under_test")
 PRE_COMPOSITION_STEPS = [
-    ["test", "--reporter=junit",
+    ["test", "--timeout", str(_BUN_CLIENT.DEFAULT_TEST_TIMEOUT_MS),
+     "--reporter=junit",
      "--reporter-outfile=<project>/reports/junit.xml",
      "--coverage", "--coverage-reporter=lcov",
      "--coverage-dir=<project>/coverage"],
@@ -515,7 +528,7 @@ class UnrunnableLocalRunnerFailsTheGateTest(_UnrunnableSuiteProbe):
 
     A different unguarded call site from the first shape's — `run_gate_suites`
     → `_captured_suite_run` → the client's own `_run_logged` at
-    `bun-crucible.py:316`, versus the dispatch's `subprocess.run` at
+    `bun-crucible.py:310`, versus the dispatch's `subprocess.run` at
     `_crucible_axi.py:4267` — so a GREEN that guards only the dispatch still
     dies here, and dies BEFORE any suite has run at all (ESCALATION 6)."""
 

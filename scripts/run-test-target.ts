@@ -21,12 +21,49 @@
 // (`bun run test:unit -- --coverage`).
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { partitionTestFiles, REPO_ROOT } from "./test-targets";
 
 const TARGETS = ["unit", "integration", "client", "regression"] as const;
 type Target = (typeof TARGETS)[number];
 
 const isTarget = (value: string): value is Target => TARGETS.includes(value as Target);
+
+// THE DEFAULT PER-TEST BUDGET (CR-CRU-137 §S1) — DERIVED, never retyped.
+//
+// This script is the THIRD `bun test` invocation path in the project, and the
+// one a tier run arrives at: `bun-crucible.py`'s `unit`/`integration` verbs run
+// the declared script BY NAME (`bun run test:<tier>`), so the client's own
+// `--timeout` never reaches this command — before this, a tier run silently
+// fell back to bun's 5000 ms default, which is the defect §S1 exists to end.
+//
+// The figure is DECLARED once, in `clients/bun-crucible.py`'s
+// DEFAULT_TEST_TIMEOUT_MS, and that declaration stays authoritative: it is the
+// CLIENT's choice, portable to whatever package it is pointed at, so it cannot
+// move into this repo's `package.json` without making the client's default a
+// property of the project it happens to be running. TypeScript cannot import a
+// Python constant, so this path READS it — at run time, from the one file that
+// declares it. A rename or a second declaration does not degrade to bun's
+// default: it REFUSES to run, because silently inheriting a budget nobody chose
+// is precisely the failure being fixed.
+const TIMEOUT_DECLARATION_REL = join("clients", "bun-crucible.py");
+const TIMEOUT_DECLARATION = /^DEFAULT_TEST_TIMEOUT_MS\s*=\s*(\d[\d_]*)\s*$/gm;
+
+function declaredTimeoutArgs(): string[] {
+  const declaration = join(REPO_ROOT, TIMEOUT_DECLARATION_REL);
+  const matches = [...readFileSync(declaration, "utf8").matchAll(TIMEOUT_DECLARATION)];
+  if (matches.length !== 1) {
+    process.stderr.write(
+      `${TIMEOUT_DECLARATION_REL} declares DEFAULT_TEST_TIMEOUT_MS ${String(matches.length)} times; ` +
+        `this runner derives the suite's per-test budget from exactly one declaration and will not ` +
+        `fall back to bun's default\n`,
+    );
+    process.exit(2);
+  }
+  const digits = (matches[0] as RegExpMatchArray)[1] as string;
+  return ["--timeout", digits.replace(/_/g, "")];
+}
 
 async function run(command: string, args: string[]): Promise<number> {
   const { promise, resolve } = Promise.withResolvers<number>();
@@ -57,7 +94,9 @@ let exitCode = 0;
 if (target === "client") {
   exitCode = await run("python3", [...PYTHON_SUITE, ...passthrough]);
 } else if (target === "regression") {
-  const bun = await run("bun", ["test", ...passthrough]);
+  // The budget goes ahead of the passthrough, so `-- --timeout 5001` still
+  // overrides it: bun honours the LAST spelling on the command line.
+  const bun = await run("bun", ["test", ...declaredTimeoutArgs(), ...passthrough]);
   const python = await run("python3", PYTHON_SUITE);
   exitCode = bun !== 0 ? bun : python;
 } else {
@@ -67,7 +106,7 @@ if (target === "client") {
     process.exit(1);
   }
   process.stderr.write(`[${target}] ${String(files.length)} files\n`);
-  exitCode = await run("bun", ["test", ...files, ...passthrough]);
+  exitCode = await run("bun", ["test", ...declaredTimeoutArgs(), ...files, ...passthrough]);
 }
 
 process.exit(exitCode);

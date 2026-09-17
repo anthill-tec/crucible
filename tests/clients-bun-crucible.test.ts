@@ -1094,7 +1094,7 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC2/AC4 (E2E): two consecutive 
 // asserting a PARSER contract on bytes a toolchain release owns.
 //
 // Seam (reused, not invented): the client's own `--bun` flag
-// (`_resolve_bun`, clients/bun-crucible.py:120) driven by a FAKE bun binary —
+// (`_resolve_bun`, clients/bun-crucible.py:137) driven by a FAKE bun binary —
 // exactly the technique tests/clients-narration.test.ts already uses
 // (`writeFakeAnsiTickBun` / `writeFakeEnvCaptureBun` + `--bun <script>`).
 // The fake binary writes a frozen JUnit XML to whatever
@@ -2023,7 +2023,7 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
 // ── CR-CRU-050 §S1/§S1b/§S2 — <skipped/> testcases fold into `pending`, ───
 // never `passed` ────────────────────────────────────────────────────────────
 //
-// `_parse_junit_file` (clients/bun-crucible.py:506) today checks only
+// `_parse_junit_file` (clients/bun-crucible.py:577) today checks only
 // `tc.find("failure")`/`tc.find("error")`; a bare `else: passed += 1` folds
 // every `<skipped/>` testcase (bun's real shape for BOTH `test.skip` and
 // `test.todo` — probed above) into `passed`, and the summary hardcodes
@@ -2106,7 +2106,7 @@ describe("clients/bun-crucible.py — CR-CRU-050 §S1/§S1b: <skipped/> (test.sk
   });
 
   // §S2 (extended after C1 GREEN) — the plain human-readable "ingest: ..."
-  // stderr line (bun-crucible.py:721-726) prints passed/failed/total but NOT
+  // stderr line (bun-crucible.py:907-913) prints passed/failed/total but NOT
   // pending. C1 GREEN correctly declined to touch this untested surface and
   // escalated it instead — this is that RED. Post-fix the line must read
   // "passed=1 failed=1 pending=2 total=4"; today it omits pending entirely,

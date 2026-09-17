@@ -2262,14 +2262,17 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:5801 — re-pinned 2026-09-14 from :5790,
+# (`deriveQueueStatus`, src/store.ts:5821 — re-pinned 2026-09-14 from :5790,
 # shifted UP by the three lines CR-CRU-131 C2 deleted above it when the
 # environment-variable layer under `defaultRetention` and `runAbandonAfterMs`
 # was retired; re-pinned again the same day from :5787, shifted DOWN by the
 # fourteen lines CR-CRU-131 §S2 added above it — the three states
 # `ProjectPatch.retention` now distinguishes, and `updateProject` merging the
 # cap by key PRESENCE so a patch naming another field cannot wipe a cap of
-# zero). Anything else — PENDING, IN_PROGRESS — is unmerged.
+# zero); re-pinned once more 2026-09-17 from :5801, shifted DOWN by the twenty
+# schema-comment lines CR-CRU-140 §S2 added above it, saying which of `events`
+# and `runs` an ingested result actually lands in. Anything else — PENDING,
+# IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
 # §S2 — the three DRAINED reasons and the four HOLD trigger kinds, as the

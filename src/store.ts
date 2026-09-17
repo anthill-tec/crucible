@@ -2315,6 +2315,16 @@ export class Store {
       );
 
       CREATE TABLE IF NOT EXISTS events (
+        -- CR-CRU-140 §S2 — WHAT THIS TABLE HOLDS: every INGESTED result. A
+        -- test run filed through POST /api/v2/runs is a row HERE, with
+        -- kind='test'; so are compile reports, gates and milestones. This is
+        -- the table to read when the question is "what did this agent file",
+        -- and GET /api/v2/events?project=<key>&cycleId=<id> is the route that
+        -- answers it without a SQL prompt.
+        --
+        -- The \`runs\` table is NOT where an ingest lands, despite its name: it
+        -- holds only the OPEN, in-flight row of a run that was started and
+        -- has not yet settled.
         id TEXT PRIMARY KEY,
         project_key TEXT NOT NULL,
         agent_id TEXT NOT NULL,
@@ -2376,6 +2386,16 @@ export class Store {
       -- end-after-abort race. run_state is spelled for the RUN entity: it is
       -- not, and never maps onto, plans.status.
       CREATE TABLE IF NOT EXISTS runs (
+        -- CR-CRU-140 §S2 — WHAT THIS TABLE HOLDS, despite its name: the OPEN,
+        -- in-flight row of a run started through POST /api/v2/runs/start and
+        -- not yet settled (kept after it settles only so a re-close can be
+        -- told from an unknown runId).
+        --
+        -- An INGESTED result is NOT here. Filed test runs, compile reports,
+        -- gates and milestones are all rows in \`events\` (a test run has
+        -- kind='test'), which is the table to read when the question is "what
+        -- did this agent file" — or, better than any SQL, the route
+        -- GET /api/v2/events?project=<key>&cycleId=<id>.
         run_id TEXT PRIMARY KEY,
         project_key TEXT NOT NULL,
         agent_id TEXT NOT NULL,

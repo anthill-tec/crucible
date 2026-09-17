@@ -166,11 +166,12 @@ describe("TOON conformance — official library decode of a real CLIENT envelope
     });
 
     // ESCALATION: the dispatch brief asked for this case to be driven via
-    // `--message "42"`, but reading `clients/bun-crucible.py:339-421`
+    // `--message "42"`, but reading `clients/bun-crucible.py:357-438`
     // (`_register_agent`/`cmd_register`) shows `message` is POSTed to the
-    // server ONLY — the `_emit_axi("register", ok, {"agent": args.agent,
-    // "help": _HELP_STEPS["register"]}, ...)` call at bun-crucible.py:419-420
-    // never includes it, and `_crucible_axi.py`'s documented envelope shape
+    // server ONLY — the `emit("register", ok, {"agent": agent_id,
+    // "help": HELP_STEPS["register"]}, ...)` call `cmd_register` now delegates
+    // to, at `clients/_crucible_axi.py:3242-3248`, never includes it, and
+    // `_crucible_axi.py`'s documented envelope shape
     // (`axi: {verb, ok, <verb-specific result fields>, context, warnings}`)
     // confirms `register`'s result fields are exactly `{agent, help}` — no
     // field carries `message` in the CLIENT's own stdout to decode. The

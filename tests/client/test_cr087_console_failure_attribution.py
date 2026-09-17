@@ -12,7 +12,7 @@ rather than on the code. AC3 moves the version-sensitive half down here, where
 BOTH orderings are fixtures fed to the real function, so the suite's verdict
 stops depending on which bun the runner installed.
 
-WIRE FORMS. Both legal families documented at clients/bun-crucible.py:643-663
+WIRE FORMS. Both legal families documented at clients/bun-crucible.py:656-676
 are exercised for every ordering:
   - the ANSI-colourised form bun emits EVEN THROUGH A PIPE
     (`\x1b[0m\x1b[31m<glyph>\x1b[0m\x1b[0m\x1b[1m name\x1b[0m ...`), and
@@ -87,7 +87,7 @@ def _load_client_module():
     return module
 
 
-# ── bun's two legal result-line wire forms (clients/bun-crucible.py:643-663) ──
+# ── bun's two legal result-line wire forms (clients/bun-crucible.py:656-676) ──
 
 def _fail_line(name, wire, duration_ms="0.13"):
     if wire == "plain":

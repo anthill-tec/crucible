@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 5
 - **Depends on**: —
-- **Status**: PENDING
+- **Status**: COMPLETED (shipped 2026-08-27 on master)
 
 ## Problem
 
@@ -103,6 +103,20 @@ places to drift.
 (`>=1.2`). The two are complementary — "what we support" vs "what we build and test with" — and only
 the latter may be exact. A bun upgrade then becomes a one-line reviewable commit that re-runs the
 format-parsing suites, instead of an invisible input change that reds the gate overnight.
+
+**Delivered by CR-CRU-137 §S2 (2026-09-17) — in the other location.** This §S1 shipped as written
+and was reverted: `packageManager` is corepack's field, corepack does not support bun, and this
+repository runs real npm in three jobs (`pack-server`'s `npm pack`, `dry-run-npm`'s
+`npm publish --dry-run`, `publish-npm`'s `npm publish --provenance`). The revert's recorded number
+was 958 ms → 13082 ms on the npm-pack test; re-measured on the current toolchain by CR-CRU-137 §S2,
+`corepack npm pack --dry-run` succeeds in 1.368 s with the field absent and FAILS outright —
+`Unsupported package manager specification (bun@1.4.2)` — with it present. So the REQUIREMENT of
+this section holds and is now met, while its chosen FILE does not: CR-CRU-136 landed the exact pin
+as four literal `bun-version` entries, and CR-CRU-137 §S2 consolidated those four into one
+workflow-level `env: BUN_VERSION` that every `setup-bun` step references. One declaration, four
+consumers, guarded by `tests/ci-toolchain-provisioning.test.ts` — which counts declaration SITES and
+checks every step resolves an exact version, so it holds whichever of the two files the version
+lives in. `engines.bun` (`>=1.2`) stays the compatibility floor, exactly as this section specified.
 
 ### §S2 Assert attribution, not absence
 

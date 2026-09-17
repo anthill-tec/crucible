@@ -345,8 +345,8 @@ describe("CR-CRU-131 §S1b — the uncapped-retention disclosure names the FILE 
 // reader of `crucible-server` meets, so a retired knob presented there as live
 // configuration outranks every document that says otherwise.
 // Prose counts as well as code, and
-// deliberately: `clients/bun-crucible.py:928` is not a comment, it is text a
-// CLIENT EMITS to a user — "older than CRUCIBLE_RUN_ABANDON_MS" — and
+// deliberately: `clients/bun-crucible.py:1010` is not a comment, it is text a
+// CLIENT EMITS to a user — it read "older than CRUCIBLE_RUN_ABANDON_MS" — and
 // src/server.ts:303 is a comment that would go on teaching the next author a
 // mechanism that no longer exists. Neither may survive.
 //

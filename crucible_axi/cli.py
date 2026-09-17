@@ -157,6 +157,14 @@ def cmd_install(args) -> int:
                 or not _retry_exhausted_range(detail)):
             break
     axi = _load_client_module("_crucible_axi")
+    # CR-CRU-142 §S1 -- that module is the copy vendored inside THIS package, so
+    # the install root it derives from its own location is a site-packages
+    # directory no operator can edit (and `uv` replaces on every upgrade). Bind
+    # it to the install this verb is acting on, BEFORE anything can emit:
+    # `<target-dir>/crucible.toml` is the file `run_install` has just laid down,
+    # and the file a fleet-installed client later resolves from inside
+    # `<target-dir>/clients/`.
+    axi.bind_project_dir(args.target_dir)
     # The `[server]` stage reports the ABSOLUTE Bun it resolved (CR-CRU-066
     # §S2); it rides along in that stage's envelope row so the operator can see
     # exactly which Bun provisioned the server. The `[unit]` stage reports
@@ -293,6 +301,11 @@ def cmd_uninstall(args) -> int:
     ok, stages, warnings = install.run_uninstall(
         args.target_dir, purge=_resolve_purge(args))
     axi = _load_client_module("_crucible_axi")
+    # CR-CRU-142 §S1 -- the same bind as `cmd_install`, and before any emit for
+    # the same reason: this verb may have just REMOVED
+    # `<target-dir>/crucible.toml`, so a disclosure it carries must name that
+    # operator-owned path rather than one inside this package.
+    axi.bind_project_dir(args.target_dir)
     stage_fields = []
     for stage in stages:
         fields = {"name": stage["name"], "path": stage["path"],

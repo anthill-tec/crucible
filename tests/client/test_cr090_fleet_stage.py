@@ -69,6 +69,7 @@ OPERATOR'S user manager. Nothing is written inside the repo, into
 `~/.crucible`, or into the operator's systemd unit directory.
 """
 
+import contextlib
 import filecmp
 import importlib
 import json
@@ -169,11 +170,32 @@ def _fast_unit_stage(target_dir, force):
 
 
 class _ScratchInstallCase(unittest.TestCase):
-    """Shared fixture: one throwaway target dir per test, under `/tmp`."""
+    """Shared fixture: one throwaway target dir per test, under `/tmp`.
+
+    CR-CRU-143 §S2 -- provisioned-ness is part of the sandbox, DECLARED here
+    rather than read off the machine. Every test below runs the REAL
+    `[manifest]` stage, and that stage lays the SERVER's operator-editable
+    `crucible.toml` down beside the server's own database -- a path outside the
+    scratch target entirely, which on a developer box that has run
+    `crucible-axi install` is the operator's live store. So the DEFAULT is the
+    unprovisioned answer, declared for every test, and the two classes whose
+    subject is the conditional key opt into the provisioned one by entering
+    `server_provisioning(True)` themselves (the nested patch wins and restores
+    to this default on exit).
+
+    Unprovisioned is the safe default AND the neutral one: no test outside
+    those two classes reads the manifest's conditional `server_config` key, and
+    convergence is unaffected either way -- `lay_down_config` NEVER overwrites,
+    so the server file only ever counts as written on a machine that did not
+    already have one.
+    """
 
     def setUp(self):
         self.target = tempfile.mkdtemp(prefix="cr090-fleet-target-")
         self.install, = _import_fresh("crucible_axi.install")
+        sandbox = contextlib.ExitStack()
+        self.addCleanup(sandbox.close)
+        sandbox.enter_context(self.server_provisioning(False))
 
     def tearDown(self):
         shutil.rmtree(self.target, ignore_errors=True)
@@ -194,6 +216,53 @@ class _ScratchInstallCase(unittest.TestCase):
                              {"server": _fast_provision_server_stage,
                               UNIT_STAGE_NAME: _fast_unit_stage}):
             return self.install.run_install(self.target, **kwargs)
+
+    @contextlib.contextmanager
+    def server_provisioning(self, provisioned):
+        """DECLARE, for the installs run inside this block, whether a Crucible
+        server is provisioned on the machine -- the condition the manifest's
+        `server_config` key is published under (CR-CRU-138 §S2).
+
+        CR-CRU-143 §S2: without this, the `[manifest]` stage asks the WORKSTATION
+        whether a server is provisioned, so the manifest a test reads means one
+        thing on a CI runner and another on a developer box, and the suite
+        silently tests two different documents. Provisioned-ness is a property
+        of the sandbox here, and each test says which one it runs under.
+
+        Two production seams, both redirected INTO the scratch target:
+
+        * `_provisioned_server_config_source` IS the probe `server_config_plan()`
+          consults -- `src/crucible.toml` inside a provisioned server package,
+          or None. The real `server_config_plan()` still computes the plan, so
+          the unprovisioned branch carries the module's own stated reason
+          rather than a reason this fixture invented.
+        * `server_config_path` is where that plan would WRITE. Unredirected,
+          the provisioned branch copies a file into the operator's real store
+          dir beside their live database; a test must never touch that.
+
+        Yields the sandboxed destination, which is what the manifest publishes
+        when the condition holds.
+
+        `setUp` enters this for EVERY test at `provisioned=False`, so no test
+        can reach the operator's store by forgetting to declare; a class whose
+        subject IS the conditional key re-enters it with its own answer.
+        """
+        config_filename = self.install.manifest.CONFIG_FILENAME
+        destination = os.path.join(self.target, "server-store", config_filename)
+        source = None
+        if provisioned:
+            package_src = os.path.join(self.target, "server-package", "src")
+            os.makedirs(package_src, exist_ok=True)
+            source = os.path.join(package_src, config_filename)
+            Path(source).write_text(
+                "# stand-in for the provisioned server's shipped limits\n",
+                encoding="utf-8")
+        with mock.patch.object(self.install,
+                               "_provisioned_server_config_source",
+                               return_value=source), \
+                mock.patch.object(self.install, "server_config_path",
+                                  return_value=destination):
+            yield destination
 
 
 class FleetStageOrderContractTest(_ScratchInstallCase):
@@ -695,8 +764,18 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
 # stacks. The key set is DECLARED ONCE in `manifest_contract` and imported here
 # rather than restated: three suites pin it, and three copies of one contract is
 # a schema change that can land on two of them (CR-CRU-131 §S1c).
+#
+# CR-CRU-143 -- the contract has two halves and both are imported: the
+# UNCONDITIONAL floor, and the keys published only under a stated condition.
+# Neither list is restated here, and the bound is computed by the contract
+# module's own helpers, so adding a conditional key is one edit there.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
+from manifest_contract import (  # noqa: E402
+    ALLOWED_MANIFEST_KEYS,
+    EXPECTED_MANIFEST_KEYS,
+    missing_manifest_keys,
+    unexpected_manifest_keys,
+)
 
 EXPECTED_CLIENT_STACKS = frozenset({
     "bun", "python", "rust", "mvn", "arduino",
@@ -723,10 +802,20 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
     not enough here: each path is opened and read.
     """
 
+    #: CR-CRU-143 §S2 -- this class runs under a PROVISIONED server, declared
+    #: rather than inherited from the machine. It is the shape that matches the
+    #: `[server]` double this fixture already installs with (it "PROVISIONS
+    #: instantly"), and it is the shape the pre-merge gate actually runs in on a
+    #: workstation, so the harder of the two cases is the one pinned here: the
+    #: manifest carries the conditional `server_config` key as well as the floor.
+    SERVER_IS_PROVISIONED = True
+
     def setUp(self):
         super().setUp()
-        self.ok, self.stages, self.warnings = \
-            self.run_install_with_stubbed_server()
+        with self.server_provisioning(self.SERVER_IS_PROVISIONED) as destination:
+            self.server_config_destination = destination
+            self.ok, self.stages, self.warnings = \
+                self.run_install_with_stubbed_server()
         manifest_file = Path(self.manifest_path())
         self.assertTrue(
             manifest_file.exists(),
@@ -813,15 +902,48 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
     def test_the_manifest_shape_is_unchanged_by_this_cr(self):
         """§S3 -- `build_manifest` "keeps its signature and its keys": the
         contract is tightened by TEST, not by shape. So the guard also pins
-        that nothing was ADDED -- exactly `{version, clients, status}` at top
-        level, `clients` a five-entry mapping of stack to string path, and a
-        non-empty `version`."""
+        that nothing was ADDED -- the unconditional keys all present, nothing
+        outside the declared contract published, `clients` a five-entry mapping
+        of stack to string path, and a non-empty `version`.
+
+        CR-CRU-143 §S1 -- the key set is judged as a CLOSED BOUND, not by exact
+        equality with the unconditional half. The floor must be there and an
+        undeclared key must not; a key that is conditional BY CONTRACT is judged
+        against its condition (below) instead of counted as an intruder. Exact
+        equality made this test mean "no server is provisioned here", which is a
+        fact about the machine, not about `build_manifest`.
+        """
         self.assertEqual(
-            EXPECTED_MANIFEST_KEYS, set(self.document),
-            f"§S3 -- the manifest's top-level keys must stay exactly "
+            [], missing_manifest_keys(self.document),
+            f"§S3 -- the manifest must publish every unconditional key "
             f"{sorted(EXPECTED_MANIFEST_KEYS)} (the consumer contract is "
             f"byte-compatible; only the values become real); got "
             f"{sorted(self.document)}")
+        self.assertEqual(
+            [], unexpected_manifest_keys(self.document),
+            f"§S3 -- the manifest must publish NOTHING outside "
+            f"{sorted(ALLOWED_MANIFEST_KEYS)} (the unconditional keys plus the "
+            f"declared conditional ones); an undeclared key is internal state "
+            f"leaking into a document other tools parse. Got "
+            f"{sorted(self.document)}")
+        # The conditional key by its CONDITION (CR-CRU-143 §S1, over the key
+        # CR-CRU-138 §S2 declares): this fixture declares a provisioned server,
+        # so `server_config` is OWED -- and owed as the path the install really
+        # wrote, not as a bare key. The lineage stays in the comment: an
+        # assertion message is live text, and CR-CRU-097's tripwire keeps real
+        # board ids out of it.
+        self.assertIn(
+            "server_config", self.document,
+            f"this install provisioned a server "
+            f"(SERVER_IS_PROVISIONED={self.SERVER_IS_PROVISIONED}), so the "
+            f"manifest owes a `server_config` entry naming the operator-editable "
+            f"file it laid down at {self.server_config_destination!r}; got "
+            f"{sorted(self.document)}")
+        self.assertEqual(
+            self.server_config_destination, self.document["server_config"],
+            f"`server_config` must publish the file the "
+            f"install actually wrote; published "
+            f"{self.document['server_config']!r}")
         clients = self.document["clients"]
         self.assertEqual(
             EXPECTED_CLIENT_STACKS, set(clients),
@@ -840,6 +962,117 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
             self.document["version"],
             f"§S3 -- the manifest must carry a non-empty `version`; got "
             f"{self.document['version']!r}")
+
+
+# --- CR-CRU-143 §S1 -- the conditional key, judged by its condition ----------
+
+# `server_config` is the manifest's one CONDITIONAL key (CR-CRU-138 §S2), and a
+# conditional key is worth nothing asserted one-sidedly: "present" passes on a
+# build that publishes it unconditionally -- the dangling-path defect CR-CRU-090
+# closed -- and "absent" passes on a build that never publishes it at all. So
+# BOTH branches are pinned, with provisioned-ness controlled by the sandbox
+# rather than read off the machine.
+
+
+class ConditionalServerConfigKeyTest(_ScratchInstallCase):
+    """CR-CRU-143 §S1/§S2 -- the manifest publishes `server_config` exactly
+    when the install provisioned a server locally, and when it did not, says
+    why instead of publishing a path nothing wrote."""
+
+    def _install_and_read(self, provisioned):
+        """Run the real `fleet`+`manifest` stages under a DECLARED
+        provisioned-ness; return `(document, manifest_stage, destination)`."""
+        with self.server_provisioning(provisioned) as destination:
+            ok, stages, warnings = self.run_install_with_stubbed_server()
+        self.assertTrue(
+            ok,
+            f"fixture invariant -- the install must succeed whether or not a "
+            f"server is provisioned (provisioned={provisioned}); "
+            f"stages={stages} warnings={warnings}")
+        document = json.loads(
+            Path(self.manifest_path()).read_text(encoding="utf-8"))
+        stage = next(s for s in stages if s["name"] == MANIFEST_STAGE_NAME)
+        return document, stage, destination
+
+    def test_a_provisioned_server_publishes_the_file_the_install_wrote(self):
+        document, stage, destination = self._install_and_read(provisioned=True)
+        # BOTH bounds, in BOTH branches: the floor and the ceiling are
+        # independent failures, and a branch that checked only one would pass a
+        # build that dropped an unconditional key under one condition or leaked
+        # an undeclared one under the other.
+        self.assertEqual(
+            [], missing_manifest_keys(document),
+            f"the provisioned install still owes every unconditional key "
+            f"{sorted(EXPECTED_MANIFEST_KEYS)}; got {sorted(document)}")
+        self.assertEqual(
+            [], unexpected_manifest_keys(document),
+            f"the provisioned install must still publish nothing outside "
+            f"{sorted(ALLOWED_MANIFEST_KEYS)}; got {sorted(document)}")
+        self.assertEqual(
+            destination, document.get("server_config"),
+            f"with a server provisioned, the manifest must "
+            f"publish the operator-editable file at {destination!r}; got "
+            f"{document.get('server_config')!r} (keys={sorted(document)})")
+        # CR-CRU-090 -- a published path that names nothing is the defect this
+        # C3 section exists over, so the key is judged by the file on disk.
+        self.assertTrue(
+            os.path.isfile(destination),
+            f"the published `server_config` path must RESOLVE: "
+            f"the stage must have laid the file down at {destination!r}, not "
+            f"merely named it")
+        self.assertIsNone(
+            stage.get("server_config", {}).get("reason"),
+            f"a written file needs no excuse; stage={stage}")
+
+    def test_no_provisioned_server_publishes_no_key_and_states_the_reason(self):
+        document, stage, destination = self._install_and_read(provisioned=False)
+        self.assertEqual(
+            [], missing_manifest_keys(document),
+            f"the unprovisioned install still owes every unconditional key "
+            f"{sorted(EXPECTED_MANIFEST_KEYS)}; got {sorted(document)}")
+        self.assertEqual(
+            [], unexpected_manifest_keys(document),
+            f"the unprovisioned install must publish nothing outside "
+            f"{sorted(ALLOWED_MANIFEST_KEYS)} either -- declining one "
+            f"conditional key is no licence to invent another; got "
+            f"{sorted(document)}")
+        self.assertNotIn(
+            "server_config", document,
+            f"with NO server provisioned there is nothing to "
+            f"write beside, so publishing `server_config` would publish a path "
+            f"that does not exist -- the dangling-path defect this suite "
+            f"closed. Got {document.get('server_config')!r}")
+        self.assertFalse(
+            os.path.exists(destination),
+            f"nothing may be written at {destination!r} when no server is "
+            f"provisioned")
+        reason = stage.get("server_config", {}).get("reason")
+        self.assertTrue(
+            reason,
+            f"the install must STATE why it wrote no server configuration "
+            f"rather than staying silent -- silence is what let the original "
+            f"hole survive a whole release; stage={stage}")
+        # CR-CRU-143 -- the CONDITION, not one word of the sentence. What the
+        # install owes here is not a vocabulary (`server_config_plan`'s wording
+        # may be rewritten) but two facts that make the decision actionable:
+        # the prerequisite it looked for and did not find, and the file it
+        # therefore declined to write. Both are asserted as the paths
+        # themselves -- one resolved by the production probe the plan consults,
+        # one chosen by this fixture -- so any rewording that still discloses
+        # them passes, while a bare "not provisioned" that names neither, and a
+        # plan that quietly stops mentioning where it looked, both fail.
+        looked_for = self.install.abbreviate_home(
+            self.install._provisioned_server_package_dir())
+        self.assertIn(
+            looked_for, reason,
+            f"the reason must NAME the missing prerequisite -- the provisioned "
+            f"server package at {looked_for!r} -- or an operator cannot see "
+            f"where the install looked; got {reason!r}")
+        self.assertIn(
+            self.install.abbreviate_home(destination), reason,
+            f"the reason must NAME the file it declined to write "
+            f"({destination!r}), or it explains a decision about a file the "
+            f"operator cannot identify; got {reason!r}")
 
 
 # --- CR-CRU-090 C4 (§S1, AC4) -- a copied client actually RUNS ---------------
