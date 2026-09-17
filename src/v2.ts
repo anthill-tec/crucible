@@ -848,16 +848,37 @@ function attachEcho(event: RunEvent): { context?: { cycleId: number }; role?: Ag
   };
 }
 
+/**
+ * CR-CRU-140 §S1 — the ONE place a reply carrying `event: <id>` is built.
+ *
+ * Five routes hand a filer an id — /runs, /runs/parsed, /runs/compile, /gates
+ * and /milestones — and before this CR none of them said what to DO with it.
+ * The hint therefore hangs HERE rather than at each route: it is owed by the
+ * ACT of returning an id, not by any one route's circumstances, so it cannot
+ * be attached to four and forgotten on the fifth, and it cannot be made
+ * conditional on a failure (the measured hole: /gates and /milestones carried
+ * no help at all, and a clean /runs/parsed ingest carried none either — which
+ * is exactly the reader who has an id and no idea where it went).
+ */
+function evidenceResponse(
+  body: Record<string, unknown>,
+  options: { help?: string[]; status?: number } = {},
+): Response {
+  return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
+}
+
 function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
-  return json({
-    ok: true,
-    changed: true,
-    event: event.id,
-    run: summary,
-    verdict: runVerdict(summary),
-    ...attachEcho(event),
-    ...(help !== undefined ? { help } : {}),
-  });
+  return evidenceResponse(
+    {
+      ok: true,
+      changed: true,
+      event: event.id,
+      run: summary,
+      verdict: runVerdict(summary),
+      ...attachEcho(event),
+    },
+    { help },
+  );
 }
 
 /**
@@ -1103,16 +1124,18 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     report.errorCount > 0
       ? `COMPILE FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
       : `COMPILE OK — ${report.warningCount} warnings`;
-  return json({
-    ok: true,
-    changed: true,
-    event: event.id,
-    errors: report.errorCount,
-    warnings: report.warningCount,
-    verdict,
+  return evidenceResponse(
+    {
+      ok: true,
+      changed: true,
+      event: event.id,
+      errors: report.errorCount,
+      warnings: report.warningCount,
+      verdict,
+    },
     // §S3 — panel-routing reminder after a compile ingest.
-    help: hints.afterCompile,
-  });
+    { help: hints.afterCompile },
+  );
 }
 
 // ── CR-CRU-013 §S1+§S4b — gate/milestone event routes ───────────────────────
@@ -1190,7 +1213,10 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   });
   // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
   // exactly the same `context.cycleId` path as the run-ingest response.
-  return json({ ok: true, changed: true, event: event.id, ...attachEcho(event) }, 201);
+  return evidenceResponse(
+    { ok: true, changed: true, event: event.id, ...attachEcho(event) },
+    { status: 201 },
+  );
 }
 
 /**
@@ -1337,9 +1363,9 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // CR-CRU-086 §S3 — a repair that SHRANK a stored `crs` carries what it
   // dropped back to the reporter, which is the only actor that can say it out
   // loud where a human will read it.
-  return json(
+  return evidenceResponse(
     { ok: true, changed, event: event.id, ...(shrink !== undefined ? { shrink } : {}) },
-    changed ? 201 : 200,
+    { status: changed ? 201 : 200 },
   );
 }
 

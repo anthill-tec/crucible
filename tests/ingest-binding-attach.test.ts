@@ -490,9 +490,12 @@ describe("§S3.7 (C5) — the ingest RESPONSE echoes the cycle the server attach
     const body = (await res.json()) as RunsPostResponse;
     expect(body.ok).toBe(true);
     // NEGATIVE — the event was stored cycle-less, so the echo carries no
-    // cycle: no null, no zero, no active-cycle guess.
-    expect(body.context?.cycleId).toBeUndefined();
-    expect(JSON.stringify(body)).not.toContain("cycleId");
+    // cycle: no null, no zero, no active-cycle guess. Scanned over the
+    // reply's DATA, with `help` left out: since CR-CRU-140 §S1 every reply
+    // that hands back an `event: <id>` names the evidence route's `cycleId`
+    // QUERY in its help, which is prose about a route, not an echoed value.
+    expect(body.context).toBeUndefined();
+    expect(JSON.stringify({ ...body, help: undefined })).not.toContain("cycleId");
 
     const events = await testEventsForProject(key);
     expect(events.length).toBe(1);
