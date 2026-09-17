@@ -2008,8 +2008,58 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // THIS file (the same one-defect/two-failures shape the CR-CRU-127 note above
 // records); that file is correct, fires for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-09-17 by the 0.2.2 RELEASE CLOSE-OUT — `src` 724 -> 731 (+7),
+// all of it CR-CRU-140's, and attributed citation by citation rather than
+// re-recorded on trust. MEASURED with this file's own machinery, not
+// transcribed: `bun test tests/project-namespace-tripwire.test.ts` reported
+// `src: 731` against the then-recorded `724`, and the same `extractCitableText`
+// + `CR_LITERAL` classifier run per FILE and per ID over `a6b03be..HEAD` (the
+// span from CR-CRU-142's close to this one) attributes every one of the seven:
+//
+//   src/hints.ts   43 -> 45  (+2, both `CR-CRU-140`): the module-level block on
+//     `cycleEvidence` (:6, "the ONE sentence that names the read answering
+//     'what did this cycle record'") and the `readEvidence` doc comment (:76,
+//     what `evidenceResponse` attaches it to).
+//   src/v2.ts     234 -> 239 (+5): THREE `CR-CRU-140` — the `evidenceResponse`
+//     header (:852, "the ONE place a reply carrying `event: <id>` is built")
+//     and §S3's two milestone-attach comments (:1287 why the third stamped
+//     surface never asked, :1356 the resolved attachment on `/gates` terms) —
+//     plus TWO citations of OLDER CRs that the §S3 comment makes, because it
+//     explains the new call by the seams it reuses rather than by itself: one
+//     `CR-CRU-056` (the §S3 attach seam `/gates` and `/runs/compile` already
+//     call) and one `CR-CRU-024` (§S7's explicit-context validation, named to
+//     say `validateUnbound` stays FALSE). Lineage citations of a PRIOR CR count
+//     exactly like the CR's own — the measure is provenance, not authorship.
+//
+// A NON-MOVE THAT LOOKS LIKE ONE, checked rather than assumed: `src/store.ts`
+// gains 20 lines and TWO `CR-CRU-140` literals in the same span (§S2's
+// "WHAT THIS TABLE HOLDS" headers on `events` and `runs`) and still measures
+// 350, unchanged. They sit inside the schema DDL TEMPLATE LITERAL, where they
+// are `--` SQL comments to sqlite but STRING CONTENT to this file's classifier,
+// which is a TypeScript one. They are therefore not prose here and move no
+// head — the right answer, and the reason the arithmetic above is per-file and
+// per-id instead of a subtraction.
+//
+// `public` (477) and `clients` (864) re-measure at their recorded heads in the
+// same run, and could not have moved: the whole span touches twelve files and
+// not one is under `public/` or `clients/` — six are under `docs/`, four under
+// `tests/`, and the remaining two are `src/hints.ts` and `src/v2.ts` (plus
+// `src/store.ts`, accounted for above). Neither `docs/` nor `tests/` is a tree
+// this guard walks.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 731 is far above the 512 floor, no
+// head came out below its baseline, and the three `develop` floors stay at
+// 512/378/601 — a floor never moves for a re-record.
+//
+// TAKEN AT CLOSE-OUT, after the last content edit of the release (the four CRs
+// 137/143/142/140 are all COMPLETED), so this is the final figure for 0.2.2
+// rather than a mid-cycle reading. It clears the CASCADE with it: this file's
+// stale head also reds tests/help-surface-order-independence.test.ts, whose
+// child `bun test` collects THIS file; that file is correct, fired for the
+// right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 731 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
   clients: { exts: [".py"], develop: 601, head: 864 },
 };
