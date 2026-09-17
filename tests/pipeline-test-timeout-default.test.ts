@@ -281,6 +281,133 @@ describe("§S1 CI runs the suite on the same budget, and the two figures cannot 
   });
 });
 
+// ── the THIRD invocation path: the project's declared tier targets ─────────
+//
+// `bun-crucible.py`'s `unit`/`integration` verbs build no `bun test` command of
+// their own: §S6 ruling 2 has them run the project's DECLARED script BY NAME
+// (`bun run test:<tier>`), and that script — `scripts/run-test-target.ts` —
+// spawns its own `bun test`. So a THIRD site carries the figure; it is also the
+// one a developer reaches by typing `bun run test:unit`.
+//
+// It is DRIVEN, not read as text: the script is executed with a stub `bun` (and
+// a stub `python3`, so the regression target cannot launch the real client
+// suite) at the head of PATH, and the assertion reads the argv really spawned.
+
+const STUB_ARG_INDENT = "  ";
+
+/** Runs `scripts/run-test-target.ts <target>` against stub executables and
+ *  returns the argv of every `bun` it spawned, argv[0] dropped. */
+function bunArgvSpawnedBy(target: string): string[][] {
+  const dir = mkdtempSync(join(tmpdir(), "cr137-tier-target-"));
+  try {
+    const log = join(dir, "argv.log");
+    for (const name of ["bun", "python3"]) {
+      writeFileSync(
+        join(dir, name),
+        `#!/bin/sh\n{ echo "${name}"; for arg in "$@"; do echo "${STUB_ARG_INDENT}$arg"; done; } >> "${log}"\nexit 0\n`,
+        { mode: 0o755 },
+      );
+    }
+    const child = Bun.spawnSync({
+      cmd: [process.execPath, join(REPO_ROOT, "scripts", "run-test-target.ts"), target],
+      cwd: REPO_ROOT,
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ""}` },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(
+      child.exitCode,
+      `run-test-target.ts ${target} exited ${String(child.exitCode)} under stub executables:\n` +
+        child.stderr.toString(),
+    ).toBe(0);
+
+    const commands: string[][] = [];
+    for (const line of existsSync(log) ? readFileSync(log, "utf8").split("\n") : []) {
+      if (line === "") continue;
+      if (line.startsWith(STUB_ARG_INDENT)) {
+        (commands[commands.length - 1] as string[]).push(line.slice(STUB_ARG_INDENT.length));
+      } else {
+        commands.push([line]);
+      }
+    }
+    return commands.filter((argv) => argv[0] === "bun").map((argv) => argv.slice(1));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const cachedTargetCommands = new Map<string, string[]>();
+
+/** The single `bun test` command a declared tier target spawns. */
+function bunTestCommandOf(target: string): string[] {
+  const cached = cachedTargetCommands.get(target);
+  if (cached !== undefined) return cached;
+  const spawned = bunArgvSpawnedBy(target);
+  const testCommands = spawned.filter((argv) => argv[0] === "test");
+  expect(
+    testCommands.length,
+    `bun run test:${target} spawned ${String(testCommands.length)} \`bun test\` commands; ` +
+      `§S1 expects exactly one: ${JSON.stringify(spawned)}`,
+  ).toBe(1);
+  const argv = testCommands[0] as string[];
+  cachedTargetCommands.set(target, argv);
+  return argv;
+}
+
+/** The default per-test budget a declared tier target declares, read off the
+ *  command it actually spawns. Never a literal in this file. */
+function targetDeclaredTimeoutMs(target: string): number {
+  const argv = bunTestCommandOf(target);
+  const values = timeoutFlagValues(argv);
+  expect(
+    values.length,
+    `bun run test:${target}'s own \`bun test\` carries ${String(values.length)} --timeout flags; ` +
+      `§S1 requires exactly one: bun ${argv.join(" ")}`,
+  ).toBe(1);
+  const timeoutMs = Number(values[0]);
+  expect(
+    Number.isInteger(timeoutMs),
+    `bun run test:${target} declares --timeout ${String(values[0])}, which is not an integer ms figure`,
+  ).toBe(true);
+  return timeoutMs;
+}
+
+describe("§S1 the declared tier targets run on the same budget as the gate", () => {
+  test("`test:unit`'s own `bun test` runs on the figure the client declares — derived from both, retyped in neither", () => {
+    const fromTarget = targetDeclaredTimeoutMs("unit");
+    const fromClient = clientDeclaredTimeoutMs();
+
+    expect(
+      fromTarget,
+      `scripts/run-test-target.ts runs the unit target at ${String(fromTarget)} ms/test while ` +
+        `${CLIENT_REL} declares ${String(fromClient)} ms/test — the client's \`unit\` verb REACHES ` +
+        `this path (\`bun run test:unit\`), so a tier run would silently use a different budget`,
+    ).toBe(fromClient);
+
+    // NEGATIVE/bound — the budget is an ADDITION: the target still names the
+    // files it selected, or it would be green here while running nothing.
+    expect(
+      bunTestCommandOf("unit").some((arg) => arg.endsWith(".test.ts")),
+      "the unit target spawned `bun test` with no test file arguments",
+    ).toBe(true);
+  });
+
+  test("`test:regression`'s whole-suite `bun test` carries it too, with no path argument", () => {
+    const fromTarget = targetDeclaredTimeoutMs("regression");
+    const fromClient = clientDeclaredTimeoutMs();
+
+    expect(
+      fromTarget,
+      `scripts/run-test-target.ts runs the regression target at ${String(fromTarget)} ms/test while ` +
+        `${CLIENT_REL} declares ${String(fromClient)} ms/test`,
+    ).toBe(fromClient);
+
+    // NEGATIVE — regression collects the WHOLE suite in one invocation: a path
+    // argument here would silently narrow it.
+    expect(bunTestCommandOf("regression").filter((arg) => arg.endsWith(".test.ts"))).toEqual([]);
+  });
+});
+
 // ── the measured premise: a per-test annotation still wins ─────────────────
 
 // The child's CLI default, set BELOW the annotation on purpose: the annotated
