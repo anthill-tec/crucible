@@ -1,6 +1,6 @@
 # CR-CRU-137 — the pipeline's own defaults are chosen, not inherited
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-087, CR-CRU-134, CR-CRU-136 · **Status** PENDING
+**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** CR-CRU-087, CR-CRU-134, CR-CRU-136 · **Status** PENDING
 
 ## Problem
 

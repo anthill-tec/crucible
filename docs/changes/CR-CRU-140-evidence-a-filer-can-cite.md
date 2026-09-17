@@ -1,6 +1,6 @@
 # CR-CRU-140 — evidence a filer can cite
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING
+**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** — · **Status** PENDING
 
 ## Problem
 
