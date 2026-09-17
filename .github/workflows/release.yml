@@ -100,10 +100,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
       - name: Build crucible-axi sdist + wheel
@@ -111,7 +111,15 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           twine check dist/*
-      - uses: actions/upload-artifact@v4
+      # CR-CRU-137 §S5 — MATCHED PAIR with actions/download-artifact in
+      # publish-pypi and publish-testpypi: these two only ever move together.
+      # This step uploads the `dist` artifact both publish jobs download, and
+      # the newer download major exists specifically to understand this upload
+      # major's direct (unzipped) uploads — it also turns an artifact hash
+      # mismatch into an error by default. A single-sided bump therefore fails
+      # not here but later, in a publish job that on a tag ref uploads to PyPI.
+      # tests/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: dist
           path: dist/
@@ -131,7 +139,7 @@ jobs:
       # assertions fail — taking CR-CRU-110's order-independence guard with
       # them, since its child `bun test` includes this very file. The commit is
       # reachable from origin/develop, so history is all that was missing.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # a pinned pre-CR baseline is read with `git show`
       - uses: oven-sh/setup-bun@v2
@@ -143,7 +151,7 @@ jobs:
       # step 98 tests fail with `Executable not found in $PATH: "uv"`
       # (measured on run 31677479804). The maintained, pinned action — a
       # release gate must not depend on an unpinned `curl | sh` network script.
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # CR-CRU-112 §S1 (measured on the 0.2.0 release, run 34303803078) — this
@@ -179,14 +187,14 @@ jobs:
   test-python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
       # CR-CRU-063 §S1 — tests/client/test_cr046_uv_env_gate.py's setUpClass
       # raises ``RuntimeError: `uv` is not on PATH … Remedy: install uv.``,
       # aborting the whole class (which is why CI discovered 673, not 683).
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       # CR-CRU-063 §S2 — the project's `dev` extra, CONSUMED from
       # pyproject.toml (which declares it) and never restated here (AC8):
       # tests/client/test_cr040_coverage_tooling.py:172 needs the gate venv's
@@ -213,7 +221,7 @@ jobs:
     env:
       CRUCIBLE_DB: ${{ github.workspace }}/e2e-scratch/data/crucible.db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
@@ -248,8 +256,8 @@ jobs:
   pack-server:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - name: Pack server package (dry-run) and assert the bin entrypoint ships
@@ -274,7 +282,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # need full tag history to detect the tag at HEAD
       - name: Create GitHub Release for version tag at HEAD (idempotent)
@@ -302,7 +310,7 @@ jobs:
     permissions:
       id-token: write           # OIDC trusted publishing (no long-lived token)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - name: Guard — tag ref + on-master ancestry
@@ -316,7 +324,13 @@ jobs:
             echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/master"
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      # CR-CRU-137 §S5 — MATCHED PAIR with actions/upload-artifact in `build`:
+      # never bump one side alone. This major exists to understand the upload
+      # major's direct (unzipped) uploads and errors on an artifact hash
+      # mismatch by default, so a mismatched pair breaks the `dist` handoff
+      # HERE — in the job that uploads to PyPI — and not in `build`.
+      # tests/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: dist
           path: dist/
@@ -358,7 +372,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # hatch-vcs needs tags to derive the version
       - name: Version sanity — reject PEP 440 local segment ('+')
@@ -371,7 +385,13 @@ jobs:
             echo "::error::version '$VER' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      # CR-CRU-137 §S5 — MATCHED PAIR with actions/upload-artifact in `build`:
+      # never bump one side alone. This major exists to understand the upload
+      # major's direct (unzipped) uploads and errors on an artifact hash
+      # mismatch by default, so a mismatched pair breaks the `dist` handoff
+      # HERE — in the job that uploads to PyPI — and not in `build`.
+      # tests/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: dist
           path: dist/
@@ -394,13 +414,13 @@ jobs:
       id-token: write          # OIDC trusted publishing / provenance attestation
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -456,11 +476,11 @@ jobs:
         startsWith(github.ref, 'refs/heads/hotfix/')))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
