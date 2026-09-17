@@ -146,6 +146,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
 | [CR-CRU-139](CR-CRU-139-a-connection-is-configuration-too.md) | a connection is configuration too | feature | COMPLETED (0.3.0) | 131, 138 | 7 (0.3.0) |
 | [CR-CRU-140](CR-CRU-140-evidence-a-filer-can-cite.md) | evidence a filer can cite | fix | PENDING | 139 | 7 (0.3.0) |
+| [CR-CRU-141](CR-CRU-141-a-ci-run-is-earned-by-what-changed.md) | a CI run is earned by what changed | fix | PENDING | 137 | 7 (0.3.0) |
 
 ## Deferred — post-0.2.0
 
