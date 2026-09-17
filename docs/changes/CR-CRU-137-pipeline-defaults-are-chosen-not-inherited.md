@@ -151,6 +151,14 @@ historical record of what a prior author observed, like a DN's dated note, not a
       `bun test` whose test is annotated above the default and observing it pass.
 - [ ] `tests/cr009-release-bundle.test.ts` still declares `NPM_PACK_TIMEOUT_MS = 60_000` and both
       `npm pack` tests still pass it.
+- [ ] `tests/client/test_gate_suite_outcome_reporting.py`'s `PRE_COMPOSITION_STEPS` fixture (the
+      pre-merge gate's own frozen whole-suite argv, asserted by
+      `test_a_single_suite_gate_runs_the_same_step_it_ran_before_the_composition`) is corrected to
+      DERIVE its expected `--timeout` value from `clients/bun-crucible.py`'s declared constant,
+      never a retyped `30000` — found during GREEN, missed by this CR's original AC list: §S1's own
+      "every invocation it builds" necessarily changes the whole-suite argv this fixture pins, and a
+      third physical copy of the number is exactly what AC3's derived-equality test exists to
+      prevent.
 - [ ] The full suite passes with no test relying on bun's 5000 ms default: run
       `bun test --timeout 5001` and `bun test --timeout 30000` and compare — no test may pass only
       because of the larger figure other than ones carrying their own annotation.
