@@ -390,8 +390,63 @@ describe("§S1 raising the DEFAULT does not clobber a test's own declared budget
   );
 });
 
+// ── cr009's npm pack tests, DERIVED from that file rather than counted ─────
+//
+// The set of tests carrying the 60 s budget is whatever cr009 currently spends
+// on `npm pack`. CR-CRU-137 §S3 legitimately added a THIRD one (the LICENSE
+// tarball test), so a literal count was never the contract — re-pinning it
+// would only defer the same breakage to the next CR that packs. What must not
+// change is the invariant: ONE declaration, above the suite default, and every
+// test that really spawns npm pack still receives it.
+
+/** A `test(...)` call sliced out of a source file: its name, its body, and the
+ *  identifier passed as bun's optional per-test timeout argument (undefined
+ *  when the test declares no budget of its own). */
+interface SlicedTest {
+  name: string;
+  body: string;
+  timeoutArg: string | undefined;
+}
+
+const TEST_DECL = /^(\s*)test\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`([^`]*)`)/;
+
+/** Slices every `test(...)` block out of `source`. The closing line is matched
+ *  at the declaration's OWN indentation, so a test nested inside a loop is cut
+ *  as accurately as a top-level one, and the trailer is read across lines
+ *  because bun's timeout argument is often formatted onto its own line. */
+function sliceTests(source: string): SlicedTest[] {
+  const lines = source.split("\n");
+  const sliced: SlicedTest[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const decl = TEST_DECL.exec(lines[i] as string);
+    if (decl === null) continue;
+    const indent = decl[1] as string;
+
+    const closer = new RegExp(`^${indent}\\}`);
+    let end = i + 1;
+    while (end < lines.length && !closer.test(lines[end] as string)) end += 1;
+    if (end >= lines.length) continue;
+
+    // The call closes either on the `}` line (`}, NPM_PACK_TIMEOUT_MS);`) or a
+    // few lines below it (`},` / `SOME_TIMEOUT_MS,` / `);`).
+    let callEnd = end;
+    while (callEnd < lines.length && !/\)\s*;?\s*$/.test(lines[callEnd] as string)) callEnd += 1;
+    const trailer = lines.slice(end, Math.min(callEnd, lines.length - 1) + 1).join("\n");
+
+    sliced.push({
+      name: (decl[2] ?? decl[3] ?? decl[4]) as string,
+      body: lines.slice(i, end + 1).join("\n"),
+      timeoutArg: /\}\s*,\s*([A-Za-z_$][\w$]*)\s*,?\s*\)/.exec(trailer)?.[1],
+    });
+    i = end;
+  }
+
+  return sliced;
+}
+
 describe("§S1 the suite's existing explicit budgets survive the new default", () => {
-  test("cr009-release-bundle still declares NPM_PACK_TIMEOUT_MS = 60_000 and still hands it to both npm pack tests", () => {
+  test("cr009-release-bundle still declares NPM_PACK_TIMEOUT_MS = 60_000 exactly once, and every npm pack test it runs still carries it", () => {
     const source = readFileSync(join(REPO_ROOT, CR009_TEST_REL), "utf8");
 
     const declarations = [...source.matchAll(/const NPM_PACK_TIMEOUT_MS\s*=\s*([\d_]+)\s*;/g)];
@@ -399,22 +454,50 @@ describe("§S1 the suite's existing explicit budgets survive the new default", (
       declarations,
       `${CR009_TEST_REL} must declare NPM_PACK_TIMEOUT_MS exactly once`,
     ).toHaveLength(1);
-    const declaredMs = Number(((declarations[0] as RegExpMatchArray)[1] as string).replace(/_/g, ""));
+    const declaredMs = Number(
+      ((declarations[0] as RegExpMatchArray)[1] as string).replace(/_/g, ""),
+    );
+
+    // THE POINT OF THE RAIL — the budget remains ABOVE the project default §S1
+    // chooses, which is why §S1 leaves it alone: npm pack's cold start is a
+    // per-test fact, not the suite's floor. Compared against the REQUIRED
+    // figure rather than against whatever the client currently emits, so this
+    // rail stays a statement about cr009's budget and does not go red merely
+    // because §S1 has not landed yet.
+    expect(
+      declaredMs,
+      `${CR009_TEST_REL}'s npm pack budget must stay above the suite default`,
+    ).toBeGreaterThan(REQUIRED_DEFAULT_TIMEOUT_MS);
+    // …and it is still the measured 60 s figure cr009 chose.
     expect(declaredMs).toBe(60_000);
 
-    // Both `npm pack` tests still CARRY it — a declaration nothing passes is a
-    // budget that is not in force.
-    const uses = [...source.matchAll(/\}\s*,\s*NPM_PACK_TIMEOUT_MS\s*\)/g)];
+    // EVERY npm pack test still CARRIES it — a declaration nothing passes is a
+    // budget that is not in force. The set is read off cr009's own source: the
+    // tests whose body calls its `npmPackDryRun*` helper, i.e. the ones that
+    // really spawn npm. (cr009's §S5 workflow test shells out a runner script
+    // that merely CONTAINS `npm pack`; it is deliberately not in this set,
+    // which is why the helper — not the string "npm pack" — defines it.)
+    const packTests = sliceTests(source).filter((t) => /\bnpmPackDryRun[A-Za-z]*\(/.test(t.body));
     expect(
-      uses,
-      `${CR009_TEST_REL} must pass NPM_PACK_TIMEOUT_MS to both npm pack tests`,
-    ).toHaveLength(2);
+      packTests.length,
+      `${CR009_TEST_REL} must still run at least one npm pack test, else this rail is vacuous`,
+    ).toBeGreaterThan(0);
 
-    // …and it remains ABOVE the project default §S1 chooses, which is why §S1
-    // leaves it alone: npm pack cold start is a per-test fact, not the suite's
-    // floor. Compared against the REQUIRED figure rather than against whatever
-    // the client currently emits, so this rail stays a statement about cr009's
-    // budget and does not go red merely because §S1 has not landed yet.
-    expect(declaredMs).toBeGreaterThan(REQUIRED_DEFAULT_TIMEOUT_MS);
+    expect(
+      packTests
+        .filter((t) => t.timeoutArg !== "NPM_PACK_TIMEOUT_MS")
+        .map((t) => `${t.name} [budget: ${t.timeoutArg ?? "none"}]`),
+      `${CR009_TEST_REL}: every test that spawns npm pack must carry NPM_PACK_TIMEOUT_MS`,
+    ).toEqual([]);
+
+    // Cross-check the derivation against the raw text, so a slicer that quietly
+    // stopped recognising tests cannot make the check above pass by finding
+    // nothing: the budget is handed out exactly as many times as there are npm
+    // pack tests — no more (it is on a test that does not pack) and no fewer.
+    const rawUses = [...source.matchAll(/\}\s*,\s*NPM_PACK_TIMEOUT_MS\s*,?\s*\)/g)];
+    expect(
+      rawUses.length,
+      `${CR009_TEST_REL} passes NPM_PACK_TIMEOUT_MS ${rawUses.length}× but runs ${packTests.length} npm pack test(s)`,
+    ).toBe(packTests.length);
   });
 });
