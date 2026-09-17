@@ -2066,27 +2066,37 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // head — the right answer, and the reason the arithmetic above is per-file and
 // per-id instead of a subtraction.
 //
-// `public` (477) and `clients` (864) re-measure at their recorded heads in the
-// same run, and could not have moved: the whole span touches twelve files and
-// not one is under `public/` or `clients/` — six are under `docs/`, four under
-// `tests/`, and the remaining two are `src/hints.ts` and `src/v2.ts` (plus
-// `src/store.ts`, accounted for above). Neither `docs/` nor `tests/` is a tree
-// this guard walks.
+// `public` (477) re-measures at its recorded head in the same run, and could
+// not have moved: of the twelve files CR-CRU-140 touches, six are under
+// `docs/`, four under `tests/`, and the other two are `src/hints.ts` and
+// `src/v2.ts` (plus `src/store.ts`, accounted for above) — nothing under
+// `public/` at all, and neither `docs/` nor `tests/` is a tree this guard
+// walks.
 //
-// GROWTH IS THE DIRECTION THE RULE PERMITS: 731 is far above the 512 floor, no
-// head came out below its baseline, and the three `develop` floors stay at
-// 512/378/601 — a floor never moves for a re-record.
+// `clients` 864 -> 865 (+1), and the +1 is THIS CLOSE-OUT'S OWN, which is why
+// it is recorded here rather than under a CR: re-pointing the drifted
+// `deriveQueueStatus` citation (src/store.ts:5801 -> :5821, shifted by the very
+// schema comments counted above) means the production docstring that mirrors
+// it, `LANDED_STATUSES` in `clients/_crucible_axi.py`, has to say WHY it moved,
+// and saying why names `CR-CRU-140 §S2`. MEASURED after that edit, not before
+// it: the drift this table exists to catch is exactly a count recorded before
+// the last prose change, so the figure here is the one taken with every
+// close-out edit already in the tree.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 731 and 865 are far above the 512
+// and 601 floors, no head came out below its baseline, and the three `develop`
+// floors stay at 512/378/601 — a floor never moves for a re-record.
 //
 // TAKEN AT CLOSE-OUT, after the last content edit of the release (the four CRs
-// 137/143/142/140 are all COMPLETED), so this is the final figure for 0.2.2
-// rather than a mid-cycle reading. It clears the CASCADE with it: this file's
+// 137/143/142/140 are all COMPLETED), so these are the final figures for 0.2.2
+// rather than mid-cycle readings. It clears the CASCADE with it: this file's
 // stale head also reds tests/help-surface-order-independence.test.ts, whose
 // child `bun test` collects THIS file; that file is correct, fired for the
 // right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 731 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 864 },
+  clients: { exts: [".py"], develop: 601, head: 865 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
