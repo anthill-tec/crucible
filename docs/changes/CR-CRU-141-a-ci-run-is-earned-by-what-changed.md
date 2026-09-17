@@ -1,6 +1,6 @@
 # CR-CRU-141 — a CI run is earned by what changed
 
-**Type** fix · **Wave** 8 (0.3.0) · **Depends on** CR-CRU-137 · **Status** PENDING
+**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-137 · **Status** PENDING
 
 > **Deferred out of hotfix 0.2.2 (user ruling 2026-09-17) after gap analysis measured the original
 > approach INERT.** The first draft proposed a trigger-level path condition. Its own safety rule —
@@ -69,7 +69,7 @@ draft assumed:
   change can possibly affect* — a different and larger question, adjacent to the declared-target
   work CR-CRU-133 established.
 
-This CR is therefore re-specified at design time in wave 8, with a mechanism chosen against those
+This CR is therefore re-specified at design time for 0.3.0, with a mechanism chosen against those
 three constraints. Candidate directions, none adopted here: a docs-only path that runs the
 doc-reading suites only (needs the coupling to be derived, not listed); making `test-e2e`/`pack-server`
 conditional at the *trigger* level via a second workflow rather than a job condition; or accepting
@@ -78,7 +78,7 @@ directs cost reduction toward.
 
 ## Scope
 
-**Open — to be specified in wave 8 against the three constraints above.** Nothing in this CR is
+**Open — to be specified for 0.3.0 against the three constraints above.** Nothing in this CR is
 approved for implementation in its current form; the draft's §S1/§S2 (a trigger-level path condition
 plus a drift guard over the exclusion list) are withdrawn as measured-inert, not merely deferred.
 
@@ -96,7 +96,7 @@ To be written with the mechanism. Two survive the rewrite as constraints on ANY 
 
 - **An over-broad exclusion silently removes coverage, and CI stays green because it never ran.**
   The failure is invisible by construction. This is why the 132-file measurement above belongs in
-  the spec permanently, whatever mechanism wave 8 chooses.
+  the spec permanently, whatever mechanism 0.3.0 chooses.
 
 ## Non-goals
 
