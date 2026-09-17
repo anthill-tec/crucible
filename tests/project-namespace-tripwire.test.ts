@@ -1980,10 +1980,38 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // Measured with this file's own classifier: `bun test
 // tests/project-namespace-tripwire.test.ts -t 'never below its develop
 // baseline'` reported `clients: 861` against the then-recorded `858`.
+//
+// UPDATED 2026-09-17 by CR-CRU-137 §S1 — `clients` 862 -> 864, +2, and both
+// land in `clients/bun-crucible.py`, the only production file §S1 touches:
+// the header of the `DEFAULT_TEST_TIMEOUT_MS` block (:477, why this project
+// declares its own per-test budget rather than inheriting bun's 5000 ms, and
+// why `bunfig.toml` cannot carry it) and the `_bun_test_cmd` docstring line
+// (:505) recording that both invocation shapes select that figure. MEASURED
+// with this file's own machinery rather than transcribed: `bun test
+// tests/project-namespace-tripwire.test.ts -t 'never below its develop
+// baseline'` reported `clients: 864` against the then-recorded `862`.
+//
+// `src` (724) and `public` (477) re-measure at their recorded heads in the
+// same run — §S1's other two edits are `.github/workflows/release.yml` and a
+// file under `tests/`, and neither a workflow nor `tests/` is a tree or a
+// counted extension here, so they move no head by construction.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 864 is far above the 601 floor, no
+// head came out below its baseline, and the three `develop` floors stay at
+// 512/378/601 — a floor never moves for a re-record.
+//
+// TAKEN MID-CR, and stated as such (CR-CRU-130's deferral rule): §S1's last
+// content edit is already in, so this figure is the CR's own close-out
+// measurement for these trees unless a later § touches `clients/` again. The
+// re-record is what clears the CASCADE too — this file's stale head also reds
+// tests/help-surface-order-independence.test.ts, whose child `bun test` runs
+// THIS file (the same one-defect/two-failures shape the CR-CRU-127 note above
+// records); that file is correct, fires for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 724 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 862 },
+  clients: { exts: [".py"], develop: 601, head: 864 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
