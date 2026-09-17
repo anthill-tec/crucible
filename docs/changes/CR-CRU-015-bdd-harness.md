@@ -1,4 +1,4 @@
-# CR-CRU-015 — the BDD tier is wired to the suite that already runs
+# CR-CRU-015 — the BDD-driven e2e suite reaches the board, with its scenarios intact
 
 **Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-004, CR-CRU-007 · **Status** PENDING
 
@@ -38,70 +38,111 @@ pointed at it.
 
 ## Scope
 
-### §S1 — the project's BDD suite is a declared target, run and filed as the `bdd` tier
+### §S1 — the e2e suite is BDD-driven, files as `e2e`, and reaches the board at all
 
-`package.json` declares the BDD target the fleet's `bdd` verb already looks for, so
-`bun-crucible.py bdd` runs this project's own Gherkin suite rather than failing to resolve a target.
-The relationship to `test:e2e` is decided rather than left ambiguous: the BDD target names the
-playwright-bdd run, and whether `test:e2e` remains a separate declaration or becomes an alias of it
-is settled by measurement (does the existing e2e job collect anything the BDD target does not?) and
-stated in the CR at RED time.
+**USER RULING 2026-09-17, overriding this CR's first two drafts: for a UI-driven project, `e2e` MAY
+use Playwright and BDD.** BDD and Playwright are the MEANS; `e2e` is the tier. So there is no
+rename, no `test:bdd`, and no tier change — an earlier draft of this section proposed migrating
+`test:e2e` to `test:bdd` on the strength of the DN's marker row ("feature files, generated specs"),
+which read the means as the dependency. The dependency this suite takes is the assembled product
+driven through a browser, which is `e2e`.
 
-The run is filed under `tier: bdd` — not `e2e`, not `unstated`. A tier names the dependency a test
-takes; a Gherkin suite driven through a real browser is the project's own BDD form, which is exactly
-what the fleet's vocabulary entry says.
+What is measurably wrong is narrower and worse: **the suite's results never reach the board.**
+Measured on `develop` at `fe7794c`:
 
-### §S2 — the playwright codec stops being dead
+- `playwright.config.ts:76-77` is `defineBddConfig({ features: "tests/e2e/features/*.feature" })`
+  with `testDir` on the generated output; `bunx playwright test --list` reports
+  **`Total: 46 tests in 16 files`**, every one generated from a `.feature`.
+- `test:e2e` is excluded from the pre-merge gate fleet-wide, and nothing else files it, so those 46
+  scenarios run on every CI push and produce no board record whatsoever.
+- The `playwright` codec that would carry their scenario-level detail has no caller
+  (`grep playwright clients/*.py` → zero hits), so even an ingest today would flatten them through
+  JUnit into counts.
 
-The ingest path that carries a playwright report selects the `"playwright"` codec, so the parser the
-project already owns and tests is the one that reads a playwright run. Whether the client posts the
-report for server-side decoding (`format: "playwright"`) or parses locally and posts `runs/parsed`
-is a real choice with a measurable answer — playwright's JSON reporter carries per-step detail a
-JUnit conversion discards — and the CR settles it against what the board can actually render rather
-than by preference.
+So §S1 makes the existing suite's existing runs land, as `e2e`, carrying the per-scenario detail a
+specification language exists to produce. It does NOT decide who SHOULD run and gate the browser
+tiers — that is DN open question 5, still unanswered, and a non-goal below.
 
-**Non-vacuity is the point:** an AC must prove the codec is reached by a REAL client invocation, not
-by a unit test calling `parsePlaywright` directly. It has had unit coverage all along; what it has
-never had is a caller.
+### §S2 — the codec that already parses the Gherkin gets a caller
 
-### §S3 — the BDD surface the UI says is missing
+`src/codecs/playwright.ts` does not need writing. Read on the merged tree, it already produces
+exactly the tree the BDD UI needs, and its own header records why: *"CR-CRU-007 C5b (pulled forward
+from CR-CRU-015 §S2)"* — this CR's codec work was delivered early and then left unreachable.
 
-`public/app.js:2644` states the gap in its own words. The BDD tab renders this project's executable
-specifications: scenario-level outcomes from the codec's parse, not a second Runs timeline. Scope is
-the surface the tab row has promised since CR-CRU-007; the greyed tab either renders BDD results or
-stops claiming it will.
+What it yields, per its own code:
+
+- one `SuiteNode` **per scenario**, named `<Feature title> › <Scenario title>` — playwright-bdd
+  surfaces Gherkin feature and scenario names as ordinary suite/spec titles;
+- one `TestLeaf` **per Gherkin step**, in step order, `name` being the step text
+  (`Given …` / `When …` / `Then …`);
+- per-step `status`, and on a failing step `failure.message` plus `trace`;
+- the LAST attempt's steps, so a retried scenario reports its verdict rather than its history.
+
+The gap is the caller: `grep playwright clients/*.py` returns zero hits, so every run is either not
+ingested at all or flattened through JUnit into counts, which discards the steps. This CR selects
+the `"playwright"` codec for this suite's reports — the registry entry exists
+(`src/codecs/index.ts:20-27`) and is registry-only by CR-CRU-010 §S1, so selection is the whole job.
+
+### §S3 — the BDD section that already exists gets populated with the Gherkin execution output
+
+**USER RULING: there IS a BDD section in the UI, and showing the Gherkin execution output is what it
+is for.** This is a POPULATION of an existing, already-routed surface — not a new tab, not a second
+Runs timeline, not a pass/fail tally. Measured, the section is present and wired:
+
+| Site | State today |
+|---|---|
+| `public/app.js:2638` `BddFeed` | renders ONE string and nothing else |
+| `public/app.js:2644-2645` | that string: *"BDD run results already stream into the Runs timeline — a dedicated BDD surface does not exist yet"* |
+| `public/app.js:2650` `BddPlaceholder` | wraps `BddFeed` in `greyed(...)` — the tab is deliberately dimmed |
+| `public/app.js:4841` | `state.workspaceTab === "BDD"` — the route already dispatches here |
+
+So the tab row has promised this since CR-CRU-007 and the dispatch has been in place all along; only
+the content is absent. `BddFeed` renders the feature, its scenarios, and each scenario's
+`Given`/`When`/`Then` steps in order with the outcome of each, straight off the codec's tree
+(scenario nodes named `<Feature> › <Scenario>`, step leaves in step order). A failing step shows its
+`failure.message` AT that step — which step of the specification broke is the thing a Gherkin report
+is read for, not merely that the scenario did. The `greyed(...)` wrapper and the
+"does not exist yet" copy both go, because neither is true once the section renders.
 
 ## Acceptance criteria
 
 **§S1**
-- [ ] `package.json` declares the BDD target the fleet's `bdd` verb resolves, and
-      `bun-crucible.py bdd` runs this project's 16-feature Gherkin suite through it — evidenced by
-      the run's own output naming the features, not by the verb exiting zero.
-- [ ] That run is ingested with `tier: bdd`, asserted on the stored event rather than on the
-      client's claim.
-- [ ] The `test:e2e` / BDD-target relationship is stated in the CR and asserted: whichever is
-      chosen, no suite silently stops being collected — a test compares what each target collects
-      before and after.
-- [ ] The declared-target guard (`tests/ci-toolchain-provisioning.test.ts` and the declared-target
-      tests CR-CRU-133 established) covers the new target, so a fifth declared target cannot appear
-      unguarded.
+- [ ] `test:e2e` KEEPS its name and the suite keeps `tier: e2e` — no rename, no second target, no
+      tier change. Asserted by a test pinning that the declared target for this suite is `test:e2e`
+      and that its runs file as `e2e`, so a later author cannot "tidy" it into `test:bdd`.
+- [ ] The suite's results are INGESTED at all: today 46 scenarios across 16 features run on every
+      CI push and nothing reaches the board. A real `bun-crucible.py e2e` invocation files a run,
+      asserted on the stored event.
+- [ ] That ingest carries SCENARIO-LEVEL detail — the thing a specification language exists to
+      produce — not just a pass/fail total. Asserted against the stored event's own shape.
+- [ ] The declared-target guard (`tests/ci-toolchain-provisioning.test.ts` plus the declared-target
+      tests CR-CRU-133 established) covers `test:e2e`, so its declaration cannot silently change.
 
 **§S2**
-- [ ] A REAL client invocation causes the `"playwright"` codec to parse the run — asserted by
-      driving the client and observing the codec's own output shape in the stored event, with the
-      test failing if the run was decoded as `junit` instead.
-- [ ] The choice between server-side decode and client-side parse is recorded in the CR with the
-      measurement that decided it (what per-step detail survives each path).
-- [ ] `tests/playwright-codec.test.ts` keeps its unit coverage unchanged — this CR adds a caller, it
-      does not rewrite the parser.
+- [ ] A REAL client invocation of this project's e2e suite causes the `"playwright"` codec to parse
+      the report — asserted by driving the client and reading the STORED event, and failing if the
+      run was decoded as `junit` (which would flatten the steps into counts).
+- [ ] The stored event carries the Gherkin structure the codec produces: scenario nodes named
+      `<Feature> › <Scenario>`, each holding its steps IN ORDER with the step text as the leaf name.
+      Asserted against a real run of the 16-feature suite, not a fixture.
+- [ ] A failing step's `failure.message` survives to the stored event on THAT step — proven by a
+      deliberately failing scenario, so the report can say which step of the specification broke.
+- [ ] `tests/playwright-codec.test.ts` keeps its unit coverage unchanged — this CR adds a caller; it
+      does not rewrite the parser (whose header records it was pulled forward by CR-CRU-007 C5b).
 
 **§S3**
-- [ ] The BDD tab renders scenario-level results for a real ingested BDD run, and
-      `public/app.js:2644`'s "does not exist yet" note is deleted because it is no longer true.
-- [ ] A Chromium-tier test drives the tab against a real ingested BDD run and asserts scenario
-      outcomes are rendered — the storyboard compliance bar, not a smoke check.
-- [ ] With no BDD run recorded, the tab shows a definitive empty state rather than a broken or
-      greyed surface (CR-CRU-078's empty-state rule).
+- [ ] The BDD tab renders the GHERKIN of a real ingested run: the feature, its scenarios, and each
+      scenario's `Given`/`When`/`Then` steps in order, each with its own outcome — not a tally and
+      not a second Runs timeline. This is the tab's stated purpose (user ruling).
+- [ ] A failing scenario renders its failure AT the step that failed, carrying the message, so a
+      reader sees which step of the specification broke.
+- [ ] A Chromium-tier test drives the tab against a real ingested run and asserts the rendered
+      Gherkin — feature title, scenario titles, ordered step text and per-step outcomes — at the
+      storyboard compliance bar, not a smoke check.
+- [ ] `public/app.js:2644`'s "a dedicated BDD surface does not exist yet" note is DELETED, because
+      it is no longer true; a test asserts the claim is gone rather than left contradicting the UI.
+- [ ] With no run recorded, the tab shows a definitive empty state rather than a broken or greyed
+      surface (CR-CRU-078's empty-state rule).
 
 ## Estimated size
 
