@@ -1,13 +1,20 @@
 # CR-CRU-141 — a CI run is earned by what changed
 
-**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** CR-CRU-137 · **Status** PENDING
+**Type** fix · **Wave** 8 (0.3.0) · **Depends on** CR-CRU-137 · **Status** PENDING
+
+> **Deferred out of hotfix 0.2.2 (user ruling 2026-09-17) after gap analysis measured the original
+> approach INERT.** The first draft proposed a trigger-level path condition. Its own safety rule —
+> and that rule was the best thing in it — makes it a no-op for every case it was filed for. The
+> measurement is kept below because it is the thing that stops the next author reaching for
+> `paths-ignore: docs/**`. The mechanism is re-opened, not inherited.
 
 ## Problem
 
 Every push to `develop`, `master`, `release/**` or `hotfix/**` runs the whole pipeline, whatever it
 touched. `.github/workflows/release.yml`'s `push` and `pull_request` triggers carry no path
-condition, so the five jobs — `build`, `test-bun`, `test-python`, `test-e2e`, `pack-server` — fire
-identically for a source change and for a one-file prose edit.
+condition, so five jobs — `build`, `test-bun`, `test-python`, `test-e2e`, `pack-server` — fire
+identically for a source change and for a one-file prose edit. `test-bun` alone is ~16 minutes and
+`test-e2e` provisions Chromium.
 
 Measured on this repo's own history (2026-09-17):
 
@@ -16,89 +23,84 @@ Measured on this repo's own history (2026-09-17):
 | `35166187151` | `cbe264e` | one CR spec, `38+/8-` | 5 |
 | `35164711642` | `5ec7fc5` | PRD paragraph + a DN dating note | 5 |
 
-Both spent a full Playwright tier and an `npm pack` on prose. The `test-bun` step alone runs ~16
-minutes; a doc-only commit pays it in full.
+**Why the obvious fix is wrong here, measured rather than argued.** This project guards its
+documentation with tests, far more heavily than the first draft of this CR realised — it claimed 74
+doc-reading test files; the real figure is **132**. Per path:
 
-**But the naive fix is wrong here, and measurably so.** This project guards its documentation with
-tests: **74 test files under `tests/` read documentation**, including `docs/RUNBOOK.md`,
-`docs/changes/README.md`, `docs/research/PRD-crucible-v2.md`, the DNs, `CHANGELOG.md`, `AGENTS.md`,
-`RELEASING.md`, `STATUS-CONTRACT.md`, and individual CR specs as citation targets. A blanket
-`paths-ignore: docs/**` would not save wasted work — it would switch off the guards that make those
-documents trustworthy, and the queue/spec structure guards would stop running in CI entirely.
+| Path the wasted runs touched | Test files that read it |
+|---|---|
+| `docs/changes/CR-CRU-*.md` | **112** |
+| `docs/research/DN-*.md` | 19 |
+| `docs/RUNBOOK.md` | 10 |
+| `docs/changes/README.md` | 6 |
+| `docs/research/PRD-*.md` | 3 |
 
-So the requirement is not "skip docs". It is that a run is **earned by what changed**: a change no
-test can observe and no artifact can embed runs nothing; everything else runs the full pipeline,
-unchanged.
+A blanket `paths-ignore: docs/**` would not remove wasted work — it would switch off 144 guards and
+stop the queue/spec/citation invariants running in CI at all.
+
+**And that is exactly why the trigger-condition approach is inert.** The draft's own rule was: *a
+path may be excluded only if no test reads it and no published artifact embeds it.* Applied
+honestly:
+
+- `cbe264e` touched a CR spec — read by 112 test files. **Not excludable.**
+- `5ec7fc5` touched a DN and the PRD — read by 19 and 3. **Not excludable.**
+
+So neither motivating commit would have been skipped. What IS excludable is the set that never
+changes: `.omp/` and `.lavish/` carry one tracked file each and appear in **zero** of the last 100
+commits' diffs. The CR would have added a trigger condition plus a permanently-maintained derived
+guard in order to skip runs that do not occur.
+
+## The real question, re-opened
+
+The waste is real; the lever was wrong. A docs-only push runs 2537 bun tests, a Playwright tier and
+an `npm pack` in order to execute ~144 cheap doc guards. So the question is **how to make a
+docs-only push cheap without half-populating the publish graph**, and it is harder than the first
+draft assumed:
+
+- **Per-job conditions are forbidden, for a reason already recorded.** `release.yml`'s own §S0/§S4
+  header notes that a job which is *skipped* rather than absent makes every `needs:` dependant skip
+  too — publishing nothing, silently. That is why the draft put the condition on the trigger. Any
+  new design inherits that constraint.
+- **A docs-only push is not publish-free on every branch.** `publish-testpypi` fires on
+  `release/**` and `hotfix/**` pushes and consumes the `dist` artifact, so "docs-only means no
+  publish path" is false exactly where release candidates live.
+- **The cheap guards and the expensive tiers share one job.** `test-bun` runs the doc guards
+  alongside everything else, so the saving is not in *which files changed* but in *which suites a
+  change can possibly affect* — a different and larger question, adjacent to the declared-target
+  work CR-CRU-133 established.
+
+This CR is therefore re-specified at design time in wave 8, with a mechanism chosen against those
+three constraints. Candidate directions, none adopted here: a docs-only path that runs the
+doc-reading suites only (needs the coupling to be derived, not listed); making `test-e2e`/`pack-server`
+conditional at the *trigger* level via a second workflow rather than a job condition; or accepting
+the cost and attacking the 16-minute `test-bun` directly, which `release.yml`'s header already
+directs cost reduction toward.
 
 ## Scope
 
-### §S1 — a push that no test can observe does not start a run
-
-The `push` and `pull_request` triggers gain a path condition. Its content is not a guess about what
-looks inert: a path may be excluded **only if no test reads it and no published artifact embeds
-it**, and that set is established by measurement against `tests/` and the packaging manifests, not
-by intuition about file extensions.
-
-Two properties make this safe rather than clever:
-
-- **Filtering happens at the trigger, never per job.** `release.yml`'s own header (§S0/§S4) records
-  why: the publish gate *is* the dependency graph, and a job that is skipped rather than absent
-  makes every `needs:` dependant skip too — publishing nothing, silently. A trigger-level condition
-  yields either a complete run or no run at all; the graph is never half-populated. Per-job `if:`
-  conditions on changed paths are therefore out of scope, not merely discouraged.
-- **Only `push`/`pull_request` are conditioned.** The `release` and `workflow_dispatch` triggers
-  carry no changed-file concept and keep firing everything, so no publish path is touched.
-
-`develop` and `master` are unprotected branches today (measured: both return `Branch not protected`),
-so no required status check can be left permanently pending by a run that never starts. If branch
-protection is ever added, a required check naming a job of this workflow would reintroduce that
-hazard — recorded here so the decision is informed rather than rediscovered.
-
-### §S2 — the exclusion list cannot drift away from the tests
-
-A guard asserts the invariant the list depends on: every path pattern excluded by the trigger is
-read by **no** test and embedded in **no** published artifact. It derives both sides — it enumerates
-the exclusions from the workflow and checks them against the tree — so adding a test that reads a
-currently-excluded path, or excluding a path something already reads, fails the suite rather than
-quietly removing coverage.
+**Open — to be specified in wave 8 against the three constraints above.** Nothing in this CR is
+approved for implementation in its current form; the draft's §S1/§S2 (a trigger-level path condition
+plus a drift guard over the exclusion list) are withdrawn as measured-inert, not merely deferred.
 
 ## Acceptance criteria
 
-- [ ] A push whose changed files are all within the excluded set starts **no** workflow run,
-      evidenced by a real push and the absence of a run for that commit.
-- [ ] A push touching any source, test, packaging or guarded-documentation path still runs all five
-      jobs, evidenced by a real run.
-- [ ] Every path excluded by the trigger is read by no test and embedded in no published artifact,
-      evidenced by the measurement that produced the list.
-- [ ] A guard test derives the exclusion list from `release.yml` and fails if any excluded path is
-      read by a test or shipped in an artifact — and fails if a newly added exclusion escapes the
-      check.
-- [ ] No job in the workflow gains an `if:` condition on changed paths; the publish jobs' `needs:`
-      graph is byte-identical to before this CR.
-- [ ] The `release` and `workflow_dispatch` triggers are unchanged.
-- [ ] `release.yml`'s header comment records why the condition sits on the trigger and not on the
-      jobs, in the same place §S0 warns against event-scoping them.
+To be written with the mechanism. Two survive the rewrite as constraints on ANY design:
 
-## Estimated size
-
-Small. One trigger condition, one guard test, one header paragraph. No job, gate or publish path
-changes.
+- [ ] No documentation a test reads is excluded from verification — membership is established by
+      measurement against `tests/` and the packaging manifests, never by file extension or intuition
+      about what looks inert. Prose is not privileged for being prose.
+- [ ] Whatever gates or narrows a run does so without leaving the publish graph half-populated: a
+      complete run or no run, never a skipped job that makes its `needs:` dependants skip.
 
 ## Risk
 
-- **An over-broad exclusion silently removes coverage.** This is the whole hazard, and why the list
-  is measured and guarded rather than asserted. The failure is invisible by construction — CI stays
-  green because it never ran — so §S2's guard is the requirement, not a nicety.
-- **A future branch protection rule could wedge on a run that never starts.** Not live today
-  (measured), recorded in the spec so it is a decision rather than a surprise.
+- **An over-broad exclusion silently removes coverage, and CI stays green because it never ran.**
+  The failure is invisible by construction. This is why the 132-file measurement above belongs in
+  the spec permanently, whatever mechanism wave 8 chooses.
 
 ## Non-goals
 
 - Reducing how many times the suite runs **per release** (release branch, master, develop, then the
   release event — four full runs of substantially the same tree before a package uploads). Still
-  real, still deferred by CR-CRU-137's non-goals, still its own CR. This CR changes which *pushes*
-  earn a run, not how a release sequences them.
-- Making the suite itself cheaper — caching, sharding, or trimming the e2e tier. `release.yml`'s
-  header explicitly directs cost reduction inside the jobs; that is a separate and larger question.
-- Excluding any documentation a test reads. The measurement decides membership; prose is not
-  privileged by being prose.
+  real, still its own CR, still deferred by CR-CRU-137's non-goals.
+- Excluding any documentation a test reads.
