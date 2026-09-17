@@ -108,8 +108,17 @@ EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino"}
 # imported here rather than restated: three suites pin it, and three copies of
 # one consumer contract is a schema change that can land on two of them
 # (CR-CRU-131 §S1c).
+#
+# CR-CRU-143 -- the bound a site asserts against is the contract module's, not
+# a literal restated here: the unconditional floor plus the keys published only
+# under a stated condition.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from manifest_contract import EXPECTED_MANIFEST_KEYS  # noqa: E402
+from manifest_contract import (  # noqa: E402
+    ALLOWED_MANIFEST_KEYS,
+    EXPECTED_MANIFEST_KEYS,
+    missing_manifest_keys,
+    unexpected_manifest_keys,
+)
 
 
 def _ensure_repo_root_on_path():
@@ -168,6 +177,24 @@ def _fast_unit_stage(target_dir, force):
     """A `[unit]` stage double that provisions nothing: no unit file, no
     `systemctl`. Matches the `(target_dir, force)` runner protocol."""
     return {"path": os.path.join(target_dir, UNIT_STAGE), "converged": False}
+
+
+@contextlib.contextmanager
+def _server_not_provisioned(install):
+    """CR-CRU-143 §S2 -- DECLARE, for the installs run inside this block, that
+    NO Crucible server is provisioned on this machine.
+
+    `_provisioned_server_config_source` IS the probe `install.server_config_plan()`
+    consults, and unpatched it asks the WORKSTATION: a developer box that has
+    run `crucible-axi install` answers yes, a CI runner answers no, and a test
+    reading the resulting manifest then means two different things in two
+    places. Pinned to the unprovisioned shape, the real `server_config_plan()`
+    still computes the plan -- including its own stated reason -- and the
+    `[manifest]` stage writes nothing outside the sandbox.
+    """
+    with mock.patch.object(install, "_provisioned_server_config_source",
+                           return_value=None):
+        yield
 
 
 @contextlib.contextmanager
@@ -580,11 +607,18 @@ class InstallIdempotencyTest(unittest.TestCase):
                 UNIT_STAGE: _fast_unit_stage}
 
     def test_running_install_twice_does_not_duplicate_the_manifest_file(self):
+        """CR-CRU-143 §S2 -- run under a DECLARED provisioned-ness: no server
+        provisioned, so the manifest's conditional `server_config` key is owed
+        by nobody and the document under test is the same on every machine.
+        The contract is still asserted as a closed bound (§S1) rather than by
+        exact equality, so this stays a statement about the install rather than
+        about the host."""
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
 
         with _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, _stages1, _w1 = install.run_install(self.tmp)
             with open(manifest_path) as f:
@@ -603,7 +637,23 @@ class InstallIdempotencyTest(unittest.TestCase):
         # JSON documents, which json.loads rejects -- this must stay a single
         # parseable document.
         reparsed = json.loads(second_content)
-        self.assertEqual(set(reparsed.keys()), set(EXPECTED_MANIFEST_KEYS))
+        self.assertEqual(
+            [], missing_manifest_keys(reparsed),
+            f"the rewritten manifest must still publish every unconditional "
+            f"key {sorted(EXPECTED_MANIFEST_KEYS)}; got {sorted(reparsed)}")
+        self.assertEqual(
+            [], unexpected_manifest_keys(reparsed),
+            f"the rewritten manifest must publish nothing outside "
+            f"{sorted(ALLOWED_MANIFEST_KEYS)} -- an undeclared key is internal "
+            f"state leaking into the document consumers parse; got "
+            f"{sorted(reparsed)}")
+        # The conditional key by its CONDITION: this run declared no provisioned
+        # server, so publishing `server_config` would name a file nothing wrote.
+        self.assertNotIn(
+            "server_config", reparsed,
+            f"CR-CRU-138 §S2 -- no server is provisioned for this install, so "
+            f"there is nothing to write beside and no `server_config` to "
+            f"publish; got {reparsed.get('server_config')!r}")
 
     def test_running_install_twice_reports_manifest_stage_converged_on_second_run(self):
         install = _import_fresh("crucible_axi.install")
