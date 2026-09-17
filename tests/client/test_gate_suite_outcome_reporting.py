@@ -251,8 +251,21 @@ PRE_COMPOSITION_ENVELOPE_KEYS = ("context", "help", "ok", "run", "tier", "verb",
 PRE_COMPOSITION_RUN = {"passed": 2, "failed": 0, "pending": 0, "total": 2,
                        "files": 1}
 PRE_COMPOSITION_HELP = ["cycle-done <id>", "status"]
+
+# CR-CRU-137 §S1 — the snapshot above is recorded VERBATIM as it was measured,
+# and what it pins is WHICH collection the gate runs (the whole-suite `bun
+# test`, never a narrowed `bun run <script>`), not which flags bun is handed.
+# §S1 added the project's own default per-test budget to every command
+# `_bun_test_cmd` builds, so the expected argv carries it too — READ off the
+# client's own declaration rather than retyped, because §S1's whole mechanism
+# is that the figure lives in one place and every consumer derives it. Change
+# the constant and this pin moves with it; retype it here and the suite would
+# gain a third figure free to drift.
+_BUN_CLIENT = _load_module(_GATE.CLIENTS_DIR / "bun-crucible.py",
+                           "cr112_c5_bun_client_under_test")
 PRE_COMPOSITION_STEPS = [
-    ["test", "--reporter=junit",
+    ["test", "--timeout", str(_BUN_CLIENT.DEFAULT_TEST_TIMEOUT_MS),
+     "--reporter=junit",
      "--reporter-outfile=<project>/reports/junit.xml",
      "--coverage", "--coverage-reporter=lcov",
      "--coverage-dir=<project>/coverage"],
