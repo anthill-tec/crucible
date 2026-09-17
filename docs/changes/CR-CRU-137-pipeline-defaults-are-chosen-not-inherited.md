@@ -47,10 +47,11 @@ Measured against bun 1.4.2 (the pinned version), so §S1's mechanism is not assu
 
 ### §S1 — the suite's default per-test budget is the suite's own figure
 
-**Surfaces (verified 2026-09-16):** `.github/workflows/release.yml:146` runs bare `bun test`;
-`clients/bun-crucible.py:489-497` (`_bun_test_cmd`) builds the local gate's invocation and takes its
-flag contract from `_bun_test_report_flags` at `:478-486`, the "spelled in ONE place" pattern
-CR-CRU-133 §S2 established.
+**Surfaces (verified 2026-09-16; line numbers re-pointed at §S6 close-out):**
+`.github/workflows/release.yml:179` carries the `test-bun` step's `bun test` invocation — bare
+before this CR; `clients/bun-crucible.py:500-510` (`_bun_test_cmd`) builds the local gate's
+invocation and takes its flag contract from `_bun_test_report_flags` at `:489-497`, the "spelled in
+ONE place" pattern CR-CRU-133 §S2 established.
 
 The default per-test timeout becomes **30000 ms**, declared by this project rather than inherited
 from bun. 30 s is chosen against the two measured failures (5.1 s, 6.2 s) and the suite's most
@@ -126,11 +127,14 @@ escalate, not to absorb silently.
 
 ### §S6 — this CR's own edits do not leave stale line-number citations behind
 
-§S1's constant lands beside `_bun_test_report_flags` at `clients/bun-crucible.py:493`, and §S2's
-consolidation touches the same file. Measured: 136 `bun-crucible.py:NNN` citations across 79 test
-files sit at or below that point today, plus 2 `release.yml:NNN` citations in
-`tests/cr009-release-bundle.test.ts` (its `RELEASE_PAT`/`NPM_TOKEN` secret-name assertions) near
-§S1/§S2's edit sites, plus this CR's own two citations (`bun-crucible.py:489`, `release.yml:146`).
+§S1's constant lands immediately ABOVE `_bun_test_report_flags`, not beside it: its comment block
+and `DEFAULT_TEST_TIMEOUT_MS` occupy `clients/bun-crucible.py:477-486` — the constant itself on
+`:486`, the helper's own `def` at `:489` — and §S2's consolidation touches the same file. Measured
+at close-out: 43 `bun-crucible.py:NNN` citation lines across 21 test SOURCE files (170 raw matches
+under `tests/`; the remainder sit inside gitignored `__pycache__` byte-caches, which are build
+output and not swept), plus 2 `release.yml:NNN` citations in `tests/cr009-release-bundle.test.ts`
+(its `RELEASE_PAT`/`NPM_TOKEN` secret-name assertions) near §S1/§S2's edit sites, plus this CR's own
+two citations (`bun-crucible.py:500`, `release.yml:179`).
 None of it is asserted at runtime — a citation that drifts stays silently wrong, which is why this
 project's own history already shows the same defect shipping twice at smaller scale. This is a
 ONE-TIME close-out sweep after every other §S's edits have landed, not a per-cycle escalation.
