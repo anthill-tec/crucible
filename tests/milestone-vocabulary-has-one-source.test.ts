@@ -8,7 +8,7 @@
 //   src/v2.ts:1168                     `MILESTONE_TYPES` — the validator
 //   src/hints.ts:104                   the refusal's own `help[]`
 //   clients/arduino-crucible.py:1408   `--type` help
-//   clients/bun-crucible.py:2374       `--type` help
+//   clients/bun-crucible.py:2506       `--type` help
 //   clients/mvn-crucible.py:2374       `--type` help
 //   clients/python-crucible.py:1729    `--type` help
 //   clients/rust-crucible.py:3020      `--type` help

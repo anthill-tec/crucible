@@ -918,7 +918,7 @@ describe("§S4 docs — RELEASING.md", () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
-    // Exact secret name, matching release.yml:57's actual usage.
+    // Exact secret name, matching release.yml:290's actual usage.
     expect(doc).toContain("RELEASE_PAT");
     expect(lower).toContain("github_token");
     // The specific reason: default token release does not re-trigger the
@@ -931,7 +931,8 @@ describe("§S4 docs — RELEASING.md", () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
-    // Exact secret name, matching release.yml:170's actual usage.
+    // Exact secret name, matching release.yml:451-456, where the token path is
+    // recorded as retired in favour of the OIDC trusted publisher.
     expect(doc).toContain("NPM_TOKEN");
     expect(lower).toContain("oidc");
     // npm has no pending-publisher equivalent to PyPI's — named explicitly,

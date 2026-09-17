@@ -51,7 +51,7 @@ BUN'S MODULE-DOCSTRING VERB TABLE (`clients/bun-crucible.py:34`, which reads
 `--cycles "a,b[,c...]"`) is deliberately NOT asserted here. MEASURED at
 `a7fe101`: `bun-crucible.py --help` renders `_CLI_DESCRIPTION`, never
 `__doc__` -- CR-CRU-097 §S2 severed that wiring on purpose ("deliberately NOT
-`__doc__`", `clients/bun-crucible.py:1925-1943`), and a drive of the root help
+`__doc__`", `clients/bun-crucible.py:2179-2201`), and a drive of the root help
 finds zero occurrences of the table's `a,b[,c...]` string. It is a design
 record, not user-visible output, so a test asserting on it would pin prose. It
 is left to GREEN as a comment-only correction.
