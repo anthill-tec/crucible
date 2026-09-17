@@ -32,7 +32,7 @@ months later.
 
 **§S3–§S5** are the same defect in three smaller places: the published npm package declares no
 licence (npm's registry page renders `License: none`), the queue header still names the release that
-has already shipped, and four workflow actions are being force-migrated off Node 20 by GitHub.
+has already shipped, and six workflow actions are being force-migrated off Node 20 by GitHub.
 
 Measured against bun 1.4.2 (the pinned version), so §S1's mechanism is not assumed:
 
@@ -97,9 +97,30 @@ release now being planned. A release-boundary row marks 0.2.0 in the ordering pe
 
 ### §S5 — no workflow action is running on a deprecated runtime
 
-A full run currently raises Node-20 deprecation annotations on `actions/checkout@v4`,
-`actions/setup-python@v5`, `actions/setup-node@v4` and `astral-sh/setup-uv@v6`; GitHub is forcing
-them onto Node 24. Each is moved to a major version that targets a supported runtime natively.
+GitHub deprecated Node 20 on the runners, so every action declaring `using: node20` is force-run on
+Node 24 and each job emits a deprecation annotation naming its offenders. Measured on run
+`35164711642` (the CR-CRU-139 merge), all five jobs are annotated; `.github/workflows/release.yml`
+is the only workflow file, and six of its pins are the cause — `actions/checkout`,
+`actions/setup-python`, `actions/setup-node`, `astral-sh/setup-uv`, `actions/upload-artifact` and
+`actions/download-artifact`. Already clean and not to be touched: `oven-sh/setup-bun@v2` (already
+`node24`) and `pypa/gh-action-pypi-publish@release/v1` (not a Node action, never annotated).
+
+Each is moved to a version that targets a supported runtime natively. Two measured facts, because
+each one is a way to get this wrong:
+
+- **A floating major tag is not evidence.** `actions/upload-artifact@v5` and
+  `actions/download-artifact@{v5,v6}` still resolve to `using: node20`; the node24 releases are
+  further along than the obvious next major. The runtime a pin resolves to is read from that ref's
+  own `action.yml`, never assumed from the version number.
+- **The two artifact actions are a matched pair.** `build` uploads the `dist` artifact that both
+  publish jobs download, and the newer download major exists specifically to understand the newer
+  upload major's direct (unzipped) uploads. Bumping one without the other breaks that handoff, and
+  the newer download major also turns artifact hash mismatches into errors by default.
+
+Our invocations pass only inputs that survive these majors, and every job is `runs-on:
+ubuntu-latest`, so no self-hosted runner needs a version floor. The bump is therefore expected to
+be pins only — if any target major forces an input or job-logic change, that is a finding to
+escalate, not to absorb silently.
 
 ## Acceptance criteria
 
@@ -140,10 +161,17 @@ them onto Node 24. Each is moved to a major version that targets a supported run
 - [ ] A release-boundary row for 0.2.0 exists in the queue ordering.
 
 **§S5**
+- [ ] Every `uses:` pin in `release.yml` resolves to a ref whose own `action.yml` declares a
+      supported runtime — evidenced by reading each pinned ref's `action.yml`, not by the version
+      number looking new.
 - [ ] No job in a full `release.yml` run produces a Node-20 deprecation annotation — verified by
-      reading the annotations of a real run after the change, not by diffing the workflow.
-- [ ] `tests/ci-toolchain-provisioning.test.ts` asserts each action's pinned major version, so a
-      silent downgrade fails.
+      reading a real run's annotations after the change, not by diffing the workflow.
+- [ ] The `dist` artifact still survives the `build` → publish handoff after the artifact actions
+      move, evidenced by a real run's publish job consuming it.
+- [ ] `tests/ci-toolchain-provisioning.test.ts` asserts the pinned version of **every** action the
+      workflow uses, enumerated from the workflow itself — so an action added later without a pin,
+      or a pin silently downgraded, fails the suite. A guard covering only the actions listed today
+      does not satisfy this.
 
 ## Estimated size
 
@@ -160,7 +188,9 @@ production server or client behaviour changes — `_bun_test_cmd` gains a flag, 
   section names the fallback, so a bad interaction changes the location, not the requirement.
 - **§S5 can break a job on an unrelated major-version change.** Action majors carry behaviour
   changes beyond the runtime; each bump is verified by a real run, which is why the AC reads the
-  run's annotations rather than the diff.
+  run's annotations rather than the diff. The sharpest exposure is the `dist` handoff: the artifact
+  actions must move as a pair, and a mismatch shows up not in `build` but later, in a publish job
+  that cannot find or verify the artifact — which on a tag ref is a job that uploads to PyPI.
 
 ## Non-goals
 
