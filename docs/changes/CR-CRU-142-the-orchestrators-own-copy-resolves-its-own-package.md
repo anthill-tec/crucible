@@ -33,9 +33,11 @@ location** — correct for the two shapes CR-138 enumerated (a checkout's `clien
 FLEET-installed client at `<install>/clients/_crucible_axi.py`, giving `_INSTALL_DIR = <install>`).
 Neither is what actually loads this warning here.
 
-`crucible_axi/cli.py`'s `_load_client_module` (both call sites: `cmd_install:159`,
-`cmd_uninstall:295` — confirmed identical on `master`) vendors its OWN copy of the same shared
-module by file path, from **inside its own venv** (`crucible_axi/clients/_crucible_axi.py`, per the
+`crucible_axi/cli.py`'s `_load_client_module` (both call sites: `cmd_install:108`,
+`cmd_uninstall:244` — measured on THIS branch, whose `cli.py` is 328 lines; the first draft of this
+paragraph cited `:159`/`:295`, read off `develop`, where CR-CRU-139's retry loop has since pushed
+them down) vendors its OWN copy of the same shared module by file path, from **inside its own venv**
+(`crucible_axi/clients/_crucible_axi.py`, per the
 PyPI wheel's own layout — confirmed by downloading `crucible_axi-0.2.1-py3-none-any.whl` and
 listing it). That copy's `_INSTALL_DIR` therefore resolves to `dirname(crucible_axi/clients)` =
 `crucible_axi` **inside site-packages** — a THIRD execution shape CR-138 never accounted for.
@@ -70,13 +72,19 @@ to have just written (uninstall may have removed it), so its warning, when one f
 names `<target_dir>/crucible.toml` — the file an operator actually owns — rather than a site-packages
 path they cannot act on.
 
-### §S3 — this CR's own two insertions do not leave stale citations behind
+### §S3 — nothing to sweep here, and why that is a finding rather than a relief
 
-Both bind calls land above `crucible_axi/cli.py:355-362`, cited three times: twice in
-`tests/cr009-release-bundle.test.ts` (lines 153, 1492) and once in
-`tests/docs-runbook-documents-every-limit.test.ts` (line 909). Two insertions shift that range by
-two lines; all three citations are re-recorded at close-out, verified by re-reading the corrected
-line and confirming it still names the `--host`/`--port` write CR-CRU-066 §S3 documents there.
+The first draft required re-recording three `cli.py:355-362` citations after the insertions. On this
+branch there is no such range — `cli.py` ends at 328 — and `grep -rn 'cli.py:3[0-9][0-9]' tests/`
+returns NOTHING. Those citations exist only on `develop`, because the `--host`/`--port` behaviour
+they name is CR-CRU-139's rewrite (serve WRITES the listener into the server's `crucible.toml`),
+which is not in 0.2.2's lineage: here `cmd_serve` still exports `SERVER_HOST_ENV_VAR` /
+`SERVER_PORT_ENV_VAR`, the mechanism CR-CRU-139 retired.
+
+So this section requires no sweep on the hotfix branch. It is recorded rather than deleted because
+the same two insertions WILL shift those develop-side citations when 0.2.2 back-merges into
+`develop` at `git flow hotfix finish` — and that is where they must be re-checked, against
+develop's own line numbers, not invented from this branch's.
 
 ## Acceptance criteria
 
@@ -100,10 +108,14 @@ line and confirming it still names the `--host`/`--port` write CR-CRU-066 §S3 d
       of scope for this CR.
 
 **§S3**
-- [ ] All three `cli.py:355-362` citations (`tests/cr009-release-bundle.test.ts:153,1492`,
-      `tests/docs-runbook-documents-every-limit.test.ts:909`) are re-checked after §S1's edits land
-      and corrected to the line range that now holds the `--host`/`--port` write, evidenced by
-      re-reading each corrected citation's new lines.
+- [ ] No `cli.py:NNN` citation in this branch's `tests/` tree points into the region the two
+      insertions shift — asserted by measurement, not assumption: `grep -rn 'cli\.py:[0-9]+' tests/`
+      is run after §S1 lands and every hit (if any) is checked against the line it names. Measured
+      before the branch cut: zero hits, because the `--host`/`--port` citations belong to
+      CR-CRU-139's serve rewrite, which is not in 0.2.2's lineage.
+- [ ] The back-merge is where develop's three `cli.py:355-362` citations get re-checked — recorded
+      here as a close-out obligation of `git flow hotfix finish`, against develop's own line
+      numbers, never numbers carried over from this branch.
 
 ## Estimated size
 
