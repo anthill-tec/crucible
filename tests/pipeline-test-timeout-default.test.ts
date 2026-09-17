@@ -2,13 +2,17 @@
 // OWN figure, chosen here, not inherited from whatever bun ships.
 //
 // Spec: docs/changes/CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md
-//   §S1 — the default per-test timeout becomes 30000 ms, carried by BOTH
+//   §S1 — the default per-test timeout becomes 30000 ms, carried by all THREE
 //         invocation paths: `clients/bun-crucible.py`'s `_bun_test_cmd` (the
-//         local gate) and `.github/workflows/release.yml`'s `test-bun` step
-//         (CI, which does not shell through the client). Because the two
-//         cannot be one physical constant, the value is DERIVED, not retyped:
-//         a test reads the client's declared figure and asserts the workflow
-//         matches it, so changing one alone reddens the suite.
+//         local gate), `.github/workflows/release.yml`'s `test-bun` step (CI,
+//         which does not shell through the client), and
+//         `scripts/run-test-target.ts` (the declared tier targets, which the
+//         client's `unit`/`integration` verbs reach by running the project's
+//         declared script by name). Because the three cannot be one physical
+//         constant, the value is DERIVED, not retyped: the client declares it,
+//         the tier runner reads that declaration at run time, and a test
+//         asserts each site's figure equals the client's — so changing one
+//         alone reddens the suite.
 //
 // Measured defect this closes: two tests failed CI on wall clock alone against
 // bun's own 5000 ms default (6245 ms and 5148 ms, on trees whose suites were
