@@ -1038,10 +1038,27 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
             f"the install must STATE why it wrote no server configuration "
             f"rather than staying silent -- silence is what let the original "
             f"hole survive a whole release; stage={stage}")
+        # CR-CRU-143 -- the CONDITION, not one word of the sentence. What the
+        # install owes here is not a vocabulary (`server_config_plan`'s wording
+        # may be rewritten) but two facts that make the decision actionable:
+        # the prerequisite it looked for and did not find, and the file it
+        # therefore declined to write. Both are asserted as the paths
+        # themselves -- one resolved by the production probe the plan consults,
+        # one chosen by this fixture -- so any rewording that still discloses
+        # them passes, while a bare "not provisioned" that names neither, and a
+        # plan that quietly stops mentioning where it looked, both fail.
+        looked_for = self.install.abbreviate_home(
+            self.install._provisioned_server_package_dir())
         self.assertIn(
-            "provisioned", reason,
-            f"the reason must name the missing prerequisite (no server "
-            f"provisioned on this machine); got {reason!r}")
+            looked_for, reason,
+            f"the reason must NAME the missing prerequisite -- the provisioned "
+            f"server package at {looked_for!r} -- or an operator cannot see "
+            f"where the install looked; got {reason!r}")
+        self.assertIn(
+            self.install.abbreviate_home(destination), reason,
+            f"the reason must NAME the file it declined to write "
+            f"({destination!r}), or it explains a decision about a file the "
+            f"operator cannot identify; got {reason!r}")
 
 
 # --- CR-CRU-090 C4 (§S1, AC4) -- a copied client actually RUNS ---------------
