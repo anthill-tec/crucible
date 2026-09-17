@@ -58,11 +58,16 @@ from bun. 30 s is chosen against the two measured failures (5.1 s, 6.2 s) and th
 common existing annotation; a genuine hang still fails inside a bounded time instead of stalling a
 runner.
 
-Both invocation paths carry it: the client's command builder gains the flag beside the report
-contract, and the CI step names it too. CI does not shell through the client, so the two cannot be
-one physical constant — therefore the value is **derived, not retyped**, exactly as CR-CRU-134
-requires: a test reads the client's declared figure and asserts the workflow's step matches it, so a
-change to one that is not made to the other fails the suite.
+**THREE invocation paths carry it, not two** — corrected at VERIFY, which found the third by
+following the tier verbs rather than trusting this paragraph. (1) the client's command builder
+(`_bun_test_cmd`) gains the flag beside the report contract; (2) the CI step names it too; and
+(3) `scripts/run-test-target.ts`, which `bun-crucible.py`'s `unit`/`integration` verbs reach
+through `bun run test:<tier>`, spawns its own `bun test` and was running on bun's 5000 ms default
+— the very defect this section exists to end, left in place by a scope sentence that had counted
+only the two paths its author was looking at. CI does not shell through the client and the TS
+runner cannot import a Python constant, so these cannot be one physical constant — therefore the
+value is **derived, not retyped**, exactly as CR-CRU-134 requires: a test reads the declared figure
+and asserts each site matches it, so a change to one that is not made to the others fails the suite.
 
 The two annotations added by `6515b8f` to `tests/cr009-release-bundle.test.ts`
 (`NPM_PACK_TIMEOUT_MS = 60_000`) stay — `npm pack` cold start is a per-test fact, and 60 s remains
@@ -165,7 +170,11 @@ historical record of what a prior author observed, like a DN's dated note, not a
       prevent.
 - [ ] The full suite passes with no test relying on bun's 5000 ms default: run
       `bun test --timeout 5001` and `bun test --timeout 30000` and compare — no test may pass only
-      because of the larger figure other than ones carrying their own annotation.
+      because of the larger figure other than ones carrying their own annotation. Measured
+      2026-09-17 on this branch: **5001 → 2525 pass / 0 fail** and **30000 → 2525 pass / 0 fail**,
+      identical, so nothing depends on the larger budget. (Both were run before cycles 480-482
+      landed, hence 2525 rather than today's 2537; the figure that matters is that the two runs
+      agree, and the post-482 suite is filed green at 2537/0 as `run-8d2880cf`.)
 
 **§S2**
 - [ ] The bun version appears in exactly one location in the repository; a grep for the other
@@ -192,7 +201,11 @@ historical record of what a prior author observed, like a DN's dated note, not a
       supported runtime — evidenced by reading each pinned ref's `action.yml`, not by the version
       number looking new.
 - [ ] No job in a full `release.yml` run produces a Node-20 deprecation annotation — verified by
-      reading a real run's annotations after the change, not by diffing the workflow.
+      reading a real run's annotations after the change, not by diffing the workflow. Read the
+      evidence for what it is: a deprecation annotation is emitted per ACTION, not per job, and in
+      run `35192142593` three jobs were skipped by their own ref/event gates (`create-release`,
+      `publish-pypi`, `publish-npm`) — but all eight distinct `uses:` pins were exercised across
+      the seven that ran, which is what makes the zero meaningful.
 - [ ] The `dist` artifact still survives the `build` → publish handoff after the artifact actions
       move, evidenced by a real run's publish job consuming it.
 - [ ] `tests/ci-toolchain-provisioning.test.ts` asserts the pinned version of **every** action the
