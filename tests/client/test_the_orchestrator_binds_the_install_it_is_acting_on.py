@@ -100,11 +100,6 @@ FLEET_DIRNAME = "clients"
 #: the sentence: the disclosure's wording is not this CR's contract.
 LIMIT_CONFIGURATION_CODE = "limit-configuration"
 
-#: The fragment `_limits_unreadable` puts immediately before the candidate
-#: chain, in precedence order. The FIRST name after it is the file the
-#: disclosure tells an operator to create -- which is the whole of AC2/AC3.
-PRECEDENCE_PREFIX = "precedence order: "
-
 #: A limit whose `value` an operator may legally set to something that is NOT
 #: the recommendation (`recommended` 200, range [20, 4000] in the shipped
 #: declarations). 40 is inside the range, so it is OBEYED and discloses
@@ -331,14 +326,28 @@ class _OrchestratorInstallCase(unittest.TestCase):
         return found[0]["detail"]
 
     def assertNamesTargetDirFirst(self, detail, verb):
-        self.assertIn(
-            PRECEDENCE_PREFIX, detail,
-            "%s: the disclosure must state its candidate chain in precedence "
-            "order; detail=%r" % (verb, detail))
-        chain = detail.split(PRECEDENCE_PREFIX, 1)[1]
-        first = chain.split(",")[0].split(" — ")[0].strip()
-        self.assertEqual(
-            first, self.config_file,
+        """The contract is the PATH ORDER, so that is what is asserted: the
+        file an operator can create must be named BEFORE the one inside the
+        orchestrator's own package. Nothing here parses the disclosure's
+        prose -- its wording, its separators and its precedence preamble are
+        not this CR's contract, and a test that splits on them fails on a
+        rewording that broke nothing. Both paths must be PRESENT, or an order
+        over two missing paths would pass on a disclosure naming neither."""
+        target_at = detail.find(self.config_file)
+        vendored_at = detail.find(self.vendored_install_config)
+        self.assertNotEqual(
+            target_at, -1,
+            "§S1/%s: the disclosure must NAME `%s` -- the `--target-dir` this "
+            "verb is acting on is the file it tells an operator to create. "
+            "detail=%r" % (verb, self.config_file, detail))
+        self.assertNotEqual(
+            vendored_at, -1,
+            "§S1/%s: the disclosure must also name the install-dir candidate "
+            "`%s` -- the two-candidate chain a BOUND `_PROJECT_DIR` produces "
+            "is what this ordering is about. detail=%r"
+            % (verb, self.vendored_install_config, detail))
+        self.assertLess(
+            target_at, vendored_at,
             "§S1/%s: the FIRST candidate -- the file the disclosure tells an "
             "operator to create -- must be the `--target-dir` this verb is "
             "acting on, never a path under the orchestrator's own package "
