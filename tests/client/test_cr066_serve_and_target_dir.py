@@ -5,12 +5,15 @@ directory it installs into.
 RED, and why each test below fails against the current tree (read, not guessed):
 
 §S3 / AC5 -- `crucible-axi serve`
-  `crucible_axi/cli.py:_build_parser` registers exactly ONE subparser,
-  `install` (`cli.py:53`), and `main` (`cli.py:104`) dispatches only
-  `install`. So `parse_args(["serve"])` hits argparse's "invalid choice" and
-  exits 2, and nothing in the package ever composes a server launch. Every
-  `serve` test therefore fails today at the parser or on "no launch call was
-  ever made".
+  At RED, `crucible_axi/cli.py:_build_parser` registered exactly ONE
+  subparser, `install`, and `main` dispatched only `install`. So
+  `parse_args(["serve"])` hit argparse's "invalid choice" and exited 2, and
+  nothing in the package composed a server launch. Every `serve` test
+  therefore failed at the parser or on "no launch call was ever made". No
+  line can be cited for that any more, and none is: GREEN landed the
+  subparser these tests forced (`cli.py:67`, `p_serve = sub.add_parser(`)
+  beside the `install` one (`cli.py:42`), and `main` dispatches through the
+  `_COMMANDS` table (`cli.py:337`, `handler = _COMMANDS.get(args.command)`).
 
   What the tests PIN (the contract §S3 states, plus the follow-up systemd
   `--user` unit's requirement of a minimal PATH):
@@ -41,11 +44,13 @@ RED, and why each test below fails against the current tree (read, not guessed):
   whose `returncode` `serve` propagates.
 
 §S1b / AC7 -- the install creates its target directory
-  Nothing in `crucible_axi/` ever creates `target_dir` (no `makedirs`/`mkdir`
-  anywhere in the package) and the default is `~/.crucible` (`cli.py:56`). So
-  on a clean machine the server stage provisions and the [manifest] stage then
-  dies `FileNotFoundError: .../crucible-clients.json`; `run_install` records it
-  as `ok=False` and `crucible-axi install` exits 1. The tests below drive a
+  At RED nothing in `crucible_axi/` created `target_dir` (no
+  `makedirs`/`mkdir` anywhere in the package) while the default was -- and
+  still is -- `~/.crucible` (`cli.py:45`,
+  `default=os.path.expanduser("~/.crucible"),`). So on a clean machine the
+  server stage provisioned and the [manifest] stage then died
+  `FileNotFoundError: .../crucible-clients.json`; `run_install` recorded it
+  as `ok=False` and `crucible-axi install` exited 1. The tests below drive a
   target dir that does NOT exist (with the server stage stubbed to a fast
   provision -- no subprocess, no network) and assert the REAL outcome: the
   directory exists, the manifest was written inside it, and `ok is True` /
