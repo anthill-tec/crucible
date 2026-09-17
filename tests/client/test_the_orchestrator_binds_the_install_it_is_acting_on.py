@@ -82,8 +82,10 @@ import hashlib
 import importlib
 import io
 import os
+import re
 import shutil
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -394,15 +396,29 @@ class AFreshInstallResolvesTheConfigurationItJustWroteTest(
         the file it read."""
         self.install_via_cli()
         text = Path(self.config_file).read_text(encoding="utf-8")
-        header = "[limits.%s]\n" % (EDITED_LIMIT_NAME,)
         self.assertIn(
-            header, text,
-            "fixture: the laid-down config must declare `%s`"
-            % (EDITED_LIMIT_NAME,))
-        Path(self.config_file).write_text(
-            text.replace(header,
-                         "%svalue = %d\n" % (header, EDITED_LIMIT_VALUE), 1),
-            encoding="utf-8")
+            EDITED_LIMIT_NAME, tomllib.loads(text).get("limits", {}),
+            "fixture: the laid-down `%s` must DECLARE `[limits.%s]` for an "
+            "operator to set a `value` on -- asserted by PARSING it, so how "
+            "the shipped file is laid out is no precondition of a test whose "
+            "subject is WHICH file the envelope read; config:\n%s"
+            % (CONFIG_NAME, EDITED_LIMIT_NAME, text))
+        edited = re.sub(
+            r"^\[limits\.%s\][ \t]*(#[^\n]*)?$"
+            % (re.escape(EDITED_LIMIT_NAME),),
+            lambda match: "%s\nvalue = %d" % (match.group(0),
+                                              EDITED_LIMIT_VALUE),
+            text, count=1, flags=re.MULTILINE)
+        Path(self.config_file).write_text(edited, encoding="utf-8")
+        self.assertEqual(
+            tomllib.loads(edited).get("limits", {}).get(
+                EDITED_LIMIT_NAME, {}).get("value"),
+            EDITED_LIMIT_VALUE,
+            "fixture: the edited `%s` must PARSE carrying the operator's "
+            "`value = %d`; it does not, so the `[limits.%s]` header this test "
+            "inserts under is no longer shaped the way it matched. edited "
+            "config:\n%s"
+            % (CONFIG_NAME, EDITED_LIMIT_VALUE, EDITED_LIMIT_NAME, edited))
 
         stdout = self.install_via_cli("--force")
 
