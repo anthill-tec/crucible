@@ -443,8 +443,15 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         # `systemctl` (so it reports skipped-with-reason and writes nothing)
         # and points both unit-dir resolution rules at tmp, so the operator's
         # real `~/.config/systemd/user` is unreachable on two independent axes.
+        # CR-CRU-143 §S2 -- the REAL `[manifest]` stage runs here too, and
+        # unpinned it asks the WORKSTATION whether a server is provisioned and
+        # then copies that server's shipped `crucible.toml` into the operator's
+        # own store dir, beside their live database. The stage sequence this
+        # test asserts is the same under either answer, so the answer is
+        # DECLARED and the write stays inside the sandbox.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
                 _unit_stage_sandboxed(self.tmp), \
+                _server_not_provisioned(install), \
                 mock.patch("crucible_axi.install.subprocess.run",
                            side_effect=_fail_if_npx_server_run) as mock_run, \
                 mock.patch("crucible_axi.install._server_already_installed",
