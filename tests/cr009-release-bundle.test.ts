@@ -29,7 +29,7 @@
 // `docs/RUNBOOK.md`. Every test below is expected to FAIL for one of those
 // reasons — that is expected RED.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -251,15 +251,22 @@ describe("§S1 install.sh bootstrap", () => {
 // that reddens a release branch for the machine it ran on.
 const NPM_PACK_TIMEOUT_MS = 60_000;
 
+/** One entry of npm's own `--json` file list: the published path and the
+ *  byte count npm read off disk for it. */
+interface PackedFile {
+  path: string;
+  size: number;
+}
+
 /**
  * Runs `npm pack --dry-run --json` against the real repo package.json and
- * returns the flat list of file paths npm would actually publish. Exercises
- * the real npm packaging engine (respecting `files`/`.gitignore`/.npmignore
- * precedence) rather than re-deriving the whitelist logic by hand, so a
- * `files` array that npm itself would ignore (typo'd glob, wrong casing)
- * still fails the test.
+ * returns the entries npm would actually publish. Exercises the real npm
+ * packaging engine (respecting `files`/`.gitignore`/.npmignore precedence,
+ * and npm's own always-included set) rather than re-deriving the whitelist
+ * logic by hand, so a `files` array that npm itself would ignore (typo'd
+ * glob, wrong casing) still fails the test.
  */
-function npmPackDryRunFiles(): string[] {
+function npmPackDryRunEntries(): PackedFile[] {
   const res = Bun.spawnSync({
     cmd: ["npm", "pack", "--dry-run", "--json"],
     cwd: REPO_ROOT,
@@ -268,12 +275,15 @@ function npmPackDryRunFiles(): string[] {
     throw new Error(`npm pack --dry-run --json failed: ${res.stderr.toString()}`);
   }
   const parsed = JSON.parse(res.stdout.toString()) as Array<{
-    files?: Array<{ path: string }>;
-  }> | Record<string, { files?: Array<{ path: string }> }>;
+    files?: PackedFile[];
+  }> | Record<string, { files?: PackedFile[] }>;
 
   const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
-  const files = entry?.files ?? [];
-  return files.map((f) => f.path);
+  return entry?.files ?? [];
+}
+
+function npmPackDryRunFiles(): string[] {
+  return npmPackDryRunEntries().map((f) => f.path);
 }
 
 describe("§S1 publishable server package.json", () => {
@@ -308,13 +318,20 @@ describe("§S1 publishable server package.json", () => {
 });
 
 describe("§S1 npm pack --dry-run tarball contents", () => {
-  test("published tarball contains bin/, src/, and public/", () => {
+  // CR-CRU-137 §S3/AC3 — this test says what the published package IS, so it
+  // names `LICENSE` beside the runtime paths. Before this CR the tarball
+  // carried no licence at all and npm's registry page rendered
+  // `License: none`; a licence that ships is part of the bundle's contents,
+  // not a separate concern, so it is asserted here rather than in a second
+  // packing check.
+  test("published tarball contains bin/, src/, public/, and LICENSE", () => {
     const files = npmPackDryRunFiles();
 
     // POSITIVE — the runtime paths the server actually needs (src/server.ts
     // resolves PUBLIC_DIR package-relative and reads package.json for
-    // pkg.version at :92/:15; there are no runtime deps to worry about).
-    for (const required of ["bin/", "src/", "public/"]) {
+    // pkg.version at :92/:15; there are no runtime deps to worry about),
+    // plus the licence file the registry page renders.
+    for (const required of ["bin/", "src/", "public/", "LICENSE"]) {
       const present = files.some((f) => f === required || f.startsWith(required));
       expect(present).toBe(true);
     }
@@ -345,6 +362,98 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
       const leaked = files.filter((f) => f === forbidden || f.startsWith(forbidden));
       expect(leaked).toEqual([]);
     }
+  }, NPM_PACK_TIMEOUT_MS);
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-137 §S3 — the published package declares its licence
+//
+// Spec: docs/changes/CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md
+// §S3 + its three acceptance criteria. Measured on this branch before the fix:
+// `package.json` carries no `license` key at all and no `LICENSE` file exists
+// at the repo root, so npm serves `@anthill-tec/crucible-server` as
+// `License: none` — a load-bearing declaration left to whatever the tool
+// defaults to, which is this CR's whole shape.
+//
+// DERIVED, NOT RETYPED (§S1/AC3's principle applied to a second figure): the
+// SPDX identifier is READ from `pyproject.toml`'s own `license =` declaration
+// rather than restated here. The npm server package and the PyPI client
+// package ship from this one repo as a version-locked pair, so two
+// identifiers that disagree IS the defect — and a test that retypes the
+// string cannot see that disagreement. Changing either declaration alone
+// fails here.
+//
+// Extends this file rather than opening a new one: it is already the home of
+// `package.json`'s published-identity contract (`§S1 publishable server
+// package.json`) and of what the tarball contains (`§S1 npm pack --dry-run
+// tarball contents`), which is exactly what §S3 adds to — and AC2 requires
+// the real `npm pack --dry-run --json` mechanism this file already owns.
+// ---------------------------------------------------------------------------
+
+/** `pyproject.toml`'s own `[project] license = "<spdx>"` declaration. */
+const PYPROJECT_LICENSE_PAT = /^license\s*=\s*"([^"]+)"$/m;
+
+function declaredSpdxIdentifier(): string {
+  const match = PYPROJECT_LICENSE_PAT.exec(readText("pyproject.toml"));
+  if (!match) {
+    throw new Error(
+      'pyproject.toml declares no `license = "<spdx>"` — the identifier this ' +
+        "repo's two published packages share has no single source to read.",
+    );
+  }
+  return match[1] as string;
+}
+
+describe("CR-CRU-137 §S3 the published package declares its licence", () => {
+  test("package.json's license field is the SPDX identifier pyproject.toml declares", () => {
+    const spdx = declaredSpdxIdentifier();
+    const pkg = JSON.parse(readText("package.json")) as { license?: string };
+
+    // The read value is SPDX-shaped — an identifier, not prose or a file
+    // reference — so the equality below cannot be satisfied by two matching
+    // nonsense strings.
+    expect(spdx).toMatch(/^[A-Za-z0-9][A-Za-z0-9.+-]*$/);
+
+    // POSITIVE — one identifier, both published packages.
+    expect(pkg.license).toBe(spdx);
+
+    // NEGATIVE — npm's two "no usable licence" spellings. `UNLICENSED` is
+    // what a scaffolded package.json carries, and a `SEE LICENSE IN …`
+    // reference is not an identifier a consumer's licence tooling can read.
+    expect(pkg.license).not.toBe("UNLICENSED");
+    expect(pkg.license?.startsWith("SEE LICENSE IN")).toBe(false);
+  });
+
+  test("a LICENSE file at the repository root carries the full text the declared identifier names", () => {
+    expect(existsSync(join(REPO_ROOT, "LICENSE"))).toBe(true);
+
+    // The identifier selects which text belongs here, so it is read first:
+    // a GPL-3.0 declaration over an MIT body is a licence that says two
+    // different things.
+    expect(declaredSpdxIdentifier()).toMatch(/^GPL-3\.0(-only|-or-later)$/);
+
+    const text = readText("LICENSE");
+    expect(text).toContain("GNU GENERAL PUBLIC LICENSE");
+    expect(text).toContain("Version 3, 29 June 2007");
+
+    // Bound — GPL-3.0's full text is ~35 kB. A one-line `GPL-3.0` stub, or a
+    // truncated copy, is a filename, not a licence grant.
+    expect(text.length).toBeGreaterThan(30_000);
+  });
+
+  test("LICENSE ships in the published npm tarball, whole, straight from the repo root", () => {
+    const entries = npmPackDryRunEntries();
+
+    // POSITIVE — read from what npm itself says it would publish, NOT from
+    // package.json's `files` array: npm packs LICENSE by its own rule, so a
+    // `files` read would claim coverage the tarball might not have (and miss
+    // the inverse — a listed file that does not exist).
+    const packed = entries.filter((f) => f.path === "LICENSE");
+    expect(packed.length).toBe(1);
+
+    // …and it is the real root file, byte for byte, not an empty or
+    // truncated one that satisfies a name check.
+    expect(packed[0]?.size).toBe(statSync(join(REPO_ROOT, "LICENSE")).size);
   }, NPM_PACK_TIMEOUT_MS);
 });
 
