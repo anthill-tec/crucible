@@ -984,6 +984,14 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
 
     def test_a_provisioned_server_publishes_the_file_the_install_wrote(self):
         document, stage, destination = self._install_and_read(provisioned=True)
+        # BOTH bounds, in BOTH branches: the floor and the ceiling are
+        # independent failures, and a branch that checked only one would pass a
+        # build that dropped an unconditional key under one condition or leaked
+        # an undeclared one under the other.
+        self.assertEqual(
+            [], missing_manifest_keys(document),
+            f"the provisioned install still owes every unconditional key "
+            f"{sorted(EXPECTED_MANIFEST_KEYS)}; got {sorted(document)}")
         self.assertEqual(
             [], unexpected_manifest_keys(document),
             f"the provisioned install must still publish nothing outside "
@@ -1008,6 +1016,12 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
             [], missing_manifest_keys(document),
             f"the unprovisioned install still owes every unconditional key "
             f"{sorted(EXPECTED_MANIFEST_KEYS)}; got {sorted(document)}")
+        self.assertEqual(
+            [], unexpected_manifest_keys(document),
+            f"the unprovisioned install must publish nothing outside "
+            f"{sorted(ALLOWED_MANIFEST_KEYS)} either -- declining one "
+            f"conditional key is no licence to invent another; got "
+            f"{sorted(document)}")
         self.assertNotIn(
             "server_config", document,
             f"CR-CRU-138 §S2 -- with NO server provisioned there is nothing to "
