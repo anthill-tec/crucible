@@ -543,7 +543,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       expect(listedBody.events.length).toBe(beforeCount);
     });
 
-    test("a planless project's parsed ingest is byte-identical to pre-CR-011 (regression guard)", async () => {
+    test("a planless project's parsed ingest carries NO plan/cycle linkage — the pre-CR-011 payload, additively extended (regression guard)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
 
@@ -553,12 +553,37 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as RunIngestResponse;
-      // CR-CRU-057 §S1 — `role` is a deliberate ADDITIVE key: `fixture-orch`
-      // (createProject's registered caller) declares role:"ORCHESTRATOR",
-      // so the ingest-response echo now carries it alongside the pre-CR-011
-      // set. Any agent with a declared role gets the key, bound or not —
-      // this is not a subset loosening, it's recording the intended shape.
-      expect(Object.keys(body).sort()).toEqual(["changed", "event", "ok", "role", "run", "verdict"].sort());
+      // WHAT THIS GUARDS (CR-CRU-011 §S0): a project with no plan gets no
+      // LINKAGE — CR-011's machinery may not invent a cycle, a plan or a span
+      // for a project that declared none.
+      //
+      // It used to be written as EXACT equality with a typed key list, and
+      // that pin has now been wrong twice for reasons that have nothing to do
+      // with linkage: CR-CRU-057 §S1 added `role` (the caller's declared role,
+      // echoed bound or not), and CR-CRU-140 §S1 made `help` unconditional on
+      // every evidence-returning reply (the reply that hands back `event: <id>`
+      // must also say how to read it back). Re-typing the list a third time
+      // only defers the next false RED to the next additive key — the pin was
+      // measuring the response's whole shape, which is not this test's subject
+      // and is covered by the routes' own suites.
+      //
+      // So the bound is CLOSED the CR-CRU-143 §S1 way instead — the floor must
+      // be there, and the keys that would MEAN linkage must not — rather than
+      // by exact equality with a hand-kept enumeration.
+      const keys = Object.keys(body);
+      // FLOOR — the payload a parsed ingest owes every caller, plan or no plan.
+      for (const owed of ["ok", "changed", "event", "run", "verdict"]) {
+        expect(keys).toContain(owed);
+      }
+      // `help` is part of the contract now (CR-CRU-140 §S1/AC2), not a
+      // tolerated extra: an evidence-returning reply always says how to read
+      // the evidence back, so its ABSENCE is the failure worth catching here.
+      expect(Array.isArray(body.help)).toBe(true);
+      // CEILING — and no key that speaks of a plan, a cycle or an attached
+      // context may appear, because there is no plan to link to. This is the
+      // regression the guard exists for, and it stays true however many
+      // linkage-free keys the evidence contract grows later.
+      expect(keys.filter((k) => /plan|cycle|context/i.test(k))).toEqual([]);
       expect(body.ok).toBe(true);
       expect(body.changed).toBe(true);
     });
