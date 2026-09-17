@@ -150,7 +150,7 @@ describe("§S5 docs — README quick start", () => {
   // "honours `CRUCIBLE_HOST` / `CRUCIBLE_PORT`"; it honours neither
   // (`src/server.ts:158`), and the flags it does honour WRITE the server's
   // `crucible.toml` rather than pass a per-run value
-  // (`crucible_axi/cli.py:355-362`).
+  // (`crucible_axi/cli.py:368-375`).
   //
   // The README carries NO retirement record, and that is deliberate rather
   // than an omission: a quick start's job is to be true today, and the record
@@ -1599,7 +1599,7 @@ describe("CR-CRU-066 §S4/AC6 docs — RUNBOOK reconciled", () => {
   //
   // The subject is the mechanism that replaced them, and it is a real one:
   // `crucible-axi serve --host/--port` WRITES the listener into the server's
-  // own `crucible.toml` and then boots it (`crucible_axi/cli.py:355-362`,
+  // own `crucible.toml` and then boots it (`crucible_axi/cli.py:368-375`,
   // `crucible_axi/install.py:559`). So both halves are kept and the
   // anti-deletion property holds in both directions — the command line that
   // sets the listener AND the declaration that command writes must each stay

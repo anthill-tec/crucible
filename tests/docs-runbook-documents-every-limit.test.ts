@@ -906,7 +906,7 @@ describe("CR-CRU-139 §S4 — the retired CONNECTION variables are recorded as R
     const md = collapse(text(RUNBOOK));
     // Wrong in KIND, not only in name: `crucible-axi serve --host/--port`
     // WRITES the listener into the server's own `crucible.toml` and then boots
-    // it (`crucible_axi/cli.py:355-362`, `crucible_axi/install.py:559`). A
+    // it (`crucible_axi/cli.py:368-375`, `crucible_axi/install.py:559`). A
     // document calling that an alias for an export teaches a model in which
     // the setting evaporates with the shell — which is the confusion this CR
     // exists to end, so the stale framing is forbidden by its own words.
