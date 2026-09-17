@@ -202,6 +202,12 @@ historical record of what a prior author observed, like a DN's dated note, not a
       citation whose target line no longer matches its comment's claim is corrected to the line
       that now holds it. Evidenced by re-reading each corrected citation's new line and confirming
       it names what the comment says — not by a line-count diff alone.
+- [ ] `tests/project-namespace-tripwire.test.ts`'s `PROSE_CITATIONS.clients.head` reflects the
+      actual measured count after this CR's edits land — found during C1 close-out: two new
+      `CR-CRU-137` literals in `clients/bun-crucible.py` moved the true count from 862 to 864,
+      reddening this guard and (via its own child-process pairing)
+      `tests/help-surface-order-independence.test.ts` too, on content grounds unrelated to §S1's
+      timeout work. Evidenced by re-running the classifier the guard names in its own comment.
 
 ## Estimated size
 
