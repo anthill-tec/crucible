@@ -41,7 +41,7 @@ suite whose colour means nothing:
   RED  `UnrunnableLocalRunnerFailsTheGateTest`. The same crash class as the
          first shape at a DIFFERENT unguarded call site — `run_gate_suites` →
          `_captured_suite_run` → the client's own `_run_logged`
-         (`bun-crucible.py:316`) — so a declared suite the gate runs in its own
+         (`bun-crucible.py:310`) — so a declared suite the gate runs in its own
          process, whose runner is missing, kills the gate too, and kills it
          BEFORE any suite has run at all. Included because AC3's shapes are
          otherwise both on the dispatched side, and a GREEN that guards only
@@ -522,7 +522,7 @@ class UnrunnableLocalRunnerFailsTheGateTest(_UnrunnableSuiteProbe):
 
     A different unguarded call site from the first shape's — `run_gate_suites`
     → `_captured_suite_run` → the client's own `_run_logged` at
-    `bun-crucible.py:316`, versus the dispatch's `subprocess.run` at
+    `bun-crucible.py:310`, versus the dispatch's `subprocess.run` at
     `_crucible_axi.py:4267` — so a GREEN that guards only the dispatch still
     dies here, and dies BEFORE any suite has run at all (ESCALATION 6)."""
 
