@@ -226,6 +226,48 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
     return cycleId;
   }
 
+  /**
+   * The cycle-evidence read AS THIS REPLY NAMES IT — path and query keys read
+   * out of the product's own words, never typed here. Of the hints an evidence
+   * reply offers, the reader after "what has this CYCLE recorded" follows the
+   * GET whose query speaks of a cycle; the same reply also offers
+   * `GET …/events/<id>`, which answers the narrower "what was in THIS run".
+   */
+  function cycleHintTarget(reply: JsonBody): { path: string; queryKeys: string[] } {
+    const help = (reply.help ?? []) as string[];
+    const hint = help.find((entry) => /GET\s+\/api\/v2\/\S+\?\S*cycle/i.test(entry));
+    expect(hint).toBeDefined();
+    const named = /GET\s+(\/api\/v2\/[A-Za-z0-9_\-\/]+)(\?(\S+))?/.exec(hint!);
+    expect(named).not.toBeNull();
+    const queryKeys = (named![3] ?? "")
+      .split("&")
+      .filter((pair) => pair.length > 0)
+      .map((pair) => pair.split("=")[0]!);
+    expect(queryKeys.length).toBeGreaterThan(1);
+    return { path: named![1]!, queryKeys };
+  }
+
+  /**
+   * CR-CRU-140 §S3 — FOLLOW an evidence reply's own hint: call what it names,
+   * filling each parameter it names from what the poster already holds. A
+   * hint naming a parameter nobody can fill is not followable, and throws
+   * here rather than quietly reading the wrong feed.
+   */
+  async function followCycleHint(
+    reply: JsonBody,
+    fill: { projectKey: string; cycleId: number },
+  ): Promise<JsonBody> {
+    const { path, queryKeys } = cycleHintTarget(reply);
+    const filled = queryKeys.map((key) => {
+      if (/cycle/i.test(key)) return `${key}=${fill.cycleId}`;
+      if (/project/i.test(key)) return `${key}=${fill.projectKey}`;
+      throw new Error(`the hint names a parameter the caller cannot fill: ${key}`);
+    });
+    const res = await fetch(`${base()}${path}?${filled.join("&")}`);
+    expect(res.status).toBe(200);
+    return readJson(res);
+  }
+
   // ── AC1 ─────────────────────────────────────────────────────────────────
 
   test("GET /api/v2's help[] names the cycle-evidence route AND its cycle query, at the path the dispatch chain actually serves — and names no path the server does not serve", async () => {
@@ -420,37 +462,15 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
     expect(typeof eventId).toBe("string");
     expect((ingest.context as { cycleId: number }).cycleId).toBe(cycleId);
 
-    // STEP 2 — read the hint. Nothing below is typed by the test: the path
-    // and the query keys come out of the product's own words, and the values
-    // out of the product's own reply.
-    // The reader's question is "what has this CYCLE recorded", so of the
-    // hints offered they follow the GET whose query speaks of a cycle — the
-    // same reply also offers `GET …/events/<id>`, which answers the narrower
-    // "what was in THIS run". Chosen by the product's own words; no path and
-    // no parameter name is typed here.
-    const help = (ingest.help ?? []) as string[];
-    const hint = help.find((entry) => /GET\s+\/api\/v2\/\S+\?\S*cycle/i.test(entry));
-    expect(hint).toBeDefined();
-    const named = /GET\s+(\/api\/v2\/[A-Za-z0-9_\-\/]+)(\?(\S+))?/.exec(hint!);
-    expect(named).not.toBeNull();
-    const path = named![1]!;
-    const query = (named![3] ?? "")
-      .split("&")
-      .filter((pair) => pair.length > 0)
-      .map((pair) => pair.split("=")[0]!);
-    expect(query.length).toBeGreaterThan(1);
-
-    // STEP 3 — call what the hint names, filling each parameter it names from
-    // the SAME reply. A hint naming a parameter the reply cannot supply is
-    // not followable, and fails here.
-    const filled = query.map((key) => {
-      if (/cycle/i.test(key)) return `${key}=${(ingest.context as { cycleId: number }).cycleId}`;
-      if (/project/i.test(key)) return `${key}=${projectKey}`;
-      throw new Error(`the hint names a parameter the ingest reply cannot fill: ${key}`);
+    // STEP 2/3 — read the hint and call what it names, filling each parameter
+    // it names from the SAME reply. Nothing below is typed by the test: the
+    // path and the query keys come out of the product's own words, and the
+    // cycle value out of the product's own echo — so a hint naming a
+    // parameter this reply cannot supply is not followable, and fails here.
+    const answer = await followCycleHint(ingest, {
+      projectKey,
+      cycleId: (ingest.context as { cycleId: number }).cycleId,
     });
-    const res = await fetch(`${base()}${path}?${filled.join("&")}`);
-    expect(res.status).toBe(200);
-    const answer = await readJson(res);
 
     // STEP 4 — the id the ingest returned is IN the answer, exactly once, and
     // the answer is this cycle's evidence rather than the whole feed.
@@ -462,4 +482,164 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
     // cycle answered.
     expect((answer.cycle as { id: number }).id).toBe(cycleId);
   });
+
+  // ── §S3 — a route that advertises a read must be VISIBLE to it ───────────
+  //
+  // Found by VERIFY, not by design. §S1 makes all five event-id-returning
+  // routes advertise the cycle-evidence read; for `/milestones` that
+  // advertisement was FALSE in the ordinary case, because `handleMilestones`
+  // took its context from `eventContext(body)` alone and never asked the seam
+  // its two stamped siblings use. A milestone filed by a registered,
+  // cycle-BOUND agent was therefore stored with no cycle and did not appear in
+  // the read its own reply named — the reply told the reader where to look and
+  // the answer was `events: []`. A hint that lies is the exact failure this CR
+  // was filed to end.
+
+  // ── §S3 / AC1 ───────────────────────────────────────────────────────────
+
+  test("§S3 — a milestone filed by a cycle-BOUND agent with NO explicit context is returned by the read its own reply advertises", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const projectKey = await createProject("cr140-s3-bound-milestone");
+    await register(projectKey, "fixture-orch");
+    const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3");
+    // The ordinary filer: registered BOUND, exactly as every client registers
+    // a TDD agent, and posting the body a client posts — no `context`, because
+    // since CR-CRU-094 the SERVER stamps the binding it holds.
+    await register(projectKey, "s3-verify", { role: "VERIFY", cycleId });
+
+    const reply = await readJson(
+      await postJson("/api/v2/milestones", {
+        projectKey,
+        agentId: "s3-verify",
+        type: "gap-analysis",
+        label: "CR-CRU-140",
+      }),
+    );
+    const eventId = reply.event as string;
+    expect(typeof eventId).toBe("string");
+
+    // The reader follows the reply's OWN hint — and finds what it was told
+    // would be there. This is the call that measured `events: []`.
+    const answer = await followCycleHint(reply, { projectKey, cycleId });
+    expect(answer.ok).toBe(true);
+    const events = answer.events as Array<{ id: string }>;
+    expect(events.filter((e) => e.id === eventId)).toHaveLength(1);
+  });
+
+  // ── §S3 / AC2 ───────────────────────────────────────────────────────────
+
+  test("§S3 — an explicit body context still WINS on /milestones: its own fields survive the binding stamp, and the milestone lands in the cycle the caller stated", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const projectKey = await createProject("cr140-s3-explicit-context");
+    await register(projectKey, "fixture-orch");
+    const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3-EXPLICIT");
+    await register(projectKey, "s3-explicit", { role: "VERIFY", cycleId });
+
+    const reply = await readJson(
+      await postJson("/api/v2/milestones", {
+        projectKey,
+        agentId: "s3-explicit",
+        type: "gap-analysis",
+        label: "CR-CRU-140",
+        // The caller states its own context, cycle included. The binding is a
+        // FALLBACK; it may not flatten what the caller said.
+        context: { cycleId, cr: "CR-CRU-140" },
+      }),
+    );
+    const eventId = reply.event as string;
+    expect(typeof eventId).toBe("string");
+
+    const answer = await followCycleHint(reply, { projectKey, cycleId });
+    const events = answer.events as Array<{ id: string; context?: { cycleId?: number; cr?: string } }>;
+    const stored = events.filter((e) => e.id === eventId);
+    expect(stored).toHaveLength(1);
+    // Both halves of what the caller stated survived: the cycle it named, and
+    // the field the binding knows nothing about.
+    expect(stored[0]!.context?.cycleId).toBe(cycleId);
+    expect(stored[0]!.context?.cr).toBe("CR-CRU-140");
+  });
+
+  for (const fixture of INGEST_ROUTES) {
+    test(`§S3 — POST ${fixture.path} refuses a body context naming a DIFFERENT cycle than the poster's binding, storing nothing — the stated cycle is never silently re-stamped`, async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const projectKey = await createProject(`cr140-s3-conflict-${fixture.path.replaceAll("/", "-")}`);
+      await register(projectKey, "fixture-orch");
+      const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3-CONFLICT");
+      await register(projectKey, "s3-conflict", { role: "RED", cycleId });
+
+      const before = (
+        (await readJson(await fetch(`${base()}/api/v2/events?project=${projectKey}`)))
+          .events as unknown[]
+      ).length;
+
+      const res = await postJson(fixture.path, {
+        ...fixture.body(projectKey, "s3-conflict"),
+        context: { cycleId: cycleId + 1000 },
+      });
+      // One answer for all five: the caller named a cycle, the server holds a
+      // different binding, and guessing between them is not an option.
+      expect(res.status).toBe(409);
+      const body = await readJson(res);
+      expect(body.ok).toBe(false);
+      expect(body.event).toBeUndefined();
+
+      const after = (
+        (await readJson(await fetch(`${base()}/api/v2/events?project=${projectKey}`)))
+          .events as unknown[]
+      ).length;
+      expect(after).toBe(before);
+    });
+  }
+
+  // ── §S3 / AC3 ───────────────────────────────────────────────────────────
+
+  test("§S3 — every stamped ingest surface resolves its attachment through the ONE `resolveIngestAttach` seam, and none reads the binding for itself", () => {
+    // Read off `src/v2.ts`: the five evidence-returning POST routes this file
+    // already exercises, matched to the handlers the dispatch chain names. A
+    // second, parallel resolution path is a defect (§S3/AC3), so it fails HERE
+    // rather than drifting out of step with its siblings later.
+    const stamped = dispatchTable().filter(
+      (r) => r.method === "POST" && INGEST_ROUTES.some((f) => f.path === r.path),
+    );
+    expect(stamped).toHaveLength(INGEST_ROUTES.length);
+    for (const route of stamped) {
+      const body = handlerBody(route.handler);
+      // Control: the parser really found this handler's body.
+      expect(body.length).toBeGreaterThan(0);
+      expect(body).toContain("resolveIngestAttach(");
+      // NEGATIVE — the agent row is read ONCE, inside the seam. A handler
+      // reaching for the binding itself is the parallel path.
+      expect(body).not.toContain("boundCycleId");
+    }
+  });
+
+  // ── §S3 / AC4 ───────────────────────────────────────────────────────────
+
+  for (const fixture of INGEST_ROUTES) {
+    test(`§S3 — POST ${fixture.path} by a cycle-BOUND agent is VISIBLE in the read its own reply advertises`, async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const projectKey = await createProject(`cr140-s3-visible-${fixture.path.replaceAll("/", "-")}`);
+      await register(projectKey, "fixture-orch");
+      const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3-VISIBLE");
+      // Bound, and posting the ordinary client body — NO explicit context.
+      await register(projectKey, "s3-poster", { role: "RED", cycleId });
+
+      const res = await postJson(fixture.path, fixture.body(projectKey, "s3-poster"));
+      expect(res.ok).toBe(true);
+      const reply = await readJson(res);
+      const eventId = reply.event as string;
+      expect(typeof eventId).toBe("string");
+
+      // ADVERTISED (AC2 of §S1) and VISIBLE (this AC) are one property, not
+      // two: the route says how to read its evidence back, and the evidence is
+      // there when the reader goes. Parameterised over the whole table so the
+      // next route to hand back an `event` id cannot advertise a read it is
+      // absent from.
+      const answer = await followCycleHint(reply, { projectKey, cycleId });
+      expect(answer.ok).toBe(true);
+      const events = answer.events as Array<{ id: string }>;
+      expect(events.filter((e) => e.id === eventId)).toHaveLength(1);
+      expect((answer.cycle as { id: number }).id).toBe(cycleId);
+    });
+  }
 });
