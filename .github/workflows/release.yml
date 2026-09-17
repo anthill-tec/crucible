@@ -142,8 +142,15 @@ jobs:
       # as test-e2e's, deliberately — one provisioning idiom, not two.
       - name: Install Playwright browsers (the suite includes the Chromium tier)
         run: bunx playwright install --with-deps chromium
+      # CR-CRU-137 §S1 — the suite's default per-test budget is this project's
+      # own figure, not bun's 5000 ms: two content assertions failed THIS job on
+      # wall clock alone (5.1 s, 6.2 s) on trees whose suites were green.
+      # `bunfig.toml`'s `[test] timeout` is silently ignored by bun, so the CLI
+      # flag is the only honoured channel, and CI does not shell through
+      # `clients/bun-crucible.py` — so the figure is named in both places, and a
+      # test reads BOTH and fails if they ever drift apart.
       - name: Bun suite
-        run: bun test
+        run: bun test --timeout 30000
 
   # CR-CRU-062 §S2 — the Python client suite. Measured server-free at gap
   # analysis (683/683 with CRUCIBLE_URL pointed at a dead port), so it needs
