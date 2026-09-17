@@ -2116,10 +2116,73 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // stale head also reds tests/help-surface-order-independence.test.ts, whose
 // child `bun test` collects THIS file; that file is correct, fired for the
 // right reason, and gets no change.
+//
+// UPDATED 2026-09-17 by the 0.2.2 BACK-MERGE into develop (`4b531d8`, tag
+// `0.2.2`/`87ec641` merged into `287a64c`) — `src` 736 -> 743 (+7) and
+// `clients` 872 -> 875 (+3). NEITHER figure is either side's recorded one, and
+// that is the whole reason a back-merge re-record is mandatory rather than
+// bookkeeping: the two notes above measure two DIFFERENT trees — CR-CRU-139
+// read 736/872 on develop, which never carried CR-CRU-140's citations, and the
+// 0.2.2 close-out read 731/865 on the hotfix branch, which never carried
+// CR-CRU-139's — so the merged truth is their UNION, a figure no run on either
+// branch could have produced. Both notes above stay exactly as they are: each
+// is still the correct reading of the tree it was taken on.
+//
+// ATTRIBUTED per tree and per file over `4b531d8^1..4b531d8` (what the hotfix
+// brought that develop lacked), citation by citation rather than subtracted:
+//
+//   src +7, all of it CR-CRU-140's, and all of it prose the merge moved
+//     verbatim: src/hints.ts +2 (:6 the module block on `cycleEvidence`, :76
+//     the `readEvidence` doc comment) and src/v2.ts +5 (:852 the
+//     `evidenceResponse` header, :1287 and :1356 the two §S3 milestone-attach
+//     comments, plus the lineage `CR-CRU-056` at :1292 and `CR-CRU-024` at
+//     :1294 that the §S3 comment makes to explain the new call by the seams it
+//     reuses — a lineage citation of a PRIOR CR counts exactly like the CR's
+//     own, because the measure is provenance, not authorship).
+//
+//   clients +3: clients/bun-crucible.py +2 — CR-CRU-137 §S1's
+//     `DEFAULT_TEST_TIMEOUT_MS` header and the `_bun_test_cmd` docstring line,
+//     which on THIS tree are :492 and :520, not the :477/:505 the note above
+//     records, because CR-CRU-139 C2's edits to the same file sit above them
+//     and pushed them down — and clients/_crucible_axi.py +1 (:2273, the
+//     `LANDED_STATUSES` docstring naming `CR-CRU-140 §S2` as the reason its
+//     mirrored citation moved).
+//
+// THE SAME NON-MOVE, RE-CHECKED ON THE MERGED TREE rather than carried across:
+// the merge also brings src/store.ts's two `CR-CRU-140 §S2` "WHAT THIS TABLE
+// HOLDS" headers (:2318, :2389), so the RAW added-literal count under `src/` is
+// 9, not 7. They are `--` SQL comments inside the schema DDL TEMPLATE LITERAL,
+// hence STRING CONTENT to this file's TypeScript classifier and not prose here.
+// They moved no head on either branch and move none on the union — which is
+// why the arithmetic above is per-file and per-id and never a diff subtraction.
+//
+// `public` (477) re-measures at its recorded head in the same run and could not
+// have moved: the merge changes exactly five files inside a classified tree —
+// the three `src/` files and the two `clients/` files above — and nothing under
+// `public/` at all. Both branches recorded 477 for that same reason, so the
+// union is forced to it.
+//
+// MEASURED with this file's own machinery on the MERGED tree, not transcribed
+// from either side: `bun test tests/project-namespace-tripwire.test.ts -t
+// "never below its develop baseline"` reported, against the then-recorded
+// 736/872,
+//
+//     -  "clients": 872   +  "clients": 875
+//     -  "src":     736   +  "src":     743
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 743 and 875 are far above the 512
+// and 601 floors, no head came out below its baseline — a merge that only
+// UNIONS two trees' prose can add and cannot shed — and the three `develop`
+// floors stay at 512/378/601, unchanged, as always for a re-record.
+//
+// It clears the CASCADE with it, as every re-record here does: this file's
+// stale head also reds tests/help-surface-order-independence.test.ts, whose
+// child `bun test` collects THIS file; that file is correct, fired for the
+// right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 736 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 743 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 872 },
+  clients: { exts: [".py"], develop: 601, head: 875 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
