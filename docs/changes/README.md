@@ -5,7 +5,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 **Design contract:** [../research/PRD-crucible-v2.md](../research/PRD-crucible-v2.md)
 **Evidence base:** [../research/DN-crucible-api-reconstruction.md](../research/DN-crucible-api-reconstruction.md)
-**Target release:** 0.2.0
+**Target release:** 0.2.2
 
 | CR | Title | Type | Status | Depends on | Wave |
 |---|---|---|---|---|---|

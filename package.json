@@ -1,6 +1,7 @@
 {
   "name": "@anthill-tec/crucible-server",
   "version": "0.2.1",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/anthill-tec/crucible.git"
