@@ -255,17 +255,27 @@ describe("§S1 the local gate's own invocations carry the project's default per-
 });
 
 describe("§S1 CI runs the suite on the same budget, and the two figures cannot drift apart", () => {
-  test("release.yml's test-bun `Bun suite` step runs `bun test --timeout 30000`", () => {
+  test("release.yml's test-bun job runs the suite exactly once, on `bun test --timeout 30000`", () => {
     const { parsed } = readReleaseWorkflow();
     const invocations = bunTestInvocations(parsed);
 
     // POSITIVE — the job runs the suite, and that one invocation carries the
-    // figure. Bound at exactly one: a second, unflagged `bun test` step added
-    // later fails here instead of quietly running on bun's default.
-    expect(invocations.map((i) => i.label)).toEqual(["Bun suite"]);
-    expect(timeoutFlagValues((invocations[0] as { run: string }).run.trim().split(/\s+/))).toEqual([
-      String(REQUIRED_DEFAULT_TIMEOUT_MS),
-    ]);
+    // figure exactly once. Bound at one INVOCATION, not at one step NAME: a
+    // second, unflagged `bun test` step added later fails here instead of
+    // quietly running on bun's default, while merely RENAMING the step changes
+    // nothing about what CI runs and must not redden the suite. The label is
+    // evidence in the failure message, never the contract.
+    expect(
+      invocations.length,
+      `release.yml's test-bun job runs ${String(invocations.length)} \`bun test\` steps; §S1 requires ` +
+        `exactly one: ${JSON.stringify(invocations.map((i) => i.label))}`,
+    ).toBe(1);
+
+    const invocation = invocations[0] as { label: string; run: string };
+    expect(
+      timeoutFlagValues(invocation.run.trim().split(/\s+/)),
+      `release.yml's '${invocation.label}' step runs: ${invocation.run.trim()}`,
+    ).toEqual([String(REQUIRED_DEFAULT_TIMEOUT_MS)]);
   });
 
   test("the workflow's --timeout EQUALS the figure the client declares — derived from both files, retyped from neither", () => {
