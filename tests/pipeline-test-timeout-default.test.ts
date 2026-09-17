@@ -124,6 +124,9 @@ function timeoutFlagValues(tokens: string[]): string[] {
 
 const PROBE_TARGET_FILE = "tests/example-target.test.ts";
 const PROBE_JUNIT_PATH = "/tmp/cr137-probe-junit.xml";
+// A value no real budget would hold, so "the flag followed this constant" is
+// unambiguous when the probe moves one.
+const PROBE_SENTINEL_MS = 7331;
 
 const CLIENT_PROBE = `
 import importlib.util, json, sys
@@ -139,13 +142,32 @@ constants = {
     for name, value in vars(module).items()
     if name.isupper() and isinstance(value, int) and not isinstance(value, bool)
 }
-print(json.dumps({"targeted": targeted, "suite": suite, "constants": constants}))
+
+# Which constant does the builder SELECT? Move each one to a sentinel, rebuild,
+# and let the caller see whose move the emitted flag followed.
+sentinel = ${String(PROBE_SENTINEL_MS)}
+rebuilt = {}
+for name, value in constants.items():
+    setattr(module, name, sentinel)
+    try:
+        rebuilt[name] = module._bun_test_cmd("bun", None, ${JSON.stringify(PROBE_JUNIT_PATH)}, False, None)
+    except Exception as error:
+        rebuilt[name] = ["<raised>", type(error).__name__]
+    finally:
+        setattr(module, name, value)
+
+print(json.dumps({"targeted": targeted, "suite": suite, "constants": constants,
+                  "sentinel": sentinel, "rebuilt": rebuilt}))
 `;
 
 interface ClientProbe {
   targeted: string[];
   suite: string[];
   constants: Record<string, number>;
+  /** The value each constant was moved to, one at a time. */
+  sentinel: number;
+  /** The whole-suite command rebuilt with that constant moved, per constant. */
+  rebuilt: Record<string, string[]>;
 }
 
 let cachedProbe: ClientProbe | undefined;
@@ -236,21 +258,34 @@ describe("§S1 the local gate's own invocations carry the project's default per-
     expect(suite).not.toContain(PROBE_TARGET_FILE);
   });
 
-  test("the budget is declared ONCE, as a single named integer constant holding 30000", () => {
-    const { constants } = probeClient();
-    const budgetConstants = Object.entries(constants).filter(([name]) => /TIMEOUT|BUDGET/.test(name));
+  test("the budget is declared ONCE, as a named constant the command builder SELECTS, holding 30000", () => {
+    const { constants, sentinel, rebuilt } = probeClient();
 
-    // POSITIVE — exactly one named declaration, holding the chosen figure.
+    // WHICH constant carries the budget is established by BEHAVIOUR: each of
+    // the module's named integers is moved to a sentinel in turn and the
+    // command rebuilt, so a constant is the budget's declaration exactly when
+    // moving it moves the emitted flag. Scoping by behaviour rather than by
+    // name is what lets the module grow an unrelated `*_TIMEOUT_MS` (an HTTP or
+    // ingest budget) without reddening this test — while still catching the
+    // two failures that matter: a number retyped inside the builder (nothing
+    // would move it) and a second declaration that also feeds it.
+    const selectors = Object.keys(constants).filter(
+      (name) => timeoutFlagValues(rebuilt[name] ?? []).join(",") === String(sentinel),
+    );
+
+    // POSITIVE — exactly one named declaration, and it holds the chosen figure.
     expect(
-      budgetConstants.map(([name]) => name),
-      `${CLIENT_REL} must declare the default per-test budget as ONE named constant; ` +
-        `found ${JSON.stringify(budgetConstants)}`,
+      selectors,
+      `${CLIENT_REL}'s _bun_test_cmd must take its --timeout from exactly ONE named constant; ` +
+        `moving each of ${JSON.stringify(constants)} moved the emitted flag for ` +
+        `${JSON.stringify(selectors)}`,
     ).toHaveLength(1);
-    expect((budgetConstants[0] as [string, number])[1]).toBe(REQUIRED_DEFAULT_TIMEOUT_MS);
+    const declared = constants[selectors[0] as string] as number;
+    expect(declared).toBe(REQUIRED_DEFAULT_TIMEOUT_MS);
 
-    // …and the command builder SELECTS that constant rather than retyping the
-    // number: change the constant alone and the emitted flag must move with it.
-    expect(clientDeclaredTimeoutMs()).toBe((budgetConstants[0] as [string, number])[1]);
+    // …and the command really emits that constant's value rather than a
+    // coincidentally equal literal beside it.
+    expect(clientDeclaredTimeoutMs()).toBe(declared);
   });
 });
 
