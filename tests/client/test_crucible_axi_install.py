@@ -127,20 +127,28 @@ def _ensure_repo_root_on_path():
         sys.path.insert(0, root_str)
 
 
-def _import_fresh(module_name):
-    """Import (or re-import) a `crucible_axi` module from the repo-root
-    checkout, purging any stale cache entry first so each test gets an
-    independent import attempt. Deliberately does NOT catch/skip -- during
-    RED this raises ModuleNotFoundError (the package does not exist yet),
-    which is the expected failure (same convention as the sibling
-    `_load_axi_module()`/`_load_toon_module()` helpers in
+def _import_fresh(*module_names):
+    """Import the named `crucible_axi` modules from the repo-root checkout,
+    purging the WHOLE `crucible_axi` package first so each test gets an
+    independent import graph (and so `crucible_axi.cli` holds the same
+    `crucible_axi.install` module object this suite patches) -- the convention
+    every sibling suite uses. Returns the modules in the order requested.
+
+    Purging one module NAME instead left the package half-superseded for
+    whatever ran next: `sys.modules['crucible_axi.install']` re-executed while
+    an already-imported `crucible_axi.cli` stayed bound to the previous copy,
+    so a later suite that stubbed the new copy's `DEFAULT_STAGE_RUNNERS` had
+    the REAL `[server]` stage run out of the old one. Deliberately does NOT
+    catch/skip -- during RED this raises ModuleNotFoundError (the package does
+    not exist yet), which is the expected failure (same convention as the
+    sibling `_load_axi_module()`/`_load_toon_module()` helpers in
     test_crucible_axi_shared.py, which load-by-path and let a missing-module
     error propagate as RED)."""
     _ensure_repo_root_on_path()
     for mod in list(sys.modules):
-        if mod == module_name or mod.startswith(module_name + "."):
+        if mod == "crucible_axi" or mod.startswith("crucible_axi."):
             del sys.modules[mod]
-    return importlib.import_module(module_name)
+    return tuple(importlib.import_module(name) for name in module_names)
 
 
 def _load_toon_module():
@@ -300,7 +308,7 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
         m = re.search(r'(?m)^crucible-axi\s*=\s*"([^"]+)"\s*$', text)
         self.assertIsNotNone(m, "expected the crucible-axi script mapping")
         module_path, _, attr = m.group(1).partition(":")
-        mod = _import_fresh(module_path)
+        mod, = _import_fresh(module_path)
         self.assertTrue(
             hasattr(mod, attr),
             f"expected {module_path} to define {attr!r}")
@@ -322,7 +330,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_run_install_executes_server_fleet_manifest_unit_stages_in_order(self):
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         call_order = []
 
         def make_fake(name):
@@ -350,7 +358,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         """Negative/bound path: a stage failure must NOT silently continue to
         later stages -- would fail if GREEN swallowed stage exceptions and
         kept going regardless."""
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         call_order = []
 
         def failing_server(target_dir, force):
@@ -386,7 +394,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         self.assertFalse(ok, "a stage failure must surface as ok:false")
 
     def test_run_install_stage_results_carry_tilde_abbreviated_installed_path(self):
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         home = os.path.expanduser("~")
         fake_server_path = os.path.join(home, ".crucible", "server")
         fakes = {
@@ -422,8 +430,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         stubbed to RAISE if asked to run the server via `npx`, so the retired
         behaviour surfaces here as ok:false (and would hang for real), while
         the provision path returns ok:true with both stages present."""
-        install = _import_fresh("crucible_axi.install")
-        axi = _import_fresh("crucible_axi")
+        install, axi = _import_fresh("crucible_axi.install", "crucible_axi")
 
         def _fail_if_npx_server_run(*args, **kwargs):
             command = args[0] if args else kwargs.get("args", "")
@@ -494,8 +501,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         `install.DEFAULT_STAGE_RUNNERS` patched to injected fakes (no real
         npx/uv/skills/subprocess). Asserts the REAL observable outcome: one
         decodable TOON-AXI envelope on stdout, not merely a clean exit."""
-        install = _import_fresh("crucible_axi.install")
-        cli = _import_fresh("crucible_axi.cli")
+        install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
         toon = _load_toon_module()
 
         def make_fake(name):
@@ -542,7 +548,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_build_manifest_maps_all_five_client_stacks_to_installed_paths(self):
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         self.assertEqual(set(manifest["clients"].keys()), EXPECTED_CLIENT_STACKS)
         for stack, path in manifest["clients"].items():
@@ -558,12 +564,12 @@ class DiscoveryManifestTest(unittest.TestCase):
         """Negative/bound path -- exactly 5 keys, no extra/unknown stack
         sneaks in (would fail if a runaway implementation added e.g. a
         6th/'vscode' entry, since vscode is clientless per the CR context)."""
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         self.assertEqual(len(manifest["clients"]), 5)
 
     def test_build_manifest_carries_a_version_key_and_status_contract_reference(self):
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         self.assertIn("version", manifest)
         self.assertIsInstance(manifest["version"], str)
@@ -572,7 +578,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         self.assertIn("STATUS-CONTRACT.md", manifest["status"])
 
     def test_write_manifest_persists_valid_json_with_the_stable_schema(self):
-        manifest_mod = _import_fresh("crucible_axi.manifest")
+        manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
         written_path = manifest_mod.write_manifest(self.tmp, manifest)
 
@@ -620,7 +626,7 @@ class InstallIdempotencyTest(unittest.TestCase):
         The contract is still asserted as a closed bound (§S1) rather than by
         exact equality, so this stays a statement about the install rather than
         about the host."""
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
 
@@ -671,7 +677,7 @@ class InstallIdempotencyTest(unittest.TestCase):
         whether a server is provisioned, then lays the server's file down
         beside the operator's live database. Convergence is a property of the
         install, not of the machine it ran on."""
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
         with _unit_stage_sandboxed(self.tmp), \
@@ -697,7 +703,7 @@ class InstallIdempotencyTest(unittest.TestCase):
         `[manifest]` stage runs here, so the stage sequence this asserts must
         be the one a machine with no server provisioned reports too, and no run
         of this suite may write beside the operator's live database."""
-        install = _import_fresh("crucible_axi.install")
+        install, = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
         with _unit_stage_sandboxed(self.tmp), \

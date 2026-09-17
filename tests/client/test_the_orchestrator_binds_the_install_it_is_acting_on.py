@@ -71,6 +71,14 @@ BOTH directions. An L2 escape detector re-reads the operator's two real
 `crucible.toml` files after every test and FAILS on any change, so a sandbox
 that ever regresses is reported here rather than on the operator's disk.
 
+Runner order -- CR-CRU-143 §S2. Nothing here may depend on what a PREVIOUS
+test module left in `sys.modules`: `_import_fresh` below pins one coherent
+`crucible_axi` import generation per test (`cli.install` IS the module whose
+stage table this fixture stubs), and `$CRUCIBLE_SERVER_VERSION` is explicitly
+UNSET alongside the rest of the sandbox. Free-riding on either made all five
+tests pass under `unittest discover`'s order and fail under pytest's, with the
+REAL `[server]` stage reporting a version it could not resolve.
+
 Invocation:
     python3 -m pytest tests/client/test_the_orchestrator_binds_the_install_it_is_acting_on.py -q
 Fallback:
@@ -84,6 +92,7 @@ import io
 import os
 import re
 import shutil
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -117,6 +126,34 @@ REAL_INSTALL_CONFIG = Path(os.path.expanduser("~/.crucible")) / CONFIG_NAME
 REAL_STORE_CONFIG = (Path(os.path.expanduser("~/.local/share/crucible"))
                      / CONFIG_NAME)
 REAL_WATCHED_PATHS = (REAL_INSTALL_CONFIG, REAL_STORE_CONFIG)
+
+
+def _import_fresh(*module_names):
+    """Import the named `crucible_axi` modules from the repo-root checkout,
+    purging the whole `crucible_axi` package FIRST so the modules returned are
+    ONE import generation -- in particular so `crucible_axi.cli`'s bound
+    `install` IS the module object whose `DEFAULT_STAGE_RUNNERS` this fixture
+    patches. Returns the modules in the order requested.
+
+    CR-CRU-143 §S2 -- the shape this file runs under is STATED here, never
+    inherited from whatever a previous test module left behind. A bare
+    `importlib.import_module` returns whatever generation is in `sys.modules`,
+    and a sibling suite that re-imports `crucible_axi.install` ALONE (several
+    do, to read this tree's module-level stage tables) leaves
+    `crucible_axi.cli` bound to the SUPERSEDED copy: `mock.patch.dict` on the
+    new copy's table then stubs nothing `cmd_install` will run, the REAL
+    `[server]` stage executes, and all five tests below fail with
+    `stage-failed: ... the Crucible server version could not be resolved`.
+    That is an ordering accident -- invisible under `unittest discover`'s
+    order, fatal under pytest's (and different again per `pytest-randomly`
+    seed) -- so the import graph is pinned rather than assumed."""
+    root = str(REPO_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    for mod in list(sys.modules):
+        if mod == "crucible_axi" or mod.startswith("crucible_axi."):
+            del sys.modules[mod]
+    return tuple(importlib.import_module(name) for name in module_names)
 
 
 def _load_toon_module():
@@ -170,9 +207,16 @@ class _OrchestratorInstallCase(unittest.TestCase):
     `[fleet]` and `[manifest]` are REAL, which is the point."""
 
     def setUp(self):
-        self.cli = importlib.import_module("crucible_axi.cli")
-        self.install = importlib.import_module("crucible_axi.install")
-        self.manifest = importlib.import_module("crucible_axi.manifest")
+        # ONE import generation, pinned here rather than inherited from the
+        # runner's order -- `self.cli.install` MUST be `self.install`, or the
+        # stage table stubbed below is not the one `cmd_install` reads.
+        self.cli, self.install, self.manifest = _import_fresh(
+            "crucible_axi.cli", "crucible_axi.install", "crucible_axi.manifest")
+        self.assertIs(
+            self.cli.install, self.install,
+            "fixture: `crucible_axi.cli` must be bound to the SAME "
+            "`crucible_axi.install` module this fixture stubs -- otherwise "
+            "`[server]` runs for real against the machine")
         self.toon = _load_toon_module()
 
         self.root = tempfile.mkdtemp(prefix="cr142-orchestrator-bind-")
@@ -228,6 +272,12 @@ class _OrchestratorInstallCase(unittest.TestCase):
             "BUN_INSTALL": self.bun_root,
             "CRUCIBLE_NO_SERVICE": "1",
             "CRUCIBLE_NO_BUN_BOOTSTRAP": "1",
+            # UNSET, deliberately: `[server]` is stubbed here, so the pin it
+            # would resolve is never wanted -- and an ambient (or leaked)
+            # value is exactly what would let an accidentally-unstubbed
+            # `[server]` stage reach a REAL `bun add -g` instead of failing
+            # fast with its remedy.
+            "CRUCIBLE_SERVER_VERSION": None,
         }
 
     def _stubs(self, table, extra=()):
