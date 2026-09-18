@@ -1,6 +1,6 @@
 # CR-CRU-015 — the BDD-driven e2e suite reaches the board, with its scenarios intact
 
-**Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-004, CR-CRU-007 · **Status** PENDING
+**Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-004, CR-CRU-007 · **Status** COMPLETED (0.3.0)
 
 > **RE-SPECIFIED 2026-09-17 (user ruling, option 2).** The original CR — filed at kickoff, when
 > Crucible was "not just a sink" — had the SERVER execute Playwright against a project's `sutRoot`
