@@ -137,6 +137,10 @@ interface RunFixture {
   tier: string;
   codec: string;
   tree: SuiteNode[];
+  /** Milliseconds AFTER the mount clock this run was recorded — the shell
+   *  picks the BDD run with the greatest timestamp, so a run that arrives
+   *  later in a project's life says so here. */
+  offsetMs?: number;
 }
 
 /** A playwright-coded `e2e` run — what a real `bun-crucible.py e2e` drive of
@@ -186,6 +190,9 @@ interface MountOpts {
   key: string;
   projectType?: "backend" | "frontend";
   runs?: RunFixture[];
+  /** Event ids whose DETAIL read the board refuses — the run is in the feed
+   *  (so the section picks it) and reading its Gherkin fails. */
+  failingDetails?: string[];
 }
 
 /** AC7's driver, and the reason `healthReachable` is module state: the shell
@@ -197,8 +204,18 @@ let healthReachable = true;
 let cacheBust = 0;
 let fetchLog: string[] = [];
 
+/** The project's runs AS THE BOARD HOLDS THEM RIGHT NOW — module state, not a
+ *  mount-time constant, so a test can file a LATER run into a live pane the
+ *  way a real ingest does, without remounting the section (remounting is the
+ *  workaround under test: it rebuilds the pane's own state). */
+let liveRuns: RunFixture[] = [];
+
+/** Event ids whose detail read the board currently refuses. */
+let detailReadFails = new Set<string>();
+
 async function mountApp(opts: MountOpts): Promise<void> {
-  const runs = opts.runs ?? [];
+  liveRuns = [...(opts.runs ?? [])];
+  detailReadFails = new Set(opts.failingDetails ?? []);
   healthReachable = true;
   fetchLog = [];
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
@@ -222,7 +239,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     kind: "test",
     tier: run.tier,
     codec: run.codec,
-    timestamp: now,
+    timestamp: now + (run.offsetMs ?? 0),
     summary: summarize(run.tree),
     tree: run.tree,
   });
@@ -248,7 +265,11 @@ async function mountApp(opts: MountOpts): Promise<void> {
     }
     const eventMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     if (eventMatch !== null) {
-      const run = runs.find((r) => r.id === eventMatch[1]);
+      const eventId = eventMatch[1] as string;
+      if (detailReadFails.has(eventId)) {
+        return okResponse({ ok: false, error: "this run's detail could not be read" });
+      }
+      const run = liveRuns.find((r) => r.id === eventId);
       if (run === undefined) return okResponse({ ok: false, error: "no such event" });
       const detail = detailOf(run);
       const params = new URL(url, "http://localhost").searchParams;
@@ -286,14 +307,14 @@ async function mountApp(opts: MountOpts): Promise<void> {
     if (url.includes("/api/v2/events")) {
       return okResponse({
         ok: true,
-        events: runs.map((run) => ({
+        events: liveRuns.map((run) => ({
           id: run.id,
           projectKey: opts.key,
           agentId: "bdd-section-agent",
           kind: "test",
           tier: run.tier,
           codec: run.codec,
-          timestamp: now,
+          timestamp: now + (run.offsetMs ?? 0),
           ...summarize(run.tree),
           hasCoverage: false,
         })),
@@ -570,6 +591,80 @@ describe("CR-CRU-015 §S3 — the BDD tab renders an ingested run's Gherkin", ()
     expect(bddPaneText()).not.toContain("SomeUnitSuite");
     expect(bddPaneText()).not.toContain("adds two numbers");
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// §S3 — the read that FAILED: stated while it stands, gone when it is stale
+//
+// The pane reads the run's tree itself, so a refused read is a state of its
+// own — and the two branches that state it were the only changed code paths
+// with no coverage. The second test is the REGRESSION test for a sticky
+// error: the failure flag short-circuits the render, so a failure that is
+// never cleared makes a LATER, perfectly readable run render the earlier
+// run's error until the operator switches tabs and back (which rebuilds the
+// pane's state — the workaround, deliberately not used here).
+// ──────────────────────────────────────────────────────────────────────────
+
+/** Polls the mounted pane until `done()` holds, the way the shell's own poll
+ *  fallback re-reads the feed — real timers, no state assigned by hand. */
+async function waitFor(done: () => boolean, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!done() && Date.now() < deadline) {
+    await sleep(500);
+    await settle();
+  }
+}
+
+describe("CR-CRU-015 §S3 — the BDD pane states a failed read, and a newer run supersedes it", () => {
+  test("a run whose Gherkin the board cannot return renders an explicit failure — never the no-run empty state, and no half-drawn Gherkin", async () => {
+    // The no-run copy, read from the shell itself rather than pinned here, so
+    // the comparison below is about WHICH state is rendered and not about
+    // anybody's wording.
+    await mountBdd({ key: "bdd-read-fails-control" });
+    const noRunCopy = norm(paneEmptyStates()[0]!.textContent);
+    expect(noRunCopy.length).toBeGreaterThan(20);
+
+    await mountBdd({
+      key: "bdd-read-fails",
+      runs: [bddRun("evt-bdd-unreadable")],
+      failingDetails: ["evt-bdd-unreadable"],
+    });
+
+    await waitFor(() => /unavailable|failed|could not/i.test(norm(paneEmptyStates()[0]?.textContent)), 5_000);
+    const empties = paneEmptyStates();
+    expect(empties.length).toBe(1);
+    const stated = norm(empties[0]!.textContent);
+    // A run IS in the feed, so "no run yet" would be a lie: the pane says the
+    // read failed instead.
+    expect(stated).not.toBe(noRunCopy);
+    expect(stated).toMatch(/unavailable|failed|could not/i);
+
+    // …and nothing is half-drawn beside it: no feature, no scenario, no step.
+    expect(featureBlocks().length).toBe(0);
+    expect(scenarioBlocks().length).toBe(0);
+    expect(stepRows(bddPane()).length).toBe(0);
+  }, 20_000);
+
+  test("after a failed read, the NEXT run's successful read renders its Gherkin — the error does not stick to the pane", async () => {
+    const stale = { ...bddRun("evt-bdd-stale"), offsetMs: -60_000 };
+    await mountBdd({ key: "bdd-read-recovers", runs: [stale], failingDetails: [stale.id] });
+
+    // PRECONDITION — the pane really is in the failed state.
+    await waitFor(() => /unavailable|failed|could not/i.test(norm(paneEmptyStates()[0]?.textContent)), 5_000);
+    expect(norm(paneEmptyStates()[0]!.textContent)).toMatch(/unavailable|failed|could not/i);
+    expect(featureBlocks().length).toBe(0);
+
+    // A NEWER run is ingested for the same project and its read succeeds —
+    // filed into the live feed, with the pane left exactly as it is.
+    liveRuns = [stale, bddRun("evt-bdd-fresh")];
+    await waitFor(() => featureBlocks().length > 0);
+
+    // The newer run's Gherkin renders, and the older run's error is gone.
+    expect(featureBlocks().length).toBe(1);
+    expect(scenarioTitles()).toEqual([PASSING_SCENARIO, FAILING_SCENARIO]);
+    expect(stepLines(scenarioBlock(PASSING_SCENARIO))).toEqual(PASSING_STEPS);
+    expect(paneEmptyStates().length).toBe(0);
+  }, 40_000);
 });
 
 // ──────────────────────────────────────────────────────────────────────────

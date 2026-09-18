@@ -2771,7 +2771,17 @@
             loadError.val = "this run's Gherkin is unavailable";
             return;
           }
+          // A SUCCESSFUL read supersedes a failed one: `failed !== null`
+          // short-circuits the render below, so an error left standing would
+          // hide the Gherkin of every LATER run (recoverable only by leaving
+          // the tab and coming back, which rebuilds this pane's state).
+          // Cleared HERE rather than before the fetch because `load` is called
+          // from inside the binding below: van subscribes a binding only to
+          // the states it reads WITHOUT writing them in the same pass, so an
+          // assignment in the binding's synchronous phase would unsubscribe
+          // the pane from `loadError` and no failure would ever render.
           gherkin.val = { eventId, features: bddFeatures(ev.tree) };
+          loadError.val = null;
         } catch (err) {
           loadError.val = `this run's Gherkin failed to load — ${String(err)}`;
         }
