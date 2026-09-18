@@ -26,10 +26,23 @@ Every piece of the BDD path exists, and nothing connects them. Measured on `deve
 | Any client that selects the codec | **none** — `grep playwright clients/*.py` returns zero hits |
 | A BDD surface | absent, and the UI says so at `public/app.js:2644`: *"BDD run results already stream into the Runs timeline — a dedicated BDD surface does not exist yet"* |
 
-So sixteen executable specifications run on every CI push and **not one of their results reaches
-Crucible as `bdd`**. They are collected under `test:e2e`, which the pre-merge gate excludes
-fleet-wide (DN open question 5), so the BDD suite is the least-reported tier in the project while
-being the one written in the project's own domain language.
+So sixteen executable specifications run, and what reaches the board is a **tally of verdicts with
+the specification stripped out**.
+
+**CORRECTED 2026-09-18 by the RED phase, which refuted this CR's own opening claim.** An earlier
+draft of this section said the suite's runs "produce no board record whatsoever". Measured by
+driving the real verb (`bun-crucible.py e2e --package-dir <this repo>`) against a board: the run
+DOES land — `tier: "e2e"`, `codec: "parsed"`, `summary {total: 46, passed: 45, failed: 1}` — because
+CR-CRU-133 already wired the declared target's report mechanism. What the board never receives is a
+single `Given`/`When`/`Then`. The stored tree is addressed by **generated spec file**
+(`"tests/e2e/features/roadmap.feature.spec.js"`), holding one leaf per scenario, so a reader sees
+which FILE broke and never which STEP of the specification broke. The defect is the discarded
+Gherkin, not an absent ingest — and the two demand different work, which is why the claim is
+corrected here rather than quietly narrowed later.
+
+Compounding it: `test:e2e` is excluded from the pre-merge gate fleet-wide (DN open question 5), so
+nothing files these runs in the ordinary workflow either — the capability exists and no routine
+exercises it.
 
 And the `playwright` codec is **dead in the real workflow**: reachable only through the raw API, never
 selected by the fleet. A codec no caller selects is not a feature, it is an unexercised parser — the
@@ -38,7 +51,7 @@ pointed at it.
 
 ## Scope
 
-### §S1 — the e2e suite is BDD-driven, files as `e2e`, and reaches the board at all
+### §S1 — the e2e suite is BDD-driven, files as `e2e`, and reaches the board WITH ITS STEPS
 
 **USER RULING 2026-09-17, overriding this CR's first two drafts: for a UI-driven project, `e2e` MAY
 use Playwright and BDD.** BDD and Playwright are the MEANS; `e2e` is the tier. So there is no
@@ -47,17 +60,25 @@ rename, no `test:bdd`, and no tier change — an earlier draft of this section p
 which read the means as the dependency. The dependency this suite takes is the assembled product
 driven through a browser, which is `e2e`.
 
-What is measurably wrong is narrower and worse: **the suite's results never reach the board.**
-Measured on `develop` at `fe7794c`:
+What is measurably wrong is narrower and worse: **the board receives the verdicts and discards the
+specification.** Measured on `develop` at `fe7794c`, and re-measured by the RED phase against a
+live drive:
 
 - `playwright.config.ts:76-77` is `defineBddConfig({ features: "tests/e2e/features/*.feature" })`
   with `testDir` on the generated output; `bunx playwright test --list` reports
   **`Total: 46 tests in 16 files`**, every one generated from a `.feature`.
-- `test:e2e` is excluded from the pre-merge gate fleet-wide, and nothing else files it, so those 46
-  scenarios run on every CI push and produce no board record whatsoever.
-- The `playwright` codec that would carry their scenario-level detail has no caller
-  (`grep playwright clients/*.py` → zero hits), so even an ingest today would flatten them through
-  JUnit into counts.
+- A real `bun-crucible.py e2e` drive DOES file a run (`tier: "e2e"`, `codec: "parsed"`), but its
+  tree is addressed by generated spec file with one leaf per scenario — so no `Given`/`When`/`Then`
+  ever reaches the board, and `summary.total` equals the scenario count, i.e. the event is a tally.
+- `test:e2e` is excluded from the pre-merge gate fleet-wide, so nothing files these runs in the
+  ordinary workflow — the ingest path works and no routine walks it.
+- The `playwright` codec that would carry the step detail has no caller
+  (`grep playwright clients/*.py` → zero hits). Worse, measured during RED: the bun client has NO
+  raw-report ingest route at all — every path is `_ingest_parsed → POST /api/v2/runs/parsed` — and
+  this project declares no Playwright JSON reporter (`playwright.config.ts` declares `list` +
+  `junit` only; `package.json`'s `crucible.reportPath` declares only
+  `env:PLAYWRIGHT_JUNIT_OUTPUT_NAME`). So "the codec needs a caller" understates it: the raw report
+  does not exist yet and there is no route that would carry it.
 
 So §S1 makes the existing suite's existing runs land, as `e2e`, carrying the per-scenario detail a
 specification language exists to produce. It does NOT decide who SHOULD run and gate the browser
@@ -160,13 +181,21 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
 - [ ] `test:e2e` KEEPS its name and the suite keeps `tier: e2e` — no rename, no second target, no
       tier change. Asserted by a test pinning that the declared target for this suite is `test:e2e`
       and that its runs file as `e2e`, so a later author cannot "tidy" it into `test:bdd`.
-- [ ] The suite's results are INGESTED at all: today 46 scenarios across 16 features run on every
-      CI push and nothing reaches the board. A real `bun-crucible.py e2e` invocation files a run,
-      asserted on the stored event.
-- [ ] That ingest carries SCENARIO-LEVEL detail — the thing a specification language exists to
-      produce — not just a pass/fail total. Asserted against the stored event's own shape.
-- [ ] The declared-target guard (`tests/ci-toolchain-provisioning.test.ts` plus the declared-target
-      tests CR-CRU-133 established) covers `test:e2e`, so its declaration cannot silently change.
+- [ ] The stored event addresses scenarios BY SCENARIO, not by generated spec file: a real
+      `bun-crucible.py e2e` invocation yields a tree whose nodes are `<Feature> › <Scenario>`,
+      replacing today's `"tests/e2e/features/<name>.feature.spec.js"` addressing. (Corrected AC:
+      an earlier draft asked for the run to be "ingested at all", which RED measured as ALREADY
+      TRUE — the ingest lands, the specification is what it discards.)
+- [ ] That ingest carries STEP-LEVEL detail — the thing a specification language exists to produce.
+      `summary.total` equalling the scenario count is the current defect and is asserted against,
+      so a tally cannot satisfy this criterion.
+- [ ] The declared-target guard covers `test:e2e` so its declaration cannot silently change.
+      Location corrected after RED measured it: CR-CRU-133's declared-target tests are PYTHON
+      (`tests/client/test_declared_target_report_mechanism.py`, which already asserts this repo
+      declares `test:e2e` with `crucible.reportPath["test:e2e"] == "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"`);
+      `tests/ci-toolchain-provisioning.test.ts` guards the CI workflow and holds no such guard. The
+      bun-side rail therefore lives with this CR's own tests rather than inventing a second
+      convention in a CI file or editing another stack's client suite.
 
 **§S2**
 - [ ] A REAL client invocation of this project's e2e suite causes the `"playwright"` codec to parse
