@@ -145,7 +145,7 @@ Runs timeline, not a pass/fail tally. Measured, the section is present and wired
 |---|---|
 | `public/app.js:2638` `BddFeed` | renders ONE string and nothing else |
 | `public/app.js:2644-2645` | that string: *"BDD run results already stream into the Runs timeline — a dedicated BDD surface does not exist yet"* |
-| `public/app.js:2650` `BddPlaceholder` | wraps `BddFeed` in `greyed(...)` — the tab is deliberately dimmed |
+| `public/app.js:2650` `BddPlaceholder` | wraps `BddFeed` in `greyed("app-center")` — **NOT an "unbuilt" marker; see the correction below** |
 | `public/app.js:4841` | `state.workspaceTab === "BDD"` — the route already dispatches here |
 
 So the tab row has promised this since CR-CRU-007 and the dispatch has been in place all along; only
@@ -153,8 +153,24 @@ the content is absent. `BddFeed` renders the feature, its scenarios, and each sc
 `Given`/`When`/`Then` steps in order with the outcome of each, straight off the codec's tree
 (scenario nodes named `<Feature> › <Scenario>`, step leaves in step order). A failing step shows its
 `failure.message` AT that step — which step of the specification broke is the thing a Gherkin report
-is read for, not merely that the scenario did. The `greyed(...)` wrapper and the
-"does not exist yet" copy both go, because neither is true once the section renders.
+is read for, not merely that the scenario did. The "does not exist yet" copy goes, because it is no
+longer true once the section renders.
+
+**CORRECTED 2026-09-18 by C2 RED: the `greyed(...)` claim above was wrong, and the AC built on it
+was vacuous.** Measured at `public/app.js:451`: `greyed(cls)` is
+`() => (state.backendUp ? cls : cls + " greyed")` — the UNIVERSAL backend-down dimmer, applied
+identically by Runs (`:2187`), Coverage (`:2606`), Compile (`:2633`), Workflow (`:4785`), the project
+pane and the home timeline; 11 call sites. It has never meant "dimmed because unbuilt". With the
+backend UP the BDD pane carries no `greyed` class today, so "the wrapper is gone for a frontend
+project with runs" was already true and would have proven nothing — worse, obeying it literally
+would have STRIPPED the liveness dimming every other pane has.
+
+So the wrapper STAYS and only the copy goes. The real distinction the AC was reaching for is
+between the two dimmings, and it is now stated as two falsifiable halves: a POPULATED pane carries
+no `greyed` while the backend is up and gains it only when the shell's own watchdog loses the
+backend — with its Gherkin still rendered, because a dimmed pane is a STALE pane, never an unbuilt
+one; and "gated" is expressed on the TAB (disabled attribute, dead click, pane never mounts), never
+by dimming a pane.
 
 **The section is frontend-only, and that gate already exists (user ruling: not backend projects).**
 `public/app-logic.mjs:300-314`'s `workspaceTabs(project)` already returns
@@ -185,9 +201,30 @@ CR and no release version; it states the capability"* — because the string thi
 a CR-097 correction: the pane previously read *"the dedicated BDD surface lands in CR-CRU-015
 (0.2.0)"*, and CR-097 struck that on the rule that an empty state may say a surface is not built,
 but may not cite the builder's backlog, because *"a plan moves, and a string does not move with
-it"*. §S3 must therefore (a) keep an empty state for the no-run case, (b) keep it free of CR ids
-and version numbers, and (c) leave that guard passing rather than re-pinning it to new text. A CR
-that deleted the string and the guard together would re-open a defect CR-097 closed.
+it"*. §S3 must therefore (a) keep an empty state for the no-run case and (b) keep it free of CR ids
+and version numbers.
+
+**RULED 2026-09-18 after C2 RED escalated a real collision.** That file holds TWO tests, and they
+are not equivalent:
+
+- `:172` — *"the rendered empty state names no project's CR id and no release version"*. This is
+  CR-097's actual invariant, the reason the CR exists. It MUST keep passing, untouched.
+- `:187` — *"the empty state still states the capability and that no dedicated surface exists
+  yet"*, asserting `toContain("Runs timeline")` and `toLowerCase().toContain("does not exist
+  yet")`. The second clause pins the WORDING of a sentence this CR legitimately makes false.
+
+An earlier draft of this section said to leave the guard passing "rather than re-pinning it to new
+text", which RED correctly read as forbidding any edit — and then found the only way to obey both:
+keep the literal `"does not exist yet"` alive by predicating it on a missing RUN instead of a
+missing SURFACE. **That escape is REFUSED.** It is re-pinning wearing a disguise: the copy gets
+contorted to preserve a substring, and the guard is left with a name describing an assertion it no
+longer makes. A test that pins incidental wording made false by a legitimate change is narrowed or
+deleted — never worked around by bending the product's words to fit it.
+
+So: `:187` is NARROWED to its durable half — the empty state still states the CAPABILITY (results
+appear in the Runs timeline) — and its surface-absence clause plus the stale half of its name are
+deleted. `:172` is untouched. CR-097's defect stays closed, because what CR-097 actually forbade was
+citing the builder's backlog, and nothing here re-introduces a CR id or a version.
 
 **Not related, checked and dismissed:** CR-CRU-022 (roadmap analytics) and CR-CRU-098 (the plan
 pointer has no publisher) mention none of these; CR-CRU-082 is VOID; CR-CRU-141 names Playwright
@@ -245,17 +282,27 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
       storyboard compliance bar, not a smoke check.
 - [ ] `public/app.js:2644`'s "a dedicated BDD surface does not exist yet" note is DELETED, because
       it is no longer true; a test asserts the claim is gone rather than left contradicting the UI.
-- [ ] With no run recorded, the tab shows a definitive empty state rather than a broken or greyed
-      surface (CR-CRU-078's empty-state rule) — and that empty state still names NO CR id and NO
-      release version, so `tests/project-independence-strings.test.ts` (CR-CRU-097 AC1) keeps
-      passing UNCHANGED. The guard is not re-pinned to new copy; if satisfying §S3 requires editing
-      it, that is a finding to escalate.
+- [ ] With no run recorded, the tab shows exactly ONE definitive empty state (CR-CRU-078's rule),
+      naming NO CR id and NO release version — `tests/project-independence-strings.test.ts:172`
+      keeps passing UNTOUCHED. Its sibling at `:187` is NARROWED per the §S4 ruling: the capability
+      clause (`"Runs timeline"`) stays, the `"does not exist yet"` surface-absence clause and the
+      stale half of its name are deleted. The product's words are NOT contorted to preserve a
+      substring.
+- [ ] A run carrying no Gherkin (a junit `unit` run, say) does NOT render as Gherkin — it shows the
+      same empty state, so the section cannot pass off an unrelated run as a specification.
 - [ ] The tab stays frontend-only: `workspaceTabs(project)` still returns
       `disabled: true` for `BDD` on a `type !== "frontend"` project, asserted for a backend project
-      — the gate exists today and populating the section must not un-gate it.
-- [ ] The `greyed(...)` wrapper on the populated section is gone for a frontend project with runs,
-      and a test distinguishes "greyed because gated" from "greyed because unbuilt" so the two
-      cannot be conflated again.
+      — the gate exists today and populating the section must not un-gate it. Bounded the other way
+      too: every project-type-independent tab (Roadmap/Workflow/Runs/Compile) stays ENABLED for a
+      backend project, so accidentally gating one of those reds this as well.
+- [ ] The two dimmings can never be conflated again, asserted as two halves (the `greyed(...)`
+      wrapper STAYS — see the §S3 correction; it is the universal backend-down dimmer):
+      (a) a POPULATED pane carries no `greyed` while the backend is up, and gains it only when the
+      shell's own watchdog loses the backend — with its Gherkin STILL rendered, because a dimmed
+      pane is a STALE pane, never an unbuilt one; driven through the real health probe, never by
+      assigning `state.backendUp`;
+      (b) "gated" is expressed on the TAB — disabled attribute, dead click, pane never mounts —
+      and never by dimming a pane.
 
 **§S4**
 - [ ] `docs/changes/README.md`'s CR-CRU-018 row lists `015` among its dependencies, so the queue's
