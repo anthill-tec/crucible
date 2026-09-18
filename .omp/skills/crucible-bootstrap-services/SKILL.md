@@ -129,12 +129,32 @@ const after = await snap();           // 6. PROVE isolation before reporting
 - If the user closes your tabs or disconnects the relay mid-session, redo this whole sequence from
   step 1; stale handles are the danger, not the closed tabs.
 
-## 5. One storyboard poll
+## 5. One storyboard poll — SUPERVISED, not a fire-and-forget bash job
 
 ```
-npx -y lavish-axi poll .lavish/crucible-v2-design.html --agent-reply "<one-line state summary>"
+hub start name=lavish-poll-storyboard application=npx \
+     args=[-y, lavish-axi, poll, .lavish/crucible-v2-design.html, --agent-reply, "<one-line state>"] \
+     cwd=<repo>
 ```
-As a tracked async bash job (`async: true`, `timeout: 0`). Exactly one poll process (one-listener invariant; `pgrep -af 'lavish-axi poll'` must show none before arming). Re-arm on the same artifact after every fetch; never truncate its output.
+Exactly one poll process (one-listener invariant; `pgrep -af 'lavish-axi poll'` must show none
+before arming). Re-arm on the same artifact after every fetch; never truncate its output.
+
+**CORRECTED 2026-09-18 — this section used to say "as a tracked async bash job (`async: true`,
+`timeout: 0`)", and that is how the user's editor went unattended for a whole session.** A poll
+launched that way exits on its own (its review windows disconnect past the reconnect grace period —
+and omp FREEZES idle tabs at turn settle, which drops the Lavish socket), and because nothing
+supervises a detached bash job, **nothing tells you it is gone**. The user asked "have you stopped
+listening to lavish editor" before I noticed.
+
+`hub start` fixes exactly that: a supervised process announces its own exit, the same mechanism that
+made the Sandesh notifier reliable all session (it exited twice, and both times the notice arrived
+and it was relaunched in the same turn). Treat a dead poll like a dead watcher — relaunch it in the
+turn you learn of it.
+
+**Open the two Lavish tabs with `persist: true`** (step 4) so they are not auto-frozen at turn
+settle; a frozen review window is the thing that kills the poll in the first place. Feedback is
+never lost while the poll is down — it queues until a poll delivers it — so a re-arm always
+recovers it, but the user is left talking to a surface nobody is reading.
 
 ## 6. Sandesh notifier
 
