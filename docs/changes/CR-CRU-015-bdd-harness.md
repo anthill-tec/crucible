@@ -117,6 +117,24 @@ into the feature → scenario → step tree the UI reads. The `runs/parsed` path
 suite: a client-side parse would flatten the Gherkin before the server ever saw it, store
 `codec: "parsed"`, and leave the BDD section rendering something no codec vouches for.
 
+**Making the report authoritative widens one existing edge, and GREEN measured it.** The suite
+enforces a single ordering constraint through Playwright project dependencies:
+`shell-storyboard.feature`'s F1 asserts a database nothing has seeded, its `Given a fresh, empty
+Crucible database` is a NO-OP step (the emptiness comes from running FIRST), and four features that
+sort alphabetically ahead of it were each pinned into their own project depending on `chromium` so
+they ran after the main body. That was harmless while the board saw only counts. It is not harmless
+once this suite's own report IS the board's evidence: **Playwright skips every dependent project
+when its dependency project holds ANY failing test** (`hasFailedDeps` in the runner's phase loop —
+measured here as one failing scenario in `chromium` leaving *"14 did not run"*). Those 14 then land
+as scenario nodes with no steps and no verdict, and a reader cannot distinguish a SKIPPED
+specification from an empty one — the exact confusion this CR exists to remove.
+
+So the dependency is narrowed to the constraint that actually exists: F1 is tagged `@empty-db` in
+its own feature file, that tag alone constitutes the dependency project, and every other project
+depends on THAT rather than on the main body. A failure anywhere in the body now skips nothing,
+because nothing depends on the body. The four keep their own projects declared after `chromium`
+(measured: folding them in reds CR-CRU-034 §S1, which needs the DB state the body leaves behind).
+
 ### §S3 — the BDD section that already exists gets populated with the Gherkin execution output
 
 **USER RULING: there IS a BDD section in the UI, and showing the Gherkin execution output is what it
@@ -208,6 +226,13 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
       deliberately failing scenario, so the report can say which step of the specification broke.
 - [ ] `tests/playwright-codec.test.ts` keeps its unit coverage unchanged — this CR adds a caller; it
       does not rewrite the parser (whose header records it was pulled forward by CR-CRU-007 C5b).
+- [ ] **A failure in the suite's main body skips NOTHING.** No Playwright project may depend on the
+      main body, because a dependency-project failure makes Playwright skip every dependent and
+      those scenarios then reach the board as nodes with no steps and no verdict — indistinguishable
+      from a specification that ran and asserted nothing. The only permitted dependency is the
+      single `@empty-db`-tagged ordering precondition. Asserted on the config's own dependency
+      graph, so a later author cannot re-widen it back to `dependencies: ["chromium"]` and silently
+      reintroduce childless nodes.
 
 **§S3**
 - [ ] The BDD tab renders the GHERKIN of a real ingested run: the feature, its scenarios, and each
