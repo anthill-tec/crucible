@@ -340,8 +340,17 @@ reached; §S3 is a real UI surface with a Chromium-tier test, which is where mos
 
 ## Risk
 
-- **`test:e2e` already collects these features.** A careless §S1 could double-collect them or stop
-  collecting them — which is why an AC compares what each target collects either side of the change.
+- **`test:e2e` already collects these features.** This risk was written when §S1 still contemplated
+  migrating the target to `test:bdd`; the user's ruling removed the rename, so no target was added,
+  renamed or retired and the double-collect/stop-collect hazard never materialised. An earlier draft
+  of this bullet promised *"an AC compares what each target collects either side of the change"* —
+  there is no such AC and there should not be, because a count comparison is the wrong instrument:
+  collection legitimately GREW by one (16 features / 46 tests → 17 / 47, the §S3 Chromium scenario),
+  so a pinned figure would have to be edited by every CR that adds a feature, CR-CRU-018 included.
+  What actually protects collection is DERIVATION: the tests read the scenario list from the
+  `.feature` sources at run time and never hardcode a total, the declared-target guard pins
+  `test:e2e` as the one BDD target, and the dependency-graph rail asserts the ordering precondition
+  runs exactly once.
 - **The e2e tier is excluded from the pre-merge gate.** Filing BDD runs correctly does not put them
   in the gate; who runs and gates the browser tiers is DN open question 5, still unanswered, and this
   CR does not pre-empt it.
