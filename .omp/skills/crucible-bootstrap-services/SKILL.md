@@ -163,8 +163,19 @@ sandesh addressbook --project Crucible        # who can address me?
 sandesh projects                              # CROSS-PROJECT grant per project
 sandesh register --project Crucible --address 'Mainline - Crucible'   # only if inactive; NOT --as (that's unregister's flag)
 hub start name=sandesh-notify-crucible application=sandesh \
-     args=[notify, --project, Crucible, --to, "Mainline - Crucible", --timeout, 14400]
+     args=[notify, --project, Crucible, --to, "Mainline - Crucible", --timeout, 43200]
 ```
+
+**`--timeout 43200`, raised from 14400 and MEASURED 2026-09-18.** The 4h ceiling fired mid-session:
+`timed out (1441 polls)` — 1441 × 10s = exactly its 14400s — and `sandesh notify` exits **2** on
+timeout, so `hub` reports the process as **failed** when nothing failed. That costs a relaunch every
+four hours and, worse, trains you to read a red "failed" line as routine. 12h covers a working day
+in one process. It is still a CEILING, not a heartbeat: when it fires, RELAUNCH — a timeout exit is
+not a reason to leave the channel dead.
+
+**Read the exit code before reacting:** `0` = mail arrived (fetch it, then relaunch), `2` = the
+ceiling fired (just relaunch, there is no mail), anything else = a real fault worth reading the log
+for.
 
 **CORRECTED 2026-09-16. This section previously read "retired for this project — never launch it",
 and that was wrong on both the fact and the framing.**
