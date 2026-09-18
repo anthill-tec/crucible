@@ -36,6 +36,16 @@ const FEATURES_DIR = path.join(REPO_ROOT, "tests/e2e/features");
  *  tag on the scenario that holds it. */
 const ORDERING_TAG = "@empty-db";
 
+/** Is this line a TAG LINE carrying the ordering tag? A Gherkin tag line is a
+ *  whitespace-separated list of `@`-tokens, so the tag is matched as a TOKEN:
+ *  a header sentence that merely NAMES the tag is not a tag (and documenting
+ *  the mechanism must never red the rail that guards it), while a scenario
+ *  that legitimately carries a second tag (`@empty-db @slow`) still is one. */
+const isOrderingTagLine = (line: string): boolean => {
+  const trimmed = line.trim();
+  return trimmed.startsWith("@") && trimmed.split(/\s+/).includes(ORDERING_TAG);
+};
+
 /** Titles Playwright would match `grep`/`grepInvert` against — one carrying
  *  the ordering tag, one an ordinary main-body scenario. */
 const TAGGED_TITLE = `CR-CRU-006 shell — storyboard frames › F1 fresh forge — empty state ${ORDERING_TAG}`;
@@ -105,13 +115,13 @@ describe("CR-CRU-015 §S2 — nothing in the e2e suite depends on the main body 
     const featureFiles = readdirSync(FEATURES_DIR).filter((f) => f.endsWith(".feature"));
     expect(featureFiles.length).toBeGreaterThan(0);
     const tagged = featureFiles.filter((f) =>
-      readFileSync(path.join(FEATURES_DIR, f), "utf8").includes(ORDERING_TAG),
+      readFileSync(path.join(FEATURES_DIR, f), "utf8").split("\n").some(isOrderingTagLine),
     );
     expect(tagged.length).toBe(1);
     const taggedFile = tagged[0] as string;
     const occurrences = readFileSync(path.join(FEATURES_DIR, taggedFile), "utf8")
       .split("\n")
-      .filter((line) => line.trim() === ORDERING_TAG);
+      .filter(isOrderingTagLine);
     expect(occurrences.length).toBe(1);
 
     // Exactly one project selects it, so the precondition is not executed by

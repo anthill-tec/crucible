@@ -434,11 +434,11 @@ describe("CR-CRU-015 §S1 — the BDD suite's declaration cannot be renamed or r
     );
     expect(renamed).toEqual([]);
 
-    // The `.feature` files are what this target collects — the config's glob,
-    // and a non-empty directory behind it.
-    const config = readFileSync(join(REPO_ROOT, "playwright.config.ts"), "utf8");
-    expect(config).toContain("defineBddConfig");
-    expect(config).toContain("tests/e2e/features/*.feature");
+    // The `.feature` files are what this target collects — asserted on the
+    // features the suite actually declares, never on the config's SOURCE
+    // TEXT: `defineBddConfig`'s glob is not exposed on the config object, so
+    // reading it as a string would only pin how the glob is spelled and would
+    // red on a hoisted constant with nothing broken.
     expect(declaredScenarios().length).toBeGreaterThan(0);
 
     // CR-CRU-133's declaration rides the same manifest: the report mechanism
