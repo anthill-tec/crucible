@@ -50,7 +50,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
-import { workspaceTabs } from "../public/app-logic.mjs";
+import { relativeTime, workspaceTabs } from "../public/app-logic.mjs";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -137,6 +137,13 @@ interface RunFixture {
   tier: string;
   codec: string;
   tree: SuiteNode[];
+  /** The agent that FILED this run. Per-run rather than a harness constant,
+   *  because the pane names the filer of the run it is SHOWING: two runs in
+   *  one feed have to be able to carry two different filers, or "it follows
+   *  its subject" could not be told apart from "it always says the same
+   *  thing". Absent → `HARNESS_AGENT_ID`, so every earlier fixture is
+   *  unchanged. */
+  agentId?: string;
   /** Milliseconds AFTER the mount clock this run was recorded — the shell
    *  picks the BDD run with the greatest timestamp, so a run that arrives
    *  later in a project's life says so here. */
@@ -202,6 +209,13 @@ interface MountOpts {
  *  flag (technique lifted from tests/workspace-rail-collapse.test.ts). */
 let healthReachable = true;
 let cacheBust = 0;
+
+/** The clock the most recent mount anchored its fixture timestamps to, and
+ *  the default filer. Exposed so a test can say WHEN a run was recorded
+ *  relative to the board's own "now" and then read the pane through the
+ *  board's own formatter, instead of pinning a rendered string. */
+let mountNow = 0;
+const HARNESS_AGENT_ID = "bdd-section-agent";
 let fetchLog: string[] = [];
 
 /** The project's runs AS THE BOARD HOLDS THEM RIGHT NOW — module state, not a
@@ -222,7 +236,8 @@ async function mountApp(opts: MountOpts): Promise<void> {
   await GlobalRegistrator.register({ url: `http://localhost/p/${opts.key}` });
   document.body.innerHTML = '<div id="app"></div>';
 
-  const now = Date.now();
+  mountNow = Date.now();
+  const now = mountNow;
   const project = {
     key: opts.key,
     name: opts.key,
@@ -235,7 +250,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
   const detailOf = (run: RunFixture): Record<string, unknown> => ({
     id: run.id,
     projectKey: opts.key,
-    agentId: "bdd-section-agent",
+    agentId: run.agentId ?? HARNESS_AGENT_ID,
     kind: "test",
     tier: run.tier,
     codec: run.codec,
@@ -310,7 +325,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
         events: liveRuns.map((run) => ({
           id: run.id,
           projectKey: opts.key,
-          agentId: "bdd-section-agent",
+          agentId: run.agentId ?? HARNESS_AGENT_ID,
           kind: "test",
           tier: run.tier,
           codec: run.codec,
@@ -763,4 +778,292 @@ describe("CR-CRU-015 §S3 — the BDD tab stays frontend-only (RAIL, born green)
     expect(backendTabs.length).toBeGreaterThan(0);
     for (const t of backendTabs) expect(t.disabled).toBe(false);
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// §S3 (cycle C3, RED) — THE PANE NAMES THE RUN WHOSE SPECIFICATION IT RENDERS
+//
+// USER RULING 2026-09-18: C2 shipped a pane that renders `latestBddEventId()`
+// and nothing else — no timestamp, no agent — so a week-old run is
+// indistinguishable from one that landed a minute ago, and a reader debugging
+// a broken step cannot tell whether the specification on screen is their own
+// run or yesterday's. The AC: a reader can tell WHICH run is on screen — when
+// it was recorded, in the same relative-time idiom the rest of the board
+// already uses, and which agent filed it — asserted on a populated pane AND
+// asserted to FOLLOW its subject, so "latest" is observable, not assumed.
+//
+// THE TIME IS READ BACK THROUGH THE BOARD'S OWN FORMATTER.
+// `relativeTime(ts, now)` (public/app-logic.mjs:20) is the one the shell binds
+// as `rel(ts) = L.relativeTime(ts, Date.now())` at public/app.js:443 and every
+// event card (:919, :1014), agent row (:671) and project rollup (:1285, :4090)
+// renders through. Asserting THROUGH it is what "the same idiom" means:
+// pinning a hand-written "2h ago" here would let a SECOND time format pass
+// whenever it happened to agree, and would have to be rewritten the day the
+// board's tiers change. Every fixture below is aged to the MIDDLE of a tier
+// (…h 30m), so the seconds a poll costs cannot roll one across a boundary.
+//
+// CONTRACT THIS SECTION ADDS FOR GREEN (identifiers verbatim), with the two
+// design choices the AC does not settle — both taken as the SMALLEST reading
+// consistent with §S3's refusal, and both declared for the orchestrator:
+//   • `[data-testid="bdd-run-identity"]` — the pane's ONE identity node,
+//     inside `[data-testid="workspace-bdd"]`. WHERE in the pane it sits is
+//     NOT asserted; that there is exactly one of it IS, because "no run
+//     list" is unmeasurable otherwise.
+//   • The run's opaque event ID is NOT asserted — neither required nor
+//     forbidden. The AC names WHEN and WHO, and this file asserts only the
+//     behaviour the AC names.
+// ──────────────────────────────────────────────────────────────────────────
+
+/** Filers, per run: distinctive on purpose, so an identity that hardcoded the
+ *  id its author saw while building cannot pass. */
+const FILER_ALPHA = "e2e-runner-alpha";
+const FILER_BRAVO = "e2e-runner-bravo";
+const FILER_CHARLIE = "e2e-runner-charlie";
+
+/** Ages, all MID-tier (see the header): a poll's few seconds cannot move one
+ *  of these across a `relativeTime` boundary. */
+const AGED_OFFSET_MS = -(2 * 3600 + 1800) * 1000;
+const OLDER_OFFSET_MS = -(3 * 3600 + 1800) * 1000;
+const NEWER_OFFSET_MS = -(1 * 3600 + 1800) * 1000;
+const TALLY_OFFSET_MS = -(6 * 3600 + 1800) * 1000;
+const BYSTANDER_OFFSET_MS = -(20 * 3600 + 1800) * 1000;
+
+const NEWER_FEATURE_TITLE = "Superseding Run Feature";
+const NEWER_SCENARIO = "the newer run's own specification renders";
+const NEWER_STEPS = [
+  "Given a newer BDD run is filed for the same project",
+  "When the shell's own poll re-reads the project's feed",
+  "Then the section renders THIS run's specification",
+];
+
+/** The SECOND run, carrying its own Gherkin rather than a copy of the first's:
+ *  two runs sharing one tree could not tell a followed subject apart from a
+ *  stale one. */
+function newerBddRun(): RunFixture {
+  return {
+    id: "evt-bdd-newer",
+    tier: "e2e",
+    codec: "playwright",
+    agentId: FILER_BRAVO,
+    offsetMs: NEWER_OFFSET_MS,
+    tree: [
+      {
+        name: `${NEWER_FEATURE_TITLE} › ${NEWER_SCENARIO}`,
+        status: "pass",
+        children: NEWER_STEPS.map((name, i) => ({
+          name,
+          status: "pass" as const,
+          duration_ms: 7 + i,
+        })),
+      },
+    ],
+  };
+}
+
+const TALLY_FEATURE_TITLE = "Tally Bound Feature";
+const TALLY_CASES = ["one", "two", "three", "four", "five"];
+/** THIRTEEN passed, FIVE failed, EIGHTEEN steps — figures distinctive enough
+ *  that their absence is a measurement, and every word the fixture renders is
+ *  spelled out ("the three case"), so no scenario title or step line can
+ *  supply those digits by accident. */
+const TALLY_PASSED = 13;
+const TALLY_FAILED = 5;
+const TALLY_TOTAL = 18;
+
+/** A run that really DOES have failures — the fixture the AC demands, because
+ *  a no-tally assertion driven by an all-green run proves nothing. */
+function tallyRun(): RunFixture {
+  const broken: SuiteNode[] = TALLY_CASES.map((word) => ({
+    name: `${TALLY_FEATURE_TITLE} › the ${word} case breaks`,
+    status: "fail" as const,
+    children: [
+      { name: "Given the suite is prepared", status: "pass" as const, duration_ms: 3 },
+      { name: `When it exercises the ${word} case`, status: "pass" as const, duration_ms: 3 },
+      {
+        name: `Then the ${word} case reports its outcome`,
+        status: "fail" as const,
+        duration_ms: 3,
+        failure: { message: `the ${word} case never reached its assertion` },
+      },
+    ],
+  }));
+  return {
+    id: "evt-bdd-tally",
+    tier: "e2e",
+    codec: "playwright",
+    agentId: FILER_CHARLIE,
+    offsetMs: TALLY_OFFSET_MS,
+    tree: [
+      ...broken,
+      {
+        name: `${TALLY_FEATURE_TITLE} › the clean path still runs to the end`,
+        status: "pass",
+        children: [
+          { name: "Given the clean path is prepared", status: "pass", duration_ms: 2 },
+          { name: "When it runs to the end", status: "pass", duration_ms: 2 },
+          { name: "Then every step of it passes", status: "pass", duration_ms: 2 },
+        ],
+      },
+    ],
+  };
+}
+
+function runIdentityNodes(): HTMLElement[] {
+  return Array.from(bddPane().querySelectorAll<HTMLElement>('[data-testid="bdd-run-identity"]'));
+}
+
+/** The identity the pane renders — throwing a diagnostic that names the
+ *  MISSING IDENTITY as the defect, rather than letting a later assertion fail
+ *  on an empty string and read as a harness fault. */
+function runIdentityText(): string {
+  const nodes = runIdentityNodes();
+  if (nodes.length === 0) {
+    throw new Error(
+      'the BDD pane renders no [data-testid="bdd-run-identity"]: it does not name the run whose ' +
+        "specification it shows — when it was recorded and which agent filed it " +
+        `(CR-CRU-015 §S3, user ruling, cycle C3). The pane renders: ${bddPaneText().slice(0, 240)}`,
+    );
+  }
+  return norm(nodes.map((n) => n.textContent).join(" "));
+}
+
+/** What the BOARD would call that moment, computed at assertion time through
+ *  the shell's own formatter — never a string written by hand here. */
+function boardRelativeTime(offsetMs: number): string {
+  return relativeTime(mountNow + offsetMs, Date.now());
+}
+
+describe("CR-CRU-015 §S3 — the BDD pane names the run whose specification it renders", () => {
+  test("a populated pane names WHEN the run was recorded, in the board's own relative-time idiom, and WHICH agent filed it", async () => {
+    await mountBdd({
+      key: "bdd-run-identity",
+      runs: [{ ...bddRun("evt-bdd-identity"), agentId: FILER_ALPHA, offsetMs: AGED_OFFSET_MS }],
+    });
+
+    // PRECONDITION — the pane is POPULATED: identity is a claim about a
+    // rendered specification, not a consolation prize for an empty surface.
+    expect(featureBlocks().length).toBe(1);
+    expect(stepRows(bddPane()).length).toBe(6);
+
+    const identity = runIdentityText();
+
+    // POSITIVE (WHEN) — asserted through `relativeTime`, and against a run
+    // that is genuinely OLD: a pane that rendered its own mount clock would
+    // say "just now" and fail here, so "names when" is a real claim.
+    const recordedAt = boardRelativeTime(AGED_OFFSET_MS);
+    expect(recordedAt).not.toBe("just now");
+    expect(identity).toContain(recordedAt);
+
+    // POSITIVE (WHO) — the agent that actually filed THIS run…
+    expect(identity).toContain(FILER_ALPHA);
+    // …and not the harness's own default filer, which is exactly what a
+    // hardcoded or placeholder id would have rendered.
+    expect(identity).not.toContain(HARNESS_AGENT_ID);
+
+    // BOUND — ONE identity for ONE subject, told in the board's idiom ALONE:
+    // no raw epoch and no second date format invented beside the one every
+    // other pane already uses.
+    expect(runIdentityNodes().length).toBe(1);
+    expect(identity).not.toContain(String(mountNow + AGED_OFFSET_MS));
+    expect(identity).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  }, 20_000);
+
+  test("the pane FOLLOWS its subject: a newer BDD run filed into the live feed is the run it then names, and renders", async () => {
+    const older = { ...bddRun("evt-bdd-older"), agentId: FILER_ALPHA, offsetMs: OLDER_OFFSET_MS };
+    await mountBdd({ key: "bdd-run-identity-follows", runs: [older] });
+
+    // PRECONDITION — the pane names the FIRST run.
+    expect(runIdentityText()).toContain(FILER_ALPHA);
+    expect(runIdentityText()).toContain(boardRelativeTime(OLDER_OFFSET_MS));
+    expect(scenarioTitles()).toEqual([PASSING_SCENARIO, FAILING_SCENARIO]);
+
+    // A SECOND, NEWER run is ingested for the same project — filed into the
+    // live feed and picked up by the shell's OWN poll, with the pane left
+    // exactly where it is. Nothing is remounted: remounting rebuilds this
+    // pane's state and is the workaround, not the behaviour.
+    const newer = newerBddRun();
+    liveRuns = [older, newer];
+    await waitFor(() => scenarioTitles().includes(NEWER_SCENARIO));
+
+    // The subject MOVED — the newer run's specification is what renders…
+    expect(featureBlocks().length).toBe(1);
+    expect(
+      norm(
+        featureBlocks()[0]!.querySelector<HTMLElement>('[data-testid="bdd-feature-title"]')
+          ?.textContent,
+      ),
+    ).toBe(NEWER_FEATURE_TITLE);
+    expect(scenarioTitles()).toEqual([NEWER_SCENARIO]);
+    expect(stepLines(scenarioBlock(NEWER_SCENARIO))).toEqual(NEWER_STEPS);
+
+    // …and the newer run's IDENTITY moved with it. This is the assertion that
+    // makes "latest" observable instead of assumed.
+    const identity = runIdentityText();
+    expect(identity).toContain(FILER_BRAVO);
+    expect(identity).toContain(boardRelativeTime(NEWER_OFFSET_MS));
+
+    // NEGATIVE — a pane that kept naming the first run fails here, and the
+    // superseded run is not kept on screen beside the new one either.
+    expect(identity).not.toContain(FILER_ALPHA);
+    expect(identity).not.toContain(boardRelativeTime(OLDER_OFFSET_MS));
+    expect(runIdentityNodes().length).toBe(1);
+    expect(bddPaneText()).not.toContain(FEATURE_TITLE);
+  }, 60_000);
+
+  test("a run WITH failures is NAMED, never TALLIED: no pass/fail counts, no totals, no run list", async () => {
+    // WHY THIS BOUND EXISTS. §S3 refuses to re-render the Runs timeline's
+    // content inside this pane — counts, pass/fail tallies, a run list — and
+    // that refusal STANDS beside the identity the user ruling adds: identity
+    // is not a scoreboard. The AC says so outright — "a test that would pass
+    // if counts appeared does not satisfy this criterion" — so the fixture
+    // here HAS failures and carries distinctive figures (13 passed, 5 failed,
+    // 18 steps) in the very feed payload the shell reads. The absence is
+    // measured against numbers that are genuinely THERE to be rendered.
+    const run = tallyRun();
+    expect(summarize(run.tree)).toMatchObject({
+      total: TALLY_TOTAL,
+      passed: TALLY_PASSED,
+      failed: TALLY_FAILED,
+    });
+
+    await mountBdd({
+      key: "bdd-run-identity-no-tally",
+      runs: [
+        { ...bddRun("evt-bdd-bystander"), agentId: FILER_ALPHA, offsetMs: BYSTANDER_OFFSET_MS },
+        run,
+      ],
+    });
+
+    // PRECONDITION — the failing run is the subject, rendered in full.
+    expect(stepRows(bddPane()).length).toBe(TALLY_TOTAL);
+    expect(bddPane().querySelectorAll('[data-testid="bdd-step-failure"]').length).toBe(
+      TALLY_FAILED,
+    );
+
+    // POSITIVE — it is NAMED.
+    const identity = runIdentityText();
+    expect(identity).toContain(FILER_CHARLIE);
+    expect(identity).toContain(boardRelativeTime(TALLY_OFFSET_MS));
+
+    // NEGATIVE — and it is not SCORED: none of the run's own figures reaches
+    // the surface.
+    const paneText = bddPaneText();
+    expect(paneText).not.toMatch(new RegExp(`\\b${TALLY_PASSED}\\b`));
+    expect(paneText).not.toMatch(new RegExp(`\\b${TALLY_FAILED}\\b`));
+    expect(paneText).not.toMatch(new RegExp(`\\b${TALLY_TOTAL}\\b`));
+    // …nor any tally IDIOM at all: no "13/18" ratio, no "5 failed" counter.
+    expect(paneText).not.toMatch(/\d+\s*\/\s*\d+/);
+    expect(paneText).not.toMatch(
+      /\b\d+\s+(passed|failed|pending|skipped|tests?|scenarios?|steps?)\b/i,
+    );
+
+    // NO RUN LIST — the pane names its ONE subject and does not become the
+    // second Runs timeline: no event cards, no ratio pills, and the other run
+    // sitting in the same feed is neither named nor listed.
+    expect(runIdentityNodes().length).toBe(1);
+    expect(bddPane().querySelectorAll('[data-testid="event-card"]').length).toBe(0);
+    expect(bddPane().querySelectorAll('[data-testid="ratio-pill"]').length).toBe(0);
+    expect(paneText).not.toContain(FILER_ALPHA);
+    expect(paneText).not.toContain(FEATURE_TITLE);
+  }, 20_000);
 });
