@@ -11,11 +11,11 @@ Feature: CR-CRU-013 gate + milestone events — E2E round trip (AC150)
   server, house style (Gherkin + playwright-bdd, not a bespoke .e2e.ts file
   — see tests/e2e/features/workflow.feature for the precedent this mirrors).
 
-  This feature sorts alphabetically AFTER shell-storyboard.feature
-  ("workflow-gates" > "shell-storyboard"), so its F1 empty-DB precondition
-  already holds by the time this scenario seeds data into the shared
-  server/db instance (same discipline as workflow.feature's own header
-  note). Every project/cr name below is namespaced "GT " / "CR-GT-…" to stay
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment).
+  Every project/cr name below is namespaced "GT " / "CR-GT-…" to stay
   clear of the other features sharing that instance. Results are ingested
   with tier "e2e" by the orchestrator's ingest step, not by this suite.
 

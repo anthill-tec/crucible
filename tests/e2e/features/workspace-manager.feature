@@ -9,11 +9,11 @@ Feature: CR-CRU-012 workspace manager — archive UI round-trip (§S2, §S1b)
   refetch/SSE contract.
 
   This feature seeds its own project through the manager UI itself (no API
-  seeding helper — the whole point is the manager's OWN add-project form),
-  so it must sort alphabetically AFTER shell-storyboard.feature ("w" > "s")
-  the way workflow.feature already does, to let that feature's F1 empty-DB
-  precondition observe a truly empty database before this feature's
-  scenario seeds a project into the shared server/db instance. Every
+  seeding helper — the whole point is the manager's OWN add-project form).
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment). Every
   project name below is namespaced "WM …" to stay clear of the other
   features sharing that instance. Results are ingested with tier "e2e" by
   the orchestrator's ingest step, not by this suite.

@@ -6,13 +6,13 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
   lens shows the plan tree with the closed span, cycle label, merge
   commit, and the sealed agent runtime; plus a timeline scenario asserting
   suppression + the declared marker" (docs/changes/CR-CRU-011-workflow-lens.md).
-  Storyboard frame F13 (Workflow tab). This feature sorts alphabetically
-  AFTER shell-storyboard.feature ("w" > "s"), so its F1 empty-DB
-  precondition already holds by the time these scenarios seed data into
-  the shared server/db instance. Every project/cr/agent name below is
-  namespaced "WF …" to stay clear of the other features sharing that
-  instance. Results are ingested with tier "e2e" by the orchestrator's
-  ingest step, not by this suite.
+  Storyboard frame F13 (Workflow tab). This file's POSITION governs nothing:
+  shell-storyboard.feature's F1 states its empty-DB precondition with its own
+  `@empty-db` tag, in the `chromium-empty-db` project every other project
+  depends on (see playwright.config.ts's ordering comment).
+  Every project/cr/agent name below is namespaced "WF …" to stay clear of
+  the other features sharing that instance. Results are ingested with tier
+  "e2e" by the orchestrator's ingest step, not by this suite.
 
   Scenario: F13 filing a plan, running its cycle to done, and closing the plan with a merge commit renders the closed plan tree in the Workflow tab's history lens
     Given a project named "WF Lifecycle Project" is registered
