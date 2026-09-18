@@ -1147,6 +1147,26 @@ def _run_left_open_warning(run_id, cause):
     }
 
 
+def _raw_route_coverage_warning(codec, script):
+    """CR-CRU-015 §S2 — the structured warning for a `--coverage` the RAW route
+    cannot carry. `POST /api/v2/runs` posts a report and the codec that decodes
+    it, and has no coverage field at all, so coverage measured by a target
+    whose report the BOARD decodes is measured and then dropped. The flag is
+    accepted on every declared-tier verb, so the drop is easy to reach and
+    impossible to see — it is stated here on the same terms the parsed
+    branch's own "lcov coverage unavailable" WARN states its miss."""
+    return {
+        "code": "raw-report-carries-no-coverage",
+        "detail": (f"--coverage was requested, and `{script}` declares that its "
+                   f"report is decoded on the board by the `{codec}` codec: "
+                   f"the raw report route carries NO coverage, so whatever "
+                   f"this run measured is not ingested and this run is stored "
+                   f"with no coverage at all. Run a target ingested by the "
+                   f"PARSED route (e.g. `regression --coverage`) for coverage "
+                   f"evidence"),
+    }
+
+
 def _run_left_open_help():
     """CR-CRU-048's rule — the state actually reached is "an open run is being
     settled by the server", so the next action is to WATCH that settlement and
@@ -1531,6 +1551,17 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             # the ones the server's codec produced from it.
             files = (_parse_junit_file(junit_path)[2]
                      if os.path.exists(junit_path) else 0)
+            # §S2 — `--coverage` is accepted on every declared-tier verb and
+            # this route has nowhere to put it. Silence here is the exact
+            # failure the declaration exists to end, so the drop is stated on
+            # BOTH channels the parsed branch below uses for its own miss: the
+            # operator's stream, and the envelope the next reader parses.
+            if coverage_on:
+                print(f"[crucible] WARN: --coverage is not carried by the "
+                      f"`{raw_report['codec']}` raw report route — this run "
+                      f"is ingested with no coverage", file=sys.stderr)
+                run_warnings.append(
+                    _raw_route_coverage_warning(raw_report["codec"], script))
             resp = _ingest_raw(project_dir, args.agent, raw_report, tier=tier,
                                context=_run_context(), run_id=run_id)
             summary = _decoded_summary(resp)
