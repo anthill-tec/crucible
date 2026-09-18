@@ -137,7 +137,25 @@ hub start name=lavish-poll-storyboard application=npx \
      cwd=<repo>
 ```
 Exactly one poll process (one-listener invariant; `pgrep -af 'lavish-axi poll'` must show none
-before arming). Re-arm on the same artifact after every fetch; never truncate its output.
+before arming). Never truncate its output.
+
+**THE REPLY IS THE RE-ARM — make them ONE command, never two steps.** The rule "re-arm after every
+fetch" was already written here on 2026-09-18 and I broke it within the hour: the poll delivered
+feedback, I read it, went off applying the change, and never restarted the listener — so the user's
+NEXT message queued with nobody reading it and they had to ask twice. Reading a poll result and
+arming the next poll are not two tasks that happen to be adjacent; a consumed poll IS a dead
+listener, and the gap starts the instant you read it.
+
+So the ONLY sanctioned shape after consuming feedback is a single `hub start` that carries the reply
+and re-arms in the same call:
+
+```
+hub start name=lavish-poll-storyboard application=npx \
+     args=[-y, lavish-axi, poll, <artifact>, --agent-reply, "<what changed>"] cwd=<repo>
+```
+
+Never answer in the conversation panel by any other route, and never apply the feedback first and
+arm "once it's done" — apply-then-arm is exactly the window the user falls into.
 
 **CORRECTED 2026-09-18 — this section used to say "as a tracked async bash job (`async: true`,
 `timeout: 0`)", and that is how the user's editor went unattended for a whole session.** A poll
