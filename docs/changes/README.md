@@ -151,6 +151,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-143](CR-CRU-143-a-conditional-key-is-not-an-unexpected-one.md) | a conditional key is not an unexpected one | hotfix | COMPLETED (0.2.2) | 138 | 7 (0.2.2) |
 | [CR-CRU-144](CR-CRU-144-a-tier-is-claimed-not-measured.md) | a tier is claimed, never measured | fix | PENDING | 111 | 7 (0.3.0) |
 | [CR-CRU-145](CR-CRU-145-the-bdd-section-is-a-run-view.md) | the BDD section is a run VIEW, not a snapshot of the last run | fix | PENDING | 015 | 7 (0.3.0) |
+| [CR-CRU-146](CR-CRU-146-the-cycle-row-is-not-clickable-but-looks-it.md) | the history cycle row looks clickable and is not | fix | PENDING | 020, 021 | 7 (0.3.0) |
 
 ## Deferred — post-0.2.0
 
