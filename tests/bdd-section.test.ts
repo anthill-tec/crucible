@@ -44,15 +44,6 @@
 //   • the no-run case renders exactly one `.app-empty` inside the pane's
 //     `[data-testid="pane-scroll"]` — the same locator CR-CRU-097's shipped
 //     guard (tests/project-independence-strings.test.ts) reads.
-//
-// AC4 AND CR-CRU-097's GUARD, stated so the collision is not discovered
-// later: that guard's second test asserts the BDD EMPTY STATE contains both
-// "Runs timeline" and "does not exist yet", and §S3's AC4 deletes the claim
-// that the SURFACE does not exist. The AC4 test below therefore asserts
-// exactly that — no claim about the SURFACE's existence — and deliberately
-// does NOT forbid the words "does not exist yet" about a missing RUN, which
-// is the one wording that satisfies AC4 and AC5's "the guard keeps passing
-// UNCHANGED" together. Reported as a finding for the orchestrator to rule on.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
