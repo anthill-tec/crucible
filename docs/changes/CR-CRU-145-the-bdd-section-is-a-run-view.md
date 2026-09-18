@@ -63,14 +63,34 @@ project's history client-side and `latestBddEventId()` already uses the predicat
 (`kind === "test" && codec === "playwright"`). One selected-run state serves every entry, so the
 chain, the tab's list and a direct deep-link cannot disagree about which run is on screen.
 
-### §S2 — the tree is F11's, with the drill-in's grammar
+### §S2 — a MELD of three things, and the shipped Gherkin view is the part that stays
 
-F11's content design, reconciled with the user's CR-015 ruling that the tab exists to show the
-**Gherkin execution output** (so steps stay, beneath their scenario):
+**USER RULING 2026-09-18:** *"I like the Gherkin view output you are giving in BDD now so we have to
+meld both the design in F11 and the current drill down capabilities to get to the BDD view."*
 
-- feature nodes are **collapsible**, each carrying its own pass/fail counts as F11 draws them;
-- scenario rows carry their status and **duration**;
-- steps remain the verbatim Gherkin lines with per-step status, and a failing step keeps its message.
+This matters because F11 and the shipped pane disagree about the leaf, and F11 is the SHALLOWER of
+the two. F11's mock draws scenario rows and stops:
+
+```
+▾ Feature: property search      11 ✓   1 ✗
+    ✓ filters by price range · chromium · 2.1s
+    ✗ map view sync · chromium · 4.8s · trace ↗
+```
+
+No `Given`/`When`/`Then` anywhere in it. The shipped pane renders every Gherkin STEP with its own
+outcome — 524 rows for this project's suite — which is what the user endorses and what the CR-015
+ruling asked for ("showing the Gherkin execution output is what it is for"). So the meld is
+explicit, and it is NOT "implement F11":
+
+| Contributes | What it gives |
+|---|---|
+| **The shipped pane (KEEP)** | the leaf: every step, verbatim Gherkin text, per-step status, the failing step's message at that step |
+| **F11 (ADD)** | the frame: collapsible feature nodes with their own ✓/✗ counts, and per-scenario browser + duration + the trace affordance |
+| **The drill-in (REUSE)** | the behaviour: failures float, green folds, virtualization — the same functions, not a copy |
+
+A future author must not "correct" the step view down to F11's two-line scenario rows on F11's
+authority: F11 predates the step-level ruling, and the steps are the point of the surface. F11 is the
+authority on the FRAME around them.
 
 And the affordances every other run view already has, reused rather than reinvented —
 `L.foldSuites`, `L.digestFailures` and `L.drillinDefaultMode` are pure and exported from
@@ -134,11 +154,14 @@ reader does not restore the button on F11's authority.
 - [ ] A project with no BDD-bearing run still shows the CR-CRU-078 empty state, with no list or
       selector chrome implying runs exist.
 
-**§S2**
-- [ ] Feature nodes collapse and expand; a feature carries its own pass/fail counts as F11 draws
-      them.
-- [ ] Scenario rows carry status and duration; steps remain the verbatim Gherkin lines with per-step
-      status and the failing step's message.
+**§S2 — the meld**
+- [ ] **The shipped step-level view does NOT regress.** Every Gherkin step still renders, with its
+      verbatim text and its own outcome, and a failing step still carries its message AT that step —
+      the assertions CR-CRU-015 C2 shipped keep passing UNCHANGED. A pane that showed only scenario
+      rows would satisfy F11's mock and FAIL this CR.
+- [ ] Feature nodes collapse and expand, and each carries its own pass/fail counts as F11 draws
+      them — with the steps still reachable underneath, not replaced by the counts.
+- [ ] Scenario rows carry status and duration.
 - [ ] Failures float and green folds, through `L.foldSuites` / `L.digestFailures` /
       `L.drillinDefaultMode` — asserted to be the SAME functions the run drill-in uses, not a second
       implementation.
