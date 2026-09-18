@@ -71,11 +71,22 @@ function assertEphemeralTarget(action: string): void {
 //
 // CR-CRU-052 §S3/§S2 — guarded (ephemeral target only, checked before the POST)
 // and self-cleaning (every key created is registered for `teardownSeededProjects`).
-export async function seedProject(request: APIRequestContext, name: string): Promise<string> {
+//
+// CR-CRU-015 §S3 — the optional `type` (the POST's own `backend|frontend`
+// field, src/v2.ts:316) is threaded through because the BDD tab is gated to
+// FRONTEND projects (`workspaceTabs`, public/app-logic.mjs), so a scenario
+// about that tab cannot use a default-typed fixture. Omitted, the field is not
+// sent at all and the server's own default applies — every existing caller is
+// unaffected.
+export async function seedProject(
+  request: APIRequestContext,
+  name: string,
+  type?: "backend" | "frontend",
+): Promise<string> {
   assertEphemeralTarget(`seed project "${name}"`);
   const key = crypto.randomUUID();
   const res = await request.post("/api/v2/projects", {
-    data: { key, name, sutRoot: "/tmp/e2e" },
+    data: { key, name, sutRoot: "/tmp/e2e", ...(type !== undefined ? { type } : {}) },
   });
   expect(res.ok()).toBe(true);
   const tracked = seededProjectKeys.get(request);
@@ -229,6 +240,90 @@ export async function ingestJunit(
       data: xml,
       ...(tier !== undefined ? { tier } : {}),
     },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as RunIngestResponse;
+}
+
+// ── CR-CRU-015 §S2/§S3 — the RAW Playwright JSON report, decoded BY THE
+// SERVER. `codec: "playwright"` on POST /api/v2/runs makes the registry codec
+// (src/codecs/playwright.ts) turn the report into the feature → scenario →
+// step tree the BDD section reads; `runs/parsed` is deliberately NOT used,
+// because a client-side parse would flatten the Gherkin before the server ever
+// saw it and store `codec: "parsed"` (§S2's refused route).
+
+/** One feature, two scenarios — a passing one whose four steps include an
+ *  `And` (so verbatim step text is exercised) and a failing one that stops AT
+ *  the broken step, which is the shape the codec produces for a real run and
+ *  the shape `tests/e2e/features/bdd-gherkin-section.feature` asserts. Kept
+ *  beside the JUnit/rustc fixtures above rather than inline in a step file,
+ *  the same rule this harness states in its header. */
+export const PLAYWRIGHT_BDD_FEATURE_TITLE = "Gherkin Rendering Feature";
+export const PLAYWRIGHT_BDD_REPORT = JSON.stringify({
+  suites: [
+    {
+      title: PLAYWRIGHT_BDD_FEATURE_TITLE,
+      specs: [
+        {
+          title: "a passing scenario renders every step",
+          tests: [
+            {
+              results: [
+                {
+                  status: "passed",
+                  duration: 20,
+                  steps: [
+                    { title: "Given the board has a frontend project", duration: 5 },
+                    { title: "When a BDD run is ingested for it", duration: 6 },
+                    { title: "And the run carries its Gherkin steps", duration: 4 },
+                    { title: "Then the BDD section renders them in order", duration: 5 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          title: "a failing scenario stops at the broken step",
+          tests: [
+            {
+              results: [
+                {
+                  status: "failed",
+                  duration: 7,
+                  steps: [
+                    { title: "Given the board has a frontend project", duration: 4 },
+                    {
+                      title: "When the specification breaks",
+                      duration: 3,
+                      error: {
+                        message: "expect(received).toBe(expected) — the step never rendered",
+                        stack:
+                          "expect(received).toBe(expected)\n    at bdd-gherkin-section.steps.ts:42:7",
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+});
+
+/** POST /api/v2/runs with `codec: "playwright"` — the server decodes. */
+export async function ingestPlaywright(
+  request: APIRequestContext,
+  projectKey: string,
+  agentId: string,
+  report: string,
+  tier = "e2e",
+): Promise<RunIngestResponse> {
+  await ensureRegistered(request, projectKey, agentId);
+  const res = await request.post("/api/v2/runs", {
+    data: { projectKey, agentId, codec: "playwright", data: report, tier },
   });
   expect(res.ok()).toBe(true);
   return (await res.json()) as RunIngestResponse;
