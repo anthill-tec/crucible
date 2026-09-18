@@ -156,6 +156,20 @@ the content is absent. `BddFeed` renders the feature, its scenarios, and each sc
 is read for, not merely that the scenario did. The "does not exist yet" copy goes, because it is no
 longer true once the section renders.
 
+**USER RULING 2026-09-18: the pane must say WHICH run it is showing.** C2 GREEN built the section
+to render `latestBddEventId()`'s Gherkin and nothing else — no run id, no timestamp, no agent —
+because the ACs demanded the specification and explicitly refused a tally or a second Runs
+timeline, and it declared the omission rather than hiding it. The consequence is real: the pane
+always shows the LATEST BDD run, so a week-old run is indistinguishable from one that landed a
+minute ago, and a reader debugging a broken step cannot tell whether they are looking at their own
+run or yesterday's. That is a defect of a surface whose whole purpose is to be read as evidence.
+
+So the section names its subject. This is NOT the run header §S3 refused: what is refused is
+re-rendering the Runs timeline's content — counts, pass/fail tallies, a run list — and that refusal
+stands. What is required is the run's IDENTITY: when it was recorded and who filed it, in the same
+relative-time idiom the rest of the board already uses, so the reader knows which run's
+specification is on screen. Delivered as cycle C3 on plan 152.
+
 **CORRECTED 2026-09-18 by C2 RED: the `greyed(...)` claim above was wrong, and the AC built on it
 was vacuous.** Measured at `public/app.js:451`: `greyed(cls)` is
 `() => (state.backendUp ? cls : cls + " greyed")` — the UNIVERSAL backend-down dimmer, applied
@@ -290,6 +304,14 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
       substring.
 - [ ] A run carrying no Gherkin (a junit `unit` run, say) does NOT render as Gherkin — it shows the
       same empty state, so the section cannot pass off an unrelated run as a specification.
+- [ ] **The pane NAMES the run whose specification it renders (user ruling; cycle C3).** A reader
+      can tell WHICH run is on screen: when it was recorded, in the same relative-time idiom the
+      rest of the board already uses, and which agent filed it. Asserted on a populated pane, and
+      asserted to FOLLOW the subject — ingest a second, newer BDD run and the pane names the newer
+      one, so "latest" is observable rather than assumed. Bounded against the surface this CR
+      refuses to duplicate: the pane still shows NO pass/fail tally, NO totals and NO run list —
+      identity is not a scoreboard, and a test that would pass if counts appeared does not satisfy
+      this criterion.
 - [ ] The tab stays frontend-only: `workspaceTabs(project)` still returns
       `disabled: true` for `BDD` on a `type !== "frontend"` project, asserted for a backend project
       — the gate exists today and populating the section must not un-gate it. Bounded the other way
