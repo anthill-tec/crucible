@@ -532,8 +532,38 @@ function collectHelpSurfaces(): HelpSurface[] {
 // that row would legally re-admit real board ids into that file's assertions.
 // CR-CRU-140's one leak was a different kind (the asserted VALUE) and took
 // AC4's synthetic-id remedy instead — recorded at SYNTHETIC_NAMESPACES above.
+//
+// TWO, after CR-CRU-015's close-out on 2026-09-18, and the second row is taken
+// for exactly the reason the first was: the guard FAILED on the day the file
+// was written, which is the forward guarantee working rather than a hole being
+// widened. The remedy hierarchy the 0.2.2 note above records was walked in
+// order and neither of the first two reaches it; the entry states the reading
+// at its own line below.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
+  // ADDED 2026-09-18 by CR-CRU-015 §S4 — the SECOND entry this table has taken
+  // since it was measured on 2026-09-03 (41 files then, 43 now). ONE literal,
+  // MEASURED by this file's own checker on the day the file was written:
+  // `expect(rows.some((r) => r.cr === "CR-CRU-015")).toBe(true)`, the rail's
+  // second claim — that the dependency CR-CRU-018's queue row declares names a
+  // row that actually exists, an ordering fact being a fact only while BOTH
+  // ends do.
+  //
+  // THE IDS ARE THE SUBJECT AND CANNOT BE SYNTHESISED, which is the same
+  // justification the CR-CRU-118 board census gives at
+  // RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10 above. This suite drives NO fixture:
+  // its whole input is docs/changes/README.md, this project's live hand-edited
+  // queue table, and the claim §S4 asks the queue to keep carrying is about
+  // those two real rows. So AC4's remedy cannot reach it — a synthetic id would
+  // assert nothing about whether CR-018 really depends on 015, which is the
+  // only fact the rail exists to hold — and neither can CR-CRU-138's, because
+  // the literal is the asserted VALUE and not decoration inside an `expect`
+  // MESSAGE: stripping it deletes the assertion rather than the decoration.
+  // A residue row is the last resort here, not the convenient one.
+  //
+  // The ceiling may only shrink, as always, and this one shrinks to 0 the day
+  // CR-CRU-018 lands and the ordering it needed stops needing a rail.
+  [join("tests", "bdd-consumer-queue-ordering.test.ts")]: 1,
   [join("tests", "ci-toolchain-provisioning.test.ts")]: 1,
   [join("tests", "client", "test_arduino_crucible_axi.py")]: 9,
   [join("tests", "client", "test_bun_crucible_auto_attach.py")]: 4,
