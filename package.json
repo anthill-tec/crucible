@@ -34,6 +34,13 @@
   "crucible": {
     "reportPath": {
       "test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"
+    },
+    "rawReport": {
+      "test:e2e": {
+        "codec": "playwright",
+        "file": "playwright.json",
+        "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"
+      }
     }
   },
   "devDependencies": {

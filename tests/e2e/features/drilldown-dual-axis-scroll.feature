@@ -23,7 +23,9 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
   shell-storyboard.feature's F1 "truly empty DB" precondition — so this
   feature is pinned to its own `chromium-drilldown-dual-axis-scroll`
   Playwright project (see playwright.config.ts), which `dependencies` on
-  the default `chromium` project the same way the other two do. Every
+  the `chromium-empty-db` project holding that precondition, and is
+  declared after `chromium` so it still runs once the main body has: §S1
+  below was measured red when it ran ahead of it. Every
   project/agent name below is namespaced "DDA …" to stay clear of other
   features sharing the webServer/DB instance. Results are ingested with
   tier "e2e" by the orchestrator's ingest step, not by this suite.

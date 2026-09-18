@@ -96,6 +96,18 @@ export default defineConfig({
   // variable — so a hardcoded path here would make the declaration a lie and
   // the client could never move the file this suite writes. The default is
   // kept for a bare `bun run test:e2e`, which is unaffected.
+  //
+  // CR-CRU-015 §S2 — and the RAW report the SERVER decodes. The JUnit XML has
+  // no notion of a `test.step`, so every Gherkin step this suite executes is
+  // already gone by the time that file is written; playwright's own JSON
+  // report keeps them, and `src/codecs/playwright.ts` (registered as the
+  // `"playwright"` codec) turns them back into the feature → scenario → step
+  // tree. `package.json`'s `crucible.rawReport` DECLARES that this target
+  // takes that report's path from PLAYWRIGHT_JSON_OUTPUT_NAME, so the path is
+  // read from the environment for exactly the reason the junit reporter above
+  // reads one: playwright's json reporter prefers an explicit `outputFile`
+  // OVER the variable, and a hardcoded path here would make the declaration a
+  // lie. The default keeps a bare `bun run test:e2e` writing beside the XML.
   reporter: [
     ["list"],
     [
@@ -105,75 +117,94 @@ export default defineConfig({
           process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
       },
     ],
+    [
+      "json",
+      {
+        outputFile:
+          process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? "test-reports/playwright.json",
+      },
+    ],
   ],
   use: {
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
   },
-  // CR-CRU-016 C4 — `drill-in.feature` sorts alphabetically before
-  // `shell-storyboard.feature` ("d" < "s"), but shell-storyboard.feature's
-  // FIRST scenario (F1) asserts a truly empty DB — a precondition that MUST
-  // hold before ANY scenario in the shared webServer/DB seeds a project.
-  // playwright-bdd's file resolver (tinyglobby) always returns results in
-  // alphabetical order regardless of pattern order passed to `features`
-  // (verified: reordering the `features` array above had no effect), so
-  // ordering must be enforced at the Playwright project level instead:
-  // Playwright's documented "project dependencies" guarantee a dependency
-  // project completes before its dependent starts, independent of file
-  // discovery order. `chromium` covers everything except drill-in.feature;
-  // `chromium-drill-in` depends on it and runs strictly after.
+  // ORDERING. One scenario in this suite — shell-storyboard.feature's F1,
+  // "fresh forge — empty state" — asserts a database NOTHING has seeded, and
+  // every scenario shares one webServer and one DB for the whole run. Its
+  // `Given a fresh, empty Crucible database` is a NO-OP step (see
+  // tests/e2e/steps/navigation.steps.ts): the emptiness is provided by running
+  // FIRST, not by truncating anything, so the precondition is an ordering
+  // constraint and there is exactly one of it.
   //
-  // CR-CRU-025 C4 — `cycle-run-navigation.feature` sorts alphabetically
-  // BEFORE drill-in.feature too ("cycle" < "drill" < "shell"), which would
-  // break the SAME F1 precondition. Same fix, its own dependent project
-  // (`chromium-cycle-run-navigation`) — it and `chromium-drill-in` have no
-  // ordering requirement relative to EACH OTHER (each seeds its own
-  // namespaced fixtures), only relative to `chromium`.
+  // playwright-bdd's file resolver (tinyglobby) always returns files in
+  // alphabetical order regardless of the order passed to `features` (verified:
+  // reordering the `features` array above had no effect), and F1's file sorts
+  // well down that list — so the constraint is enforced at the Playwright
+  // PROJECT level, where "project dependencies" are documented to complete a
+  // dependency project before any dependent starts.
   //
-  // CR-CRU-034 C1 RED — `drilldown-dual-axis-scroll.feature` sorts
-  // alphabetically right after drill-in.feature ("drill-in" < "drilldown",
-  // the hyphen sorts before any letter) — still BEFORE shell-storyboard's
-  // F1 precondition. Same fix again, its own dependent project
-  // (`chromium-drilldown-dual-axis-scroll`); no ordering requirement
-  // relative to `chromium-drill-in` / `chromium-cycle-run-navigation`
-  // (own namespaced "DDA …" fixtures), only relative to `chromium`.
+  // CR-CRU-016 C4 / CR-CRU-025 C4 / CR-CRU-034 C1 / CR-CRU-017 §S3 each hit
+  // this constraint when adding a feature that sorts BEFORE shell-storyboard,
+  // and each answered it the same way: pin THAT feature into its own project
+  // that `dependencies` on `chromium`, so it runs after the whole main body.
   //
-  // CR-CRU-017 §S3 — `run-lifecycle.feature` sorts alphabetically BEFORE
-  // shell-storyboard.feature ("r" < "s") too, so it would seed projects ahead
-  // of that same F1 empty-DB precondition. Same fix once more, its own
-  // dependent project (`chromium-run-lifecycle`); no ordering requirement
-  // relative to the other dependents (its fixtures are namespaced "RL …"),
-  // only relative to `chromium`.
+  // CR-CRU-015 §S2 — that edge is WIDER than the constraint, and the width is
+  // not free. Playwright skips every dependent project when its dependency
+  // project holds ANY failing test (`hasFailedDeps` in the runner's phase
+  // loop, measured here: one failing scenario in `chromium` left "14 did not
+  // run"). Since this CR makes the suite's own report the board's evidence,
+  // those 14 scenarios land as nodes with no steps and no verdict — a reader
+  // cannot tell a skipped specification from an empty one. So the DEPENDENCY
+  // is narrowed to the constraint that actually exists: F1 is TAGGED
+  // `@empty-db` in its own feature file and is the whole of the dependency
+  // project, and every other project depends on THAT. A failure anywhere in
+  // the main body now skips nothing, because nothing depends on it.
+  //
+  // The four stay their own projects, declared AFTER `chromium` and running
+  // after it: measured, moving them into `chromium` (where file order puts
+  // them first) reds CR-CRU-034 §S1, which needs the DB state the main body
+  // leaves behind. They share a phase with `chromium` (same dependency
+  // depth), and a phase runs its projects in declaration order on the single
+  // declared worker — which is exactly the relative order the four have
+  // always had among themselves.
   projects: [
+    {
+      name: "chromium-empty-db",
+      use: { ...devices["Desktop Chrome"] },
+      grep: /@empty-db/,
+    },
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      grepInvert: /@empty-db/,
       testIgnore:
         /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle)\.feature\.spec\.js$/,
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-drill-in",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drill-in\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-cycle-run-navigation",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /cycle-run-navigation\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-drilldown-dual-axis-scroll",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drilldown-dual-axis-scroll\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-run-lifecycle",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /run-lifecycle\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
   ],
   webServer: {
