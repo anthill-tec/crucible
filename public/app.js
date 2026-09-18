@@ -2632,23 +2632,218 @@
     const CompilePanel = () =>
       div({ class: greyed("app-center") }, CompileFeed());
 
+    // ── CR-CRU-015 §S3 — the BDD section renders the GHERKIN of this
+    // project's latest BDD-bearing run: the feature, its scenarios in order,
+    // and each scenario's steps in order with each step's OWN outcome. Not a
+    // tally and not a second Runs timeline — which STEP of the specification
+    // broke is the thing a Gherkin report is read for, so a failed step
+    // carries its `failure.message` AT that step.
+    //
+    // The codec (src/codecs/playwright.ts) emits one suite node PER SCENARIO
+    // named "<Feature title> › <Scenario title>" and one leaf PER STEP in
+    // step order. The feature half is split off here and named ONCE per
+    // group; a scenario row carries its own half alone.
+    const BDD_SEP = " › ";
+
+    /** Codec tree → [{ title, scenarios: [{ title, status, steps }] }]. */
+    function bddFeatures(tree) {
+      const features = [];
+      const byTitle = new Map();
+      for (const node of tree ?? []) {
+        const name = typeof node?.name === "string" ? node.name : "";
+        const cut = name.indexOf(BDD_SEP);
+        // No separator: the node names no feature, so it groups under the
+        // untitled feature (whose title node is not rendered) rather than
+        // repeating the scenario line as a heading over itself.
+        const featureTitle = cut < 0 ? "" : name.slice(0, cut);
+        let feature = byTitle.get(featureTitle);
+        if (feature === undefined) {
+          feature = { title: featureTitle, scenarios: [] };
+          byTitle.set(featureTitle, feature);
+          features.push(feature);
+        }
+        feature.scenarios.push({
+          title: cut < 0 ? name : name.slice(cut + BDD_SEP.length),
+          status: bddStatus(node?.status),
+          steps: node?.children ?? [],
+        });
+      }
+      return features;
+    }
+
+    function bddStatus(status) {
+      return status === "fail" || status === "pending" ? status : "pass";
+    }
+
+    // The project's latest BDD-bearing run. `codec` is the discriminator (the
+    // playwright codec is what produces Gherkin): a junit unit run carries no
+    // specification, whatever else it carries, and must never be rendered as
+    // one.
+    function latestBddEventId() {
+      let latest = null;
+      for (const e of visibleEvents()) {
+        if (e.kind !== "test" || e.codec !== "playwright") continue;
+        if (latest === null || e.timestamp > latest.timestamp) latest = e;
+      }
+      return latest === null ? null : latest.id;
+    }
+
     // CR-CRU-097 §S1/§S4 — the empty state states the CAPABILITY, not the
     // plan: it names no CR and no release version, because a backlog is the
     // builder's and a shipped string does not move when the plan does.
-    const BddFeed = () =>
+    const BDD_EMPTY =
+      "No BDD run has been ingested for this project yet — a run's features, " +
+      "scenarios and steps render here once one arrives, and every run also " +
+      "reaches the Runs timeline.";
+
+    // One Gherkin step: the verbatim step line, its own outcome, and — when it
+    // is the step that broke — the failure the codec preserved, INSIDE it.
+    // The ✓/✗/⏭ glyph is a CSS ::before, so the rendered line stays the
+    // literal Gherkin and nothing else.
+    const BddStep = (step) => {
+      const status = bddStatus(step?.status);
+      const message =
+        typeof step?.failure?.message === "string" && step.failure.message.length > 0
+          ? step.failure.message
+          : null;
+      return div(
+        {
+          "data-testid": "bdd-step",
+          "data-bdd-status": status,
+          class: "app-bdd-step app-tree-line",
+        },
+        step?.name ?? "",
+        status === "fail"
+          ? div(
+              { "data-testid": "bdd-step-failure", class: "app-failure-box" },
+              // Same degradation rule as the run drill-in's failure box: a
+              // reporter that stored no message still gets a definite line.
+              message ?? "step failed",
+            )
+          : null,
+      );
+    };
+
+    const BddScenario = (scenario) =>
       div(
-        { "data-testid": "pane-scroll", class: "app-pane-content" },
-        paneRunway(
-          div(
-            { class: "app-empty" },
-            "BDD run results already stream into the Runs timeline — " +
-              "a dedicated BDD surface does not exist yet",
-          ),
+        {
+          "data-testid": "bdd-scenario",
+          "data-bdd-status": scenario.status,
+          class: "app-bdd-scenario",
+        },
+        div(
+          { "data-testid": "bdd-scenario-title", class: "app-bdd-scenario-title" },
+          scenario.title,
         ),
+        div({ class: "app-bdd-steps" }, scenario.steps.map(BddStep)),
       );
 
-    const BddPlaceholder = () =>
-      div({ class: greyed("app-center") }, BddFeed());
+    const BddFeature = (feature) =>
+      div(
+        { "data-testid": "bdd-feature", class: "app-bdd-feature" },
+        feature.title === ""
+          ? null
+          : div(
+              { "data-testid": "bdd-feature-title", class: "app-bdd-feature-title" },
+              feature.title,
+            ),
+        feature.scenarios.map(BddScenario),
+      );
+
+    // ── CR-CRU-015 §S3 (user ruling, cycle C3) — the pane NAMES its subject.
+    // A specification read as evidence has to say WHICH run produced it: when
+    // it was recorded, in the board's own relative-time idiom (`rel`, the same
+    // one every event card, agent row and rollup renders through), and which
+    // agent filed it. NOT the run header §S3 refuses: no counts, no tally, no
+    // run list, no id — a dim mono BYLINE over the specification, never a
+    // second Runs timeline.
+    const BddRunIdentity = (run) =>
+      div(
+        { "data-testid": "bdd-run-identity", class: "app-bdd-identity app-tree-line" },
+        // Same degradation rule as the failure box: an event that stored no
+        // stamp or no filer still gets a definite line rather than a blank.
+        `recorded ${run.timestamp === null ? "at an unrecorded time" : rel(run.timestamp)}` +
+          ` by ${run.agentId === null ? "an unnamed agent" : run.agentId}`,
+      );
+
+    const BddFeed = () => {
+      // The WHOLE-event read, deliberately, not the run detail's progressive
+      // ?depth=suites + ?suite=<name> pair: a specification is read in full —
+      // every step of every scenario is the content here, so there is nothing
+      // to expand on demand and a suites-depth reply carries no step at all.
+      const gherkin = van.state(null); // { eventId, features }
+      const loadError = van.state(null);
+      let requested = null;
+
+      async function load(eventId) {
+        if (requested === eventId) return;
+        requested = eventId;
+        if (eventId === null) return;
+        try {
+          const res = await fetch(`/api/v2/events/${encodeURIComponent(eventId)}`);
+          const body = await res.json();
+          const ev = body !== null && typeof body === "object" ? body.event : undefined;
+          if (ev === undefined || ev === null) {
+            loadError.val = "this run's Gherkin is unavailable";
+            return;
+          }
+          // A SUCCESSFUL read supersedes a failed one: `failed !== null`
+          // short-circuits the render below, so an error left standing would
+          // hide the Gherkin of every LATER run (recoverable only by leaving
+          // the tab and coming back, which rebuilds this pane's state).
+          // Cleared HERE rather than before the fetch because `load` is called
+          // from inside the binding below: van subscribes a binding only to
+          // the states it reads WITHOUT writing them in the same pass, so an
+          // assignment in the binding's synchronous phase would unsubscribe
+          // the pane from `loadError` and no failure would ever render.
+          // Identity is taken off THE SAME event the Gherkin is taken off, in
+          // the same assignment: a pane that read WHO/WHEN from the feed row
+          // and the steps from the detail could name one run over another
+          // run's specification the moment the two reads straddle an ingest.
+          gherkin.val = {
+            eventId,
+            features: bddFeatures(ev.tree),
+            timestamp: typeof ev.timestamp === "number" ? ev.timestamp : null,
+            agentId: typeof ev.agentId === "string" && ev.agentId !== "" ? ev.agentId : null,
+          };
+          loadError.val = null;
+        } catch (err) {
+          loadError.val = `this run's Gherkin failed to load — ${String(err)}`;
+        }
+      }
+
+      return div(
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
+        paneRunway(() => {
+          const eventId = latestBddEventId();
+          load(eventId);
+          const loaded = gherkin.val;
+          const failed = loadError.val;
+          if (eventId === null) return div({ class: "app-empty" }, BDD_EMPTY);
+          if (failed !== null) return div({ class: "app-empty" }, failed);
+          if (loaded === null || loaded.eventId !== eventId) {
+            // CR-CRU-122 §S2 — words AND a spinner while the read is in
+            // flight; plain text alone reads as a stalled surface.
+            return div({ class: "app-empty" }, Spinner(), " loading the run's Gherkin…");
+          }
+          // A playwright-coded run whose tree holds no scenario is no
+          // specification either — it gets the same empty state, never a
+          // skeleton of empty Gherkin chrome (CR-CRU-078).
+          if (loaded.features.length === 0) return div({ class: "app-empty" }, BDD_EMPTY);
+          return div(
+            { class: "app-bdd-tree" },
+            BddRunIdentity(loaded),
+            loaded.features.map(BddFeature),
+          );
+        }),
+      );
+    };
+
+    // §S3 CORRECTION — `greyed(...)` is the UNIVERSAL backend-down dimmer
+    // (see `greyed` above; 11 call sites), never an "unbuilt" marker: a
+    // dimmed pane is a STALE pane. It stays; only the unbuilt COPY went.
+    const BddPanel = () =>
+      div({ "data-testid": "workspace-bdd", class: greyed("app-center") }, BddFeed());
 
     // ── CR-CRU-014 §S3, re-scoped by CR-CRU-078 §S1 — the Roadmap tab's ZONE 3:
     // the table over the execution queue. It is one of three zones that render
@@ -4839,7 +5034,7 @@
               : state.workspaceTab === "Roadmap"
                 ? RoadmapPanel()
                 : state.workspaceTab === "BDD"
-                  ? BddPlaceholder()
+                  ? BddPanel()
                   : WorkspaceRuns();
       if (wsShowingDetail) {
         wsShowingDetail = false;

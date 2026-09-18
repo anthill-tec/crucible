@@ -14,8 +14,9 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
   ("cycle" < "shell"), which would break that feature's F1 "truly empty DB"
   precondition if it ran in plain file order — so, exactly like
   drill-in.feature, it is forced into its own Playwright project that runs
-  strictly AFTER the main `chromium` project (`dependencies: ["chromium"]`,
-  see playwright.config.ts's project-dependencies comment). Every
+  after the main `chromium` project — it `dependencies` on the
+  `chromium-empty-db` project that holds that precondition and is declared
+  after `chromium` (see playwright.config.ts's ordering comment). Every
   project/cr/agent name below is namespaced "CRB …" / "CR-CRB-…" to stay
   clear of the other features sharing that server/db instance. Results are
   ingested with tier "e2e" by the orchestrator's ingest step, not by this

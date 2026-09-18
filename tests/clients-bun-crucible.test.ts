@@ -1858,6 +1858,205 @@ describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verb
   });
 });
 
+// ── CR-CRU-015 §S2 — `--coverage` on a target the BOARD decodes ──────────
+//
+// `--coverage` is accepted on EVERY declared-tier verb (`_add_declared_tier_args`),
+// and a target that declares a RAW report is ingested through POST /api/v2/runs
+// — which carries a report and the codec that decodes it, and no coverage at
+// all. The parsed branch beside it prints a WARN when its lcov is missing; the
+// raw branch printed nothing, so `e2e --agent X --coverage` ran, filed a
+// coverage-less event, and said nothing about the coverage it dropped.
+//
+// Driven on a FIXTURE project that declares its own raw report and a STUB bun
+// that writes both reports, so the subject is what the client says about the
+// declaration — not Playwright, and not this repo's own manifest.
+
+const RAW_FIXTURE_CODEC = "playwright";
+
+/** The smallest report `src/codecs/playwright.ts` decodes into one scenario
+ *  with one step — enough for the server to store a real raw-route run. */
+const RAW_FIXTURE_REPORT = JSON.stringify({
+  suites: [
+    {
+      title: "Raw Report Feature",
+      specs: [
+        {
+          title: "a scenario the board decodes",
+          tests: [
+            {
+              results: [
+                { status: "passed", duration: 3, steps: [{ title: "Given a raw report", duration: 3 }] },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+});
+
+/** The JUnit XML the same run writes beside it — the client reads it for its
+ *  distinct-FILE count only, and the raw report is still the evidence. */
+const RAW_FIXTURE_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="raw-report.spec.ts" tests="1" failures="0">
+    <testcase name="a scenario the board decodes" classname="raw-report.spec.ts" file="raw-report.spec.ts" time="0.003"/>
+  </testsuite>
+</testsuites>
+`;
+
+/** A project declaring a raw report for `test:e2e`, in the shape
+ *  `_declared_raw_report` reads: the codec the BOARD resolves, the file the
+ *  target writes, and the env variable it is told the path through. */
+function writeRawReportProject(dir: string, projectKey: string): void {
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "clients-bun-crucible-raw-fixture",
+      version: "0.0.0",
+      private: true,
+      scripts: { "test:e2e": "stub-runner" },
+      crucible: {
+        reportPath: { "test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME" },
+        rawReport: {
+          "test:e2e": {
+            codec: RAW_FIXTURE_CODEC,
+            file: "playwright.json",
+            path: "env:PLAYWRIGHT_JSON_OUTPUT_NAME",
+          },
+        },
+      },
+    }),
+  );
+  writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
+}
+
+/** A stub `bun`: `bun run test:e2e` writes both reports to the paths the
+ *  client handed it through the declared env overlay, and exits green. */
+function writeStubBun(dir: string): string {
+  const path = join(dir, "stub-bun.sh");
+  writeFileSync(
+    path,
+    [
+      "#!/bin/sh",
+      'if [ -n "$PLAYWRIGHT_JSON_OUTPUT_NAME" ]; then',
+      `  cat > "$PLAYWRIGHT_JSON_OUTPUT_NAME" <<'RAWJSON'`,
+      RAW_FIXTURE_REPORT,
+      "RAWJSON",
+      "fi",
+      'if [ -n "$PLAYWRIGHT_JUNIT_OUTPUT_NAME" ]; then',
+      `  cat > "$PLAYWRIGHT_JUNIT_OUTPUT_NAME" <<'RAWXML'`,
+      RAW_FIXTURE_JUNIT.trimEnd(),
+      "RAWXML",
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** The envelope's `warnings[...]` rows — the STRUCTURED channel a reader
+ *  parses, as distinct from the operator's stderr stream. */
+function warningRows(stdout: string): string[] {
+  const block = / {2}warnings\[\d+\][^\n]*\n((?: {4}.*\n)*)/.exec(stdout);
+  if (block === null) return [];
+  return (block[1] ?? "").split("\n").filter((line) => line.trim() !== "");
+}
+
+/** The operator-stream WARN lines this client prints. */
+function warnLines(stderr: string): string[] {
+  return stderr.split("\n").filter((line) => line.includes("[crucible] WARN:"));
+}
+
+describe("clients/bun-crucible.py — CR-CRU-015 §S2: a raw-decoded target never drops --coverage in silence", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  /** One real `e2e` drive of the raw-declaring fixture, with or without the
+   *  flag — everything else identical, so the flag is the only variable. */
+  async function driveE2e(name: string, coverage: boolean): Promise<{ res: RunResult; baseUrl: string; key: string }> {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, name);
+    const dir = mkdtempSync(join(tmpdir(), `bun-crucible-raw-${coverage ? "cov" : "plain"}-`));
+    scratchDirs.push(dir);
+    writeRawReportProject(dir, key);
+    const bun = writeStubBun(dir);
+    await ensureRegistered("raw-route-agent", { cwd: dir, crucibleUrl: baseUrl, projectDir: dir });
+
+    const res = await runScript(
+      [
+        "e2e",
+        "--agent",
+        "raw-route-agent",
+        ...(coverage ? ["--coverage"] : []),
+        "--bun",
+        bun,
+        "--project-dir",
+        dir,
+        "--package-dir",
+        dir,
+      ],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    return { res, baseUrl, key };
+  }
+
+  test("with --coverage the dropped coverage is stated on BOTH channels — attributably, naming the declared codec — and the run still ingests by the raw route", async () => {
+    const { res, baseUrl, key } = await driveE2e("clients-bc-raw-coverage", true);
+
+    // NON-VACUITY — the drive really took the raw route: the board decoded the
+    // report itself, so the warning below is about a run that HAPPENED.
+    expect(res.code).toBe(0);
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.codec).toBe(RAW_FIXTURE_CODEC);
+    expect(event.tier).toBe("e2e");
+
+    // The STRUCTURED channel: an attributable code, naming the codec the
+    // project declared and the coverage this route does not carry. The
+    // sentence itself is not pinned — a re-wording must not red this.
+    const structured = warningRows(res.stdout).find((row) =>
+      row.includes("raw-report-carries-no-coverage"),
+    );
+    expect(structured).toBeDefined();
+    expect(structured).toContain(RAW_FIXTURE_CODEC);
+    expect(structured!.toLowerCase()).toContain("coverage");
+
+    // The OPERATOR's channel: the same miss on stderr, where the parsed branch
+    // prints its own "lcov coverage unavailable".
+    const printed = warnLines(res.stderr).find((line) => /coverage/i.test(line));
+    expect(printed).toBeDefined();
+    expect(printed).toContain(RAW_FIXTURE_CODEC);
+  });
+
+  test("WITHOUT --coverage the same fixture warns about nothing — the warning is the flag's, not the route's", async () => {
+    const { res, baseUrl, key } = await driveE2e("clients-bc-raw-plain", false);
+
+    // The same route, the same report, the same ingest — only the flag differs.
+    expect(res.code).toBe(0);
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    expect((await getFullEvent(baseUrl, events[0]!.id)).codec).toBe(RAW_FIXTURE_CODEC);
+
+    expect(warningRows(res.stdout).some((row) => row.includes("raw-report-carries-no-coverage"))).toBe(
+      false,
+    );
+    expect(warnLines(res.stderr).some((line) => /coverage/i.test(line))).toBe(false);
+  });
+});
+
 // ── CR-CRU-056 (C5) — the gated-run bracket must not destroy the CALLER's ──
 // registration, because §S1 stores the cycle binding ON the agent row.
 //

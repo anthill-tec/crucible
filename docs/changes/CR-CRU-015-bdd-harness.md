@@ -1,6 +1,6 @@
 # CR-CRU-015 — the BDD-driven e2e suite reaches the board, with its scenarios intact
 
-**Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-004, CR-CRU-007 · **Status** PENDING
+**Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-004, CR-CRU-007 · **Status** COMPLETED (0.3.0)
 
 > **RE-SPECIFIED 2026-09-17 (user ruling, option 2).** The original CR — filed at kickoff, when
 > Crucible was "not just a sink" — had the SERVER execute Playwright against a project's `sutRoot`
@@ -26,10 +26,23 @@ Every piece of the BDD path exists, and nothing connects them. Measured on `deve
 | Any client that selects the codec | **none** — `grep playwright clients/*.py` returns zero hits |
 | A BDD surface | absent, and the UI says so at `public/app.js:2644`: *"BDD run results already stream into the Runs timeline — a dedicated BDD surface does not exist yet"* |
 
-So sixteen executable specifications run on every CI push and **not one of their results reaches
-Crucible as `bdd`**. They are collected under `test:e2e`, which the pre-merge gate excludes
-fleet-wide (DN open question 5), so the BDD suite is the least-reported tier in the project while
-being the one written in the project's own domain language.
+So sixteen executable specifications run, and what reaches the board is a **tally of verdicts with
+the specification stripped out**.
+
+**CORRECTED 2026-09-18 by the RED phase, which refuted this CR's own opening claim.** An earlier
+draft of this section said the suite's runs "produce no board record whatsoever". Measured by
+driving the real verb (`bun-crucible.py e2e --package-dir <this repo>`) against a board: the run
+DOES land — `tier: "e2e"`, `codec: "parsed"`, `summary {total: 46, passed: 45, failed: 1}` — because
+CR-CRU-133 already wired the declared target's report mechanism. What the board never receives is a
+single `Given`/`When`/`Then`. The stored tree is addressed by **generated spec file**
+(`"tests/e2e/features/roadmap.feature.spec.js"`), holding one leaf per scenario, so a reader sees
+which FILE broke and never which STEP of the specification broke. The defect is the discarded
+Gherkin, not an absent ingest — and the two demand different work, which is why the claim is
+corrected here rather than quietly narrowed later.
+
+Compounding it: `test:e2e` is excluded from the pre-merge gate fleet-wide (DN open question 5), so
+nothing files these runs in the ordinary workflow either — the capability exists and no routine
+exercises it.
 
 And the `playwright` codec is **dead in the real workflow**: reachable only through the raw API, never
 selected by the fleet. A codec no caller selects is not a feature, it is an unexercised parser — the
@@ -38,7 +51,7 @@ pointed at it.
 
 ## Scope
 
-### §S1 — the e2e suite is BDD-driven, files as `e2e`, and reaches the board at all
+### §S1 — the e2e suite is BDD-driven, files as `e2e`, and reaches the board WITH ITS STEPS
 
 **USER RULING 2026-09-17, overriding this CR's first two drafts: for a UI-driven project, `e2e` MAY
 use Playwright and BDD.** BDD and Playwright are the MEANS; `e2e` is the tier. So there is no
@@ -47,17 +60,25 @@ rename, no `test:bdd`, and no tier change — an earlier draft of this section p
 which read the means as the dependency. The dependency this suite takes is the assembled product
 driven through a browser, which is `e2e`.
 
-What is measurably wrong is narrower and worse: **the suite's results never reach the board.**
-Measured on `develop` at `fe7794c`:
+What is measurably wrong is narrower and worse: **the board receives the verdicts and discards the
+specification.** Measured on `develop` at `fe7794c`, and re-measured by the RED phase against a
+live drive:
 
 - `playwright.config.ts:76-77` is `defineBddConfig({ features: "tests/e2e/features/*.feature" })`
   with `testDir` on the generated output; `bunx playwright test --list` reports
   **`Total: 46 tests in 16 files`**, every one generated from a `.feature`.
-- `test:e2e` is excluded from the pre-merge gate fleet-wide, and nothing else files it, so those 46
-  scenarios run on every CI push and produce no board record whatsoever.
-- The `playwright` codec that would carry their scenario-level detail has no caller
-  (`grep playwright clients/*.py` → zero hits), so even an ingest today would flatten them through
-  JUnit into counts.
+- A real `bun-crucible.py e2e` drive DOES file a run (`tier: "e2e"`, `codec: "parsed"`), but its
+  tree is addressed by generated spec file with one leaf per scenario — so no `Given`/`When`/`Then`
+  ever reaches the board, and `summary.total` equals the scenario count, i.e. the event is a tally.
+- `test:e2e` is excluded from the pre-merge gate fleet-wide, so nothing files these runs in the
+  ordinary workflow — the ingest path works and no routine walks it.
+- The `playwright` codec that would carry the step detail has no caller
+  (`grep playwright clients/*.py` → zero hits). Worse, measured during RED: the bun client has NO
+  raw-report ingest route at all — every path is `_ingest_parsed → POST /api/v2/runs/parsed` — and
+  this project declares no Playwright JSON reporter (`playwright.config.ts` declares `list` +
+  `junit` only; `package.json`'s `crucible.reportPath` declares only
+  `env:PLAYWRIGHT_JUNIT_OUTPUT_NAME`). So "the codec needs a caller" understates it: the raw report
+  does not exist yet and there is no route that would carry it.
 
 So §S1 makes the existing suite's existing runs land, as `e2e`, carrying the per-scenario detail a
 specification language exists to produce. It does NOT decide who SHOULD run and gate the browser
@@ -96,6 +117,24 @@ into the feature → scenario → step tree the UI reads. The `runs/parsed` path
 suite: a client-side parse would flatten the Gherkin before the server ever saw it, store
 `codec: "parsed"`, and leave the BDD section rendering something no codec vouches for.
 
+**Making the report authoritative widens one existing edge, and GREEN measured it.** The suite
+enforces a single ordering constraint through Playwright project dependencies:
+`shell-storyboard.feature`'s F1 asserts a database nothing has seeded, its `Given a fresh, empty
+Crucible database` is a NO-OP step (the emptiness comes from running FIRST), and four features that
+sort alphabetically ahead of it were each pinned into their own project depending on `chromium` so
+they ran after the main body. That was harmless while the board saw only counts. It is not harmless
+once this suite's own report IS the board's evidence: **Playwright skips every dependent project
+when its dependency project holds ANY failing test** (`hasFailedDeps` in the runner's phase loop —
+measured here as one failing scenario in `chromium` leaving *"14 did not run"*). Those 14 then land
+as scenario nodes with no steps and no verdict, and a reader cannot distinguish a SKIPPED
+specification from an empty one — the exact confusion this CR exists to remove.
+
+So the dependency is narrowed to the constraint that actually exists: F1 is tagged `@empty-db` in
+its own feature file, that tag alone constitutes the dependency project, and every other project
+depends on THAT rather than on the main body. A failure anywhere in the body now skips nothing,
+because nothing depends on the body. The four keep their own projects declared after `chromium`
+(measured: folding them in reds CR-CRU-034 §S1, which needs the DB state the body leaves behind).
+
 ### §S3 — the BDD section that already exists gets populated with the Gherkin execution output
 
 **USER RULING: there IS a BDD section in the UI, and showing the Gherkin execution output is what it
@@ -106,7 +145,7 @@ Runs timeline, not a pass/fail tally. Measured, the section is present and wired
 |---|---|
 | `public/app.js:2638` `BddFeed` | renders ONE string and nothing else |
 | `public/app.js:2644-2645` | that string: *"BDD run results already stream into the Runs timeline — a dedicated BDD surface does not exist yet"* |
-| `public/app.js:2650` `BddPlaceholder` | wraps `BddFeed` in `greyed(...)` — the tab is deliberately dimmed |
+| `public/app.js:2650` `BddPlaceholder` | wraps `BddFeed` in `greyed("app-center")` — **NOT an "unbuilt" marker; see the correction below** |
 | `public/app.js:4841` | `state.workspaceTab === "BDD"` — the route already dispatches here |
 
 So the tab row has promised this since CR-CRU-007 and the dispatch has been in place all along; only
@@ -114,8 +153,38 @@ the content is absent. `BddFeed` renders the feature, its scenarios, and each sc
 `Given`/`When`/`Then` steps in order with the outcome of each, straight off the codec's tree
 (scenario nodes named `<Feature> › <Scenario>`, step leaves in step order). A failing step shows its
 `failure.message` AT that step — which step of the specification broke is the thing a Gherkin report
-is read for, not merely that the scenario did. The `greyed(...)` wrapper and the
-"does not exist yet" copy both go, because neither is true once the section renders.
+is read for, not merely that the scenario did. The "does not exist yet" copy goes, because it is no
+longer true once the section renders.
+
+**USER RULING 2026-09-18: the pane must say WHICH run it is showing.** C2 GREEN built the section
+to render `latestBddEventId()`'s Gherkin and nothing else — no run id, no timestamp, no agent —
+because the ACs demanded the specification and explicitly refused a tally or a second Runs
+timeline, and it declared the omission rather than hiding it. The consequence is real: the pane
+always shows the LATEST BDD run, so a week-old run is indistinguishable from one that landed a
+minute ago, and a reader debugging a broken step cannot tell whether they are looking at their own
+run or yesterday's. That is a defect of a surface whose whole purpose is to be read as evidence.
+
+So the section names its subject. This is NOT the run header §S3 refused: what is refused is
+re-rendering the Runs timeline's content — counts, pass/fail tallies, a run list — and that refusal
+stands. What is required is the run's IDENTITY: when it was recorded and who filed it, in the same
+relative-time idiom the rest of the board already uses, so the reader knows which run's
+specification is on screen. Delivered as cycle C3 on plan 152.
+
+**CORRECTED 2026-09-18 by C2 RED: the `greyed(...)` claim above was wrong, and the AC built on it
+was vacuous.** Measured at `public/app.js:451`: `greyed(cls)` is
+`() => (state.backendUp ? cls : cls + " greyed")` — the UNIVERSAL backend-down dimmer, applied
+identically by Runs (`:2187`), Coverage (`:2606`), Compile (`:2633`), Workflow (`:4785`), the project
+pane and the home timeline; 11 call sites. It has never meant "dimmed because unbuilt". With the
+backend UP the BDD pane carries no `greyed` class today, so "the wrapper is gone for a frontend
+project with runs" was already true and would have proven nothing — worse, obeying it literally
+would have STRIPPED the liveness dimming every other pane has.
+
+So the wrapper STAYS and only the copy goes. The real distinction the AC was reaching for is
+between the two dimmings, and it is now stated as two falsifiable halves: a POPULATED pane carries
+no `greyed` while the backend is up and gains it only when the shell's own watchdog loses the
+backend — with its Gherkin still rendered, because a dimmed pane is a STALE pane, never an unbuilt
+one; and "gated" is expressed on the TAB (disabled attribute, dead click, pane never mounts), never
+by dimming a pane.
 
 **The section is frontend-only, and that gate already exists (user ruling: not backend projects).**
 `public/app-logic.mjs:300-314`'s `workspaceTabs(project)` already returns
@@ -146,9 +215,30 @@ CR and no release version; it states the capability"* — because the string thi
 a CR-097 correction: the pane previously read *"the dedicated BDD surface lands in CR-CRU-015
 (0.2.0)"*, and CR-097 struck that on the rule that an empty state may say a surface is not built,
 but may not cite the builder's backlog, because *"a plan moves, and a string does not move with
-it"*. §S3 must therefore (a) keep an empty state for the no-run case, (b) keep it free of CR ids
-and version numbers, and (c) leave that guard passing rather than re-pinning it to new text. A CR
-that deleted the string and the guard together would re-open a defect CR-097 closed.
+it"*. §S3 must therefore (a) keep an empty state for the no-run case and (b) keep it free of CR ids
+and version numbers.
+
+**RULED 2026-09-18 after C2 RED escalated a real collision.** That file holds TWO tests, and they
+are not equivalent:
+
+- `:172` — *"the rendered empty state names no project's CR id and no release version"*. This is
+  CR-097's actual invariant, the reason the CR exists. It MUST keep passing, untouched.
+- `:187` — *"the empty state still states the capability and that no dedicated surface exists
+  yet"*, asserting `toContain("Runs timeline")` and `toLowerCase().toContain("does not exist
+  yet")`. The second clause pins the WORDING of a sentence this CR legitimately makes false.
+
+An earlier draft of this section said to leave the guard passing "rather than re-pinning it to new
+text", which RED correctly read as forbidding any edit — and then found the only way to obey both:
+keep the literal `"does not exist yet"` alive by predicating it on a missing RUN instead of a
+missing SURFACE. **That escape is REFUSED.** It is re-pinning wearing a disguise: the copy gets
+contorted to preserve a substring, and the guard is left with a name describing an assertion it no
+longer makes. A test that pins incidental wording made false by a legitimate change is narrowed or
+deleted — never worked around by bending the product's words to fit it.
+
+So: `:187` is NARROWED to its durable half — the empty state still states the CAPABILITY (results
+appear in the Runs timeline) — and its surface-absence clause plus the stale half of its name are
+deleted. `:172` is untouched. CR-097's defect stays closed, because what CR-097 actually forbade was
+citing the builder's backlog, and nothing here re-introduces a CR id or a version.
 
 **Not related, checked and dismissed:** CR-CRU-022 (roadmap analytics) and CR-CRU-098 (the plan
 pointer has no publisher) mention none of these; CR-CRU-082 is VOID; CR-CRU-141 names Playwright
@@ -160,13 +250,21 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
 - [ ] `test:e2e` KEEPS its name and the suite keeps `tier: e2e` — no rename, no second target, no
       tier change. Asserted by a test pinning that the declared target for this suite is `test:e2e`
       and that its runs file as `e2e`, so a later author cannot "tidy" it into `test:bdd`.
-- [ ] The suite's results are INGESTED at all: today 46 scenarios across 16 features run on every
-      CI push and nothing reaches the board. A real `bun-crucible.py e2e` invocation files a run,
-      asserted on the stored event.
-- [ ] That ingest carries SCENARIO-LEVEL detail — the thing a specification language exists to
-      produce — not just a pass/fail total. Asserted against the stored event's own shape.
-- [ ] The declared-target guard (`tests/ci-toolchain-provisioning.test.ts` plus the declared-target
-      tests CR-CRU-133 established) covers `test:e2e`, so its declaration cannot silently change.
+- [ ] The stored event addresses scenarios BY SCENARIO, not by generated spec file: a real
+      `bun-crucible.py e2e` invocation yields a tree whose nodes are `<Feature> › <Scenario>`,
+      replacing today's `"tests/e2e/features/<name>.feature.spec.js"` addressing. (Corrected AC:
+      an earlier draft asked for the run to be "ingested at all", which RED measured as ALREADY
+      TRUE — the ingest lands, the specification is what it discards.)
+- [ ] That ingest carries STEP-LEVEL detail — the thing a specification language exists to produce.
+      `summary.total` equalling the scenario count is the current defect and is asserted against,
+      so a tally cannot satisfy this criterion.
+- [ ] The declared-target guard covers `test:e2e` so its declaration cannot silently change.
+      Location corrected after RED measured it: CR-CRU-133's declared-target tests are PYTHON
+      (`tests/client/test_declared_target_report_mechanism.py`, which already asserts this repo
+      declares `test:e2e` with `crucible.reportPath["test:e2e"] == "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"`);
+      `tests/ci-toolchain-provisioning.test.ts` guards the CI workflow and holds no such guard. The
+      bun-side rail therefore lives with this CR's own tests rather than inventing a second
+      convention in a CI file or editing another stack's client suite.
 
 **§S2**
 - [ ] A REAL client invocation of this project's e2e suite causes the `"playwright"` codec to parse
@@ -179,6 +277,13 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
       deliberately failing scenario, so the report can say which step of the specification broke.
 - [ ] `tests/playwright-codec.test.ts` keeps its unit coverage unchanged — this CR adds a caller; it
       does not rewrite the parser (whose header records it was pulled forward by CR-CRU-007 C5b).
+- [ ] **A failure in the suite's main body skips NOTHING.** No Playwright project may depend on the
+      main body, because a dependency-project failure makes Playwright skip every dependent and
+      those scenarios then reach the board as nodes with no steps and no verdict — indistinguishable
+      from a specification that ran and asserted nothing. The only permitted dependency is the
+      single `@empty-db`-tagged ordering precondition. Asserted on the config's own dependency
+      graph, so a later author cannot re-widen it back to `dependencies: ["chromium"]` and silently
+      reintroduce childless nodes.
 
 **§S3**
 - [ ] The BDD tab renders the GHERKIN of a real ingested run: the feature, its scenarios, and each
@@ -191,17 +296,35 @@ only as the cost of the e2e tier and already defers browser-tier ownership to DN
       storyboard compliance bar, not a smoke check.
 - [ ] `public/app.js:2644`'s "a dedicated BDD surface does not exist yet" note is DELETED, because
       it is no longer true; a test asserts the claim is gone rather than left contradicting the UI.
-- [ ] With no run recorded, the tab shows a definitive empty state rather than a broken or greyed
-      surface (CR-CRU-078's empty-state rule) — and that empty state still names NO CR id and NO
-      release version, so `tests/project-independence-strings.test.ts` (CR-CRU-097 AC1) keeps
-      passing UNCHANGED. The guard is not re-pinned to new copy; if satisfying §S3 requires editing
-      it, that is a finding to escalate.
+- [ ] With no run recorded, the tab shows exactly ONE definitive empty state (CR-CRU-078's rule),
+      naming NO CR id and NO release version — `tests/project-independence-strings.test.ts:172`
+      keeps passing UNTOUCHED. Its sibling at `:187` is NARROWED per the §S4 ruling: the capability
+      clause (`"Runs timeline"`) stays, the `"does not exist yet"` surface-absence clause and the
+      stale half of its name are deleted. The product's words are NOT contorted to preserve a
+      substring.
+- [ ] A run carrying no Gherkin (a junit `unit` run, say) does NOT render as Gherkin — it shows the
+      same empty state, so the section cannot pass off an unrelated run as a specification.
+- [ ] **The pane NAMES the run whose specification it renders (user ruling; cycle C3).** A reader
+      can tell WHICH run is on screen: when it was recorded, in the same relative-time idiom the
+      rest of the board already uses, and which agent filed it. Asserted on a populated pane, and
+      asserted to FOLLOW the subject — ingest a second, newer BDD run and the pane names the newer
+      one, so "latest" is observable rather than assumed. Bounded against the surface this CR
+      refuses to duplicate: the pane still shows NO pass/fail tally, NO totals and NO run list —
+      identity is not a scoreboard, and a test that would pass if counts appeared does not satisfy
+      this criterion.
 - [ ] The tab stays frontend-only: `workspaceTabs(project)` still returns
       `disabled: true` for `BDD` on a `type !== "frontend"` project, asserted for a backend project
-      — the gate exists today and populating the section must not un-gate it.
-- [ ] The `greyed(...)` wrapper on the populated section is gone for a frontend project with runs,
-      and a test distinguishes "greyed because gated" from "greyed because unbuilt" so the two
-      cannot be conflated again.
+      — the gate exists today and populating the section must not un-gate it. Bounded the other way
+      too: every project-type-independent tab (Roadmap/Workflow/Runs/Compile) stays ENABLED for a
+      backend project, so accidentally gating one of those reds this as well.
+- [ ] The two dimmings can never be conflated again, asserted as two halves (the `greyed(...)`
+      wrapper STAYS — see the §S3 correction; it is the universal backend-down dimmer):
+      (a) a POPULATED pane carries no `greyed` while the backend is up, and gains it only when the
+      shell's own watchdog loses the backend — with its Gherkin STILL rendered, because a dimmed
+      pane is a STALE pane, never an unbuilt one; driven through the real health probe, never by
+      assigning `state.backendUp`;
+      (b) "gated" is expressed on the TAB — disabled attribute, dead click, pane never mounts —
+      and never by dimming a pane.
 
 **§S4**
 - [ ] `docs/changes/README.md`'s CR-CRU-018 row lists `015` among its dependencies, so the queue's
@@ -217,8 +340,17 @@ reached; §S3 is a real UI surface with a Chromium-tier test, which is where mos
 
 ## Risk
 
-- **`test:e2e` already collects these features.** A careless §S1 could double-collect them or stop
-  collecting them — which is why an AC compares what each target collects either side of the change.
+- **`test:e2e` already collects these features.** This risk was written when §S1 still contemplated
+  migrating the target to `test:bdd`; the user's ruling removed the rename, so no target was added,
+  renamed or retired and the double-collect/stop-collect hazard never materialised. An earlier draft
+  of this bullet promised *"an AC compares what each target collects either side of the change"* —
+  there is no such AC and there should not be, because a count comparison is the wrong instrument:
+  collection legitimately GREW by one (16 features / 46 tests → 17 / 47, the §S3 Chromium scenario),
+  so a pinned figure would have to be edited by every CR that adds a feature, CR-CRU-018 included.
+  What actually protects collection is DERIVATION: the tests read the scenario list from the
+  `.feature` sources at run time and never hardcode a total, the declared-target guard pins
+  `test:e2e` as the one BDD target, and the dependency-graph rail asserts the ordering precondition
+  runs exactly once.
 - **The e2e tier is excluded from the pre-merge gate.** Filing BDD runs correctly does not put them
   in the gate; who runs and gates the browser tiers is DN open question 5, still unanswered, and this
   CR does not pre-empt it.

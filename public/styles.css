@@ -760,6 +760,40 @@ body {
 .app-failure-trace { color: var(--ink-faint); margin-top: 4px; }
 /* §S3 failure-box degradation — dim reporter note when no message stored. */
 .app-failure-note { color: var(--ink-faint); font-style: italic; margin-top: 2px; }
+
+/* ── CR-CRU-015 §S3 — the BDD section's Gherkin: feature ▸ scenario ▸ steps.
+   Same flat mono tree language as the run drill-in (F4) — status is COLOR,
+   never a box — and the ✓/✗/⏭ glyph is a ::before, so the rendered step line
+   stays the verbatim Gherkin the codec stored. ──────────────────────────── */
+/* §S3 cycle C3 — the run BYLINE: which run's specification is on screen.
+   Deliberately quieter than a feature title (faint, 10.5px, no rule, no box,
+   no status colour) so it reads as attribution over the specification rather
+   than as a run header — there is nothing here to score. */
+.app-bdd-identity {
+  font: 10.5px var(--mono);
+  color: var(--ink-faint);
+  margin-bottom: 10px;
+}
+.app-bdd-feature { margin-bottom: 14px; }
+.app-bdd-feature-title {
+  font: 600 12px var(--mono);
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.app-bdd-scenario { margin: 0 0 8px 12px; }
+.app-bdd-scenario-title { font: 600 11px var(--mono); color: var(--ink-dim); }
+.app-bdd-scenario[data-bdd-status="pass"] .app-bdd-scenario-title { color: var(--pass); }
+.app-bdd-scenario[data-bdd-status="fail"] .app-bdd-scenario-title { color: var(--fail); }
+.app-bdd-scenario[data-bdd-status="pending"] .app-bdd-scenario-title { color: var(--pend); }
+.app-bdd-steps { margin: 2px 0 0 14px; }
+.app-bdd-step { font: 10.5px var(--mono); padding: 1px 0; color: var(--ink); }
+.app-bdd-step::before { content: "✓ "; }
+.app-bdd-step[data-bdd-status="pass"] { color: var(--pass); }
+.app-bdd-step[data-bdd-status="fail"] { color: var(--fail); }
+.app-bdd-step[data-bdd-status="fail"]::before { content: "✗ "; }
+.app-bdd-step[data-bdd-status="pending"] { color: var(--pend); }
+.app-bdd-step[data-bdd-status="pending"]::before { content: "⏭ "; }
+.app-bdd-step .app-failure-box { margin: 2px 0 4px 14px; }
 /* §S3 — compile drill-in status line (always first). */
 .app-compile-status {
   display: inline-block;

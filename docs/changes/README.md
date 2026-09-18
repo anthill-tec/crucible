@@ -71,7 +71,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is selected by "last non-empty line", which fits python and node but not maven | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
 | [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (runs the server) and exposes no run command; provision-and-exit + a `serve` verb + bun guarantee | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
-| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | the BDD-driven e2e suite reaches the board, with its Gherkin rendered | feature | PENDING | 004, 007 | 7 (0.3.0) |
+| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | the BDD-driven e2e suite reaches the board, with its Gherkin rendered | feature | COMPLETED (0.3.0) | 004, 007 | 7 (0.3.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
 | [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 015, 016, 093 | 7 (0.3.0) |
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 7 (post-0.2.0) |
@@ -152,6 +152,30 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-09-18 — **`scripts/test-targets.ts` cannot see a test that WAITS, so a real-time-dependent
+  test files as `unit`** (candidate defect CR, found by CR-CRU-015 C2 GREEN, not by a failure).
+  `tests/bdd-section.test.ts`'s watchdog test sleeps ~6s of real time to drive the shell's own
+  health probe. The DN's tier rule is explicit that *"anything that WAITS on real time (a poll
+  tick, a debounce, a watchdog)"* is `integration`, and the crucible skill states a run ingested
+  under the wrong tier is worse than an unlabelled one — the board then reports coverage the
+  project does not have. But `INTEGRATION_MARKERS` detects only `chromium.launch`, `Bun.spawn`,
+  `spawnSync`, `Bun.serve`, `startServer` and `:3849` — every marker a SPAWN or a LISTENER, none a
+  wait. So the file classifies `unit` and adds ~6s to the fast target. **Not a CR-CRU-015 defect:**
+  the classifier gap predates it and `tests/test-targets.test.ts` is 7/7 as it stands; CR-015
+  merely produced the first test that exposes it. Whoever takes it should decide whether a wait is
+  detectable by source marker at all (`sleep`/`setTimeout`/`await new Promise` are all legitimate
+  in a unit test) or whether the honest signal is MEASURED wall-vs-CPU time, which the same skill
+  already names as the falsifier: *"a run claiming `unit` with wall time far above its CPU time is
+  misclassified, not merely slow"*.
+- 2026-09-18 — **the BDD section shows no run identity, so a stale run looks current** (candidate
+  UX patch, deliberate omission in CR-CRU-015 §S3, raised by C2 GREEN). The pane renders the
+  Gherkin of `latestBddEventId()` and nothing else — no run id, no timestamp, no agent — because
+  §S3's ACs require the feature/scenarios/steps and explicitly NOT a tally or a second Runs
+  timeline, and CR-CRU-078's rule is that an empty surface draws the empty state and nothing else.
+  The consequence is real and unasserted either way: a reader cannot tell WHICH run they are
+  looking at, so a week-old run is indistinguishable from one that just landed. If wanted, it needs
+  an explicit AC naming what identity is shown (and where, without becoming the run header §S3
+  refused) — not a silent addition to the pane.
 - 2026-09-16 — **six more retyped figures in `docs/RUNBOOK.md`, beyond the schema version CR-CRU-134
   fixed** (candidate patch CR, found by CR-CRU-134's §S3 census). Highest-value: the port `3849`
   (5 sites) and host `127.0.0.1` (6 sites) are both retyped from `src/server.ts:249,252`'s `??`

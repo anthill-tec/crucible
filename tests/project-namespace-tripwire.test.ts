@@ -532,8 +532,38 @@ function collectHelpSurfaces(): HelpSurface[] {
 // that row would legally re-admit real board ids into that file's assertions.
 // CR-CRU-140's one leak was a different kind (the asserted VALUE) and took
 // AC4's synthetic-id remedy instead — recorded at SYNTHETIC_NAMESPACES above.
+//
+// TWO, after CR-CRU-015's close-out on 2026-09-18, and the second row is taken
+// for exactly the reason the first was: the guard FAILED on the day the file
+// was written, which is the forward guarantee working rather than a hole being
+// widened. The remedy hierarchy the 0.2.2 note above records was walked in
+// order and neither of the first two reaches it; the entry states the reading
+// at its own line below.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
+  // ADDED 2026-09-18 by CR-CRU-015 §S4 — the SECOND entry this table has taken
+  // since it was measured on 2026-09-03 (41 files then, 43 now). ONE literal,
+  // MEASURED by this file's own checker on the day the file was written:
+  // `expect(rows.some((r) => r.cr === "CR-CRU-015")).toBe(true)`, the rail's
+  // second claim — that the dependency CR-CRU-018's queue row declares names a
+  // row that actually exists, an ordering fact being a fact only while BOTH
+  // ends do.
+  //
+  // THE IDS ARE THE SUBJECT AND CANNOT BE SYNTHESISED, which is the same
+  // justification the CR-CRU-118 board census gives at
+  // RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10 above. This suite drives NO fixture:
+  // its whole input is docs/changes/README.md, this project's live hand-edited
+  // queue table, and the claim §S4 asks the queue to keep carrying is about
+  // those two real rows. So AC4's remedy cannot reach it — a synthetic id would
+  // assert nothing about whether CR-018 really depends on 015, which is the
+  // only fact the rail exists to hold — and neither can CR-CRU-138's, because
+  // the literal is the asserted VALUE and not decoration inside an `expect`
+  // MESSAGE: stripping it deletes the assertion rather than the decoration.
+  // A residue row is the last resort here, not the convenient one.
+  //
+  // The ceiling may only shrink, as always, and this one shrinks to 0 the day
+  // CR-CRU-018 lands and the ordering it needed stops needing a rail.
+  [join("tests", "bdd-consumer-queue-ordering.test.ts")]: 1,
   [join("tests", "ci-toolchain-provisioning.test.ts")]: 1,
   [join("tests", "client", "test_arduino_crucible_axi.py")]: 9,
   [join("tests", "client", "test_bun_crucible_auto_attach.py")]: 4,
@@ -2179,10 +2209,65 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // stale head also reds tests/help-surface-order-independence.test.ts, whose
 // child `bun test` collects THIS file; that file is correct, fired for the
 // right reason, and gets no change.
+//
+// UPDATED 2026-09-18 by CR-CRU-015's CLOSE-OUT — `clients` 875 -> 888 (+13) and
+// `public` 477 -> 482 (+5). MEASURED with this file's own machinery on the
+// feature branch rather than transcribed from the gate that reported it: the
+// close-out regression (run-68249e61, cycle 494) reported, against the
+// then-recorded 875/477,
+//
+//     -  "clients": 875   +  "clients": 888
+//     -  "public":  477   +  "public":  482
+//
+// and the same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID over `develop...HEAD`, attributes every one of the eighteen:
+//
+//   clients +13, all of it in clients/bun-crucible.py (156 -> 169), the only
+//     file under `clients/` this CR touches:
+//       • ELEVEN `CR-CRU-015`, §S2's raw-report route end to end — `extra` and
+//         `declaration` on the target block (:477, :542), the
+//         decoded-BY-THE-SERVER declaration itself (:566) and the raw report it
+//         names (:585), the POST that hands the board the undecoded file
+//         (:995), the counts the server decodes back (:1037), the `--coverage`
+//         warning the raw route cannot answer client-side (:1151), and the FOUR
+//         call-site comments that carry the declaration through a wrapped run
+//         (:1423, :1450, :1501, :1547).
+//       • ONE `CR-CRU-017` (:1019) and ONE `CR-CRU-047` (:1549) — LINEAGE
+//         citations the new prose makes to explain the new code by the seams it
+//         reuses: the optional run-closing seam every ingest already carries,
+//         and the distinct-test-FILE count whose shrink signal is print-only. A
+//         lineage citation of a PRIOR CR counts exactly like the CR's own,
+//         because the measure is provenance, not authorship.
+//
+//   public +5: public/app.js +4 (259 -> 263) — TWO `CR-CRU-015` for §S3's BDD
+//     pane (:2635, the section that renders THIS run's Gherkin; :2753, the user
+//     ruling that the pane NAMES its subject) plus the two lineage citations
+//     that pane's own prose makes, `CR-CRU-122` (:2825, the words-AND-a-spinner
+//     in-flight idiom it reuses) and `CR-CRU-078` (:2831, the empty-chrome
+//     skeleton it refuses to draw) — and public/styles.css +1 (76 -> 77), the
+//     §S3 header on the Gherkin feature ▸ scenario ▸ steps block (:764).
+//
+// `src` (743) re-measures at its recorded head in the same run and could not
+// have moved: of the 27 files this CR touches, exactly THREE sit inside a
+// classified tree — the one under `clients/` and the two under `public/` above
+// — and nothing under `src/` at all. The other 24 are `docs/`, `tests/`,
+// `package.json` and `playwright.config.ts`, and none of those is a tree this
+// guard walks.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 888 and 482 are far above the 601
+// and 378 floors, no head came out below its baseline, and the three `develop`
+// floors stay at 512/378/601, unchanged, as always for a re-record.
+//
+// TAKEN AT CLOSE-OUT, after the CR's last content edit, so these are its final
+// figures rather than a mid-cycle reading. It clears the CASCADE with it, as
+// every re-record here does: this file's stale head also reds
+// tests/help-surface-order-independence.test.ts, whose child `bun test`
+// collects THIS file; that file is correct, fired for the right reason, and
+// gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 743 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 875 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 482 },
+  clients: { exts: [".py"], develop: 601, head: 888 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

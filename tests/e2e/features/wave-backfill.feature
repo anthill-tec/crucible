@@ -15,10 +15,10 @@ Feature: CR-CRU-031 §S4 — the wave backfill folds a wave-less plan into its c
   house style (Gherkin + playwright-bdd), mirroring
   tests/e2e/features/workflow-gates.feature's AC150 round trip.
 
-  This feature sorts alphabetically BEFORE workflow.feature/
-  workflow-gates.feature/workspace-*.feature ("wave-backfill" < "workflow"
-  since 'a' < 'o') but AFTER shell-storyboard.feature ("shell" < "wave"),
-  so its F1 empty-DB precondition already holds. The History lens scopes
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment). The History lens scopes
   plans to the CURRENT project (CR-CRU-026 §S1/§S2), so this scenario's own
   project is unaffected by any other feature's plans sharing the same
   server/db instance. Every project/cr name below is namespaced "WB " /

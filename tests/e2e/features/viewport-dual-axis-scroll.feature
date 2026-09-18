@@ -26,9 +26,10 @@ Feature: CR-CRU-029 §S1+§S2 — dual-axis scroll stays operable in narrow view
   content overflows below ~687px of available pane width), plus enough
   filler runs to force genuine vertical overflow on the workspace Runs pane.
 
-  Sorts after shell-storyboard.feature ("t" < "v", same slot as
-  viewport-pane-scroll-floor.feature) so that feature's F1 "truly empty DB"
-  precondition still holds; sorts before wave-backfill.feature ("v" < "w").
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment).
   Every project name below is namespaced "DAS …" to stay clear of other
   features sharing the webServer/DB instance. Results are ingested with tier
   "e2e" by the orchestrator's ingest step, not by this suite.

@@ -471,13 +471,19 @@ def _junit_path(reports_dir):
     return os.path.join(reports_dir, DEFAULT_JUNIT)
 
 
-def _wipe(reports_dir):
-    jp = _junit_path(reports_dir)
-    if os.path.exists(jp):
-        try:
-            os.remove(jp)
-        except OSError:
-            pass
+def _wipe(reports_dir, *extra):
+    """Remove the stale report(s) so only THIS run's results can be ingested.
+
+    CR-CRU-015 §S2 — `extra` names any additional report the run is about to
+    write (the RAW report a declared target produces for server-side decode).
+    A stale one left in place is worse than none: the ingest would succeed and
+    file the PREVIOUS run's evidence under this run's agent."""
+    for path in (_junit_path(reports_dir), *extra):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 # CR-CRU-133 §S2 — the vocabulary a project states a declared target's
@@ -525,20 +531,24 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
     return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)
 
 
-def _report_path_variable(mechanism):
+def _report_path_variable(mechanism, declaration="crucible.reportPath"):
     """CR-CRU-133 §S2 — the environment variable a declared mechanism names, or
     None when the declaration is the flag default (`flag`, or no entry at all).
 
     An unrecognised value is NOT honoured as a variable name: it falls back to
     the default and SAYS so, because a typo'd declaration that silently starved
-    the report is the class of failure this CR exists to end."""
+    the report is the class of failure this CR exists to end.
+
+    CR-CRU-015 §S2 — `declaration` names the block the value was read from, so
+    the same `env:<VAR>` vocabulary can be reused by the RAW-report declaration
+    beside it without the warning naming the wrong key."""
     text = (mechanism or "").strip()
     if text.startswith(REPORT_MECHANISM_ENV_PREFIX):
         variable = text[len(REPORT_MECHANISM_ENV_PREFIX):].strip()
         if variable:
             return variable
     if text and text != REPORT_MECHANISM_FLAG:
-        print(f"[crucible] WARN: unknown crucible.reportPath mechanism "
+        print(f"[crucible] WARN: unknown {declaration} mechanism "
               f"{mechanism!r} — falling back to {REPORT_MECHANISM_FLAG!r}",
               file=sys.stderr)
     return None
@@ -551,6 +561,57 @@ def _declared_report_mechanism(package_dir, script):
     declaration that exists today keeps its meaning with no edit."""
     crucible = _package_manifest(package_dir).get("crucible") or {}
     return (crucible.get("reportPath") or {}).get(script)
+
+
+# CR-CRU-015 §S2 — the declaration that a target's report is decoded BY THE
+# SERVER rather than by this client. It sits beside `crucible.reportPath` in
+# the same manifest, keyed by the same target name, and states the three things
+# a client cannot infer without classifying a runner it was told never to read:
+#
+#   "rawReport": {"test:e2e": {"codec": "playwright",
+#                              "file": "playwright.json",
+#                              "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"}}
+#
+# `codec` is the decoder the BOARD resolves from its own registry, `file` is
+# what the report is called inside this client's reports dir, and `path` reuses
+# `reportPath`'s `env:<VAR>` vocabulary for how the target is told where to
+# write it. NO entry is the default: the target's JUnit XML is parsed here and
+# POSTed to /api/v2/runs/parsed, exactly as before.
+RAW_REPORT_KEY = "rawReport"
+RAW_REPORT_DECLARATION = f"crucible.{RAW_REPORT_KEY}"
+
+
+def _declared_raw_report(package_dir, script, reports_dir):
+    """CR-CRU-015 §S2 — the RAW report the declared target writes for the SERVER
+    to decode, as `{codec, path, variable}`, or None when the project declares
+    none (every target but `test:e2e` today).
+
+    A declaration that exists but cannot be honoured is a HARD STOP, never a
+    silent fall-back to the client-side parse: the whole point of declaring a
+    codec is that the client's own parse discards what that codec keeps (here,
+    every Gherkin step), so quietly taking the other route would file evidence
+    the project explicitly refused."""
+    if not script:
+        return None
+    crucible = _package_manifest(package_dir).get("crucible") or {}
+    declared = (crucible.get(RAW_REPORT_KEY) or {}).get(script)
+    if not declared:
+        return None
+    if not isinstance(declared, dict):
+        sys.exit(f"[crucible] ERROR: {RAW_REPORT_DECLARATION}.{script} must be "
+                 f"an object of {{codec, file, path}}, not {declared!r}")
+    codec = str(declared.get("codec") or "").strip()
+    name = str(declared.get("file") or "").strip()
+    variable = _report_path_variable(declared.get("path"),
+                                     declaration=RAW_REPORT_DECLARATION)
+    if not (codec and name and variable):
+        sys.exit(f"[crucible] ERROR: {RAW_REPORT_DECLARATION}.{script} is "
+                 f"incomplete ({declared!r}) — it must name the board `codec` "
+                 f"that decodes the report, the `file` it is written as, and "
+                 f"the `path` mechanism (\"env:<VAR>\") the target reads its "
+                 f"location from")
+    return {"codec": codec, "variable": variable,
+            "path": os.path.join(reports_dir, name)}
 
 
 def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
@@ -929,6 +990,64 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
+def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
+                run_id=None):
+    """CR-CRU-015 §S2 — POST the RAW report and let the BOARD decode it, at
+    `/api/v2/runs`, whose `codec` names the decoder the server resolves from its
+    own registry (`mvn-crucible.py`'s `_ingest_junit_dir` already ingests this
+    way, with `codec: "junit"`).
+
+    This client parses NOTHING on this route, and that is the point: a
+    client-side parse can only send back the shape this client knows how to
+    build, so everything its parser has no notion of — for the playwright codec,
+    every Gherkin step of every scenario — is discarded before the board ever
+    sees the report. The path is handed over as `dataPath`, so the report is
+    read once, by the side that decodes it.
+
+    Returns the response dict; the caller emits the §S1 envelope from the
+    summary the SERVER decoded."""
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "codec": raw_report["codec"],
+        "dataPath": raw_report["path"],
+        "agentId": agent_id,
+    }
+    if tier:
+        payload["tier"] = tier
+    if context:
+        payload["context"] = context
+    # CR-CRU-017 §S1/§S4 — the same optional run-closing seam every ingest
+    # route shares; absent, the server stores no lifecycle fields.
+    if run_id:
+        payload["runId"] = run_id
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
+    run = resp.get("run") or {}
+    print(
+        f"ingest {raw_report['codec']}: ok={resp.get('ok')} "
+        f"report={raw_report['path']} passed={run.get('passed')} "
+        f"failed={run.get('failed')} pending={run.get('pending', 0)} "
+        f"total={run.get('total')}"
+        + (f" error={resp['error']}" if resp.get("error") else ""),
+        file=sys.stderr,
+    )
+    return resp
+
+
+def _decoded_summary(resp):
+    """CR-CRU-015 §S2 — the counts the SERVER decoded, in the shape the ingest
+    envelope reports. On the raw route the client never parsed the report, so
+    what the run envelope states is what the board actually stored — a refused
+    ingest carries no `run` and reports zeros beside its own `error`."""
+    run = resp.get("run") or {}
+
+    def count(key):
+        value = run.get(key)
+        return value if isinstance(value, int) else 0
+
+    return {"passed": count("passed"), "failed": count("failed"),
+            "pending": count("pending"), "total": count("total")}
+
+
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
     payload = {
         "projectKey": _project_key(project_dir),
@@ -1025,6 +1144,26 @@ def _run_left_open_warning(run_id, cause):
                    f"older than the `run_abandon_ms` limit the server resolves "
                    f"from the crucible.toml beside its database. The run is "
                    f"abandoned, not lost"),
+    }
+
+
+def _raw_route_coverage_warning(codec, script):
+    """CR-CRU-015 §S2 — the structured warning for a `--coverage` the RAW route
+    cannot carry. `POST /api/v2/runs` posts a report and the codec that decodes
+    it, and has no coverage field at all, so coverage measured by a target
+    whose report the BOARD decodes is measured and then dropped. The flag is
+    accepted on every declared-tier verb, so the drop is easy to reach and
+    impossible to see — it is stated here on the same terms the parsed
+    branch's own "lcov coverage unavailable" WARN states its miss."""
+    return {
+        "code": "raw-report-carries-no-coverage",
+        "detail": (f"--coverage was requested, and `{script}` declares that its "
+                   f"report is decoded on the board by the `{codec}` codec: "
+                   f"the raw report route carries NO coverage, so whatever "
+                   f"this run measured is not ingested and this run is stored "
+                   f"with no coverage at all. Run a target ingested by the "
+                   f"PARSED route (e.g. `regression --coverage`) for coverage "
+                   f"evidence"),
     }
 
 
@@ -1281,7 +1420,11 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     bun = _resolve_bun(args.bun)
     reports_dir = _reports_dir(package_dir, args.reports)
     os.makedirs(reports_dir, exist_ok=True)
-    _wipe(reports_dir)
+    # CR-CRU-015 §S2 — a declared target may state that its report is decoded
+    # by the BOARD; that report is written into this same reports dir, so it is
+    # resolved before the wipe and wiped with the XML beside it.
+    raw_report = _declared_raw_report(package_dir, script, reports_dir)
+    _wipe(reports_dir, *([raw_report["path"]] if raw_report else []))
     junit_path = _junit_path(reports_dir)
     coverage_on = bool(args.coverage)
     coverage_dir = os.path.join(package_dir, "coverage")
@@ -1304,6 +1447,13 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             cmd, report_env = _bun_run_script_cmd(
                 bun, script, junit_path, coverage_on, coverage_dir,
                 _declared_report_mechanism(package_dir, script))
+            # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
+            # discipline, for the same reason: the client picks WHERE the
+            # report lands (its reports dir) and the declaration states HOW the
+            # target is told, so nothing is appended to an argv the runner
+            # never agreed to accept.
+            if raw_report:
+                report_env[raw_report["variable"]] = raw_report["path"]
             env.update(report_env)
         else:
             cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
@@ -1348,9 +1498,17 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
-        if not os.path.exists(junit_path):
-            print("[crucible] ERROR: no JUnit XML produced — nothing to ingest",
-                  file=sys.stderr)
+        # CR-CRU-015 §S2 — the report that MATTERS is the one this run will
+        # ingest: the raw report the board decodes when the target declares
+        # one, and the JUnit XML this client parses otherwise. A run whose
+        # declared raw report is missing is starved exactly as a run with no
+        # XML is — it must never quietly ingest the other one by the route the
+        # declaration exists to refuse.
+        ingest_path = raw_report["path"] if raw_report else junit_path
+        ingest_name = os.path.basename(ingest_path)
+        if not os.path.exists(ingest_path):
+            print(f"[crucible] ERROR: no {ingest_name} produced — nothing to "
+                  f"ingest", file=sys.stderr)
             # CR-CRU-064 §S3/AC6 — under the `verb` PARAMETER, so a starved
             # `pre-merge-gate` speaks as the gate, never as the inner
             # `regression`. The capture exists here today and was simply
@@ -1360,8 +1518,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             warnings = list(run_warnings)
             if run_id:
                 warnings.append(_run_left_open_warning(
-                    run_id, "the runner produced no JUnit XML, so there was "
-                            "nothing to ingest"))
+                    run_id, f"the runner produced no {ingest_name}, so there "
+                            f"was nothing to ingest"))
             # CR-CRU-133 §S3/AC5 — a DECLARED target that produced nothing is
             # named: which script starved, the exact command that ran it, and
             # the path the report was expected at. It rides the ADDITIVE
@@ -1371,32 +1529,55 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             if script:
                 starved = (f"declared target `{script}` exited "
                            f"{result.returncode} and wrote no report at "
-                           f"{junit_path} — re-run `{invocation}` in "
-                           f"{package_dir} and make `{script}` write its JUnit "
-                           f"XML to that path")
+                           f"{ingest_path} — re-run `{invocation}` in "
+                           f"{package_dir} and make `{script}` write its "
+                           f"{ingest_name} to that path")
             _emit_axi(verb, False,
-                      {"help": _axi().no_report_help(verb, "junit.xml",
+                      {"help": _axi().no_report_help(verb, ingest_name,
                                                      remedy=starved)},
                       _axi_context(project_dir, agent_id=args.agent),
                       warnings + [_axi().no_report_warning(
-                          verb, "junit.xml", result.returncode,
+                          verb, ingest_name, result.returncode,
                           getattr(result, "stdout", None) or "",
                           cause=starved)],
-                      f"{verb}: ok=False — no JUnit XML, nothing to ingest")
+                      f"{verb}: ok=False — no {ingest_name}, nothing to ingest")
             return 1
 
-        summary, tree, files = _parse_junit_file(junit_path)
-        _marry_failures(tree, getattr(result, "stdout", None))
-        coverage = None
-        if coverage_on:
-            lcov_path = os.path.join(coverage_dir, "lcov.info")
-            coverage = _parse_lcov(lcov_path)
-            if coverage is None:
-                print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
-                      file=sys.stderr)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier=tier, context=_run_context(),
-                              run_id=run_id)
+        if raw_report:
+            # CR-CRU-015 §S2 — the board decodes. The client reads the JUnit
+            # XML the same run wrote for its distinct-FILE count ONLY (the
+            # envelope's shrink signal, print-only by CR-CRU-047 §S2); the
+            # evidence itself is the raw report, and the counts reported are
+            # the ones the server's codec produced from it.
+            files = (_parse_junit_file(junit_path)[2]
+                     if os.path.exists(junit_path) else 0)
+            # §S2 — `--coverage` is accepted on every declared-tier verb and
+            # this route has nowhere to put it. Silence here is the exact
+            # failure the declaration exists to end, so the drop is stated on
+            # BOTH channels the parsed branch below uses for its own miss: the
+            # operator's stream, and the envelope the next reader parses.
+            if coverage_on:
+                print(f"[crucible] WARN: --coverage is not carried by the "
+                      f"`{raw_report['codec']}` raw report route — this run "
+                      f"is ingested with no coverage", file=sys.stderr)
+                run_warnings.append(
+                    _raw_route_coverage_warning(raw_report["codec"], script))
+            resp = _ingest_raw(project_dir, args.agent, raw_report, tier=tier,
+                               context=_run_context(), run_id=run_id)
+            summary = _decoded_summary(resp)
+        else:
+            summary, tree, files = _parse_junit_file(junit_path)
+            _marry_failures(tree, getattr(result, "stdout", None))
+            coverage = None
+            if coverage_on:
+                lcov_path = os.path.join(coverage_dir, "lcov.info")
+                coverage = _parse_lcov(lcov_path)
+                if coverage is None:
+                    print(f"[crucible] WARN: lcov coverage unavailable at "
+                          f"{lcov_path}", file=sys.stderr)
+            resp = _ingest_parsed(project_dir, args.agent, summary, tree,
+                                  coverage, tier=tier, context=_run_context(),
+                                  run_id=run_id)
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
@@ -2211,6 +2392,11 @@ _CLI_DESCRIPTION = (
     "`flag` (the default — `bun test`'s own report flags are appended) or `env:<VAR>`\n"
     "(the variable the script's own runner reads the path from, so nothing is appended\n"
     "that the runner never agreed to accept).\n"
+    "\n"
+    "A target whose report the BOARD should decode declares that beside it, under\n"
+    "`crucible.rawReport.<target>` = {codec, file, path}: the run's raw report is\n"
+    "POSTed to /api/v2/runs under that codec and parsed server-side, instead of being\n"
+    "parsed here and POSTed to /api/v2/runs/parsed.\n"
     "\n"
     "Run `<verb> --help` for a verb's own flags."
 )

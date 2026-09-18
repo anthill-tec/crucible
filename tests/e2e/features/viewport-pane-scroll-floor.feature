@@ -13,18 +13,13 @@ Feature: CR-CRU-023 §S1 — pane scroll floor at the supported viewport bounds
   surfaces — exactly one instance renders per route.
   This is a VERIFICATION-layer suite: production already implements the
   behavior, so both scenarios below are expected to PASS.
-  Filename note: this feature is named "viewport-pane-scroll-floor" (not the
-  originally-proposed "pane-scroll-floor") so it sorts alphabetically AFTER
-  shell-storyboard.feature ("s" < "v") — that feature's F1 scenario asserts
-  a TRULY EMPTY DB, a precondition that must hold before ANY feature in this
-  shared webServer/DB run seeds a project (same ordering constraint
-  documented for drill-in.feature in playwright.config.ts; "pane-scroll-
-  floor.feature" would have sorted BEFORE shell-storyboard.feature and
-  broken that precondition). It sorts before workflow.feature ("v" < "w"),
-  which has no such constraint. Every project/cr/agent name below is
-  namespaced "PSF …" to stay clear of the other features sharing the
-  instance. Results are ingested with tier "e2e" by the orchestrator's
-  ingest step, not by this suite.
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment).
+  Every project/cr/agent name below is namespaced "PSF …" to stay clear of
+  the other features sharing the instance. Results are ingested with tier
+  "e2e" by the orchestrator's ingest step, not by this suite.
 
   Scenario: the Workflow pane with a long-label active plan scrolls horizontally at 800×640 without crushing the cycle-timer badge or the page body
     Given the viewport is 800x640
