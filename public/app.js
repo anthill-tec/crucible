@@ -2750,6 +2750,22 @@
         feature.scenarios.map(BddScenario),
       );
 
+    // ── CR-CRU-015 §S3 (user ruling, cycle C3) — the pane NAMES its subject.
+    // A specification read as evidence has to say WHICH run produced it: when
+    // it was recorded, in the board's own relative-time idiom (`rel`, the same
+    // one every event card, agent row and rollup renders through), and which
+    // agent filed it. NOT the run header §S3 refuses: no counts, no tally, no
+    // run list, no id — a dim mono BYLINE over the specification, never a
+    // second Runs timeline.
+    const BddRunIdentity = (run) =>
+      div(
+        { "data-testid": "bdd-run-identity", class: "app-bdd-identity app-tree-line" },
+        // Same degradation rule as the failure box: an event that stored no
+        // stamp or no filer still gets a definite line rather than a blank.
+        `recorded ${run.timestamp === null ? "at an unrecorded time" : rel(run.timestamp)}` +
+          ` by ${run.agentId === null ? "an unnamed agent" : run.agentId}`,
+      );
+
     const BddFeed = () => {
       // The WHOLE-event read, deliberately, not the run detail's progressive
       // ?depth=suites + ?suite=<name> pair: a specification is read in full —
@@ -2780,7 +2796,16 @@
           // the states it reads WITHOUT writing them in the same pass, so an
           // assignment in the binding's synchronous phase would unsubscribe
           // the pane from `loadError` and no failure would ever render.
-          gherkin.val = { eventId, features: bddFeatures(ev.tree) };
+          // Identity is taken off THE SAME event the Gherkin is taken off, in
+          // the same assignment: a pane that read WHO/WHEN from the feed row
+          // and the steps from the detail could name one run over another
+          // run's specification the moment the two reads straddle an ingest.
+          gherkin.val = {
+            eventId,
+            features: bddFeatures(ev.tree),
+            timestamp: typeof ev.timestamp === "number" ? ev.timestamp : null,
+            agentId: typeof ev.agentId === "string" && ev.agentId !== "" ? ev.agentId : null,
+          };
           loadError.val = null;
         } catch (err) {
           loadError.val = `this run's Gherkin failed to load — ${String(err)}`;
@@ -2805,7 +2830,11 @@
           // specification either — it gets the same empty state, never a
           // skeleton of empty Gherkin chrome (CR-CRU-078).
           if (loaded.features.length === 0) return div({ class: "app-empty" }, BDD_EMPTY);
-          return div({ class: "app-bdd-tree" }, loaded.features.map(BddFeature));
+          return div(
+            { class: "app-bdd-tree" },
+            BddRunIdentity(loaded),
+            loaded.features.map(BddFeature),
+          );
         }),
       );
     };

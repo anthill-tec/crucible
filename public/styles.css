@@ -765,6 +765,15 @@ body {
    Same flat mono tree language as the run drill-in (F4) — status is COLOR,
    never a box — and the ✓/✗/⏭ glyph is a ::before, so the rendered step line
    stays the verbatim Gherkin the codec stored. ──────────────────────────── */
+/* §S3 cycle C3 — the run BYLINE: which run's specification is on screen.
+   Deliberately quieter than a feature title (faint, 10.5px, no rule, no box,
+   no status colour) so it reads as attribution over the specification rather
+   than as a run header — there is nothing here to score. */
+.app-bdd-identity {
+  font: 10.5px var(--mono);
+  color: var(--ink-faint);
+  margin-bottom: 10px;
+}
 .app-bdd-feature { margin-bottom: 14px; }
 .app-bdd-feature-title {
   font: 600 12px var(--mono);
