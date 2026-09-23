@@ -42,7 +42,7 @@ this note: *a collapsed region still states what it holds*.
 | **10** | **Roadmap** | The **release strip leads and never leaves the screen** (roadmap DN 7b) — it pages by whole containers, so a phone shows fewer gates and a higher `◀ N earlier` count. The **flowchart scrolls inside its own container** at every band (decision 6); it is not re-laid-out for portrait. The **scoped table becomes a stacked card list** on phone: one card per CR carrying id, status, wave and dependencies — the same columns, re-flowed, because a 6-column table cannot honour decision 6 at 640px. |
 | **11** | **Workflow** | Cycle rows go full-width and **the row is the toggle** — which is exactly CR-CRU-146's fix, so the two CRs must not implement it twice: whichever lands first owns the hit area, the other asserts it. Nested affordances (`→ Runs`) stay separate ≥44px targets that `stopPropagation`. The active section stays above history; history stays collapsed by default. |
 | **12** | **Runs · Coverage · Compile · BDD** | Run cards stack single-column, keeping agent · tier · codec · time (nothing is dropped to fit). The **drill-in fills the viewport** with `←` always visible, and its virtualization is unchanged. The coverage heat strip **enlarges its cells on touch media** rather than showing fewer. Compile diagnostics and raw output **scroll inside their container**, never the page. The BDD index lists runs newest-first with the cycle each belongs to. |
-| **13** | **Both mobile ecosystems are tested, on their own ENGINES** (user ruling 2026-09-23) | A phone profile on Chromium proves geometry, not the platform: `devices["iPhone 15"]` under Chromium is still Blink. So the phone band is covered by **two engines** — `chromium-mobile` (Pixel 7, Blink) and **`webkit-iphone` (iPhone profile on WebKit)** — because the areas §S3 lives in (scroll containment, `100vh`, `-webkit-fill-available`, flex/grid edge cases) are exactly where the engines differ. This requires WebKit provisioning in **both** CI jobs, which today install `chromium` only. **WebKit runs in CI, NOT on this workstation** (measured 2026-09-23): Playwright ships its WebKit build for Debian/Ubuntu only, and this host is Arch/CachyOS — the install asks for `libicu74` + `libflite1` against a system carrying ICU 78.3, and `install-deps` needs root. The CI runners are Ubuntu and provision it cleanly. **Locally it runs through the Docker Playwright Server** (see the section below) — one command, `bun run test:e2e:webkit`. It is never silently skipped: with no server reachable the project fails LOUD, naming the command that starts it. |
+| **13** | **Both mobile ecosystems are tested, on their own ENGINES** (user ruling 2026-09-23) | A phone profile on Chromium proves geometry, not the platform: `devices["iPhone 15"]` under Chromium is still Blink. So the phone band is covered by **two engines** — `chromium-mobile` (Pixel 7, Blink) and **`webkit-iphone` (iPhone profile on WebKit)** — because the areas §S3 lives in (scroll containment, `100vh`, `-webkit-fill-available`, flex/grid edge cases) are exactly where the engines differ. This requires WebKit provisioning in **both** CI jobs, which today install `chromium` only. **WebKit runs in CI, NOT on this workstation** (measured 2026-09-23): Playwright ships its WebKit build for Debian/Ubuntu only, and this host is Arch/CachyOS — the install asks for `libicu74` + `libflite1` against a system carrying ICU 78.3, and `install-deps` needs root. The CI runners are Ubuntu and provision it cleanly. **Locally it runs through the Docker Playwright Server** (see the section below) — one command, `bun run webkit:docker`. Plain `test:e2e` is **endpoint-gated** (user ruling 2026-09-24): `webkit-iphone` stays declared but collects nothing unless a WebKit endpoint exists — natively in CI, or via the docker launcher — so a local run never reds on an engine it cannot reach. |
 
 **What none of them may do:** drop a tab, drop a route, drop a control, or summarise data away to fit
 the band. If information is worth hiding on a phone, that is a question about the desktop design,
@@ -71,9 +71,24 @@ Two mechanics that are defects if missed, both stated here so nobody rediscovers
 
 - **The image version must match `@playwright/test` EXACTLY** (today `^1.61.1` — so `v1.61.1-noble`).
   Playwright's docs are explicit that a mismatch leaves it unable to locate browser executables.
-- **The container's `localhost` is not the host's.** The e2e suite binds its OWN ephemeral `webServer` on `E2E_PORT` = **39877** (`tests/e2e/steps/harness.ts`), deliberately NOT the supervised dev board on `:3850` — an earlier draft of this note said 3850 and was wrong (corrected 2026-09-24, found by RED2). The container still cannot reach that port on its own loopback, so
-  the container needs `--add-host=hostmachine:host-gateway` and the WebKit run must target
-  `hostmachine`, never `localhost`. This is the one place a base URL differs by engine.
+- **The container's `localhost` is not the host's — solved by TUNNELLING, not by re-addressing.**
+  The e2e suite binds its OWN ephemeral `webServer` on `E2E_PORT` = **39877** (`tests/e2e/steps/harness.ts`),
+  deliberately NOT the supervised dev board on `:3850`, and it stays bound to **`127.0.0.1` in every mode**.
+  The launcher sets Playwright's own **`PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>`** beside the endpoint,
+  which tunnels the container browser's loopback traffic back through the client connection (documented
+  `BrowserType.connect` `exposeNetwork`; recommended for exactly this setup in microsoft/playwright#31440).
+  Every base URL stays `localhost:39877` for every engine.
+- **Readiness is an HTTP 200, not a TCP connect.** Docker's port proxy accepts connections the moment the
+  container starts, then RESETS them until `run-server` is listening (~2s measured). A launcher that treats
+  a successful connect as ready dies with a WebSocket `ECONNRESET` on its first real run.
+
+**RETIRED 2026-09-24 — the `hostmachine` design this section first specified.** It re-addressed every base
+URL to `hostmachine` via `--add-host=hostmachine:host-gateway`, which needed the e2e server bound beyond
+loopback AND a host firewall rule — and it was broken regardless: Playwright's host-side `request`
+fixture inherits `use.baseURL`, and `hostmachine` does not resolve on the host, so every seeding call would
+have failed. Found by C4 GREEN; the firewall had been hiding it. The tunnel needs none of that, and was
+verified end to end on this workstation: the phone feature passed **9/9 on real WebKit** via
+`bun run webkit:docker` (`66fbbf3`).
 
 **Explicitly REJECTED: the AUR route.** The AUR `playwright` maintainer's own note calls WebKit on
 Arch "not guaranteed": it needs `flite-voices-extra` (Arch's `flite` omits six voice modules the
