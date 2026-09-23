@@ -2264,9 +2264,49 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // tests/help-surface-order-independence.test.ts, whose child `bun test`
 // collects THIS file; that file is correct, fired for the right reason, and
 // gets no change.
+//
+// UPDATED 2026-09-24 by CR-CRU-018's CLOSE-OUT (the C5 FIX round, cycle 499).
+// `public` moves 482 -> 496 (+14). MEASURED with this file's own machinery on
+// the feature branch after the FIX round's last content edit:
+// `bun test tests/project-namespace-tripwire.test.ts -t "never below its
+// develop baseline"` reported, against the then-recorded 482,
+//
+//     -  "public": 482   +  "public": 496
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show b32ddbc:<path>` (the merge-base with `develop`),
+// attributes all fourteen. Those are the only two files under a classified
+// tree that this CR touches:
+//
+//   public/app.js +8 (263 -> 271): SEVEN `CR-CRU-018` for the DN decisions the
+//     frontend implements. They are decisions 3 + 9 (the viewport trigger of
+//     the pane collapse, :2479), decision 9 (the phone foot strip, :2541),
+//     decision 10 / phone AC8 (the roadmap card testids, :2992; the re-flowed
+//     row, :3021; the phone-band zone, :3213) and decision 11 (the row being
+//     clicked, :4186; the row-is-the-toggle `CycleLine`, :4636). The last of
+//     those also carries ONE `CR-CRU-146 §S1`: the hit-area fix that
+//     CR-CRU-146 names, landed here once.
+//   public/styles.css +6 (77 -> 83): TWO `CR-CRU-018` (the §S1 bands header,
+//     :1826; the §S2 touch floor, :2009), plus FOUR lineage citations the band
+//     prose makes to explain what it overrides or reuses. Those are
+//     `CR-CRU-023` twice (the 1024×640 guarantee the desktop band starts at,
+//     :1830; the 660px floor it scopes, :1873), `CR-CRU-093` (the collapsed
+//     sliver column, :1858) and `CR-CRU-029` (the dual-axis scroller the pane
+//     keeps, :1876).
+//
+// Every one of the fourteen is prose on a `//` or `/* */` line, and none is
+// in a string. `src` (743) and `clients` (888) re-measure at their recorded
+// heads in the same run and could not have moved, because this CR changes no
+// file under either tree.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 496 is far above the 378 floor,
+// and the three `develop` floors stay at 512/378/601, unchanged. As always, the
+// re-record also clears the CASCADE: tests/help-surface-order-independence.test.ts
+// collects THIS file in its child `bun test`, fired for the right reason, and
+// gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 743 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 482 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 496 },
   clients: { exts: [".py"], develop: 601, head: 888 },
 };
 
