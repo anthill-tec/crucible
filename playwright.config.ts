@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 // `seedProject`'s ephemeral guard demands cannot drift apart. Direction is
 // deliberate: config depends on harness, never the reverse.
 import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
+import { webkitEngineAvailable } from "./tests/e2e/steps/webkit-docker-preflight.ts";
 
 // CR-CRU-018 \u00a7S1 AC13/AC14 (DN decision 13, "WebKit provisioning \u2014 the two
 // paths") \u2014 WebKit runs two ways, never a third "install it locally": CI
@@ -45,26 +46,38 @@ import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
 // PW_TEST_CONNECT_WS_ENDPOINT \u2014 Playwright's OWN env var, consumed
 // automatically by every browser launch in this process (verified:
 // node_modules/playwright/lib/index.js's connectOptionsFromEnv()).
-// scripts/webkit-docker-server.ts (`bun run test:e2e:webkit`) is the one
+// scripts/webkit-docker-server.ts (`bun run webkit:docker`) is the one
 // command that sets it.
 //
-// The container's `localhost` is not the host's (DN, same section): the
-// browser WebKit launches runs INSIDE the container, so it must reach this
-// config's own `webServer` via the `--add-host=hostmachine:host-gateway`
-// alias scripts/webkit-docker-runner.ts adds, never via `localhost`. THE PORT
-// USED IS `PORT` (E2E_PORT, 39877, imported above) \u2014 corrected from the DN's
-// own illustration, which names `127.0.0.1:3850`. That address is this
-// WORKSTATION's separately supervised dev board (docs/RUNBOOK.md), not this
-// suite's ephemeral webServer: this file's own header already explains why
-// E2E_PORT is a distinct, harness-owned port, precisely so no ambient board
-// (:3849 or :3850) can be mistaken for this suite's target. Measured
-// 2026-09-23 in this cycle's own verification (see
-// scripts/webkit-docker-runner.ts's header): `--add-host` resolves correctly
-// inside a real container on this host (`getent hosts hostmachine` ->
-// docker0's gateway IP) \u2014 the DN's PORT NUMBER is what is corrected here, not
-// its mechanism.
-const isWebkitDocker = Boolean(process.env.PW_TEST_CONNECT_WS_ENDPOINT);
-const WEBKIT_DOCKER_HOST = "hostmachine";
+// Docker mode (`bun run webkit:docker`) points EVERY browser launch in this
+// process at the container, so the container's `localhost` is not the
+// host's. It is answered with Playwright's OWN tethering, not a network
+// route: the launcher also sets PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>
+// (read beside the endpoint by connectOptionsFromEnv(),
+// node_modules/playwright/lib/index.js; BrowserType.connect's
+// `exposeNetwork`), so the remote browser's requests to localhost /
+// 127.0.0.1 / [::1] travel back over the SAME websocket and are made from
+// THIS process. Consequences, all deliberate: every baseURL stays
+// `localhost:PORT` in every mode, including the host-side `request` fixture
+// (which inherits `use.baseURL` and could never resolve a container-only
+// alias); the webServer keeps its loopback-only bind (`host = "127.0.0.1"`
+// below, never widened); and no host firewall rule is involved. THE PORT
+// USED IS `PORT` (E2E_PORT, 39877, imported above), never either
+// workstation board (:3849 / :3850). The earlier `hostmachine` route
+// (`--add-host=hostmachine:host-gateway` + a hostmachine baseURL) is
+// RETIRED: it needed a wider bind and a firewall rule, and the host-side
+// `request` fixture cannot resolve `hostmachine` at all.
+//
+// The webkit-iphone project is ENDPOINT-GATED (user-approved ruling): it
+// collects its feature only when a WebKit engine exists for this run, CI's
+// native install or the Docker endpoint (`webkitEngineAvailable`, the one
+// predicate tests/e2e-suite-reaches-the-board.test.ts shares). A plain
+// local `bun run test:e2e` therefore runs Chromium only instead of failing
+// on an engine this host cannot launch.
+const webkitAvailable = webkitEngineAvailable({
+  isCI: Boolean(process.env.CI),
+  wsEndpoint: process.env.PW_TEST_CONNECT_WS_ENDPOINT,
+});
 
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
@@ -286,22 +299,24 @@ export default defineConfig({
     // to declare `defaultBrowserType: "webkit"` — not assumed, per the DN's
     // own caution not to assume a name survives a version.
     //
-    // `baseURL` is the ONE place a base URL differs by engine (DN): every
-    // other project reaches this config's own webServer via `localhost`, but
-    // a WebKit browser running inside the Docker container cannot — it needs
-    // the `--add-host=hostmachine:host-gateway` alias
-    // scripts/webkit-docker-runner.ts adds. In CI, WebKit is native (same
-    // machine as the webServer), so `localhost` stays correct there exactly
-    // as it is for every other project.
+    // `baseURL` is `localhost` here exactly as for every other project, in
+    // every mode: in CI WebKit is native (same machine as the webServer), and
+    // in Docker mode the exposeNetwork tethering above carries the
+    // container's loopback requests back to this host. Declared explicitly
+    // (not inherited) so the project's own object states it.
+    //
+    // ENDPOINT-GATED: with no WebKit engine for this run (no CI, no Docker
+    // endpoint) `testIgnore` excludes every file, so the project stays
+    // DECLARED (a later edit cannot quietly delete it) but collects nothing,
+    // and a plain local run never attempts a WebKit launch.
     {
       name: "webkit-iphone",
       use: {
         ...devices["iPhone 15"],
-        baseURL: isWebkitDocker
-          ? `http://${WEBKIT_DOCKER_HOST}:${String(PORT)}`
-          : (process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${String(PORT)}`),
+        baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${String(PORT)}`,
       },
       testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
+      ...(webkitAvailable ? {} : { testIgnore: /.*/ }),
       grepInvert: /@empty-db/,
       dependencies: ["chromium-empty-db"],
     },

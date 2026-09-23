@@ -29,7 +29,7 @@
     "test:client": "python3 -m unittest discover -s tests/client -t .",
     "test:regression": "bun scripts/run-test-target.ts regression",
     "test:e2e": "bunx bddgen && bunx playwright test",
-    "test:e2e:webkit": "bun scripts/webkit-docker-server.ts",
+    "webkit:docker": "bun scripts/webkit-docker-server.ts",
     "start": "bun run src/server.ts"
   },
   "crucible": {

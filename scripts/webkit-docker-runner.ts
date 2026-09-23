@@ -19,16 +19,15 @@
 //   Running the connect from INSIDE this repo (so module resolution hits
 //   node_modules/playwright-core@1.61.1, the pinned version) fixed the
 //   handshake immediately — `browser.newPage()` succeeded and the WebKit
-//   engine was fully controllable. `--add-host=hostmachine:host-gateway` also
-//   measured correctly: `getent hosts hostmachine` inside the container
-//   resolved to the docker0 gateway IP. The one leg NOT verified end-to-end
-//   here is a full page load from the container to this host's own bound
-//   webServer port — this workstation's firewall drops the forwarded
-//   connection past DNS resolution (a HOST firewall configuration question,
-//   not a defect in this wiring), so `dockerRunArgs`'s shape is verified by
-//   the two legs above plus this repository's own convention (readServerPort
-//   already isolates E2E_PORT the same way `playwright.config.ts` does), not
-//   by a full local suite pass.
+//   engine was fully controllable.
+//
+//   REACHING THE HOST (C4, orchestrator ruling): the container's localhost is
+//   not the host's, and the earlier `--add-host=hostmachine:host-gateway`
+//   route is RETIRED. It needed the e2e server bound beyond loopback, a host
+//   firewall rule, and a `hostmachine` baseURL the host-side `request`
+//   fixture cannot resolve. Playwright's own tethering replaces it:
+//   PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback> (EXPOSE_NETWORK below), which
+//   routes the remote browser's loopback requests back through the client.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "./test-targets";
@@ -41,14 +40,15 @@ export const CONTAINER_NAME = "crucible-webkit-iphone-docker";
  *  (127.0.0.1 only — never 0.0.0.0 on the host side, so this never competes
  *  with the workstation's own supervised boards on :3849/:3850). Distinct
  *  from E2E_PORT (39877, tests/e2e/steps/harness.ts) — that port is the
- *  suite's OWN webServer, which the container's WebKit browser reaches via
- *  `hostmachine`, never via this one. */
+ *  suite's OWN webServer, which the container's WebKit browser reaches
+ *  through the EXPOSE_NETWORK tether, never via this one. */
 export const RUN_SERVER_PORT = 53_333;
 
-/** The `--add-host` alias `playwright.config.ts` targets for the webkit-iphone
- *  project when PW_TEST_CONNECT_WS_ENDPOINT is set — DN: "the container's
- *  localhost is not the host's". */
-export const HOSTMACHINE_ALIAS = "hostmachine";
+/** PW_TEST_CONNECT_EXPOSE_NETWORK's value: Playwright's `exposeNetwork`
+ *  rule matching localhost, *.localhost, 127.0.0.1 and [::1]. The remote
+ *  browser's requests to those hosts are made from THIS process, so every
+ *  baseURL stays `localhost` and the e2e server stays loopback-only. */
+export const EXPOSE_NETWORK = "<loopback>";
 
 /** An EXACT semver, same shape package.json's own devDependency range starts
  *  with — `^1.61.1` -> `1.61.1`. Anything looser (a range, `latest`, no
@@ -111,7 +111,7 @@ export function runServerWsEndpoint(port: number = RUN_SERVER_PORT): string {
 
 /** The exact `docker run` argv this script spawns — a pure function so
  *  tests/webkit-docker-local-guard.test.ts can assert its shape (the pinned
- *  image, the `--add-host` alias, the exact `run-server` command) without a
+ *  image, the published port, the exact `run-server` command) without a
  *  Docker daemon. `--rm` so a crashed run leaves nothing behind for the NEXT
  *  one to collide with; `--init` so `run-server`'s child browser processes
  *  are reaped correctly (the same flag Playwright's own Docker docs use). */
@@ -122,7 +122,6 @@ export function dockerRunArgs(opts: { image: string; port: number; playwrightVer
     "--rm",
     "--name",
     CONTAINER_NAME,
-    `--add-host=${HOSTMACHINE_ALIAS}:host-gateway`,
     "-p",
     `127.0.0.1:${String(opts.port)}:${String(opts.port)}`,
     "--init",

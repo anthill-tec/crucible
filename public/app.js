@@ -2989,6 +2989,17 @@
       track: "track",
     };
 
+    // CR-CRU-018 phone AC8: each re-flowed field's own testid on a roadmap
+    // card, keyed by the SAME column names the table's cells use.
+    const ROADMAP_CARD_FIELD_TESTIDS = {
+      cr: "roadmap-card-id",
+      title: "roadmap-card-title",
+      deps: "roadmap-card-deps",
+      status: "roadmap-card-status",
+      wave: "roadmap-card-wave",
+      track: "roadmap-card-track",
+    };
+
     const RoadmapTableHead = (columns) =>
       div(
         { "data-testid": "roadmap-table-head", class: "app-roadmap-row app-roadmap-head" },
@@ -3007,6 +3018,11 @@
     // column beside it.
     const RoadmapRow = (entry, opts) => {
       const active = entry.status === "IN_PROGRESS";
+      // CR-CRU-018 DN decision 10 / phone AC8: the SAME row, re-flowed as
+      // a stacked CARD on the phone band (a six-column table cannot honour
+      // "no page-level horizontal scroll" at 640px). One function, so the card
+      // keeps the row's every column, badge, selection and drill-through.
+      const card = opts.card === true;
       const deps = entry.dependsOn ?? [];
       const lateDeps = opts.lateDeps ?? [];
       const columns = opts.columns;
@@ -3039,12 +3055,12 @@
       // AC17 — the ROW's own binding, for the reason the node's carries one.
       const selected = () => roadmapSelectedCr() === entry.cr;
       const props = {
-        "data-testid": "roadmap-row",
+        "data-testid": card ? "roadmap-cr-card" : "roadmap-row",
         "data-cr": entry.cr,
         "data-active": active ? "true" : "false",
         "data-selected": () => (selected() ? "true" : "false"),
         class: () =>
-          `app-roadmap-row${active ? " on" : ""}${selected() ? " selected" : ""}`,
+          `${card ? "app-roadmap-card" : "app-roadmap-row"}${active ? " on" : ""}${selected() ? " selected" : ""}`,
         // §S7 — one click, two effects. It SELECTS, which is what highlights
         // the flowchart node for the same entry (AC17), and it drills: a
         // ROUTE-OUT to /p/<key> (CR-CRU-079 §S1 — every Roadmap exit routes;
@@ -3068,13 +3084,32 @@
       }
       if (drillSource) props["data-drill-source"] = "true";
       if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
-      const cell = (column, ...children) =>
-        columns.includes(column)
+      const cell = (column, ...children) => {
+        if (card) {
+          // A card states EVERY column the table has, wave included whatever
+          // AC12 decides for the table's head: a card has no head to carry it,
+          // so nothing is dropped to fit. Each field names its column, because
+          // a re-flowed value no longer sits under a column label.
+          if (column === "track" && !columns.includes("track")) return null;
+          return span(
+            {
+              "data-testid": ROADMAP_CARD_FIELD_TESTIDS[column],
+              "data-column": column,
+              class: `app-roadmap-card-field app-roadmap-${column}`,
+            },
+            column === "cr" || column === "title"
+              ? null
+              : span({ class: "app-roadmap-card-label" }, ROADMAP_COLUMN_LABELS[column]),
+            ...children,
+          );
+        }
+        return columns.includes(column)
           ? span(
               { "data-column": column, class: `app-roadmap-cell app-roadmap-${column}` },
               ...children,
             )
           : null;
+      };
       return div(
         props,
         cell("cr", entry.cr),
@@ -3175,7 +3210,11 @@
         entry.planId === undefined
           ? undefined
           : plans.find((p) => String(p.planId) === String(entry.planId));
-      const children = [RoadmapTableHead(columns)];
+      // CR-CRU-018 DN decision 10 / phone AC8: on the phone band the zone is
+      // a stacked CARD list instead of the table. A card labels each of its
+      // own fields, so the list carries no column head.
+      const cards = isPhoneBand();
+      const children = cards ? [] : [RoadmapTableHead(columns)];
       // AC16 — each wave heads its rows AT MOST ONCE inside this region. The
       // divider used to fire on every wave CHANGE, which repeated a wave the
       // moment the authoring was not wave-contiguous; a re-appearance now adds
@@ -3208,6 +3247,7 @@
         children.push(
           RoadmapRow(entry, {
             columns,
+            card: cards,
             multiTrack,
             plan: planFor(entry),
             lateDeps: roadmapLateDeps(entry, positionOf, at),
@@ -3220,7 +3260,9 @@
       // makes "exactly three zones, in this order" checkable on the surface
       // rather than inferred from the render function's argument order.
       return div(
-        { "data-testid": "roadmap-table", "data-zone": "3", class: "app-roadmap-table" },
+        cards
+          ? { "data-testid": "roadmap-cards", "data-zone": "3", class: "app-roadmap-cards" }
+          : { "data-testid": "roadmap-table", "data-zone": "3", class: "app-roadmap-table" },
         children,
       );
     };
@@ -3290,10 +3332,7 @@
       roadmapDrillTargets.set(state.route.projectKey, entry.cr);
       roadmapDrillRev.val += 1;
       const crKey = lensKey("cr", entry.cr);
-      if (!lensOpenKeys.has(crKey)) {
-        lensOpenKeys.add(crKey);
-        lensOpenRev.val += 1;
-      }
+      lensOpenOn(crKey);
       selectWorkspaceTab("Workflow");
       revealDrillTarget(entry.cr);
     };
@@ -4139,20 +4178,37 @@
     // CR-CRU-020 §S1.2/§S2 — expand/collapse state for CR groups and
     // cycle rows. Keyed OUTSIDE the render tree
     // (surface-keyed — the CR-016 one-rule precedent) so poll-tick
-    // re-renders and the detail pane swap never reset an expansion. The
-    // van.state rev is the reactive handle each slot's OWN child binding
-    // reads, so a toggle re-renders only that slot — row/group element
-    // identity is preserved across clicks.
+    // re-renders and the detail pane swap never reset an expansion. Each KEY
+    // owns its own van.state rev and each slot's OWN child binding reads only
+    // its key's rev, so a toggle re-renders only that slot — row/group element
+    // identity is preserved across clicks. (One shared rev re-rendered EVERY
+    // lens binding on any toggle, remounting a CR group's cycle rows beneath
+    // the very row being clicked — CR-CRU-018 DN decision 11, where the row
+    // itself is the toggle.)
     const lensOpenKeys = new Set();
-    const lensOpenRev = van.state(0);
+    const lensOpenRevs = new Map();
+    const lensRev = (key) => {
+      let rev = lensOpenRevs.get(key);
+      if (rev === undefined) {
+        rev = van.state(0);
+        lensOpenRevs.set(key, rev);
+      }
+      return rev;
+    };
     const lensKey = (kind, id) => `${kind}:${state.route.projectKey}:${id}`;
     const lensOpen = (key) => {
-      lensOpenRev.val; // subscribe the enclosing binding to toggle flips
+      lensRev(key).val; // subscribe the enclosing binding to THIS key's flips
       return lensOpenKeys.has(key);
     };
     const lensToggle = (key) => {
       if (!lensOpenKeys.delete(key)) lensOpenKeys.add(key);
-      lensOpenRev.val += 1;
+      lensRev(key).val += 1;
+    };
+    // Opens `key` when closed, never closes it (the drill-through landings).
+    const lensOpenOn = (key) => {
+      if (lensOpenKeys.has(key)) return;
+      lensOpenKeys.add(key);
+      lensRev(key).val += 1;
     };
     // ▸/▾ — the drill-in tree's expand affordance (design language: rows
     // stay text-color only; the glyph is the visual cue).
@@ -4553,11 +4609,7 @@
             ev.stopPropagation();
             state.workspaceTab = "Workflow";
             if (isHistory) {
-              const crKey = lensKey("cr", plan.cr);
-              if (!lensOpenKeys.has(crKey)) {
-                lensOpenKeys.add(crKey);
-                lensOpenRev.val += 1;
-              }
+              lensOpenOn(lensKey("cr", plan.cr));
             }
             revealCycleRow(cycleId);
           },
@@ -4580,6 +4632,21 @@
     // — the Integration AC's whole point; never inline a status test at a site.
     const cycleHasRunsBoundary = (cycle) =>
       cycleIsCompleted(cycle) || cycle.status === "active";
+
+    // CR-CRU-018 DN decision 11 / CR-CRU-146 §S1 — THE ROW IS THE TOGGLE. The
+    // cycle row's line is built HERE for both the active section (`CycleRow`)
+    // and history (`LensCycleRow`), so the hit area is decided in exactly one
+    // place: given a toggle, the WHOLE `.app-cycle-line` carries the ONE
+    // handler — the `▸` glyph, the label, the timer and the `▸ N runs` hint
+    // all reach it by bubbling, so there is never a second, per-target toggle
+    // state to disagree with it. Nested affordances (`→ Runs`) keep their own
+    // behaviour by `stopPropagation`. `null` = no toggle: the active section's
+    // ruling (a) renders the active cycle's open span inline, always.
+    const CycleLine = (toggle, ...children) =>
+      div(
+        toggle === null ? { class: "app-cycle-line" } : { class: "app-cycle-line", onclick: toggle },
+        ...children,
+      );
 
     // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
     // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
@@ -4617,8 +4684,8 @@
           "data-cycle-id": cycle.id,
           class: `app-cycle-row cycle-status-${cycle.status}`,
         },
-        div(
-          { class: "app-cycle-line" },
+        CycleLine(
+          null,
           span(
             { "data-testid": "cycle-glyph", class: "app-cycle-glyph" },
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
@@ -4835,14 +4902,13 @@
           "data-cycle-id": cycle.id,
           class: `app-cycle-row cycle-status-${cycle.status}`,
         },
-        div(
-          { class: "app-cycle-line" },
+        CycleLine(
+          expandable ? () => lensToggle(key) : null,
           expandable
             ? span(
                 {
                   "data-testid": "cycle-toggle",
                   class: "app-cycle-toggle",
-                  onclick: () => lensToggle(key),
                 },
                 ToggleGlyph(key),
               )

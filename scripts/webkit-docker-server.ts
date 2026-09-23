@@ -2,7 +2,7 @@
 // CR-CRU-018 §S1 AC13/AC14 (DN "WebKit provisioning — the two paths") — the
 // ONE command for a local WebKit phone-band pass:
 //
-//   bun run test:e2e:webkit
+//   bun run webkit:docker
 //
 // Native install is CI-only (Playwright ships WebKit for Debian/Ubuntu only;
 // the AUR route is explicitly REJECTED — DN, "not guaranteed" per the AUR
@@ -10,11 +10,12 @@
 // Docker Playwright Server: this script pulls nothing itself (`docker run`
 // pulls on demand), starts the PINNED `run-server` image — DERIVED from
 // package.json's `@playwright/test` devDependency, never a second literal
-// (scripts/webkit-docker-runner.ts) — with `--add-host=hostmachine:host-gateway`
-// so the browser INSIDE the container can reach this suite's own webServer
-// (E2E_PORT, tests/e2e/steps/harness.ts — never the workstation's separately
-// supervised :3849/:3850 boards), waits for it to report ready, sets
-// PW_TEST_CONNECT_WS_ENDPOINT, runs `bddgen` + the `webkit-iphone` project,
+// (scripts/webkit-docker-runner.ts), waits for it to report ready, sets
+// PW_TEST_CONNECT_WS_ENDPOINT together with
+// PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback> (Playwright's own tethering, so
+// the browser INSIDE the container reaches this suite's own loopback-only
+// webServer on E2E_PORT, tests/e2e/steps/harness.ts, through the client:
+// never the workstation's separately supervised :3849/:3850 boards), runs `bddgen` + the `webkit-iphone` project,
 // and ALWAYS tears the container down again (finally), so a crashed run does
 // not leave a stray container for the next one to collide with.
 //
@@ -22,13 +23,14 @@
 // writes an ACTIONABLE remedy to stderr and exits non-zero — no bare "docker:
 // command not found" stack, no hang waiting on a server that will never
 // answer. `tests/e2e/steps/webkit-docker-preflight.steps.ts` is the SECOND
-// line of defence for the path this script does not own (a bare
-// `bun run test:e2e`, which still collects every project including
-// webkit-iphone).
+// line of defence, behind playwright.config.ts's endpoint gate (a bare
+// `bun run test:e2e` has no endpoint, so its webkit-iphone project collects
+// nothing).
 import { spawn, spawnSync } from "node:child_process";
 import { REPO_ROOT } from "./test-targets";
 import {
   CONTAINER_NAME,
+  EXPOSE_NETWORK,
   RUN_SERVER_PORT,
   dockerImageTag,
   dockerRunArgs,
@@ -50,23 +52,20 @@ function dockerReachable(): boolean {
 async function waitForServer(port: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // A TCP connect is NOT readiness: Docker's port proxy accepts on the
+    // published port the moment the container starts, then resets the
+    // connection until `npx playwright run-server` is really listening
+    // (measured C4: curl exit 56 for ~2s, then `200 Running`). That early
+    // accept is what made the first real run fail with a websocket
+    // ECONNRESET. run-server answers a plain HTTP GET with 200 once it
+    // listens, so an HTTP response is the readiness signal.
     try {
-      // run-server answers a plain WS upgrade request; a refused/timed-out
-      // TCP connect is the only thing distinguishing "not ready yet" from
-      // "ready", so a raw socket probe is enough — no protocol handshake
-      // needed here, connectOptionsFromEnv() (playwright/lib/index.js) does
-      // the real one once PW_TEST_CONNECT_WS_ENDPOINT is set below.
-      const socket = await new Promise<boolean>((resolve) => {
-        const net = require("node:net") as typeof import("node:net");
-        const s = net.createConnection({ host: "127.0.0.1", port }, () => {
-          s.end();
-          resolve(true);
-        });
-        s.on("error", () => resolve(false));
+      const res = await fetch(`http://127.0.0.1:${String(port)}/`, {
+        signal: AbortSignal.timeout(2_000),
       });
-      if (socket) return true;
+      if (res.ok) return true;
     } catch {
-      // keep polling
+      // reset / refused / timed out: not listening yet, keep polling
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -85,7 +84,7 @@ async function main(): Promise<number> {
     fail(
       "webkit-iphone needs the local Docker Playwright Server, and Docker is not reachable.\n" +
         "Remedy: start Docker (`sudo systemctl start docker` or Docker Desktop), then re-run\n" +
-        "`bun run test:e2e:webkit`.",
+        "`bun run webkit:docker`.",
     );
   }
 
@@ -115,7 +114,7 @@ async function main(): Promise<number> {
       fail(
         `webkit-iphone: the Docker Playwright Server never became reachable on 127.0.0.1:${String(port)}.\n` +
           `Container logs:\n${logs.stdout}${logs.stderr}\n` +
-          "Remedy: re-run `bun run test:e2e:webkit`; if it keeps failing, run the container " +
+          "Remedy: re-run `bun run webkit:docker`; if it keeps failing, run the container " +
           "by hand and read its logs directly.",
       );
     }
@@ -132,6 +131,7 @@ async function main(): Promise<number> {
 }
 
 process.env.PW_TEST_CONNECT_WS_ENDPOINT = runServerWsEndpoint(RUN_SERVER_PORT);
+process.env.PW_TEST_CONNECT_EXPOSE_NETWORK = EXPOSE_NETWORK;
 main()
   .then((code) => process.exit(code))
   .catch((error: unknown) => {

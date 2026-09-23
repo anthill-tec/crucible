@@ -20,7 +20,7 @@ import {
 } from "./e2e/steps/webkit-docker-preflight.ts";
 import {
   CONTAINER_NAME,
-  HOSTMACHINE_ALIAS,
+  EXPOSE_NETWORK,
   RUN_SERVER_PORT,
   dockerImageTag,
   dockerRunArgs,
@@ -79,7 +79,7 @@ describe("CR-CRU-018 — webkitLocalGuardMessage: never a silent skip, never a c
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
-    expect(WEBKIT_DOCKER_NPM_SCRIPT).toBe("bun run test:e2e:webkit");
+    expect(WEBKIT_DOCKER_NPM_SCRIPT).toBe("bun run webkit:docker");
     const scriptName = WEBKIT_DOCKER_NPM_SCRIPT.replace(/^bun run /, "");
     expect(
       pkg.scripts?.[scriptName],
@@ -120,9 +120,9 @@ describe("CR-CRU-018 — the Docker image tag is DERIVED from @playwright/test's
 describe("CR-CRU-018 — dockerRunArgs: the two mechanics the DN calls defects if missed", () => {
   const args = dockerRunArgs({ image: "mcr.microsoft.com/playwright:v1.61.1-noble", port: RUN_SERVER_PORT, playwrightVersion: "1.61.1" });
 
-  test("adds --add-host=hostmachine:host-gateway — the container's localhost is not the host's", () => {
-    expect(args).toContain(`--add-host=${HOSTMACHINE_ALIAS}:host-gateway`);
-    expect(HOSTMACHINE_ALIAS).toBe("hostmachine");
+  test("adds NO --add-host alias, and the runner tethers the container's loopback via EXPOSE_NETWORK = <loopback> instead — one mechanism, not two", () => {
+    expect(args.some((arg) => arg.startsWith("--add-host"))).toBe(false);
+    expect(EXPOSE_NETWORK).toBe("<loopback>");
   });
 
   test("runs the SAME pinned version's run-server inside the container — never an unpinned `npx playwright run-server`", () => {

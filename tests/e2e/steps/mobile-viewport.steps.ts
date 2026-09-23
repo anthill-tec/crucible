@@ -312,6 +312,11 @@ Step(
 Step(
   "the roadmap release table renders as cards, not a table, on the phone profile",
   async ({ page }) => {
+    // Wait for the roadmap's LOADED state first: until the queue and the
+    // release both arrive, the zone renders neither a table nor cards, so the
+    // two negative counts below would pass vacuously against an unloaded
+    // roadmap. A flowchart node exists only once both reads have landed.
+    await expect(page.getByTestId("roadmap-node").first()).toBeVisible();
     await expect(page.getByTestId("roadmap-table")).toHaveCount(0);
     await expect(page.getByTestId("roadmap-row")).toHaveCount(0);
     const cards = page.getByTestId("roadmap-cr-card");
@@ -351,7 +356,10 @@ Step(
 );
 
 Step("the compile diagnostics container is the element that scrolls, not the page", async ({ page }) => {
-  await expect(page.getByTestId("workspace-runs")).toBeVisible();
+  // The Compile pane (app.js CompileFeed) carries no `workspace-runs` testid
+  // (that one belongs to the Runs pane and the run detail); its real scroll
+  // container is its `pane-scroll` box.
+  await expect(page.getByTestId("pane-scroll")).toBeVisible();
   const pane = page.getByTestId("pane-scroll");
   await expect(pane).toHaveCount(1);
   const { scrollHeight, clientHeight } = await pane.evaluate((el) => ({

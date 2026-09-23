@@ -82,7 +82,7 @@ describe("CR-CRU-018 §S1 AC13/AC14 — playwright.config.ts declares webkit-iph
   });
 });
 
-describe("CR-CRU-018 — the container's localhost is not the host's: webkit-iphone's baseURL swaps to hostmachine ONLY when pointed at the Docker Playwright Server", () => {
+describe("CR-CRU-018 — the container's localhost is not the host's: answered by Playwright's exposeNetwork tether, so no project's baseURL ever leaves localhost", () => {
   // Config side effects (mkdtempSync/writeFileSync, defineBddConfig) run once
   // at IMPORT time, so re-importing the SAME process with a different
   // PW_TEST_CONNECT_WS_ENDPOINT cannot re-resolve baseURL — each branch is
@@ -114,11 +114,45 @@ describe("CR-CRU-018 — the container's localhost is not the host's: webkit-iph
     expect(url).toBe("http://localhost:39877");
   });
 
-  test("with PW_TEST_CONNECT_WS_ENDPOINT set (the Docker Playwright Server path), baseURL targets hostmachine on E2E_PORT — the DN's own port, corrected: never the workstation's :3850 dev board", async () => {
-    const url = await resolvedBaseUrl({ PW_TEST_CONNECT_WS_ENDPOINT: "ws://127.0.0.1:53333/" });
-    expect(url).toBe("http://hostmachine:39877");
-    expect(url).not.toContain("3850");
-    expect(url).not.toContain("localhost");
+  // Every project's EFFECTIVE baseURL (its own `use.baseURL`, else the
+  // config-level one it inherits), read from a fresh child process for the
+  // same reason as `resolvedBaseUrl` above.
+  async function everyProjectBaseUrl(env: Record<string, string>): Promise<Record<string, string>> {
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "-e",
+        "const cfg = (await import('./playwright.config.ts')).default;" +
+          "const out = {};" +
+          "for (const p of cfg.projects) out[p.name] = String(p.use?.baseURL ?? cfg.use?.baseURL);" +
+          "process.stdout.write(JSON.stringify(out));",
+      ],
+      { cwd: REPO_ROOT, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(code, `resolving every project's baseURL exited ${String(code)}: ${stderr}`).toBe(0);
+    return JSON.parse(stdout) as Record<string, string>;
+  }
+
+  test("with PW_TEST_CONNECT_WS_ENDPOINT set (the Docker Playwright Server path), the launcher tethers the container's loopback with PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>, and NO project's baseURL leaves localhost:<E2E_PORT> — never a container-only alias, never the workstation's :3850 dev board", async () => {
+    const launcher = readFileSync(join(REPO_ROOT, "scripts", "webkit-docker-server.ts"), "utf8");
+    expect(launcher).toContain("process.env.PW_TEST_CONNECT_EXPOSE_NETWORK = EXPOSE_NETWORK;");
+    const runner = readFileSync(join(REPO_ROOT, "scripts", "webkit-docker-runner.ts"), "utf8");
+    expect(runner).toContain('export const EXPOSE_NETWORK = "<loopback>";');
+
+    const urls = await everyProjectBaseUrl({
+      PW_TEST_CONNECT_WS_ENDPOINT: "ws://127.0.0.1:53333/",
+      PW_TEST_CONNECT_EXPOSE_NETWORK: "<loopback>",
+    });
+    expect(Object.keys(urls)).toContain("webkit-iphone");
+    expect(Object.keys(urls)).toContain("chromium-empty-db");
+    for (const [name, url] of Object.entries(urls)) {
+      expect(url, `project ${name}`).toBe("http://localhost:39877");
+    }
   });
 });
 

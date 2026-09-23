@@ -1947,6 +1947,63 @@ body {
     z-index: 46;
     background: rgba(0, 0, 0, 0.55);
   }
+
+  /* DN decision 10 / phone AC8: the roadmap's release-scoped table is a
+     stacked CARD list here (app.js renders the cards only on this band).
+     Each card is the SAME entry the desktop row draws, re-flowed: the id and
+     brief title lead, then every other column as a labelled field that
+     wraps inside the card instead of widening the page (DN decision 6). */
+  .app-roadmap-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+  .app-roadmap-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: 400 12.5px/1.55 var(--sans);
+  }
+  .app-roadmap-card.selected {
+    outline: 1px solid var(--ink-dim);
+    outline-offset: 1px;
+  }
+  .app-roadmap-card[data-drill-source="true"] { cursor: pointer; }
+  .app-roadmap-card-field {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
+  .app-roadmap-card-field.app-roadmap-title {
+    flex: 1 1 100%;
+    order: -1;
+    overflow-wrap: anywhere;
+  }
+  .app-roadmap-card-field.app-roadmap-cr { order: -2; }
+  .app-roadmap-card-label {
+    font: 600 10px/1.4 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-dim);
+  }
+
+  /* DN decision 12 / phone AC10: the run detail's heat strip ENLARGES its
+     cells on the phone band rather than showing fewer. Every cell still
+     renders (the strip wraps), so the file count is unchanged. Keyed on the
+     band, not on `pointer: coarse` alone: the desktop band keeps its 8px
+     cells whatever the input medium. */
+  .app-heat-cell {
+    width: 14px;
+    height: 14px;
+  }
 }
 
 /* CR-CRU-018 §S2 / DN decision 4 — the touch floor OUTRANKS density. On
