@@ -6199,7 +6199,7 @@ describe("CR-CRU-093 — the project rail collapses to a sliver", () => {
 //
 // Spec: docs/changes/CR-CRU-093-project-rail-collapses.md §S4, §S5 —
 //       AC5's FIRST-PAINT half, AC7 (every view clean at both widths),
-//       AC11 (the 1024×640 floor, sliver included).
+//       AC11 (the 1025×640 660px floor, sliver included — CR-CRU-018/DN decision 5 re-points this from the original 1024×640).
 //
 // WHY THESE THREE ARE HERE AND THE REST OF §S3/§S4 IS NOT. "on first paint,
 // with no expanded flash" is a claim about FRAMES, "scrollWidth <=
@@ -6225,10 +6225,18 @@ describe("CR-CRU-093 — the project rail collapses to a sliver", () => {
 // 353 shipped: whatever they find is the finding §S5 exists to surface.
 
 const SWEEP_KEY = "rail-sweep-key";
-/** CR-CRU-023 §S1's minimum supported screen, which AC11 names. */
-const FLOOR_VIEWPORT = { width: 1024, height: 640 };
+// RE-POINTED by CR-CRU-018 §S1/DN decision 5 (2026-09-23): CR-CRU-023 §S1's
+// original "minimum supported screen" was 1024x640, but DN decision 1 moves
+// the desktop band's own start to exactly 1025px ("1024 is not arbitrary:
+// CR-CRU-023 §S1 already declares 1024×640 the minimum supported screen, so
+// the desktop band begins exactly where that guarantee ends") and decision 5
+// SCOPES the 660px floor to that desktop band, LIFTING it below 1025px —
+// where 1024x640 now sits (tablet band, DN decision 2's stacked layout).
+// 1025x640 is the new exact floor AC11 names post-CR-018.
+const FLOOR_VIEWPORT = { width: 1025, height: 640 };
 /** `.app-pane-content > * { min-width: 660px }` (public/styles.css) — the
- *  floor AC11 says the sliver may not break. */
+ *  floor AC11 says the sliver may not break, now scoped to ≥1025px by
+ *  CR-CRU-018/DN decision 5. */
 const PANE_CHILD_FLOOR = 660;
 const SLIVER_LABEL = "project · vitals";
 
@@ -6470,8 +6478,9 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
   test("AC7 — every tab the shell declares renders clean at 1600x900, rail expanded AND collapsed", async () => {
     const p = sweepPageEl();
     // This case states its own viewport rather than inheriting the page's: AC11
-    // shares this page at the 1024×640 floor, and "at 1600x900" is this test's
-    // claim, not an artefact of what ran before it.
+    // shares this page at the 1025×640 floor (CR-CRU-018/DN decision 5
+    // re-point), and "at 1600x900" is this test's claim, not an artefact of
+    // what ran before it.
     await step("sizing the sweep page to 1600x900", PROBE_MS, () =>
       p.setViewportSize(RAIL_VIEWPORT),
     );
@@ -6531,13 +6540,13 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
     expect(offenders).toEqual([]);
   }, 300_000);
 
-  test("AC11 — at 1024x640 the collapsed rail keeps the page unscrolled, the 660px pane floor unbroken, and its own sliver content inside the pane", async () => {
+  test("AC11 — at 1025x640 the collapsed rail keeps the page unscrolled, the 660px pane floor unbroken, and its own sliver content inside the pane", async () => {
     // AC11 SHARES the sweep page rather than opening a fourth: it states the
     // floor viewport itself, and `freshWorkspace` reloads from cleared storage,
     // so it begins on a clean document that owes nothing to AC7 — and the file
     // holds ONE Chromium instead of three.
     const p = sweepPageEl();
-    await step("sizing the sweep page to 1024x640", PROBE_MS, () =>
+    await step("sizing the sweep page to 1025x640", PROBE_MS, () =>
       p.setViewportSize(FLOOR_VIEWPORT),
     );
     try {

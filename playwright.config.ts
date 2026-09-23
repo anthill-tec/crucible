@@ -179,7 +179,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       grepInvert: /@empty-db/,
       testIgnore:
-        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle)\.feature\.spec\.js$/,
+        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle|mobile-viewport-responsive|tablet-viewport-responsive)\.feature\.spec\.js$/,
       dependencies: ["chromium-empty-db"],
     },
     {
@@ -204,6 +204,45 @@ export default defineConfig({
       name: "chromium-run-lifecycle",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /run-lifecycle\.feature\.spec\.js$/,
+      dependencies: ["chromium-empty-db"],
+    },
+    // CR-CRU-018 §S1 AC1 — the DEDICATED `@mobile`-tagged e2e feature, not a
+    // second pass of the whole suite body (which would roughly double a
+    // 9m27s suite for one invariant). Two real Playwright DEVICE profiles
+    // (touch + narrow UA, not merely a resized desktop viewport), each
+    // scoped to its OWN feature file via `testMatch` so neither the
+    // `chromium` main body nor the other mobile project ever double-runs a
+    // scenario. Both `grepInvert: /@empty-db/` per the CR's own ordering
+    // note: a project that swept up the F1 empty-db precondition a second
+    // time would both red tests/e2e-suite-dependency-graph.test.ts's "the
+    // ordering precondition runs exactly once" invariant AND seed the
+    // "empty" database ahead of that second run. Both `dependencies` on
+    // `chromium-empty-db` (never on `chromium`) for the same reason every
+    // other project here does: a failing scenario in the main body must
+    // skip nothing.
+    {
+      name: "chromium-mobile",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
+    },
+    {
+      name: "chromium-tablet",
+      // DN-crucible-responsive-model.md decision 1 — tablet is 641-1024px.
+      // No named Playwright "tablet" device sits inside that exact band (the
+      // closest built-ins straddle it: "iPad Mini" landscape is 1024 wide,
+      // its portrait is 768), so the viewport is declared explicitly at
+      // 820x1180 (touch-enabled, mid-band) rather than borrowing a device
+      // whose width sits at the band's own edge.
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 820, height: 1180 },
+        isMobile: true,
+        hasTouch: true,
+      },
+      testMatch: /tablet-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
       dependencies: ["chromium-empty-db"],
     },
   ],

@@ -30,14 +30,27 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
   features sharing the webServer/DB instance. Results are ingested with
   tier "e2e" by the orchestrator's ingest step, not by this suite.
 
+  RE-POINTED by CR-CRU-018 §S1/DN decision 5 (2026-09-23): every scenario
+  below moves from 1024×640/800×640 to 1280×640. DN decision 1 makes
+  1024×640 tablet band (not desktop) once CR-CRU-018 lands, where DN
+  decision 2 stacks the Project pane beneath the content instead of
+  today's side-by-side grid — a different DOM arrangement than the one
+  `workspace-runs`/`pane-scroll` assume here. §S2's 800×640 scenario
+  additionally relied on the CR-CRU-023 660px floor to force horizontal
+  overflow, which DN decision 5 LIFTS below 1025px. 1280×640 keeps every
+  scenario on the desktop band this feature's own subject (the run-detail
+  dual-axis scroller) still applies to post-CR-018, per that CR's own
+  "which RED must re-point deliberately rather than discover" note.
+
   Fixture note: every failing leaf below carries a long (60-line) trace so
   its rendered failure-box is reliably taller than the 60vh cap (384px at
   this suite's fixed 640px viewport height) regardless of exact
   chrome/header pixel budgets.
 
   Scenario: §S1 a run detail with ONE suite holding several tall failing leaves scrolls as a single bounded scroller — no inner 60vh trap, no dead space, header controls and last failure reachable, jump and raw toggle keep working
-    Given the viewport is 1024x640
+    Given the viewport is 1280x640
     And a project named "DDA Single Suite Project" is registered
+
     And a failing run with 3 tall failing leaves in one suite is ingested for agent "dda-single-suite"
     When I open the workspace for that project
     And I click the "Runs" workspace tab
@@ -63,7 +76,7 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
   # so the 3 failing suites are now expanded EXPLICITLY (one click each)
   # before the same scroll/no-60vh-trap assertions run.
   Scenario: §S1 Multi-suite — a run detail with 3 failing suites expanded scrolls as the SAME single bounded scroller, no per-suite 60vh box stacks
-    Given the viewport is 1024x640
+    Given the viewport is 1280x640
     And a project named "DDA Multi Suite Project" is registered
     And a failing run with 3 failing suites, each with a tall failure, is ingested for agent "dda-multi-suite"
     When I open the workspace for that project
@@ -78,16 +91,23 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
 
   # §S2 — CR-CRU-029's own horizontal-affordance contract, now exercised
   # against the run-detail body specifically (its own e2e never covered
-  # this surface). 800×640 mirrors CR-023/CR-029's own established
+  # this surface). 1280×640 (RE-POINTED, CR-CRU-018 §S1/DN decision 5): the
+  # scenario used to run at 800×640, CR-023/CR-029's own established
   # floor-forcing viewport (`.app-pane-content > * { min-width: 660px }`
-  # overflows below ~687px of available pane width — no long-label trick
-  # needed). The pane-scroll.steps.ts steps below are reused UNCHANGED: the
-  # run detail renders inside the SAME `workspace-runs` / `pane-scroll`
-  # testid pair as the Runs feed (WorkspaceRunDetail in public/app.js).
+  # overflows below ~687px of available pane width) — but that floor is now
+  # SCOPED to ≥1025px, so 800×640 (tablet band) no longer forces the
+  # overflow this scenario needs. It now uses the unbreakably-long-suite-name
+  # fixture variant (drilldown-dual-axis-scroll.steps.ts) instead — measured
+  # (2026-09-23) that even 1280×640's own ~872px pane no longer narrows
+  # below 660px via the grid alone, so content-driven overflow replaces the
+  # now-vacuous-at-this-band floor mechanism. The pane-scroll.steps.ts steps
+  # below are reused UNCHANGED: the run detail renders inside the SAME
+  # `workspace-runs` / `pane-scroll` testid pair as the Runs feed
+  # (WorkspaceRunDetail in public/app.js).
   Scenario: §S2 the horizontal scroll affordance on the run-detail body stays within the viewport at the top, middle, and bottom of its vertical scroll range, and both axes stay operable at once
-    Given the viewport is 800x640
+    Given the viewport is 1280x640
     And a project named "DDA Horizontal Project" is registered
-    And a failing run with 3 tall failing leaves in one suite is ingested for agent "dda-horizontal"
+    And a failing run with 3 tall failing leaves in a suite with an unbreakably long name is ingested for agent "dda-horizontal"
     When I open the workspace for that project
     And I click the "Runs" workspace tab
     And I click the event card for "dda-horizontal"
