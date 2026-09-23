@@ -108,6 +108,18 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the roadmap release table renders as cards, not a table, on the phone profile
     And the roadmap card for "CR-MOB-1" shows its id, status, wave and dependencies fields
 
+  # BORN GREEN, deliberately — a regression rail (CR-CRU-018 C5 F3). This
+  # scenario PASSED at RED (9efb9ed): replayed by restoring that commit's
+  # public/styles.css + public/app.js and running it alone on chromium-mobile.
+  # It is NOT proof of new CR-CRU-018 behaviour. The pre-existing mechanism
+  # satisfies it at phone width: the CR-CRU-016 §S1 app frame (body
+  # `height: 100%; overflow: hidden`, the flex-column #app, and `.app-main`
+  # `min-height: 0; overflow: hidden`) keeps the document at the viewport
+  # height, while the CR-CRU-029 §S1 pane-scroll box (`.app-pane-content`,
+  # flex-filled with `min-height: 0` and `overflow: auto` on both axes;
+  # CR-CRU-034 §S1 adds `position: relative`) owns the overflow. It guards
+  # §S3 ("scroll stays contained") at phone width against a later
+  # regression.
   Scenario: AC10 — compile diagnostics scroll inside their own container with the page unscrolled
     Given a project named "MOB Compile Project" is registered
     And a rustc compile error report with 40 diagnostics is ingested for agent "mob-compile-agent"
