@@ -345,6 +345,90 @@ describe("CR-CRU-018 §S1 / CR-CRU-146 — the history cycle row's hit area is o
     expect(row.querySelector('[data-testid="cycle-span-closed"]')).toBeNull();
   });
 
+  // CR-CRU-146 AC1, by name: "Clicking the history cycle row — on its LABEL,
+  // on its status glyph, on the `▸ N runs` hint, and on empty space in the
+  // line — opens that cycle's linked runs. Asserted at several x-offsets
+  // across the row". Each of those four named targets is clicked in turn, from
+  // a CLOSED row, and each must open it. The status glyph (`.app-cycle-glyph`)
+  // is NOT the `cycle-toggle` chevron the test above closes with; it is the
+  // separate cycle-status symbol. "Empty space in the line" is a click
+  // dispatched AT `.app-cycle-line` itself, so the event target is the line
+  // and no child. HONEST LIMIT: happy-dom does no layout or hit-testing, so
+  // this harness cannot aim a click at a pixel x-offset. The four targets ARE
+  // the row's distinct horizontal positions (status glyph at the left, then
+  // the label, the hint, and the line's own trailing space), and each is its
+  // own DOM target. That proves one line-level handler owns the whole row, not
+  // a narrow per-child hit area. A synthetic `clientX` would change nothing
+  // here, so none is faked.
+  test("CR-CRU-146 AC1 — clicking the row on its LABEL, its status glyph, its '▸ N runs' hint, and empty space in the line each opens the cycle's linked runs", async () => {
+    const key = "row-toggle-targets-1";
+    const linkedRun = runEvent({
+      id: "evt-row-toggle-targets-1",
+      projectKey: key,
+      agentId: "agent-row-toggle-targets",
+      timestamp: Date.now(),
+      context: { cycleId: 904 },
+    });
+    const plan: PlanFixture = {
+      planId: 9104,
+      cr: "CR-ROWTOGGLE-5",
+      projectKey: key,
+      status: "closed",
+      wave: "1",
+      merge: { commit: "rowToggleCommit5" },
+      cycles: [{ id: 904, label: "row-toggle cycle 5", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Row Toggle Project 5" })],
+      events: [linkedRun],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-ROWTOGGLE-5"]',
+    )!;
+    expect(crGroup).not.toBeNull();
+    crGroup.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.click();
+    await settle();
+
+    const currentRow = (): HTMLElement => {
+      const row = crGroup.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]');
+      expect(row).not.toBeNull();
+      return row!;
+    };
+    const targets: Array<[string, (row: HTMLElement) => Element | null]> = [
+      ["label (.app-cycle-label)", (row) => row.querySelector(".app-cycle-label")],
+      ["status glyph (.app-cycle-glyph)", (row) => row.querySelector(".app-cycle-glyph")],
+      ["'▸ N runs' hint (.app-run-count-hint)", (row) => row.querySelector(".app-run-count-hint")],
+      ["empty space in the line (.app-cycle-line itself)", (row) => row.querySelector(".app-cycle-line")],
+    ];
+
+    for (const [name, find] of targets) {
+      const row = currentRow();
+      // Precondition for every "opens on click" claim: the row starts CLOSED.
+      expect(row.querySelector('[data-testid="cycle-span-closed"]'), `${name}: row must start closed`).toBeNull();
+      const target = find(row);
+      expect(target, `${name}: target must render on the closed row`).not.toBeNull();
+      clickAt(target!);
+      await settle();
+
+      const openSpan = currentRow().querySelector('[data-testid="cycle-span-closed"]');
+      expect(openSpan, `clicking the ${name} must open the cycle's linked runs`).not.toBeNull();
+      expect(
+        openSpan!.querySelector('[data-testid="linked-run-row"]')?.getAttribute("data-run-id"),
+      ).toBe("evt-row-toggle-targets-1");
+
+      // Close again through the label (a proven toggle, above) so the NEXT
+      // target also starts from a closed row.
+      clickAt(currentRow().querySelector(".app-cycle-label")!);
+      await settle();
+      expect(currentRow().querySelector('[data-testid="cycle-span-closed"]')).toBeNull();
+    }
+  });
+
   test("the → Runs badge inside the row still performs its own navigation and does NOT toggle the row (stopPropagation carve-out, non-regression)", async () => {
     const key = "row-toggle-badge-1";
     const linkedRun = runEvent({
