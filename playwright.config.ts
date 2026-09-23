@@ -37,6 +37,47 @@ import { fileURLToPath } from "node:url";
 // `seedProject`'s ephemeral guard demands cannot drift apart. Direction is
 // deliberate: config depends on harness, never the reverse.
 import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
+import { webkitEngineAvailable } from "./tests/e2e/steps/webkit-docker-preflight.ts";
+
+// CR-CRU-018 \u00a7S1 AC13/AC14 (DN decision 13, "WebKit provisioning \u2014 the two
+// paths") \u2014 WebKit runs two ways, never a third "install it locally": CI
+// installs it natively (Ubuntu runners), and locally the ONLY working path is
+// Playwright's own Docker `run-server`, reached from THIS process via
+// PW_TEST_CONNECT_WS_ENDPOINT \u2014 Playwright's OWN env var, consumed
+// automatically by every browser launch in this process (verified:
+// node_modules/playwright/lib/index.js's connectOptionsFromEnv()).
+// scripts/webkit-docker-server.ts (`bun run webkit:docker`) is the one
+// command that sets it.
+//
+// Docker mode (`bun run webkit:docker`) points EVERY browser launch in this
+// process at the container, so the container's `localhost` is not the
+// host's. It is answered with Playwright's OWN tethering, not a network
+// route: the launcher also sets PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>
+// (read beside the endpoint by connectOptionsFromEnv(),
+// node_modules/playwright/lib/index.js; BrowserType.connect's
+// `exposeNetwork`), so the remote browser's requests to localhost /
+// 127.0.0.1 / [::1] travel back over the SAME websocket and are made from
+// THIS process. Consequences, all deliberate: every baseURL stays
+// `localhost:PORT` in every mode, including the host-side `request` fixture
+// (which inherits `use.baseURL` and could never resolve a container-only
+// alias); the webServer keeps its loopback-only bind (`host = "127.0.0.1"`
+// below, never widened); and no host firewall rule is involved. THE PORT
+// USED IS `PORT` (E2E_PORT, 39877, imported above), never either
+// workstation board (:3849 / :3850). The earlier `hostmachine` route
+// (`--add-host=hostmachine:host-gateway` + a hostmachine baseURL) is
+// RETIRED: it needed a wider bind and a firewall rule, and the host-side
+// `request` fixture cannot resolve `hostmachine` at all.
+//
+// The webkit-iphone project is ENDPOINT-GATED (user-approved ruling): it
+// collects its feature only when a WebKit engine exists for this run, CI's
+// native install or the Docker endpoint (`webkitEngineAvailable`, the one
+// predicate tests/e2e-suite-reaches-the-board.test.ts shares). A plain
+// local `bun run test:e2e` therefore runs Chromium only instead of failing
+// on an engine this host cannot launch.
+const webkitAvailable = webkitEngineAvailable({
+  isCI: Boolean(process.env.CI),
+  wsEndpoint: process.env.PW_TEST_CONNECT_WS_ENDPOINT,
+});
 
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
@@ -179,7 +220,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       grepInvert: /@empty-db/,
       testIgnore:
-        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle)\.feature\.spec\.js$/,
+        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle|mobile-viewport-responsive|tablet-viewport-responsive)\.feature\.spec\.js$/,
       dependencies: ["chromium-empty-db"],
     },
     {
@@ -204,6 +245,79 @@ export default defineConfig({
       name: "chromium-run-lifecycle",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /run-lifecycle\.feature\.spec\.js$/,
+      dependencies: ["chromium-empty-db"],
+    },
+    // CR-CRU-018 §S1 AC1 — the DEDICATED `@mobile`-tagged e2e feature, not a
+    // second pass of the whole suite body (which would roughly double a
+    // 9m27s suite for one invariant). Two real Playwright DEVICE profiles
+    // (touch + narrow UA, not merely a resized desktop viewport), each
+    // scoped to its OWN feature file via `testMatch` so neither the
+    // `chromium` main body nor the other mobile project ever double-runs a
+    // scenario. Both `grepInvert: /@empty-db/` per the CR's own ordering
+    // note: a project that swept up the F1 empty-db precondition a second
+    // time would both red tests/e2e-suite-dependency-graph.test.ts's "the
+    // ordering precondition runs exactly once" invariant AND seed the
+    // "empty" database ahead of that second run. Both `dependencies` on
+    // `chromium-empty-db` (never on `chromium`) for the same reason every
+    // other project here does: a failing scenario in the main body must
+    // skip nothing.
+    {
+      name: "chromium-mobile",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
+    },
+    {
+      name: "chromium-tablet",
+      // DN-crucible-responsive-model.md decision 1 — tablet is 641-1024px.
+      // No named Playwright "tablet" device sits inside that exact band (the
+      // closest built-ins straddle it: "iPad Mini" landscape is 1024 wide,
+      // its portrait is 768), so the viewport is declared explicitly at
+      // 820x1180 (touch-enabled, mid-band) rather than borrowing a device
+      // whose width sits at the band's own edge.
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 820, height: 1180 },
+        isMobile: true,
+        hasTouch: true,
+      },
+      testMatch: /tablet-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
+    },
+    // CR-CRU-018 §S1 AC13/AC14 (DN decision 13, user ruling 2026-09-23) — the
+    // SAME phone feature `chromium-mobile` runs, on WebKit instead of Blink: a
+    // phone profile under Chromium proves geometry, not the platform, and
+    // §S3's subject matter (scroll containment, 100vh,
+    // -webkit-fill-available, flex/grid edge cases) is exactly where the
+    // engines diverge. `testMatch` is IDENTICAL to chromium-mobile's, on
+    // purpose — both engines assert the same phone ACs, never a second
+    // feature. `devices["iPhone 15"]` is VERIFIED against this pinned
+    // Playwright version's own device descriptors
+    // (node_modules/playwright-core/lib/server/deviceDescriptorsSource.json)
+    // to declare `defaultBrowserType: "webkit"` — not assumed, per the DN's
+    // own caution not to assume a name survives a version.
+    //
+    // `baseURL` is `localhost` here exactly as for every other project, in
+    // every mode: in CI WebKit is native (same machine as the webServer), and
+    // in Docker mode the exposeNetwork tethering above carries the
+    // container's loopback requests back to this host. Declared explicitly
+    // (not inherited) so the project's own object states it.
+    //
+    // ENDPOINT-GATED: with no WebKit engine for this run (no CI, no Docker
+    // endpoint) `testIgnore` excludes every file, so the project stays
+    // DECLARED (a later edit cannot quietly delete it) but collects nothing,
+    // and a plain local run never attempts a WebKit launch.
+    {
+      name: "webkit-iphone",
+      use: {
+        ...devices["iPhone 15"],
+        baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${String(PORT)}`,
+      },
+      testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
+      ...(webkitAvailable ? {} : { testIgnore: /.*/ }),
+      grepInvert: /@empty-db/,
       dependencies: ["chromium-empty-db"],
     },
   ],

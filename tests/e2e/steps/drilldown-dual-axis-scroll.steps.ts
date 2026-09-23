@@ -57,6 +57,28 @@ Step(
   },
 );
 
+// CR-CRU-018/DN decision 5 desktop-band re-point support (§S2 only).
+//
+// MEASURED (2026-09-23, live server): the desktop-band grid alone can no
+// longer narrow `.app-pane-content` below 660px at any legal >=1025px
+// viewport (688px at exactly 1025px, 872px at 1280px), so §S2's original
+// 800x640 floor-forced overflow no longer occurs once this scenario moves
+// to the desktop band. The run-detail body's failure TRACE wraps
+// (`pre-wrap`, by design -- that is what §S1 tests), so a wide trace cannot
+// force horizontal overflow here; the suite NAME (`.app-suite-name`, no
+// `white-space` rule, so an unbroken token does not wrap) can, and is a
+// legitimate real-world overflow source (a long real suite/file path is
+// exactly this shape).
+Step(
+  "a failing run with {int} tall failing leaves in a suite with an unbreakably long name is ingested for agent {string}",
+  async ({ request, world }, failCount: number, agentId: string) => {
+    const wideName = `SuiteWithAnUnbreakablyLongNameForcingOverflowAtTheDesktopBand${"x".repeat(140)}`;
+    const xml = suiteWithTallFailures(wideName, failCount);
+    const res = await ingestJunit(request, world.projectKey as string, agentId, xml, "unit");
+    world.eventId = res.event;
+  },
+);
+
 Step(
   "a failing run with {int} failing suites, each with a tall failure, is ingested for agent {string}",
   async ({ request, world }, suiteCount: number, agentId: string) => {

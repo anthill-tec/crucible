@@ -1,7 +1,6 @@
 # CR-CRU-018 — Responsive Crucible: mobile + tablet media support
 
-**Status:** PENDING (0.3.0 — user-filed during CR-007 execution: "we have not
-considered media like a mobile phone"; carried past 0.2.0, now wave 7)
+**Status:** COMPLETED (0.3.0)
 **Type:** feature
 **Priority:** P3
 **Depends on:** CR-CRU-015 (its BDD section renders this CR's viewport evidence; see the note below), CR-CRU-016 (final pane/drill-in geometry must exist first), CR-CRU-093 (the pane-collapse mechanism this reuses)
@@ -101,6 +100,8 @@ suites in `tests/boundary-to-cycle-navigation.test.ts` and `tests/cycle-run-navi
 ## Acceptance criteria
 
 - [ ] BDD E2E with mobile viewport projects (Playwright devices "Pixel 7" or equivalent + a tablet profile) running a **dedicated `@mobile`-tagged feature**, not a second pass of the whole suite body: home renders single-column, no page-level horizontal scroll (scrollWidth ≤ innerWidth asserted on every routed surface + open drill-in). The mobile project carries `grepInvert: /@empty-db/` per the note above. Re-running the entire body at a second viewport would roughly double a suite measured at 9m27s for one invariant; the tagged feature buys the same protection.
+- [ ] **The phone band runs on BOTH engines** (DN decision 13, user ruling 2026-09-23): `chromium-mobile` (Pixel 7, Blink) AND `webkit-iphone` (an iPhone profile on **WebKit**). A phone profile under Chromium proves geometry, not the platform — and §S3's subject matter (scroll containment, `100vh`, `-webkit-fill-available`, flex and grid edge cases) is exactly where the engines diverge. The phone ACs below are asserted under both; where a result differs by engine, this CR states which behaviour is the contract rather than asserting whichever happens to pass.
+- [ ] **WebKit runs in BOTH places**: CI provisions it natively (both jobs' `bunx playwright install --with-deps` steps gain `webkit`), and LOCALLY it runs through the Docker Playwright Server in one command (`bun run webkit:docker`), pinned to the image matching `@playwright/test` and reaching the host's loopback-bound e2e server through Playwright's own `PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>` tunnel — no bind widening, no re-addressed base URLs, no host firewall change. Plain `test:e2e` is endpoint-gated: `webkit-iphone` stays declared but collects nothing without a WebKit endpoint, so a local run never reds on an engine it cannot reach. Asserted on the config, so a future edit cannot quietly delete the project.
 - [ ] Workspace on phone: tabs row wraps/scrolls in its own container; Project pane renders as the collapsed summary strip and expands on tap; the in-pane detail fills the viewport with the ← chip visible without scrolling.
 - [ ] Touch targets: every interactive chip/row/card measures ≥44px in either dimension on the phone profile (sampled assertions on badges, tabs, cards, back chips), **and the floor holds at compact and ultra density too** — asserted, since density is the mechanism most likely to breach it.
 - [ ] Density defaults to **comfortable** on phone media (overrideable by the toggle; persisted as usual, and the toggle still reaches compact/ultra).
@@ -128,3 +129,37 @@ code: any later edit to those frames re-runs those four.
 
 Native apps; PWA/offline; push notifications; portrait-specific redesigns of
 the graph views (they scroll).
+
+## Implementation Notes
+
+Recorded at close-out so nobody credits this CR with work it did not do, and so the next CR does not
+rediscover what this one measured.
+
+- **Three criteria were already met before this CR, and their tests are regression rails, not proof
+  of new behaviour.** Each was settled by replaying RED's production files (`9efb9ed`) and running
+  the scenario, and each passed there:
+  - *Phone density defaults to comfortable* — `app.js`'s density default was already `comfortable`
+    at every band; this CR changed nothing there. The real work in that scenario is the 44px floor.
+  - *The workspace tabs row does not force page scroll* — at RED the row already spanned 388 of a
+    412px Pixel 7 viewport (94%): it is a direct child of `.app-main`, not of the squeezed content
+    column, and already wrapped via the pre-existing `.app-top { flex-wrap: wrap }`. The only change
+    is the tab height, 22px → 44px, which is the touch floor's work and asserted separately.
+  - *Compile diagnostics scroll inside their container* — satisfied by CR-CRU-016 §S1's page frame
+    and CR-CRU-029 §S1's pane scroll box.
+- **Two tests were vacuous as first written and were strengthened**: phone and tablet AC1. `body`
+  and `.app-main` hide overflow, so `scrollWidth <= innerWidth` could not fail; at RED the phone
+  content column had been squeezed to 116px. They now also assert the content region is visible at a
+  usable width, and were proven to fail at RED.
+- **CR-CRU-146's hit area is implemented here** (DN decision 11): one handler on the cycle row's line,
+  reached by the label, status glyph, `▸ N runs` hint and empty space, with the `→ Runs` badge
+  still stopping propagation. CR-CRU-146 can become assertion-only, with ONE gap: its AC1 asks for
+  clicks "at several x-offsets", and the covering test runs in happy-dom, which has no layout or
+  hit-testing — a pixel-aimed click needs a Playwright step, which CR-CRU-146 should own.
+- **WebKit runs through a tunnel, not a re-addressed host.** The `hostmachine` design first specified
+  was broken regardless of the firewall (the host-side `request` fixture inherits `use.baseURL`, and
+  `hostmachine` does not resolve on the host). Playwright's own `PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>`
+  replaced it; the phone feature passed 9/9 on real WebKit on this workstation. See the DN's
+  "WebKit provisioning" section.
+- **The 660px floor's stated purpose was wrong; the rule stood.** Measured: the pane is already 688px
+  at 1025px, so the floor cannot bind by narrowing anywhere in its own band. Overflow tests now force
+  it with wide content, never a narrow viewport (DN decision 5, amended).

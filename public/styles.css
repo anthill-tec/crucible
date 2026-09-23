@@ -1822,3 +1822,205 @@ body {
   background-size: 55% 100%;
   animation: app-stream-flow 1.9s linear infinite;
 }
+
+/* ── CR-CRU-018 §S1 — the responsive bands (DN-crucible-responsive-model) ──
+   Three bands, named by what they are (DN decision 1):
+     phone    ≤ 640px
+     tablet   641–1024px
+     desktop  ≥ 1025px   — begins exactly where CR-CRU-023's 1024×640
+                           minimum-supported-screen guarantee ends.
+   The bands are declared ONCE, here. A custom property cannot be read inside
+   a media query, so each band's query is the single literal declaration of
+   its boundary and the band then PUBLISHES itself as the `--band` token —
+   script that needs the band reads that token (getComputedStyle) instead of
+   re-declaring a pixel value. The `--bp-*` tokens name the same two
+   boundaries for any consumer that needs the number itself. Range syntax
+   (`width < 1025px`) is used so no fractional width falls between two bands.
+
+   DN decision 2 — ONE layout axis changes per band, never a redesign:
+   desktop keeps today's `[content | pane]` grid untouched (nothing in this
+   block matches ≥1025px, so desktop is pixel-unchanged by construction);
+   below it the Project pane stacks BENEATH the content column, full width,
+   and the content keeps its single column.
+
+   APPENDED at the end of the sheet, like the block above, so the informal
+   `styles.css:<line>` citations in the test tree shift by none. */
+:root {
+  --bp-phone-max: 640px;
+  --bp-tablet-max: 1024px;
+  --band: desktop;
+}
+
+@media (width < 1025px) {
+  :root { --band: tablet; }
+
+  /* DN decision 2 — the pane stacks beneath the content column, full width.
+     The collapsed variant (CR-CRU-093's 34px sliver column) is overridden
+     too: below the desktop band there is no side column for a sliver to
+     occupy. The pane's row is sized to its content up to 40% of the body,
+     and stays its own vertical scroller beyond that — never the page's. */
+  .app-workspace-body,
+  .app-workspace-body:has(> .app-pane-collapsed) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) fit-content(40%);
+  }
+  /* A stacked collapsed pane reads as a horizontal strip, not a rotated
+     sliver — it still states what it holds (DN "what a band must not
+     change"). */
+  .app-pane-collapsed .app-pane-head { flex-direction: row; }
+  .app-rail-sliver-label { writing-mode: horizontal-tb; }
+
+  /* DN decision 5 (amended) — the CR-CRU-023 660px pane-content floor
+     (`.app-pane-content > *`, above) stays in force at ≥1025px and is
+     LIFTED here: content reflows to the band instead. Wide content still
+     scrolls inside its own `.app-pane-content` box (CR-CRU-029's dual-axis
+     contract, unchanged) — container scroll is the mechanism, page scroll
+     the defect (DN decision 6). */
+  .app-pane-content > * { min-width: 0; }
+}
+
+@media (width <= 640px) {
+  :root { --band: phone; }
+
+  /* Storyboard F15 — the projects row scrolls inside its own row rather
+     than wrapping into a tall block or widening the page (DN decision 6). */
+  .app-badge-flow {
+    flex: 1 1 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .app-badge-flow > .app-badge { flex: 0 0 auto; }
+
+  /* DN decision 12 / CR §S1 — on the phone band the in-pane drill-in
+     FILLS THE VIEWPORT with its ← back chip in the header band at the top;
+     its own scroller (and virtualization) is unchanged inside it. */
+  .app-workspace-body > .app-detail-col {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    padding: 12px;
+    background: var(--bg);
+  }
+
+  /* DN decision 9 — the project band RELOCATES to a foot strip, never
+     hides. The collapsed pane (collapsed on this band by the viewport
+     trigger, app.js — ephemerally, never via RAIL_STORAGE_KEY) drops its
+     sliver header and shows the foot strip in its place: project name,
+     live-agent count and health dot, so it still states what it holds. */
+  .app-pane-collapsed { padding: 0; overflow: hidden; }
+  .app-pane-collapsed > .app-pane-head { display: none; }
+  .app-pane-collapsed > .app-band-foot { display: flex; }
+  .app-band-foot {
+    width: 100%;
+    min-height: 44px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 0;
+    background: rgba(255, 122, 26, 0.06);
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+  }
+  .app-band-foot .app-dot { margin-right: 0; }
+  .app-band-foot-open {
+    margin-left: auto;
+    font: 600 10.5px var(--mono);
+    color: var(--ember);
+  }
+  /* Tapped open, the SAME pane becomes a sheet over the content: it fills
+     the lower 70% of the viewport and scrolls inside itself; the backdrop
+     is the complementary upper 30%, so the two never overlap and the
+     backdrop always has an exposed surface to tap. */
+  .app-band-sheet {
+    position: fixed;
+    inset: 30vh 0 0 0;
+    z-index: 46;
+    border-radius: 12px 12px 0 0;
+  }
+  .app-band-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 30vh;
+    z-index: 46;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  /* DN decision 10 / phone AC8: the roadmap's release-scoped table is a
+     stacked CARD list here (app.js renders the cards only on this band).
+     Each card is the SAME entry the desktop row draws, re-flowed: the id and
+     brief title lead, then every other column as a labelled field that
+     wraps inside the card instead of widening the page (DN decision 6). */
+  .app-roadmap-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+  .app-roadmap-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: 400 12.5px/1.55 var(--sans);
+  }
+  .app-roadmap-card.selected {
+    outline: 1px solid var(--ink-dim);
+    outline-offset: 1px;
+  }
+  .app-roadmap-card[data-drill-source="true"] { cursor: pointer; }
+  .app-roadmap-card-field {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
+  .app-roadmap-card-field.app-roadmap-title {
+    flex: 1 1 100%;
+    order: -1;
+    overflow-wrap: anywhere;
+  }
+  .app-roadmap-card-field.app-roadmap-cr { order: -2; }
+  .app-roadmap-card-label {
+    font: 600 10px/1.4 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-dim);
+  }
+
+  /* DN decision 12 / phone AC10: the run detail's heat strip ENLARGES its
+     cells on the phone band rather than showing fewer. Every cell still
+     renders (the strip wraps), so the file count is unchanged. Keyed on the
+     band, not on `pointer: coarse` alone: the desktop band keeps its 8px
+     cells whatever the input medium. */
+  .app-heat-cell {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* CR-CRU-018 §S2 / DN decision 4 — the touch floor OUTRANKS density. On
+   touch media every interactive chip, card and toggle measures ≥44px in at
+   least one dimension at comfortable, compact AND ultra: density sets
+   padding (`--row-pad`, above), the floor sets a min-height density never
+   touches, so no density can breach it. Keyed on the input medium, not the
+   band — a touch screen is a touch screen at any width — so no desktop
+   (fine-pointer) layout is affected. The virtualized drill-in tree rows are
+   deliberately NOT floored: their fixed row height drives the
+   virtualization window (DN decision 12 — virtualization unchanged). */
+@media (pointer: coarse) {
+  button.app-chip,
+  .app-rail-toggle,
+  .app-evt,
+  .app-band-foot {
+    min-height: 44px;
+  }
+  .app-rail-toggle { min-width: 44px; }
+}

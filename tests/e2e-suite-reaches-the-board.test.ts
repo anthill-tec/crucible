@@ -103,11 +103,16 @@ import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
+import { webkitEngineAvailable } from "./e2e/steps/webkit-docker-preflight.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const CLIENT = join(REPO_ROOT, "clients", "bun-crucible.py");
 const FEATURES_DIR = join(REPO_ROOT, "tests", "e2e", "features");
 const STEPS_DIR = join(REPO_ROOT, "tests", "e2e", "steps");
+/** The phone feature `chromium-mobile` and `webkit-iphone` BOTH collect
+ *  (their testMatch is identical, asserted by
+ *  tests/webkit-iphone-engine-coverage.test.ts). */
+const PHONE_FEATURE_FILE = join(FEATURES_DIR, "mobile-viewport-responsive.feature");
 const AGENT = "e2e-suite-ingest-fixture";
 
 /** The declared target this suite is collected under — §S1's whole point is
@@ -470,7 +475,28 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
       // NEGATIVE/bound — and NOTHING else is a node. A tree that also carried
       // the spec files, or a second copy of each scenario, would pass the
       // containment check above while being a different shape.
-      expect(names.length).toBe(run.declared.length);
+      //
+      // CR-CRU-018 — the ONE legitimate second copy: the phone feature runs on
+      // TWO engines (chromium-mobile + webkit-iphone) whenever a WebKit engine
+      // exists for the run (CI's native install, or the Docker endpoint; the
+      // SAME predicate that gates webkit-iphone in playwright.config.ts). The
+      // codec drops Playwright's projectName (CR-CRU-145 §S3), so each phone
+      // scenario then lands as two same-named nodes. Asserted as the exact
+      // multiset: every declared scenario once, plus one more copy of each
+      // phone scenario per extra engine, and nothing else.
+      const expected = new Map(run.declared.map((scenario) => [scenario.node, 1]));
+      const phoneEngines = webkitEngineAvailable({
+        isCI: Boolean(process.env.CI),
+        wsEndpoint: process.env.PW_TEST_CONNECT_WS_ENDPOINT,
+      })
+        ? 2
+        : 1;
+      for (const scenario of parseFeatureFile(PHONE_FEATURE_FILE)) {
+        expected.set(scenario.node, phoneEngines);
+      }
+      const actual = new Map<string, number>();
+      for (const name of names) actual.set(name, (actual.get(name) ?? 0) + 1);
+      expect(Object.fromEntries(actual)).toEqual(Object.fromEntries(expected));
     },
     DRIVE_BUDGET_MS,
   );
