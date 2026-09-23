@@ -69,6 +69,19 @@ Step("the workspace renders as a single column on the phone profile", async ({ p
   expect(box!.width).toBeGreaterThan(viewport!.width * 0.85);
 });
 
+// BORN GREEN, deliberately — a regression rail (CR-CRU-018 C5 F2, orchestrator
+// ruling). This step PASSED at RED (9efb9ed), replayed by restoring that
+// commit's public/styles.css + public/app.js on chromium-mobile. It is NOT
+// proof of new CR-CRU-018 behaviour. `workspace-tabs` is a direct child of
+// `.app-main`, not of the squeezed content column (the column that the AC1
+// "usable width" step below guards). At RED the row already wrapped inside its
+// own container because of the pre-existing `.app-top { flex-wrap: wrap }`
+// (public/styles.css:88), and it measured 388px of the 412px Pixel 7 viewport
+// (94%) with every tab inside the viewport. It is also vacuous in isolation,
+// because `.app-main { overflow: hidden }` clips descendant overflow before
+// `body.scrollWidth` can see it. So it guards §S3 at phone width as a
+// regression rail only. The one tabs-row change CR-CRU-018 made, the 22px ->
+// 44px tab height, is the touch floor's work and is asserted separately.
 Step("the workspace tabs row does not force the page to scroll horizontally", async ({ page }) => {
   await expect(page.getByTestId("workspace-tabs")).toBeVisible();
   const { bodyScrollWidth, innerWidth } = await page.evaluate(() => ({
