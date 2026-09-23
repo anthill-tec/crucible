@@ -167,7 +167,9 @@ jobs:
       # cannot see, which is the defect this CR exists to close. Same command
       # as test-e2e's, deliberately — one provisioning idiom, not two.
       - name: Install Playwright browsers (the suite includes the Chromium tier)
-        run: bunx playwright install --with-deps chromium
+        # CR-CRU-018 (DN decision 13): WebKit beside Chromium. This job runs
+        # the whole `bun test` suite; the phone band asserts BOTH engines.
+        run: bunx playwright install --with-deps chromium webkit
       # CR-CRU-137 §S1 — the suite's default per-test budget is this project's
       # own figure, not bun's 5000 ms: two content assertions failed THIS job on
       # wall clock alone (5.1 s, 6.2 s) on trees whose suites were green.
@@ -228,7 +230,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium
+        # CR-CRU-018 (DN decision 13) — the `webkit-iphone` project runs here
+        # natively; Ubuntu runners provision WebKit directly.
+        run: bunx playwright install --with-deps chromium webkit
       - name: E2E suite
         run: bun run test:e2e
 

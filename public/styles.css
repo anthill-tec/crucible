@@ -1822,3 +1822,72 @@ body {
   background-size: 55% 100%;
   animation: app-stream-flow 1.9s linear infinite;
 }
+
+/* ── CR-CRU-018 §S1 — the responsive bands (DN-crucible-responsive-model) ──
+   Three bands, named by what they are (DN decision 1):
+     phone    ≤ 640px
+     tablet   641–1024px
+     desktop  ≥ 1025px   — begins exactly where CR-CRU-023's 1024×640
+                           minimum-supported-screen guarantee ends.
+   The bands are declared ONCE, here. A custom property cannot be read inside
+   a media query, so each band's query is the single literal declaration of
+   its boundary and the band then PUBLISHES itself as the `--band` token —
+   script that needs the band reads that token (getComputedStyle) instead of
+   re-declaring a pixel value. The `--bp-*` tokens name the same two
+   boundaries for any consumer that needs the number itself. Range syntax
+   (`width < 1025px`) is used so no fractional width falls between two bands.
+
+   DN decision 2 — ONE layout axis changes per band, never a redesign:
+   desktop keeps today's `[content | pane]` grid untouched (nothing in this
+   block matches ≥1025px, so desktop is pixel-unchanged by construction);
+   below it the Project pane stacks BENEATH the content column, full width,
+   and the content keeps its single column.
+
+   APPENDED at the end of the sheet, like the block above, so the informal
+   `styles.css:<line>` citations in the test tree shift by none. */
+:root {
+  --bp-phone-max: 640px;
+  --bp-tablet-max: 1024px;
+  --band: desktop;
+}
+
+@media (width < 1025px) {
+  :root { --band: tablet; }
+
+  /* DN decision 2 — the pane stacks beneath the content column, full width.
+     The collapsed variant (CR-CRU-093's 34px sliver column) is overridden
+     too: below the desktop band there is no side column for a sliver to
+     occupy. The pane's row is sized to its content up to 40% of the body,
+     and stays its own vertical scroller beyond that — never the page's. */
+  .app-workspace-body,
+  .app-workspace-body:has(> .app-pane-collapsed) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) fit-content(40%);
+  }
+  /* A stacked collapsed pane reads as a horizontal strip, not a rotated
+     sliver — it still states what it holds (DN "what a band must not
+     change"). */
+  .app-pane-collapsed .app-pane-head { flex-direction: row; }
+  .app-rail-sliver-label { writing-mode: horizontal-tb; }
+
+  /* DN decision 5 (amended) — the CR-CRU-023 660px pane-content floor
+     (`.app-pane-content > *`, above) stays in force at ≥1025px and is
+     LIFTED here: content reflows to the band instead. Wide content still
+     scrolls inside its own `.app-pane-content` box (CR-CRU-029's dual-axis
+     contract, unchanged) — container scroll is the mechanism, page scroll
+     the defect (DN decision 6). */
+  .app-pane-content > * { min-width: 0; }
+}
+
+@media (width <= 640px) {
+  :root { --band: phone; }
+
+  /* Storyboard F15 — the projects row scrolls inside its own row rather
+     than wrapping into a tall block or widening the page (DN decision 6). */
+  .app-badge-flow {
+    flex: 1 1 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .app-badge-flow > .app-badge { flex: 0 0 auto; }
+}
