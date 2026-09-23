@@ -48,6 +48,13 @@ this note: *a collapsed region still states what it holds*.
 the band. If information is worth hiding on a phone, that is a question about the desktop design,
 not a licence to diverge.
 
+**Precedence between decisions 9 and 12 (ruled 2026-09-24, found by C3 GREEN).** On a phone an open
+drill-in fills the viewport, which covers the project band's foot strip. That is not a violation of
+"never hides": the drill-in is a transient FOCUS state with `←` always visible, and the band returns
+the moment it is dismissed. Decision 9 governs the navigable surface; decision 12 governs a focus
+layer above it. What would violate decision 9 is any surface where the band is absent with no single
+action that restores it.
+
 ### WebKit provisioning — the two paths (decision 13's mechanics)
 
 Playwright does not support Arch: issue #8100 was closed in Dec 2024 and folded into the container
