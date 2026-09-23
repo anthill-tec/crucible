@@ -1,7 +1,8 @@
 # DN — Responsive model (phone · tablet · desktop)
 
-- **Status**: **APPROVED** (user, 2026-09-23) for decisions 1–8. The **per-surface section** below
-  is PROPOSED and awaits a second approval.
+- **Status**: **APPROVED** (user, 2026-09-23) for decisions 1–8, and **INITIAL APPROVAL** (user,
+  2026-09-23) for the per-surface decisions 9–12 below — given against storyboard frames F15b–F15e,
+  so a later refinement of those frames may refine these rows.
   Micro-feature design note for the responsive behaviour of every Crucible surface.
 - **Governing model**: `PRD-crucible-v2.md` (surfaces + density), `DN-crucible-roadmap-view.md`
   (roadmap visual contract, whose invariants this note inherits rather than restates).
@@ -28,7 +29,7 @@
 | **7** | **The roadmap strip's paging rule is band-independent.** `DN-crucible-roadmap-view.md`'s invariant already states whole containers only: a narrower viewport shows **fewer** gates and a higher `◀ N earlier` count, **never a partial one**. This note adds nothing to it and may not weaken it. | inherited |
 | **8** | **Nothing new is drawn.** Shape, colour and motion keep their meanings from the roadmap DN — shape says what a thing is, colour says where it stands, motion means live, and no element relies on colour alone. A band may relocate or stack an element; it may not invent a visual channel. | inherited |
 
-## Per-surface behaviour — PROPOSED, awaiting approval
+## Per-surface behaviour — INITIAL APPROVAL (user, 2026-09-23)
 
 Decisions 1–8 govern the frame; these say what each SURFACE does inside it. Drawn as storyboard
 frames **F15b–F15e**. The question that prompted them: *does the side project band get hidden?*

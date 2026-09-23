@@ -48,6 +48,29 @@ phones. The roadmap release strip pages by whole containers at every breakpoint
 (CR-CRU-078): a narrower viewport shows **fewer** gates and a higher hidden
 count, never a partial one.
 
+**Per-surface behaviour (DN decisions 9–12, storyboard F15b–F15e).** The band changes
+arrangement, never content — no surface drops a tab, a route or a control, and summarising data
+away to fit is not an option:
+
+- **The project band RELOCATES, never hides** (DN 9). Desktop: today's right rail. Tablet: stacked
+  beneath the content, full width. Phone: a **foot strip** carrying project name, live-agent count
+  and health dot, expanding to a sheet on tap with the backdrop dismissing it. It is the only
+  surface that answers *whose work is this*, and a hidden region cannot satisfy this CR's own rule
+  that a collapsed region still states what it holds.
+- **Roadmap** (DN 10): the strip keeps leading and pages by whole gates; the flowchart **scrolls
+  inside its container** and is not re-laid-out for portrait; the release-scoped table becomes a
+  **stacked card list carrying the same columns** (id, status, wave, dependencies) — a six-column
+  table cannot honour §S3 at 640px.
+- **Workflow** (DN 11): cycle rows go full-width and **the row becomes the toggle**. This is the
+  SAME hit area **CR-CRU-146** fixes. **Whichever CR lands first owns the implementation; the other
+  asserts it.** Building it twice is the defect — the same rule §S1 already states for the pane's
+  collapse. Nested affordances (the `→ Runs` badge) keep their own ≥44px target and
+  `stopPropagation`.
+- **Runs · Coverage · Compile · BDD** (DN 12): run cards stack keeping agent · tier · codec · time;
+  the drill-in fills the viewport with `←` visible and its virtualization unchanged; coverage
+  **enlarges its heat cells on touch media rather than showing fewer files**; compile diagnostics
+  and raw output scroll inside their container.
+
 ### §S2 Touch affordances
 
 Hover-only affordances get touch equivalents: tap targets ≥44px on
@@ -83,6 +106,10 @@ suites in `tests/boundary-to-cycle-navigation.test.ts` and `tests/cycle-run-navi
 - [ ] Density defaults to **comfortable** on phone media (overrideable by the toggle; persisted as usual, and the toggle still reaches compact/ultra).
 - [ ] A narrow viewport's pane collapse leaves `RAIL_STORAGE_KEY` untouched: asserted by collapsing at phone width and reading the key, then restoring desktop width and finding the user's stored choice intact.
 - [ ] The 660px floor still applies at ≥1025px — `pane-scroll.steps.ts`'s existing assertion passes unmodified — and is absent below the phone band.
+- [ ] The project band is reachable at every band and never absent: on phone it renders as a foot strip stating project name, live-agent count and health, and expands to a sheet on tap; on tablet it renders stacked beneath the content. Asserted on presence and on the strip's stated content, so "collapsed" can never degrade into "gone".
+- [ ] Roadmap on phone: the release strip still renders only whole gates with the remainder as the hidden-count tag, and the release-scoped table renders as cards carrying id, status, wave and dependencies — the same columns as the desktop table, asserted field-by-field so nothing is dropped to fit.
+- [ ] The Workflow cycle row's hit area is implemented ONCE: if CR-CRU-146 has landed, this CR asserts its behaviour and adds no second handler; if it has not, this CR implements it and CR-CRU-146 becomes the assertion. Either way a test proves a single handler owns the row.
+- [ ] Compile diagnostics and raw output scroll inside their own container at phone width with the page unscrolled, and the coverage heat strip's cells measure LARGER on the phone profile than on desktop while rendering the same file count.
 - [ ] Desktop is pixel-unchanged at ≥1280px (the existing desktop BDD scenarios re-run green with zero modifications).
 
 ## Estimated size
