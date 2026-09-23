@@ -64,7 +64,7 @@ Two mechanics that are defects if missed, both stated here so nobody rediscovers
 
 - **The image version must match `@playwright/test` EXACTLY** (today `^1.61.1` — so `v1.61.1-noble`).
   Playwright's docs are explicit that a mismatch leaves it unable to locate browser executables.
-- **The container's `localhost` is not the host's.** Our e2e drives a board on `127.0.0.1:3850`, so
+- **The container's `localhost` is not the host's.** The e2e suite binds its OWN ephemeral `webServer` on `E2E_PORT` = **39877** (`tests/e2e/steps/harness.ts`), deliberately NOT the supervised dev board on `:3850` — an earlier draft of this note said 3850 and was wrong (corrected 2026-09-24, found by RED2). The container still cannot reach that port on its own loopback, so
   the container needs `--add-host=hostmachine:host-gateway` and the WebKit run must target
   `hostmachine`, never `localhost`. This is the one place a base URL differs by engine.
 
