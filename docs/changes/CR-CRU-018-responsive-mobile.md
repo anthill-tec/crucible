@@ -1,7 +1,6 @@
 # CR-CRU-018 — Responsive Crucible: mobile + tablet media support
 
-**Status:** PENDING (0.3.0 — user-filed during CR-007 execution: "we have not
-considered media like a mobile phone"; carried past 0.2.0, now wave 7)
+**Status:** COMPLETED (0.3.0)
 **Type:** feature
 **Priority:** P3
 **Depends on:** CR-CRU-015 (its BDD section renders this CR's viewport evidence; see the note below), CR-CRU-016 (final pane/drill-in geometry must exist first), CR-CRU-093 (the pane-collapse mechanism this reuses)
@@ -130,3 +129,37 @@ code: any later edit to those frames re-runs those four.
 
 Native apps; PWA/offline; push notifications; portrait-specific redesigns of
 the graph views (they scroll).
+
+## Implementation Notes
+
+Recorded at close-out so nobody credits this CR with work it did not do, and so the next CR does not
+rediscover what this one measured.
+
+- **Three criteria were already met before this CR, and their tests are regression rails, not proof
+  of new behaviour.** Each was settled by replaying RED's production files (`9efb9ed`) and running
+  the scenario, and each passed there:
+  - *Phone density defaults to comfortable* — `app.js`'s density default was already `comfortable`
+    at every band; this CR changed nothing there. The real work in that scenario is the 44px floor.
+  - *The workspace tabs row does not force page scroll* — at RED the row already spanned 388 of a
+    412px Pixel 7 viewport (94%): it is a direct child of `.app-main`, not of the squeezed content
+    column, and already wrapped via the pre-existing `.app-top { flex-wrap: wrap }`. The only change
+    is the tab height, 22px → 44px, which is the touch floor's work and asserted separately.
+  - *Compile diagnostics scroll inside their container* — satisfied by CR-CRU-016 §S1's page frame
+    and CR-CRU-029 §S1's pane scroll box.
+- **Two tests were vacuous as first written and were strengthened**: phone and tablet AC1. `body`
+  and `.app-main` hide overflow, so `scrollWidth <= innerWidth` could not fail; at RED the phone
+  content column had been squeezed to 116px. They now also assert the content region is visible at a
+  usable width, and were proven to fail at RED.
+- **CR-CRU-146's hit area is implemented here** (DN decision 11): one handler on the cycle row's line,
+  reached by the label, status glyph, `▸ N runs` hint and empty space, with the `→ Runs` badge
+  still stopping propagation. CR-CRU-146 can become assertion-only, with ONE gap: its AC1 asks for
+  clicks "at several x-offsets", and the covering test runs in happy-dom, which has no layout or
+  hit-testing — a pixel-aimed click needs a Playwright step, which CR-CRU-146 should own.
+- **WebKit runs through a tunnel, not a re-addressed host.** The `hostmachine` design first specified
+  was broken regardless of the firewall (the host-side `request` fixture inherits `use.baseURL`, and
+  `hostmachine` does not resolve on the host). Playwright's own `PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>`
+  replaced it; the phone feature passed 9/9 on real WebKit on this workstation. See the DN's
+  "WebKit provisioning" section.
+- **The 660px floor's stated purpose was wrong; the rule stood.** Measured: the pane is already 688px
+  at 1025px, so the floor cannot bind by narrowing anywhere in its own band. Overflow tests now force
+  it with wide content, never a narrow viewport (DN decision 5, amended).

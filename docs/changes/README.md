@@ -73,7 +73,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | the BDD-driven e2e suite reaches the board, with its Gherkin rendered | feature | COMPLETED (0.3.0) | 004, 007 | 7 (0.3.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
-| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 015, 016, 093 | 7 (0.3.0) |
+| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | COMPLETED (0.3.0) | 015, 016, 093 | 7 (0.3.0) |
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 7 (post-0.2.0) |
 | [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 7 (post-0.2.0) |
 | [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened | bugfix | COMPLETED (0.2.0) | 043, 066 | 5 (0.2.0) |
