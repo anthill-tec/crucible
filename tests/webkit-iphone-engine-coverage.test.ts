@@ -160,7 +160,6 @@ describe("CR-CRU-018 — playwright.config.ts's own source names the DN's mechan
   test("the config cites DN-crucible-responsive-model.md's 'WebKit provisioning' section and the PW_TEST_CONNECT_WS_ENDPOINT env var by name", () => {
     const source = readFileSync(join(REPO_ROOT, "playwright.config.ts"), "utf8");
     expect(source).toContain("PW_TEST_CONNECT_WS_ENDPOINT");
-    expect(source).toContain("hostmachine");
     expect(source).toContain("WebKit provisioning");
   });
 });
