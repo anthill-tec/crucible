@@ -78,6 +78,36 @@ Step("the workspace tabs row does not force the page to scroll horizontally", as
   expect(bodyScrollWidth).toBeLessThanOrEqual(innerWidth);
 });
 
+// AC1 strengthening (CR-CRU-018 C3, orchestrator-authorized): `body` and
+// `.app-main` both hide overflow, so `scrollWidth <= innerWidth` cannot fail
+// on its own — it passed before any responsive CSS existed, while the
+// workspace's fixed `[content | 260px-min pane]` grid squeezed the content
+// column to ~116px on a Pixel 7. The main content region must therefore ALSO
+// be visible at a usable width: the workspace body's content column (its
+// first child — the active tab's pane, or the open drill-in) when a
+// workspace is on screen, else the home timeline. "Usable" is the file's own
+// single-column threshold: more than 85% of the viewport width.
+Step("the main content region is visible at a usable width", async ({ page }) => {
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  const inWorkspace = (await page.getByTestId("workspace-body").count()) > 0;
+  const region = inWorkspace
+    ? page.locator('[data-testid="workspace-body"] > *').first()
+    : page.getByTestId("timeline");
+  await expect(region).toBeVisible();
+  // Retried as one unit: a tab switch re-renders the content column, so the
+  // node `toBeVisible` saw may be replaced before it is measured.
+  await expect(async () => {
+    const box = await region.boundingBox();
+    expect(box).not.toBeNull();
+    expect(
+      box!.width,
+      `main content region (${inWorkspace ? "workspace content column" : "home timeline"}) ` +
+        `is ${String(box!.width)}px wide in a ${String(viewport!.width)}px viewport — squeezed, not usable`,
+    ).toBeGreaterThan(viewport!.width * 0.85);
+  }).toPass({ timeout: 5000 });
+});
+
 // ── AC2/DN9 — the project band foot strip (phone) ───────────────────────────
 
 Step(

@@ -28,10 +28,13 @@ Feature: CR-CRU-018 §S1/§S3 — tablet-band responsive layout
     And an online agent "tab-overflow-agent" with message "building" is registered on that project
     When I open the home page
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     When I open the workspace for that project
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     When I click the "Runs" workspace tab
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
 
   Scenario: AC7 — the project band relocates to stack beneath the content column, full width, and never disappears
     Given a project named "TAB Band Project" is registered

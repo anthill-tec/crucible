@@ -999,18 +999,36 @@ describe("CR-CRU-018 \u00a7S1 AC13/AC14 \u2014 both CI jobs provision WebKit, no
     ).toBeGreaterThan(0);
   });
 
-  test("AC \u2014 the literal string 'webkit' names no OTHER meaning in release.yml today, so the two assertions above are reading a real install argument", () => {
+  test("AC \u2014 every occurrence of 'webkit' in release.yml sits on a `playwright install` line or in a comment, so the two assertions above are reading a real install argument", () => {
     const { raw } = readReleaseWorkflow();
-    // A NEGATIVE control for the RED phase itself: if this fails, 'webkit'
-    // already appears in the file for some unrelated reason and the two
-    // positive assertions above could be satisfied by that instead of a real
-    // provisioning step \u2014 which would make them pass for the wrong reason.
+    // The control that guards the two positive assertions above: 'webkit'
+    // may appear in release.yml ONLY as a `playwright install …` argument
+    // or inside a YAML comment explaining one. Any other occurrence (an env
+    // value, a job name, a script path) could satisfy a looser reading of the
+    // positive checks for the wrong reason, so it is named here as a defect.
+    // (RED's original form asserted 'webkit' appeared NOWHERE — true only
+    // before GREEN provisioned it, and contradicted by the two positives once
+    // they were satisfied.)
+    const lines = raw.split("\n");
+    const occurrences = lines
+      .map((line, index) => ({ line, lineNo: index + 1 }))
+      .filter(({ line }) => line.toLowerCase().includes("webkit"));
     expect(
-      raw.toLowerCase().includes("webkit"),
-      "expected release.yml to name 'webkit' nowhere yet on this branch (RED " +
-        "baseline) \u2014 if this is now true, re-check that the two positive " +
-        "assertions above are reading a real `playwright install \u2026 webkit` " +
-        "argument and not an unrelated occurrence of the word.",
-    ).toBe(false);
+      occurrences.length,
+      "expected release.yml to name 'webkit' at least once \u2014 the two positive " +
+        "assertions above require a `playwright install \u2026 webkit` step.",
+    ).toBeGreaterThan(0);
+    const stray = occurrences.filter(({ line }) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#")) return false;
+      const code = line.split(" #")[0] ?? line;
+      return !/playwright install\b/.test(code) || !code.toLowerCase().includes("webkit");
+    });
+    expect(
+      stray.map(({ line, lineNo }) => `release.yml:${String(lineNo)}: ${line.trim()}`),
+      "every 'webkit' in release.yml must sit on a `playwright install \u2026` line " +
+        "or in a comment \u2014 any other occurrence could make the two positive " +
+        "assertions above pass for the wrong reason.",
+    ).toEqual([]);
   });
 });

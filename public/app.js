@@ -2476,11 +2476,46 @@
     let railCollapsed =
       (RAIL_STATES.includes(storedRail) ? storedRail : "expanded") === "collapsed";
     const railCollapsedRev = van.state(0);
+    // CR-CRU-018 DN decisions 3 + 9 — the VIEWPORT trigger of this SAME
+    // collapse (one mechanism, two triggers). The band is read from the
+    // `--band` token styles.css publishes, and the boundary to watch from its
+    // `--bp-phone-max` token — neither is re-declared here as a pixel value.
+    // A MediaQueryList fires only when the phone boundary is crossed (never
+    // on every resize frame). On the phone band the pane is collapsed to its
+    // foot strip unless the user has opened it as a sheet; that open flag is
+    // EPHEMERAL — a plain holder that is never stored — so a phone visit
+    // never writes RAIL_STORAGE_KEY, and leaving the phone band hands the
+    // pane straight back to the user's stored `railCollapsed` choice.
+    const rootTokens = () => window.getComputedStyle(document.documentElement);
+    const readPhoneBand = () => rootTokens().getPropertyValue("--band").trim() === "phone";
+    const phoneBand = van.state(readPhoneBand());
+    let bandSheetOpen = false;
+    const phoneMax = rootTokens().getPropertyValue("--bp-phone-max").trim();
+    if (phoneMax !== "" && typeof window.matchMedia === "function") {
+      window.matchMedia(`(width <= ${phoneMax})`).addEventListener("change", () => {
+        const phone = readPhoneBand();
+        if (phone === phoneBand.val) return;
+        bandSheetOpen = false;
+        phoneBand.val = phone;
+      });
+    }
+    const isPhoneBand = () => phoneBand.val;
     const isRailCollapsed = () => {
       railCollapsedRev.val; // subscribe the enclosing binding to toggle flips
-      return railCollapsed;
+      return isPhoneBand() ? !bandSheetOpen : railCollapsed;
+    };
+    const isBandSheetOpen = () => {
+      railCollapsedRev.val;
+      return isPhoneBand() && bandSheetOpen;
     };
     const toggleRailCollapsed = () => {
+      if (isPhoneBand()) {
+        // The viewport trigger's toggle: flips the ephemeral sheet, and
+        // deliberately writes NOTHING to storage (DN decision 3).
+        bandSheetOpen = !bandSheetOpen;
+        railCollapsedRev.val += 1;
+        return;
+      }
       railCollapsed = !railCollapsed;
       railCollapsedRev.val += 1;
       try {
@@ -2495,14 +2530,64 @@
     // collapse cannot drop `greyed`. An imperative classList write would be
     // wiped by the next flip.
     const railClass = () =>
-      greyed(isRailCollapsed() ? "app-pane app-pane-collapsed" : "app-pane")();
+      greyed(
+        isRailCollapsed()
+          ? "app-pane app-pane-collapsed"
+          : isBandSheetOpen()
+            ? "app-pane app-band-sheet"
+            : "app-pane",
+      )();
+
+    // CR-CRU-018 DN decision 9 — the phone band's collapsed form: a foot
+    // strip that still states what the pane holds (project name, live-agent
+    // count, and the project's health dot — the SAME liveness dot its badge
+    // carries in the projects row, so no new visual channel is drawn). A tap
+    // is the collapse mechanism's own toggle, opening the pane as a sheet.
+    const ProjectBandFoot = (project) =>
+      button(
+        {
+          "data-testid": "project-band-foot",
+          class: "app-band-foot",
+          "aria-expanded": "false",
+          onclick: toggleRailCollapsed,
+        },
+        span({ class: `app-dot ${project.active === false ? "o" : "g"}` }),
+        span({ class: "app-card-name" }, project.name || project.key),
+        span(
+          { class: "app-card-meta" },
+          `${project.agentsOnline}/${project.agentsTotal} agents online`,
+        ),
+        span({ class: "app-band-foot-open" }, "open"),
+      );
+
+    // DN decision 9 — the sheet's backdrop: tapping it closes the sheet
+    // through the same toggle. It sits OUTSIDE the pane (a fixed pane is its
+    // own stacking context, so a backdrop inside it could not sit beneath it).
+    const ProjectBandBackdrop = () =>
+      isBandSheetOpen()
+        ? div({
+            "data-testid": "project-band-backdrop",
+            class: "app-band-backdrop",
+            onclick: toggleRailCollapsed,
+          })
+        : "";
 
     // §S5.2 — the workspace's right rail: project card, then the project's
     // agents (live + tombstoned) as ⌁-marked indented sub-rows, then Vitals.
     // This pane exists ONLY inside the workspace.
     const ProjectPane = () =>
       div(
-        { "data-testid": "project-pane", class: railClass },
+        {
+          // DN decision 9 — on the phone band the EXPANDED pane is the sheet;
+          // its handle says so, as the parked tabs row's does (WorkspaceTabs).
+          "data-testid": () => (isBandSheetOpen() ? "project-band-sheet" : "project-pane"),
+          class: railClass,
+        },
+        () => {
+          if (!isPhoneBand() || !isRailCollapsed()) return "";
+          const p = currentProject();
+          return p === null ? "" : ProjectBandFoot(p);
+        },
         // §S5.2 (a) — F8 section title above the project card (uppercase
         // mono, ember accent, wide letter-spacing — styles.css).
         // CR-CRU-093 §S2 — the title now heads a ROW that also carries the
@@ -5059,6 +5144,7 @@
           { "data-testid": "workspace-body", class: "app-workspace-body" },
           () => WorkspaceBody(),
           ProjectPane(),
+          () => ProjectBandBackdrop(),
         ),
       );
 

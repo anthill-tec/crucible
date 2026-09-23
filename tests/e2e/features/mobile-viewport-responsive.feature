@@ -31,21 +31,27 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     And a passing 1-test run is ingested for agent "mob-overflow-runner" on that project
     When I open the home page
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     And the home timeline renders as a single column on the phone profile
     When I open the workspace for that project
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     And the workspace renders as a single column on the phone profile
     When I click the "Runs" workspace tab
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     When I click the event card for "mob-overflow-runner"
     Then the run overlay is visible
     And the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     When I click the "← runs" chip
     Then the run overlay and its scrim are gone
     When I click the "Workflow" workspace tab
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
     When I click the "Roadmap" workspace tab
     Then the page body does not scroll horizontally
+    And the main content region is visible at a usable width
 
   Scenario: AC2 — the workspace tabs row stays inside its own container, the Project pane renders as a collapsed foot strip that expands to a sheet on tap, and an in-pane drill-in fills the viewport with the back chip visible unscrolled
     Given a project named "MOB Workspace Project" is registered
@@ -70,6 +76,7 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     And an online agent "mob-touch-agent" with message "building" is registered on that project
     And a passing 1-test run is ingested for agent "mob-touch-runner" on that project
     When I open the workspace for that project
+    And I click the "Runs" workspace tab
     Then the density toggle reads "comfortable" with no stored preference
     And every sampled interactive control measures at least 44px in some dimension at density "comfortable"
     When I cycle the density toggle to "compact"
