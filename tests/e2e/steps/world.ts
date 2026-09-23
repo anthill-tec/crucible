@@ -51,4 +51,10 @@ export const test = base.extend<{ world: World; seededProjectTeardown: void }>({
 // failed or threw in the middle — which is the property a step file's own
 // `finally` cannot give, because a scenario that dies before that step never
 // reaches it.
-export const { Given, When, Then, Step, After } = createBdd(test);
+//
+// `BeforeAll` is playwright-bdd's WORKER-scoped hook (CR-CRU-018 §S1 AC13/AC14) —
+// tests/e2e/steps/webkit-docker-preflight.steps.ts is its one caller, guarding
+// the webkit-iphone project against a native WebKit launch this host cannot
+// make (DN-crucible-responsive-model.md, "WebKit provisioning"). Exported from
+// here for the same reason `After` is: one binding.
+export const { Given, When, Then, Step, After, BeforeAll } = createBdd(test);

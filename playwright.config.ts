@@ -38,6 +38,34 @@ import { fileURLToPath } from "node:url";
 // deliberate: config depends on harness, never the reverse.
 import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
 
+// CR-CRU-018 \u00a7S1 AC13/AC14 (DN decision 13, "WebKit provisioning \u2014 the two
+// paths") \u2014 WebKit runs two ways, never a third "install it locally": CI
+// installs it natively (Ubuntu runners), and locally the ONLY working path is
+// Playwright's own Docker `run-server`, reached from THIS process via
+// PW_TEST_CONNECT_WS_ENDPOINT \u2014 Playwright's OWN env var, consumed
+// automatically by every browser launch in this process (verified:
+// node_modules/playwright/lib/index.js's connectOptionsFromEnv()).
+// scripts/webkit-docker-server.ts (`bun run test:e2e:webkit`) is the one
+// command that sets it.
+//
+// The container's `localhost` is not the host's (DN, same section): the
+// browser WebKit launches runs INSIDE the container, so it must reach this
+// config's own `webServer` via the `--add-host=hostmachine:host-gateway`
+// alias scripts/webkit-docker-runner.ts adds, never via `localhost`. THE PORT
+// USED IS `PORT` (E2E_PORT, 39877, imported above) \u2014 corrected from the DN's
+// own illustration, which names `127.0.0.1:3850`. That address is this
+// WORKSTATION's separately supervised dev board (docs/RUNBOOK.md), not this
+// suite's ephemeral webServer: this file's own header already explains why
+// E2E_PORT is a distinct, harness-owned port, precisely so no ambient board
+// (:3849 or :3850) can be mistaken for this suite's target. Measured
+// 2026-09-23 in this cycle's own verification (see
+// scripts/webkit-docker-runner.ts's header): `--add-host` resolves correctly
+// inside a real container on this host (`getent hosts hostmachine` ->
+// docker0's gateway IP) \u2014 the DN's PORT NUMBER is what is corrected here, not
+// its mechanism.
+const isWebkitDocker = Boolean(process.env.PW_TEST_CONNECT_WS_ENDPOINT);
+const WEBKIT_DOCKER_HOST = "hostmachine";
+
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
@@ -242,6 +270,38 @@ export default defineConfig({
         hasTouch: true,
       },
       testMatch: /tablet-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
+    },
+    // CR-CRU-018 §S1 AC13/AC14 (DN decision 13, user ruling 2026-09-23) — the
+    // SAME phone feature `chromium-mobile` runs, on WebKit instead of Blink: a
+    // phone profile under Chromium proves geometry, not the platform, and
+    // §S3's subject matter (scroll containment, 100vh,
+    // -webkit-fill-available, flex/grid edge cases) is exactly where the
+    // engines diverge. `testMatch` is IDENTICAL to chromium-mobile's, on
+    // purpose — both engines assert the same phone ACs, never a second
+    // feature. `devices["iPhone 15"]` is VERIFIED against this pinned
+    // Playwright version's own device descriptors
+    // (node_modules/playwright-core/lib/server/deviceDescriptorsSource.json)
+    // to declare `defaultBrowserType: "webkit"` — not assumed, per the DN's
+    // own caution not to assume a name survives a version.
+    //
+    // `baseURL` is the ONE place a base URL differs by engine (DN): every
+    // other project reaches this config's own webServer via `localhost`, but
+    // a WebKit browser running inside the Docker container cannot — it needs
+    // the `--add-host=hostmachine:host-gateway` alias
+    // scripts/webkit-docker-runner.ts adds. In CI, WebKit is native (same
+    // machine as the webServer), so `localhost` stays correct there exactly
+    // as it is for every other project.
+    {
+      name: "webkit-iphone",
+      use: {
+        ...devices["iPhone 15"],
+        baseURL: isWebkitDocker
+          ? `http://${WEBKIT_DOCKER_HOST}:${String(PORT)}`
+          : (process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${String(PORT)}`),
+      },
+      testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
       grepInvert: /@empty-db/,
       dependencies: ["chromium-empty-db"],
     },

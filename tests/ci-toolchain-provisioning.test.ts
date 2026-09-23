@@ -917,3 +917,100 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
     ).toBe(atRequired(downloads));
   });
 });
+
+// \u2500\u2500 CR-CRU-018 \u00a7S1 AC13/AC14 \u2014 WebKit is provisioned in BOTH CI jobs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+//
+// Spec: docs/changes/CR-CRU-018-responsive-mobile.md's AC "WebKit is
+//   provisioned in CI, and its local absence is EXPLICIT": "both CI jobs gain
+//   WebKit (they install `chromium` only today \u2014 two
+//   `bunx playwright install --with-deps chromium` steps under
+//   `.github/workflows/`)". Governed by
+//   docs/research/DN-crucible-responsive-model.md, "WebKit provisioning \u2014 the
+//   two paths": "CI \u2014 the gate | Native: add WebKit to the existing
+//   `bunx playwright install --with-deps` steps in **both** jobs".
+//
+// THIS CYCLE'S SCOPE IS THE TEST ONLY \u2014 GREEN edits .github/workflows/, this
+// RED pass must not (see this dispatch's own "Do NOT" list). release.yml on
+// this branch installs `chromium` alone in both `test-bun` (the job that RUNS
+// the whole `bun test` suite, CR-CRU-112 \u00a7S1 \u2014 collects
+// tests/webkit-iphone-engine-coverage.test.ts and every other webkit-project
+// assertion in THIS file's own repository) and `test-e2e` (the Playwright/BDD
+// job that runs the `webkit-iphone` project directly), so BOTH assertions
+// below are expected to FAIL right now \u2014 there is no `webkit` argument to
+// `playwright install --with-deps` anywhere in the file (measured by grep:
+// zero occurrences of the literal `webkit` in release.yml on this branch).
+//
+// `installsPlaywrightBrowser()` is REUSED from the existing Chromium-CI-shape
+// guard above (CR-CRU-112 \u00a7S1's "test-bun installs the Chromium browser" test)
+// \u2014 one browser-install-detection mechanism, asked about a second browser name,
+// never a second parser.
+describe("CR-CRU-018 \u00a7S1 AC13/AC14 \u2014 both CI jobs provision WebKit, not chromium alone", () => {
+  test("test-bun installs the WebKit browser \u2014 `bun test` collects tests/webkit-iphone-engine-coverage.test.ts and the whole suite, and CR-CRU-018's phone band runs on webkit-iphone under it", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-bun");
+
+    const chromiumSteps = steps.filter((step) => installsPlaywrightBrowser(step, "chromium"));
+    expect(
+      chromiumSteps.length,
+      "release.yml job 'test-bun' has no Chromium-install step at all \u2014 this " +
+        "guard would then say nothing meaningful about a SECOND browser being " +
+        "added beside it.",
+    ).toBeGreaterThan(0);
+
+    const webkitSteps = steps.filter((step) => installsPlaywrightBrowser(step, "webkit"));
+    expect(
+      webkitSteps.length,
+      "release.yml job 'test-bun' has no step installing the WebKit browser " +
+        "(expected `webkit` named among a `playwright install \u2026` step's " +
+        "arguments, e.g. `playwright install --with-deps chromium webkit`). " +
+        "CR-CRU-018 \u00a7S1 AC13/AC14: the phone band is asserted on BOTH engines, and " +
+        "`bun test` is the job that runs tests/webkit-iphone-engine-coverage.test.ts " +
+        "and the rest of this repository's webkit-iphone assertions \u2014 this is CI's " +
+        "OWN native provisioning path (DN \"WebKit provisioning \u2014 the two paths\": " +
+        "CI installs natively, Ubuntu runners support it directly).\n" +
+        `test-bun steps:\n${stepInventory(steps)}`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("test-e2e installs the WebKit browser \u2014 the job that runs the `webkit-iphone` Playwright project (playwright.config.ts) directly", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-e2e");
+
+    const chromiumSteps = steps.filter((step) => installsPlaywrightBrowser(step, "chromium"));
+    expect(
+      chromiumSteps.length,
+      "release.yml job 'test-e2e' has no Chromium-install step at all \u2014 this " +
+        "guard would then say nothing meaningful about a SECOND browser being " +
+        "added beside it.",
+    ).toBeGreaterThan(0);
+
+    const webkitSteps = steps.filter((step) => installsPlaywrightBrowser(step, "webkit"));
+    expect(
+      webkitSteps.length,
+      "release.yml job 'test-e2e' has no step installing the WebKit browser " +
+        "(expected `webkit` named among a `playwright install \u2026` step's " +
+        "arguments). CR-CRU-018 \u00a7S1 AC13/AC14: `test-e2e` runs `bun run test:e2e` " +
+        "(`bunx bddgen && bunx playwright test`, no `--project` filter), which " +
+        "collects EVERY project declared in playwright.config.ts \u2014 including " +
+        "`webkit-iphone` \u2014 so without this step the CI run either red-lines on a " +
+        "missing WebKit executable or (worse) silently reports zero webkit-iphone " +
+        "scenarios.\n" +
+        `test-e2e steps:\n${stepInventory(steps)}`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("AC \u2014 the literal string 'webkit' names no OTHER meaning in release.yml today, so the two assertions above are reading a real install argument", () => {
+    const { raw } = readReleaseWorkflow();
+    // A NEGATIVE control for the RED phase itself: if this fails, 'webkit'
+    // already appears in the file for some unrelated reason and the two
+    // positive assertions above could be satisfied by that instead of a real
+    // provisioning step \u2014 which would make them pass for the wrong reason.
+    expect(
+      raw.toLowerCase().includes("webkit"),
+      "expected release.yml to name 'webkit' nowhere yet on this branch (RED " +
+        "baseline) \u2014 if this is now true, re-check that the two positive " +
+        "assertions above are reading a real `playwright install \u2026 webkit` " +
+        "argument and not an unrelated occurrence of the word.",
+    ).toBe(false);
+  });
+});
