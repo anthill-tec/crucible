@@ -46,11 +46,26 @@ A CR whose `lifecycle.state` is `VOID` or `SUPERSEDED` is excluded from every su
 object and its reason all survive and remain readable. Exclusion is a reading of the second axis,
 never a write to the first.
 
-### §S2 — the table row shows it as dead (user ruling 2026-09-23)
+### §S2 — the table row shows it as dead (user rulings 2026-09-23 and 2026-09-24; storyboard F17, approved)
 
-In the roadmap table the row stays visible, rendered with a **strikethrough**, so the history still
-reads. This composes with CR-CRU-078 AC27 rather than replacing it: a `SUPERSEDED` row still names
-its successor and a `VOID` row still reads as abandoned. The strikethrough adds that neither is live.
+In the roadmap table the row stays visible and struck through, so the history still reads. This
+composes with CR-CRU-078 AC27 rather than replacing it: a `SUPERSEDED` row still names its successor
+and a `VOID` row still reads as abandoned. The strikethrough adds that neither is live.
+
+**Measured on the live board 2026-09-24 (CR-CRU-141, just voided):** the row already renders a
+strikethrough, but its **title is missing**, its STATUS cell reads **`PENDING`**, and the lifecycle
+reason is written into the row as text. That text pushes every cell out of its column and runs off
+the right edge, giving the whole table a horizontal scrollbar. F17 draws the defect and the fix:
+
+- **The row keeps the table's grid.** A dead row has the same cells as every other row: id, title,
+  points, depends-on and status. The **id, title and points are struck through** and dimmed, and the
+  depends-on chips fade. Nothing is added to the row.
+- **The STATUS cell names the state:** `VOID`, or `SUPERSEDED → <successor>`, never `PENDING`. This
+  is **display only**. The queue's `status` field stays derived (PRD `:350-352`), and `lifecycle`
+  stays the second axis (CR-091 §S2). The cell shows the lifecycle state when one exists, in place
+  of the derived status.
+- **The reason is a tooltip** on the status badge (`ⓘ`): state · date · who, then the full reason,
+  wrapped. On a phone a tap opens the same bubble. The reason never renders inline in the row.
 
 ### §S3 — the `queue` row carries what makes a dead row self-evident
 
@@ -72,9 +87,15 @@ the echo, which is how Model B found four drifted titles.
       `status` and its `lifecycle` object intact.
 
 **§S2**
-- [ ] A dead CR's roadmap table row renders with a strikethrough, and 078 AC27 still holds on the same
-      row: a `SUPERSEDED` row names its successor, a `VOID` row reads as abandoned, and neither reads
-      as `PENDING`.
+- [ ] A dead CR's roadmap table row has the same cells, in the same columns, as a live row: id,
+      **title**, points, depends-on, status. The id, title and points are struck through. No cell of
+      the row, and no row of the table, overflows its column or the table's width, asserted by
+      measured geometry on a row whose reason is longer than the table is wide.
+- [ ] The STATUS cell reads `VOID` for a voided CR and `SUPERSEDED → <successor>` for a superseded
+      one (078 AC27), never `PENDING`. The queue read's `status` for the same CR is still the derived
+      value: the change is to the cell, not the data.
+- [ ] The lifecycle reason is not rendered in the row. It is the status badge's tooltip (state ·
+      date · who · reason), reachable by hover on desktop and by tap on the phone band.
 - [ ] A row with no `lifecycle` key renders exactly as today, with no strikethrough and no default.
 
 **§S3**
@@ -87,7 +108,9 @@ the echo, which is how Model B found four drifted titles.
 
 - **Folding `lifecycle` into `status`.** That is the tempting fix, and it is forbidden: the PRD
   locks `status` as derived, and CR-CRU-091 §S2 kept the axes separate on purpose. A build that makes
-  `status` read `VOID` fails this CR as surely as one that ignores the lifecycle.
+  the queue's `status` **field** read `VOID` fails this CR as surely as one that ignores the
+  lifecycle. The table's STATUS **cell** showing `VOID` (§S2, F17) is not that: it displays the
+  second axis where one exists, and the data underneath is unchanged.
 - **Model B pins released clients** (#1383), so §S3 reaches them at release time, not at merge.
 
 ## Non-goals
