@@ -62,3 +62,27 @@ Do not fix a guess.
 ## Non-goals
 
 - Anything in CR-CRU-022. This CR fixes CR-CRU-018's shipped behaviour only.
+
+## Implementation Notes
+
+**The Problem section above is wrong, and was measured wrong on 2026-09-24.** It reads the failure as a
+layout collapse caused by accumulating projects. The FIX agent measured the failing state and refuted
+that: the element the step measured was **detached** (`isConnected=false`), the outgoing **Workflow**
+pane's `pane-scroll`, while the live Compile pane measured 831 / 571 at the same instant. **Nothing was
+squeezed and no user-facing defect exists.** The cause is a tab-swap race: the Compile click flips state,
+the pane swaps on the next render, and the step's lookup resolved the outgoing pane first. The window is
+about 20ms, and the workspace's opening fetches (still in flight during the full phone sequence) push the
+swap past the lookup. That is why it passed alone and in the full suite, and why CR-018's VERIFY saw
+green. CR-CRU-029 had already documented the race at `pane-scroll.steps.ts:64-77`.
+
+**The fix is test-side:** that wait is extracted into one helper, `tests/e2e/steps/pane-mount.ts`
+(`mountedPaneScroll`), and AC10 measures the pinned Compile pane, asserting it is attached, the only live
+`pane-scroll`, and headed `Compile`. It gained one assertion, `clientHeight > 0`, which the old step
+lacked. The product-layout regression-test AC does not apply.
+
+**Same exposure, not fixed here (scope stays at AC10):** the step "no pane scrolls horizontally"
+(`viewport-pane-scroll-floor.feature:79/81/83`, right after tab clicks) does a bare `pane-scroll` lookup
+with no wait. It is the worst case, because a detached node reads 0 ≤ 0 and **passes silently**. Also
+exposed, at lower risk: "the active pane-scroll element scrolls horizontally" (`:61`) and "the
+pane-scroll element's scrollTop is {int}" (`viewport-dual-axis-scroll.feature:82`). All three should
+adopt `mountedPaneScroll`.
