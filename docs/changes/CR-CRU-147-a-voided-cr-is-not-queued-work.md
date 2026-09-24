@@ -116,3 +116,9 @@ the other adapts** — if CR-CRU-098 lands first, this CR's skip is implemented 
   implementation detail.
 - **CR-CRU-098 lands first** (wave order) and moves the resolver to the server unchanged; any change
   to `next` here is made in that server function.
+- **Two dead-CR predicates now live on the server (recorded at CR-CRU-098's merge, `42419fe`).**
+  `isDeadCr` (`src/types.ts`) reads `lifecycle.state ∈ {VOID, SUPERSEDED}`; `src/next.ts`'s
+  `isActionable` reads the **presence** of a `lifecycle` key, ported verbatim from the client so
+  CR-098 changed no semantics. They agree on every `listQueue` row today, and differ for
+  `lifecycle: null` or a lifecycle whose state is neither. This CR owns dead-CR semantics, so
+  unifying them on one predicate is in its scope.
