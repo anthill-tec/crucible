@@ -164,16 +164,7 @@ class TheNextStartTemplateFilesAPlanUnderTheMandateTest(unittest.TestCase):
     `plan-file` invocation the kinded-cycle mandate ACCEPTS, never a string
     that merely looks right."""
 
-    def test_the_reconstruction_matches_next_start_help_today(self):
-        """Non-vacuity / regression pin — see the module docstring. GREEN
-        C1/C2 deletes THIS test (not the file) when `_next_start_help` is
-        removed (AC10); the two tests below have no such dependency."""
-        entry = {"cr": CR, "wave": WAVE}
-        self.assertEqual(
-            _expected_next_start_template(CR, WAVE),
-            AXI._next_start_help(entry)[0],
-            "the reconstruction has drifted from `_next_start_help`'s actual "
-            "output — fix the reconstruction, not this assertion")
+    # CR-CRU-098 C3: the `_next_start_help` regression pin was deleted here — AC10 removed its subject.
 
     def test_the_next_start_template_files_a_plan_under_the_mandate(self):
         template = _expected_next_start_template(CR, WAVE)

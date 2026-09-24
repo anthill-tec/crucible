@@ -105,7 +105,6 @@ CLIENT_FILES = {
     "rust": CLIENTS_DIR / "rust-crucible.py",
 }
 
-AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
 
 PLAN_FILE_VERB = "plan-file"
@@ -118,8 +117,6 @@ FIXTURE_CR = "CR-AAA-7"
 FIXTURE_WAVE = "5"
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-# `--cycle` NOT followed by another word character: `--cycles` must not match.
-_REPEATABLE_OCCURRENCE = re.compile(r"--cycle(?![-\w])")
 # The repeatable flag carrying its OWN quoted placeholder label.
 _REPEATABLE_WITH_LABEL = re.compile(r'--cycle(?![-\w])\s+"<[^"]+>"')
 
@@ -306,58 +303,12 @@ class PlanFileHelpTeachesTheCanonicalFlagTest(_PlanFileHelpTest):
                     f"got {len(distinct)} distinct: {bodies}")
 
 
-class NextStartTemplateTeachesTheCanonicalFlagTest(unittest.TestCase):
-    """AC8 -- the call an orchestrator copies verbatim."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.axi = _load_module(AXI_MODULE_PATH, "crucible_axi_under_test_for_cycle_help")
-
-    def _template(self):
-        steps = self.axi._next_start_help({"cr": FIXTURE_CR, "wave": FIXTURE_WAVE})
-        self.assertTrue(
-            steps, "the start template must be a non-empty help[] -- an empty "
-                   "one would make every rule below vacuous")
-        step = steps[0]
-        # Non-vacuity: this really is the plan-file start call, still carrying
-        # the entry's own cr and wave (CR-CRU-092 AC2, untouched here).
-        self.assertIn(f"{PLAN_FILE_VERB} --cr {FIXTURE_CR}", step)
-        self.assertIn(f"--wave {FIXTURE_WAVE}", step)
-        return step
-
-    def test_the_start_template_hands_back_the_repeatable_flag_and_no_comma_split_one(self):
-        """§S1/AC8 -- the template emits `--cycle`. A template still spelling
-        `--cycles "<c1,c2>"` reintroduces the delimiter defect on the next
-        filing no matter how good the help is, because the template is what
-        gets pasted."""
-        step = self._template()
-        self.assertNotIn(
-            f'{LEGACY_FLAG} ', step,
-            f"the `next` start template must no longer hand back the "
-            f"comma-split form (AC8); got {step!r}")
-        self.assertRegex(
-            step, _REPEATABLE_OCCURRENCE,
-            f"the `next` start template must hand back {REPEATABLE_FLAG} "
-            f"(AC8); got {step!r}")
-
-    def test_the_start_template_shows_the_flag_repeated_with_its_own_label(self):
-        """§S1 -- "one occurrence per cycle, in order". A template showing a
-        single `--cycle "<label>"` teaches a one-cycle plan and quietly loses
-        the point of the flag; the reader must see the repetition. Bounded
-        above so a runaway template (a whole synthetic plan pasted into the
-        help) fails here rather than reading as success."""
-        step = self._template()
-        labelled = _REPEATABLE_WITH_LABEL.findall(step)
-        occurrences = _REPEATABLE_OCCURRENCE.findall(step)
-        self.assertGreaterEqual(
-            len(labelled), 2,
-            f"the template must REPEAT {REPEATABLE_FLAG}, each occurrence "
-            f"carrying its own quoted placeholder label; found "
-            f"{len(labelled)} in {step!r}")
-        self.assertLessEqual(
-            len(occurrences), 3,
-            f"two or three occurrences teach the repetition; more is a "
-            f"template pasting a plan; found {len(occurrences)} in {step!r}")
+# CR-CRU-098 C3 — `NextStartTemplateTeachesTheCanonicalFlagTest` (its two tests,
+# `test_the_start_template_hands_back_the_repeatable_flag_and_no_comma_split_one`
+# and `test_the_start_template_shows_the_flag_repeated_with_its_own_label`) was
+# deleted here: it called `_next_start_help`, which AC10 removes from the client.
+# Both are PORTED to tests/next-resolver.test.ts (AC5 group, "NEXT's start template
+# hands back the repeatable --cycle form ...") against the server's template.
 
 
 class NextEnvelopeCarriesTheCanonicalFlagTest(unittest.TestCase):
