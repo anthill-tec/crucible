@@ -483,3 +483,91 @@ export const roadmapHints = {
     "GET /api/v2/projects/<key>/queue — the crs this project actually holds",
   ],
 };
+
+/**
+ * CR-CRU-098 §S2/AC5 — the `next` pointer's state-derived `help[]`, authored
+ * by the server beside the answer it rides (`src/next.ts`). Ported VERBATIM
+ * from the client's `_next_start_help`, `_hold_help` and `_drained_help`: the
+ * strings are byte-identical, so the move each decision hands back does not
+ * change with the side that computes it. Each builder takes only the facts it
+ * reads, so the resolver's own trigger type satisfies it structurally.
+ */
+type HeldBy =
+  | { kind: "in-flight"; cr: string }
+  | { kind: "dead-dependency"; cr: string; state: string; by?: string }
+  | { kind: "dependency"; blockedBy: ReadonlyArray<{ cr: string }> }
+  | { kind: "unknown-dependency"; cr: string };
+
+export const nextHints = {
+  /** NEXT — the concrete call that STARTS this cr, carrying its own wave. */
+  start: (cr: string, wave: string | undefined): string[] => {
+    let step =
+      `plan-file --cr ${cr} --title "<brief>" ` +
+      `--cycle "<c1>" --cycle-kind <k1> ` +
+      `--cycle "<c2>" --cycle-kind <k2> --agent <agentId>`;
+    if (wave) step += ` --wave ${wave}`;
+    return [step, "status"];
+  },
+  /** HOLD — the move that clears the NAMED trigger, then `next` again. */
+  hold: (trigger: HeldBy): string[] => {
+    let steps: string[];
+    if (trigger.kind === "in-flight") {
+      steps = [
+        `cr-close --cr ${trigger.cr} --commit <sha> --agent <agentId> — ` +
+          `${trigger.cr} occupies the lane and holds everything behind it`,
+      ];
+    } else if (trigger.kind === "dead-dependency") {
+      const target = trigger.by ? `at ${trigger.by}` : "off it";
+      steps = [
+        `re-point the dependsOn ${target} in docs/changes/README.md ` +
+          `and re-run queue-file — ${trigger.cr} is ${trigger.state}, so waiting will ` +
+          `never clear this`,
+      ];
+    } else if (trigger.kind === "unknown-dependency") {
+      steps = [
+        `cr-plan --cr ${trigger.cr} --release <v> --wave <n> ` +
+          `--title <brief> --agent <agentId> — the queue does not ` +
+          `hold ${trigger.cr}`,
+      ];
+    } else {
+      steps = trigger.blockedBy.map((row) => `cr-close --cr ${row.cr} --commit <sha> --agent <agentId>`);
+    }
+    steps.push("next");
+    return steps;
+  },
+  /**
+   * DRAINED — the move that would REFILL the lane. `dead` is the rows the
+   * answer's container declared dead (named on `wave-complete`); `nextWave`
+   * is the label published after a finished wave, verbatim, or absent.
+   */
+  drained: (
+    reason: string,
+    dead: ReadonlyArray<{ cr: string; state: string; by?: string }>,
+    nextWave?: string,
+  ): string[] => {
+    const sequence = "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>";
+    if (reason === "no-roadmap") {
+      return [
+        "release-propose --label <v> --agent <agentId>",
+        "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+        sequence,
+      ];
+    }
+    if (reason === "awaiting-assignment") return [`${sequence} --track <n>`];
+    const steps: string[] = [];
+    if (dead.length > 0) {
+      steps.push(
+        "the lane's remaining entries are declared dead: " +
+          dead.map(({ cr, state, by }) => (by ? `${cr} (${state} by ${by})` : `${cr} (${state})`)).join(", "),
+      );
+    }
+    steps.push("cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>");
+    const opens = nextWave || "<n>";
+    steps.push(`wave-sequence --release <v> --wave ${opens} --crs <a,b,c> --agent <agentId>`);
+    return steps;
+  },
+  /** The multi-track refusal — names the live lanes, never picks one. */
+  needsTrack: (tracks: readonly string[]): string[] => [
+    `next --track <n> — the live lanes are ${tracks.join(", ")}`,
+  ],
+};
