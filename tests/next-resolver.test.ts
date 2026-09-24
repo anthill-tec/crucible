@@ -36,6 +36,7 @@
 // tests/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES in this same
 // commit) or bare placeholder ids (`CR-A`, `CR-TARGET`, …) that name no real CR.
 
+import { readFileSync } from "node:fs";
 import { describe, test, expect } from "bun:test";
 import type { QueueEntry, QueueLifecycle } from "../src/types.ts";
 // RED — src/next.ts does not exist yet (GREEN creates it). This import failure
@@ -82,41 +83,64 @@ function fields(entries: QueueEntry[], scope: { track?: string; release?: string
   return resolve(entries, scope).fields;
 }
 
-// ── AC5 oracle — today's Python help[] builders, run live via subprocess ───
+// ── AC5 oracle — today's Python help[] builders, FROZEN before AC10 deleted them ───
 //
 // "Derive AC5's expected strings by running today's Python helpers on the same
-// fixtures, not by retyping them" (dispatch prompt item 2). Computed IN-TEST via
-// a subprocess against `clients/_crucible_axi.py:_next_start_help` /
-// `_hold_help` / `_drained_help` — never a checked-in fixture file, so a future
-// change to the Python wording is caught here without anyone updating a copy.
-const PY_HELP_PROBE = `
-import sys, json, importlib.util
-spec = importlib.util.spec_from_file_location("cr098_help_probe", "clients/_crucible_axi.py")
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
-req = json.loads(sys.argv[1])
-fn = req["fn"]
-if fn == "start":
-    out = m._next_start_help(req["entry"])
-elif fn == "hold":
-    out = m._hold_help(req["trigger"])
-elif fn == "drained":
-    out = m._drained_help(req["reason"], req["lane"], req.get("nextWave"))
-else:
-    raise SystemExit(f"unknown fn {fn!r}")
-print(json.dumps(out))
-`;
+// fixtures, not by retyping them" (dispatch prompt item 2). They WERE run live by
+// subprocess against `clients/_crucible_axi.py:_next_start_help` / `_hold_help` /
+// `_drained_help` until CR-CRU-098 C3 deleted those helpers (AC10). Per the C3
+// ruling (option (c), widened) their answers are now read from ONE frozen record,
+// tests/fixtures/cr098-next-oracle.json, which
+// tests/fixtures/cr098-next-oracle.gen.py generates by running the PRE-DELETION
+// client out of git (the JSON's `source.commit`) — still derived, never retyped.
+// The same record freezes today's `resolve_next` answers; the AC5 group below
+// holds `resolveNext` equal to every one of them.
+interface OracleResolverCase {
+  entries: QueueEntry[];
+  tracks: string[];
+  scope: { track?: string; release?: string; wave?: string };
+  result: { ok: boolean; code: number; fields: Record<string, unknown>; warnings: ResolveWarning[] };
+}
+
+interface OracleHelpCase {
+  request: Record<string, unknown>;
+  help: string[];
+}
+
+interface NextOracle {
+  source: { commit: string; path: string };
+  resolver: OracleResolverCase[];
+  help: OracleHelpCase[];
+}
+
+const ORACLE = JSON.parse(
+  readFileSync(`${REPO_ROOT}tests/fixtures/cr098-next-oracle.json`, "utf8"),
+) as NextOracle;
+
+/** One spelling per value — keys sorted, `undefined` dropped exactly as the old
+ *  subprocess's `JSON.stringify(req)` dropped it — so a lookup keys on CONTENT. */
+function canonical(value: unknown): string {
+  const sortKeys = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v !== null && typeof v === "object") {
+      const rec = v as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(rec).sort().map((k) => [k, sortKeys(rec[k])]));
+    }
+    return v;
+  };
+  return JSON.stringify(sortKeys(JSON.parse(JSON.stringify(value))));
+}
 
 function pythonHelp(req: Record<string, unknown>): string[] {
-  const proc = Bun.spawnSync(["python3", "-c", PY_HELP_PROBE, JSON.stringify(req)], {
-    cwd: REPO_ROOT,
-  });
-  if (proc.exitCode !== 0) {
+  const wanted = canonical(req);
+  const hit = ORACLE.help.find((c) => canonical(c.request) === wanted);
+  if (hit === undefined) {
     throw new Error(
-      `python help probe failed (exit ${proc.exitCode}): ${proc.stderr.toString()}`,
+      `no frozen help[] for ${wanted} in cr098-next-oracle.json — regenerate it: ` +
+        "python3 tests/fixtures/cr098-next-oracle.gen.py",
     );
   }
-  return JSON.parse(proc.stdout.toString());
+  return hit.help;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -669,6 +693,21 @@ describe("CR-CRU-098 AC5 — help[] matches clients/_crucible_axi.py's helpers b
     expect(waveComplete.help).toEqual(
       pythonHelp({ fn: "drained", reason: "wave-complete", lane: pyLane }),
     );
+  });
+
+  test("resolveNext answers every board the frozen oracle recorded exactly as today's client resolve_next did (C3 ruling: the server matches the old resolver)", () => {
+    // Non-vacuity: both the python route test's boards and this file's AC5
+    // boards are recorded, and the record names the commit it came from.
+    expect(ORACLE.source.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(ORACLE.resolver.length).toBeGreaterThanOrEqual(10);
+    for (const c of ORACLE.resolver) {
+      const got = resolveNext(c.entries, c.tracks, c.scope);
+      const label = canonical({ entries: c.entries, scope: c.scope });
+      expect(got.ok, label).toBe(c.result.ok);
+      expect(got.code, label).toBe(c.result.code);
+      expect(got.fields, label).toEqual(c.result.fields);
+      expect(got.warnings, label).toEqual(c.result.warnings);
+    }
   });
 
   test("NEXT's start template hands back the repeatable --cycle form, never legacy --cycles, repeated 2-3 times (CR-107 AC8, ported from test_plan_file_cycle_flag_help.py)", () => {

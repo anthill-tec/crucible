@@ -41,6 +41,7 @@ Invocation:
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
 import unittest
@@ -53,6 +54,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
+
+# CR-CRU-098 C3 ruling (option (c), widened) — the OLD client resolver's
+# answers, frozen before C3 deleted it (AC10). Regenerate with
+# `python3 tests/fixtures/cr098-next-oracle.gen.py`; it reads the pre-deletion
+# client out of git, never the working tree.
+ORACLE_PATH = REPO_ROOT / "tests" / "fixtures" / "cr098-next-oracle.json"
 
 PROJECT_KEY = "cr098-next-verb-key"
 QUEUE_PATH = f"/api/v2/projects/{PROJECT_KEY}/queue"
@@ -110,17 +117,49 @@ def _queue(*entries):
     return {"ok": True, "entries": list(entries), "tracks": _published_tracks(entries)}
 
 
+def _canonical(value):
+    """One spelling per board, so a lookup keys on CONTENT, never on dict or
+    tuple identity."""
+    return json.dumps(value, sort_keys=True)
+
+
+def _resolver_key(entries, tracks, scope):
+    return _canonical({"entries": list(entries), "tracks": list(tracks),
+                       "scope": scope})
+
+
+def _frozen_resolver(entries, tracks, scope):
+    """The frozen `resolve_next` answer for this exact board and scope —
+    `(ok, code, fields, warnings)`, the shape the deleted function returned.
+    A board the oracle never recorded is a loud failure naming the generator,
+    never a silently invented answer."""
+    oracle = json.loads(ORACLE_PATH.read_text(encoding="utf-8"))
+    wanted = _resolver_key(entries, tracks, scope)
+    for case in oracle["resolver"]:
+        if _resolver_key(case["entries"], case["tracks"], case["scope"]) == wanted:
+            result = case["result"]
+            return (result["ok"], result["code"], result["fields"],
+                    result["warnings"])
+    raise AssertionError(
+        f"no frozen resolver answer for this board in {ORACLE_PATH.name} — "
+        f"regenerate it: python3 tests/fixtures/cr098-next-oracle.gen.py "
+        f"(board: {wanted})")
+
+
 def _route_response(entries, track=None, release=None, wave=None):
     """The payload a GREEN `GET .../next` route publishes for this board —
-    built from the STILL-PRESENT `AXI.resolve_next` (semantics unchanged, the
-    CR's own Non-goals), wrapped as §S2 describes: the whole answer, `ok` and
+    built from the FROZEN answers of the old client `resolve_next` (semantics
+    unchanged, the CR's own Non-goals; frozen in
+    tests/fixtures/cr098-next-oracle.json because AC10 deletes the function),
+    wrapped as §S2 describes: the whole answer, `ok` and
     `warnings[]` included. The refusal ALSO carries an `error` string
     (`fail()`'s own first argument, src/v2.ts:191) that TODAY's client-computed
     refusal never had — proving GREEN's `cmd_next` must not blindly relay it
     into the envelope (AC9's byte-identity with today's refusal shape)."""
     tracks = _published_tracks(entries)
-    ok, code, fields, warnings = AXI.resolve_next(
-        entries, track=track, tracks=tracks, release=release, wave=wave)
+    scope = {k: v for k, v in (("track", track), ("release", release),
+                               ("wave", wave)) if v is not None}
+    ok, code, fields, warnings = _frozen_resolver(entries, tracks, scope)
     body = dict(fields)
     body["ok"] = ok
     body["warnings"] = warnings
