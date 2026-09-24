@@ -41,20 +41,12 @@
 //     that needs IntersectionObserver instead is not written here — nothing
 //     in this codebase's history uses it, and happy-dom's own intersection
 //     reporting cannot be trusted either.
-//   • "green features fold" is read at the SUITE-ROW granularity the
-//     drill-in already has, not as a NEW third DOM level grouping several
-//     `suite-row`s under a collapsible feature heading. The codec's
-//     `SuiteNode` is one node PER SCENARIO (feature identity lives only in
-//     the composed `"<Feature> › <Scenario>"` name — CR-CRU-007's own
-//     precedent for a level the model has no room for); §S1's own text
-//     leans on REUSE ("its collapse … are the frame this CR wanted, and
-//     they are reused by not being touched"), and the existing `foldSuites`
-//     fold rule already operates per suite. F11's mock draws a feature
-//     heading, which is a legitimate GREEN choice this file does not
-//     forbid — but this file asserts only the STEP-VISIBILITY behaviour
-//     (expanded vs folded, fetched vs not), never a specific heading
-//     element, so it passes equally against a GREEN that adds a heading and
-//     one that doesn't.
+//   • "green features fold" — AMENDED 2026-09-24 by orchestrator ruling
+//     (was: suite-row granularity, no feature heading; F11 is the approved
+//     visual contract and B draws a FEATURE level, so that reading let an
+//     implementation pass without the structure F11 approved). The
+//     corrected contract has its OWN describe block below ("F11 draws a
+//     FEATURE level"), with its testids declared there.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -486,3 +478,163 @@ describe("CR-CRU-145 §S1/§S4 — the byline: who filed the run, when, and its 
     expect(secondText).not.toContain("byline-filer-first");
   });
 });
+
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// CR-CRU-145 \u00a7S1 \u2014 F11 DRAWS A FEATURE LEVEL (orchestrator ruling 2026-09-24,
+// amending this file's earlier "suite-row granularity, no feature heading"
+// reading \u2014 see the file header).
+//
+// F11 (the APPROVED visual contract, B) draws "\u25be Feature: responsive phone
+// band 3 \u2713 1 \u2717" and "\u25b8 Feature: roadmap graph 6 \u2713", each feature's scenarios
+// nested beneath ITS OWN heading, and "\u25b8 14 more features, all green \u2014
+// folded". So a feature is its own DOM group, carrying its OWN pass/fail
+// counts, its OWN expand/fold state, and the failing feature (like the
+// failing scenario) floats ahead of the green ones.
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// TESTIDS DECLARED HERE (F11 names no identifier \u2014 the smallest reading
+// consistent with its drawing, same house precedent as this file's other
+// declared choices):
+//   [data-testid="feature-group"]   \u2014 one per feature, wrapping its heading
+//                                     AND its nested scenario suite-rows.
+//     data-feature-name              \u2014 the feature's own title (the part of
+//                                     the codec's "<Feature> \u203a <Scenario>"
+//                                     name before the separator).
+//     data-feature-status            \u2014 "fail" | "pass" (any failing scenario
+//                                     beneath it makes the feature "fail").
+//   [data-testid="feature-heading"] \u2014 the clickable heading row inside a
+//                                     feature-group; carries the feature's
+//                                     OWN pass/fail counts as TEXT (F11's
+//                                     "3 \u2713 1 \u2717" / "6 \u2713").
+//     [data-testid="feature-toggle"] \u2014 \u25be (expanded) / \u25b8 (folded) glyph, the
+//                                     same convention `tree-toggle` already
+//                                     uses one level down.
+// A feature-group's scenarios (existing `[data-testid="suite-row"]` nodes)
+// are DESCENDANTS of it when expanded; when folded, NONE of that feature's
+// suite-rows exist in the DOM at all (mirrors the existing suite-row/
+// leaf-row fold contract one level up).
+const FEATURE_GREEN_TITLE = "F11 Green Feature";
+const FEATURE_FAIL_TITLE = "F11 Failing Feature";
+const GREEN_SCENARIO_A = `${FEATURE_GREEN_TITLE} \u203a first green scenario`;
+const GREEN_SCENARIO_B = `${FEATURE_GREEN_TITLE} \u203a second green scenario`;
+const FAIL_SCENARIO = `${FEATURE_FAIL_TITLE} \u203a the scenario that breaks`;
+
+/** The green feature is listed FIRST in the report; the failing feature
+ *  SECOND \u2014 the report's own order is the ADVERSARIAL one for "failures
+ *  float": a GREEN that merely preserved report order would put the green
+ *  feature-group first in the DOM, which every ordering assertion below
+ *  catches. */
+function featureLevelTree(): SuiteFixture[] {
+  return [
+    { name: GREEN_SCENARIO_A, status: "pass", children: [GIVEN(101), THEN_PASS(101)] },
+    { name: GREEN_SCENARIO_B, status: "pass", children: [GIVEN(102), THEN_PASS(102)] },
+    {
+      name: FAIL_SCENARIO,
+      status: "fail",
+      children: [GIVEN(103), { name: "Then it breaks", status: "fail", duration_ms: 2, failure: { message: "feature-level failure" } }],
+    },
+  ];
+}
+
+function featureGroups(): HTMLElement[] {
+  return Array.from(overlay().querySelectorAll<HTMLElement>('[data-testid="feature-group"]'));
+}
+
+function featureGroup(title: string): HTMLElement {
+  const found = featureGroups().find((el) => el.getAttribute("data-feature-name") === title);
+  if (found === undefined) {
+    throw new Error(
+      `no feature-group named "${title}"; groups present: ` +
+        JSON.stringify(featureGroups().map((el) => el.getAttribute("data-feature-name"))),
+    );
+  }
+  return found;
+}
+
+function featureExpanded(group: HTMLElement): boolean {
+  return group.querySelector('[data-testid="feature-toggle"]')?.textContent?.trim() === "\u25be";
+}
+
+describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading, its own counts, its own expand/fold, failures float", () => {
+  test("each feature renders as its own heading carrying that feature's OWN counts, with its scenarios nested beneath it", async () => {
+    const eventId = "evt-s1-feature-level-counts";
+    await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId, { tree: featureLevelTree() })] });
+
+    expect(featureGroups().length).toBe(2);
+
+    const greenGroup = featureGroup(FEATURE_GREEN_TITLE);
+    expect(greenGroup.getAttribute("data-feature-status")).toBe("pass");
+    expect(greenGroup.getAttribute("data-feature-passed")).toBe("2");
+    expect(greenGroup.getAttribute("data-feature-failed")).toBe("0");
+    const greenHeading = greenGroup.querySelector('[data-testid="feature-heading"]');
+    expect(greenHeading).not.toBeNull();
+    expect((greenHeading!.textContent ?? "")).toContain("2");
+
+    const failGroup = featureGroup(FEATURE_FAIL_TITLE);
+    expect(failGroup.getAttribute("data-feature-status")).toBe("fail");
+    // POSITIVE \u2014 the failing feature's OWN counts: 1 scenario passed
+    // (GREEN_SCENARIO would be a different feature; here there is exactly
+    // one scenario, and it fails) \u2014 0 passed, 1 failed.
+    expect(failGroup.getAttribute("data-feature-passed")).toBe("0");
+    expect(failGroup.getAttribute("data-feature-failed")).toBe("1");
+    const failHeading = failGroup.querySelector('[data-testid="feature-heading"]');
+    expect(failHeading).not.toBeNull();
+    expect((failHeading!.textContent ?? "")).toContain("1");
+
+    // BOUND \u2014 scenarios sit BENEATH their own feature's group, never a
+    // sibling's: the green feature's group contains ONLY its own two
+    // scenarios, never the failing feature's.
+    expect(greenGroup.querySelectorAll('[data-testid="suite-row"]').length).toBeLessThanOrEqual(2);
+    expect((greenGroup.textContent ?? "")).not.toContain("the scenario that breaks");
+    expect((failGroup.textContent ?? "")).not.toContain("first green scenario");
+  });
+
+  test("the feature containing the failure is EXPANDED on open; the all-green feature is FOLDED — and expands on click", async () => {
+    const eventId = "evt-s1-feature-level-fold";
+    await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId, { tree: featureLevelTree() })] });
+
+    const failGroup = featureGroup(FEATURE_FAIL_TITLE);
+    expect(featureExpanded(failGroup)).toBe(true);
+    expect(failGroup.querySelectorAll('[data-testid="suite-row"]').length).toBeGreaterThan(0);
+
+    const greenGroup = featureGroup(FEATURE_GREEN_TITLE);
+    expect(featureExpanded(greenGroup)).toBe(false);
+    // BOUND \u2014 folded really means folded: NO suite-row for either of its
+    // scenarios exists in the DOM at all, not merely hidden leaves.
+    expect(greenGroup.querySelectorAll('[data-testid="suite-row"]').length).toBe(0);
+    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent(GREEN_SCENARIO_A)}`))).toBe(false);
+
+    // Clicking the folded feature's heading expands it.
+    greenGroup.querySelector<HTMLElement>('[data-testid="feature-heading"]')!.click();
+    await settle();
+
+    const greenGroupAfter = featureGroup(FEATURE_GREEN_TITLE);
+    expect(featureExpanded(greenGroupAfter)).toBe(true);
+    expect(greenGroupAfter.querySelectorAll('[data-testid="suite-row"]').length).toBeGreaterThan(0);
+    expect((greenGroupAfter.textContent ?? "")).toContain("first green scenario");
+  });
+
+  test("failures float: the failing feature (and its scenario) sit BEFORE the green ones in the rendered order, though the report lists the green feature FIRST", async () => {
+    const eventId = "evt-s1-feature-level-float";
+    // The fixture (featureLevelTree) deliberately lists the GREEN feature's
+    // scenarios FIRST and the failing one LAST \u2014 report order is the
+    // adversarial case for "floats".
+    await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId, { tree: featureLevelTree() })] });
+
+    const groups = featureGroups();
+    expect(groups.map((g) => g.getAttribute("data-feature-name"))).toEqual([
+      FEATURE_FAIL_TITLE,
+      FEATURE_GREEN_TITLE,
+    ]);
+
+    // The SAME ordering holds at the scenario level, independent of feature
+    // grouping: the failing scenario's own suite-row precedes both green
+    // scenarios' rows in document order.
+    const allSuiteRows = Array.from(overlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]'));
+    const failIdx = allSuiteRows.findIndex((r) => (r.textContent ?? "").includes("the scenario that breaks"));
+    const greenAIdx = allSuiteRows.findIndex((r) => (r.textContent ?? "").includes("first green scenario"));
+    expect(failIdx).toBeGreaterThanOrEqual(0);
+    expect(greenAIdx).toBeGreaterThanOrEqual(0);
+    expect(failIdx).toBeLessThan(greenAIdx);
+  });
+});
+
