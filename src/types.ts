@@ -119,6 +119,9 @@ export interface SuiteNode {
   name: string;
   status: "pass" | "fail" | "pending";
   children: TestLeaf[];
+  // The Playwright project (browser) a scenario ran under,
+  // from the report's `projectName`. Optional: only the playwright codec sets it.
+  browser?: string;
 }
 
 export interface CoverageAxis {
