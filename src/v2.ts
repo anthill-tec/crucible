@@ -6,6 +6,7 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
+import { burndown, forecast, seededRandom, velocity } from "./analytics.ts";
 import {
   authHints,
   hints,
@@ -23,6 +24,7 @@ import {
   QueueWaveOverflowError,
   reservedMilestoneTypeConflict,
   Store,
+  STORY_POINT_SCALE,
   TRACK_LANE_RULE,
   UUID_RE,
   WAVE_SEQ_STRIDE,
@@ -144,6 +146,8 @@ interface V2Body {
   // CR-CRU-106 §S1 — `cr-depends`' whole payload: the complete dependency
   // set. `cr` is already declared above.
   dependsOn?: unknown;
+  /** CR-CRU-022 §S1 — `cr-plan --points`: story points on the Fibonacci scale. */
+  points?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -241,6 +245,21 @@ function requireRegisteredCaller(
       ? "a registered caller is required — this request carried no agentId"
       : `agent ${agentId} is not registered with this project — refused`;
   return { fail: fail(409, error, { help: authHints.unregisteredCaller(agentId) }) };
+}
+
+/**
+ * CR-CRU-022 §S1 — the AUTHOR every HTTP route writes on a declaration-journal
+ * row: the caller `requireRegisteredCaller` / `requireOrchestrator` already
+ * authenticated, and nothing else. The store accepts a missing author only
+ * because a direct store write has no caller; a ROUTE never passes one, and
+ * this seam refuses to hand an empty identity to the journal rather than let
+ * an unauthored row through.
+ */
+function declarationAuthor(caller: { agentId: string }): string {
+  if (caller.agentId.length === 0) {
+    throw new Error("declaration journal: a route must journal its registered caller as author");
+  }
+  return caller.agentId;
 }
 
 // CR-CRU-091 §S3 — the role roadmap registration requires. There is no
@@ -1544,7 +1563,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     // `wave-sequence`'s envelope, with nothing written.
     let written: ReturnType<Store["filePlanRegistering"]>;
     try {
-      written = store.filePlanRegistering(pk.key, entry, planInput);
+      written = store.filePlanRegistering(pk.key, entry, planInput, declarationAuthor(caller));
     } catch (error) {
       if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
       throw error;
@@ -2989,6 +3008,19 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   if (typeof body.title !== "string" || body.title.length === 0) {
     return fail(400, "`title` is required — the CR's brief");
   }
+  // CR-CRU-022 §S1 — story points are optional; when sent they must sit on
+  // the planning-poker Fibonacci scale, refused BEFORE anything is written.
+  const points = body.points ?? undefined;
+  if (
+    points !== undefined &&
+    (typeof points !== "number" || !STORY_POINT_SCALE.includes(points))
+  ) {
+    return fail(
+      400,
+      `\`points\` must be on the planning-poker Fibonacci scale ` +
+        `${STORY_POINT_SCALE.join(", ")} — got ${JSON.stringify(points)}`,
+    );
+  }
   // CR-CRU-104 §S1 — the ONE membership rule, the same decision the migration
   // door passes through. `cr-plan` declares no track, so `release` is its
   // whole declaration.
@@ -3016,12 +3048,17 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // envelope, and nothing is written.
   let report: QueueSeqReport & { changed: boolean };
   try {
-    report = store.upsertQueueEntry(pk.key, {
-      cr: body.cr,
-      release: body.release,
-      wave: String(body.wave),
-      title: body.title,
-    });
+    report = store.upsertQueueEntry(
+      pk.key,
+      {
+        cr: body.cr,
+        release: body.release,
+        wave: String(body.wave),
+        title: body.title,
+        ...(points !== undefined ? { points } : {}),
+      },
+      declarationAuthor(caller),
+    );
   } catch (error) {
     if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
     throw error;
@@ -3289,11 +3326,16 @@ async function handleCrLifecycle(
       help: roadmapHints.shippedCr(cr, label),
     });
   }
-  const result = store.setQueueLifecycle(pk.key, cr, {
-    state: verb === "supersede" ? "SUPERSEDED" : "VOID",
-    ...(by !== undefined ? { by } : {}),
-    ...(reason !== undefined ? { reason } : {}),
-  });
+  const result = store.setQueueLifecycle(
+    pk.key,
+    cr,
+    {
+      state: verb === "supersede" ? "SUPERSEDED" : "VOID",
+      ...(by !== undefined ? { by } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    },
+    declarationAuthor(caller),
+  );
   if (result === null) {
     return fail(404, `cr ${cr} is not registered in this project's queue`, {
       help: roadmapHints.unregisteredCr(cr),
@@ -3899,6 +3941,12 @@ export function handleV2(
     if (req.method === "DELETE" && segments.length === 1) {
       return handleProjectDelete(store, segments[0]!, req);
     }
+    // CR-CRU-022 §S2–§S4 — the three analytics reads, GET-only.
+    if (req.method === "GET" && segments.length === 3 && segments[1] === "analytics") {
+      if (segments[2] === "velocity") return handleAnalyticsVelocity(store, segments[0]!, req, url);
+      if (segments[2] === "burndown") return handleAnalyticsBurndown(store, segments[0]!, req, url);
+      if (segments[2] === "forecast") return handleAnalyticsForecast(store, segments[0]!, req, url);
+    }
   }
   // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must
   // declare a role, heartbeat must not be forced to re-declare it.
@@ -3954,4 +4002,106 @@ export function handleV2(
     return handleStatus(store, req, url);
   }
   return null;
+}
+
+// ── CR-CRU-022 §S2–§S4 — roadmap analytics ───────────────────────────────
+
+/**
+ * The analytics reads validate the project key exactly as every other v2
+ * project read does (`releases`, `queue`, `release-proposals`, `milestones`):
+ * UUID shape (400), then existence (404 + help). C3 ruling #8 — no carve-out
+ * for non-UUID keys.
+ */
+function requireHeldProject(store: Store, key: string): Response | null {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return null;
+}
+
+/** `?release=<label>`, required by the two release-scoped reads. */
+function requireReleaseParam(url: URL): string | { fail: Response } {
+  const release = url.searchParams.get("release");
+  if (release === null || release.length === 0) {
+    return { fail: fail(400, "`release` is required — the release label to analyse, e.g. ?release=0.3.0") };
+  }
+  return release;
+}
+
+/**
+ * CR-CRU-091 — the release's DECLARED target, epoch seconds: the live
+ * proposal's `targetAt`, else a delivered record's. Absent when none was
+ * declared — never defaulted.
+ */
+function declaredTarget(store: Store, key: string, release: string): number | undefined {
+  const proposal = store.listReleaseProposals(key).find((event) => event.label === release);
+  if (proposal?.targetAt !== undefined) return proposal.targetAt;
+  return store.listReleases(key).find((event) => event.label === release)?.targetAt;
+}
+
+/** §S2 — GET …/analytics/velocity: project-level pointed velocity + flow. */
+function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const payload = velocity({
+    plans: store.listPlans(key),
+    entries: store.listQueue(key),
+    execByCycle: store.cycleExecMs(key),
+    now: Date.now(),
+  });
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/** §S3 — GET …/analytics/burndown?release=: the release's SCRUM burndown. */
+function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const target = declaredTarget(store, key, release);
+  const payload = burndown({
+    release,
+    entries: store.listQueue(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    plans: store.listPlans(key),
+    ...(target !== undefined ? { targetAt: target } : {}),
+  });
+  if (payload === null) {
+    return fail(404, `no CR was ever planned into release ${release}`);
+  }
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/**
+ * §S4 — GET …/analytics/forecast?release=[&seed=]: the Monte Carlo band.
+ * `seed` is TEST-ONLY (DN §7): an integer that makes the draws deterministic.
+ */
+function handleAnalyticsForecast(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const seedParam = url.searchParams.get("seed");
+  const seed = seedParam === null ? undefined : Number(seedParam);
+  if (seed !== undefined && !Number.isInteger(seed)) {
+    return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
+  }
+  const entries = store.listQueue(key);
+  if (!entries.some((entry) => entry.release === release)) {
+    return fail(404, `no CR is planned into release ${release}`);
+  }
+  const target = declaredTarget(store, key, release);
+  const payload = forecast({
+    release,
+    entries,
+    plans: store.listPlans(key),
+    now: Date.now(),
+    ...(target !== undefined ? { targetAt: target } : {}),
+    random: seed !== undefined ? seededRandom(seed) : Math.random,
+  });
+  return reply(req, url, { ok: true, ...payload });
 }

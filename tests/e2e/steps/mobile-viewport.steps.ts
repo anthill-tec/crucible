@@ -16,7 +16,7 @@
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
 import { ingestCompile, ingestJunit, ingestParsed, junit60 } from "./harness.ts";
-import { mountedPaneScroll } from "./pane-mount.ts";
+import { mountedPaneScroll, mountedPaneScrollGeometry } from "./pane-mount.ts";
 
 // CR-CRU-018/DN decision 5 desktop-band re-point support.
 //
@@ -437,3 +437,78 @@ Step(
     );
   },
 );
+
+// \u2500\u2500 CR-CRU-022 \u00a7S5 (last AC)/DN \u00a710 \"Phone\" \u2014 the release band's one-line
+// collapse, velocity riding the CR-CRU-018 foot strip, and the analytics
+// pane's own scroll containment. New assertions ONLY; \"the page body does
+// not scroll horizontally\" (the Gherkin's own reused Then step, this file's
+// existing AC1/AC10 idiom) still owns the horizontal half of \"page
+// unscrolled\" \u2014 it is not re-implemented here. \u2500\u2500
+
+Step(
+  "the roadmap release band renders as one line measuring at least 44px on the phone profile",
+  async ({ page }) => {
+    const band = page.getByTestId("roadmap-progress");
+    await expect(band).toBeVisible();
+    const box = await band.boundingBox();
+    expect(box).not.toBeNull();
+    // \"\u2265 44px\" is the CR's own touch-floor wording (this file's existing
+    // AC3/AC4 44px floor, reused as the LOWER bound). \"one line\" is the
+    // CR's own adjective for the COLLAPSED form (vs. the desktop band's
+    // thumbnail-plus-chips block), asserted as an UPPER bound double the
+    // floor \u2014 generous enough for real padding/line-height on a single row,
+    // tight enough that a band which rendered its full desktop content
+    // (thumbnail + remaining/committed + P50/P80 chip + health chip, each
+    // on its own row) could not pass by accident.
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeLessThanOrEqual(88);
+  },
+);
+
+Step("velocity appears on the project band foot strip", async ({ page }) => {
+  const foot = page.getByTestId("project-band-foot");
+  await expect(foot).toBeVisible();
+  const text = (await foot.innerText()).toLowerCase();
+  // The exact wording tests/cr022-analytics-ui.test.ts's Velocity-card unit
+  // test already pins for the Project band (\"N pts / week\") \u2014 matched here
+  // rather than a bare non-empty check, so a foot strip that renders SOME
+  // extra text but never the velocity figure still fails this.
+  expect(text).toContain("pts / week");
+});
+
+Step("I tap the roadmap release band", async ({ page }) => {
+  await page.getByTestId("roadmap-progress").click();
+});
+
+Step(
+  "the analytics pane's chart scrolls inside its own container, not the page",
+  async ({ page }) => {
+    const pane = page.getByTestId("analytics-pane");
+    await expect(pane).toBeVisible();
+    await expect(pane.getByTestId("burndown-chart")).toBeVisible();
+    // Force genuine overflow WITHOUT depending on burndown-fixture richness
+    // (unlike the sibling \"compile diagnostics\" scenario's 40-line trick):
+    // \u00a7S1's `--points` verb is not yet wired through the HTTP `queue/plan`
+    // door this suite drives (grep-confirmed: no `points` field anywhere in
+    // src/store.ts), so this scenario cannot seed a rich, real burndown/
+    // forecast history to overflow the pane by DATA VOLUME. Shrinking the
+    // viewport to a height far below any legitimate chart-plus-caption
+    // render instead forces the pane's OWN content to overflow its box for
+    // ANY correct implementation, while an empty/no-op pane (nothing
+    // rendered) would still fit inside it and this assertion would catch
+    // that too.
+    await page.setViewportSize({ width: 375, height: 320 });
+    // CR-CRU-022 §S6 — the analytics pane's OWN pane-scroll, straight after a
+    // pane swap, so never a bare lookup: waited on by the pane's marker and
+    // re-proven attached, live and its own in the same turn as the read.
+    await expect(page.getByTestId("pane-scroll")).toHaveCount(1);
+    const { scrollHeight, clientHeight } = await mountedPaneScrollGeometry(page, "Analytics");
+    expect(scrollHeight).toBeGreaterThan(clientHeight);
+    const { docScrollHeight, innerHeight } = await page.evaluate(() => ({
+      docScrollHeight: document.documentElement.scrollHeight,
+      innerHeight: window.innerHeight,
+    }));
+    expect(docScrollHeight).toBeLessThanOrEqual(innerHeight + 2);
+  },
+);
+

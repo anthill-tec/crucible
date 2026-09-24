@@ -48,6 +48,8 @@ export interface RouteState {
   overlay?: string;
   /** CR-CRU-012 §S2 — /manage: the Projects manager slide-over over home. */
   manage?: boolean;
+  /** CR-CRU-022 §S5 — /p/<key>/roadmap/analytics: the Roadmap pane's analytics state. */
+  analytics?: boolean;
 }
 
 export interface WorkspaceProjectLike {

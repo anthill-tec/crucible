@@ -7,7 +7,7 @@
 // the viewport + scroll-geometry assertions are new here.
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
-import { mountedPaneScroll } from "./pane-mount.ts";
+import { mountedPaneScroll, mountedPaneScrollGeometry, recordedPaneTab } from "./pane-mount.ts";
 
 Step("the viewport is {int}x{int}", async ({ page }, width: number, height: number) => {
   await page.setViewportSize({ width, height });
@@ -17,23 +17,24 @@ Step("the viewport is {int}x{int}", async ({ page }, width: number, height: numb
 // renders per route (one of the seven central-pane surfaces mounts at a
 // time); its scrollWidth exceeding its clientWidth is the PANE-level
 // horizontal scrollbar the §S1 AC requires below the supported floor.
-Step("the active pane-scroll element scrolls horizontally", async ({ page }) => {
-  const pane = page.getByTestId("pane-scroll");
-  await expect(pane).toHaveCount(1);
-  const { scrollWidth, clientWidth } = await pane.evaluate((el) => ({
-    scrollWidth: (el as HTMLElement).scrollWidth,
-    clientWidth: (el as HTMLElement).clientWidth,
-  }));
+//
+// CR-CRU-022 §S6 — measured through `mountedPaneScrollGeometry`: the pane is
+// the one the TEST last opened or selected (`recordedPaneTab(world)`), waited
+// on by its own marker, and re-proven attached, live and its own in the same
+// JS turn as the read. The bare `getByTestId("pane-scroll")` lookup this
+// replaced could resolve the outgoing tab's pane; a detached one reads 0 / 0.
+Step("the active pane-scroll element scrolls horizontally", async ({ page, world }) => {
+  await expect(page.getByTestId("pane-scroll")).toHaveCount(1);
+  const { scrollWidth, clientWidth } = await mountedPaneScrollGeometry(page, recordedPaneTab(world));
   expect(scrollWidth).toBeGreaterThan(clientWidth);
 });
 
-Step("no pane scrolls horizontally", async ({ page }) => {
-  const pane = page.getByTestId("pane-scroll");
-  await expect(pane).toHaveCount(1);
-  const { scrollWidth, clientWidth } = await pane.evaluate((el) => ({
-    scrollWidth: (el as HTMLElement).scrollWidth,
-    clientWidth: (el as HTMLElement).clientWidth,
-  }));
+// CR-CRU-022 §S6 — the step VERIFY caught passing SILENTLY on a detached node
+// (`0 ≤ 0`): a dead node can satisfy "no overflow", so this one above all
+// must never measure one. Same reader as above.
+Step("no pane scrolls horizontally", async ({ page, world }) => {
+  await expect(page.getByTestId("pane-scroll")).toHaveCount(1);
+  const { scrollWidth, clientWidth } = await mountedPaneScrollGeometry(page, recordedPaneTab(world));
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
 });
 
@@ -136,10 +137,11 @@ Step("I scroll the pane-scroll element down by {int}px", async ({ page }, amount
   }, amount);
 });
 
-Step("the pane-scroll element's scrollTop is {int}", async ({ page }, expected: number) => {
-  const scrollTop = await page
-    .getByTestId("pane-scroll")
-    .evaluate((el) => (el as HTMLElement).scrollTop);
+// CR-CRU-022 §S6 — read after a pane swap (a detail closing back to its
+// tab), so through the same reader: the restored pane, not the detail's
+// outgoing one.
+Step("the pane-scroll element's scrollTop is {int}", async ({ page, world }, expected: number) => {
+  const { scrollTop } = await mountedPaneScrollGeometry(page, recordedPaneTab(world));
   expect(scrollTop).toBe(expected);
 });
 

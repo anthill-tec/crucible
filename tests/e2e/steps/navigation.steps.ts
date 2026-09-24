@@ -10,8 +10,9 @@ Step("a fresh, empty Crucible database", async () => {
   // throwaway scratch database per E2E run (see that file's header comment).
 });
 
-Step("I open the home page", async ({ page }) => {
+Step("I open the home page", async ({ page, world }) => {
   await page.goto("/");
+  world.activeTab = "Home"; // CR-CRU-022 §S6 — the pane the test opened (pane-mount.ts)
 });
 
 Step("I have opened the home page", async ({ page }) => {
@@ -50,6 +51,7 @@ Step("the timeline spans more than 90% of the main content width", async ({ page
 
 Step("I open the workspace for that project", async ({ page, world }) => {
   await page.goto(`/p/${world.projectKey}`);
+  world.activeTab = "Workflow"; // CR-CRU-022 §S6 — the landing pane (pane-mount.ts)
 });
 
 Step("the workspace header is visible", async ({ page }) => {

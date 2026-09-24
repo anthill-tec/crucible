@@ -459,4 +459,26 @@ export interface QueueEntry {
   track?: string;
   /** §S2 — the second axis, parsed from `lifecycle_json`. Absent when none. */
   lifecycle?: QueueLifecycle;
+  /**
+   * CR-CRU-022 §S1 — the cr's story points, DERIVED on read from its latest
+   * points declaration in the append-only declaration journal
+   * (`queue_declarations`). Absent when the cr was never pointed — never
+   * defaulted, and never counted as 1.
+   */
+  points?: number;
+}
+
+/**
+ * CR-CRU-022 §S3 / CR-CRU-147 §S1 — THE dead-CR predicate: a CR whose
+ * `lifecycle.state` is VOID or SUPERSEDED is not live work. It keeps its row
+ * (a void is not a deletion) but contributes nothing to any remaining total
+ * or live-work count. Written ONCE, here beside `QueueLifecycle`, so every
+ * reader — the analytics routes today, `next` and the wave card under
+ * CR-CRU-147 — draws the line identically. Takes anything carrying an
+ * optional lifecycle, so a queue entry and a journalled lifecycle `to` value
+ * are judged by the same rule.
+ */
+export function isDeadCr(entry: { lifecycle?: Pick<QueueLifecycle, "state"> | null }): boolean {
+  const state = entry.lifecycle?.state;
+  return state === "VOID" || state === "SUPERSEDED";
 }

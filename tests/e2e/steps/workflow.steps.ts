@@ -80,10 +80,11 @@ Step(
 
 // ── workspace tab navigation (new — no existing "click a tab" step) ────────
 
-Step("I click the {string} workspace tab", async ({ page }, label: string) => {
+Step("I click the {string} workspace tab", async ({ page, world }, label: string) => {
   const tab = page.getByTestId("workspace-tab").filter({ hasText: label });
   await expect(tab).toBeVisible();
   await tab.click();
+  world.activeTab = label; // CR-CRU-022 §S6 — the tab the test selected (pane-mount.ts)
 });
 
 // ── §S3 history lens assertions ─────────────────────────────────────────────

@@ -319,6 +319,28 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // apply, and a residue entry would have PINNED a real board id into an
 // assertion. AC4's remedy is the one that fits: the fixture now states a
 // synthetic `cr` it invents itself, and the round trip it proves is unchanged.
+//
+// THREE entries added 2026-09-24 by CR-CRU-022 (`CR-PTS`, `CR-UI`, `CR-VEL`),
+// each read at its use site like every entry above. Two were added because the
+// guard FAILED on the day their files were written — the deny-by-default rule
+// working, not a hole being widened: `CR-PTS-1` is the cr §S1's story-points
+// suite plans with `--points 5` and then reads back from the queue
+// (tests/cr022-story-points.test.ts:154, asserted at :160), and `CR-UI-2` is
+// the unpointed cr of §S5's UI fixture queue that the roadmap-progress band
+// must NAME (tests/cr022-analytics-ui.test.ts:74, asserted at :231; its
+// pointed sibling `CR-UI-1` is at :73). Both ids are what their assertions are
+// ABOUT — the band's unpointed list, the round-tripped points — so stripping
+// them from a message does not apply and a residue entry would pin nothing
+// real: the fixtures invent them, which is AC4's remedy already taken. The
+// third, `CR-VEL`, did NOT fail the guard and is registered anyway, found by
+// scanning every CR-shaped literal the CR added under tests/ rather than only
+// the two the guard reported: §S2's velocity suite invents `CR-VEL-1..4` as
+// its merged-cr fixtures (tests/cr022-velocity-analytics.test.ts:167-197, and
+// prose at :31). Today they sit only in fixture setup, but they are the suite's
+// own invention, and listing the namespace now means a later assertion on one
+// is read as synthetic rather than reported as a real board id. The CR's other
+// fixture ids (`CR-BURN-A`, `CR-BURN-NT-1`, `CR-FCST-HIST-1`, …) need no entry:
+// a letter segment follows the namespace, so `CR_LITERAL` never matches them.
 const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-AAA": "test_crucible_axi_shared.py — two-agent warning fixture",
   "CR-AUTH": "cycle/plan fixtures for an authored-but-unplanned CR",
@@ -337,9 +359,12 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-NT": "f13 fidelity fixture — a no-title CR",
   "CR-ORD": "workflow-history ordering fixture",
   "CR-PLANLESS": "home-marker fixture — a run with no plan",
+  "CR-PTS": "CR-CRU-022 §S1's story-points fixture — the cr planned with --points and read back",
   "CR-RM": "roadmap-pane fixtures",
   "CR-SHIPPED": "§S5's synthetic completed rows (AC4's remedy)",
   "CR-SOLO": "f13 fidelity fixture — a single-CR workflow",
+  "CR-UI": "CR-CRU-022 §S5's UI fixture queue — a pointed cr and the unpointed one the band names",
+  "CR-VEL": "CR-CRU-022 §S2's velocity fixtures — the merged crs whose points make the weeks",
 };
 
 // EXEMPT BY NAME (AC7a) — the four files whose fixtures hold ANOTHER
@@ -2304,10 +2329,71 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // re-record also clears the CASCADE: tests/help-surface-order-independence.test.ts
 // collects THIS file in its child `bun test`, fired for the right reason, and
 // gets no change.
+//
+// UPDATED 2026-09-24 by CR-CRU-022's CLOSE-OUT (the C5 FIX round, cycle 504).
+// ALL THREE trees move: `src` 743 -> 772 (+29), `public` 496 -> 519 (+23),
+// `clients` 888 -> 889 (+1). MEASURED with this file's own machinery on the
+// feature branch AFTER the FIX round's last content edit (the CR-PTS/CR-UI/
+// CR-VEL registration above, which touches only this file under tests/):
+// `bun test tests/project-namespace-tripwire.test.ts` reported, against the
+// then-recorded 743/496/888,
+//
+//     -  "clients": 888   +  "clients": 889
+//     -  "public":  496   +  "public":  519
+//     -  "src":     743   +  "src":     772
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 0127005:<path>` (the merge-base with `develop`),
+// attributes all fifty-three. No citation is REMOVED anywhere, and every
+// classified file this CR touches is listed:
+//
+//   src +29:
+//     src/store.ts   350 -> 366 (+16, all `CR-CRU-022`): §S1's points field,
+//       Fibonacci scale and scope-moving verbs (:358, :366, :372), the
+//       current-points reads and the journal append (:5545, :5568, :5576,
+//       :5592, :5605), the three write paths that journal or clear points
+//       (:5670, :5717, :5907), and the §S2–§S4 analytics reads (:6345,
+//       :6348, :6381, :6395, :6413).
+//     src/v2.ts      239 -> 245 (+6): FIVE `CR-CRU-022` (:149 `--points`, :251
+//       the journal author, :3011 the scale check, :3944 and :4007 the
+//       analytics routes) plus ONE lineage `CR-CRU-091` (:4035, the declared
+//       target the forecast reads).
+//     src/types.ts    56 -> 60  (+4): TWO `CR-CRU-022` (:463 derived points,
+//       :472 the dead-CR predicate) plus TWO lineage `CR-CRU-147` (:472, :477),
+//       the predicate's own origin.
+//     src/analytics.ts  new -> 3 (+3): ONE `CR-CRU-022` (:1, the module
+//       header) and TWO lineage `CR-CRU-091` (:174, :452, the declared target).
+//
+//   public +23:
+//     public/app.js  271 -> 291 (+20): SIXTEEN `CR-CRU-022`, §S5's routes,
+//       reads, Velocity card, release band and analytics pane (:95, :126, :136,
+//       :190, :213, :238, :404, :416, :783, :2675, :2683, :3304, :4085, :4318,
+//       :4847, :5871), plus FOUR lineage citations its prose makes:
+//       `CR-CRU-016` (:126, the pane-swap route), `CR-CRU-078` twice (:786 no
+//       date of its own; :4466 the pinned skeleton), `CR-CRU-091` (:4626).
+//     public/app-logic.mjs 89 -> 90, public/app-logic.d.mts 53 -> 54 and
+//       public/styles.css 83 -> 84 (+1 each, all `CR-CRU-022` §S5: :266, :51,
+//       :2028). The two vendored uPlot files are new and hold no citation.
+//
+//   clients +1: clients/_crucible_axi.py 220 -> 221, ONE `CR-CRU-022` (:4379,
+//     §S1's story points riding only when declared).
+//
+// THE SAME NON-MOVE AS BEFORE, re-checked rather than assumed: src/store.ts's
+// raw added-literal count is 18, not 16. The two extra (:2508 `CR-CRU-022
+// §S1`, the declaration journal's header, and :2512 its `CR-CRU-130` lineage)
+// are `--` SQL comments inside the schema DDL TEMPLATE LITERAL, so they are
+// STRING CONTENT to this file's TypeScript classifier and move no head.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 772, 519 and 889 are far above
+// the 512/378/601 floors, and those three `develop` floors stay unchanged, as
+// always for a re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit,
+// so these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 743 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 496 },
-  clients: { exts: [".py"], develop: 601, head: 888 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 772 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 519 },
+  clients: { exts: [".py"], develop: 601, head: 889 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

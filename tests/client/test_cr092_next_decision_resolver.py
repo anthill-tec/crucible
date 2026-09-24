@@ -1720,7 +1720,14 @@ class NextBlockCitationsTest(unittest.TestCase):
         # never goes red. The three sibling entries were re-measured at BOTH
         # ends in the same pass and none had moved — this release touched no
         # other cited file above a cited construct.
-        ("LANDED_STATUSES", "src/store.ts", 5821, 5821,
+        # Re-pinned 2026-09-24 (CR-CRU-022 C2 GREEN, orchestrator-approved),
+        # 5821 -> 5981: §S1 added the story-point scale, the declaration
+        # journal's base-pass table and index, and the journal's reader and
+        # writer methods ABOVE this construct in src/store.ts. LOCATED on the
+        # final tree (`private deriveQueueStatus(` is a unique hit at :5981),
+        # never computed from the shift. BOTH halves move in the same commit:
+        # `LANDED_STATUSES` in `clients/_crucible_axi.py` carries :5981.
+        ("LANDED_STATUSES", "src/store.ts", 5981, 5981,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-12 (CR-CRU-119 GREEN), 349-352 -> 362-365: the
         # QueueSeqReport/preservedSeq additions and the seq-cause split
@@ -1752,7 +1759,13 @@ class NextBlockCitationsTest(unittest.TestCase):
         # same commit: the production docstring this row mirrors
         # (`canonical_track` in `clients/_crucible_axi.py`) carries the same
         # 381-384.
-        ("canonical_track", "src/store.ts", 381, 384,
+        # Re-pinned 2026-09-24 (CR-CRU-022 C2 GREEN, orchestrator-approved),
+        # 381-384 -> 399-402: §S1's `QueuePlanInput.points`,
+        # `STORY_POINT_SCALE` and `DeclarationVerb` sit ABOVE this construct.
+        # Head AND tail re-read on the final tree. BOTH halves move in the same
+        # commit: `canonical_track` in `clients/_crucible_axi.py` carries
+        # 399-402.
+        ("canonical_track", "src/store.ts", 399, 402,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is

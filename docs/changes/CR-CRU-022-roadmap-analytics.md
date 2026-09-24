@@ -1,6 +1,6 @@
 # CR-CRU-022 — Roadmap analytics: SCRUM velocity, burndown and forecast
 
-**Status:** PENDING
+**Status:** COMPLETED (0.3.0)
 **Type:** feature
 **Priority:** P3
 **Depends on:** CR-CRU-011, CR-CRU-014, CR-CRU-091 (the declared release target this CR reads)
@@ -97,6 +97,22 @@ p50Ts?, p80Ts?, scheduleHealth?, sampleWeeks, status}`.
 - **Chart library: uPlot 1.6.32**, vendored to `public/vendor/` beside VanJS, zero-build. Colours are
   read from CSS variables at draw time.
 
+### §S6 One wait for a tab's own pane (folded in from CR-CRU-148, user ruling 2026-09-24)
+
+CR-CRU-148 found that a step reading `pane-scroll` straight after a tab click can resolve the OUTGOING
+tab's pane before the swap lands, and measure a detached node. It fixed CR-CRU-018's AC10 with a shared
+helper, `mountedPaneScroll` (`tests/e2e/steps/pane-mount.ts`), and listed three more steps with the same
+exposure. The user ruled that this CR carries them, since its own new phone scenario has the same race:
+
+- this CR's phone analytics scenario measures `pane-scroll` through `mountedPaneScroll`, never a bare
+  lookup;
+- the three exposed steps in `tests/e2e/steps/pane-scroll.steps.ts` adopt it: "the active pane-scroll
+  element scrolls horizontally", "no pane scrolls horizontally" (VERIFY caught it **passing silently** on
+  a detached node: `0 ≤ 0`), and "the pane-scroll element's scrollTop is {int}".
+
+This is test-side only. `mountedPaneScroll` is extended for any tab it doesn't yet cover, never
+duplicated.
+
 ## Acceptance criteria
 
 **§S1 — story points**
@@ -141,6 +157,13 @@ p50Ts?, p80Ts?, scheduleHealth?, sampleWeeks, status}`.
 - [ ] At the phone band, the release band is one line measuring ≥44px, velocity appears on the foot
       strip, and the pane's chart scrolls inside its own container with the page unscrolled.
 
+**§S6 — one wait for a tab's own pane**
+- [ ] This CR's phone scenario and the three listed steps in `pane-scroll.steps.ts` measure through
+      `mountedPaneScroll`; no step in `tests/e2e/steps/` resolves `pane-scroll` with a bare lookup
+      straight after a tab click or pane swap.
+- [ ] Each migrated step rejects a detached pane and a wrong-tab pane. The detached case is proven per
+      step by replaying its old bare lookup (it must fail), and no existing assertion is weakened.
+
 ## Estimated size
 
 **L** (re-sized from M at gap analysis): a client verb, a journal, three endpoints, a Monte Carlo, a
@@ -183,4 +206,31 @@ cycle kind); and the chart-library pick (uPlot). **The planning game for 0.3.0 �
 | CR-CRU-141 | 3 | CI path gating |
 | CR-CRU-146 | 2 | hit area shipped in CR-018; pixel-offset step + assertion-only |
 
-Committed **70**, merged **29**, remaining **41**.
+Total **70** across the release, merged **29**, remaining **41**. (Corrected 2026-09-24: this said
+"committed 70". In the burndown, `committedPoints` means the points in the release at its START — the
+earliest `filed_at` — so for 0.3.0, whose CRs were filed one at a time, it is far smaller than the
+total, and later filings appear as scope steps. 70 is the total, not the commitment.)
+
+**C3 rulings (2026-09-24), where the spec was silent.** Accepted as implemented at `a9cb2b9`:
+
+1. Weeks are ISO weeks, Monday 00:00 UTC, labelled by their Monday (`YYYY-MM-DD`).
+2. A week with no merges AFTER the first pointed merge counts as 0 in the mean and the forecast's
+   sampling, but is left out of `weeks` (the AC's wording). Before the first pointed merge, weeks are
+   absent entirely. With no history, `pointsPerWeek` is absent, not 0.
+3. The current, unfinished week is excluded from velocity and from the forecast's history.
+4. A CR's first points declaration counts from the moment it JOINED the release; only later changes
+   appear as `repointed` steps. Without this, pointing merged CRs at this CR's close-out would read as
+   "committed 0" followed by one large step.
+5. Step labels: `start` (delta 0), `merged` (verb `cr-close`), `planned` / `moved-out` / `repointed`
+   (verb `cr-plan`), `voided` / `superseded`. Steps that predate the journal carry no verb.
+6. When history is short AND CRs are unpointed, `insufficient_history` wins, and the forecast still
+   names the unpointed CRs.
+7. `target` stays in seconds (CR-CRU-091's declared unit); `ideal` and step timestamps are milliseconds.
+   Each field states its unit.
+8. **Overruled:** the analytics routes had skipped the project-key validation every other v2 route
+   applies, to fit test fixtures using non-UUID keys. They must validate identically, and the fixtures
+   move to valid keys (C4).
+
+The dead-CR predicate is `isDeadCr(entry)` in `src/types.ts`, and CR-CRU-147 imports it rather than
+re-implementing it. The forecast's seeded RNG is mulberry32 (`?seed=`), sampling the weekly history
+uniformly; P50/P80 by nearest rank.
