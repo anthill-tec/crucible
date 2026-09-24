@@ -1,6 +1,23 @@
 # CR-CRU-144 — a tier is claimed, never measured
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-111 · **Status** PENDING
+**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-111 · **Status** VOID — voided at gap
+analysis 2026-09-24 (user ruling)
+
+> **VOID (2026-09-24).** The gap analysis measured both halves:
+>
+> - **§S1's premise is false.** `tests/bdd-section.test.ts` has classified **`integration`** in every
+>   version since it was written (`54191c5`, `91e7aec`, `bf466f6`, `c59131e`), including at `8f8312d`,
+>   the commit this spec cites, when read with that commit's own classifier. The classifier has seen
+>   real-time waits since 2026-09-08: `REAL_WAIT` and `NAMED_WAIT` in `scripts/test-targets.ts`, with a
+>   1 s threshold (`402eb9e`, `f943de1`). A scan of all 83 `unit` files at `a9a0ef3` finds no hidden
+>   wait of 1 s or more. Its only non-literal hits are a comment, a 400 ms wait and fixture strings.
+>   The "classifies `unit`" claim was never measured.
+> - **§S2 is honest as it stands.** A targeted `bun-crucible.py test --tests …` files
+>   `tier: unstated`, which CR-CRU-111 §S2/AC3 calls the honest answer. A caller who needs a tiered
+>   run already has the declared-tier verbs (`unit` / `integration`), and the wall-vs-CPU falsifier
+>   (CR-111 AC6b) already flags a `unit` run that spends its time waiting.
+>
+> The record below is kept as written.
 
 ## Problem
 
