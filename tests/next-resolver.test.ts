@@ -130,21 +130,29 @@ describe("CR-CRU-098 AC6 — every spelling 091 accepts resolves the same lane",
 
   const ACCEPTED = ["2", "track-2", "Track 2", "TRACK-2", "  2  ", "track-02", "1", "track-11"];
 
-  test("every accepted spelling of track 2 answers CR-NEXTPTR-200, and 1/11 answer their own lanes or drain", () => {
+  test("every accepted spelling of track 2 answers CR-NEXTPTR-200; '1' resolves the declared track-1, 'track-11' is refused as an undeclared lane", () => {
     for (const spelling of ["2", "track-2", "Track 2", "TRACK-2", "  2  ", "track-02"]) {
       const answer = fields(TWO_TRACK, { track: spelling });
       expect(answer.decision, `--track ${JSON.stringify(spelling)}`).toBe("NEXT");
       expect(answer.cr).toBe("CR-NEXTPTR-200");
     }
-    // "1" and "track-11" name lanes this fixture declares none of — awaiting-assignment,
-    // never a match against track-1/track-2 by accident. Both are members of ACCEPTED
-    // (091's accepted spellings) so this loop, together with the one above, exercises
-    // every value ACCEPTED declares.
-    for (const spelling of ACCEPTED.filter((s) => s === "1" || s === "track-11")) {
-      const answer = fields(TWO_TRACK, { track: spelling });
-      expect(answer.decision).toBe("DRAINED");
-      expect(answer.reason).toBe("awaiting-assignment");
-    }
+    // CR-CRU-098 C2 — the RED port asserted DRAINED, which the Python oracle never produced; corrected to the oracle's measured answers.
+    // "1" and "track-11" are both members of ACCEPTED (091's accepted spellings), so this
+    // block, together with the loop above, exercises every value ACCEPTED declares.
+    expect(ACCEPTED).toContain("1");
+    const one = fields(TWO_TRACK, { track: "1" });
+    expect(one.decision).toBe("NEXT");
+    expect(one.cr).toBe("CR-NEXTPTR-100");
+    expect(one.track).toBe("track-1");
+
+    expect(ACCEPTED).toContain("track-11");
+    const eleven = resolve(TWO_TRACK, { track: "track-11" });
+    expect(eleven.ok).toBe(false);
+    expect(eleven.code).toBe(2);
+    expect(eleven.fields.needs).toEqual(["track"]);
+    expect(eleven.fields.tracks).toEqual(["track-1", "track-2"]);
+    expect(eleven.fields.totalCount).toBe(2);
+    expect(eleven.fields.decision).toBeUndefined();
   });
 
   test("a value naming no integer is refused exactly as no --track at all, in a multi-track project", () => {
