@@ -1,6 +1,6 @@
 # CR-CRU-148 — the phone compile pane collapses to zero height
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-018 · **Status** PENDING
+**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-018 · **Status** COMPLETED (0.3.0)
 
 ## Problem
 
