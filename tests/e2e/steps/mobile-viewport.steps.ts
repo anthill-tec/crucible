@@ -16,6 +16,7 @@
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
 import { ingestCompile, ingestJunit, ingestParsed, junit60 } from "./harness.ts";
+import { mountedPaneScroll } from "./pane-mount.ts";
 
 // CR-CRU-018/DN decision 5 desktop-band re-point support.
 //
@@ -372,16 +373,38 @@ Step("the compile diagnostics container is the element that scrolls, not the pag
   // The Compile pane (app.js CompileFeed) carries no `workspace-runs` testid
   // (that one belongs to the Runs pane and the run detail); its real scroll
   // container is its `pane-scroll` box.
-  await expect(page.getByTestId("pane-scroll")).toBeVisible();
-  const pane = page.getByTestId("pane-scroll");
-  await expect(pane).toHaveCount(1);
-  const { scrollHeight, clientHeight } = await pane.evaluate((el) => ({
-    scrollHeight: (el as HTMLElement).scrollHeight,
-    clientHeight: (el as HTMLElement).clientHeight,
-  }));
+  //
+  // CR-CRU-148: pinned to the LIVE Compile pane. A bare page-level
+  // pane-scroll lookup right after the tab click resolved the outgoing
+  // Workflow pane, which VanJS then detached, so this step measured a dead
+  // node (0 / 0). `mountedPaneScroll` waits until the Compile pane's own
+  // pane-scroll is mounted (a wrong-tab pane can never satisfy it). The
+  // measurement below then re-proves, in the SAME JS turn as the read, that
+  // the node is attached, is the document's one pane-scroll, and carries the
+  // Compile heading. A detached or wrong-tab node fails outright here; it is
+  // never measured.
+  const pane = await mountedPaneScroll(page, "Compile");
+  await expect(page.getByTestId("pane-scroll")).toHaveCount(1);
+  const m = await pane.evaluate((el) => {
+    const all = document.querySelectorAll('[data-testid="pane-scroll"]');
+    return {
+      connected: el.isConnected,
+      live: all.length === 1 && all[0] === el,
+      heading: el.querySelector(".app-rail-title")?.textContent ?? "",
+      scrollHeight: (el as HTMLElement).scrollHeight,
+      clientHeight: (el as HTMLElement).clientHeight,
+    };
+  });
+  expect(m.connected, "the measured pane-scroll is detached from the document").toBe(true);
+  expect(m.live, "the measured pane-scroll is not the document's one live pane-scroll").toBe(true);
+  expect(m.heading, "the measured pane-scroll is not the Compile pane").toMatch(/^Compile — /);
+  // CR-CRU-148 strengthening: the container must have real height to show
+  // any diagnostic at all. Without this, a pane squeezed to 0px with content
+  // inside would satisfy `scrollHeight > clientHeight` below.
+  expect(m.clientHeight, "the Compile pane-scroll has no height at the phone band").toBeGreaterThan(0);
   // The fixture's 40 synthetic diagnostics must genuinely overflow the pane
   // at phone height, or this proves nothing about containment.
-  expect(scrollHeight).toBeGreaterThan(clientHeight);
+  expect(m.scrollHeight).toBeGreaterThan(m.clientHeight);
   const { docScrollHeight, innerHeight } = await page.evaluate(() => ({
     docScrollHeight: document.documentElement.scrollHeight,
     innerHeight: window.innerHeight,
