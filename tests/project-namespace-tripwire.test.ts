@@ -2391,10 +2391,70 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // so these are its final figures and not a mid-cycle reading. It clears the
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-09-24 by CR-CRU-098's CLOSE-OUT (the C4 FIX round, cycle 510).
+// `src` moves 772 -> 779 (+7) and `clients` moves 889 -> 884 (-5). MEASURED
+// with this file's own machinery on the feature branch AFTER the FIX round's
+// last content edit (the `isActionable` cross-reference to CR-CRU-147 in
+// src/next.ts, plus the citation re-pins, which are all under tests/ and so
+// move no head): `bun test tests/project-namespace-tripwire.test.ts -t "never
+// below its develop baseline"` reported, against the then-recorded
+// 772/519/889,
+//
+//     -  "clients": 889   +  "clients": 884
+//     -  "src":     772   +  "src":     779
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 7f2a85c:<path>` (the merge-base with `develop`),
+// attributes all twelve moves (+7 in `src`; +5 and -10 in `clients`). Every
+// classified file this CR touches is listed:
+//
+//   src +7:
+//     src/next.ts    new -> 4 (+4): ONE `CR-CRU-098` (:1, the module header)
+//       plus THREE lineage citations. Those are `CR-CRU-095` (:4, the
+//       published order the entries arrive in), `CR-CRU-092` (:7, the ported
+//       resolver block; its `-095, -108` abbreviations are not literals) and
+//       `CR-CRU-147` (:163, the CR that owns unifying `isActionable` with
+//       `isDeadCr`).
+//     src/v2.ts      245 -> 247 (+2, both `CR-CRU-098` §S2): the GET …/next
+//       route header (:2104) and its dispatch comment (:3979).
+//     src/hints.ts    45 -> 46  (+1, `CR-CRU-098` §S2/AC5): the `nextHints`
+//       block, the server-authored `help[]` (:488).
+//
+//   clients -5: clients/_crucible_axi.py 221 -> 216, the only file under
+//     `clients/` whose count moved (the five per-client files each changed
+//     ONE line and re-measure unchanged). FIVE `CR-CRU-098` are added: §S3's
+//     read-is-the-server's block (:2249), the decision vocabulary now living
+//     on the server (:2271), the lane MATCH moved to the server (:2284), the
+//     §S2/AC6 refusal fields (:2296) and the `cmd_next` docstring (:2380).
+//     TEN lineage citations are REMOVED, because §S4/AC10 deletes the
+//     client resolver and the orphaned vocabulary whose prose carried them
+//     (base lines at 7f2a85c): `CR-CRU-131` twice and `CR-CRU-140` once in
+//     the `LANDED_STATUSES` re-pin history (:2266, :2269, :2273), `CR-CRU-091`
+//     twice (:2295 the argument-parsing split, :2776 the published `seq`),
+//     `CR-CRU-108` three times (:2308, :2314, :2718, the track-fact error and
+//     the published `tracks`), `CR-CRU-095` once (:2762, the lane order) and
+//     `CR-CRU-097` once (:2778, the detail that names no CR).
+//
+// A NET LOSS, and stated as one: `clients` goes DOWN in this re-record. It
+// is not lineage being shed from living code. The
+// ten citations sat on code this CR DELETES, and they left with it. Their
+// facts survive where the logic moved to: src/next.ts cites `CR-CRU-092`/
+// `-095`/`-108` for the ported block. `clients` (884) is still far above its
+// 601 floor, so the directional half holds.
+//
+// `public` (519) re-measures at its recorded head in the same run, and could
+// not have moved: this CR changes no file under `public/`.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit, so these
+// are its final figures and not a mid-cycle reading. It clears the CASCADE
+// with it: tests/help-surface-order-independence.test.ts collects THIS file in
+// its child `bun test`, fired for the right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 772 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 779 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 519 },
-  clients: { exts: [".py"], develop: 601, head: 889 },
+  clients: { exts: [".py"], develop: 601, head: 884 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

@@ -159,7 +159,9 @@ function entrySeq(entry: QueueEntry): number | undefined {
  * §S2 — the TWO axes: `PENDING` on the derived status axis AND no `lifecycle`
  * disposition at all. Keyed on the lifecycle's PRESENCE, exactly as the
  * ported resolver keyed it — deliberately not `isDeadCr`, which judges the
- * lifecycle's `state` value rather than its presence.
+ * lifecycle's `state` value rather than its presence. Unifying the two
+ * predicates is CR-CRU-147's to do (see `isDeadCr`, src/types.ts) — until
+ * then `next` draws the line here, on presence.
  */
 function isActionable(entry: QueueEntry): boolean {
   return entry.status === "PENDING" && entry.lifecycle === undefined;

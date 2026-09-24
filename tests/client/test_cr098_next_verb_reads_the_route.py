@@ -23,7 +23,8 @@ ordered query string would be over-specification GREEN could only satisfy by
 matching this file's arbitrary choice.
 
 RED expectation: TODAY's `cmd_next` still issues its ONE `GET .../queue` (no
-query string at all — clients/_crucible_axi.py:2924-2925) — every AC8 path
+query string at all — clients/_crucible_axi.py:2924-2925 at 7f2a85c; the
+GET …/next that replaced it is now :2392-2396) — every AC8 path
 assertion below fails on that fact, which is the missing contract, not a
 broken harness. The byte-identity halves (AC9) mostly hold TRIVIALLY even in
 RED (this CR's own Non-goal: semantics are unchanged, and `resolve_next` is
@@ -119,7 +120,7 @@ def _route_response(entries, track=None, release=None, wave=None):
     tests/fixtures/cr098-next-oracle.json because AC10 deletes the function),
     wrapped as §S2 describes: the whole answer, `ok` and
     `warnings[]` included. The refusal ALSO carries an `error` string
-    (`fail()`'s own first argument, src/v2.ts:191) that TODAY's client-computed
+    (`fail()`'s own first argument, src/v2.ts:192) that TODAY's client-computed
     refusal never had — proving GREEN's `cmd_next` must not blindly relay it
     into the envelope (AC9's byte-identity with today's refusal shape)."""
     tracks = _published_tracks(entries)
