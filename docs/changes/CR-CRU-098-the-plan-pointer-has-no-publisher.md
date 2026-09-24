@@ -74,8 +74,12 @@ the data:
 
 - **the track fact could be unpublished** — CR-108's `QueueTrackFactUnpublished` / `queue_tracks`
   refusal. On the server the resolver reads the declared tracks directly; the case cannot arise.
-- **the client mirrors the server's track rule** — `canonical_track` vs `normalizeTrack`, pinned by
-  `TrackCanonicalisationAgreesWithTheServerTest`. With one side, there is no mirror.
+- **the client mirrors the server's track rule** — `canonical_track` vs `normalizeTrack`. ~~With one
+  side, there is no mirror.~~ **Corrected at C3 (2026-09-24):** the mirror survives. `next_context`
+  stamps `context.track` from the canonicalised `--track` flag, and in a single-track project the
+  answer carries no `track` (AC4's `_lane_fields` rule), so the client cannot take it from the
+  answer without changing the envelope (AC9). `canonical_track` therefore stays, and
+  `TrackCanonicalisationAgreesWithTheServerTest` stays with it; it is not retired.
 - **line citations into the client block** — `NextBlockCitationsTest`.
 
 These are retired, not ported, and each retirement is recorded where the test stood.
@@ -122,14 +126,17 @@ These are retired, not ported, and each retirement is recorded where the test st
   `_entry_seq`, `_is_actionable`, `_dead_entries`, `_dead_phrase`, `_next_start_help`,
   `_hold_help`, `_drained_help`, `_next_trigger`, `_lane_fields`, `_announced_fields`,
   `_next_answer`, `_drained_answer`, `_wave_of_the_lane`, `_previous_published_wave`,
-  `_next_published_wave`, `_boundary_announcement`, `resolve_next`. `canonical_track` goes too if
-  `next_context` can take the resolved track from the answer (it can: `track` rides AC4).
+  `_next_published_wave`, `_boundary_announcement`, `resolve_next`. `canonical_track` **stays**: it is
+  the `next_context` stamp's canonicaliser, and the answer cannot supply it in a single-track project
+  (§S4, corrected at C3).
 - **AC11** — All five clients reach `next` through the one shared `cmd_next`; none defines its own.
 
 **§S4**
-- **AC12** — `TrackCanonicalisationAgreesWithTheServerTest`, `PublishedTrackFactTest`,
-  `PublishedTrackFactIsWiredTest` and `NextBlockCitationsTest` are removed, each with a comment
-  where it stood naming this CR and the reason in §S4.
+- **AC12** — `PublishedTrackFactTest`, `PublishedTrackFactIsWiredTest`, `NextBlockCitationsTest` and
+  the census's `Cr108PublishedTrackFactTest` (`test_client_fleet_envelope_census.py`) are removed,
+  each with a comment where it stood naming this CR and the reason in §S4. Behaviours of theirs that
+  now live server-side (blank/padded declared tracks) are ported to the route tests, not dropped.
+  `TrackCanonicalisationAgreesWithTheServerTest` is **not** retired (§S4, corrected at C3).
 
 **All**
 - **AC13** — All fixtures are synthetic (CR-096 AC29).
