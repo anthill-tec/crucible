@@ -146,7 +146,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
 | [CR-CRU-139](CR-CRU-139-a-connection-is-configuration-too.md) | a connection is configuration too | feature | COMPLETED (0.3.0) | 131, 138 | 7 (0.3.0) |
 | [CR-CRU-140](CR-CRU-140-evidence-a-filer-can-cite.md) | evidence a filer can cite | hotfix | COMPLETED (0.2.2) | — | 7 (0.2.2) |
-| [CR-CRU-141](CR-CRU-141-a-ci-run-is-earned-by-what-changed.md) | a CI run is earned by what changed | fix | PENDING | 137 | 7 (0.3.0) |
+| [CR-CRU-141](CR-CRU-141-a-ci-run-is-earned-by-what-changed.md) | a CI run is earned by what changed | fix | VOID | 137 | 7 (0.3.0) |
 | [CR-CRU-142](CR-CRU-142-the-orchestrators-own-copy-resolves-its-own-package.md) | the orchestrator's own copy resolves its own package, not the install it just wrote | hotfix | COMPLETED (0.2.2) | — | 7 (0.2.2) |
 | [CR-CRU-143](CR-CRU-143-a-conditional-key-is-not-an-unexpected-one.md) | a conditional key is not an unexpected one | hotfix | COMPLETED (0.2.2) | 138 | 7 (0.2.2) |
 | [CR-CRU-144](CR-CRU-144-a-tier-is-claimed-not-measured.md) | a tier is claimed, never measured | fix | PENDING | 111 | 7 (0.3.0) |
@@ -154,7 +154,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-146](CR-CRU-146-the-cycle-row-is-not-clickable-but-looks-it.md) | the history cycle row looks clickable and is not | fix | PENDING | 020, 021 | 7 (0.3.0) |
 | [CR-CRU-147](CR-CRU-147-a-voided-cr-is-not-queued-work.md) | a voided CR is not queued work, and its row says so | fix | PENDING | 091, 078 | 7 (0.3.0) |
 | [CR-CRU-148](CR-CRU-148-the-phone-compile-pane-collapses-to-zero-height.md) | the phone compile pane collapses to zero height | fix | COMPLETED (0.3.0) | 018 | 7 (0.3.0) |
-| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | PENDING | 141, 144, 145, 146, 147, 150 | 7 (0.3.0) |
+| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | PENDING | 144, 145, 146, 147, 150 | 7 (0.3.0) |
 | [CR-CRU-150](CR-CRU-150-status-shows-the-work-in-flight.md) | `status` shows the work in flight, not the project's history | feature | PENDING | 030, 035, 094 | 7 (0.3.0) |
 
 ## Deferred — post-0.2.0

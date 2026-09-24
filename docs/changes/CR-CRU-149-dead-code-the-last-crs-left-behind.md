@@ -1,7 +1,7 @@
 # CR-CRU-149 — dead code the last CRs left behind
 
 **Type** chore · **Points** 3 · **Wave** 7 (0.3.0), last in the wave, before the release (user ruling
-2026-09-24) · **Depends on** CR-CRU-141, CR-CRU-144, CR-CRU-145, CR-CRU-146, CR-CRU-147,
+2026-09-24) · **Depends on** CR-CRU-144, CR-CRU-145, CR-CRU-146, CR-CRU-147,
 CR-CRU-150 ·
 **Status** PENDING
 
