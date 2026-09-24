@@ -720,3 +720,158 @@ describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading,
   });
 });
 
+// "Every other feature containing a failure is expanded with its failing
+// scenarios' steps shown" covers MORE than one failing feature; the fixtures
+// above each carry exactly one. This one carries TWO failing features and one
+// green, listed green-first so report order is the adversarial one.
+const TWO_FAIL_GREEN_A = "Two-Fail Green Feature \u203a its first green scenario";
+const TWO_FAIL_GREEN_B = "Two-Fail Green Feature \u203a its second green scenario";
+const TWO_FAIL_ONE_FIRST = "Two-Fail First Failing Feature \u203a its report-first scenario";
+const TWO_FAIL_ONE_BROKEN = "Two-Fail First Failing Feature \u203a its scenario that breaks";
+const TWO_FAIL_TWO_FIRST = "Two-Fail Second Failing Feature \u203a its report-first scenario";
+const TWO_FAIL_TWO_BROKEN = "Two-Fail Second Failing Feature \u203a its scenario that breaks";
+
+function twoFailingFeaturesTree(): SuiteFixture[] {
+  const breaks = (n: number): LeafFixture => ({ name: `Then step ${n} breaks`, status: "fail", duration_ms: 3, failure: { message: `failure ${n}` } });
+  return [
+    { name: TWO_FAIL_GREEN_A, status: "pass", children: [GIVEN(201), THEN_PASS(201)] },
+    { name: TWO_FAIL_GREEN_B, status: "pass", children: [GIVEN(202), THEN_PASS(202)] },
+    { name: TWO_FAIL_ONE_FIRST, status: "pass", children: [GIVEN(203), THEN_PASS(203)] },
+    { name: TWO_FAIL_ONE_BROKEN, status: "fail", children: [GIVEN(204), breaks(204)] },
+    { name: TWO_FAIL_TWO_FIRST, status: "pass", children: [GIVEN(205), THEN_PASS(205)] },
+    { name: TWO_FAIL_TWO_BROKEN, status: "fail", children: [GIVEN(206), breaks(206)] },
+  ];
+}
+
+describe("CR-CRU-145 \u00a7S1 \u2014 a run with TWO failing features expands BOTH, and folds the green one", () => {
+  test("the first failing feature opens per the first-feature rule, the SECOND failing feature is expanded with its failing scenario's steps shown, and the green feature folds", async () => {
+    const eventId = "evt-s1-two-failing-features";
+    await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId, { tree: twoFailingFeaturesTree() })] });
+
+    // Failures float: both failing features precede the green one.
+    const order = featureGroups().map((g) => g.getAttribute("data-feature-name"));
+    expect(order.length).toBe(3);
+    expect(order[2]).toBe("Two-Fail Green Feature");
+    const [firstTitle, secondTitle] = [order[0]!, order[1]!];
+    expect([firstTitle, secondTitle].sort()).toEqual(["Two-Fail First Failing Feature", "Two-Fail Second Failing Feature"]);
+    const scenariosOf = (title: string) =>
+      title === "Two-Fail First Failing Feature"
+        ? { first: TWO_FAIL_ONE_FIRST, broken: TWO_FAIL_ONE_BROKEN, step: "Then step 204 breaks" }
+        : { first: TWO_FAIL_TWO_FIRST, broken: TWO_FAIL_TWO_BROKEN, step: "Then step 206 breaks" };
+
+    // POSITIVE \u2014 the first feature in failures-first order: its failing
+    // scenario AND its first scenario show their steps without a click.
+    const first = scenariosOf(firstTitle);
+    expect(featureExpanded(featureGroup(firstTitle))).toBe(true);
+    expect(isExpanded(suiteRow(first.broken))).toBe(true);
+    expect(leafRowsOf(first.broken).some((r) => (r.textContent ?? "").includes(first.step))).toBe(true);
+    expect(isExpanded(suiteRow(first.first))).toBe(true);
+    expect(leafRowsOf(first.first).length).toBe(2);
+
+    // POSITIVE \u2014 the SECOND failing feature is expanded too, its failing
+    // scenario's steps shown without a click.
+    const second = scenariosOf(secondTitle);
+    const secondGroup = featureGroup(secondTitle);
+    expect(featureExpanded(secondGroup)).toBe(true);
+    expect(secondGroup.querySelectorAll('[data-testid="suite-row"]').length).toBeGreaterThan(0);
+    expect(isExpanded(suiteRow(second.broken))).toBe(true);
+    expect(leafRowsOf(second.broken).some((r) => (r.textContent ?? "").includes(second.step))).toBe(true);
+    expect(suiteRead(second.broken)).toBe(true);
+
+    // BOUND \u2014 the green feature folds whole, its scenarios unread.
+    expect(featureFolded("Two-Fail Green Feature")).toBe(true);
+    expect(suiteRead(TWO_FAIL_GREEN_A)).toBe(false);
+    expect(suiteRead(TWO_FAIL_GREEN_B)).toBe(false);
+  });
+});
+
+// A spec run's step line keeps the verbatim Gherkin the codec stored, so its
+// glyph and duration are drawn by CSS from attributes the leaf row sets. The
+// source-assertion technique of tests/roadmap-visual-grammar.test.ts: read the
+// shipped public/styles.css, comments stripped, and hold its rules to account.
+const STYLES_RULES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
+
+/** Every `selector { body }` rule; an @media wrapper's own brace is skipped,
+ *  its inner rules still match. */
+function cssRules(): Array<{ selectors: string[]; body: string }> {
+  return [...STYLES_RULES_SRC.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+    selectors: m[1]!.split(",").map((s) => s.trim()),
+    body: m[2]!,
+  }));
+}
+
+/** The rules whose `content` draws `attr(<attribute>)`; asserts each is scoped
+ *  to `.app-leaf-step` on the given pseudo-element and returns the class the
+ *  pseudo-element hangs off. */
+function attrDrawingTargets(attribute: string, pseudo: "::before" | "::after"): string[] {
+  const drawing = cssRules().filter((r) => new RegExp(`content:[^;]*attr\\(${attribute}\\)`).test(r.body));
+  expect(drawing.length).toBeGreaterThan(0);
+  const targets: string[] = [];
+  for (const rule of drawing) {
+    for (const selector of rule.selectors) {
+      const m = new RegExp(`^\\.app-leaf-step\\s+\\.([\\w-]+)${pseudo}$`).exec(selector);
+      if (m === null) throw new Error(`attr(${attribute}) is drawn by "${selector}", not scoped as .app-leaf-step .<cell>${pseudo}`);
+      targets.push(m[1]!);
+    }
+  }
+  return targets;
+}
+
+describe("CR-CRU-145 \u00a7S1 \u2014 a playwright step's glyph and duration are CSS-drawn from its own attributes, scoped to .app-leaf-step", () => {
+  test("styles.css draws the glyph (::before) from data-glyph and the duration (::after) from data-duration, ONLY under .app-leaf-step", () => {
+    expect(attrDrawingTargets("data-glyph", "::before")).toEqual(["app-leaf-name"]);
+    expect(attrDrawingTargets("data-duration", "::after")).toEqual(["app-leaf-duration"]);
+  });
+
+  test("a playwright leaf row is an .app-leaf-step whose cells carry data-glyph / data-duration; a junit leaf row carries neither and prints its glyph as text", async () => {
+    const glyphCell = attrDrawingTargets("data-glyph", "::before")[0]!;
+    const durationCell = attrDrawingTargets("data-duration", "::after")[0]!;
+
+    const pwId = "evt-s1-leaf-attrs-playwright";
+    await mountApp({ pathname: `/run/${pwId}`, events: [playwrightEvent(pwId)] });
+    const failing = leafRowsOf(S4_NAME).find((r) => (r.textContent ?? "").includes("Then it breaks"));
+    const passing = leafRowsOf(S4_NAME).find((r) => (r.textContent ?? "").includes("Given step 4"));
+    expect(failing).toBeDefined();
+    expect(passing).toBeDefined();
+    for (const row of [failing!, passing!]) {
+      expect(row.classList.contains("app-leaf-step")).toBe(true);
+      const duration = row.querySelector(`.${durationCell}`)?.getAttribute("data-duration") ?? "";
+      expect(duration.length).toBeGreaterThan(0);
+    }
+    // POSITIVE \u2014 the attribute carries the step's own verdict glyph, and the
+    // name cell holds the verbatim step text alone (the glyph is not drawn twice).
+    const failName = failing!.querySelector(`.${glyphCell}`)!;
+    expect(failName.getAttribute("data-glyph")).toBe("\u2717");
+    expect((failName.textContent ?? "").trim()).toBe("Then it breaks");
+    expect(passing!.querySelector(`.${glyphCell}`)!.getAttribute("data-glyph")).toBe("\u2713");
+
+    const junitId = "evt-s1-leaf-attrs-junit";
+    await mountApp({
+      pathname: `/run/${junitId}`,
+      events: [
+        {
+          id: junitId,
+          projectKey: "proj-s1-run-detail",
+          agentId: "junit-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: Date.now(),
+          tree: [{ name: "JunitSuite", status: "fail", children: [{ name: "a failing case", status: "fail", duration_ms: 1, failure: { message: "boom" } }] }],
+        },
+      ],
+    });
+    suiteRow("JunitSuite").click();
+    await settle();
+    const junitRows = leafRowsOf("JunitSuite");
+    expect(junitRows.length).toBe(1);
+    const junitRow = junitRows[0]!;
+    // BOUND \u2014 the CSS rules above never reach a junit row: no scope class, no
+    // attributes; its glyph is printed in the name cell as text.
+    expect(junitRow.classList.contains("app-leaf-step")).toBe(false);
+    expect(junitRow.querySelector("[data-glyph]")).toBeNull();
+    expect(junitRow.querySelector("[data-duration]")).toBeNull();
+    expect((junitRow.querySelector(`.${glyphCell}`)?.textContent ?? "").trim()).toBe("\u2717 a failing case");
+  });
+});
+
