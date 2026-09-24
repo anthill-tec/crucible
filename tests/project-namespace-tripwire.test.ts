@@ -319,6 +319,28 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // apply, and a residue entry would have PINNED a real board id into an
 // assertion. AC4's remedy is the one that fits: the fixture now states a
 // synthetic `cr` it invents itself, and the round trip it proves is unchanged.
+//
+// THREE entries added 2026-09-24 by CR-CRU-022 (`CR-PTS`, `CR-UI`, `CR-VEL`),
+// each read at its use site like every entry above. Two were added because the
+// guard FAILED on the day their files were written — the deny-by-default rule
+// working, not a hole being widened: `CR-PTS-1` is the cr §S1's story-points
+// suite plans with `--points 5` and then reads back from the queue
+// (tests/cr022-story-points.test.ts:154, asserted at :160), and `CR-UI-2` is
+// the unpointed cr of §S5's UI fixture queue that the roadmap-progress band
+// must NAME (tests/cr022-analytics-ui.test.ts:74, asserted at :231; its
+// pointed sibling `CR-UI-1` is at :73). Both ids are what their assertions are
+// ABOUT — the band's unpointed list, the round-tripped points — so stripping
+// them from a message does not apply and a residue entry would pin nothing
+// real: the fixtures invent them, which is AC4's remedy already taken. The
+// third, `CR-VEL`, did NOT fail the guard and is registered anyway, found by
+// scanning every CR-shaped literal the CR added under tests/ rather than only
+// the two the guard reported: §S2's velocity suite invents `CR-VEL-1..4` as
+// its merged-cr fixtures (tests/cr022-velocity-analytics.test.ts:167-197, and
+// prose at :31). Today they sit only in fixture setup, but they are the suite's
+// own invention, and listing the namespace now means a later assertion on one
+// is read as synthetic rather than reported as a real board id. The CR's other
+// fixture ids (`CR-BURN-A`, `CR-BURN-NT-1`, `CR-FCST-HIST-1`, …) need no entry:
+// a letter segment follows the namespace, so `CR_LITERAL` never matches them.
 const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-AAA": "test_crucible_axi_shared.py — two-agent warning fixture",
   "CR-AUTH": "cycle/plan fixtures for an authored-but-unplanned CR",
@@ -337,9 +359,12 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-NT": "f13 fidelity fixture — a no-title CR",
   "CR-ORD": "workflow-history ordering fixture",
   "CR-PLANLESS": "home-marker fixture — a run with no plan",
+  "CR-PTS": "CR-CRU-022 §S1's story-points fixture — the cr planned with --points and read back",
   "CR-RM": "roadmap-pane fixtures",
   "CR-SHIPPED": "§S5's synthetic completed rows (AC4's remedy)",
   "CR-SOLO": "f13 fidelity fixture — a single-CR workflow",
+  "CR-UI": "CR-CRU-022 §S5's UI fixture queue — a pointed cr and the unpointed one the band names",
+  "CR-VEL": "CR-CRU-022 §S2's velocity fixtures — the merged crs whose points make the weeks",
 };
 
 // EXEMPT BY NAME (AC7a) — the four files whose fixtures hold ANOTHER
