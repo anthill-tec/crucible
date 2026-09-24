@@ -32,24 +32,6 @@ FIXTURE IDS carry a namespace no project owns and none matches the tripwire's
 CR-literal shape, so no assertion here names a real board row.
 """
 
-import importlib.util
-import unittest
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
-
-
-def _load(path, name):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-AXI = _load(CLIENTS_DIR / "_crucible_axi.py", "next_boundary_axi_under_test")
-
 
 # CR-CRU-098 C3 — the eighteen in-process `cmd_next` tests that stood here were
 # deleted (docs/changes/CR-CRU-098-test-classification.md), with the fixtures and
@@ -63,28 +45,11 @@ AXI = _load(CLIENTS_DIR / "_crucible_axi.py", "next_boundary_axi_under_test")
 #   TheAnnouncementIsScopedToTheContainerAskedAboutTest (2),
 #   AskingAboutACompleteWaveTest (2), ABlockedFrontCrHoldsItsOwnWaveTest (2),
 #   EmptyDeclaredContainerTest (2).
-# The vocabulary bounds below never reached the resolver and are untouched.
-
-
-class DecisionVocabularyIsUnchangedTest(unittest.TestCase):
-    """§S2 adds a STATEMENT to the answer, never a fourth reason or a fifth
-    trigger kind. Asserted by length AND by value, because a set comparison
-    alone survives a new member arriving beside a deleted one. Passes today
-    and must keep passing — this is the bound on the change."""
-
-    def test_the_three_drained_reasons_are_still_the_whole_vocabulary(self):
-        self.assertEqual(len(AXI.DRAINED_REASONS), 3)
-        self.assertEqual(
-            AXI.DRAINED_REASONS,
-            ("wave-complete", "awaiting-assignment", "no-roadmap"))
-
-    def test_the_four_hold_trigger_kinds_are_still_the_whole_vocabulary(self):
-        self.assertEqual(len(AXI.HOLD_TRIGGER_KINDS), 4)
-        self.assertEqual(
-            AXI.HOLD_TRIGGER_KINDS,
-            ("in-flight", "dead-dependency", "dependency",
-             "unknown-dependency"))
-
-
-if __name__ == "__main__":
-    unittest.main()
+#
+# DecisionVocabularyIsUnchangedTest (2) — RETIRED at CR-CRU-098 C3: it read
+# the client copies of `DRAINED_REASONS` / `HOLD_TRIGGER_KINDS`, which nothing
+# in `clients/` read any more and which were deleted as a second source of
+# truth. The vocabulary lives in `src/next.ts`'s exports, pinned exactly (members
+# AND order) by tests/next-resolver.test.ts "the decision vocabulary is exactly
+# the four HOLD trigger kinds and the three DRAINED reasons, in their declared
+# order (ported from DecisionVocabularyIsUnchangedTest)".

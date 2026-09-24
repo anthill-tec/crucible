@@ -355,6 +355,11 @@ describe("CR-CRU-098 AC1/AC4 — HOLD's four trigger kinds", () => {
     }
   });
 
+  test("the decision vocabulary is exactly the four HOLD trigger kinds and the three DRAINED reasons, in their declared order (ported from DecisionVocabularyIsUnchangedTest)", () => {
+    expect([...HOLD_TRIGGER_KINDS]).toEqual(["in-flight", "dead-dependency", "dependency", "unknown-dependency"]);
+    expect([...DRAINED_REASONS]).toEqual(["wave-complete", "awaiting-assignment", "no-roadmap"]);
+  });
+
   test("the declared HOLD_TRIGGER_KINDS constant is exactly the four kinds the fixtures produce", () => {
     expect([...HOLD_TRIGGER_KINDS].sort()).toEqual(Object.keys(HOLD_FIXTURES).sort());
   });
@@ -723,7 +728,7 @@ describe("CR-CRU-098 AC5 — help[] matches clients/_crucible_axi.py's helpers b
 // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 // AC2 CENSUS EXPANSION (2nd RED pass) \u2014 tests/client/test_next_announces_the_wave_boundary.py
 // (20 tests: 18 reach `cmd_next`, PORTED below; 2 assert AXI.DRAINED_REASONS/
-// HOLD_TRIGGER_KINDS, which AC10 does NOT remove \u2014 unaffected, no port needed)
+// HOLD_TRIGGER_KINDS \u2014 ported at C3 to the exact-vocabulary test in the HOLD group)
 // and tests/client/test_next_lane_carries_release_and_wave.py (13 of its 20
 // tests reach `cmd_next` and are PORTED below; 2 are KEPT \u2014
 // tests/client/test_cr098_next_verb_reads_the_route.py; 5 are OUT OF the AC2

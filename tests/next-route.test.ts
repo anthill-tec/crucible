@@ -211,7 +211,34 @@ describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
 
   // Ported from the census's Cr108PublishedTrackFactTest (retired under
   // CR-CRU-098 §S4, AC12): the declared-track fact is `declaredTracks`'s,
-  // on the server, so its padded-value case is asserted at the route.
+  // on the server, so its two whitespace cases are asserted here: the
+  // blank value at WRITE time (the store refuses it), the padded one at the route.
+  test("AC6 \u2014 a whitespace-only track value is refused at WRITE time and nothing is stored, so it can never become a phantom second lane; the board without it answers bare", async () => {
+    boot();
+    const key = await seed("cru098-next-route-blank-track");
+    expect(() =>
+      seedRows(key, [
+        { cr: "CR-NEXTPTR-550", wave: "5", seq: 10, track: "   " },
+        { cr: "CR-NEXTPTR-551", wave: "5", seq: 20, track: "2" },
+      ]),
+    ).toThrow(/carries no lane number/);
+
+    const stored = await get(`/api/v2/projects/${key}/queue`);
+    expect(stored.status).toBe(200);
+    expect(stored.body.entries).toEqual([]);
+    expect(stored.body.tracks).toEqual([]);
+
+    seedRows(key, [{ cr: "CR-NEXTPTR-551", wave: "5", seq: 20, track: "2" }]);
+    const { status, body } = await get(`/api/v2/projects/${key}/next`);
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.decision).toBe("NEXT");
+    expect(body.cr).toBe("CR-NEXTPTR-551");
+    expect(body.needs).toBeUndefined();
+    expect(body.tracks).toBeUndefined();
+  });
+
   test("AC6 \u2014 a padded track value collapses into the track it pads: one lane, so the project answers bare", async () => {
     boot();
     const key = await seed("cru098-next-route-padded-track");

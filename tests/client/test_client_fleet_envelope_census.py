@@ -2743,9 +2743,11 @@ def _get_depends_drives():
 # (`tracks` beside `entries`) instead of re-deriving one. `next` no longer reads
 # the queue: on the server the resolver reads the declared tracks directly, so
 # an unpublished or re-derived track fact cannot arise. Its two server-side
-# behaviours — a whitespace-only second value is not a second track, and a
-# padded value collapses into the track it pads — are PORTED to
-# tests/next-route.test.ts as route cases (CR-CRU-098 AC12).
+# behaviours are PORTED to tests/next-route.test.ts (CR-CRU-098 AC12): the
+# blank case is now enforced at WRITE time — "AC6 — a whitespace-only track
+# value is refused at WRITE time and nothing is stored, so it can never become
+# a phantom second lane; …" — and the padded case at the route — "AC6 — a
+# padded track value collapses into the track it pads: one lane, …".
 
 
 class Cr106CrDependsAxiConformanceTest(unittest.TestCase):
