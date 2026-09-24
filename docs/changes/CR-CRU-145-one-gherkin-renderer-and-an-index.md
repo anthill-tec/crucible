@@ -135,10 +135,14 @@ verifying.
 ## Acceptance criteria
 
 **§S1 — one renderer**
-- [ ] A `codec: "playwright"` run's detail opens **progressively expanded**: every failing scenario
-      and the first scenarios of the first feature show their ordered `Given`/`When`/`Then` with
-      per-step status without clicking; green features fold; a scenario further down loads and
-      shows its steps when it scrolls into view, without a click. Asserted on a real ingested run.
+- [ ] A `codec: "playwright"` run's detail opens **progressively expanded**, per F11 B. Features are
+      ordered failures first. The **first feature in that order** is expanded: its failing scenarios
+      and its first scenarios show their ordered `Given`/`When`/`Then` with per-step status without
+      clicking, and its later scenarios have rows that load their steps when they scroll into view,
+      without a click. Every other feature containing a failure is expanded with its failing
+      scenarios' steps shown. Every other all-green feature is **folded** (no scenario rows until
+      clicked). In an all-green run, the report-first feature is the one expanded. Asserted on a
+      real ingested run. (Rule settled at C2 GREEN 2026-09-24, when two RED readings contradicted.)
 - [ ] A long run is neither fetched nor rendered in one go: opening a run with more scenarios than
       the initial expansion issues **no** per-suite read for a scenario that has not scrolled into
       view. Asserted on the requests made, not on timing.
