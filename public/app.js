@@ -2929,6 +2929,14 @@
           class: `app-bdd-index-row ${row.verdict}`,
           onclick: () => openDrillin(row.id),
         },
+        span(
+          {
+            "data-testid": "bdd-index-glyph",
+            "data-verdict": row.verdict,
+            class: `app-bdd-index-glyph app-count-${row.verdict}`,
+          },
+          drillinLeafGlyph(row.verdict),
+        ),
         span({ "data-testid": "bdd-index-when", class: "app-card-meta" }, rel(row.timestamp)),
         span({ "data-testid": "bdd-index-who", class: "app-agent-id" }, row.agentId),
         span(
@@ -2940,7 +2948,6 @@
         ),
         span(
           { "data-testid": "bdd-index-verdict", class: "app-suite-counts" },
-          `${row.verdict} `,
           span({ class: "app-count-pass" }, `${row.passed} ✓`),
           row.failed > 0 ? [" ", span({ class: "app-count-fail" }, `${row.failed} ✗`)] : null,
           row.pending > 0 ? ` ${row.pending} ⏭` : null,

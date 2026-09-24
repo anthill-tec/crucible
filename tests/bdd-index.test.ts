@@ -343,3 +343,68 @@ describe("CR-CRU-145 §S2 — the empty state still names no CR id and no releas
     expect(text).not.toMatch(RELEASE_VERSION);
   });
 });
+
+// F11 A draws each index row with a coloured ✗ / ✓ glyph in its OWN leftmost
+// column, and the counts on the right as `58 ✓ 1 ✗` — never the verdict as
+// a word. The glyph's colour comes from the board's existing pass/fail
+// palette (`var(--pass)` / `var(--fail)` in public/styles.css), so this
+// test resolves the glyph cell's classes against the shipped stylesheet
+// rather than naming one class.
+const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+function colourVarOf(el: Element): string | null {
+  for (const cls of Array.from(el.classList)) {
+    const esc = cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = new RegExp(`\\.${esc}\\s*\\{[^}]*\\bcolor:\\s*var\\((--[a-z-]+)\\)`).exec(STYLES_SRC);
+    if (m !== null) return m[1]!;
+  }
+  return null;
+}
+
+describe("CR-CRU-145 §S2 — F11 A: an index row leads with its coloured verdict glyph", () => {
+  test("the row's first cell is the verdict glyph (✓ pass, ✗ fail, ⏭ pending), its verdict attribute and palette colour differing between a passing and a failing run", async () => {
+    const key = "proj-bdd-index-glyph";
+    const now = Date.now();
+    const failing = playwrightRun({ id: "evt-idx-glyph-fail", projectKey: key, agentId: "idx-glyph-fail", timestamp: now - 1_000, total: 59, passed: 58, failed: 1 });
+    const passing = playwrightRun({ id: "evt-idx-glyph-pass", projectKey: key, agentId: "idx-glyph-pass", timestamp: now - 2_000, total: 59, passed: 59, failed: 0 });
+    const pending = playwrightRun({ id: "evt-idx-glyph-pending", projectKey: key, agentId: "idx-glyph-pending", timestamp: now - 3_000, total: 3, passed: 0, failed: 0, pending: 3 });
+
+    await mountApp({ projects: [project({ key })], events: [failing, passing, pending], pathname: `/p/${key}` });
+    await openBddTab();
+
+    const rows = indexRows();
+    expect(rows.length).toBe(3);
+    const byId = (id: string) => rows.find((r) => r.getAttribute("data-run-id") === id)!;
+    const glyphOf = (row: HTMLElement) => row.firstElementChild as HTMLElement | null;
+
+    const failGlyph = glyphOf(byId("evt-idx-glyph-fail"));
+    const passGlyph = glyphOf(byId("evt-idx-glyph-pass"));
+    const pendGlyph = glyphOf(byId("evt-idx-glyph-pending"));
+    expect(failGlyph).not.toBeNull();
+    expect(passGlyph).not.toBeNull();
+    expect(pendGlyph).not.toBeNull();
+
+    // POSITIVE — the leftmost cell IS the glyph, alone in its cell.
+    expect(failGlyph!.getAttribute("data-testid")).toBe("bdd-index-glyph");
+    expect(norm(failGlyph!.textContent)).toBe("✗");
+    expect(norm(passGlyph!.textContent)).toBe("✓");
+    expect(norm(pendGlyph!.textContent)).toBe("⏭");
+
+    // POSITIVE — the verdict rides on the cell as an attribute + class that
+    // DIFFER between a passing and a failing run.
+    expect(failGlyph!.getAttribute("data-verdict")).toBe("fail");
+    expect(passGlyph!.getAttribute("data-verdict")).toBe("pass");
+    expect(pendGlyph!.getAttribute("data-verdict")).toBe("pending");
+    expect(failGlyph!.className).not.toBe(passGlyph!.className);
+
+    // POSITIVE — coloured from the board's EXISTING palette, no new one.
+    expect(colourVarOf(failGlyph!)).toBe("--fail");
+    expect(colourVarOf(passGlyph!)).toBe("--pass");
+
+    // BOUND — the verdict is the glyph, not a word printed beside the counts.
+    for (const row of rows) {
+      const counts = norm(row.querySelector('[data-testid="bdd-index-verdict"]')?.textContent);
+      expect(counts).not.toMatch(/\b(pass|fail|pending)\b/);
+    }
+  });
+});
