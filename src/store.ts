@@ -354,7 +354,25 @@ export interface QueuePlanInput {
   release: string;
   wave: string;
   title: string;
+  /**
+   * CR-CRU-022 §S1 — the cr's story points. ABSENT leaves the declared points
+   * alone (never a default); PRESENT is journalled when it moves them. The
+   * Fibonacci scale is refused at the route (`STORY_POINT_SCALE`).
+   */
+  points?: number;
 }
+
+/**
+ * CR-CRU-022 §S1 — the planning-poker Fibonacci scale, the ONLY values
+ * `cr-plan --points` accepts (DN-crucible-analytics §4).
+ */
+export const STORY_POINT_SCALE: readonly number[] = [1, 2, 3, 5, 8, 13];
+
+/**
+ * CR-CRU-022 §S1 — the per-CR verbs whose writes move a release's scope, and
+ * therefore the only verbs a declaration-journal row may name.
+ */
+export type DeclarationVerb = "cr-plan" | "cr-void" | "cr-supersede";
 
 /** CR-CRU-091 §S4/§S8 — one `wave-sequence` call: the WHOLE ordered list. */
 export interface WaveSequenceInput {
@@ -2486,6 +2504,37 @@ export class Store {
         lifecycle_json TEXT,
         PRIMARY KEY (project_key, cr)
       );
+
+      -- CR-CRU-022 §S1 — the DECLARATION JOURNAL: one APPEND-ONLY row per
+      -- per-CR write that moves a release's scope — cr-plan (planning a cr into
+      -- a release, changing its release, setting or changing its points),
+      -- cr-void and cr-supersede. A row is never updated and never deleted.
+      -- A new TABLE, never a retrofitted column (the CR-CRU-130 §4
+      -- precedent above), so it costs no chain step and no schema version.
+      --
+      -- It is also the SINGLE source of a cr's story points: the queue read
+      -- publishes the points of the cr's LATEST row whose points is not NULL,
+      -- so no second copy exists to drift from the history. points is the
+      -- value THIS row declared (NULL when the row declares none, e.g. a
+      -- void); change_json is the verbatim {field: {from, to}} move; author is
+      -- the registered caller the route authenticated (NULL only for a direct
+      -- store write, which has no caller); at is epoch MILLISECONDS, the unit
+      -- of filed_at and lifecycle.at.
+      CREATE TABLE IF NOT EXISTS queue_declarations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_key TEXT NOT NULL,
+        cr TEXT NOT NULL,
+        verb TEXT NOT NULL,
+        change_json TEXT NOT NULL,
+        points INTEGER,
+        author TEXT,
+        at INTEGER NOT NULL
+      );
+
+      -- The latest-points seek: (project_key, cr) equality, newest id first,
+      -- so a cr's current points is one index probe, never a scan per row.
+      CREATE INDEX IF NOT EXISTS idx_queue_declarations_cr
+        ON queue_declarations (project_key, cr, id);
     `);
     // CR-CRU-129 §S1 — the two RECORD tables, written by the same base pass
     // for every store, old or new, so a brand-new store and the end of the
@@ -4712,9 +4761,10 @@ export class Store {
       track?: string;
       cycles: Array<{ label: string; kind: CycleKind }>;
     },
+    author?: string,
   ): { plan: Plan; report: QueueSeqReport & { changed: boolean } } | PlanOpError {
     const compose = this.db.transaction(() => {
-      const report = this.upsertQueueEntry(projectKey, entry);
+      const report = this.upsertQueueEntry(projectKey, entry, author);
       const filed = this.filePlan(projectKey, plan);
       if ("error" in filed) throw new PlanRegistrationRefused(filed);
       return { plan: filed, report };
@@ -5492,11 +5542,15 @@ export class Store {
         shipped.add(cr);
       }
     }
+    // CR-CRU-022 §S1 — every cr's CURRENT points, read once for the project
+    // off the declaration journal (its latest points-bearing row).
+    const points = this.latestPointsByCr(projectKey);
     // CR-CRU-095 §S1 — published in the canonical order, and ONLY here: every
     // reader (the routes, the roadmap, the clients) consumes this verbatim.
     return rows
       .map((row): QueueEntry => {
         const derived = this.deriveQueueStatus(projectKey, row.cr, shipped);
+        const declared = points.get(row.cr);
         return {
           cr: row.cr,
           ...(row.title !== null ? { title: row.title } : {}),
@@ -5511,9 +5565,73 @@ export class Store {
           ...(row.lifecycle_json !== null
             ? { lifecycle: JSON.parse(row.lifecycle_json) as QueueLifecycle }
             : {}),
+          // CR-CRU-022 §S1 — absent when never pointed: never defaulted.
+          ...(declared !== undefined ? { points: declared } : {}),
         };
       })
       .sort(compareQueueOrder);
+  }
+
+  /**
+   * CR-CRU-022 §S1 — each cr's CURRENT story points: the value its LATEST
+   * points-bearing journal row declared. One grouped read over the project's
+   * rows (`idx_queue_declarations_cr`); SQLite takes the bare `points` column
+   * from the row that supplied `MAX(id)`. A cr with no such row is absent.
+   */
+  private latestPointsByCr(projectKey: string): Map<string, number> {
+    const rows = this.db
+      .query<{ cr: string; points: number; id: number }, [string]>(
+        `SELECT cr, points, MAX(id) AS id FROM queue_declarations
+          WHERE project_key = ? AND points IS NOT NULL
+          GROUP BY cr`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.cr, row.points]));
+  }
+
+  /** CR-CRU-022 §S1 — one cr's CURRENT story points, or undefined when never pointed. */
+  private latestPoints(projectKey: string, cr: string): number | undefined {
+    const row = this.db
+      .query<{ points: number }, [string, string]>(
+        `SELECT points FROM queue_declarations
+          WHERE project_key = ? AND cr = ? AND points IS NOT NULL
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(projectKey, cr);
+    return row === null ? undefined : row.points;
+  }
+
+  /**
+   * CR-CRU-022 §S1 — APPEND one declaration-journal row. The journal's only
+   * writer, and an INSERT only: no path updates or deletes a row. Called
+   * inside the caller's own write transaction, so a row exists exactly when
+   * the scope move it records was committed.
+   */
+  private appendDeclaration(
+    projectKey: string,
+    row: {
+      cr: string;
+      verb: DeclarationVerb;
+      change: Record<string, { from: unknown; to: unknown }>;
+      points: number | null;
+      author: string | undefined;
+      at: number;
+    },
+  ): void {
+    this.db
+      .query(
+        `INSERT INTO queue_declarations (project_key, cr, verb, change_json, points, author, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        projectKey,
+        row.cr,
+        row.verb,
+        JSON.stringify(row.change),
+        row.points,
+        row.author ?? null,
+        row.at,
+      );
   }
 
   /**
@@ -5542,17 +5660,23 @@ export class Store {
   upsertQueueEntry(
     projectKey: string,
     input: QueuePlanInput,
+    author?: string,
   ): QueueSeqReport & { changed: boolean } {
     const held = this.db
       .query<QueueEntryRow, [string, string]>(
         `SELECT * FROM queue_entries WHERE project_key = ? AND cr = ?`,
       )
       .get(projectKey, input.cr);
+    // CR-CRU-022 §S1 — an ABSENT `points` leaves the declared value alone; a
+    // present one moves it only when it differs from the journal's latest.
+    const heldPoints = this.latestPoints(projectKey, input.cr);
+    const pointsMoved = input.points !== undefined && input.points !== heldPoints;
     if (
       held !== null &&
       held.release === input.release &&
       held.wave === input.wave &&
-      held.title === input.title
+      held.title === input.title &&
+      !pointsMoved
     ) {
       return { changed: false, defaultedSeq: [], preservedSeq: [] };
     }
@@ -5589,6 +5713,26 @@ export class Store {
           )
           .run(input.title, input.wave, input.release, seq, projectKey, input.cr);
         if (moved) this.densifyWave(projectKey, held.wave, input.cr);
+      }
+      // CR-CRU-022 §S1 — journalled only when the write MOVES scope: the cr is
+      // planned into a release (first plan, pointed or not), its release
+      // changes, or its points are set or changed. A retitle or a wave move
+      // inside the same release moves no scope and appends nothing.
+      const heldRelease = held === null ? null : held.release;
+      const change: Record<string, { from: unknown; to: unknown }> = {};
+      if (held === null || heldRelease !== input.release) {
+        change.release = { from: heldRelease, to: input.release };
+      }
+      if (pointsMoved) change.points = { from: heldPoints ?? null, to: input.points };
+      if (Object.keys(change).length > 0) {
+        this.appendDeclaration(projectKey, {
+          cr: input.cr,
+          verb: "cr-plan",
+          change,
+          points: pointsMoved ? (input.points ?? null) : null,
+          author,
+          at: now,
+        });
       }
     })();
     this.emit("events", projectKey);
@@ -5735,6 +5879,7 @@ export class Store {
     projectKey: string,
     cr: string,
     lifecycle: Omit<QueueLifecycle, "at">,
+    author?: string,
   ): { changed: boolean } | null {
     const held = this.db
       .query<QueueEntryRow, [string, string]>(
@@ -5753,9 +5898,24 @@ export class Store {
       }
     }
     const stamped: QueueLifecycle = { ...lifecycle, at: Date.now() };
-    this.db
-      .query(`UPDATE queue_entries SET lifecycle_json = ? WHERE project_key = ? AND cr = ?`)
-      .run(JSON.stringify(stamped), projectKey, cr);
+    const previous =
+      held.lifecycle_json === null ? null : (JSON.parse(held.lifecycle_json) as QueueLifecycle);
+    this.db.transaction(() => {
+      this.db
+        .query(`UPDATE queue_entries SET lifecycle_json = ? WHERE project_key = ? AND cr = ?`)
+        .run(JSON.stringify(stamped), projectKey, cr);
+      // CR-CRU-022 §S1 — a void or a supersede takes the cr's points out of
+      // its release's scope, so it is journalled, in the same transaction and
+      // at the same instant the lifecycle carries.
+      this.appendDeclaration(projectKey, {
+        cr,
+        verb: lifecycle.state === "VOID" ? "cr-void" : "cr-supersede",
+        change: { lifecycle: { from: previous, to: lifecycle } },
+        points: null,
+        author,
+        at: stamped.at,
+      });
+    })();
     this.emit("events", projectKey);
     return { changed: true };
   }

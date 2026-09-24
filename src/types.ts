@@ -459,4 +459,11 @@ export interface QueueEntry {
   track?: string;
   /** §S2 — the second axis, parsed from `lifecycle_json`. Absent when none. */
   lifecycle?: QueueLifecycle;
+  /**
+   * CR-CRU-022 §S1 — the cr's story points, DERIVED on read from its latest
+   * points declaration in the append-only declaration journal
+   * (`queue_declarations`). Absent when the cr was never pointed — never
+   * defaulted, and never counted as 1.
+   */
+  points?: number;
 }

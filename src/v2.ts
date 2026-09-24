@@ -23,6 +23,7 @@ import {
   QueueWaveOverflowError,
   reservedMilestoneTypeConflict,
   Store,
+  STORY_POINT_SCALE,
   TRACK_LANE_RULE,
   UUID_RE,
   WAVE_SEQ_STRIDE,
@@ -144,6 +145,8 @@ interface V2Body {
   // CR-CRU-106 §S1 — `cr-depends`' whole payload: the complete dependency
   // set. `cr` is already declared above.
   dependsOn?: unknown;
+  /** CR-CRU-022 §S1 — `cr-plan --points`: story points on the Fibonacci scale. */
+  points?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -241,6 +244,21 @@ function requireRegisteredCaller(
       ? "a registered caller is required — this request carried no agentId"
       : `agent ${agentId} is not registered with this project — refused`;
   return { fail: fail(409, error, { help: authHints.unregisteredCaller(agentId) }) };
+}
+
+/**
+ * CR-CRU-022 §S1 — the AUTHOR every HTTP route writes on a declaration-journal
+ * row: the caller `requireRegisteredCaller` / `requireOrchestrator` already
+ * authenticated, and nothing else. The store accepts a missing author only
+ * because a direct store write has no caller; a ROUTE never passes one, and
+ * this seam refuses to hand an empty identity to the journal rather than let
+ * an unauthored row through.
+ */
+function declarationAuthor(caller: { agentId: string }): string {
+  if (caller.agentId.length === 0) {
+    throw new Error("declaration journal: a route must journal its registered caller as author");
+  }
+  return caller.agentId;
 }
 
 // CR-CRU-091 §S3 — the role roadmap registration requires. There is no
@@ -1544,7 +1562,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     // `wave-sequence`'s envelope, with nothing written.
     let written: ReturnType<Store["filePlanRegistering"]>;
     try {
-      written = store.filePlanRegistering(pk.key, entry, planInput);
+      written = store.filePlanRegistering(pk.key, entry, planInput, declarationAuthor(caller));
     } catch (error) {
       if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
       throw error;
@@ -2989,6 +3007,19 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   if (typeof body.title !== "string" || body.title.length === 0) {
     return fail(400, "`title` is required — the CR's brief");
   }
+  // CR-CRU-022 §S1 — story points are optional; when sent they must sit on
+  // the planning-poker Fibonacci scale, refused BEFORE anything is written.
+  const points = body.points ?? undefined;
+  if (
+    points !== undefined &&
+    (typeof points !== "number" || !STORY_POINT_SCALE.includes(points))
+  ) {
+    return fail(
+      400,
+      `\`points\` must be on the planning-poker Fibonacci scale ` +
+        `${STORY_POINT_SCALE.join(", ")} — got ${JSON.stringify(points)}`,
+    );
+  }
   // CR-CRU-104 §S1 — the ONE membership rule, the same decision the migration
   // door passes through. `cr-plan` declares no track, so `release` is its
   // whole declaration.
@@ -3016,12 +3047,17 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // envelope, and nothing is written.
   let report: QueueSeqReport & { changed: boolean };
   try {
-    report = store.upsertQueueEntry(pk.key, {
-      cr: body.cr,
-      release: body.release,
-      wave: String(body.wave),
-      title: body.title,
-    });
+    report = store.upsertQueueEntry(
+      pk.key,
+      {
+        cr: body.cr,
+        release: body.release,
+        wave: String(body.wave),
+        title: body.title,
+        ...(points !== undefined ? { points } : {}),
+      },
+      declarationAuthor(caller),
+    );
   } catch (error) {
     if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
     throw error;
@@ -3289,11 +3325,16 @@ async function handleCrLifecycle(
       help: roadmapHints.shippedCr(cr, label),
     });
   }
-  const result = store.setQueueLifecycle(pk.key, cr, {
-    state: verb === "supersede" ? "SUPERSEDED" : "VOID",
-    ...(by !== undefined ? { by } : {}),
-    ...(reason !== undefined ? { reason } : {}),
-  });
+  const result = store.setQueueLifecycle(
+    pk.key,
+    cr,
+    {
+      state: verb === "supersede" ? "SUPERSEDED" : "VOID",
+      ...(by !== undefined ? { by } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    },
+    declarationAuthor(caller),
+  );
   if (result === null) {
     return fail(404, `cr ${cr} is not registered in this project's queue`, {
       help: roadmapHints.unregisteredCr(cr),

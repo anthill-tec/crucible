@@ -2262,7 +2262,7 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:5821 — re-pinned 2026-09-14 from :5790,
+# (`deriveQueueStatus`, src/store.ts:5981 — re-pinned 2026-09-14 from :5790,
 # shifted UP by the three lines CR-CRU-131 C2 deleted above it when the
 # environment-variable layer under `defaultRetention` and `runAbandonAfterMs`
 # was retired; re-pinned again the same day from :5787, shifted DOWN by the
@@ -2287,7 +2287,7 @@ _TRACK_LANE_RE = re.compile(r"\d+")
 
 def canonical_track(value):
     """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
-    mirror of `normalizeTrack` (src/store.ts:381-384). The first run of digits
+    mirror of `normalizeTrack` (src/store.ts:399-402). The first run of digits
     anywhere in the value, rendered as the PRD's locked wire format
     `track-<n>`; `None` when the value names no lane.
 
@@ -4373,10 +4373,16 @@ def cmd_cr_plan(args, project_dir, ops):
     if needs:
         return emit_cr_plan_ask(args, project_dir, ops, needs, agent_id)
     full = bool(getattr(args, "full", False))
-    resp = ops.post(queue_plan_path(ops.project_key(project_dir)),
-                    {"cr": args.cr, "release": args.release,
-                     "wave": str(args.wave), "title": args.title,
-                     "agentId": agent_id}) or {}
+    body = {"cr": args.cr, "release": args.release,
+            "wave": str(args.wave), "title": args.title,
+            "agentId": agent_id}
+    # CR-CRU-022 §S1 — story points ride only when declared: an omitted
+    # `--points` sends no key, never a fabricated default. The Fibonacci
+    # scale is the SERVER's refusal, so every client shares one sentence.
+    points = getattr(args, "points", None)
+    if points is not None:
+        body["points"] = points
+    resp = ops.post(queue_plan_path(ops.project_key(project_dir)), body) or {}
     ok = bool(resp.get("ok", False))
     context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
     if not ok:
@@ -4742,6 +4748,10 @@ def add_roadmap_verbs(sub, funcs, *, parents=(), add_args=()):
     cp.add_argument("--wave",
                     help="The wave within the release. Undeclared → the client "
                          "lists the waves already planned and exits 2 (§S6).")
+    cp.add_argument("--points", type=int,
+                    help="The CR's story points on the planning-poker "
+                         "Fibonacci scale 1, 2, 3, 5, 8, 13; anything else is "
+                         "refused. Omitted → the stored points are left alone.")
     add_roadmap_projection_args(cp)
     _common(cp)
     cp.set_defaults(func=funcs["cr-plan"])
