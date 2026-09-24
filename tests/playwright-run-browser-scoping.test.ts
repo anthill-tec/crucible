@@ -434,31 +434,49 @@ function leafRowsOf(row: HTMLElement): HTMLElement[] {
 }
 
 describe("CR-CRU-145 §S1 — UI: a scenario run under two browsers opens THAT browser's own steps", () => {
-  test("expanding the failing browser's row fetches and shows its OWN failing step — never the passing browser's; expanding the passing browser's row fetches and shows only its OWN; each click's request carries that row's browser", async () => {
+  // AMENDED 2026-09-24 by orchestrator ruling (escalation #2): this test was
+  // written against the pre-§S1 baseline, where nothing auto-expands. Under
+  // §S1 a playwright run's failing scenario is expanded ON OPEN and failures
+  // float, so rows are located by their BROWSER LABEL (never DOM order), the
+  // failing browser's row is asserted open without a click, and the passing
+  // browser's row is clicked open only if §S1 has not already opened it. The
+  // core bound is unchanged in strength: each row shows its OWN browser's
+  // steps and NEVER the other browser's, asserted by absence both ways.
+  function rowForBrowser(browser: string): HTMLElement {
+    const rows = suiteRowsNamed(SCENARIO_NAME).filter((el) => (el.textContent ?? "").includes(browser));
+    if (rows.length !== 1) {
+      throw new Error(`expected exactly one "${SCENARIO_NAME}" row labelled ${browser}; found ${rows.length}`);
+    }
+    return rows[0]!;
+  }
+
+  function isRowExpanded(row: HTMLElement): boolean {
+    return row.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim() === "▾";
+  }
+
+  function readFor(browser: string): boolean {
+    return fetchLog.some(
+      (u) => u.includes(`suite=${encodeURIComponent(SCENARIO_NAME)}`) && u.includes(`browser=${encodeURIComponent(browser)}`),
+    );
+  }
+
+  test("the failing browser's row opens with its OWN failing step (never the passing browser's); the passing browser's row shows only its OWN steps; each row's read carries that row's browser", async () => {
     const eventId = "evt-cross-browser-run-detail";
     const tree = crossBrowserTree();
     const summary = crossBrowserSummary();
     await mountApp(eventId, tree, summary);
 
-    const rows = suiteRowsNamed(SCENARIO_NAME);
-    // PRECONDITION — both same-named scenario rows are present, in the
-    // FIXTURE's own order: the passing browser first, the failing second
-    // (this AC's own framing).
-    expect(rows.length).toBe(2);
-    const passRow = rows[0]!;
-    const failRow = rows[1]!;
+    // PRECONDITION — both same-named scenario rows are present, each named
+    // by its own browser.
+    expect(suiteRowsNamed(SCENARIO_NAME).length).toBe(2);
+    const failRow = rowForBrowser(FAIL_BROWSER);
+    const passRow = rowForBrowser(PASS_BROWSER);
+    expect(failRow).not.toBe(passRow);
 
-    // Expand the FAILING browser's row FIRST.
-    failRow.click();
-    await settleDom();
-
-    // MOCK VERIFICATION — that click's OWN request names the browser it
-    // scoped to.
-    expect(
-      fetchLog.some(
-        (u) => u.includes(`suite=${encodeURIComponent(SCENARIO_NAME)}`) && u.includes(`browser=${encodeURIComponent(FAIL_BROWSER)}`),
-      ),
-    ).toBe(true);
+    // The FAILING browser's row is expanded ON OPEN, with no click, from a
+    // read scoped to that browser.
+    expect(isRowExpanded(failRow)).toBe(true);
+    expect(readFor(FAIL_BROWSER)).toBe(true);
 
     // POSITIVE — the failing row's OWN leaves carry the failing step's
     // message AT that step.
@@ -467,27 +485,35 @@ describe("CR-CRU-145 §S1 — UI: a scenario run under two browsers opens THAT b
     expect(failThenLeaf).toBeDefined();
     expect(failThenLeaf!.textContent ?? "").toContain("expected pane scrollTop > 0, got 0");
 
-    // NEGATIVE — never the passing browser's steps: the failing row's own
-    // subtree never renders a clean pass (no failure message) for that same
-    // step title.
-    expect((failThenLeaf!.textContent ?? "").includes("✓") && !(failThenLeaf!.textContent ?? "").includes("expected pane scrollTop")).toBe(false);
+    // NEGATIVE — never the passing browser's steps: no leaf of the failing
+    // row renders that step title as a clean pass, and the failing row holds
+    // no passing leaf for that step at all.
+    const failStepLeaves = failLeaves.filter((r) => (r.textContent ?? "").includes(FAIL_STEP.title));
+    expect(failStepLeaves.length).toBe(1);
+    expect(failStepLeaves.some((r) => !(r.textContent ?? "").includes("expected pane scrollTop > 0, got 0"))).toBe(false);
 
-    // Expand the PASSING browser's row SECOND, independently.
-    passRow.click();
-    await settleDom();
+    // The PASSING browser's row: expand it by click unless §S1 already did.
+    if (!isRowExpanded(passRow)) {
+      passRow.click();
+      await settleDom();
+    }
+    const passRowNow = rowForBrowser(PASS_BROWSER);
+    expect(isRowExpanded(passRowNow)).toBe(true);
+    expect(readFor(PASS_BROWSER)).toBe(true);
 
-    expect(
-      fetchLog.some(
-        (u) => u.includes(`suite=${encodeURIComponent(SCENARIO_NAME)}`) && u.includes(`browser=${encodeURIComponent(PASS_BROWSER)}`),
-      ),
-    ).toBe(true);
-
-    // POSITIVE — the passing row's OWN leaves never carry the other
-    // browser's failure message.
-    const passLeaves = leafRowsOf(passRow);
+    // POSITIVE — the passing row DOES carry its own passing steps.
+    const passLeaves = leafRowsOf(passRowNow);
     const passLeafText = passLeaves.map((r) => r.textContent ?? "").join(" | ");
-    expect(passLeafText).not.toContain("expected pane scrollTop > 0, got 0");
-    // POSITIVE — and DOES carry its own passing step.
     expect(passLeafText).toContain(GIVEN_STEP.title);
+    expect(passLeafText).toContain(PASS_STEP.title);
+    // NEGATIVE — and NEVER the failing browser's failure message.
+    expect(passLeafText).not.toContain("expected pane scrollTop > 0, got 0");
+
+    // NEGATIVE, re-checked after the second row opened — the failing row
+    // still shows only its own failing step, not the passing browser's.
+    const failLeavesAfter = leafRowsOf(rowForBrowser(FAIL_BROWSER));
+    const failStepAfter = failLeavesAfter.filter((r) => (r.textContent ?? "").includes(FAIL_STEP.title));
+    expect(failStepAfter.length).toBe(1);
+    expect(failStepAfter[0]!.textContent ?? "").toContain("expected pane scrollTop > 0, got 0");
   });
 });

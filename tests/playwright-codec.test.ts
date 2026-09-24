@@ -522,7 +522,10 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     const eventId = "evt-bdd-dom-1";
     const tree: DomSuiteNode[] = [
       {
-        name: "Sample Feature › Scenario A passing",
+        // The passing scenario sits in its OWN all-green feature, so under
+        // the progressive default it folds at the feature level and "the rest
+        // don't render" is a clean bound (see the migration note below).
+        name: "Another Feature › Scenario A passing",
         status: "pass",
         children: [
           { name: "Given a thing", status: "pass", duration_ms: 5 },
@@ -555,22 +558,23 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // CR-CRU-038 §S1 — e2e is a BROAD tier -> Density presentation, but the
-    // run opens MINIMIZED regardless: NEITHER scenario's steps render until
-    // expanded, and nothing auto-fetches.
+    // MIGRATED 2026-09-24 (CR-CRU-145 §S1, authorized by the orchestrator):
+    // a codec:"playwright" run no longer opens MINIMIZED — it opens
+    // PROGRESSIVELY EXPANDED. The failing feature floats first and opens,
+    // and its failing scenario's steps render ON OPEN with no click; the
+    // all-green feature folds, so the passing scenario's steps never render.
+    // The non-playwright MINIMIZED default is pinned in
+    // tests/playwright-run-progressive-expansion.test.ts (the junit case).
     const failScenarioRow = Array.from(overlay!.querySelectorAll('[data-testid="suite-row"]')).find(
       (el) => (el.textContent ?? "").includes("Scenario B failing"),
     );
     expect(failScenarioRow).toBeDefined();
-    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
     expect(
       (failScenarioRow as HTMLElement).querySelector('[data-testid="tree-toggle"]')!.textContent?.trim(),
-    ).toBe("▸");
+    ).toBe("▾");
 
-    // Expand the failing scenario explicitly — its steps render on click.
-    (failScenarioRow as HTMLElement).click();
-    await new Promise((r) => setTimeout(r, 200));
-
+    // The failing scenario's Given/When/Then step names render like any
+    // other leaf name — with NO click.
     const whenBreaksLeaf = Array.from(overlay!.querySelectorAll('[data-testid="leaf-row"]')).find((el) =>
       (el.textContent ?? "").includes("When it breaks"),
     );
