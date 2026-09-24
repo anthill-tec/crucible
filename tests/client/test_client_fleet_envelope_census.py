@@ -84,6 +84,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client import cr098_next_oracle
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 TOON_PATH = CLIENTS_DIR / "toon.py"
@@ -2069,6 +2071,15 @@ class _QueueStubServer:
                 stub.requests.append(("GET", self.path))
                 if self.path.endswith("/queue"):
                     self._answer(200, stub.payload)
+                elif self.path.split("?", 1)[0].endswith("/next"):
+                    # CR-CRU-098 §S3 — `next` reads the server's decision off
+                    # `…/next`. The stub answers what the route publishes for
+                    # THIS board, taken from the frozen old-resolver record
+                    # (tests/client/cr098_next_oracle.py) rather than
+                    # recomputed here.
+                    self._answer(*cr098_next_oracle.route_answer(
+                        stub.payload["entries"], stub.payload["tracks"],
+                        cr098_next_oracle.scope_of(self.path)))
                 else:
                     self._answer(404, {"ok": False,
                                        "error": f"no stub for {self.path}"})
@@ -2727,115 +2738,16 @@ def _get_depends_drives():
     return drives
 
 
-class Cr108PublishedTrackFactTest(unittest.TestCase):
-    """CR-CRU-108 §S2 / AC5 / AC5b -- `next`'s track fact, per client, END TO
-    END.
-
-    Same machinery as the CR-CRU-092 section above (`_get_next_drives()`: one
-    real subprocess per client x case against the queue stub) -- never a
-    second harness. What is new is WHERE the fact comes from. The stub now
-    publishes `tracks` exactly as §S1's `handleQueueGet` does, and these tests
-    assert the envelope carries THAT list rather than one the client
-    re-derived from the entries beside it.
-
-    Per-client subTests throughout: a fleet failure that does not name the
-    client sends the next reader to all five.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.drives = _get_next_drives()
-
-    def _axi(self, client_key, case):
-        return (self.drives.get((client_key, case)) or {}).get("axi") or {}
-
-    def _exit(self, client_key, case):
-        result = (self.drives.get((client_key, case)) or {}).get("result")
-        return getattr(result, "returncode", None)
-
-    def test_every_client_reads_its_track_fact_off_the_published_list(self):
-        """AC5 -- `next`'s multi-track behaviour is UNCHANGED on the wire for
-        every value that classifies the same under both rules, driven per
-        client. Three fixtures, one rule -- the envelope's track fact IS the
-        payload's published `tracks`:
-
-          * `two-track` (two published lanes) -- exit 2, `ok=false`,
-            `needs=["track"]`, `tracks` EQUAL to the published list, a
-            `totalCount` matching its length, and no decision;
-          * `one-track` and `no-track` (one published lane / none) -- exit 0,
-            a decision, no `needs` and NO `tracks` key.
-
-        The CR-CRU-092 P4/P8 tests above pin the same fixtures against
-        HARDCODED values; this pins them against the PAYLOAD, which is the
-        claim §S2 actually makes."""
-        for client_key in CLIENT_FILES:
-            published = CR092_FIXTURES["two-track"]["tracks"]
-            with self.subTest(client=client_key, case="two-track"):
-                axi = self._axi(client_key, "two-track")
-                self.assertIs(axi.get("ok"), False)
-                self.assertEqual(axi.get("needs"), ["track"])
-                self.assertEqual(
-                    axi.get("tracks"), published,
-                    "AC5 -- the refusal lists the tracks the READ published")
-                self.assertEqual(axi.get("totalCount"), len(published))
-                self.assertNotIn("decision", axi)
-                self.assertEqual(self._exit(client_key, "two-track"), 2)
-            for case in ("one-track", "no-track"):
-                with self.subTest(client=client_key, case=case):
-                    self.assertLessEqual(
-                        len(CR092_FIXTURES[case]["tracks"]), 1,
-                        f"non-vacuity: the {case!r} fixture must publish at "
-                        f"most ONE lane, or it is not the single-track case")
-                    axi = self._axi(client_key, case)
-                    self.assertEqual(self._exit(client_key, case), 0)
-                    self.assertEqual(axi.get("decision"), "NEXT")
-                    self.assertNotIn(
-                        "needs", axi,
-                        "AC5 -- a single-track project takes no argument")
-                    self.assertNotIn("tracks", axi)
-
-    def test_a_whitespace_only_second_value_is_not_a_second_track_in_any_client(self):
-        """AC5b -- the ONE behaviour change, pinned as a change, in all five
-        clients. A queue declaring `"   "` beside `"2"` is multi-track to
-        `next` TODAY -- it refuses without `--track` -- and becomes
-        single-track after, because the server's rule is the one that
-        survives. The old answer was wrong: whitespace is not a lane."""
-        self.assertEqual(
-            CR092_FIXTURES["blank-second-track"]["tracks"], ["2"],
-            "non-vacuity: the published list must drop the whitespace-only "
-            "value, or this fixture is not AC5b's")
-        for client_key in CLIENT_FILES:
-            with self.subTest(client=client_key):
-                axi = self._axi(client_key, "blank-second-track")
-                self.assertEqual(
-                    self._exit(client_key, "blank-second-track"), 0,
-                    "AC5b -- one published lane, so `next` answers; exit 2 is "
-                    "the pre-cutover refusal this AC retires")
-                self.assertEqual(axi.get("decision"), "NEXT")
-                self.assertEqual(axi.get("cr"), "CR-Q108-550")
-                self.assertNotIn("needs", axi)
-                self.assertNotIn("tracks", axi)
-
-    def test_a_padded_value_collapses_into_the_track_it_pads_in_every_client(self):
-        """AC5b's second half -- `" track-2 "` beside `"track-2"` is ONE track,
-        not two, in all five clients. Identity is the TRIMMED value, so
-        preserving the padding would draw the second lane `normalizeTrack`
-        exists to prevent."""
-        self.assertEqual(
-            CR092_FIXTURES["padded-track"]["tracks"], ["track-2"],
-            "non-vacuity: the published list must collapse the padded value "
-            "into the value it pads, or this fixture is not AC5b's")
-        for client_key in CLIENT_FILES:
-            with self.subTest(client=client_key):
-                axi = self._axi(client_key, "padded-track")
-                self.assertEqual(
-                    self._exit(client_key, "padded-track"), 0,
-                    "AC5b -- a padded value and the value it pads are ONE "
-                    "lane, so this queue is single-track")
-                self.assertEqual(axi.get("decision"), "NEXT")
-                self.assertEqual(axi.get("cr"), "CR-Q108-560")
-                self.assertNotIn("needs", axi)
-                self.assertNotIn("tracks", axi)
+# Cr108PublishedTrackFactTest (3 tests, per client) — RETIRED under CR-CRU-098
+# §S4: it held every client to READING the queue's published track fact
+# (`tracks` beside `entries`) instead of re-deriving one. `next` no longer reads
+# the queue: on the server the resolver reads the declared tracks directly, so
+# an unpublished or re-derived track fact cannot arise. Its two server-side
+# behaviours are PORTED to tests/next-route.test.ts (CR-CRU-098 AC12): the
+# blank case is now enforced at WRITE time — "AC6 — a whitespace-only track
+# value is refused at WRITE time and nothing is stored, so it can never become
+# a phantom second lane; …" — and the padded case at the route — "AC6 — a
+# padded track value collapses into the track it pads: one lane, …".
 
 
 class Cr106CrDependsAxiConformanceTest(unittest.TestCase):

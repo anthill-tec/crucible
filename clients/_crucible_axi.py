@@ -40,6 +40,7 @@ import sys
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # Sentinel distinguishing "cycle_id not supplied" (omit the key) from an
@@ -1748,12 +1749,12 @@ CYCLE_LEGACY_FLAG_REFUSED_CODE = "cycle-legacy-flag-refused"
 # The corrected call every refusal hands back: one label per flag, so there is
 # no delimiter left to collide with the label's own punctuation (§S1). The two
 # occurrences carry DISTINCT placeholders (`<c1>`/`<c2>`, the form AC8 pins on
-# `_next_start_help`): one identical token repeated reads as a duplicated
+# the `next` start template): one identical token repeated reads as a duplicated
 # argument to anyone copying it out of a refusal envelope, which is the
 # opposite of the repetition the template exists to teach.
 # CR-CRU-127 §S6 — each cycle now carries the kind declared at its own
 # position, because a template teaching a command the mandate REFUSES turns
-# contextual disclosure into a dead end. `_next_start_help` spells the same
+# contextual disclosure into a dead end. `nextHints.start` (src/hints.ts) spells the same
 # form by hand and moves with this one.
 CYCLE_FLAG_TEMPLATE = ('plan-file --cr <CR-id> --title "<brief>" '
                        '--cycle "<c1>" --cycle-kind <k1> '
@@ -2244,7 +2245,12 @@ def cmd_queue(args, project_dir, ops):
 
 # ── CR-CRU-092 §S2–§S6 — `next`: the roadmap's decision oracle ─────────────
 #
-# ONE read (`GET …/queue`) in, ONE decision out: `NEXT`, `HOLD` or `DRAINED`.
+# ONE read in, ONE decision out: `NEXT`, `HOLD` or `DRAINED`. Since
+# CR-CRU-098 §S3 the read is `GET …/next` and the decision is the SERVER's
+# (`resolveNext`, src/next.ts): this module keeps only the verb and the
+# presentation of an answer — the human line, the context override and the
+# `--fields` projection — never the derivation of one.
+#
 # All three are ANSWERS (§S1), so all three exit 0 — the harness's 0/2/3 split
 # is deliberately NOT adopted (the fleet's terminal-state rule,
 # `clients/STATUS-CONTRACT.md:65-68`). The only non-answer is §S3's usage
@@ -2261,582 +2267,40 @@ def cmd_queue(args, project_dir, ops):
 # cross-check, no merge — which is why this comment does not even name the
 # harness's files.
 
-# §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:5981 — re-pinned 2026-09-14 from :5790,
-# shifted UP by the three lines CR-CRU-131 C2 deleted above it when the
-# environment-variable layer under `defaultRetention` and `runAbandonAfterMs`
-# was retired; re-pinned again the same day from :5787, shifted DOWN by the
-# fourteen lines CR-CRU-131 §S2 added above it — the three states
-# `ProjectPatch.retention` now distinguishes, and `updateProject` merging the
-# cap by key PRESENCE so a patch naming another field cannot wipe a cap of
-# zero); re-pinned once more 2026-09-17 from :5801, shifted DOWN by the twenty
-# schema-comment lines CR-CRU-140 §S2 added above it, saying which of `events`
-# and `runs` an ingested result actually lands in. Anything else — PENDING,
-# IN_PROGRESS — is unmerged.
-LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
-
-# §S2 — the three DRAINED reasons and the four HOLD trigger kinds, as the
-# vocabulary the DN fixes ("Reading the lane during execution"). Named here so
-# the enum is one list rather than four string literals scattered downstream.
-DRAINED_REASONS = ("wave-complete", "awaiting-assignment", "no-roadmap")
-HOLD_TRIGGER_KINDS = ("in-flight", "dead-dependency", "dependency",
-                      "unknown-dependency")
+# §S2 — the decision vocabulary (the three DRAINED reasons, the four HOLD
+# trigger kinds) is the SERVER's since CR-CRU-098: `DRAINED_REASONS` and
+# `HOLD_TRIGGER_KINDS` in src/next.ts. This module presents an answer and keeps
+# no second copy of it.
 
 _TRACK_LANE_RE = re.compile(r"\d+")
 
 
 def canonical_track(value):
     """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
-    mirror of `normalizeTrack` (src/store.ts:399-402). The first run of digits
+    mirror of `normalizeTrack` (src/store.ts). The first run of digits
     anywhere in the value, rendered as the PRD's locked wire format
     `track-<n>`; `None` when the value names no lane.
 
-    Why a client-side copy of a server-side rule is NOT a second
-    decision-maker: CR-CRU-091 §S9 puts ARGUMENT PARSING in the client half and
-    the WRITE rule on the server. `next` writes nothing, so no round-trip
-    exists to normalise its `--track`, and a naive by-value match would refuse
-    `next --track 2` while `wave-sequence --track 2` succeeds — one flag, one
-    project, two answers. The two implementations are held to one rule by
-    assertion (AC18), not by comment."""
+    CR-CRU-098 moved the lane MATCH to the server, which applies
+    `normalizeTrack` itself; what stays here is `next_context`'s stamp. In a
+    single-track project the answer carries no `track` (AC4), yet `next
+    --track 2` has always stamped `context.track: track-2` — so the flag is
+    canonicalised client-side, by this mirror, and the two implementations are
+    still held to one rule by assertion (AC18,
+    `TrackCanonicalisationAgreesWithTheServerTest`), not by comment."""
     if not value:
         return None
     lane = _TRACK_LANE_RE.search(value)
     return None if lane is None else f"track-{int(lane.group(0))}"
 
-
-class QueueTrackFactUnpublished(Exception):
-    """CR-CRU-108 §S2 — raised when a queue READ states no track fact.
-
-    A typed hard stop in the shape `AgentIdentityRequired` and
-    `CycleSelectionRefused` already establish: it carries the AXI `code`, the
-    `error` detail and this refusal's `help[]`, and it carries NO fallback
-    value by design. Deriving one from the entries beside it is precisely the
-    second copy of the rule CR-CRU-108 deleted, and a read that omits the fact
-    must fail LOUDLY rather than let a multi-track project read as
-    single-track — that would be `next` picking a lane design §11 forbids it
-    to pick. The caller MUST convert it into an `ok:false` envelope + non-zero
-    exit (`cmd_next`), never a raw traceback."""
-
-    def __init__(self, code, detail, help_steps):
-        super().__init__(detail)
-        self.code = code
-        self.detail = detail
-        self.help = list(help_steps)
-
-
-def queue_tracks(queue):
-    """§S2/AC4 (PURE) — the lanes the queue READ PUBLISHED, read rather than
-    re-derived: `GET …/queue` answers `{ok, entries, tracks}` and `tracks` is
-    the whole track fact (`declaredTracks`, src/store.ts — sorted, distinct,
-    non-blank, trimmed, echoed as stored).
-
-    `len() > 1` is still the whole definition of multi-track and the values
-    are still echoed to the caller unchanged. What changed is WHOSE answer it
-    is: the server owns the normalisation, so it is the one surface that may
-    say how many lanes a project declares. A client that recomputed the list
-    answered FOUR lanes where the server answered TWO — a whitespace-only
-    value and a padded duplicate — and `next` refused a queue it owed an
-    answer.
-
-    A payload carrying no `tracks` list is not "no tracks": it is a read that
-    did not state the fact, and it raises rather than degrading."""
-    tracks = (queue or {}).get("tracks")
-    if not isinstance(tracks, list):
-        raise QueueTrackFactUnpublished(
-            "queue-track-fact-unpublished",
-            "the queue read published no `tracks` list, so the project's "
-            "declared lanes are unknown — next will not guess one",
-            ["upgrade the Crucible server: GET /api/v2/projects/<key>/queue "
-             "publishes `tracks` beside `entries`",
-             "then re-run next"])
-    return list(tracks)
-
-
-def _entry_seq(entry):
-    """The DECLARED position, or None. `bool` is an `int` subclass — excluded
-    so a stray `True` can never pose as a position (the same guard
-    `echoed_cycle_id` applies)."""
-    seq = entry.get("seq")
-    if isinstance(seq, int) and not isinstance(seq, bool):
-        return seq
-    return None
-
-
-def _is_actionable(entry):
-    """§S2 — the TWO axes. A CR is actionable iff it is `PENDING` on the
-    server-derived status axis AND carries no `lifecycle` disposition.
-
-    The second half is load-bearing: `deriveQueueStatus(projectKey, cr,
-    shipped)` cannot see `lifecycle`, by signature, so a VOID cr with no plan
-    reads `status: "PENDING"`. Keyed on `status` alone this verb would offer,
-    as the next thing to build, work whose author explicitly recorded that it
-    is not happening."""
-    return entry.get("status") == "PENDING" and "lifecycle" not in entry
-
-
-def _dead_entries(entries):
-    """The lane's declared-dead rows, as `(cr, lifecycle)`. A dead entry is not
-    blocked work — it is not work — which is why it leaves the candidate set
-    exactly as a landed one does, and why §S4's no-scanning-past rule is not
-    engaged by it."""
-    return [(e.get("cr"), e["lifecycle"]) for e in entries
-            if isinstance(e.get("lifecycle"), dict)]
-
-
-def _dead_phrase(cr, lifecycle):
-    state = lifecycle.get("state")
-    by = lifecycle.get("by")
-    return f"{cr} ({state} by {by})" if by else f"{cr} ({state})"
-
-
-def _next_start_help(entry):
-    """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1582-1603`).
-    `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
-    step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
-            f'--cycle "<c1>" --cycle-kind <k1> '
-            f'--cycle "<c2>" --cycle-kind <k2> --agent <agentId>')
-    wave = entry.get("wave")
-    if wave:
-        step += f" --wave {wave}"
-    return [step, "status"]
-
-
-def _hold_help(trigger):
-    """§S6 — the move that clears the NAMED trigger, then `next` again. Each
-    kind demands a different response, which is the whole point of splitting
-    the vocabulary rather than emitting one "blocked" state."""
-    kind = trigger["kind"]
-    if kind == "in-flight":
-        cr = trigger["cr"]
-        steps = [f"cr-close --cr {cr} --commit <sha> --agent <agentId> — "
-                 f"{cr} occupies the lane and holds everything behind it"]
-    elif kind == "dead-dependency":
-        cr, state, by = trigger["cr"], trigger["state"], trigger.get("by")
-        target = f"at {by}" if by else "off it"
-        steps = [f"re-point the dependsOn {target} in docs/changes/README.md "
-                 f"and re-run queue-file — {cr} is {state}, so waiting will "
-                 f"never clear this"]
-    elif kind == "unknown-dependency":
-        cr = trigger["cr"]
-        steps = [f"cr-plan --cr {cr} --release <v> --wave <n> "
-                 f"--title <brief> --agent <agentId> — the queue does not "
-                 f"hold {cr}"]
-    else:
-        steps = [f"cr-close --cr {row['cr']} --commit <sha> --agent <agentId>"
-                 for row in trigger["blockedBy"]]
-    steps.append("next")
-    return steps
-
-
-def _drained_help(reason, lane, next_wave=None):
-    """§S6 — `DRAINED`'s state-derived `help[]`: the move that would REFILL the
-    lane. `wave-complete` additionally names the lane's corpses, so a lane that
-    drained because its remaining work was declared dead reads as legible
-    rather than mysterious (AC16).
-
-    §S2 — on a finished wave the move that OPENS the next one carries that
-    wave's LABEL as data, taken verbatim from the published order, so the
-    caller is not left to re-derive it off the board; a wave with nothing
-    published after it keeps the placeholder, because there is no label to
-    name."""
-    sequence = ("wave-sequence --release <v> --wave <n> --crs <a,b,c> "
-                "--agent <agentId>")
-    if reason == "no-roadmap":
-        return ["release-propose --label <v> --agent <agentId>",
-                "cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
-                "--agent <agentId>",
-                sequence]
-    if reason == "awaiting-assignment":
-        return [f"{sequence} --track <n>"]
-    steps = []
-    dead = _dead_entries(lane)
-    if dead:
-        steps.append("the lane's remaining entries are declared dead: "
-                     + ", ".join(_dead_phrase(cr, lc) for cr, lc in dead))
-    steps.append("cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
-                 "--agent <agentId>")
-    opens = next_wave or "<n>"
-    steps.append(f"wave-sequence --release <v> --wave {opens} "
-                 f"--crs <a,b,c> --agent <agentId>")
-    return steps
-
-
-def _next_trigger(target, lane, entries):
-    """§S2 (PURE) — the ONE cause holding `target`, or `(None, warnings)` when
-    nothing does. Returns `(trigger, warnings)`.
-
-    Evaluated in the order the DN fixes: `in-flight` first (an occupied lane
-    holds everything behind it), then `dead-dependency` (waiting NEVER clears
-    it, so it outranks a blocker that waiting does clear), then `dependency`,
-    then `unknown-dependency`.
-
-    Occupancy is scoped to the LANE; dependency resolution is scoped to the
-    WHOLE queue, because a `dependsOn` legitimately crosses tracks."""
-    for entry in lane:
-        if entry.get("status") == "IN_PROGRESS":
-            return {"kind": "in-flight", "cr": entry.get("cr")}, []
-
-    by_cr = {e.get("cr"): e for e in entries if e.get("cr")}
-    dead, blocked_by, unknown = [], [], []
-    for dep in target.get("dependsOn") or []:
-        entry = by_cr.get(dep)
-        if entry is None:
-            unknown.append(dep)
-            continue
-        # The status axis decides LANDED first: a dep that COMPLETED did the
-        # work, whatever lifecycle note was filed over it afterwards.
-        if entry.get("status") in LANDED_STATUSES:
-            continue
-        lifecycle = entry.get("lifecycle")
-        if isinstance(lifecycle, dict):
-            dead.append((dep, lifecycle))
-        else:
-            blocked_by.append({"cr": dep, "status": entry.get("status")})
-
-    warnings = []
-    if unknown:
-        # §12 — reported, never rejected, and it rides a STRUCTURED warning
-        # alongside whichever trigger wins.
-        warnings.append({
-            "code": "unknown-dependency",
-            "detail": (f"{target.get('cr')} declares a dependsOn the queue "
-                       f"does not hold: {', '.join(unknown)} — a roadmap "
-                       f"authored forwards reads back this way until the dep "
-                       f"is filed with cr-plan"),
-        })
-
-    if dead:
-        dep, lifecycle = dead[0]
-        trigger = {"kind": "dead-dependency", "cr": dep,
-                   "state": lifecycle.get("state")}
-        if lifecycle.get("by"):
-            trigger["by"] = lifecycle["by"]
-        return trigger, warnings
-    if blocked_by:
-        return {"kind": "dependency", "blockedBy": blocked_by}, warnings
-    if unknown:
-        return {"kind": "unknown-dependency", "cr": unknown[0]}, warnings
-    return None, warnings
-
-
-def _lane_fields(release, wave, track, entry=None):
-    """The CONTAINER an answer is ABOUT — its release when one is in scope, its
-    wave, and its track only when the project declares more than one lane.
-
-    A reader can then tell WHICH container an answer covers instead of
-    inferring it from the cr that came back, which a HOLD or a DRAINED does not
-    even name.
-
-    `entry` is the answer's own row where it has one. An explicit `--release`
-    IS the scope; with no flag a row's own declared release still rides its
-    answer verbatim, and a row declaring none carries none — never a
-    neighbour's.
-
-    The track is the RESOLVED lane rather than the row's stored value: one
-    declared lane is no lane to choose between, and echoing a stored track
-    there would tell a reader a lane was resolved when none was."""
-    fields = {}
-    declared = release or (entry.get("release") if entry else None)
-    if declared:
-        fields["release"] = declared
-    if wave:
-        fields["wave"] = wave
-    if track:
-        fields["track"] = track
-    return fields
-
-
-def _announced_fields(fields, announced):
-    """§S2 — the boundary statement, carried ALONGSIDE the decision on every
-    answer: the crossing is a fact about the resolved WAVE, not about which
-    decision that wave produced.
-
-    It is ABSENT rather than empty or null when there is nothing to announce,
-    so a reader tells "no crossing" from "a crossing of an unnamed wave" by key
-    presence alone, and an expired announcement leaves no residue behind."""
-    if announced:
-        fields["waveCompleted"] = announced
-    return fields
-
-
-def _next_answer(entry, lane_fields, announced=None):
-    """§S2/AC14 — `NEXT`'s result fields. Every declared value is CONSUMED
-    verbatim and an undeclared `release` is OMITTED, never defaulted, never
-    index-derived. The container rides every answer through `_lane_fields`, so
-    one rule spells it for all three decisions."""
-    fields = {"decision": "NEXT", "cr": entry.get("cr")}
-    seq = _entry_seq(entry)
-    if seq is not None:
-        fields["seq"] = seq
-    fields.update(lane_fields)
-    _announced_fields(fields, announced)
-    fields["help"] = _next_start_help(entry)
-    return fields
-
-
-def _drained_answer(reason, rows, lane_fields, announced=None,
-                    next_wave=None):
-    """§S2 — the empty answer, and the container it is empty FOR. `rows` is the
-    set the reason is a claim about: the WAVE when the wave itself finished,
-    the lane when only the lane did — which is what `help[]` reads to name the
-    corpses that emptied it."""
-    fields = {"decision": "DRAINED", "reason": reason}
-    fields.update(lane_fields)
-    _announced_fields(fields, announced)
-    fields["help"] = _drained_help(reason, rows, next_wave)
-    return fields
-
-
-def _wave_of_the_lane(scope, wave):
-    """§S2 (PURE) — the ONE wave an answer is about.
-
-    An explicit `--wave` IS the answer. Otherwise it is the wave the first
-    ACTIONABLE row declares, taken in the order the server PUBLISHED and never
-    re-derived from the `seq` value; with nothing actionable anywhere, the last
-    wave published. One pass, because the answer is the first row that
-    qualifies and the fallback is the last row seen.
-
-    A row whose `wave` is the empty string is in NO wave and resolves none —
-    the row the write-side scope guard skips when it derives the wave it
-    permits. A reader that adopted it would offer work the server refuses."""
-    if wave is not None:
-        return wave
-    published = None
-    for entry in scope:
-        declared = entry.get("wave")
-        if not declared:
-            continue
-        if _is_actionable(entry):
-            return declared
-        published = declared
-    return published
-
-
-def _previous_published_wave(scope, wave):
-    """§S2 (PURE) — the PREDECESSOR: the previous DISTINCT wave label in the
-    order the server PUBLISHED, or `None` when the resolved wave is the
-    earliest published and has crossed nothing.
-
-    Waves are strings on the wire, so the label standing immediately before the
-    resolved wave's FIRST row is taken verbatim — never parsed as a number,
-    never sorted, never re-derived from the `seq` value, which is the same
-    published-order rule `_wave_of_the_lane` reads the resolved wave by. Every
-    label before that first row differs from the resolved one by construction,
-    so the nearest of them IS the previous distinct label.
-
-    A row whose `wave` is the empty string is in NO wave and can be neither a
-    predecessor nor a step towards one — skipped exactly as the resolution
-    skips it."""
-    if wave is None:
-        return None
-    previous = None
-    for entry in scope:
-        declared = entry.get("wave")
-        if not declared:
-            continue
-        if declared == wave:
-            return previous
-        previous = declared
-    return None
-
-
-def _next_published_wave(scope, wave):
-    """§S2 (PURE) — the wave the lane moves INTO once this one is finished: the
-    next distinct label published after the resolved wave's rows, or `None`
-    when nothing follows it. Read the same verbatim way as the predecessor, so
-    a zero-padded or non-numeric label is reachable without a case of its
-    own."""
-    if wave is None:
-        return None
-    reached = False
-    for entry in scope:
-        declared = entry.get("wave")
-        if not declared:
-            continue
-        if declared == wave:
-            reached = True
-        elif reached:
-            return declared
-    return None
-
-
-def _boundary_announcement(scope, container, wave):
-    """§S2 (PURE) — the predecessor wave this read PROVES has completed, or
-    `None` when there is nothing to announce.
-
-    The crossing has just happened when the predecessor holds no actionable
-    entry left — a landed CR and a declared-dead one are both finished for this
-    predicate, which `_is_actionable` already spells — AND the resolved wave
-    has landed nothing yet. It therefore EXPIRES by itself the moment the new
-    wave's first cr merges, and needs no state on either side.
-
-    A resolved wave nothing precedes announces nothing: "the predecessor
-    completed" is a claim about a predecessor that EXISTS, and a container that
-    selects no row has no first row to stand behind.
-
-    THE STATEMENT IS SCOPED TO THE CONTAINER ASKED ABOUT, deliberately (ruled
-    at cycle 401). Both the predecessor and its completeness are read over
-    `scope` — the caller's release narrowing — so a release-scoped question is
-    answered about that release and NOTHING else: the answer announces that the
-    predecessor completed within it even while that wave still holds an
-    actionable entry declaring no release. That is the same narrowing
-    membership already gets, and the envelope names the release beside the
-    statement; the unscoped reading would report on work the caller explicitly
-    excluded."""
-    predecessor = _previous_published_wave(scope, wave)
-    if predecessor is None:
-        return None
-    if any(_is_actionable(e) for e in scope
-           if e.get("wave") == predecessor):
-        return None
-    if any(e.get("status") in LANDED_STATUSES for e in container):
-        return None
-    return predecessor
-
-
-def resolve_next(entries, track=None, tracks=None, release=None, wave=None):
-    """§S2/§S3 (PURE) — the decision resolver: the lane's declared sequence
-    plus live state in, exactly one decision out.
-
-    A lane is three dimensions and each does its own job. `release` and `wave`
-    are CONTAINERS, matched VERBATIM against the entry's own strings: nothing
-    is coerced on the way in, so `6` and `06` are two waves and `0.2.0` and
-    `v0.2.0` two releases. Membership is declared, never inferred, so a row
-    with no release is in none. `track` is SCHEDULING — which cr comes next,
-    in what order — and keeps `canonical_track`'s digit rule, a mirror of the
-    server's own write rule.
-
-    The wave predicate therefore reads `wave` and NOTHING else: a wave is a
-    container of CRs, so a track-filtered set can never answer whether one is
-    finished — not as a filter, not as a union of per-track slices, not as a
-    special case for one lane or many. A lane holding no actionable cr inside
-    a wave that still holds some is `awaiting-assignment`; `wave-complete` is
-    reserved for the wave itself, independent of how many tracks it was
-    scheduled across.
-
-    `tracks` is the list the queue read PUBLISHED (CR-CRU-108 §S2), handed in
-    rather than derived here: the refusal names the SERVER's lanes or it names
-    none. There is deliberately no default answer — `None` means no read
-    stated the fact, and that raises `QueueTrackFactUnpublished` rather than
-    resolving over a lane set nobody published.
-
-    Returns `(ok, code, fields, warnings)` — a tuple, like the module's
-    existing `resolve_single_plan`. `code` is the process exit code, so the
-    three DECISIONS (all answers, all `0`) and §S3's usage refusal (`2`) come
-    out of one function rather than being re-derived by the caller."""
-    if tracks is None:
-        raise QueueTrackFactUnpublished(
-            "queue-track-fact-unpublished",
-            "the decision was asked for without the `tracks` list the queue "
-            "read publishes, so the project's declared lanes are unknown — "
-            "next will not guess one",
-            ["pass the `tracks` the queue read published"])
-    entries = list(entries or [])
-    tracks = list(tracks)
-    wanted = canonical_track(track)
-
-    # §S3 — track scoping is required only when the DATA justifies it. With one
-    # track or none the flag is never prompted for and `tracks` never rides the
-    # envelope; with more than one the verb refuses to guess and names the live
-    # lanes. It never picks a lane.
-    if len(tracks) > 1 and (
-            wanted is None
-            or wanted not in {canonical_track(t) for t in tracks}):
-        return (False, EXIT_USAGE,
-                {"needs": ["track"], "tracks": tracks,
-                 "totalCount": len(tracks),
-                 "help": [f"next --track <n> — the live lanes are "
-                          f"{', '.join(tracks)}"]},
-                [])
-
-    # The CONTAINER, resolved BEFORE any lane is chosen and never from the
-    # lane: the release scope narrows to DECLARED membership, and the wave
-    # follows from that scope's own `wave` values alone.
-    scope = entries if release is None else [
-        e for e in entries if e.get("release") == release]
-    resolved_wave = _wave_of_the_lane(scope, wave)
-    container = scope if resolved_wave is None else [
-        e for e in scope if e.get("wave") == resolved_wave]
-
-    # CR-CRU-095 §S1 — the lane is consumed in the order the server PUBLISHED
-    # (the canonical key lives in `listQueue`); a reader re-sorting it by the
-    # seq VALUE is what CR-091 AC18 outlawed.
-    lane = container if wanted is None else [
-        e for e in container if canonical_track(e.get("track")) == wanted]
-    resolved_track = wanted if len(tracks) > 1 else None
-    lane_fields = _lane_fields(release, resolved_wave, resolved_track)
-    # §S2 — the boundary this ONE read already proves, resolved before any
-    # decision so the same statement rides whichever answer the lane produces.
-    announced = _boundary_announcement(scope, container, resolved_wave)
-
-    warnings = []
-    unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]
-    if unpositioned:
-        # CR-CRU-091 §S2 — the roadmap publishes `seq` on EVERY entry, so an
-        # entry without one is a defect to surface, not a hole to fill with a
-        # position. THE DETAIL NAMES NO CR (CR-CRU-097 AC3a): this module is
-        # SHARED, so all five clients emit this string on any project's
-        # board, and it states the contract it checks rather than the id of
-        # the CR that wrote it. The lineage stays here.
-        warnings.append({
-            "code": "missing-seq",
-            "detail": (f"the queue published no seq for "
-                       f"{', '.join(unpositioned)} — the roadmap declares "
-                       f"one on every entry, so this is a roadmap defect; "
-                       f"re-run wave-sequence for its wave"),
-        })
-
-    if not entries:
-        return (True, 0,
-                _drained_answer("no-roadmap", lane, lane_fields, announced),
-                warnings)
-    if not container:
-        # The declared container holds no row at all, so nothing is SCHEDULED
-        # here — which is not the claim that a wave finished.
-        return (True, 0,
-                _drained_answer("awaiting-assignment", lane, lane_fields,
-                                announced),
-                warnings)
-
-    if not [e for e in container if _is_actionable(e)]:
-        # A MEMBERSHIP claim, read off the container and nothing else, so it
-        # is the same claim from every lane and from no lane at all. The wave
-        # is finished, so its help[] names the wave the lane moves into.
-        return (True, 0,
-                _drained_answer("wave-complete", container, lane_fields,
-                                announced,
-                                _next_published_wave(scope, resolved_wave)),
-                warnings)
-
-    actionable = [e for e in lane if _is_actionable(e)]
-    if not actionable:
-        # The wave still holds actionable work — a sibling lane's, or work
-        # this lane was never scheduled — so this answer makes no claim about
-        # the wave.
-        return (True, 0,
-                _drained_answer("awaiting-assignment", lane, lane_fields,
-                                announced),
-                warnings)
-
-    target = actionable[0]
-    target_fields = _lane_fields(release, resolved_wave, resolved_track,
-                                 target)
-    trigger, trigger_warnings = _next_trigger(target, lane, entries)
-    warnings.extend(trigger_warnings)
-    if trigger is None:
-        return (True, 0, _next_answer(target, target_fields, announced),
-                warnings)
-
-    fields = {"decision": "HOLD", "cr": target.get("cr")}
-    seq = _entry_seq(target)
-    if seq is not None:
-        fields["seq"] = seq
-    fields.update(target_fields)
-    _announced_fields(fields, announced)
-    fields["trigger"] = trigger
-    fields["help"] = _hold_help(trigger)
-    return (True, 0, fields, warnings)
+# CR-CRU-098 §S2/AC6 — the fields the route's multi-track refusal carries,
+# in the order the client-computed refusal always emitted them. The route
+# answers it through `fail()`, which adds `ok:false` and an `error` sentence
+# the envelope never carried; only these four ride.
+NEXT_REFUSAL_FIELDS = ("needs", "tracks", "totalCount", "help")
+
+# The scope flags `next` passes through as query parameters, verbatim.
+NEXT_SCOPE_FLAGS = ("track", "release", "wave")
 
 
 def _next_legacy_line(ok, fields):
@@ -2905,7 +2369,7 @@ def next_projection(ok, fields, args):
     defeat on a single-record answer, which is exactly why P3's `--full` is
     absent by shape rather than added as a no-op. The transport-failure
     envelope never arrives here at all — `cmd_next` emits and returns before
-    the resolver runs — matching `roadmap_failure_fields`, which `--fields`
+    any answer is read — matching `roadmap_failure_fields`, which `--fields`
     also leaves alone."""
     if not ok:
         return fields
@@ -2913,8 +2377,12 @@ def next_projection(ok, fields, args):
 
 
 def cmd_next(args, project_dir, ops):
-    """§S2/§S6 — the `next` READ verb (no `--agent`, §S4): one
-    `GET …/queue`, one decision, one envelope.
+    """§S2/§S6, CR-CRU-098 §S3 — the `next` READ verb (no `--agent`, §S4):
+    one `GET …/next`, the server's decision, one envelope.
+
+    Only the flags the caller GAVE ride the query string: an absent flag is
+    omitted rather than sent empty, because the route reads an empty
+    parameter as the empty string, a real (if matchless) scope.
 
     The read failure is NOT tolerantly degraded the way `cmd_status`/`cmd_queue`
     degrade theirs: an unreadable roadmap and an empty one are DIFFERENT FACTS
@@ -2922,7 +2390,22 @@ def cmd_next(args, project_dir, ops):
     reporting `DRAINED` and walking the orchestrator past a lane it never
     actually read."""
     key = ops.project_key(project_dir)
-    resp = ops.get(f"/api/v2/projects/{key}/queue")
+    query = urllib.parse.urlencode(
+        [(flag, getattr(args, flag, None)) for flag in NEXT_SCOPE_FLAGS
+         if getattr(args, flag, None) is not None])
+    resp = ops.get(f"/api/v2/projects/{key}/next" + (f"?{query}" if query else ""))
+
+    # Refusal vs transport failure is told apart STRUCTURALLY, never by
+    # matching the error string: only the route's multi-track refusal carries
+    # `needs`.
+    if resp.get("ok") is False and "needs" in resp:
+        fields = {name: resp[name] for name in NEXT_REFUSAL_FIELDS if name in resp}
+        ops.emit("next", False, next_projection(False, fields, args),
+                 next_context(ops.context(project_dir), False, None),
+                 list(resp.get("warnings") or []),
+                 _next_legacy_line(False, fields))
+        return EXIT_USAGE
+
     if not resp.get("ok"):
         error = resp.get("error")
         ops.emit("next", False,
@@ -2935,32 +2418,16 @@ def cmd_next(args, project_dir, ops):
                  f"next: ok=False — the roadmap could not be read: {error}")
         return 1
 
-    track = getattr(args, "track", None)
-    try:
-        tracks = queue_tracks(resp)
-    except QueueTrackFactUnpublished as refusal:
-        # The SAME shape the failed read above emits, for the same reason: a
-        # read that never stated the track fact is a read this verb cannot act
-        # on, and answering anyway would pick a lane out of a set nobody
-        # published.
-        ops.emit("next", False,
-                 {"error": refusal.detail, "help": refusal.help},
-                 ops.context(project_dir),
-                 [{"code": refusal.code, "detail": refusal.detail}],
-                 f"next: ok=False — {refusal.detail}")
-        return 1
-    # All three dimensions ride the ONE read already made: narrowing the lane
-    # is a question about the payload in hand, never a second round-trip.
-    ok, code, fields, warnings = resolve_next(
-        resp.get("entries"), track=track, tracks=tracks,
-        release=getattr(args, "release", None),
-        wave=getattr(args, "wave", None))
-    # The legacy line reads the UNprojected decision: the human channel is not
-    # narrowed by a machine-channel projection flag.
-    ops.emit("next", ok, next_projection(ok, fields, args),
-             next_context(ops.context(project_dir), ok, track),
-             warnings, _next_legacy_line(ok, fields))
-    return code
+    # The answer is emitted as received, less the envelope's own `ok` and
+    # `warnings`. The legacy line reads the UNprojected decision: the human
+    # channel is not narrowed by a machine-channel projection flag.
+    fields = {name: value for name, value in resp.items()
+              if name not in ("ok", "warnings")}
+    ops.emit("next", True, next_projection(True, fields, args),
+             next_context(ops.context(project_dir), True,
+                          getattr(args, "track", None)),
+             list(resp.get("warnings") or []), _next_legacy_line(True, fields))
+    return 0
 
 
 def status_namespace(**extra_fields):
@@ -4825,14 +4292,14 @@ def add_next_verb(sub, func, *, parents=(), add_args=()):
     """
     nx = sub.add_parser(
         "next", parents=list(parents),
-        help="Ask the DECLARED roadmap what is actionable now → GET …/queue "
+        help="Ask the DECLARED roadmap what is actionable now → GET …/next "
              "(§S2). Answers NEXT | HOLD | DRAINED, all exit 0. Read-only: "
              "asking claims nothing.")
     nx.add_argument("--track",
                     help="The lane to resolve — 2, track-2 or \"Track 2\" "
-                         "(canonicalised client-side, §S3, because this verb "
-                         "writes nothing and so has no server round-trip to "
-                         "normalise it). Required ONLY when the project "
+                         "(canonicalised by the server's own lane rule, the "
+                         "one `wave-sequence` writes with, so every spelling "
+                         "reaches the same lane). Required ONLY when the project "
                          "declares more than one track.")
     nx.add_argument("--release",
                     help="The release to resolve within — the CRs DECLARED "

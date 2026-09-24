@@ -7,6 +7,7 @@ import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
 import { burndown, forecast, seededRandom, velocity } from "./analytics.ts";
+import { resolveNext } from "./next.ts";
 import {
   authHints,
   hints,
@@ -2100,6 +2101,34 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
 }
 
 /**
+ * CR-CRU-098 §S2 — GET …/projects/<key>/next[?track=&release=&wave=]: the plan
+ * pointer, published WHOLE (`help[]` and `warnings[]` included). The key is
+ * validated like every other project read; the inputs are the two facts the
+ * queue read publishes — `listQueue`'s entries in their published order and
+ * `declaredTracks` over them — and the answer is `resolveNext`'s, verbatim.
+ * Derived and read-only: nothing is stored and nothing cached.
+ */
+function handleNextGet(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const entries = store.listQueue(key);
+  const param = (name: string): string | undefined => url.searchParams.get(name) ?? undefined;
+  const result = resolveNext(entries, declaredTracks(entries), {
+    track: param("track"),
+    release: param("release"),
+    wave: param("wave"),
+  });
+  if (!result.ok) {
+    return fail(
+      400,
+      "`track` is required — this project declares more than one lane, and next never picks one",
+      result.fields,
+    );
+  }
+  return reply(req, url, { ok: true, ...result.fields, warnings: result.warnings });
+}
+
+/**
  * CR-CRU-014 §S1 — POST …/projects/<key>/queue: FULL-REPLACE the queue.
  * Validation 400s name the offending field AND index. Unknown dependsOn
  * targets (forward refs to CRs not in the posted set) are ACCEPTED and
@@ -3946,6 +3975,10 @@ export function handleV2(
       if (segments[2] === "velocity") return handleAnalyticsVelocity(store, segments[0]!, req, url);
       if (segments[2] === "burndown") return handleAnalyticsBurndown(store, segments[0]!, req, url);
       if (segments[2] === "forecast") return handleAnalyticsForecast(store, segments[0]!, req, url);
+    }
+    // CR-CRU-098 §S2 — the plan pointer: GET-only, derived, stores nothing.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "next") {
+      return handleNextGet(store, segments[0]!, req, url);
     }
   }
   // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must

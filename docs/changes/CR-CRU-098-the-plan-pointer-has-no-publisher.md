@@ -4,7 +4,7 @@
 - **Wave**: 7 (0.3.0) · **Points**: 13 (re-sized from 5 at gap analysis, 2026-09-24, user ruling)
 - **Depends on**: 095 — the pointer walks `listQueue`'s published order, which 095 made the
   server's one canonical answer.
-- **Status**: PENDING — filed 2026-09-02, re-specified at gap analysis 2026-09-24
+- **Status**: COMPLETED (0.3.0) — filed 2026-09-02, re-specified at gap analysis 2026-09-24
 - **Found by**: CR-096's gap analysis (DRIFT-1) — its AC12 wanted to render which CR to take up
   next, and there is no way to READ that.
 
@@ -74,8 +74,12 @@ the data:
 
 - **the track fact could be unpublished** — CR-108's `QueueTrackFactUnpublished` / `queue_tracks`
   refusal. On the server the resolver reads the declared tracks directly; the case cannot arise.
-- **the client mirrors the server's track rule** — `canonical_track` vs `normalizeTrack`, pinned by
-  `TrackCanonicalisationAgreesWithTheServerTest`. With one side, there is no mirror.
+- **the client mirrors the server's track rule** — `canonical_track` vs `normalizeTrack`. ~~With one
+  side, there is no mirror.~~ **Corrected at C3 (2026-09-24):** the mirror survives. `next_context`
+  stamps `context.track` from the canonicalised `--track` flag, and in a single-track project the
+  answer carries no `track` (AC4's `_lane_fields` rule), so the client cannot take it from the
+  answer without changing the envelope (AC9). `canonical_track` therefore stays, and
+  `TrackCanonicalisationAgreesWithTheServerTest` stays with it; it is not retired.
 - **line citations into the client block** — `NextBlockCitationsTest`.
 
 These are retired, not ported, and each retirement is recorded where the test stood.
@@ -86,8 +90,10 @@ These are retired, not ported, and each retirement is recorded where the test st
 - **AC1** — A pure server function resolves the pointer from `(entries, tracks, {track, release,
   wave})`. Every `QueueEntry` it reads comes from `listQueue`; no other ordering rule exists in it
   (no sort, no `seq` comparison).
-- **AC2** — Every behaviour of `tests/client/test_cr092_next_decision_resolver.py` (85 tests,
-  measured at `7f2a85c`) and `tests/client/test_cr095_next_consumes_published_order.py` is
+- **AC2** — Every behaviour of every test that reaches an AC10 symbol — `tests/client/test_cr092_next_decision_resolver.py` (85 tests,
+  measured at `7f2a85c`), `tests/client/test_cr095_next_consumes_published_order.py`, and any other
+  test file RED's census finds (C1 found `test_next_announces_the_wave_boundary.py` and
+  `test_next_lane_carries_release_and_wave.py`, missed by the gap analysis) — is
   classified in the RED commit into exactly one of: **ported** to a bun test of the server function
   or route, **kept** as a Python verb test (envelope, exit code, projection, context, transport
   failure), or **retired** under §S4. The classification table is in the RED commit message or a
@@ -120,14 +126,17 @@ These are retired, not ported, and each retirement is recorded where the test st
   `_entry_seq`, `_is_actionable`, `_dead_entries`, `_dead_phrase`, `_next_start_help`,
   `_hold_help`, `_drained_help`, `_next_trigger`, `_lane_fields`, `_announced_fields`,
   `_next_answer`, `_drained_answer`, `_wave_of_the_lane`, `_previous_published_wave`,
-  `_next_published_wave`, `_boundary_announcement`, `resolve_next`. `canonical_track` goes too if
-  `next_context` can take the resolved track from the answer (it can: `track` rides AC4).
+  `_next_published_wave`, `_boundary_announcement`, `resolve_next`. `canonical_track` **stays**: it is
+  the `next_context` stamp's canonicaliser, and the answer cannot supply it in a single-track project
+  (§S4, corrected at C3).
 - **AC11** — All five clients reach `next` through the one shared `cmd_next`; none defines its own.
 
 **§S4**
-- **AC12** — `TrackCanonicalisationAgreesWithTheServerTest`, `PublishedTrackFactTest`,
-  `PublishedTrackFactIsWiredTest` and `NextBlockCitationsTest` are removed, each with a comment
-  where it stood naming this CR and the reason in §S4.
+- **AC12** — `PublishedTrackFactTest`, `PublishedTrackFactIsWiredTest`, `NextBlockCitationsTest` and
+  the census's `Cr108PublishedTrackFactTest` (`test_client_fleet_envelope_census.py`) are removed,
+  each with a comment where it stood naming this CR and the reason in §S4. Behaviours of theirs that
+  now live server-side (blank/padded declared tracks) are ported to the route tests, not dropped.
+  `TrackCanonicalisationAgreesWithTheServerTest` is **not** retired (§S4, corrected at C3).
 
 **All**
 - **AC13** — All fixtures are synthetic (CR-096 AC29).

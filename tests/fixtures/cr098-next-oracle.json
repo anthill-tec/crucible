@@ -1,0 +1,1209 @@
+{
+  "help": [
+    {
+      "help": [
+        "plan-file --cr CR-NEXTPTR-100 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 7",
+        "status"
+      ],
+      "request": {
+        "entry": {
+          "cr": "CR-NEXTPTR-100",
+          "wave": "7"
+        },
+        "fn": "start"
+      }
+    },
+    {
+      "help": [
+        "plan-file --cr CR-NEXTPTR-100 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId>",
+        "status"
+      ],
+      "request": {
+        "entry": {
+          "cr": "CR-NEXTPTR-100",
+          "wave": null
+        },
+        "fn": "start"
+      }
+    },
+    {
+      "help": [
+        "cr-close --cr CR-NEXTPTR-RUN --commit <sha> --agent <agentId> \u2014 CR-NEXTPTR-RUN occupies the lane and holds everything behind it",
+        "next"
+      ],
+      "request": {
+        "fn": "hold",
+        "trigger": {
+          "cr": "CR-NEXTPTR-RUN",
+          "kind": "in-flight"
+        }
+      }
+    },
+    {
+      "help": [
+        "cr-close --cr CR-NEXTPTR-DEP --commit <sha> --agent <agentId>",
+        "next"
+      ],
+      "request": {
+        "fn": "hold",
+        "trigger": {
+          "blockedBy": [
+            {
+              "cr": "CR-NEXTPTR-DEP",
+              "status": "PENDING"
+            }
+          ],
+          "kind": "dependency"
+        }
+      }
+    },
+    {
+      "help": [
+        "cr-plan --cr CR-NEXTPTR-GHOST --release <v> --wave <n> --title <brief> --agent <agentId> \u2014 the queue does not hold CR-NEXTPTR-GHOST",
+        "next"
+      ],
+      "request": {
+        "fn": "hold",
+        "trigger": {
+          "cr": "CR-NEXTPTR-GHOST",
+          "kind": "unknown-dependency"
+        }
+      }
+    },
+    {
+      "help": [
+        "re-point the dependsOn off it in docs/changes/README.md and re-run queue-file \u2014 CR-NEXTPTR-DEAD is VOID, so waiting will never clear this",
+        "next"
+      ],
+      "request": {
+        "fn": "hold",
+        "trigger": {
+          "cr": "CR-NEXTPTR-DEAD",
+          "kind": "dead-dependency",
+          "state": "VOID"
+        }
+      }
+    },
+    {
+      "help": [
+        "release-propose --label <v> --agent <agentId>",
+        "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+        "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+      ],
+      "request": {
+        "fn": "drained",
+        "lane": [],
+        "reason": "no-roadmap"
+      }
+    },
+    {
+      "help": [
+        "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId> --track <n>"
+      ],
+      "request": {
+        "fn": "drained",
+        "lane": [],
+        "reason": "awaiting-assignment"
+      }
+    },
+    {
+      "help": [
+        "the lane's remaining entries are declared dead: CR-NEXTPTR-DEAD1 (VOID), CR-NEXTPTR-DEAD2 (SUPERSEDED by CR-NEXTPTR-NEW)",
+        "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+        "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+      ],
+      "request": {
+        "fn": "drained",
+        "lane": [
+          {
+            "cr": "CR-NEXTPTR-DEAD1",
+            "lifecycle": {
+              "state": "VOID"
+            }
+          },
+          {
+            "cr": "CR-NEXTPTR-DEAD2",
+            "lifecycle": {
+              "by": "CR-NEXTPTR-NEW",
+              "state": "SUPERSEDED"
+            }
+          }
+        ],
+        "reason": "wave-complete"
+      }
+    }
+  ],
+  "regenerate": "python3 tests/fixtures/cr098-next-oracle.gen.py",
+  "resolver": [
+    {
+      "entries": [],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "release-propose --label <v> --agent <agentId>",
+            "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+          ],
+          "reason": "no-roadmap"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-AAA-7",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-AAA-7",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-AAA-7 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-500",
+          "dependsOn": [],
+          "release": "0.3.0",
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-501",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-500",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-CRU-500 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "release": "0.3.0",
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-510",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-511",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-510",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-CRU-510 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-520",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-521",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-521",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-CRU-521 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 20,
+          "track": "track-2",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "2"
+      },
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-520",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-521",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 2,
+        "fields": {
+          "help": [
+            "next --track <n> \u2014 the live lanes are track-1, track-2"
+          ],
+          "needs": [
+            "track"
+          ],
+          "totalCount": 2,
+          "tracks": [
+            "track-1",
+            "track-2"
+          ]
+        },
+        "ok": false,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-530",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "COMPLETED",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-531",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "COMPLETED_UNTRACKED",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+          ],
+          "reason": "wave-complete",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-540",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "IN_PROGRESS",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-541",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-541",
+          "decision": "HOLD",
+          "help": [
+            "cr-close --cr CR-CRU-540 --commit <sha> --agent <agentId> \u2014 CR-CRU-540 occupies the lane and holds everything behind it",
+            "next"
+          ],
+          "seq": 20,
+          "trigger": {
+            "cr": "CR-CRU-540",
+            "kind": "in-flight"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "release": "0.2.0",
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "7"
+        },
+        {
+          "cr": "CR-NEXTPTR-200",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "7"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-100",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-100 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 7",
+            "status"
+          ],
+          "release": "0.2.0",
+          "seq": 10,
+          "track": "track-2",
+          "wave": "7"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "release": "0.2.0",
+        "track": "2",
+        "wave": "7"
+      },
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-200",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-200",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-200 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 20,
+          "track": "track-2",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "2"
+      },
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-200",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 2,
+        "fields": {
+          "help": [
+            "next --track <n> \u2014 the live lanes are track-1, track-2"
+          ],
+          "needs": [
+            "track"
+          ],
+          "totalCount": 2,
+          "tracks": [
+            "track-1",
+            "track-2"
+          ]
+        },
+        "ok": false,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": ""
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-100",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-100 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId>",
+            "status"
+          ],
+          "seq": 10
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId> --track <n>"
+          ],
+          "reason": "awaiting-assignment",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "2"
+      },
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-100",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-100 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "7"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-100",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-100 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 7",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "7"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-A",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "COMPLETED",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+          ],
+          "reason": "wave-complete",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-A",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId> --track <n>"
+          ],
+          "reason": "awaiting-assignment",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "9"
+      },
+      "tracks": [
+        "track-1"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-DEAD",
+          "dependsOn": [],
+          "lifecycle": {
+            "at": 0,
+            "reason": "not happening",
+            "state": "VOID"
+          },
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-TARGET",
+          "dependsOn": [
+            "CR-NEXTPTR-DEAD"
+          ],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-TARGET",
+          "decision": "HOLD",
+          "help": [
+            "re-point the dependsOn off it in docs/changes/README.md and re-run queue-file \u2014 CR-NEXTPTR-DEAD is VOID, so waiting will never clear this",
+            "next"
+          ],
+          "seq": 20,
+          "trigger": {
+            "cr": "CR-NEXTPTR-DEAD",
+            "kind": "dead-dependency",
+            "state": "VOID"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-DEAD",
+          "dependsOn": [],
+          "lifecycle": {
+            "reason": "x",
+            "state": "VOID"
+          },
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-TARGET",
+          "dependsOn": [
+            "CR-NEXTPTR-DEAD"
+          ],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-TARGET",
+          "decision": "HOLD",
+          "help": [
+            "re-point the dependsOn off it in docs/changes/README.md and re-run queue-file \u2014 CR-NEXTPTR-DEAD is VOID, so waiting will never clear this",
+            "next"
+          ],
+          "seq": 20,
+          "trigger": {
+            "cr": "CR-NEXTPTR-DEAD",
+            "kind": "dead-dependency",
+            "state": "VOID"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-DEAD1",
+          "dependsOn": [],
+          "lifecycle": {
+            "at": 0,
+            "reason": "not happening",
+            "state": "VOID"
+          },
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-DEAD2",
+          "dependsOn": [],
+          "lifecycle": {
+            "at": 0,
+            "by": "CR-NEXTPTR-NEW",
+            "state": "SUPERSEDED"
+          },
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "the lane's remaining entries are declared dead: CR-NEXTPTR-DEAD1 (VOID), CR-NEXTPTR-DEAD2 (SUPERSEDED by CR-NEXTPTR-NEW)",
+            "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+          ],
+          "reason": "wave-complete",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-DEP",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-TARGET",
+          "dependsOn": [
+            "CR-NEXTPTR-DEP"
+          ],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-TARGET",
+          "decision": "HOLD",
+          "help": [
+            "cr-close --cr CR-NEXTPTR-DEP --commit <sha> --agent <agentId>",
+            "next"
+          ],
+          "seq": 20,
+          "track": "track-1",
+          "trigger": {
+            "blockedBy": [
+              {
+                "cr": "CR-NEXTPTR-DEP",
+                "status": "PENDING"
+              }
+            ],
+            "kind": "dependency"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "track-1"
+      },
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-H1",
+          "dependsOn": [],
+          "seq": 6001,
+          "status": "IN_PROGRESS",
+          "wave": "6"
+        },
+        {
+          "cr": "CR-NEXTPTR-H2",
+          "dependsOn": [],
+          "seq": 6002,
+          "status": "PENDING",
+          "wave": "6"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-H2",
+          "decision": "HOLD",
+          "help": [
+            "cr-close --cr CR-NEXTPTR-H1 --commit <sha> --agent <agentId> \u2014 CR-NEXTPTR-H1 occupies the lane and holds everything behind it",
+            "next"
+          ],
+          "seq": 6002,
+          "trigger": {
+            "cr": "CR-NEXTPTR-H1",
+            "kind": "in-flight"
+          },
+          "wave": "6"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-N1",
+          "dependsOn": [],
+          "seq": 6001,
+          "status": "PENDING",
+          "wave": "6"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-N1",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-N1 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 6",
+            "status"
+          ],
+          "seq": 6001,
+          "wave": "6"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-RUN",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "IN_PROGRESS",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-NEXTPTR-WAIT",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-WAIT",
+          "decision": "HOLD",
+          "help": [
+            "cr-close --cr CR-NEXTPTR-RUN --commit <sha> --agent <agentId> \u2014 CR-NEXTPTR-RUN occupies the lane and holds everything behind it",
+            "next"
+          ],
+          "seq": 20,
+          "trigger": {
+            "cr": "CR-NEXTPTR-RUN",
+            "kind": "in-flight"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-TARGET",
+          "dependsOn": [
+            "CR-NEXTPTR-GHOST"
+          ],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-TARGET",
+          "decision": "HOLD",
+          "help": [
+            "cr-plan --cr CR-NEXTPTR-GHOST --release <v> --wave <n> --title <brief> --agent <agentId> \u2014 the queue does not hold CR-NEXTPTR-GHOST",
+            "next"
+          ],
+          "seq": 10,
+          "trigger": {
+            "cr": "CR-NEXTPTR-GHOST",
+            "kind": "unknown-dependency"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": [
+          {
+            "code": "unknown-dependency",
+            "detail": "CR-NEXTPTR-TARGET declares a dependsOn the queue does not hold: CR-NEXTPTR-GHOST \u2014 a roadmap authored forwards reads back this way until the dep is filed with cr-plan"
+          }
+        ]
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-U1",
+          "dependsOn": [],
+          "seq": 6001,
+          "status": "PENDING",
+          "wave": "6"
+        },
+        {
+          "cr": "CR-NEXTPTR-D2",
+          "dependsOn": [],
+          "release": "0.2.0",
+          "seq": 6002,
+          "status": "PENDING",
+          "wave": "6"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-NEXTPTR-D2",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-NEXTPTR-D2 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 6",
+            "status"
+          ],
+          "release": "0.2.0",
+          "seq": 6002,
+          "wave": "6"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "release": "0.2.0",
+        "wave": "6"
+      },
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-X1",
+          "dependsOn": [],
+          "seq": 6001,
+          "status": "COMPLETED",
+          "wave": "6"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+          ],
+          "reason": "wave-complete",
+          "wave": "6"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-Q108-550",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "   ",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-Q108-551",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-Q108-550",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-Q108-550 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-Q108-560",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": " track-2 ",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-Q108-561",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-Q108-560",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-Q108-560 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-2"
+      ]
+    }
+  ],
+  "source": {
+    "commit": "21c73307f58dc11f852b0df4ee487abf9fcfd956",
+    "path": "clients/_crucible_axi.py"
+  }
+}

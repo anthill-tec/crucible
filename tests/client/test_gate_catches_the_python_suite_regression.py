@@ -65,9 +65,10 @@ nothing would leave this file asserting against a copy it never changed):
      copy would report a SKIP, i.e. a PASSING gate, which is the one outcome
      that must not be reachable by accident. Applied to BOTH halves, so it can
      never be what distinguishes them.
-  2. THE FIX ITSELF — the `tracks` key removed from the stub's queue payload —
-     applied to the reverted half ALONE. That single deletion is CR-CRU-108's
-     regression, restored.
+  2. THE PLANT — the `…/next` branch removed from the stub (CR-CRU-098; the
+     original plant removed CR-CRU-108's `tracks` key, a failure §S4 made
+     impossible) — applied to the reverted half ALONE. That single deletion
+     is a real python-suite regression, restored.
 
 The repository's own file is asserted UNCHANGED after each drive.
 
@@ -134,9 +135,12 @@ def tearDownModule():
 # copies. Read, never written.
 HISTORICAL_TEST_PATH = TESTS_CLIENT_DIR / "test_plan_file_cycle_flag_help.py"
 
-# CR-CRU-108's fix, as it stands in that file's `_queue()` stub today. Removing
-# this exact text is the revert.
-THE_TRACKS_FIX = '"tracks": [], '
+# The plant: the `…/next` branch of that file's board stub. Removing this exact
+# text is the regression — `next` then reads a board that answers no decision.
+# CR-CRU-098: the old plant (CR-CRU-108's `tracks` fix, failing
+# `queue-track-fact-unpublished`) exercised a failure §S4 made impossible.
+THE_TRACKS_FIX = ('        if path.split("?", 1)[0].endswith("/next"):\n'
+                  '            return self._next_answer(path)\n')
 
 # The copied file's own root computation, and what it becomes in the scratch
 # copy so the copy can still find the clients it drives.
@@ -146,7 +150,7 @@ ROOT_REPLACEMENT = "REPO_ROOT = Path(%r)" % str(REPO_ROOT)
 # WHICH test failed and WITH WHAT, on 2026-09-08 and again here: the proof that
 # the reverted copy fails for the ORIGINAL reason rather than for a proxy.
 BROKEN_TEST = "test_the_next_envelope_help_hands_back_the_repeatable_flag"
-HARD_STOP_CODE = "queue-track-fact-unpublished"
+HARD_STOP_CODE = "queue-unavailable"
 
 
 def _historical_test_count():
@@ -186,7 +190,7 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
             % (ROOT_LINE, source.count(ROOT_LINE), HISTORICAL_TEST_PATH))
         self.assertEqual(
             source.count(THE_TRACKS_FIX), 1,
-            "the fix is the published `tracks` list, spelled %r in %s's queue "
+            "the fix is the `…/next` branch, spelled %r in %s's board "
             "stub, and it occurs %d times — the reproduction reverts EXACTLY "
             "that, so a file no longer carrying it once cannot be reverted here"
             % (THE_TRACKS_FIX, HISTORICAL_TEST_PATH,
@@ -197,11 +201,11 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
             scratch = scratch.replace(THE_TRACKS_FIX, "")
             self.assertNotIn(
                 THE_TRACKS_FIX, scratch,
-                "the reverted scratch copy must publish no `tracks` list")
+                "the reverted scratch copy must answer no `…/next` read")
         else:
             self.assertIn(
                 THE_TRACKS_FIX, scratch,
-                "the unreverted scratch copy must still publish `tracks`")
+                "the unreverted scratch copy must still answer `…/next`")
 
         target = Path(self.tmpdir, "tests", "client", HISTORICAL_TEST_PATH.name)
         target.write_text(scratch)
@@ -256,9 +260,10 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
             % (_GATE.BUN_SUITE_PASSED, bun_counts, _text(envelope)))
 
     def test_the_gate_fails_and_names_the_python_suite_when_the_tracks_fix_is_reverted(self):
-        """AC7's reproduction. With CR-CRU-108's `tracks` fix reverted in the
-        scratch copy, the gate must FAIL and NAME `test:client` — the escape of
-        2026-09-08, run through the gate this CR built."""
+        """AC7's reproduction. With the planted regression in the scratch copy
+        (the `…/next` branch stripped; CR-CRU-108's `tracks` fix before
+        CR-CRU-098), the gate must FAIL and NAME `test:client` — the escape of
+        2026-09-08's shape, run through the gate this CR built."""
         self.plant_historical_test(revert_the_fix=True)
         drive, exc = self.gate_outcome()
         self.assertGateReported(drive, exc, "AC7")
@@ -287,12 +292,12 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
         self.assertEqual(
             [name for name, _ in failures], [BROKEN_TEST],
             "AC7 — the reverted copy must fail for the ORIGINAL reason: "
-            "exactly `%s`, the AC8 test the `tracks` hard stop broke. A "
+            "exactly `%s`, the AC8 test the stripped `…/next` branch breaks. A "
             "different failure would prove nothing about that escape. got=%s"
             % (BROKEN_TEST, [name for name, _ in failures]))
         self.assertIn(
             HARD_STOP_CODE, failures[0][1],
-            "AC7 — `%s` must fail on the queue-track hard stop `%s`; a failure "
+            "AC7 — `%s` must fail on the failed board read `%s`; a failure "
             "carrying any other reason is a proxy, not the historical defect. "
             "got=%s" % (BROKEN_TEST, HARD_STOP_CODE, failures[0][1][-2000:]))
 
@@ -308,7 +313,7 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
 
         self.assertEqual(
             drive.code, 0,
-            "AC7 (converse) — with the `tracks` list published the python suite "
+            "AC7 (converse) — with the `…/next` branch in place the python suite "
             "passes, so the gate must exit 0. A gate that fails here fails "
             "always, and the reproduction beside this test would mean nothing. "
             "envelope=%s stderr=%s" % (_text(envelope), drive.err[-2000:]))

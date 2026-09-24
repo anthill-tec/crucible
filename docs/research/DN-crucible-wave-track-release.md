@@ -194,7 +194,8 @@ TRACK  scheduling   → which lane executes, in what order → answers "what do 
 ### D2 — what shipped instead: a scheduling attribute deciding a membership question
 
 This DN states a lane is a `(release, wave, track)` slice. The shipped resolver
-(`clients/_crucible_axi.py:1821`, `resolve_next`) filters by **track only**, and then answers the
+(`clients/_crucible_axi.py:1821`, `resolve_next` — moved to the server as `resolveNext` in
+`src/next.ts` by CR-CRU-098) filters by **track only**, and then answers the
 wave question from that track-filtered set:
 
 ```python

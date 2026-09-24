@@ -591,43 +591,11 @@ class SuggestedInvocationTemplatesTeachTheMandatedFormTest(_CycleKindWireTestBas
             f"`{REPEATABLE_FLAG}`/`{KIND_FLAG}` pair teaches a one-cycle plan; "
             f"got {cycles!r}")
 
-    def test_the_next_start_template_files_a_plan_under_the_mandate(self):
-        steps = AXI._next_start_help({"cr": self.CR, "wave": self.WAVE})
-        self.assertTrue(
-            steps,
-            "`next`'s start help must be a non-empty help[] — an empty one "
-            "makes every rule here vacuous")
-        cycles = self._assert_template_files_kinded_cycles(
-            steps[0], source="_next_start_help")
-        self.assertGreaterEqual(
-            len(cycles), 2,
-            f"the START template teaches the shape of a whole plan; got "
-            f"{cycles!r}")
-
-    def test_both_templates_teach_the_same_form(self):
-        """DRIFT-1's actual finding: the template exists twice. Two templates
-        that both pass the mandate but teach DIFFERENT invocations is the
-        drift a shared constant exists to prevent — and the duplicate is
-        hand-built, so nothing structural stops it."""
-        start = AXI._next_start_help({"cr": self.CR, "wave": self.WAVE})[0]
-        for flag in (REPEATABLE_FLAG, KIND_FLAG):
-            with self.subTest(flag=flag):
-                shared_count = shlex.split(AXI.CYCLE_FLAG_TEMPLATE).count(flag)
-                # NON-VACUITY: two templates that both spell a flag ZERO times
-                # agree perfectly and teach nothing. The mandated form carries
-                # a `--cycle`/`--cycle-kind` PAIR per cycle, at least twice.
-                self.assertGreaterEqual(
-                    shared_count, 2,
-                    f"the mandated form repeats `{flag}` once per cycle, so "
-                    f"both templates must spell it at least twice; "
-                    f"CYCLE_FLAG_TEMPLATE={AXI.CYCLE_FLAG_TEMPLATE!r}")
-                self.assertEqual(
-                    shared_count,
-                    shlex.split(start).count(flag),
-                    f"both suggested-invocation templates must teach the same "
-                    f"form; `{flag}` appears a different number of times in "
-                    f"CYCLE_FLAG_TEMPLATE={AXI.CYCLE_FLAG_TEMPLATE!r} and in "
-                    f"_next_start_help={start!r}")
+    # CR-CRU-098 C3 — `test_the_next_start_template_files_a_plan_under_the_mandate`
+    # and `test_both_templates_teach_the_same_form` were deleted here: they called
+    # `_next_start_help`, which AC10 removes from the client. Both are KEPT
+    # (adapted) in tests/client/test_cr098_next_start_template_survives_the_move.py
+    # (docs/changes/CR-CRU-098-test-classification.md).
 
 
 # ═══════════════════════════════════════════════════════════════════════════
