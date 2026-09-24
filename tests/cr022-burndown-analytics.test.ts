@@ -25,7 +25,9 @@
 //     below asserts CR-BURN-A carries no positive-delta step of its own.
 //   * CR-BURN-A's plan later closes with a merge (event: "merged", the
 //     AC's own literal string) — a −5 step.
-//   * CR-BURN-C (points 2) is filed, then VOIDed — a −2 step whose `verb`
+//   * CR-BURN-C (points 2) is filed after the release start — a +2 scope
+//     step (verb "cr-plan"), exactly like CR-BURN-B's +3 — then VOIDed — a
+//     −2 step whose `verb`
 //     is "cr-void" (§S1/AC3's own journal-verb vocabulary: cr-plan,
 //     cr-void, cr-supersede — the literal CLI verb names, which is the one
 //     concrete string the spec pins for a non-merge step; "event" strings
@@ -224,21 +226,28 @@ describe("CR-CRU-022 §S3 — burndown: GET …/analytics/burndown", () => {
     expect(points.some((p) => p.cr === "CR-BURN-A" && p.delta > 0)).toBe(false);
 
     // The void: CR-BURN-C drops remaining by its own 2 points.
-    const voidStep = points.find((p) => p.cr === "CR-BURN-C");
+    const voidStep = points.find((p) => p.cr === "CR-BURN-C" && p.verb === "cr-void");
     expect(voidStep).toBeDefined();
     expect(voidStep!.delta).toBe(-2);
     expect(voidStep!.verb).toBe("cr-void");
 
+    // CR-BURN-C's post-start filing stays visible as its own +2 scope step:
+    // a voided CR's addition is history, never rewritten away (DN §2.4).
+    const voidedAddition = points.find((p) => p.cr === "CR-BURN-C" && p.verb === "cr-plan");
+    expect(voidedAddition).toBeDefined();
+    expect(voidedAddition!.delta).toBe(2);
+
     // Order-independent arithmetic proof: walk `points[]` in ts order and
     // re-derive `remaining` from committedPoints + the running delta sum.
-    // committed 5 (+3 scope, −5 merge, −2 void) => 1 remaining at the end.
+    // committed 5 (+3 B scope, +2 C scope, −5 A merge, −2 C void):
+    // 5 +3 +2 −5 −2 = 3 remaining at the end (CR-BURN-B's open 3 points).
     const chronological = [...points].sort((a, b) => a.ts - b.ts);
     let running = body.committedPoints!;
     for (const p of chronological) {
       running += p.delta;
       expect(p.remaining).toBe(running);
     }
-    expect(running).toBe(1);
+    expect(running).toBe(3);
   });
 
   test("a release with no declared target carries no ideal line and no target field (absent, not null/0)", async () => {

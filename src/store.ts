@@ -6341,4 +6341,86 @@ export class Store {
         : {}),
     };
   }
+
+  // ── CR-CRU-022 §S2–§S4 — the analytics reads ────────────────────────────
+
+  /**
+   * CR-CRU-022 §S3 — the declaration journal read back, oldest first (`id`
+   * order is append order). The journal's only reader; it never writes.
+   */
+  listQueueDeclarations(projectKey: string): QueueDeclaration[] {
+    return this.db
+      .query<
+        {
+          id: number;
+          cr: string;
+          verb: DeclarationVerb;
+          change_json: string;
+          points: number | null;
+          author: string | null;
+          at: number;
+        },
+        [string]
+      >(
+        `SELECT id, cr, verb, change_json, points, author, at FROM queue_declarations
+          WHERE project_key = ? ORDER BY id ASC`,
+      )
+      .all(projectKey)
+      .map((row) => ({
+        id: row.id,
+        cr: row.cr,
+        verb: row.verb,
+        change: JSON.parse(row.change_json) as QueueDeclaration["change"],
+        ...(row.points !== null ? { points: row.points } : {}),
+        ...(row.author !== null ? { author: row.author } : {}),
+        at: row.at,
+      }));
+  }
+
+  /**
+   * CR-CRU-022 §S3 — each queued cr's INTERNAL `filed_at` (epoch ms). Never
+   * published on the queue read; the burndown derives a release's start from
+   * it server-side.
+   */
+  queueFiledAt(projectKey: string): Map<string, number> {
+    const rows = this.db
+      .query<{ cr: string; filed_at: number }, [string]>(
+        `SELECT cr, filed_at FROM queue_entries WHERE project_key = ?`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.cr, row.filed_at]));
+  }
+
+  /**
+   * CR-CRU-022 §S2 / DN-crucible-analytics §3 — `exec(c)` per cycle: Σ
+   * `duration_ms` of every cycle-linked test and compile run. No tier filter,
+   * so a BDD e2e run bound to the cycle counts, as §3's 2026-09-24 amendment
+   * rules.
+   */
+  cycleExecMs(projectKey: string): Map<number, number> {
+    const rows = this.db
+      .query<{ cycle_id: number; exec_ms: number }, [string]>(
+        `SELECT cycle_id, SUM(COALESCE(duration_ms, 0)) AS exec_ms FROM events
+          WHERE project_key = ? AND cycle_id IS NOT NULL AND kind IN ('test', 'compile')
+          GROUP BY cycle_id`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.cycle_id, row.exec_ms]));
+  }
+}
+
+/**
+ * CR-CRU-022 §S1/§S3 — one declaration-journal row as the analytics read it
+ * back: the cr, the verb that moved scope, the `{field: {from, to}}` change,
+ * the points the row declared (absent when it declared none), its author (the
+ * registered caller; absent on an unattributed store write) and `at` (epoch ms).
+ */
+export interface QueueDeclaration {
+  id: number;
+  cr: string;
+  verb: DeclarationVerb;
+  change: Record<string, { from: unknown; to: unknown }>;
+  points?: number;
+  author?: string;
+  at: number;
 }

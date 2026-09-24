@@ -6,6 +6,7 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
+import { burndown, forecast, seededRandom, velocity } from "./analytics.ts";
 import {
   authHints,
   hints,
@@ -3940,6 +3941,12 @@ export function handleV2(
     if (req.method === "DELETE" && segments.length === 1) {
       return handleProjectDelete(store, segments[0]!, req);
     }
+    // CR-CRU-022 §S2–§S4 — the three analytics reads, GET-only.
+    if (req.method === "GET" && segments.length === 3 && segments[1] === "analytics") {
+      if (segments[2] === "velocity") return handleAnalyticsVelocity(store, segments[0]!, req, url);
+      if (segments[2] === "burndown") return handleAnalyticsBurndown(store, segments[0]!, req, url);
+      if (segments[2] === "forecast") return handleAnalyticsForecast(store, segments[0]!, req, url);
+    }
   }
   // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must
   // declare a role, heartbeat must not be forced to re-declare it.
@@ -3995,4 +4002,102 @@ export function handleV2(
     return handleStatus(store, req, url);
   }
   return null;
+}
+
+// ── CR-CRU-022 §S2–§S4 — roadmap analytics ───────────────────────────────
+
+/**
+ * The analytics reads validate the project by EXISTENCE (404 + help): they
+ * are pure reads over a held project, and a project key the store holds is
+ * answerable whatever its shape.
+ */
+function requireHeldProject(store: Store, key: string): Response | null {
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return null;
+}
+
+/** `?release=<label>`, required by the two release-scoped reads. */
+function requireReleaseParam(url: URL): string | { fail: Response } {
+  const release = url.searchParams.get("release");
+  if (release === null || release.length === 0) {
+    return { fail: fail(400, "`release` is required — the release label to analyse, e.g. ?release=0.3.0") };
+  }
+  return release;
+}
+
+/**
+ * CR-CRU-091 — the release's DECLARED target, epoch seconds: the live
+ * proposal's `targetAt`, else a delivered record's. Absent when none was
+ * declared — never defaulted.
+ */
+function declaredTarget(store: Store, key: string, release: string): number | undefined {
+  const proposal = store.listReleaseProposals(key).find((event) => event.label === release);
+  if (proposal?.targetAt !== undefined) return proposal.targetAt;
+  return store.listReleases(key).find((event) => event.label === release)?.targetAt;
+}
+
+/** §S2 — GET …/analytics/velocity: project-level pointed velocity + flow. */
+function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const payload = velocity({
+    plans: store.listPlans(key),
+    entries: store.listQueue(key),
+    execByCycle: store.cycleExecMs(key),
+    now: Date.now(),
+  });
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/** §S3 — GET …/analytics/burndown?release=: the release's SCRUM burndown. */
+function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const target = declaredTarget(store, key, release);
+  const payload = burndown({
+    release,
+    entries: store.listQueue(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    plans: store.listPlans(key),
+    ...(target !== undefined ? { targetAt: target } : {}),
+  });
+  if (payload === null) {
+    return fail(404, `no CR was ever planned into release ${release}`);
+  }
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/**
+ * §S4 — GET …/analytics/forecast?release=[&seed=]: the Monte Carlo band.
+ * `seed` is TEST-ONLY (DN §7): an integer that makes the draws deterministic.
+ */
+function handleAnalyticsForecast(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const seedParam = url.searchParams.get("seed");
+  const seed = seedParam === null ? undefined : Number(seedParam);
+  if (seed !== undefined && !Number.isInteger(seed)) {
+    return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
+  }
+  const entries = store.listQueue(key);
+  if (!entries.some((entry) => entry.release === release)) {
+    return fail(404, `no CR is planned into release ${release}`);
+  }
+  const target = declaredTarget(store, key, release);
+  const payload = forecast({
+    release,
+    entries,
+    plans: store.listPlans(key),
+    now: Date.now(),
+    ...(target !== undefined ? { targetAt: target } : {}),
+    random: seed !== undefined ? seededRandom(seed) : Math.random,
+  });
+  return reply(req, url, { ok: true, ...payload });
 }
