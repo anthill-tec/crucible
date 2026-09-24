@@ -137,3 +137,25 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the run overlay is visible
     And the heat-strip is visible with exactly 60 heat cells
     And the heat-strip cell size on the phone profile is larger than the same run's heat-strip cell size at desktop width
+
+  # CR-CRU-022 \u00a7S5 (last AC) + DN-crucible-analytics.md \u00a710 "Phone" decision
+  # \u2014 reusing THIS two-engine harness (CR-CRU-018) rather than building a new
+  # one, per CR-CRU-022's own gap-analysis coupling note and its \u00a7S5 AC block's
+  # last bullet. RED phase, re-confirmed in this pass: `grep -a` over `public/`
+  # for `roadmap-progress` / `analytics-pane` / `burndown-chart` returns ZERO
+  # hits (same baseline tests/cr022-analytics-ui.test.ts's header records), so
+  # every assertion below currently has no code path producing it \u2014 the
+  # release band, the pane and its chart do not exist at any viewport yet, let
+  # alone a phone-specific collapse of them.
+  Scenario: CR-CRU-022 AC \u2014 at the phone band the release band collapses to one \u226544px line, velocity rides the Project band's foot strip, and the analytics pane's chart scrolls inside its own container with the page unscrolled
+    Given a project named "MOB Analytics Project" is registered
+    And an online agent "mob-analytics-agent" with message "building" is registered on that project
+    And a CR queue registering cr "CR-MOB-ANALYTICS" titled "phone analytics band fixture" in wave "1" is posted for that project
+    When I open the workspace for that project
+    And I click the "Roadmap" workspace tab
+    Then the roadmap release band renders as one line measuring at least 44px on the phone profile
+    And velocity appears on the project band foot strip
+    When I tap the roadmap release band
+    Then the page body does not scroll horizontally
+    And the analytics pane's chart scrolls inside its own container, not the page
+

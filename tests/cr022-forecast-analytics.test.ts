@@ -31,16 +31,18 @@
 // own caption: "From today, the band projects the remaining points
 // forward").
 //
-// A GENUINE GAP — reported, not silently worked around: the CR's third AC
-// asks for `scheduleHealth` on THREE seeded fixtures — ahead, at-risk and
-// behind. "ahead" (target beyond completion) and "behind" (target before
-// completion) both hold for ANY target outside the zero-variance
-// completion instant, so both are exact-value tests below. "at-risk"
-// (`P50 <= target < P80`) is UNREACHABLE with P50 === P80 (a zero-variance
-// history), and reaching it with genuine variance re-opens the exact
-// unpinned-RNG problem above — there is no fixture that produces an exact,
-// algorithm-independent P50 < P80 gap. This AC is therefore NOT encoded
-// here; see this RED agent's final report.
+// THE at-risk AC (`P50 <= target < P80`) — closed by a SEPARATE RED pass
+// (agent CR-CRU-022-C1-RED2), not by this file's own zero-variance fixtures.
+// "ahead" (target beyond completion) and "behind" (target before completion)
+// both hold for ANY target outside the zero-variance completion instant, so
+// both are exact-value tests below. "at-risk" is UNREACHABLE with P50 ===
+// P80 (a zero-variance history), and reaching it needs genuine variance
+// without reopening the unpinned-RNG problem above — solved with a BIMODAL
+// history (three very-low weeks, one very-high week) whose Geometric-
+// distributed completion time gives a wide, PROBABILISTICALLY bounded gap
+// between P50 and P80 (no exact values asserted, only their ordering against
+// a seeded target chosen deep inside that gap). See the last test in this
+// file for the full margin derivation.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -265,5 +267,86 @@ describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
     expect(status).toBe(200);
     expect(body.status).toBe("ok");
     expect(body.scheduleHealth).toBe("behind");
+  });
+
+  test('scheduleHealth "at-risk" \u2014 a bimodal (very-low/very-high) weekly-velocity history separates P50 and P80 widely enough that a seeded target deep inside the gap is robust to ANY correct RNG', async () => {
+    // STATISTICALLY ROBUST, not exact-value \u2014 per this file's header, no RNG
+    // algorithm is pinned by the spec, so a fixture with genuine week-to-week
+    // VARIANCE cannot assert an exact P50/P80 date. This fixture instead
+    // makes the GAP between P50 and P80 wide, and places the seeded target
+    // deep enough inside it, that no correct Monte Carlo implementation can
+    // cross it \u2014 for ANY seeded PRNG that samples "the empirical distribution
+    // of points per week" (DN-crucible-analytics.md \u00a77 step 1), by
+    // construction:
+    //
+    //   History: 4 completed weeks, BIMODAL \u2014 three VERY LOW weeks (1 pt
+    //   each) and one VERY HIGH week (104 pts, exactly `remainingPoints`
+    //   below). Each simulated draw-week independently samples one of the 4
+    //   historical weekly totals with equal probability, so P(draw = the
+    //   high week) = p = 0.25, P(draw = a low week) = 0.75.
+    //
+    //   Because the high week's 104 points alone already meet
+    //   `remainingPoints` (104), a draw's completion week T is EXACTLY the
+    //   index of that draw's first high-week pick (low draws before it add
+    //   only 1 point each \u2014 reaching 104 through low draws ALONE would need
+    //   >100 consecutive low picks in a row, probability 0.75^100 \u2248 0, an
+    //   astronomically negligible tail this margin analysis ignores). T is
+    //   therefore (to that same negligible tail) a Geometric(p=0.25) random
+    //   variable:
+    //     P(T <= k) = 1 \u2212 0.75^k
+    //     P(T <= 3) = 0.578,  P(T <= 4) = 0.684   \u2192  true P50 = 3 weeks
+    //     P(T <= 5) = 0.763,  P(T <= 6) = 0.822   \u2192  true P80 = 6 weeks
+    //
+    //   TARGET is fixed at exactly 4 weeks (28 days) from today \u2014 inside the
+    //   [3, 6]-week gap between the true P50 and P80. For N = 1000 draws,
+    //   the two ways this fixture could fail are each many standard
+    //   deviations from ever happening:
+    //     P(empirical P50 > 4wk) = P(count(T<=4) < 500 of 1000): the true
+    //       count(T<=4) has mean 684, sd \u2248 sqrt(1000\u00b70.684\u00b70.316) \u2248 14.7,
+    //       so crossing 500 needs z \u2248 (500\u2212684)/14.7 \u2248 \u221212.5\u03c3.
+    //     P(empirical P80 <= 4wk) = P(count(T<=4) >= 800 of 1000): same
+    //       mean/sd, so crossing 800 needs z \u2248 (800\u2212684)/14.7 \u2248 +7.9\u03c3.
+    //   Both are far beyond any plausible finite-sample noise from 1000
+    //   draws, for any seeded PRNG that actually samples the distribution
+    //   the DN describes \u2014 this is what makes the fixture ROBUST rather
+    //   than a guess at one implementation's specific output.
+    boot();
+    const key = "cru022-fcst-at-risk";
+    handle!.store.addProject({ key, name: "fcst-at-risk", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
+
+    // 3 very-low weeks (1 pt each).
+    mergeCr(key, "CR-FCST-BIMODAL-LOW-1", 1, "2026-08-12T10:00:00.000Z");
+    mergeCr(key, "CR-FCST-BIMODAL-LOW-2", 1, "2026-08-19T10:00:00.000Z");
+    mergeCr(key, "CR-FCST-BIMODAL-LOW-3", 1, "2026-08-26T10:00:00.000Z");
+    // 1 very-high week: exactly `remainingPoints` below (104).
+    mergeCr(key, "CR-FCST-BIMODAL-HIGH-1", 104, "2026-09-02T10:00:00.000Z");
+
+    // The release's one remaining CR: 104 points, unmerged \u2014 exactly the
+    // high week's total (see the margin derivation above).
+    fileWithPoints(key, "CR-FCST-REL-1", "9.7.0", 104, "2026-09-01T00:00:00.000Z");
+
+    setSystemTime(new Date("2026-09-01T00:00:00.000Z"));
+    // TARGET = exactly 4 weeks (28 days) from "today" (TODAY_ISO/TODAY_MS,
+    // this file's own constants) \u2014 deep inside the theoretical [P50=3wk,
+    // P80=6wk] gap, per the margin analysis above.
+    const targetMs = TODAY_MS + 28 * DAY_MS;
+    handle!.store.recordReleaseProposal(key, "orchestrator-1", {
+      label: "9.7.0",
+      targetAt: Math.floor(targetMs / 1000),
+    });
+
+    setSystemTime(new Date(TODAY_ISO));
+    const { status, body } = await getForecast(key, "9.7.0");
+    expect(status).toBe(200);
+    expect(body.status).toBe("ok");
+    expect(body.remainingPoints).toBe(104);
+    expect(body.p50Ts).toBeDefined();
+    expect(body.p80Ts).toBeDefined();
+    // The ordering "at-risk" itself is defined by (DN \u00a78) \u2014 no exact dates,
+    // only the relationship, exactly as this gap asks for.
+    expect(body.p50Ts!).toBeLessThanOrEqual(body.p80Ts!);
+    expect(body.p50Ts!).toBeLessThanOrEqual(targetMs);
+    expect(targetMs).toBeLessThan(body.p80Ts!);
+    expect(body.scheduleHealth).toBe("at-risk");
   });
 });
