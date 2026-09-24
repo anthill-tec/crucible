@@ -4,7 +4,7 @@
 - **Wave**: 7 (0.3.0) · **Points**: 13 (re-sized from 5 at gap analysis, 2026-09-24, user ruling)
 - **Depends on**: 095 — the pointer walks `listQueue`'s published order, which 095 made the
   server's one canonical answer.
-- **Status**: PENDING — filed 2026-09-02, re-specified at gap analysis 2026-09-24
+- **Status**: COMPLETED (0.3.0) — filed 2026-09-02, re-specified at gap analysis 2026-09-24
 - **Found by**: CR-096's gap analysis (DRIFT-1) — its AC12 wanted to render which CR to take up
   next, and there is no way to READ that.
 
