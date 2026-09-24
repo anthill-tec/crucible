@@ -209,6 +209,27 @@ describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
     expect(body.track).toBe("track-2");
   });
 
+  // Ported from the census's Cr108PublishedTrackFactTest (retired under
+  // CR-CRU-098 §S4, AC12): the declared-track fact is `declaredTracks`'s,
+  // on the server, so its padded-value case is asserted at the route.
+  test("AC6 \u2014 a padded track value collapses into the track it pads: one lane, so the project answers bare", async () => {
+    boot();
+    const key = await seed("cru098-next-route-padded-track");
+    seedRows(key, [
+      { cr: "CR-NEXTPTR-560", wave: "5", seq: 10, track: " track-2 " },
+      { cr: "CR-NEXTPTR-561", wave: "5", seq: 20, track: "track-2" },
+    ]);
+
+    const { status, body } = await get(`/api/v2/projects/${key}/next`);
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.decision).toBe("NEXT");
+    expect(body.cr).toBe("CR-NEXTPTR-560");
+    expect(body.needs).toBeUndefined();
+    expect(body.tracks).toBeUndefined();
+  });
+
   test("AC6 — ?release and ?wave scope VERBATIM: '6' and '06' are two different waves, never coerced", async () => {
     boot();
     const key = await seed("cru098-next-route-wave-verbatim");

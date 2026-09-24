@@ -44,9 +44,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CR092_PATH = REPO_ROOT / "tests" / "client" / "test_cr092_next_decision_resolver.py"
 CR095_PATH = REPO_ROOT / "tests" / "client" / "test_cr095_next_consumes_published_order.py"
+CENSUS_PATH = REPO_ROOT / "tests" / "client" / "test_client_fleet_envelope_census.py"
 
+# CR-CRU-098 §S4/AC12, corrected at C3 (spec a018e0f):
+# `TrackCanonicalisationAgreesWithTheServerTest` is NOT retired — the client's
+# `canonical_track` mirror survives, so its agreement test stays.
 RETIRED_CLASSES_CR092 = (
-    "TrackCanonicalisationAgreesWithTheServerTest",
     "PublishedTrackFactTest",
     "PublishedTrackFactIsWiredTest",
     "NextBlockCitationsTest",
@@ -98,6 +101,24 @@ class AC12TheFourRetiredClassesAreGoneTest(unittest.TestCase):
             _names_a_retirement_comment(CR092_PATH),
             "AC12: a comment naming this CR and \u00a7S4's reason must stand "
             "where each retired class stood — none found yet")
+
+
+class AC12CorrectedAtC3Test(unittest.TestCase):
+    """AC12 as corrected at C3 (spec a018e0f): the census's
+    `Cr108PublishedTrackFactTest` retires under §S4 like `PublishedTrackFactTest`,
+    and `TrackCanonicalisationAgreesWithTheServerTest` is KEPT — the client's
+    `canonical_track` mirror survives, so its agreement test must too."""
+
+    def test_the_census_published_track_fact_class_is_retired_with_a_comment(self):
+        self.assertNotIn("Cr108PublishedTrackFactTest", _class_names(CENSUS_PATH))
+        self.assertTrue(
+            _names_a_retirement_comment(CENSUS_PATH),
+            "AC12: a comment naming this CR and \u00a7S4's reason must stand "
+            "where Cr108PublishedTrackFactTest stood")
+
+    def test_the_track_mirror_agreement_test_is_kept(self):
+        self.assertIn("TrackCanonicalisationAgreesWithTheServerTest",
+                      _class_names(CR092_PATH))
 
 
 class AC12TheCr095ResolveNextShapeGuardIsGoneTest(unittest.TestCase):

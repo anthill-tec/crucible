@@ -41,7 +41,6 @@ Invocation:
 import contextlib
 import importlib.util
 import io
-import json
 import os
 import re
 import unittest
@@ -50,16 +49,12 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qsl, urlsplit
 
+from tests.client import cr098_next_oracle
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
-
-# CR-CRU-098 C3 ruling (option (c), widened) — the OLD client resolver's
-# answers, frozen before C3 deleted it (AC10). Regenerate with
-# `python3 tests/fixtures/cr098-next-oracle.gen.py`; it reads the pre-deletion
-# client out of git, never the working tree.
-ORACLE_PATH = REPO_ROOT / "tests" / "fixtures" / "cr098-next-oracle.json"
 
 PROJECT_KEY = "cr098-next-verb-key"
 QUEUE_PATH = f"/api/v2/projects/{PROJECT_KEY}/queue"
@@ -117,35 +112,6 @@ def _queue(*entries):
     return {"ok": True, "entries": list(entries), "tracks": _published_tracks(entries)}
 
 
-def _canonical(value):
-    """One spelling per board, so a lookup keys on CONTENT, never on dict or
-    tuple identity."""
-    return json.dumps(value, sort_keys=True)
-
-
-def _resolver_key(entries, tracks, scope):
-    return _canonical({"entries": list(entries), "tracks": list(tracks),
-                       "scope": scope})
-
-
-def _frozen_resolver(entries, tracks, scope):
-    """The frozen `resolve_next` answer for this exact board and scope —
-    `(ok, code, fields, warnings)`, the shape the deleted function returned.
-    A board the oracle never recorded is a loud failure naming the generator,
-    never a silently invented answer."""
-    oracle = json.loads(ORACLE_PATH.read_text(encoding="utf-8"))
-    wanted = _resolver_key(entries, tracks, scope)
-    for case in oracle["resolver"]:
-        if _resolver_key(case["entries"], case["tracks"], case["scope"]) == wanted:
-            result = case["result"]
-            return (result["ok"], result["code"], result["fields"],
-                    result["warnings"])
-    raise AssertionError(
-        f"no frozen resolver answer for this board in {ORACLE_PATH.name} — "
-        f"regenerate it: python3 tests/fixtures/cr098-next-oracle.gen.py "
-        f"(board: {wanted})")
-
-
 def _route_response(entries, track=None, release=None, wave=None):
     """The payload a GREEN `GET .../next` route publishes for this board —
     built from the FROZEN answers of the old client `resolve_next` (semantics
@@ -159,7 +125,7 @@ def _route_response(entries, track=None, release=None, wave=None):
     tracks = _published_tracks(entries)
     scope = {k: v for k, v in (("track", track), ("release", release),
                                ("wave", wave)) if v is not None}
-    ok, code, fields, warnings = _frozen_resolver(entries, tracks, scope)
+    ok, code, fields, warnings = cr098_next_oracle.RESOLVER(entries, tracks, scope)
     body = dict(fields)
     body["ok"] = ok
     body["warnings"] = warnings
@@ -454,6 +420,22 @@ class NextPresentationLayerTest(_NextVerbTestBase):
         os.environ["WORKFLOW_ROLE"] = "track-1"
         _code, _out, _err, axi, ops = self.drive(list(TWO_TRACK_LANE), track="2")
         self.assertEqual(axi.get("cr"), "CR-NEXTPTR-200")
+        self.assertEqual((axi.get("context") or {}).get("track"), "track-2")
+        self.assertNextRequest(ops, track="2")
+
+    def test_a_single_track_project_still_stamps_the_canonicalised_flag(self):
+        """AC9's edge, pinned (CR-CRU-098 \u00a7S4, corrected at C3): in a
+        SINGLE-track project the answer carries no `track` (AC4's lane-field
+        rule), yet `next --track 2` has always stamped `context.track` with
+        the canonicalised flag. A client that took the lane from the answer
+        alone would let the session's declaration stand instead \u2014 a changed
+        envelope for the same board. So `canonical_track` stays client-side."""
+        os.environ["WORKFLOW_ROLE"] = "track-1"
+        _code, _out, _err, axi, ops = self.drive(list(LANE), track="2")
+        self.assertNotIn(
+            "track", axi,
+            "non-vacuity: a single-track answer carries no `track` field, or "
+            "this is not the edge the stamp has to cover")
         self.assertEqual((axi.get("context") or {}).get("track"), "track-2")
         self.assertNextRequest(ops, track="2")
 

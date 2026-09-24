@@ -58,7 +58,9 @@ AC10_REMOVED_SYMBOLS = (
     "_next_published_wave",
     "_boundary_announcement",
     "resolve_next",
-    "canonical_track",
+    # `canonical_track` STAYS (§S4/AC10, corrected at C3, spec a018e0f): it is
+    # `next_context`'s stamp canonicaliser, which the answer cannot supply in
+    # a single-track project.
 )
 
 

@@ -157,6 +157,269 @@
     {
       "entries": [
         {
+          "cr": "CR-AAA-7",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-AAA-7",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-AAA-7 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-500",
+          "dependsOn": [],
+          "release": "0.3.0",
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-501",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-500",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-CRU-500 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "release": "0.3.0",
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-510",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-511",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-510",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-CRU-510 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-520",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-521",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-521",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-CRU-521 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 20,
+          "track": "track-2",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "2"
+      },
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-520",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "track-1",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-521",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 2,
+        "fields": {
+          "help": [
+            "next --track <n> \u2014 the live lanes are track-1, track-2"
+          ],
+          "needs": [
+            "track"
+          ],
+          "totalCount": 2,
+          "tracks": [
+            "track-1",
+            "track-2"
+          ]
+        },
+        "ok": false,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-1",
+        "track-2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-530",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "COMPLETED",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-531",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "COMPLETED_UNTRACKED",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>"
+          ],
+          "reason": "wave-complete",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-CRU-540",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "IN_PROGRESS",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-CRU-541",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-CRU-541",
+          "decision": "HOLD",
+          "help": [
+            "cr-close --cr CR-CRU-540 --commit <sha> --agent <agentId> \u2014 CR-CRU-540 occupies the lane and holds everything behind it",
+            "next"
+          ],
+          "seq": 20,
+          "trigger": {
+            "cr": "CR-CRU-540",
+            "kind": "in-flight"
+          },
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
           "cr": "CR-NEXTPTR-100",
           "dependsOn": [],
           "release": "0.2.0",
@@ -312,6 +575,34 @@
         "warnings": []
       },
       "scope": {},
+      "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-NEXTPTR-100",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "decision": "DRAINED",
+          "help": [
+            "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId> --track <n>"
+          ],
+          "reason": "awaiting-assignment",
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {
+        "track": "2"
+      },
       "tracks": []
     },
     {
@@ -831,6 +1122,84 @@
       },
       "scope": {},
       "tracks": []
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-Q108-550",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": "   ",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-Q108-551",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-Q108-550",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-Q108-550 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "2"
+      ]
+    },
+    {
+      "entries": [
+        {
+          "cr": "CR-Q108-560",
+          "dependsOn": [],
+          "seq": 10,
+          "status": "PENDING",
+          "track": " track-2 ",
+          "wave": "5"
+        },
+        {
+          "cr": "CR-Q108-561",
+          "dependsOn": [],
+          "seq": 20,
+          "status": "PENDING",
+          "track": "track-2",
+          "wave": "5"
+        }
+      ],
+      "result": {
+        "code": 0,
+        "fields": {
+          "cr": "CR-Q108-560",
+          "decision": "NEXT",
+          "help": [
+            "plan-file --cr CR-Q108-560 --title \"<brief>\" --cycle \"<c1>\" --cycle-kind <k1> --cycle \"<c2>\" --cycle-kind <k2> --agent <agentId> --wave 5",
+            "status"
+          ],
+          "seq": 10,
+          "wave": "5"
+        },
+        "ok": true,
+        "warnings": []
+      },
+      "scope": {},
+      "tracks": [
+        "track-2"
+      ]
     }
   ],
   "source": {

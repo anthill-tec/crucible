@@ -11,20 +11,27 @@ working tree, so it stays reproducible after the deletion — runs today's
 functions over every fixture the two oracle-consuming test files use, and
 writes `tests/fixtures/cr098-next-oracle.json`.
 
-CONSUMERS:
+CONSUMERS (python ones through tests/client/cr098_next_oracle.py, whose
+`RESOLVER` is the one seam this script swaps while recording):
   * tests/client/test_cr098_next_verb_reads_the_route.py — `_route_response`
     serves the frozen `resolver` answer for its board (AC9: the client, given
     those fields, prints today's envelope, line and exit code).
+  * tests/client/test_client_fleet_envelope_census.py — `_QueueStubServer`
+    answers `…/next` with the frozen answer for each `CR092_FIXTURES` board.
+  * tests/client/test_plan_file_cycle_flag_help.py — the `next` envelope
+    test's board stub answers `…/next` the same way.
   * tests/next-resolver.test.ts — `pythonHelp` reads the frozen `help`
     answers (AC5), and one assertion holds the server's `resolveNext` equal
     to EVERY frozen `resolver` answer (the server matches the old resolver).
 
 WHICH FIXTURES:
-  * `resolver` — (a) every board the python route test drives, RECORDED by
-    running that test module with its `_frozen_resolver` seam swapped for the
-    old `resolve_next` (so no board can be missed or retyped), plus (b) the
-    AC5 boards tests/next-resolver.test.ts builds (mirrored below as
-    `TS_AC5_BOARDS`).
+  * `resolver` — every board a python consumer asks about, RECORDED rather
+    than retyped by driving the consumer with `RESOLVER` swapped for the old
+    `resolve_next`: (a) the python route test's boards, (b) the census's
+    `next` drives over every `CR092_FIXTURES` board plus its flags (the real
+    five clients, as subprocesses, against the census's own stub), (c) the
+    cycle-flag-help `next` envelope test's board; plus (d) the AC5 boards
+    tests/next-resolver.test.ts builds (mirrored below as `TS_AC5_BOARDS`).
   * `help` — exactly the requests `pythonHelp` makes in
     tests/next-resolver.test.ts's AC5 group; each HOLD trigger is the one the
     old resolver produces for the mirrored HOLD board.
@@ -40,14 +47,19 @@ import importlib.util
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from tests.client import cr098_next_oracle  # noqa: E402
 SOURCE_COMMIT = "21c7330"
 SOURCE_PATH = "clients/_crucible_axi.py"
 ROUTE_TEST_PATH = REPO_ROOT / "tests" / "client" / "test_cr098_next_verb_reads_the_route.py"
+CYCLE_FLAG_HELP_PATH = REPO_ROOT / "tests" / "client" / "test_plan_file_cycle_flag_help.py"
 OUT_PATH = REPO_ROOT / "tests" / "fixtures" / "cr098-next-oracle.json"
 
 
@@ -107,19 +119,39 @@ class Recorder:
         return ok, code, _plain(fields), _plain(warnings)
 
 
-def record_route_test_boards(recorder):
-    """Run the python route test with its oracle seam pointed at the OLD
-    resolver, recording every board it asks about. Pass/fail of that run is
-    irrelevant here (before C3's production change its AC8 halves are red by
-    design); only the boards it drives are collected."""
-    spec = importlib.util.spec_from_file_location("cr098_oracle_route_test", ROUTE_TEST_PATH)
+def _load_path(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    vars(module)["_frozen_resolver"] = recorder.resolve
+    return module
+
+
+def record_route_test_boards():
+    """Run the python route test with the oracle seam pointed at the OLD
+    resolver, recording every board it asks about. Pass/fail of that run is
+    irrelevant here; only the boards it drives are collected."""
+    module = _load_path(ROUTE_TEST_PATH, "cr098_oracle_route_test")
     suite = unittest.defaultTestLoader.loadTestsFromModule(module)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+
+
+def record_census_boards():
+    """Drive the census's `next` harnesses — every `CR092_FIXTURES` board with
+    its flags, in all five real clients, against the census's own stub, whose
+    `…/next` branch asks the seam. Only the boards asked about are kept."""
+    from tests.client import test_client_fleet_envelope_census as census
+    census._get_next_drives()
+    census._get_harness_isolation_drives()
+
+
+def record_cycle_flag_help_board(recorder):
+    """The cycle-flag-help `next` envelope test drives a bare `next` over its
+    `_queue()` board; recorded directly, as that test asks exactly this."""
+    module = _load_path(CYCLE_FLAG_HELP_PATH, "cr098_oracle_cycle_flag_help")
+    board = module.NextEnvelopeCarriesTheCanonicalFlagTest._queue(None)
+    recorder.resolve(board["entries"], board["tracks"], {})
 
 
 # ── tests/next-resolver.test.ts's AC5 boards, mirrored ─────────────────────
@@ -204,7 +236,13 @@ def run_help(old, request):
 def main():
     old = load_old_client()
     recorder = Recorder(old)
-    record_route_test_boards(recorder)
+    cr098_next_oracle.RESOLVER = recorder.resolve
+    try:
+        record_route_test_boards()
+        record_census_boards()
+    finally:
+        cr098_next_oracle.RESOLVER = cr098_next_oracle.frozen_resolver
+    record_cycle_flag_help_board(recorder)
     for entries, scope in TS_AC5_BOARDS:
         recorder.resolve(entries, _published_tracks(entries), scope)
     oracle = {
