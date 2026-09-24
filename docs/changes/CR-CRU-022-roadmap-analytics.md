@@ -97,6 +97,22 @@ p50Ts?, p80Ts?, scheduleHealth?, sampleWeeks, status}`.
 - **Chart library: uPlot 1.6.32**, vendored to `public/vendor/` beside VanJS, zero-build. Colours are
   read from CSS variables at draw time.
 
+### §S6 One wait for a tab's own pane (folded in from CR-CRU-148, user ruling 2026-09-24)
+
+CR-CRU-148 found that a step reading `pane-scroll` straight after a tab click can resolve the OUTGOING
+tab's pane before the swap lands, and measure a detached node. It fixed CR-CRU-018's AC10 with a shared
+helper, `mountedPaneScroll` (`tests/e2e/steps/pane-mount.ts`), and listed three more steps with the same
+exposure. The user ruled that this CR carries them, since its own new phone scenario has the same race:
+
+- this CR's phone analytics scenario measures `pane-scroll` through `mountedPaneScroll`, never a bare
+  lookup;
+- the three exposed steps in `tests/e2e/steps/pane-scroll.steps.ts` adopt it: "the active pane-scroll
+  element scrolls horizontally", "no pane scrolls horizontally" (VERIFY caught it **passing silently** on
+  a detached node: `0 ≤ 0`), and "the pane-scroll element's scrollTop is {int}".
+
+This is test-side only. `mountedPaneScroll` is extended for any tab it doesn't yet cover, never
+duplicated.
+
 ## Acceptance criteria
 
 **§S1 — story points**
@@ -140,6 +156,13 @@ p50Ts?, p80Ts?, scheduleHealth?, sampleWeeks, status}`.
 - [ ] With `insufficient_history` or `unpointed`, no date text renders anywhere on the band or the pane.
 - [ ] At the phone band, the release band is one line measuring ≥44px, velocity appears on the foot
       strip, and the pane's chart scrolls inside its own container with the page unscrolled.
+
+**§S6 — one wait for a tab's own pane**
+- [ ] This CR's phone scenario and the three listed steps in `pane-scroll.steps.ts` measure through
+      `mountedPaneScroll`; no step in `tests/e2e/steps/` resolves `pane-scroll` with a bare lookup
+      straight after a tab click or pane swap.
+- [ ] Each migrated step rejects a detached pane and a wrong-tab pane. The detached case is proven per
+      step by replaying its old bare lookup (it must fail), and no existing assertion is weakened.
 
 ## Estimated size
 
