@@ -3778,7 +3778,9 @@ function suiteCounts(node: SuiteNode): { passed: number; failed: number; pending
 }
 
 /** §S1 — event-specific 404 (distinct from the server's route catch-all). */
-/** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>. */
+/** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>[&browser=<b>].
+ *  A scenario run under two browsers is two same-named nodes; `browser` picks
+ *  that browser's own node. Omitted, the first same-named node answers. */
 function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
   const event = store.getEvent(id);
   if (event === null) {
@@ -3786,7 +3788,10 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
   }
   const suite = url.searchParams.get("suite");
   if (suite !== null) {
-    const match = (event.tree ?? []).find((node) => node.name === suite);
+    const browser = url.searchParams.get("browser");
+    const match = (event.tree ?? []).find(
+      (node) => node.name === suite && (browser === null || node.browser === browser),
+    );
     if (match === undefined) {
       return fail(404, `suite not found in event ${id}: ${suite}`);
     }
@@ -3799,6 +3804,7 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
       name: node.name,
       status: node.status,
       counts: suiteCounts(node),
+      ...(node.browser !== undefined ? { browser: node.browser } : {}),
     }));
     return reply(req, url, { ok: true, event: { ...event, tree } });
   }

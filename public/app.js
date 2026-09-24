@@ -5947,6 +5947,24 @@
     const VIRT_ROW_HEIGHT = 28;
     const VIRT_WINDOW = 120;
 
+    // "A scenario's identity is (name, browser)": a playwright scenario run
+    // under two browsers is two same-named nodes, each with its own steps, so
+    // every per-scenario state below is keyed by this, never by name alone.
+    // A node with no browser keys by its name, exactly as before.
+    const suiteKeyOf = (suite) =>
+      typeof suite?.browser === "string" && suite.browser.length > 0
+        ? `${suite.name} [${suite.browser}]`
+        : suite.name;
+
+    // A playwright run's detail opens as a SPECIFICATION (feature →
+    // scenario → step). Every other codec keeps the plain test tree.
+    const isSpecRun = (d) => d?.kind === "test" && d?.codec === "playwright";
+
+    // On open, the first feature (failures-first order) shows its failing
+    // scenarios plus its first SPEC_FIRST_OPEN scenarios; the rest of its
+    // scenarios load as they scroll into view.
+    const SPEC_FIRST_OPEN = 2;
+
     // Body factory shared by BOTH detail containers (home in-pane form and
     // the workspace's WorkspaceRunDetail wrapper): owns the fetch/suite
     // state and renders the codec-aware body.
@@ -5963,6 +5981,8 @@
       const focusedLeaf = van.state(null); // "suite::leaf" — failure focus
       const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
       const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
+      const openFeatures = van.state({}); // spec runs: feature title -> true while unfolded
+      const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
       let jumpPos = 0; // failures-footer jump cursor
 
@@ -5986,6 +6006,7 @@
             return;
           }
           detail.val = ev;
+          if (isSpecRun(ev)) openProgressively(ev);
           // CR-CRU-038 §S1 — an error run opens MINIMIZED: NO suite (failing
           // or not) is auto-expanded/fetched on open. Every suite renders as
           // a collapsed header (▸) carrying its inline ✗/✓ counts; leaves
@@ -5998,32 +6019,117 @@
       })();
 
       // §S4.5 — a suite's leaves arrive only via ?suite=<name>.
-      async function loadSuite(name) {
-        if (suiteLeaves.val[name] !== undefined) return;
+      async function loadSuite(suite) {
+        const name = suite.name;
+        const key = suiteKeyOf(suite);
+        if (suiteLeaves.val[key] !== undefined) return;
         // CR-CRU-122 §S3 — raised before the fetch, lowered in the `finally`
         // below: a flag cleared only on the success path would leave a
         // permanently spinning row behind every failed load.
-        suiteLoading.val = { ...suiteLoading.val, [name]: true };
+        suiteLoading.val = { ...suiteLoading.val, [key]: true };
         try {
+          // A browser-carrying node is read by (name, browser): the same-named
+          // node of another browser is never the answer.
+          const browserParam =
+            key === name ? "" : `&browser=${encodeURIComponent(suite.browser)}`;
           const res = await fetch(
-            `/api/v2/events/${encodeURIComponent(eventId)}?suite=${encodeURIComponent(name)}`,
+            `/api/v2/events/${encodeURIComponent(eventId)}?suite=${encodeURIComponent(name)}${browserParam}`,
           );
           const body = await res.json();
-          const match = (body?.event?.tree ?? []).find((s) => s.name === name);
-          suiteLeaves.val = { ...suiteLeaves.val, [name]: match?.children ?? [] };
+          const match = (body?.event?.tree ?? []).find((s) => suiteKeyOf(s) === key);
+          suiteLeaves.val = { ...suiteLeaves.val, [key]: match?.children ?? [] };
         } catch (err) {
           loadError.val = `suite "${name}" failed to load — ${String(err)}`;
         } finally {
-          suiteLoading.val = { ...suiteLoading.val, [name]: false };
+          suiteLoading.val = { ...suiteLoading.val, [key]: false };
         }
       }
 
       // F4 — suite-row click expands (fetches) a collapsed suite; clicking
       // an already-expanded suite keeps it expanded (auto-expanded failing
       // suites stay open — status lives in the ▾/▸ affordance).
-      async function expandSuite(name) {
-        if (suiteLeaves.val[name] !== undefined) return;
-        await loadSuite(name);
+      async function expandSuite(suite) {
+        if (suiteLeaves.val[suiteKeyOf(suite)] !== undefined) return;
+        await loadSuite(suite);
+      }
+
+      // A spec run's scenarios grouped by feature, features failures-first.
+      // The failing set is L.foldSuites' (the drill-in's own failures-float
+      // rule), keyed by (name, browser) so two browsers never merge. Within a
+      // feature its failing scenarios float too; otherwise report order.
+      let specCache = null;
+      function specFeaturesOf(d) {
+        if (specCache !== null && specCache.d === d) return specCache.features;
+        const tree = d.tree ?? [];
+        const failing = new Set(
+          L.foldSuites(tree.map((s) => ({ name: suiteKeyOf(s), status: s.status }))),
+        );
+        const byTitle = new Map();
+        for (const node of tree) {
+          const name = typeof node.name === "string" ? node.name : "";
+          const cut = name.indexOf(BDD_SEP);
+          const title = cut < 0 ? "" : name.slice(0, cut);
+          if (!byTitle.has(title)) byTitle.set(title, []);
+          byTitle.get(title).push({ node, failing: failing.has(suiteKeyOf(node)) });
+        }
+        const features = [...byTitle.entries()].map(([title, entries]) => {
+          const scenarios = [
+            ...entries.filter((e) => e.failing),
+            ...entries.filter((e) => !e.failing),
+          ];
+          return {
+            title,
+            scenarios,
+            failed: scenarios.filter((e) => e.failing).length,
+            passed: scenarios.filter((e) => e.node.status === "pass").length,
+          };
+        });
+        const ordered = [
+          ...features.filter((f) => f.failed > 0),
+          ...features.filter((f) => f.failed === 0),
+        ];
+        specCache = { d, features: ordered };
+        return ordered;
+      }
+
+      // Progressive expansion: the first feature (failures-first) unfolds and
+      // reads its failing scenarios plus its first SPEC_FIRST_OPEN; every
+      // other failing feature unfolds and reads its failing scenarios; every
+      // other all-green feature stays folded. Nothing else is read until it
+      // scrolls into view (loadScrolledScenarios) or is clicked.
+      function openProgressively(d) {
+        const open = {};
+        const initial = [];
+        specFeaturesOf(d).forEach((feature, i) => {
+          if (i === 0 || feature.failed > 0) open[feature.title] = true;
+          feature.scenarios.forEach((entry, j) => {
+            if (entry.failing || (i === 0 && j < SPEC_FIRST_OPEN)) initial.push(entry.node);
+          });
+        });
+        openFeatures.val = open;
+        for (const node of initial) void loadSuite(node);
+      }
+
+      function toggleFeature(title) {
+        const next = { ...openFeatures.val };
+        if (next[title] === true) delete next[title];
+        else next[title] = true;
+        openFeatures.val = next;
+      }
+
+      // A folded scenario row of an unfolded feature reads its steps once it
+      // is in (or has passed through) the pane's viewport.
+      function loadScrolledScenarios(pane, d) {
+        const paneTop = pane.getBoundingClientRect().top;
+        const view = pane.clientHeight ?? 0;
+        const byKey = new Map((d.tree ?? []).map((s) => [suiteKeyOf(s), s]));
+        for (const row of pane.querySelectorAll('[data-testid="suite-row"][data-suite-key]')) {
+          const key = row.getAttribute("data-suite-key");
+          if (suiteLeaves.val[key] !== undefined || suiteLoading.val[key] === true) continue;
+          if (row.getBoundingClientRect().top - paneTop > view) continue;
+          const node = byKey.get(key);
+          if (node !== undefined) void loadSuite(node);
+        }
       }
 
       // F4 — a failed leaf's failure box: inline (no click) in Detail until
@@ -6044,12 +6150,32 @@
       const LeafRows = (suiteName, leaf, presentation) => {
         const key = `${suiteName}::${leaf.name}`;
         const failed = leaf.status === "fail";
+        // A spec run's failing step carries its message AT the step, inside
+        // its own row, always shown; its stored stack sits behind `stack ▸`.
+        const spec = isSpecRun(detail.val);
+        const failure = leaf.failure ?? null;
+        const hasMessage =
+          typeof failure?.message === "string" && failure.message.length > 0;
+        const hasType = typeof failure?.type === "string" && failure.type.length > 0;
+        const messageLine = hasMessage
+          ? failure.message
+          : hasType
+            ? failure.type
+            : "test failed";
+        const hasTrace = typeof failure?.trace === "string" && failure.trace.length > 0;
+        const noteLine = hasMessage
+          ? null
+          : div(
+              { class: "app-failure-note" },
+              "no failure detail captured by the reporter",
+            );
+        const stackOpen = openStacks.val[key] === true;
         const nodes = [
           div(
             {
               "data-testid": "leaf-row",
               "data-leaf-key": key, // §S4.4 — stable identity for the window
-              class: `app-leaf-row app-tree-line app-leaf-${leaf.status} ${leaf.status}`,
+              class: `app-leaf-row app-tree-line app-leaf-${leaf.status} ${leaf.status}${spec ? " app-leaf-step" : ""}`,
               onclick: () => {
                 focusedLeaf.val = key;
               },
@@ -6059,29 +6185,43 @@
               `${drillinLeafGlyph(leaf.status)} ${leaf.name}`,
             ),
             span({ class: "app-card-meta" }, fmtDuration(leaf.duration_ms ?? 0)),
+            spec && failed
+              ? div(
+                  { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
+                  div({ class: "app-failure-message" }, messageLine),
+                  noteLine,
+                  hasTrace
+                    ? button(
+                        {
+                          "data-testid": "stack-toggle",
+                          class: "app-chip app-stack-toggle",
+                          onclick: (e) => {
+                            e.stopPropagation();
+                            const next = { ...openStacks.val };
+                            if (next[key] === true) delete next[key];
+                            else next[key] = true;
+                            openStacks.val = next;
+                          },
+                        },
+                        stackOpen ? "stack ▾" : "stack ▸",
+                      )
+                    : null,
+                  hasTrace && stackOpen
+                    ? pre(
+                        { "data-testid": "stack-trace", class: "app-failure-trace app-stack-trace" },
+                        failure.trace,
+                      )
+                    : null,
+                )
+              : null,
           ),
         ];
-        if (failed && failureBoxVisible(key, presentation)) {
-          const failure = leaf.failure ?? null;
-          const hasMessage =
-            typeof failure?.message === "string" && failure.message.length > 0;
-          const hasType = typeof failure?.type === "string" && failure.type.length > 0;
-          const messageLine = hasMessage
-            ? failure.message
-            : hasType
-              ? failure.type
-              : "test failed";
-          const hasTrace = typeof failure?.trace === "string" && failure.trace.length > 0;
+        if (!spec && failed && failureBoxVisible(key, presentation)) {
           nodes.push(
             div(
               { "data-testid": "failure-box", class: "app-failure-box" },
               div({ class: "app-failure-message" }, messageLine),
-              hasMessage
-                ? null
-                : div(
-                    { class: "app-failure-note" },
-                    "no failure detail captured by the reporter",
-                  ),
+              noteLine,
               hasTrace ? div({ class: "app-failure-trace" }, failure.trace) : null,
             ),
           );
@@ -6181,8 +6321,9 @@
           },
         });
 
-      const SynthHeatCell = (suiteName, status) =>
-        span({
+      const SynthHeatCell = (suite, status) => {
+        const suiteName = suiteKeyOf(suite);
+        return span({
           "data-testid": "heat-cell",
           class: `app-heat-cell app-heat-${status}`,
           title: suiteName,
@@ -6193,7 +6334,7 @@
             // focus-opens the suite's first failing leaf's failure box (the
             // CR-016 one-box focus model), so the click takes the user
             // straight to that failure instead of just unfolding the tree.
-            await loadSuite(suiteName);
+            await loadSuite(suite);
             if (status !== "fail") return;
             const leaves = suiteLeaves.val[suiteName] ?? [];
             const failIdx = leaves.findIndex((l) => l.status === "fail");
@@ -6212,19 +6353,20 @@
             focusedLeaf.val = `${suiteName}::${leaf.name}`;
           },
         });
+      };
 
       const HeatStrip = (d) => {
         const leavesMap = suiteLeaves.val;
         const cells = [];
         for (const suite of d.tree ?? []) {
-          const leaves = leavesMap[suite.name];
+          const leaves = leavesMap[suiteKeyOf(suite)];
           if (leaves !== undefined) {
-            leaves.forEach((leaf, i) => cells.push(HeatCell(suite.name, leaf, i)));
+            leaves.forEach((leaf, i) => cells.push(HeatCell(suiteKeyOf(suite), leaf, i)));
           } else {
             const c = suite.counts ?? {};
-            for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite.name, "fail"));
-            for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite.name, "pending"));
-            for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite.name, "pass"));
+            for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite, "fail"));
+            for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite, "pending"));
+            for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite, "pass"));
           }
         }
         return div({ "data-testid": "heat-strip", class: "app-heat-strip" }, cells);
@@ -6283,10 +6425,10 @@
       function failingLeafKeys(d) {
         const keys = [];
         for (const suite of d.tree ?? []) {
-          const leaves = suiteLeaves.val[suite.name];
+          const leaves = suiteLeaves.val[suiteKeyOf(suite)];
           if (leaves === undefined) continue;
           for (const leaf of leaves) {
-            if (leaf.status === "fail") keys.push(`${suite.name}::${leaf.name}`);
+            if (leaf.status === "fail") keys.push(`${suiteKeyOf(suite)}::${leaf.name}`);
           }
         }
         return keys;
@@ -6302,7 +6444,9 @@
         // leaves aren't loaded yet, so failingLeafKeys() would be empty. Load
         // (and thereby expand ▾) the failing suites on demand so the walk can
         // reach every failing leaf; then advance the one-box focus cursor.
-        for (const name of L.foldSuites(d.tree ?? [])) await loadSuite(name);
+        const byKey = new Map((d.tree ?? []).map((s) => [suiteKeyOf(s), s]));
+        const keyed = (d.tree ?? []).map((s) => ({ name: suiteKeyOf(s), status: s.status }));
+        for (const key of L.foldSuites(keyed)) await loadSuite(byKey.get(key));
         const keys = failingLeafKeys(d);
         if (keys.length === 0) return;
         jumpPos = (jumpPos + 1) % keys.length;
@@ -6397,10 +6541,10 @@
         const leavesMap = suiteLeaves.val;
         const leafRawOf = (predicate) => {
           for (const suite of d.tree ?? []) {
-            const leaves = leavesMap[suite.name];
+            const leaves = leavesMap[suiteKeyOf(suite)];
             if (leaves === undefined) continue;
             for (const leaf of leaves) {
-              const key = `${suite.name}::${leaf.name}`;
+              const key = `${suiteKeyOf(suite)}::${leaf.name}`;
               if (!predicate(leaf, key)) continue;
               if (typeof leaf.raw === "string" && leaf.raw.length > 0) return leaf.raw;
             }
@@ -6459,45 +6603,116 @@
         },
       ];
 
+      // One suite (a spec run's scenario) row + its leaves. The plain tree and
+      // the spec's feature groups both draw their suites through this, so a
+      // spec run's scenario is the same collapse/counts/digest/virtualization.
+      const SuiteGroup = (suite, presentation, density, leavesMap, spec) => {
+        const key = suiteKeyOf(suite);
+        const leaves = leavesMap[key];
+        const expanded = leaves !== undefined;
+        const counts = suite.counts ?? countsOfLeaves(leaves ?? suite.children);
+        const foldedAllPass = density && !expanded && (counts.failed ?? 0) === 0;
+        const rowProps = {
+          "data-testid": "suite-row",
+          class: `app-suite-row app-tree-line ${suite.status}`,
+          onclick: () => expandSuite(suite),
+        };
+        if (spec) rowProps["data-suite-key"] = key;
+        return div(
+          { class: "app-suite-group" },
+          div(
+            rowProps,
+            span(
+              { "data-testid": "tree-toggle", class: "app-tree-toggle" },
+              expanded ? "▾" : "▸",
+            ),
+            span({ class: "app-suite-name" }, suite.name),
+            key === suite.name
+              ? null
+              : span({ class: "app-suite-browser app-card-meta" }, `· ${suite.browser}`),
+            SuiteCountSpans(counts, foldedAllPass),
+            // CR-CRU-122 §S3 — this suite's own lazy-load, on this suite's
+            // own row, whichever path started it.
+            () => (suiteLoading.val[key] === true ? Spinner() : ""),
+          ),
+          expanded ? SuiteLeafList(key, leaves, presentation) : null,
+        );
+      };
+
+      // A spec run's byline: who filed it, when (the board's relative-time
+      // idiom), and its cycle — or that it is unbound.
+      const RunByline = (d) => {
+        const parts = [`recorded ${L.relativeTime(d.timestamp, Date.now())} by ${d.agentId ?? "an unknown agent"}`];
+        const cycleId = d.context?.cycleId ?? d.cycleId;
+        const cycle = d.context?.cycle;
+        if (typeof cycleId === "number") parts.push(`cycle ${cycleId}`);
+        if (typeof cycle === "string" && cycle.length > 0) parts.push(cycle);
+        if (parts.length === 1) parts.push("unbound");
+        return div({ "data-testid": "run-byline", class: "app-run-byline app-card-meta" }, parts.join(" · "));
+      };
+
+      // A spec run's features: each its own heading (its own counts, its own
+      // ▾/▸), failures first; a folded feature mounts none of its scenarios.
+      const SpecFeatures = (d, presentation, density, leavesMap) =>
+        specFeaturesOf(d).map((feature) => {
+          const open = openFeatures.val[feature.title] === true;
+          const status = feature.failed > 0 ? "fail" : "pass";
+          return div(
+            {
+              "data-testid": "feature-group",
+              class: `app-feature-group ${status}`,
+              "data-feature-name": feature.title,
+              "data-feature-status": status,
+              "data-feature-passed": String(feature.passed),
+              "data-feature-failed": String(feature.failed),
+            },
+            div(
+              {
+                "data-testid": "feature-heading",
+                class: `app-feature-heading app-tree-line ${status}`,
+                onclick: () => toggleFeature(feature.title),
+              },
+              span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
+              span(
+                { class: "app-feature-name" },
+                feature.title === "" ? "Scenarios" : `Feature: ${feature.title}`,
+              ),
+              span(
+                { class: "app-suite-counts" },
+                span({ class: "app-count-pass" }, `${feature.passed} ✓`),
+                feature.failed > 0 ? [" ", span({ class: "app-count-fail" }, `${feature.failed} ✗`)] : null,
+              ),
+            ),
+            open
+              ? div(
+                  { class: "app-feature-scenarios" },
+                  feature.scenarios.map((entry) =>
+                    SuiteGroup(entry.node, presentation, density, leavesMap, true),
+                  ),
+                )
+              : null,
+          );
+        });
+
       // Suite tree — §S4.0 FINAL: the tier decides everything. Detail (unit/
       // module/integration) renders the plain tree; Density (regression/e2e)
       // adds the status chips (F4½), heat-strip (§S4.2), failure digest
       // (§S4.3) and failures-float folding (§S4.1). Virtualization (§S4.4)
-      // applies in BOTH presentations.
+      // applies in BOTH presentations. A playwright run draws the same suites
+      // grouped under their features (SpecFeatures), under its byline.
       const TestBody = (d) => {
         const presentation = presentationOf(d);
         const density = presentation === "Density";
         const leavesMap = suiteLeaves.val;
+        const spec = isSpecRun(d);
         return div(
           { class: "app-drillin-tree" },
+          spec ? RunByline(d) : null,
           density ? StatusChips(d) : null,
           density ? HeatStrip(d) : null,
-          (d.tree ?? []).map((suite) => {
-            const leaves = leavesMap[suite.name];
-            const expanded = leaves !== undefined;
-            const counts = suite.counts ?? countsOfLeaves(leaves ?? suite.children);
-            const foldedAllPass = density && !expanded && (counts.failed ?? 0) === 0;
-            return div(
-              { class: "app-suite-group" },
-              div(
-                {
-                  "data-testid": "suite-row",
-                  class: `app-suite-row app-tree-line ${suite.status}`,
-                  onclick: () => expandSuite(suite.name),
-                },
-                span(
-                  { "data-testid": "tree-toggle", class: "app-tree-toggle" },
-                  expanded ? "▾" : "▸",
-                ),
-                span({ class: "app-suite-name" }, suite.name),
-                SuiteCountSpans(counts, foldedAllPass),
-                // CR-CRU-122 §S3 — this suite's own lazy-load, on this suite's
-                // own row, whichever path started it.
-                () => (suiteLoading.val[suite.name] === true ? Spinner() : ""),
-              ),
-              expanded ? SuiteLeafList(suite.name, leaves, presentation) : null,
-            );
-          }),
+          spec
+            ? SpecFeatures(d, presentation, density, leavesMap)
+            : (d.tree ?? []).map((suite) => SuiteGroup(suite, presentation, density, leavesMap, false)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
           // showing the RESOLVED raw (per-leaf preferred over the run blob).
@@ -6610,6 +6825,10 @@
           }
         }
         if (next !== null) suiteWindow.val = next;
+        // A spec run's folded scenarios read their steps as they scroll
+        // into view.
+        const d = detail.val;
+        if (d !== null && isSpecRun(d)) loadScrolledScenarios(pane, d);
       };
 
       // CR-CRU-017 §S3 — an aborted run's drill-in leads with WHY it was

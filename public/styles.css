@@ -761,6 +761,28 @@ body {
 /* §S3 failure-box degradation — dim reporter note when no message stored. */
 .app-failure-note { color: var(--ink-faint); font-style: italic; margin-top: 2px; }
 
+/* A playwright run's detail, read as a specification: feature headings with
+   their own counts and fold, the browser on each scenario row, the byline, and
+   a failing step's message inside its own row with the stack behind a chip. */
+.app-run-byline { margin: 0 0 6px; }
+.app-feature-group { margin-bottom: 6px; }
+.app-feature-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px var(--mono);
+  color: var(--ink);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.app-feature-heading .app-feature-name { flex: 1; }
+.app-feature-scenarios { margin-left: 14px; }
+.app-suite-browser { white-space: nowrap; }
+.app-leaf-step { flex-wrap: wrap; }
+.app-leaf-step .app-step-failure { flex-basis: 100%; margin: 2px 0 4px 14px; cursor: default; }
+.app-stack-toggle { margin-top: 4px; padding: 0 6px; font-size: 9px; }
+.app-stack-trace { margin: 4px 0 0; white-space: pre-wrap; }
+
 /* ── CR-CRU-015 §S3 — the BDD section's Gherkin: feature ▸ scenario ▸ steps.
    Same flat mono tree language as the run drill-in (F4) — status is COLOR,
    never a box — and the ✓/✗/⏭ glyph is a ::before, so the rendered step line
