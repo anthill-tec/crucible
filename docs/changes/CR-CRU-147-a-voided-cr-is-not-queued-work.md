@@ -101,3 +101,18 @@ the echo, which is how Model B found four drifted titles.
 CR-CRU-098 moves the `next` resolver from the client to the server; CR-CRU-147 changes what `next`
 skips (VOID and SUPERSEDED CRs). Both touch the same resolver. **Whichever lands first owns it, and
 the other adapts** — if CR-CRU-098 lands first, this CR's skip is implemented in the server resolver, not the client. Never two resolvers.
+
+**Corrected at CR-CRU-098's gap analysis (2026-09-24) — for this CR's own gap analysis to take up:**
+
+- **`next` already skips dead CRs.** `_is_actionable` (`"lifecycle" not in entry`), `_dead_entries`
+  and the `dead-dependency` trigger have been in the resolver since `da67a55` (CR-092, 2026-08-28),
+  shipped in 0.2.0–0.2.2. Measured live on this board: `next --wave 5` names CR-CRU-082 (VOID) as a
+  corpse and does not offer it. §S1's first `next` AC is therefore already met; Model B's report
+  that `next` surfaced a ruled CR is not reproduced here, and which client version they ran is
+  unmeasured.
+- **§S1's second AC contradicts shipped, ruled behaviour.** Today a live CR depending on a dead one
+  is HELD with trigger `dead-dependency` and told to re-point its `dependsOn` (CR-092). This CR's
+  AC says it is *not* held. Which is right is a decision for this CR's gap analysis, not an
+  implementation detail.
+- **CR-CRU-098 lands first** (wave order) and moves the resolver to the server unchanged; any change
+  to `next` here is made in that server function.
