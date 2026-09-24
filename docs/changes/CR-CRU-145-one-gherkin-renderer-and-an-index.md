@@ -143,6 +143,13 @@ verifying.
       the initial expansion issues **no** per-suite read for a scenario that has not scrolled into
       view. Asserted on the requests made, not on timing.
 - [ ] A failing step still shows its message AT that step.
+- [ ] **A scenario that ran under two browsers opens that browser's own steps.** The suites read
+      (`?depth=suites`) carries each scenario node's `browser`; the per-suite read is narrowed by
+      browser as well as name; and the run detail keys every per-scenario state (loaded leaves,
+      loading flag, window, leaf keys) by (name, browser). Asserted on a two-browser run in which
+      the FIRST-listed browser passes and the second fails: expanding the failing browser's row
+      shows its failing step, never the passing browser's steps. (Found at C1 GREEN 2026-09-24: the
+      per-suite read returned the first same-named node, and the run detail keyed by name alone.)
 - [ ] Non-playwright runs' details are UNCHANGED — same default expansion as today, asserted, so this
       does not become a global behaviour change.
 - [ ] The drill-in's existing frame still applies to a playwright run: collapse works, per-scenario
