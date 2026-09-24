@@ -2267,12 +2267,10 @@ def cmd_queue(args, project_dir, ops):
 # cross-check, no merge — which is why this comment does not even name the
 # harness's files.
 
-# §S2 — the three DRAINED reasons and the four HOLD trigger kinds, as the
-# vocabulary the DN fixes ("Reading the lane during execution"). Named here so
-# the enum is one list rather than four string literals scattered downstream.
-DRAINED_REASONS = ("wave-complete", "awaiting-assignment", "no-roadmap")
-HOLD_TRIGGER_KINDS = ("in-flight", "dead-dependency", "dependency",
-                      "unknown-dependency")
+# §S2 — the decision vocabulary (the three DRAINED reasons, the four HOLD
+# trigger kinds) is the SERVER's since CR-CRU-098: `DRAINED_REASONS` and
+# `HOLD_TRIGGER_KINDS` in src/next.ts. This module presents an answer and keeps
+# no second copy of it.
 
 _TRACK_LANE_RE = re.compile(r"\d+")
 
