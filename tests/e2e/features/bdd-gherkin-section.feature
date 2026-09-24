@@ -30,3 +30,19 @@ Feature: the BDD section renders an ingested run's Gherkin
     And the step "When the specification breaks" of "a failing scenario stops at the broken step" carries the failure message "expect(received).toBe(expected) — the step never rendered"
     And no other step in the BDD section carries a failure
     And the BDD section shows no run cards and no ratio pills
+
+  # CR-CRU-145 \u00a7S2/\u00a7S4 (cycle 511, RED) \u2014 the BDD tab becomes an INDEX of
+  # runs; a row hands off to the SAME run detail route the Runs pane and the
+  # Workflow chain use (CR-CRU-016 \u00a7S3), which renders the Gherkin as a
+  # specification (\u00a7S1). ADDED, not editing the scenario above.
+  Scenario: the BDD index lists a run and opens its Gherkin at the shared run detail route
+    Given a frontend project named "BDD Index Navigation" is registered
+    And an online agent "bdd-index-e2e" with message "gherkin run" is registered on that project
+    And a playwright BDD run is ingested for agent "bdd-index-e2e" on that project
+    When I open the workspace for that project
+    And I click the "BDD" workspace tab
+    Then the BDD index shows exactly one row for that run
+    When I open that run from the BDD index
+    Then the address bar shows that run's own route
+    And the BDD section shows the feature "Gherkin Rendering Feature"
+    And the steps of "a passing scenario renders every step" read in order "Given the board has a frontend project | When a BDD run is ingested for it | And the run carries its Gherkin steps | Then the BDD section renders them in order"
