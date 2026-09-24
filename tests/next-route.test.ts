@@ -83,6 +83,9 @@ describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
         ...(typeof row.seq === "number" ? { seq: row.seq } : {}),
         ...(typeof row.release === "string" ? { release: row.release } : {}),
         ...(typeof row.track === "string" ? { track: row.track } : {}),
+        ...(row.lifecycle && typeof row.lifecycle === "object"
+          ? { lifecycle: { ...(row.lifecycle as Record<string, unknown>), at: Date.now() } as unknown as import("../src/types.ts").QueueLifecycle }
+          : {}),
       })),
     );
   }
@@ -259,5 +262,40 @@ describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
     const after = await get(`/api/v2/projects/${key}/next`);
     expect(after.body.cr).toBe("CR-NEXTPTR-099");
     expect(after.body.cr).not.toBe(before.body.cr);
+  });
+
+  // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+  // AC2 CENSUS EXPANSION (2nd RED pass) \u2014 AC4's `waveCompleted` field, ported
+  // from tests/client/test_next_announces_the_wave_boundary.py at the ROUTE
+  // level (the pure-function coverage lives in tests/next-resolver.test.ts).
+  // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+  test("AC4 \u2014 waveCompleted names the just-finished predecessor beside NEXT's decision, and expires once the new wave lands its first cr", async () => {
+    boot();
+    const key = await seed("cru098-next-route-wave-completed");
+    seedRows(key, [
+      { cr: "CR-NEXTPTR-A5-1", wave: "5", seq: 5001, lifecycle: { state: "VOID", reason: "synthetic" } },
+      { cr: "CR-NEXTPTR-A5-2", wave: "5", seq: 5002, lifecycle: { state: "VOID", reason: "synthetic" } },
+      { cr: "CR-NEXTPTR-B6-1", wave: "6", seq: 6001 },
+    ]);
+
+    const crossed = await get(`/api/v2/projects/${key}/next`);
+    expect(crossed.body.decision).toBe("NEXT");
+    expect(crossed.body.cr).toBe("CR-NEXTPTR-B6-1");
+    expect(crossed.body.waveCompleted).toBe("5");
+  });
+
+  test("AC6 \u2014 a release label rides ?release= VERBATIM \u2014 '0.2.0' and 'v0.2.0' are two different releases", async () => {
+    boot();
+    const key = await seed("cru098-next-route-release-verbatim");
+    seedRows(key, [
+      { cr: "CR-NEXTPTR-BARE", wave: "6", seq: 6001, release: "0.2.0" },
+      { cr: "CR-NEXTPTR-VEE", wave: "6", seq: 6002, release: "v0.2.0" },
+    ]);
+
+    const { body } = await get(`/api/v2/projects/${key}/next?release=${encodeURIComponent("v0.2.0")}`);
+    expect(body.decision).toBe("NEXT");
+    expect(body.cr).toBe("CR-NEXTPTR-VEE");
+    expect(body.release).toBe("v0.2.0");
   });
 });

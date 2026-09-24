@@ -9,13 +9,18 @@ KEPT per the classification table) onto the §S3 contract: `cmd_next` makes
 EXACTLY ONE GET of `.../next` (never `.../queue` again), passing
 `track`/`release`/`wave` as query parameters, and emits whatever the route
 answers (§S3 — "passes its flags through, and emits what it receives"), never
-re-deriving a decision itself.
+re-deriving a decision itself. Also carries `LegacyLineStatesTheWaveTest` and
+`BothNewDimensionsRideTheOneReadTest`, ported from
+`test_next_lane_carries_release_and_wave.py` (KEPT — the human line and the
+one-read-per-invocation guarantee are both presentation/transport facts about
+the CLIENT, not the resolver).
 
-QUERY-STRING FORMAT — a RED-time ASSUMPTION, spec-silent on the exact shape:
-`urlencode(sorted({k: v for k, v in (('release', r), ('track', t), ('wave', w))
-if v is not None}))` — alphabetical by flag name (`release`, `track`, `wave`).
-Flagged in the RED report for GREEN to confirm, or for the orchestrator to pin
-explicitly; nothing else in §S2/§S3 constrains it.
+QUERY-STRING SHAPE — asserted STRUCTURALLY, not by string order. AC8 requires
+one GET of `.../next` with the flags "as query parameters"; it does not pin an
+ORDER, so every assertion below parses the request with `urlsplit`/`parse_qsl`
+and compares (a) the base path and (b) the PARAMS AS A DICT. Pinning a literal
+ordered query string would be over-specification GREEN could only satisfy by
+matching this file's arbitrary choice.
 
 RED expectation: TODAY's `cmd_next` still issues its ONE `GET .../queue` (no
 query string at all — clients/_crucible_axi.py:2924-2925) — every AC8 path
@@ -37,11 +42,12 @@ import contextlib
 import importlib.util
 import io
 import os
+import re
 import unittest
 from argparse import Namespace
 from pathlib import Path
 from unittest import mock
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -50,6 +56,7 @@ TOON_PATH = CLIENTS_DIR / "toon.py"
 
 PROJECT_KEY = "cr098-next-verb-key"
 QUEUE_PATH = f"/api/v2/projects/{PROJECT_KEY}/queue"
+NEXT_PATH_BASE = f"/api/v2/projects/{PROJECT_KEY}/next"
 
 ENV_KEYS = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
             "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY")
@@ -67,14 +74,18 @@ AXI = _load(AXI_MODULE_PATH, "cr098_axi_under_test")
 TOON = _load(TOON_PATH, "cr098_toon")
 
 
-def next_path(track=None, release=None, wave=None):
-    """AC8 — the ONE GET `cmd_next` must issue post-GREEN. See the RED-time
-    query-string ASSUMPTION in the module docstring."""
-    params = {k: v for k, v in (("release", release), ("track", track), ("wave", wave))
-              if v is not None}
-    path = f"/api/v2/projects/{PROJECT_KEY}/next"
-    qs = urlencode(sorted(params.items()))
-    return f"{path}?{qs}" if qs else path
+def _split_request(path):
+    """AC8, parsed rather than pinned to one order: `(base_path, params_dict)`.
+    `parse_qsl` — never a raw string compare — so a GREEN that emits
+    `?wave=7&track=2` and one that emits `?track=2&wave=7` are the SAME
+    request as far as this file is concerned."""
+    parts = urlsplit(path)
+    return parts.path, dict(parse_qsl(parts.query))
+
+
+def _expected_params(track=None, release=None, wave=None):
+    return {k: v for k, v in (("release", release), ("track", track), ("wave", wave))
+            if v is not None}
 
 
 def _entry(cr, seq, status="PENDING", wave="5", release=None, track=None,
@@ -122,14 +133,15 @@ class _RecordingOps:
     """Answers BOTH the old `.../queue` path (so today's still-unmodified
     `cmd_next` keeps computing a real decision — needed so the byte-identity
     half of AC9 says something meaningful RIGHT NOW) AND the new `.../next`
-    path (what GREEN's `cmd_next` must ask for instead) — `self.gets` records
-    EVERY path asked, so AC8 is checked as the EXACT list, not merely
-    'contains'. Any THIRD path is a bug in the test itself and raises loudly."""
+    path (what GREEN's `cmd_next` must ask for instead), matched by BASE PATH
+    only — the query string's shape is the TEST's business, never the
+    fixture's. `self.gets` records EVERY path asked, so AC8 is checked as the
+    EXACT list, not merely 'contains'. Any THIRD base path is a bug in the
+    test itself and raises loudly."""
 
-    def __init__(self, entries, next_body, track=None, release=None, wave=None):
+    def __init__(self, entries, next_body):
         self.entries = entries
         self.next_body = next_body
-        self.expected_next_path = next_path(track=track, release=release, wave=wave)
         self.gets = []
         self.writes = []
         self.agent_id_calls = 0
@@ -150,14 +162,15 @@ class _RecordingOps:
 
     def _get(self, path):
         self.gets.append(path)
-        if path == QUEUE_PATH:
+        base, _params = _split_request(path)
+        if base == QUEUE_PATH:
             return _queue(*self.entries)
-        if path == self.expected_next_path:
+        if base == NEXT_PATH_BASE:
             return self.next_body
         raise AssertionError(
             f"cmd_next asked for an unexpected path: {path!r} (expected "
             f"either the RETIRING {QUEUE_PATH!r} or AC8's "
-            f"{self.expected_next_path!r})")
+            f"{NEXT_PATH_BASE!r})")
 
     def _write(self, method):
         def _recorded(*args, **kwargs):
@@ -202,13 +215,11 @@ class _NextVerbTestBase(unittest.TestCase):
     def drive(self, entries, **flags):
         track, release, wave = flags.get("track"), flags.get("release"), flags.get("wave")
         _ok, _code, body = _route_response(entries, track=track, release=release, wave=wave)
-        recorder = _RecordingOps(entries, body, track=track, release=release, wave=wave)
+        recorder = _RecordingOps(entries, body)
         return self._run(recorder, **flags)
 
     def drive_failed(self, entries, **flags):
-        track, release, wave = flags.get("track"), flags.get("release"), flags.get("wave")
-        recorder = _FailedReadOps(entries, {"ok": False, "error": "connection refused"},
-                                  track=track, release=release, wave=wave)
+        recorder = _FailedReadOps(entries, {"ok": False, "error": "connection refused"})
         return self._run(recorder, **flags)
 
     def _run(self, recorder, **flags):
@@ -217,6 +228,26 @@ class _NextVerbTestBase(unittest.TestCase):
             code = AXI.cmd_next(_args(**flags), "/fake/dir", recorder.ops)
         decoded = TOON.decode(out.getvalue())
         return code, out.getvalue(), err.getvalue(), decoded["axi"], recorder
+
+    def assertNextRequest(self, ops, track=None, release=None, wave=None):
+        """AC8 — exactly one request, its BASE PATH the `.../next` route, and
+        its query parameters the flags given, AS A SET, never an ordered
+        string. Fails loudly (and separately) on each of the three ways
+        TODAY's client still violates this: wrong base path, extra requests,
+        or (today, always, since it never even reaches `.../next`) params
+        that were never sent at all."""
+        self.assertEqual(
+            len(ops.gets), 1,
+            f"AC8: exactly one GET; got {ops.gets!r}")
+        base, params = _split_request(ops.gets[0])
+        self.assertEqual(
+            base, NEXT_PATH_BASE,
+            f"AC8: `next` must read `.../next`, never `.../queue`; asked for "
+            f"{ops.gets[0]!r}")
+        self.assertEqual(
+            params, _expected_params(track=track, release=release, wave=wave),
+            f"AC8: the flags ride the GET as query parameters, no more and "
+            f"no fewer; got {params!r}")
 
 
 LANE = (_entry("CR-NEXTPTR-100", 10, wave="5"),)
@@ -246,39 +277,47 @@ DRAINED_FIXTURES = {
     "wave-complete": ((_entry("CR-NEXTPTR-A", 10, status="COMPLETED"),), {}),
 }
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # AC8 — the ONE GET, .../next, flags as query parameters, never .../queue
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class NextReadsTheRouteTest(_NextVerbTestBase):
 
     def test_exactly_one_get_of_next_and_never_of_queue(self):
         _code, _out, _err, _axi, ops = self.drive(list(LANE))
-        self.assertEqual(
-            ops.gets, [next_path()],
-            "AC8: `next` must issue exactly one GET of `.../next` and must "
-            "never read `.../queue` again")
+        self.assertNextRequest(ops)
 
     def test_track_release_wave_ride_the_get_as_query_parameters(self):
         entries = [_entry("CR-NEXTPTR-100", 10, wave="7", release="0.2.0", track="track-2"),
                    _entry("CR-NEXTPTR-200", 20, wave="7", track="track-1")]
         _code, _out, _err, _axi, ops = self.drive(
             entries, track="2", release="0.2.0", wave="7")
-        self.assertEqual(
-            ops.gets,
-            [next_path(track="2", release="0.2.0", wave="7")],
-            "AC8: the verb's --track/--release/--wave flags ride the GET as "
-            "query parameters, and no other request is made")
+        self.assertNextRequest(ops, track="2", release="0.2.0", wave="7")
 
     def test_no_flags_means_no_query_string_at_all(self):
         _code, _out, _err, _axi, ops = self.drive(list(LANE))
+        self.assertNextRequest(ops)
         self.assertNotIn("?", ops.gets[0] if ops.gets else "")
+
+    def test_a_drive_supplying_both_new_dimensions_reads_the_route_exactly_once(self):
+        """Ported from `BothNewDimensionsRideTheOneReadTest` (test_next_lane_
+        carries_release_and_wave.py) — narrowing is a question about the
+        payload already in hand: a reader that asked the server to narrow for
+        it would cost a round-trip per dimension. Both flags supplied at once
+        still cost exactly one request."""
+        entries = [_entry("CR-NEXTPTR-U1", 6001, wave="6"),
+                   _entry("CR-NEXTPTR-D2", 6002, wave="6", release="0.2.0")]
+        _code, _out, _err, axi, ops = self.drive(
+            entries, release="0.2.0", wave="6")
+        self.assertEqual(axi.get("cr"), "CR-NEXTPTR-D2")
+        self.assertNextRequest(ops, release="0.2.0", wave="6")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # AC9 — output is byte-identical to today's, across every outcome
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class NextOutputStaysByteIdenticalTest(_NextVerbTestBase):
 
@@ -289,7 +328,7 @@ class NextOutputStaysByteIdenticalTest(_NextVerbTestBase):
         self.assertEqual(axi.get("decision"), "NEXT")
         self.assertEqual(axi.get("cr"), "CR-NEXTPTR-100")
         self.assertEqual(axi.get("seq"), 10)
-        self.assertEqual(ops.gets, [next_path()])
+        self.assertNextRequest(ops)
 
     def test_every_hold_kind_exits_zero_and_carries_the_same_trigger_as_today(self):
         for kind, (entries, flags) in sorted(HOLD_FIXTURES.items()):
@@ -298,7 +337,7 @@ class NextOutputStaysByteIdenticalTest(_NextVerbTestBase):
                 self.assertEqual(code, 0)
                 self.assertEqual(axi.get("decision"), "HOLD")
                 self.assertEqual(axi["trigger"].get("kind"), kind)
-                self.assertEqual(ops.gets, [next_path(**flags)])
+                self.assertNextRequest(ops, **flags)
 
     def test_every_drained_reason_exits_zero_and_never_carries_a_cr(self):
         for reason, (entries, flags) in sorted(DRAINED_FIXTURES.items()):
@@ -308,7 +347,7 @@ class NextOutputStaysByteIdenticalTest(_NextVerbTestBase):
                 self.assertEqual(axi.get("decision"), "DRAINED")
                 self.assertEqual(axi.get("reason"), reason)
                 self.assertNotIn("cr", axi)
-                self.assertEqual(ops.gets, [next_path(**flags)])
+                self.assertNextRequest(ops, **flags)
 
     def test_the_multitrack_refusal_exits_two_and_carries_no_error_or_ok_leak(self):
         code, stdout, _err, axi, ops = self.drive(list(TWO_TRACK_LANE))
@@ -324,7 +363,7 @@ class NextOutputStaysByteIdenticalTest(_NextVerbTestBase):
             "envelope level — GREEN must not blindly relay the route's "
             "`fail()` wrapper string into the projected fields")
         self.assertTrue(stdout.startswith("axi:"))
-        self.assertEqual(ops.gets, [next_path()])
+        self.assertNextRequest(ops)
 
     def test_a_failed_read_exits_one_with_no_decision_key_and_a_named_warning(self):
         code, _out, _err, axi, ops = self.drive_failed(list(LANE))
@@ -347,8 +386,13 @@ class NextOutputStaysByteIdenticalTest(_NextVerbTestBase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# §S3 — the presentation-only pieces `next` keeps: --fields, context, no --agent
+# §S3 — the presentation-only pieces `next` keeps: --fields, context, no
+# --agent, and the human line (ported from LegacyLineStatesTheWaveTest,
+# test_next_lane_carries_release_and_wave.py)
 # ═══════════════════════════════════════════════════════════════════════════
+
+_WAVE_STATED = re.compile(r"wave[= ](\S+)\b")
+
 
 class NextPresentationLayerTest(_NextVerbTestBase):
 
@@ -359,7 +403,7 @@ class NextPresentationLayerTest(_NextVerbTestBase):
         self.assertEqual(axi.get("cr"), "CR-NEXTPTR-100")
         for dropped in ("seq", "wave", "help"):
             self.assertNotIn(dropped, axi)
-        self.assertEqual(ops.gets, [next_path()])
+        self.assertNextRequest(ops)
 
         refusal_code, _out2, _err2, refusal_axi, _ops2 = self.drive(
             list(TWO_TRACK_LANE), fields="decision")
@@ -372,12 +416,36 @@ class NextPresentationLayerTest(_NextVerbTestBase):
         _code, _out, _err, axi, ops = self.drive(list(TWO_TRACK_LANE), track="2")
         self.assertEqual(axi.get("cr"), "CR-NEXTPTR-200")
         self.assertEqual((axi.get("context") or {}).get("track"), "track-2")
-        self.assertEqual(ops.gets, [next_path(track="2")])
+        self.assertNextRequest(ops, track="2")
 
     def test_the_verb_never_asks_for_an_agent_identity(self):
         _code, _out, _err, axi, ops = self.drive(list(LANE))
         self.assertEqual(ops.agent_id_calls, 0)
         self.assertNotIn("agentId", axi.get("context") or {})
+
+    def test_each_decision_line_states_the_wave_it_answered_for(self):
+        """Ported from `LegacyLineStatesTheWaveTest` — the stderr channel is
+        where an orchestrator reads the answer when it is not parsing the
+        envelope, so a decision that names no container there is the silent
+        crossing in prose. Stays client-side: `_next_legacy_line` is built
+        from the PROJECTED fields, never re-derived from a second read."""
+        wave = "6"
+        boards = {
+            "NEXT": [_entry("CR-NEXTPTR-N1", 6001, wave=wave)],
+            "HOLD": [_entry("CR-NEXTPTR-H1", 6001, wave=wave, status="IN_PROGRESS"),
+                    _entry("CR-NEXTPTR-H2", 6002, wave=wave)],
+            "DRAINED": [_entry("CR-NEXTPTR-X1", 6001, wave=wave, status="COMPLETED")],
+        }
+        silent = {}
+        for decision, entries in boards.items():
+            _code, _out, stderr, axi, _ops = self.drive(entries)
+            self.assertEqual(axi.get("decision"), decision)
+            if not _WAVE_STATED.search(stderr):
+                silent[decision] = stderr
+        self.assertEqual(
+            silent, {},
+            f"every decision's legacy line must state its wave; these did "
+            f"not: {silent!r}")
 
 
 if __name__ == "__main__":

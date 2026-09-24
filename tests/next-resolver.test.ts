@@ -662,4 +662,270 @@ describe("CR-CRU-098 AC5 — help[] matches clients/_crucible_axi.py's helpers b
       pythonHelp({ fn: "drained", reason: "wave-complete", lane: pyLane }),
     );
   });
+
+  test("NEXT's start template hands back the repeatable --cycle form, never legacy --cycles, repeated 2-3 times (CR-107 AC8, ported from test_plan_file_cycle_flag_help.py)", () => {
+    const step = fields([entry("CR-NEXTPTR-100", 10, { wave: "7" })]).help as string[];
+    const template = step[0]!;
+    expect(template).not.toMatch(/--cycles /);
+    const repeatable = template.match(/--cycle "/g) ?? [];
+    expect(repeatable.length).toBeGreaterThanOrEqual(2);
+    expect(repeatable.length).toBeLessThanOrEqual(3);
+  });
+});
+
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+// AC2 CENSUS EXPANSION (2nd RED pass) \u2014 tests/client/test_next_announces_the_wave_boundary.py
+// (20 tests: 18 reach `cmd_next`, PORTED below; 2 assert AXI.DRAINED_REASONS/
+// HOLD_TRIGGER_KINDS, which AC10 does NOT remove \u2014 unaffected, no port needed)
+// and tests/client/test_next_lane_carries_release_and_wave.py (13 of its 20
+// tests reach `cmd_next` and are PORTED below; 2 are KEPT \u2014
+// tests/client/test_cr098_next_verb_reads_the_route.py; 5 are OUT OF the AC2
+// census \u2014 they never reach an AC10 symbol \u2014 and 1 is a black-box E2E
+// subprocess test, unaffected by an internal refactor). See
+// docs/changes/CR-CRU-098-test-classification.md for the full census table.
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+describe("CR-CRU-098 \u00a7S2/AC4 \u2014 waveCompleted: the crossing is announced and expires", () => {
+  const PREDECESSOR_WAVE = "5";
+  const RESOLVED_WAVE = "6";
+
+  const boundaryJustCrossed = () => [
+    entry("CR-A5-1", 5001, { status: "COMPLETED", wave: PREDECESSOR_WAVE }),
+    entry("CR-A5-2", 5002, { status: "COMPLETED", wave: PREDECESSOR_WAVE }),
+    entry("CR-A5-3", 5003, { wave: PREDECESSOR_WAVE, lifecycle: { state: "VOID", by: "CR-A5-1" } as unknown as QueueLifecycle }),
+    entry("CR-B6-1", 6001, { wave: RESOLVED_WAVE }),
+    entry("CR-B6-2", 6002, { wave: RESOLVED_WAVE }),
+  ];
+  const boundaryAlreadyCrossed = () =>
+    boundaryJustCrossed().map((e) => (e.cr === "CR-B6-1" ? { ...e, status: "COMPLETED" as const } : e));
+
+  test("a crossing states the predecessor completed beside its decision", () => {
+    const answer = fields(boundaryJustCrossed());
+    expect({ decision: answer.decision, cr: answer.cr, wave: answer.wave, waveCompleted: answer.waveCompleted })
+      .toEqual({ decision: "NEXT", cr: "CR-B6-1", wave: RESOLVED_WAVE, waveCompleted: PREDECESSOR_WAVE });
+  });
+
+  test("the announcement expires the moment the new wave lands its first cr, and the decision is unaffected", () => {
+    expect(fields(boundaryJustCrossed()).waveCompleted).toBe(PREDECESSOR_WAVE);
+    const after = fields(boundaryAlreadyCrossed());
+    expect(after.waveCompleted).toBeUndefined();
+    expect(after).not.toHaveProperty("waveCompleted");
+    expect(after.decision).toBe("NEXT");
+    expect(after.cr).toBe("CR-B6-2");
+  });
+
+  test("the predecessor is the previous DISTINCT label in PUBLISHED order, never parsed as an integer or re-derived from seq", () => {
+    const entries = [
+      entry("CR-C6-1", 601, { status: "COMPLETED", wave: "06" }),
+      entry("CR-C6-2", 602, { status: "COMPLETED", wave: "06" }),
+      entry("CR-D1-1", 1001, { status: "COMPLETED", wave: "10" }),
+      entry("CR-D1-2", 1002, { status: "COMPLETED", wave: "10" }),
+      entry("CR-E9-1", 901, { wave: "9" }),
+      entry("CR-E9-2", 902, { wave: "9" }),
+    ];
+    const answer = fields(entries);
+    expect(answer.wave).toBe("9");
+    expect(answer.waveCompleted).toBe("10");
+    expect(answer.waveCompleted).not.toBe("06");
+  });
+
+  test("the announcement rides every decision \u2014 NEXT, HOLD and DRAINED all state the predecessor completed", () => {
+    const next = fields(boundaryJustCrossed());
+    const holdEntries = boundaryJustCrossed().slice(0, 3).concat([
+      entry("CR-M6-1", 6001, { wave: RESOLVED_WAVE, status: "IN_PROGRESS" }),
+      entry("CR-M6-2", 6002, { wave: RESOLVED_WAVE }),
+    ]);
+    const hold = fields(holdEntries);
+    const drainedEntries = boundaryJustCrossed().slice(0, 3).concat([
+      entry("CR-M6-3", 6001, { wave: RESOLVED_WAVE, track: "track-1", lifecycle: { state: "VOID", by: "CR-M6-4" } as unknown as QueueLifecycle }),
+      entry("CR-M6-4", 6002, { wave: RESOLVED_WAVE, track: "track-2" }),
+    ]);
+    const drained = fields(drainedEntries, { track: "1" });
+    expect({ NEXT: next.decision, HOLD: hold.decision, DRAINED: drained.decision })
+      .toEqual({ NEXT: "NEXT", HOLD: "HOLD", DRAINED: "DRAINED" });
+    expect({ NEXT: next.waveCompleted, HOLD: hold.waveCompleted, DRAINED: drained.waveCompleted })
+      .toEqual({ NEXT: PREDECESSOR_WAVE, HOLD: PREDECESSOR_WAVE, DRAINED: PREDECESSOR_WAVE });
+  });
+
+  test("DRAINED's help[] names the NEXT wave's label VERBATIM \u2014 zero-padded and non-numeric labels both ride as data", () => {
+    const zeroPadded = [
+      entry("CR-F6-1", 601, { status: "COMPLETED", wave: "06" }),
+      entry("CR-F6-2", 602, { wave: "06", lifecycle: { state: "VOID", by: "CR-F6-1" } as unknown as QueueLifecycle }),
+      entry("CR-G7-1", 701, { wave: "07" }),
+    ];
+    const padded = fields(zeroPadded, { wave: "06" });
+    expect(padded.decision).toBe("DRAINED");
+    expect(padded.reason).toBe("wave-complete");
+    const paddedHelp = (padded.help as string[]).join(" | ");
+    expect(paddedHelp).toContain("--wave 07");
+    expect(paddedHelp).not.toMatch(/--wave 7\b/);
+
+    const nonNumeric = [
+      entry("CR-J1-1", 101, { status: "COMPLETED", wave: "alpha" }),
+      entry("CR-K2-1", 201, { wave: "beta" }),
+    ];
+    const named = fields(nonNumeric, { wave: "alpha" });
+    const namedHelp = (named.help as string[]).join(" | ");
+    expect(namedHelp).toContain("--wave beta");
+  });
+
+  test("the earliest published wave announces no completed predecessor \u2014 nothing precedes it", () => {
+    const answer = fields([entry("CR-N1-1", 101, { wave: "1" }), entry("CR-N1-2", 102, { wave: "1" })]);
+    expect(answer.decision).toBe("NEXT");
+    expect(answer.cr).toBe("CR-N1-1");
+    expect(answer).not.toHaveProperty("waveCompleted");
+  });
+
+  test("the announcement is scoped to the CONTAINER asked about \u2014 a release-scoped read announces within it, the unscoped read announces nothing", () => {
+    const entries = [
+      entry("CR-V5-1", 5001, { status: "COMPLETED", wave: PREDECESSOR_WAVE, release: "0.2.0" }),
+      entry("CR-V5-2", 5002, { wave: PREDECESSOR_WAVE }),
+      entry("CR-W6-1", 6001, { wave: RESOLVED_WAVE, release: "0.2.0" }),
+    ];
+    const scoped = fields(entries, { release: "0.2.0" });
+    expect({ decision: scoped.decision, cr: scoped.cr, wave: scoped.wave, release: scoped.release, waveCompleted: scoped.waveCompleted })
+      .toEqual({ decision: "NEXT", cr: "CR-W6-1", wave: RESOLVED_WAVE, release: "0.2.0", waveCompleted: PREDECESSOR_WAVE });
+
+    const unscoped = fields(entries);
+    expect(unscoped.decision).toBe("NEXT");
+    expect(unscoped.cr).toBe("CR-V5-2");
+    expect(unscoped).not.toHaveProperty("waveCompleted");
+  });
+
+  test("an explicit --wave against a fully-landed-or-dead wave answers DRAINED wave-complete for THAT wave, even while a later wave holds actionable work", () => {
+    const answer = fields(boundaryJustCrossed(), { wave: PREDECESSOR_WAVE });
+    expect({ decision: answer.decision, reason: answer.reason, wave: answer.wave })
+      .toEqual({ decision: "DRAINED", reason: "wave-complete", wave: PREDECESSOR_WAVE });
+  });
+
+  test("a wave holding only corpses (VOID + SUPERSEDED, no PENDING) is complete", () => {
+    const entries = [
+      entry("CR-P6-1", 601, { wave: "06", lifecycle: { state: "VOID", by: "CR-P6-2" } as unknown as QueueLifecycle }),
+      entry("CR-P6-2", 602, { wave: "06", lifecycle: { state: "SUPERSEDED", by: "CR-P6-1" } as unknown as QueueLifecycle }),
+      entry("CR-Q7-1", 701, { wave: "07" }),
+    ];
+    const answer = fields(entries, { wave: "06" });
+    expect({ decision: answer.decision, reason: answer.reason, wave: answer.wave })
+      .toEqual({ decision: "DRAINED", reason: "wave-complete", wave: "06" });
+  });
+
+  test("a blocked front cr HOLDs its own wave rather than scanning on into a later, startable wave", () => {
+    const entries = boundaryJustCrossed().slice(0, 3).concat([
+      entry("CR-S6-1", 6001, { wave: RESOLVED_WAVE, dependsOn: ["CR-S6-2"] }),
+      entry("CR-S6-2", 6002, { wave: RESOLVED_WAVE }),
+      entry("CR-T7-1", 7001, { wave: "7" }),
+    ]);
+    const later = fields(entries, { wave: "7" });
+    expect(later.decision).toBe("NEXT");
+    expect(later.cr).toBe("CR-T7-1");
+
+    const answer = fields(entries);
+    expect({ decision: answer.decision, cr: answer.cr, wave: answer.wave, kind: (answer.trigger as Record<string, unknown> | undefined)?.kind })
+      .toEqual({ decision: "HOLD", cr: "CR-S6-1", wave: RESOLVED_WAVE, kind: "dependency" });
+  });
+
+  test("a declared container selecting no row announces no crossing and is awaiting-assignment, never wave-complete", () => {
+    const board = boundaryJustCrossed();
+    const byWave = fields(board, { wave: "99" });
+    const byRelease = fields(board, { release: "9.9.9" });
+    for (const answer of [byWave, byRelease]) {
+      expect(answer).not.toHaveProperty("waveCompleted");
+      expect(answer.decision).toBe("DRAINED");
+      expect(answer.reason).toBe("awaiting-assignment");
+    }
+  });
+});
+
+describe("CR-CRU-098 \u00a7S1/AC1/AC4/AC6 \u2014 wave/release lane details (ported from test_next_lane_carries_release_and_wave.py)", () => {
+  test("the wave predicate reads `wave` alone \u2014 identical verdict from either lane and with no track at all", () => {
+    const twoTrackIncompleteWave = [
+      entry("CR-L6-1", 6001, { wave: "6", status: "COMPLETED", track: "track-1" }),
+      entry("CR-L6-2", 6002, { wave: "6", status: "COMPLETED", track: "track-1" }),
+      entry("CR-L6-3", 6003, { wave: "6", track: "track-2" }),
+      entry("CR-L6-4", 6004, { wave: "6", track: "track-2" }),
+    ];
+    const untracked = twoTrackIncompleteWave.map(({ track: _track, ...rest }) => rest as QueueEntry);
+    const verdict = (entries: QueueEntry[], scope: { track?: string } = {}) => {
+      const answer = fields(entries, scope);
+      return [answer.wave, answer.reason === "wave-complete"];
+    };
+    expect(verdict(twoTrackIncompleteWave, { track: "1" })).toEqual(["6", false]);
+    expect(verdict(twoTrackIncompleteWave, { track: "2" })).toEqual(["6", false]);
+    expect(verdict(untracked)).toEqual(["6", false]);
+  });
+
+  test("an explicit --wave answers about THAT wave alone, never the earlier or a later wave", () => {
+    const entries = [
+      entry("CR-L5-1", 5001, { wave: "5" }),
+      entry("CR-L6-9", 6001, { wave: "6" }),
+      entry("CR-L7-1", 7001, { wave: "7" }),
+    ];
+    const answer = fields(entries, { wave: "6" });
+    expect(answer.wave).toBe("6");
+    expect(answer.cr).toBe("CR-L6-9");
+  });
+
+  test("a release scope excludes an entry whose release is UNSET \u2014 membership is declared, never inferred", () => {
+    const entries = [entry("CR-U1-1", 6001, { wave: "6" }), entry("CR-D2-1", 6002, { wave: "6", release: "0.2.0" })];
+    const answer = fields(entries, { release: "0.2.0" });
+    expect(answer.cr).toBe("CR-D2-1");
+    expect(answer.release).toBe("0.2.0");
+  });
+
+  test("a release label is matched VERBATIM and never normalised \u2014 'v0.2.0' and '0.2.0' are two releases", () => {
+    const entries = [entry("CR-R1-1", 6001, { wave: "6", release: "0.2.0" }), entry("CR-R2-1", 6002, { wave: "6", release: "v0.2.0" })];
+    const answer = fields(entries, { release: "v0.2.0" });
+    expect(answer.release).toBe("v0.2.0");
+    expect(answer.cr).toBe("CR-R2-1");
+  });
+
+  test("a duplicated seq within a wave resolves to the row PUBLISHED FIRST, never a tie-break of the reader's own", () => {
+    const entries = [entry("CR-P1-1", 6001, { wave: "6" }), entry("CR-P2-1", 6001, { wave: "6" })];
+    const answer = fields(entries);
+    expect(answer.cr).toBe("CR-P1-1");
+    expect(answer.seq).toBe(6001);
+  });
+
+  test("a fully-landed lane inside an unfinished wave is awaiting-assignment, never wave-complete \u2014 the sibling lane proves it", () => {
+    const twoTrackIncompleteWave = [
+      entry("CR-L6-1", 6001, { wave: "6", status: "COMPLETED", track: "track-1" }),
+      entry("CR-L6-2", 6002, { wave: "6", status: "COMPLETED", track: "track-1" }),
+      entry("CR-L6-3", 6003, { wave: "6", track: "track-2" }),
+      entry("CR-L6-4", 6004, { wave: "6", track: "track-2" }),
+    ];
+    const landedLane = fields(twoTrackIncompleteWave, { track: "1" });
+    expect(landedLane.decision).toBe("DRAINED");
+    expect(landedLane.reason).toBe("awaiting-assignment");
+    const siblingLane = fields(twoTrackIncompleteWave, { track: "2" });
+    expect(siblingLane.decision).toBe("NEXT");
+    expect(siblingLane.cr).toBe("CR-L6-3");
+  });
+
+  test("every decision \u2014 NEXT, HOLD, DRAINED \u2014 carries the resolved wave, the release when in scope, and the track only when more than one lane is declared", () => {
+    const common = { wave: "6", release: "0.2.0" };
+    const nextE = [entry("CR-N1-1", 6001, common)];
+    const holdE = [entry("CR-H1-1", 6001, { ...common, status: "IN_PROGRESS" }), entry("CR-H2-1", 6002, common)];
+    const drainedE = [entry("CR-X1-1", 6001, { ...common, status: "COMPLETED" })];
+    for (const [name, entries] of [["NEXT", nextE], ["HOLD", holdE], ["DRAINED", drainedE]] as const) {
+      const answer = fields(entries, { release: "0.2.0" });
+      expect(answer.wave, `${name} wave`).toBe("6");
+      expect(answer.release, `${name} release`).toBe("0.2.0");
+    }
+
+    const sibling = entry("CR-S1-1", 6100, { wave: "6", track: "track-1" });
+    const trackedNext = fields([sibling, entry("CR-N2-1", 6001, { wave: "6", track: "track-2" })], { track: "2" });
+    expect(trackedNext.track).toBe("track-2");
+
+    const singleLaneEntries = [entry("CR-Z1-1", 6001, { wave: "6", track: "track-1" })];
+    const singleLane = fields(singleLaneEntries);
+    expect(singleLane).not.toHaveProperty("track");
+  });
+
+  test("a waveless row (published wave '') sitting first in the published order resolves NO wave", () => {
+    const entries = [entry("CR-B0-1", 60, { wave: "" }), entry("CR-L6-1", 6002, { wave: "6" })];
+    const answer = fields(entries);
+    expect(answer.wave).toBe("6");
+    expect(answer.wave).not.toBe("");
+    expect(answer.cr).not.toBe("CR-B0-1");
+  });
 });
