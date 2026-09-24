@@ -1,7 +1,13 @@
 # CR-CRU-145 — one Gherkin renderer, and the BDD tab is its index
 
-**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-015 · **Status** PENDING
+**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-015 · **Status** COMPLETED (0.3.0)
 
+> **Close-out 2026-09-25.** Delivered as plan 158 in three RED+GREEN cycles (codec → run detail →
+> index and cutover) plus VERIFY, which approved with findings that were fixed in-cycle. **Named gap
+> (§S3):** Playwright's `trace.zip` (`trace: "retain-on-failure"`) is still not ingested, stored or
+> linked. A failing step offers its stored stack behind `stack ▸`, and nothing in the UI offers
+> `trace ↗`. Storing artifacts would be its own CR.
+>
 > **Gap analysis 2026-09-24** (baseline bun 2741/0, python 1930/0 at `1056f8f`). **Storyboard F11 is
 > redrawn to this CR's design and approved**: it is the visual contract. Folded in by user rulings:
 > progressive expansion (§S1), a verdict per browser (§S3, a codec defect measured here), and
