@@ -4007,11 +4007,15 @@ export function handleV2(
 // ── CR-CRU-022 §S2–§S4 — roadmap analytics ───────────────────────────────
 
 /**
- * The analytics reads validate the project by EXISTENCE (404 + help): they
- * are pure reads over a held project, and a project key the store holds is
- * answerable whatever its shape.
+ * The analytics reads validate the project key exactly as every other v2
+ * project read does (`releases`, `queue`, `release-proposals`, `milestones`):
+ * UUID shape (400), then existence (404 + help). C3 ruling #8 — no carve-out
+ * for non-UUID keys.
  */
 function requireHeldProject(store: Store, key: string): Response | null {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
   if (store.getProject(key) === null) {
     return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }

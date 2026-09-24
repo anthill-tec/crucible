@@ -2024,3 +2024,125 @@ body {
   }
   .app-rail-toggle { min-width: 44px; }
 }
+
+/* ── CR-CRU-022 §S5 — analytics: the Velocity card, the release band and the
+   analytics pane (storyboard F16 + F14¾, DN-crucible-analytics §10). Colours
+   are the theme's own tokens; the chart reads the same tokens at draw time.
+   APPENDED, like the blocks above, so existing citations shift by none. */
+.app-velocity-card { gap: 3px; }
+.app-velocity-value { font: 400 12px var(--mono); color: var(--ink); }
+.app-velocity-value b { font-size: 14px; }
+.app-velocity-bars {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 36px;
+  margin-top: 4px;
+}
+.app-velocity-bar {
+  flex: 1 1 0;
+  max-width: 18px;
+  min-height: 2px;
+  background: var(--pass);
+  opacity: 0.6;
+}
+.app-velocity-mean {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--ember);
+}
+.app-velocity-flow {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+/* The release band — zone 3's header, one tap target over the table. */
+.app-roadmap-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 10px 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 122, 26, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 122, 26, 0.07);
+  cursor: pointer;
+}
+.app-roadmap-progress:hover,
+.app-roadmap-progress:focus-visible { border-color: var(--ember); }
+.app-roadmap-progress-text { font: 400 10.5px/1.5 var(--mono); color: var(--ink-dim); }
+.app-roadmap-progress-text b { color: var(--ink); }
+.app-roadmap-progress-chip { font-size: 10px; }
+.app-roadmap-health.ahead { color: var(--pass); border-color: var(--pass); }
+.app-roadmap-health.at-risk { color: var(--heat); border-color: var(--heat); }
+.app-roadmap-health.behind { color: var(--fail); border-color: var(--fail); }
+.app-roadmap-unpointed { color: var(--heat); }
+.app-roadmap-progress-open {
+  margin-left: auto;
+  font: 400 10px var(--mono);
+  color: var(--ink-faint);
+}
+.app-burn-thumb {
+  display: flex;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  width: 78px;
+  height: 26px;
+  border-bottom: 1px solid var(--line);
+}
+.app-burn-thumb-step {
+  flex-basis: 0;
+  min-width: 2px;
+  background: rgba(255, 122, 26, 0.35);
+  border-top: 1.5px solid var(--ember);
+}
+.app-roadmap-points {
+  flex: 0 0 auto;
+  font: 600 10.5px/1.4 var(--mono);
+  color: var(--ink);
+}
+
+/* The analytics pane (F14¾): the chart scrolls inside its OWN box. */
+.app-analytics-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.app-burndown-chart {
+  overflow-x: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.app-burndown-canvas {
+  width: 560px;
+  min-height: 230px;
+  font: 400 10px var(--mono);
+  color: var(--ink-faint);
+}
+.app-analytics-health.ahead { color: var(--pass); }
+.app-analytics-health.at-risk { color: var(--heat); }
+.app-analytics-health.behind { color: var(--fail); }
+
+/* DN decision 4 — the band is a touch target: ≥44px on touch media. */
+@media (pointer: coarse) {
+  .app-roadmap-progress { min-height: 44px; }
+}
+
+/* DN-crucible-responsive-model + CR §S5 — on the phone band the release band
+   COLLAPSES to one line at the touch floor: its items stay on one row and
+   what does not fit scrolls inside the band itself, never the page. */
+@media (width <= 640px) {
+  .app-roadmap-progress {
+    flex-wrap: nowrap;
+    min-height: 44px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .app-roadmap-progress > * { flex: 0 0 auto; }
+  .app-burn-thumb { width: 52px; }
+}

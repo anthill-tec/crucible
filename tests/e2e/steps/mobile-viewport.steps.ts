@@ -16,7 +16,7 @@
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
 import { ingestCompile, ingestJunit, ingestParsed, junit60 } from "./harness.ts";
-import { mountedPaneScroll } from "./pane-mount.ts";
+import { mountedPaneScroll, mountedPaneScrollGeometry } from "./pane-mount.ts";
 
 // CR-CRU-018/DN decision 5 desktop-band re-point support.
 //
@@ -498,12 +498,11 @@ Step(
     // rendered) would still fit inside it and this assertion would catch
     // that too.
     await page.setViewportSize({ width: 375, height: 320 });
-    const scrollBox = page.getByTestId("pane-scroll");
-    await expect(scrollBox).toHaveCount(1);
-    const { scrollHeight, clientHeight } = await scrollBox.evaluate((el) => ({
-      scrollHeight: (el as HTMLElement).scrollHeight,
-      clientHeight: (el as HTMLElement).clientHeight,
-    }));
+    // CR-CRU-022 §S6 — the analytics pane's OWN pane-scroll, straight after a
+    // pane swap, so never a bare lookup: waited on by the pane's marker and
+    // re-proven attached, live and its own in the same turn as the read.
+    await expect(page.getByTestId("pane-scroll")).toHaveCount(1);
+    const { scrollHeight, clientHeight } = await mountedPaneScrollGeometry(page, "Analytics");
     expect(scrollHeight).toBeGreaterThan(clientHeight);
     const { docScrollHeight, innerHeight } = await page.evaluate(() => ({
       docScrollHeight: document.documentElement.scrollHeight,

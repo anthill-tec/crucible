@@ -263,10 +263,15 @@ export function routeParse(pathname) {
   if (parts[0] === "p" && parts.length >= 3 && parts[2] === "roadmap") {
     roadmap = true;
   }
+  // CR-CRU-022 §S5 — /p/<key>/roadmap/analytics: the Roadmap pane's analytics
+  // STATE (F14¾), riding the roadmap route exactly as /run/<id> rides a
+  // pane, so Back and deep links reach it with no second mechanism.
+  const analytics = roadmap && parts.length >= 4 && parts[3] === "analytics";
   if (parts[0] === "p" && parts.length >= 2) {
     const route = { page: "workspace", projectKey: decodeURIComponent(parts[1]) };
     if (overlay !== undefined) route.overlay = overlay;
     if (roadmap) route.roadmap = true;
+    if (analytics) route.analytics = true;
     return route;
   }
   const route = { page: "home" };

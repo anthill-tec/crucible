@@ -92,6 +92,19 @@
     // other workspace entry keeps the Workflow primary default.
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
 
+    // CR-CRU-022 §S5 — the analytics reads (DN-crucible-analytics §10). Velocity
+    // is PROJECT-level; burndown + forecast belong to the FOCUSED release and
+    // are held as one pair keyed by that release, so a band can never pair one
+    // release's burndown with another's forecast. Out of the vanX tree on
+    // purpose: each is replaced wholesale, and only when its JSON changed, so
+    // an SSE tick carrying no analytics change re-renders nothing (and never
+    // redraws the chart).
+    const velocityData = van.state(null);
+    const releaseAnalytics = van.state(null);
+    const setIfChanged = (holder, value) => {
+      if (JSON.stringify(holder.val) !== JSON.stringify(value)) holder.val = value;
+    };
+
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
     // CR-CRU-016 §S1 — the run detail is a PANE STATE of the ACTIVE central
     // pane (home timeline / workspace Runs / Compile / Coverage). The pane's
@@ -110,11 +123,19 @@
       return document.querySelector('[data-testid="pane-scroll"]');
     }
 
+    // CR-CRU-016 §S1 / CR-CRU-022 §S5 — a route that swaps the active pane
+    // for one of its STATES: a run detail, or the Roadmap's analytics pane.
+    function paneStateOpen(route) {
+      return route.overlay !== undefined || route.analytics === true;
+    }
+
     function navigate(pathname) {
       const next = L.routeParse(pathname);
       // CR-CRU-016 AC2 — opening a detail: remember the ACTIVE pane's own
       // scrollTop so closing can restore the feed at its exact position.
-      const opening = next.overlay !== undefined && state.route.overlay === undefined;
+      // CR-CRU-022 §S5 — the Roadmap's analytics state is the SAME kind of
+      // pane state, so it rides this one save/restore rule.
+      const opening = paneStateOpen(next) && !paneStateOpen(state.route);
       if (opening) {
         const pane = activePaneEl();
         savedPaneScroll = pane === null ? 0 : pane.scrollTop;
@@ -166,7 +187,8 @@
     function selectWorkspaceTab(name) {
       const onRoadmap = state.route.roadmap === true;
       if (name === "Roadmap") {
-        if (!onRoadmap) navigate(workspacePath("/roadmap"));
+        // CR-CRU-022 §S5 — from the analytics state the tab is a way back.
+        if (!onRoadmap || state.route.analytics === true) navigate(workspacePath("/roadmap"));
         return;
       }
       if (onRoadmap) navigate(workspacePath(""));
@@ -188,6 +210,9 @@
       // proposals read then fails or lags must not leave the previous
       // project's plan painted under this one's shipped gates.
       vanX.replace(state.releaseProposals, () => []);
+      // CR-CRU-022 §S5 — analytics are per project, cleared in the same step.
+      velocityData.val = null;
+      releaseAnalytics.val = null;
       // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
       // deterministic and collide across projects, so a leftover open drill
       // path would render a row pre-unfolded on the newly-navigated project.
@@ -210,13 +235,16 @@
     // CR-CRU-016 AC2 — close the detail back to the underlying surface path
     // (strip the /run/<id> suffix); the pane's saved scrollTop is restored
     // by paneSwap when the feed re-mounts (also covers browser-back).
+    // CR-CRU-022 §S5 — the analytics pane closes through this SAME path
+    // (`← roadmap`, Escape): it strips `/analytics` back to the roadmap route.
     function closeDetail() {
-      if (state.route.overlay === undefined) return;
+      if (!paneStateOpen(state.route)) return;
       // CR-CRU-038 §S3 — drop the shared RunDetailBody so a reopen builds a
       // fresh body (fresh ?depth=suites fetch + fresh showRaw/expand state).
       openDetailKey = undefined;
       openDetailBody = null;
-      const base = location.pathname.replace(/\/run\/[^/]+\/?$/, "") || "/";
+      const base =
+        location.pathname.replace(/\/run\/[^/]+\/?$/, "").replace(/\/analytics\/?$/, "") || "/";
       history.pushState(null, "", base);
       state.route = L.routeParse(base);
     }
@@ -246,7 +274,7 @@
 
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      if (state.route.overlay !== undefined) closeDetail();
+      if (paneStateOpen(state.route)) closeDetail();
       else if (state.route.manage === true) closeManager();
     });
 
@@ -370,6 +398,76 @@
         // cycle renders nothing, and a banner over working data is precisely
         // what §S9 forbids.
       }
+      await refetchAnalytics();
+    }
+
+    // CR-CRU-022 §S5 — the release the Roadmap focuses, by the strip's own
+    // rule (the user's pick, else the release in progress). Read here, off the
+    // same two slices the strip joins, so band and strip cannot disagree.
+    function focusedReleaseLabel() {
+      const gates = L.releaseStripGates(
+        Array.from(state.releases),
+        Array.from(state.releaseProposals),
+      );
+      const at = L.releaseStripFocusIndex(gates, roadmapFocusedVersion());
+      return at >= 0 && gates[at].version !== "" ? gates[at].version : undefined;
+    }
+
+    // CR-CRU-022 §S2–§S5 — the three analytics reads. Each body is accepted
+    // only when it has the shape its route answers, so a degraded or foreign
+    // response draws nothing rather than a band of undefineds. A failed read
+    // keeps the last-known value for the SAME release; a different release
+    // never inherits another's numbers.
+    const isVelocityBody = (body) =>
+      body !== null && typeof body === "object" && Array.isArray(body.weeks) &&
+      typeof body.sampleWeeks === "number";
+    const isBurndownBody = (body, release) =>
+      body !== null && typeof body === "object" && body.release === release &&
+      typeof body.committedPoints === "number" && Array.isArray(body.points);
+    const isForecastBody = (body, release) =>
+      body !== null && typeof body === "object" && body.release === release &&
+      typeof body.status === "string";
+
+    async function refetchAnalytics() {
+      if (state.route.page !== "workspace") {
+        velocityData.val = null;
+        releaseAnalytics.val = null;
+        return;
+      }
+      const projectKey = state.route.projectKey;
+      const base = `/api/v2/projects/${encodeURIComponent(projectKey)}/analytics`;
+      try {
+        const body = await getJson(`${base}/velocity`);
+        if (state.route.projectKey === projectKey) {
+          setIfChanged(velocityData, isVelocityBody(body) ? body : null);
+        }
+      } catch {
+        // Keep the last-known velocity while the read is unreachable.
+      }
+      const release = focusedReleaseLabel();
+      if (release === undefined) {
+        releaseAnalytics.val = null;
+        return;
+      }
+      const query = `release=${encodeURIComponent(release)}`;
+      const held = releaseAnalytics.val;
+      const same = held !== null && held.projectKey === projectKey && held.release === release;
+      let burndown = same ? held.burndown : null;
+      let forecast = same ? held.forecast : null;
+      try {
+        const body = await getJson(`${base}/burndown?${query}`);
+        burndown = isBurndownBody(body, release) ? body : null;
+      } catch {
+        // Unreachable, or no CR was ever planned into this release (404).
+      }
+      try {
+        const body = await getJson(`${base}/forecast?${query}`);
+        forecast = isForecastBody(body, release) ? body : null;
+      } catch {
+        // Same as above: the band states only what was answered.
+      }
+      if (state.route.projectKey !== projectKey || focusedReleaseLabel() !== release) return;
+      setIfChanged(releaseAnalytics, { projectKey, release, burndown, forecast });
     }
 
     // SSE client with watchdog (§S5): data frames (hello/changes) prove
@@ -681,6 +779,23 @@
       if (s < 60) return `${s}s`;
       return `${Math.floor(s / 60)}m ${s % 60}s`;
     }
+
+    // CR-CRU-022 §S5 — the analytics copy. Points print whole when whole;
+    // dates are UTC calendar days through the ONE date formatter the roadmap
+    // uses (app-logic `formatReleaseDate`, epoch seconds): this surface
+    // constructs no date of its own (CR-CRU-078 AC30).
+    const fmtPoints = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+    const isoDay = (ms) => L.formatReleaseDate(ms / 1000);
+    const shortDay = (ms) => isoDay(ms).slice(5);
+    const fmtFlowMs = (ms) => {
+      const minutes = Math.round(ms / 60000);
+      if (minutes < 1) return `${Math.round(ms / 1000)}s`;
+      return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    };
+    const velocityFigure = () => {
+      const mean = velocityData.val?.pointsPerWeek;
+      return typeof mean === "number" ? fmtPoints(mean) : "—";
+    };
 
     // CR-CRU-021 §S3 — cycle-timer format: OWN zero-padded-seconds form
     // (`⏱ 4m 05s`, F13 contract), deliberately NOT fmtDuration (which
@@ -2557,8 +2672,78 @@
           { class: "app-card-meta" },
           `${project.agentsOnline}/${project.agentsTotal} agents online`,
         ),
+        // CR-CRU-022 §S5 — on the phone band velocity rides the foot strip.
+        span(
+          { "data-testid": "project-band-velocity", class: "app-card-meta" },
+          () => `${velocityFigure()} pts / week`,
+        ),
         span({ class: "app-band-foot-open" }, "open"),
       );
+
+    // CR-CRU-022 §S5 / F16 — the Project band's Velocity card: story points
+    // merged per calendar week (the 3-week mean), the weekly bars, the sample
+    // it rests on, and the secondary FLOW line (exec · gate per cycle), which
+    // is never summed into velocity. Project-level, so it rides the Project
+    // pane and is the same on every tab. Its heading is a plain section title,
+    // not a `pane-section-title` handle: the pane's two named sections
+    // (Project, Vitals) are unchanged.
+    const VelocityCard = () => {
+      const v = velocityData.val;
+      if (v === null) return "";
+      const mean = v.pointsPerWeek;
+      const weeks = v.weeks;
+      const top = Math.max(1, typeof mean === "number" ? mean : 0, ...weeks.map((w) => w.points));
+      const sample =
+        typeof mean !== "number"
+          ? "no pointed merges yet"
+          : `mean of the last ${v.sampleWeeks} week${v.sampleWeeks === 1 ? "" : "s"}`;
+      const flow = v.flow ?? {};
+      const flowText =
+        typeof flow.execMsPerCycle === "number" && typeof flow.gateMsPerCycle === "number"
+          ? `flow · exec ${fmtFlowMs(flow.execMsPerCycle)} · gate ${fmtFlowMs(
+              flow.gateMsPerCycle,
+            )} per cycle`
+          : "flow · no timed cycles yet";
+      return div(
+        { class: "app-rail-section app-velocity" },
+        div({ class: "app-pane-section-title" }, "Velocity"),
+        div(
+          { "data-testid": "project-velocity", class: "app-card app-velocity-card" },
+          div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / week"),
+          div({ class: "app-card-meta" }, sample),
+          weeks.length === 0
+            ? null
+            : div(
+                {
+                  "data-testid": "velocity-bars",
+                  class: "app-velocity-bars",
+                  role: "img",
+                  "aria-label": "story points merged per week",
+                },
+                weeks.map((w) =>
+                  div({
+                    class: "app-velocity-bar",
+                    title: `${w.week} · ${w.points} pts`,
+                    style: `height:${Math.round((w.points / top) * 100)}%;`,
+                  }),
+                ),
+                typeof mean === "number"
+                  ? div({
+                      class: "app-velocity-mean",
+                      style: `bottom:${Math.round((mean / top) * 100)}%;`,
+                    })
+                  : null,
+              ),
+          weeks.length === 0
+            ? null
+            : div(
+                { class: "app-card-meta" },
+                `${weeks[0].week} … ${weeks[weeks.length - 1].week} · dashed = the mean`,
+              ),
+          div({ "data-testid": "velocity-flow", class: "app-card-meta app-velocity-flow" }, flowText),
+        ),
+      );
+    };
 
     // DN decision 9 — the sheet's backdrop: tapping it closes the sheet
     // through the same toggle. It sits OUTSIDE the pane (a fixed pane is its
@@ -2623,6 +2808,7 @@
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
         },
+        () => VelocityCard(),
         // CR-CRU-123 §S2 — a 🗺 shortcut stood HERE and is retired (user
         // ruling, 2026-09-12). It shipped under CR-CRU-014 §S3 as a second
         // door onto the /p/<key>/roadmap route; CR-CRU-076 then made Roadmap
@@ -3115,6 +3301,14 @@
         cell("cr", entry.cr),
         // AC11 — the brief title, the row's one required new column.
         cell("title", L.briefCrTitle(entry.title, entry.cr)),
+        // CR-CRU-022 §S5 — the CR's story points, beside its title (F16); an
+        // unpointed CR shows none, never a default.
+        typeof entry.points === "number"
+          ? span(
+              { "data-testid": "roadmap-points", class: "app-roadmap-points" },
+              `${entry.points} pts`,
+            )
+          : null,
         cell(
           "deps",
           // AC20 — dependency is stated HERE and nowhere else on this surface.
@@ -3888,6 +4082,8 @@
     const roadmapFocusOn = (version) => {
       roadmapFocusVersions.set(state.route.projectKey, version);
       roadmapFocusRev.val += 1;
+      // CR-CRU-022 §S5 — the release band follows the focus at once.
+      void refetchAnalytics();
     };
 
     // The mounted strip's measurement listeners, or null — each mount retires
@@ -4119,6 +4315,498 @@
     // board is a registration state, which is also why AC33's degraded strip
     // can never reach this branch: a failed proposals read beside shipped
     // releases still yields gates.
+    // ── CR-CRU-022 §S5 — the release band and the analytics pane (F16, F14¾) ──
+    //
+    // The band sits in zone 3's header, above the focused release's table; a
+    // tap swaps the Roadmap pane to its analytics STATE (/p/<key>/roadmap/
+    // analytics), which closes through closeDetail like every pane state.
+    // A forecast that refuses (`insufficient_history`, `unpointed`) prints no
+    // date anywhere: it says why it has none instead.
+
+    // A forecast is DATED only when it answered `ok` with both percentiles.
+    const forecastDated = (fc) =>
+      fc !== null &&
+      fc !== undefined &&
+      fc.status === "ok" &&
+      typeof fc.p50Ts === "number" &&
+      typeof fc.p80Ts === "number";
+
+    const FORECAST_SAMPLE_WEEKS = 3; // DN §7 — the confidence gate
+
+    const forecastRefusal = (fc) => {
+      if (fc === null || fc === undefined) return "no forecast";
+      if (fc.status === "insufficient_history") {
+        return `no forecast · ${fc.sampleWeeks} of ${FORECAST_SAMPLE_WEEKS} weeks of velocity`;
+      }
+      if (fc.status === "unpointed") return "no forecast · unpointed CRs";
+      return "no forecast";
+    };
+
+    const forecastRefusalLong = (fc, bd) => {
+      if (fc === null || fc === undefined) return "No forecast was answered for this release.";
+      if (fc.status === "insufficient_history") {
+        return (
+          `No forecast yet: ${fc.sampleWeeks} of the ${FORECAST_SAMPLE_WEEKS} completed weeks ` +
+          "of pointed velocity it needs."
+        );
+      }
+      if (fc.status === "unpointed") {
+        const names = fc.unpointed ?? bd.unpointed ?? [];
+        return `No forecast while a remaining CR is unpointed: ${names.join(", ")}.`;
+      }
+      return "No forecast was answered for this release.";
+    };
+
+    // Points remaining NOW: the burndown's own last step, else the forecast's
+    // figure, else the commitment itself (a release nothing has moved yet).
+    const burndownRemaining = (bd, fc) => {
+      const last = bd.points.length > 0 ? bd.points[bd.points.length - 1].remaining : undefined;
+      if (typeof last === "number") return last;
+      if (typeof fc?.remainingPoints === "number") return fc.remainingPoints;
+      return bd.committedPoints;
+    };
+
+    // The band's burndown THUMBNAIL: one DOM step per burndown step, as tall as
+    // the points it left and as wide as the time it stood. DOM, not a canvas:
+    // zone 3 draws its states as legible elements, like the rest of the roadmap.
+    const BurndownThumb = (bd, fc) => {
+      const now = Date.now();
+      const steps =
+        bd.points.length > 0 ? bd.points : [{ ts: now, remaining: burndownRemaining(bd, fc) }];
+      const top = Math.max(1, bd.committedPoints, ...steps.map((p) => p.remaining));
+      const first = steps[0].ts;
+      const extent = Math.max(1, Math.max(now, steps[steps.length - 1].ts) - first);
+      return div(
+        {
+          "data-testid": "roadmap-progress-thumb",
+          class: "app-burn-thumb",
+          role: "img",
+          "aria-label": `${bd.release} burndown thumbnail`,
+        },
+        steps.map((p, i) => {
+          const until = i + 1 < steps.length ? steps[i + 1].ts : Math.max(now, p.ts);
+          const share = Math.max(2, Math.round(((until - p.ts) / extent) * 100));
+          return div({
+            class: "app-burn-thumb-step",
+            style: `flex-grow:${share};height:${Math.max(4, Math.round((p.remaining / top) * 100))}%;`,
+          });
+        }),
+      );
+    };
+
+    const openAnalytics = () => navigate(workspacePath("/roadmap/analytics"));
+
+    const RoadmapProgressBand = (version) => {
+      const held = releaseAnalytics.val;
+      if (
+        held === null ||
+        held.projectKey !== state.route.projectKey ||
+        held.release !== version ||
+        held.burndown === null
+      ) {
+        return "";
+      }
+      const bd = held.burndown;
+      const fc = held.forecast;
+      const dated = forecastDated(fc);
+      const unpointed = bd.unpointed ?? [];
+      // The band is where the chart's pane is one tap away: fetch uPlot now, so
+      // the pane draws at once. A failed warm-up is not an error here — the
+      // pane's own draw retries the load and states its failure in the chart box.
+      loadUplot().catch(() => undefined);
+      return div(
+        {
+          "data-testid": "roadmap-progress",
+          class: "app-roadmap-progress",
+          role: "button",
+          tabindex: "0",
+          title: `open the ${version} burndown`,
+          onclick: openAnalytics,
+          onkeydown: (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            openAnalytics();
+          },
+        },
+        BurndownThumb(bd, fc),
+        span(
+          { "data-testid": "roadmap-progress-remaining", class: "app-roadmap-progress-text" },
+          b(version),
+          " · ",
+          b(fmtPoints(burndownRemaining(bd, fc))),
+          ` of ${fmtPoints(bd.committedPoints)} pts left`,
+        ),
+        span({ class: "app-roadmap-progress-text" }, `${velocityFigure()} pts/wk`),
+        span(
+          { "data-testid": "roadmap-forecast-chip", class: "app-chip app-roadmap-progress-chip" },
+          dated ? `P50 ${shortDay(fc.p50Ts)} · P80 ${shortDay(fc.p80Ts)}` : forecastRefusal(fc),
+        ),
+        // The schedule-health chip only against a DECLARED target.
+        dated && typeof fc.scheduleHealth === "string" && typeof bd.target === "number"
+          ? span(
+              {
+                "data-testid": "roadmap-health-chip",
+                class: `app-chip app-roadmap-progress-chip app-roadmap-health ${fc.scheduleHealth}`,
+              },
+              `${fc.scheduleHealth} vs ${shortDay(bd.target * 1000)}`,
+            )
+          : null,
+        unpointed.length === 0
+          ? null
+          : span(
+              { "data-testid": "roadmap-unpointed", class: "app-roadmap-progress-text app-roadmap-unpointed" },
+              `unpointed: ${unpointed.join(", ")}`,
+            ),
+        span({ class: "app-roadmap-progress-open" }, "tap for detail ›"),
+      );
+    };
+
+    // uPlot 1.6.32 (public/vendor, DN-crucible-analytics §10) is loaded on the
+    // pane's FIRST open rather than from index.html: the shell's script list is
+    // pinned (CR-CRU-078 AC26), and a chart only this pane draws need not load
+    // on every board. One load, shared; a failed one may be retried.
+    let uplotLoading = null;
+    function loadUplot() {
+      if (typeof window.uPlot === "function") return Promise.resolve(window.uPlot);
+      if (uplotLoading !== null) return uplotLoading;
+      uplotLoading = new Promise((resolve, reject) => {
+        const css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = "/vendor/uplot-1.6.32.min.css";
+        document.head.appendChild(css);
+        const script = document.createElement("script");
+        script.src = "/vendor/uplot-1.6.32.iife.min.js";
+        script.async = true;
+        script.onload = () =>
+          typeof window.uPlot === "function"
+            ? resolve(window.uPlot)
+            : reject(new Error("uPlot loaded without its global"));
+        script.onerror = () => reject(new Error("uPlot failed to load"));
+        document.head.appendChild(script);
+      });
+      uplotLoading.catch(() => {
+        uplotLoading = null;
+      });
+      return uplotLoading;
+    }
+
+    // Colours are read from the theme's CSS variables AT DRAW TIME (uPlot calls
+    // these per redraw), so the chart follows the theme like the DOM does.
+    const cssToken = (name) =>
+      window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const withAlpha = (color, alpha) => {
+      const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color);
+      if (hex === null) return color;
+      const h = hex[1].length === 3 ? hex[1].replace(/./g, "$&$&") : hex[1];
+      const [red, green, blue] = [0, 2, 4].map((at) => parseInt(h.slice(at, at + 2), 16));
+      return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+    };
+
+    // The chart's aligned data: one x (epoch SECONDS, uPlot's time unit) for
+    // every step, ideal point and forecast point; each series is null where it
+    // has no value and spans the gap. Columns: actual, ideal, P50, P80.
+    const burndownData = (bd, fc, now) => {
+      const sec = (ms) => ms / 1000;
+      const remaining = burndownRemaining(bd, fc);
+      const actual = new Map();
+      for (const p of bd.points) actual.set(sec(p.ts), p.remaining);
+      const lastTs = bd.points.length > 0 ? bd.points[bd.points.length - 1].ts : undefined;
+      if (lastTs === undefined || lastTs < now) actual.set(sec(now), remaining);
+      const ideal = new Map((bd.ideal ?? []).map((p) => [sec(p.ts), p.remaining]));
+      const p50 = new Map();
+      const p80 = new Map();
+      if (forecastDated(fc)) {
+        p50.set(sec(now), remaining);
+        p50.set(sec(fc.p50Ts), 0);
+        p50.set(sec(fc.p80Ts), 0);
+        p80.set(sec(now), remaining);
+        p80.set(sec(fc.p80Ts), 0);
+      }
+      const xs = [...new Set([...actual.keys(), ...ideal.keys(), ...p50.keys(), ...p80.keys()])].sort(
+        (x, y) => x - y,
+      );
+      const column = (m) => xs.map((x) => (m.has(x) ? m.get(x) : null));
+      return [xs, column(actual), column(ideal), column(p50), column(p80)];
+    };
+
+    const burndownOptions = (UPlot, bd, fc, now) => {
+      const dated = forecastDated(fc);
+      const remaining = burndownRemaining(bd, fc);
+      const px = window.devicePixelRatio || 1;
+      const mono = cssToken("--mono") || "monospace";
+      const axis = {
+        stroke: () => cssToken("--ink-faint"),
+        grid: { stroke: () => cssToken("--line"), width: 1 },
+        ticks: { stroke: () => cssToken("--line"), width: 1 },
+        font: `9px ${mono}`,
+      };
+      // Labels never overprint each other: one placed on top of an earlier
+      // one (steps on the same day) moves down a line until it is clear.
+      let placed = [];
+      const drawLabel = (ctx, text, x, y, color) => {
+        const w = ctx.measureText(text).width;
+        const h = 11 * px;
+        let at = y;
+        const hits = (top) =>
+          placed.some((r) => x < r.x + r.w && r.x < x + w && top - h < r.y && r.y - h < top);
+        for (let guard = 0; hits(at) && guard < 40; guard++) at += h;
+        placed.push({ x, y: at, w });
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, at);
+      };
+      return {
+        width: 560,
+        height: 230,
+        legend: { show: false },
+        cursor: { show: false },
+        select: { show: false },
+        scales: {
+          x: {
+            time: true,
+            // A little air either side, so the first step and the target are
+            // never drawn on the frame.
+            range: (_u, min, max) => {
+              const hi = Math.max(max, min + 86400);
+              const pad = Math.max((hi - min) * 0.04, 3600);
+              return [min - pad, hi + pad];
+            },
+          },
+          y: { range: (_u, _min, max) => [0, Math.max(1, max) * 1.12] },
+        },
+        axes: [axis, { ...axis, label: "pts left", labelFont: `9px ${mono}`, labelSize: 14, size: 40 }],
+        series: [
+          {},
+          {
+            label: "remaining",
+            stroke: () => cssToken("--ember"),
+            width: 2.2,
+            paths: UPlot.paths.stepped({ align: 1 }),
+            spanGaps: true,
+            points: { show: false },
+          },
+          {
+            label: "ideal",
+            stroke: () => cssToken("--ink-faint"),
+            width: 1.2,
+            dash: [5, 4],
+            spanGaps: true,
+            points: { show: false },
+          },
+          {
+            label: "P50",
+            stroke: () => cssToken("--pass"),
+            width: 1.2,
+            dash: [4, 3],
+            spanGaps: true,
+            points: { show: false },
+          },
+          {
+            label: "P80",
+            stroke: () => cssToken("--heat"),
+            width: 1.2,
+            dash: [4, 3],
+            spanGaps: true,
+            points: { show: false },
+          },
+        ],
+        // The P50/P80 band: the area between the two projections.
+        bands: dated ? [{ series: [4, 3], fill: () => withAlpha(cssToken("--pass"), 0.16) }] : [],
+        hooks: {
+          draw: [
+            (u) => {
+              const ctx = u.ctx;
+              const top = u.bbox.top;
+              const bottom = u.bbox.top + u.bbox.height;
+              ctx.save();
+              placed = [];
+              ctx.font = `${Math.round(9 * px)}px ${mono}`;
+              // uPlot leaves the axes' alignment on the context; labels read left.
+              ctx.textAlign = "left";
+              ctx.textBaseline = "alphabetic";
+              // The declared target (CR-CRU-091), a vertical rule. Its date is
+              // printed only beside a dated forecast.
+              if (typeof bd.target === "number") {
+                const x = u.valToPos(bd.target, "x", true);
+                ctx.strokeStyle = cssToken("--heat");
+                ctx.lineWidth = px;
+                ctx.setLineDash([2 * px, 3 * px]);
+                ctx.beginPath();
+                ctx.moveTo(x, top);
+                ctx.lineTo(x, bottom);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                drawLabel(
+                  ctx,
+                  dated ? `target ${shortDay(bd.target * 1000)}` : "target",
+                  x + 4 * px,
+                  top + 10 * px,
+                  cssToken("--heat"),
+                );
+              }
+              // Every step names its CR and what moved it.
+              for (const p of bd.points) {
+                if (p.event === "start" || p.delta === 0) continue;
+                const x = u.valToPos(p.ts / 1000, "x", true);
+                const y = u.valToPos(p.remaining, "y", true);
+                const sign = p.delta > 0 ? "+" : "−";
+                drawLabel(
+                  ctx,
+                  `${sign}${fmtPoints(Math.abs(p.delta))} · ${p.cr} ${p.event}`,
+                  x + 3 * px,
+                  y - 4 * px,
+                  p.delta < 0 ? cssToken("--pass") : cssToken("--heat"),
+                );
+              }
+              // Today, on the actual line.
+              const tx = u.valToPos(now / 1000, "x", true);
+              const ty = u.valToPos(remaining, "y", true);
+              ctx.fillStyle = cssToken("--ember");
+              ctx.beginPath();
+              ctx.arc(tx, ty, 3 * px, 0, 2 * Math.PI);
+              ctx.fill();
+              drawLabel(ctx, `← today · ${fmtPoints(remaining)} pts`, tx + 5 * px, ty - 6 * px, cssToken("--ink"));
+              if (dated) {
+                drawLabel(
+                  ctx,
+                  `P50 ${shortDay(fc.p50Ts)}`,
+                  u.valToPos(fc.p50Ts / 1000, "x", true) - 30 * px,
+                  bottom - 6 * px,
+                  cssToken("--pass"),
+                );
+                drawLabel(
+                  ctx,
+                  `P80 ${shortDay(fc.p80Ts)}`,
+                  u.valToPos(fc.p80Ts / 1000, "x", true) + 2 * px,
+                  bottom - 14 * px,
+                  cssToken("--heat"),
+                );
+              }
+              ctx.restore();
+            },
+          ],
+        },
+      };
+    };
+
+    // One live chart: a redraw retires the previous instance (its listeners
+    // with it) before drawing the next. The draw waits for its host to be in
+    // the DOM; a host that never lands is dropped.
+    let burndownPlot = null;
+    const drawBurndown = (host, bd, fc) => {
+      const attempt = (tries) => {
+        loadUplot()
+          .then((UPlot) => {
+            if (!host.isConnected) {
+              if (tries < 20) setTimeout(() => attempt(tries + 1), 16);
+              return;
+            }
+            if (burndownPlot !== null) burndownPlot.destroy();
+            const now = Date.now();
+            burndownPlot = new UPlot(burndownOptions(UPlot, bd, fc, now), burndownData(bd, fc, now), host);
+          })
+          .catch((err) => {
+            if (host.isConnected) {
+              host.setAttribute("data-chart-state", "unavailable");
+              host.textContent = `chart unavailable — ${err.message}`;
+            }
+          });
+      };
+      attempt(0);
+    };
+
+    const burndownCaption = (bd, fc) => {
+      const ideal =
+        Array.isArray(bd.ideal) && bd.ideal.length > 0
+          ? `Dashed grey: the ideal line from the ${fmtPoints(bd.committedPoints)} pts committed at the start to 0 on the target. `
+          : "No target is declared, so there is no ideal line. ";
+      const actual =
+        "Orange: points actually remaining; it drops when a CR merges, rises when scope is added, " +
+        "and every step carries its event label.";
+      const band = forecastDated(fc)
+        ? " From today, the band projects the remaining points forward at the velocity distribution (P50 green, P80 amber)."
+        : "";
+      return ideal + actual + band;
+    };
+
+    const AnalyticsForecast = (bd, fc) => {
+      const dated = forecastDated(fc);
+      return div(
+        { "data-testid": "analytics-forecast", class: "app-card app-analytics-forecast" },
+        div({ class: "app-card-name" }, `Forecast · ${bd.release}`),
+        dated
+          ? div(
+              { class: "app-card-meta" },
+              "P50 ",
+              b(isoDay(fc.p50Ts)),
+              " · P80 ",
+              b(isoDay(fc.p80Ts)),
+              typeof bd.target === "number" ? ` · target ${isoDay(bd.target * 1000)}` : "",
+              typeof fc.scheduleHealth === "string"
+                ? [" → ", b({ class: `app-analytics-health ${fc.scheduleHealth}` }, fc.scheduleHealth)]
+                : "",
+            )
+          : div({ class: "app-card-meta" }, forecastRefusalLong(fc, bd)),
+        dated
+          ? div(
+              { class: "app-card-meta" },
+              `1,000 draws of weekly velocity against the ${fmtPoints(fc.remainingPoints)} pts left`,
+            )
+          : null,
+      );
+    };
+
+    const AnalyticsBody = () => {
+      const held = releaseAnalytics.val;
+      if (held === null || held.projectKey !== state.route.projectKey) {
+        return div({ class: "app-empty" }, "loading the release burndown…");
+      }
+      if (held.burndown === null) {
+        return div({ class: "app-empty" }, `No burndown for ${held.release}: no CR was ever planned into it.`);
+      }
+      const bd = held.burndown;
+      const fc = held.forecast;
+      const host = div({ class: "app-burndown-canvas" });
+      drawBurndown(host, bd, fc);
+      return div(
+        { class: "app-analytics-body" },
+        div(
+          {
+            "data-testid": "burndown-chart",
+            class: "app-burndown-chart",
+            role: "img",
+            "aria-label": `${bd.release} SCRUM burndown: story points remaining, the ideal line, the actual line with each step's event, and the forecast band`,
+          },
+          host,
+        ),
+        div({ class: "app-card-meta app-burndown-caption" }, burndownCaption(bd, fc)),
+        AnalyticsForecast(bd, fc),
+      );
+    };
+
+    // F14¾ — the pane: `← roadmap` (closeDetail, like Escape and Back) above
+    // its own scroller; velocity is NOT repeated here (it is the Project
+    // band's). The detail-column shape is the run detail's, so on the phone
+    // band it fills the viewport exactly as a drill-in does.
+    const AnalyticsPane = () =>
+      div(
+        { "data-testid": "analytics-pane", class: "app-drillin app-inpane app-detail-col" },
+        div(
+          { class: "app-drillin-head app-top" },
+          button({ class: "app-chip", onclick: () => closeDetail() }, "← roadmap"),
+          span({ class: "app-rail-title" }, () => {
+            const held = releaseAnalytics.val;
+            return held === null
+              ? "burndown · story points remaining"
+              : `${held.release} burndown · story points remaining`;
+          }),
+        ),
+        div(
+          { class: greyed("app-center") },
+          div({ "data-testid": "pane-scroll", class: "app-pane-content" }, () => AnalyticsBody()),
+        ),
+      );
+
+
     const RoadmapBoardEmpty = () =>
       div(
         { "data-testid": "roadmap-empty", "data-scope": "board", class: "app-empty" },
@@ -4156,6 +4844,11 @@
                 : [
                     RoadmapStripZone(gates, focusIndex),
                     RoadmapFlowZone(view),
+                    // CR-CRU-022 §S5 — zone 3's header: the focused release's
+                    // band, above its table, and only over a table.
+                    focused === undefined || entries.length === 0
+                      ? ""
+                      : () => RoadmapProgressBand(focused.version),
                     RoadmapTableZone(view, entries),
                   ],
             ),
@@ -5174,6 +5867,13 @@
       if (state.route.overlay !== undefined) {
         wsShowingDetail = true;
         return WorkspaceRunDetail(state.route.overlay);
+      }
+      // CR-CRU-022 §S5 — the Roadmap pane's analytics state (F14¾), under the
+      // same one rule: it replaces the pane, and closing it restores the
+      // roadmap at its saved scroll position below.
+      if (state.route.analytics === true && state.workspaceTab === "Roadmap") {
+        wsShowingDetail = true;
+        return AnalyticsPane();
       }
       const pane =
         state.workspaceTab === "Workflow"

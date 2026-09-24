@@ -153,7 +153,7 @@ const TODAY_MS = Date.parse(TODAY_ISO);
 describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
   test('status "ok" with a zero-variance 3-week velocity history: P50 === P80 === exactly 3 weeks from today (remainingPoints is an exact multiple of the constant weekly velocity)', async () => {
     boot();
-    const key = "cru022-fcst-ok";
+    const key = "00000000-0000-7000-8022-000000000f01";
     handle!.store.addProject({ key, name: "fcst-ok", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
     threeConstantWeeks(key, 10);
 
@@ -177,7 +177,7 @@ describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
 
   test('fewer than 3 completed weeks of pointed velocity → status "insufficient_history", no band values', async () => {
     boot();
-    const key = "cru022-fcst-insufficient";
+    const key = "00000000-0000-7000-8022-000000000f02";
     handle!.store.addProject({
       key,
       name: "fcst-insufficient",
@@ -201,7 +201,7 @@ describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
 
   test('a remaining CR with no points in the release → status "unpointed", naming it, no band values', async () => {
     boot();
-    const key = "cru022-fcst-unpointed";
+    const key = "00000000-0000-7000-8022-000000000f03";
     handle!.store.addProject({
       key,
       name: "fcst-unpointed",
@@ -229,7 +229,7 @@ describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
 
   test('scheduleHealth "ahead" — P80 <= the declared target', async () => {
     boot();
-    const key = "cru022-fcst-ahead";
+    const key = "00000000-0000-7000-8022-000000000f04";
     handle!.store.addProject({ key, name: "fcst-ahead", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
     threeConstantWeeks(key, 10);
     fileWithPoints(key, "CR-FCST-REL-1", "9.7.0", 30, "2026-09-01T00:00:00.000Z");
@@ -250,7 +250,7 @@ describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
 
   test('scheduleHealth "behind" — P50 > the declared target', async () => {
     boot();
-    const key = "cru022-fcst-behind";
+    const key = "00000000-0000-7000-8022-000000000f05";
     handle!.store.addProject({ key, name: "fcst-behind", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
     threeConstantWeeks(key, 10);
     fileWithPoints(key, "CR-FCST-REL-1", "9.7.0", 30, "2026-09-01T00:00:00.000Z");
@@ -311,7 +311,7 @@ describe("CR-CRU-022 §S4 — forecast: GET …/analytics/forecast", () => {
     //   the DN describes \u2014 this is what makes the fixture ROBUST rather
     //   than a guess at one implementation's specific output.
     boot();
-    const key = "cru022-fcst-at-risk";
+    const key = "00000000-0000-7000-8022-000000000f06";
     handle!.store.addProject({ key, name: "fcst-at-risk", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
 
     // 3 very-low weeks (1 pt each).

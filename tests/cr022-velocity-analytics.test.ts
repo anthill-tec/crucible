@@ -158,7 +158,7 @@ function mergeCr(key: string, fx: MergeFixture): void {
 describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
   test("pointsPerWeek is the mean of the last 3 COMPLETED weeks; weeks lists every week with a pointed merge, gap weeks stay absent (never zero); a BDD-tier run counts toward exec time", async () => {
     boot();
-    const key = "cru022-vel-1";
+    const key = "00000000-0000-7000-8022-000000000a01";
     handle!.store.addProject({ key, name: "vel", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
 
     // W1 — Wed 2026-08-05 (a full week BEFORE the gap week 2026-08-12,
@@ -238,7 +238,7 @@ describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
 
   test("with no pointed merges at all, weeks/sampleWeeks reflect an empty history, never a zero-filled one", async () => {
     boot();
-    const key = "cru022-vel-empty";
+    const key = "00000000-0000-7000-8022-000000000a02";
     handle!.store.addProject({ key, name: "vel-empty", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
     setSystemTime(new Date("2026-09-09T12:00:00.000Z"));
     const { status, body } = await getVelocity(key);

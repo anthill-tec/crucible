@@ -338,22 +338,50 @@ describe("CR-CRU-078/AC7 — NO forecast date, asserted as an ABSENCE", () => {
     }
   });
 
-  test("no forecasting machinery exists in public/ at all — CR-CRU-022 is unshipped", () => {
-    // AC7's real content is that the CODE has no such path, and the P50/P80
-    // confidence band is CR-CRU-022, deferred past 0.2.0. Scanned rather than
-    // reasoned about, so a later cycle cannot quietly add one.
-    const FORECASTING = /\b(?:forecast|estimated|estimate|interpolat\w*|p50|p80|eta)\b/i;
-    const offenders: string[] = [];
-    for (const [name, src] of [
-      ["public/app-logic.mjs", APP_LOGIC_SRC],
-      ["public/app.js", APP_JS_SRC],
-    ] as const) {
-      const hit = FORECASTING.exec(codeOnly(src));
-      if (hit !== null) offenders.push(`${name}: ${hit[0]}`);
-    }
-    expect(offenders).toEqual([]);
-    // Non-vacuity.
-    expect(FORECASTING.test("const eta = forecastTarget(rel);")).toBe(true);
+  // RETIRED in CR-CRU-022 C4 (orchestrator ruling 2026-09-24): "no forecasting
+  // machinery exists in public/ at all — CR-CRU-022 is unshipped" held only
+  // while 022 was unshipped, and 022 shipped the forecast (the P50/P80 chip,
+  // the analytics pane's forecast card, the …/analytics/forecast read). Its
+  // purpose now lives in two places:
+  //   (i)  tests/cr022-analytics-ui.test.ts, §S5 AC4 — "under
+  //        insufficient_history no date text renders anywhere on the band or
+  //        the pane";
+  //   (ii) this file's remaining AC7 tests, which pin `resolveGateDate`:
+  //        "nothing in an undated proposal's surroundings becomes its date",
+  //        "`timestamp` is never the gate's date for a SHIPPED release either",
+  //        "no undated record, however surrounded, yields a date",
+  //        "an unrecognised kind consults NO field and produces no date", and
+  //        the one below, which puts a real forecast's fields beside the gate.
+  test("a forecast's values never reach the strip's gate date — only the declared target or the ship date", () => {
+    // The CR-CRU-022 forecast payload's own fields (…/analytics/forecast:
+    // p50Ts / p80Ts in epoch MILLISECONDS, remainingPoints, scheduleHealth),
+    // riding beside the release record. p50Ts formats to 2026-10-01 and p80Ts
+    // to 2026-10-07; neither is a declared target, so neither is the date.
+    const FORECAST = {
+      p50Ts: 1_790_812_800_000,
+      p80Ts: 1_791_331_200_000,
+      remainingPoints: 29,
+      scheduleHealth: "at-risk",
+      status: "ok",
+    };
+    const targeted = Logic.resolveGateDate({ ...PROPOSED_TARGETED, ...FORECAST }, "proposed");
+    expect({ field: targeted.field, state: targeted.state, date: targeted.date }).toEqual({
+      field: "targetAt",
+      state: "dated",
+      date: "2026-09-21",
+    });
+    const undeclared = Logic.resolveGateDate({ ...PROPOSED_UNDATED, ...FORECAST }, "proposed");
+    expect({ field: undeclared.field, state: undeclared.state, date: undeclared.date }).toEqual({
+      field: "targetAt",
+      state: "absent",
+      date: "",
+    });
+    expect(JSON.stringify(undeclared)).not.toMatch(ISO_DAY);
+    const shipped = Logic.resolveGateDate({ ...SHIPPED, ...FORECAST }, "shipped");
+    expect({ field: shipped.field, date: shipped.date }).toEqual({ field: "releasedAt", date: "2026-08-19" });
+    // Non-vacuity: the forecast's instants really are formattable days.
+    expect(Logic.formatReleaseDate(FORECAST.p50Ts / 1000)).toBe("2026-10-01");
+    expect(Logic.formatReleaseDate(FORECAST.p80Ts / 1000)).toBe("2026-10-07");
   });
 });
 

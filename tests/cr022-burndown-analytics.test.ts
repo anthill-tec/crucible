@@ -140,7 +140,7 @@ function fileWithPoints(
 describe("CR-CRU-022 §S3 — burndown: GET …/analytics/burndown", () => {
   test("committedPoints is the release's point total AT ITS START; the series steps down on merge (event: \"merged\"), up on a scope addition (verb cr-plan), and down on a void (verb cr-void); unpointed CRs are excluded and named", async () => {
     boot();
-    const key = "cru022-burn-1";
+    const key = "00000000-0000-7000-8022-000000000b01";
     handle!.store.addProject({ key, name: "burn", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
 
     const RELEASE = "9.9.0";
@@ -252,7 +252,7 @@ describe("CR-CRU-022 §S3 — burndown: GET …/analytics/burndown", () => {
 
   test("a release with no declared target carries no ideal line and no target field (absent, not null/0)", async () => {
     boot();
-    const key = "cru022-burn-2";
+    const key = "00000000-0000-7000-8022-000000000b02";
     handle!.store.addProject({ key, name: "burn-notarget", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
 
     const RELEASE = "9.8.0";
