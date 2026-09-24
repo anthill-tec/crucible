@@ -44,5 +44,5 @@ Feature: the BDD section renders an ingested run's Gherkin
     Then the BDD index shows exactly one row for that run
     When I open that run from the BDD index
     Then the address bar shows that run's own route
-    And the BDD section shows the feature "Gherkin Rendering Feature"
-    And the steps of "a passing scenario renders every step" read in order "Given the board has a frontend project | When a BDD run is ingested for it | And the run carries its Gherkin steps | Then the BDD section renders them in order"
+    And the run detail shows the feature "Gherkin Rendering Feature"
+    And the steps of "a passing scenario renders every step" read in order at the run detail "Given the board has a frontend project | When a BDD run is ingested for it | And the run carries its Gherkin steps | Then the BDD section renders them in order"

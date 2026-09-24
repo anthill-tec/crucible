@@ -490,6 +490,24 @@ function boardRelativeTime(offsetMs: number): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// NEW — §S4 AC1: `BddFeed` and its siblings are GONE, asserted BY ABSENCE
+// (not by inspection). No test in this migration checked this before: the
+// 13 original assertions were all triaged to KEEP/DELETE/AMEND, but none of
+// them named the retirement itself as a fact to assert. A GREEN that left a
+// dead `BddFeed` branch behind (unreachable, unshimmed, but still declared)
+// would satisfy every migrated behavioural test above while failing this
+// CR's own §S4 AC1 in letter and spirit.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("CR-CRU-145 §S4 AC1 — the bespoke BDD renderer is RETIRED, asserted by absence", () => {
+  test("no BddFeed/BddFeature/BddScenario/BddStep/BddRunIdentity declaration survives in public/app.js — no shim, no dead branch, no second path", () => {
+    for (const symbol of ["BddFeed", "BddFeature", "BddScenario", "BddStep", "BddRunIdentity"]) {
+      expect(APP_JS_SRC).not.toMatch(new RegExp(`\\b${symbol}\\b`));
+    }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // KEPT, RE-POINTED — the Gherkin now renders at the run detail, reached via
 // the BDD index's own row (§S2's hand-off, not a fork).
 // ──────────────────────────────────────────────────────────────────────────
@@ -700,6 +718,16 @@ const TALLY_CASES = ["one", "two", "three", "four", "five"];
 const TALLY_PASSED = 13;
 const TALLY_FAILED = 5;
 const TALLY_TOTAL = 18;
+// CORRECTED against C2 GREEN's settled progressive-expansion rule
+// (a25ff4e, public/app.js `openProgressively`/`specFeaturesOf`): the ONE
+// feature here is opened (it is both the only and the failing feature), but
+// ONLY a scenario that is failing OR among its first SPEC_FIRST_OPEN (2)
+// scenarios loads its steps on open. The 5 failing "case breaks" scenarios
+// already fill (and exceed) that window, so the 6th, all-green "clean path"
+// scenario's row renders but stays FOLDED — its steps are never fetched
+// until it scrolls into view or is clicked. The DOM therefore shows exactly
+// the failing scenarios' own steps on open, not the run's full step count.
+const TALLY_VISIBLE_LEAF_ROWS = TALLY_CASES.length * 3; // 5 failing scenarios × 3 steps each
 
 function tallyRun(): RunFixture {
   const broken: SuiteNode[] = TALLY_CASES.map((word) => ({
@@ -837,9 +865,23 @@ describe("CR-CRU-145 §S4 (AMENDED, was 'NAMED never TALLIED') — the index sho
     // opening its detail is what reveals the steps, not the index row.
     expect(bddPane().querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
 
-    // Opening the row DOES reveal the full specification, counts and all —
-    // proving the counts-forbidden rule really did move, not vanish.
+    // Opening the row reveals the specification — but per §S1's settled
+    // progressive-expansion rule (C2 GREEN), that means the FAILING
+    // scenarios' steps immediately, not literally every step of the run:
+    // the one all-green "clean path" scenario stays folded until scrolled
+    // into view or clicked. This still proves the counts-forbidden rule
+    // really did move (opening reveals real Gherkin content), without
+    // asserting a figure no correct implementation could ever produce.
     await openRunFromIndex("evt-bdd-tally");
-    expect(runOverlay().querySelectorAll('[data-testid="leaf-row"]').length).toBe(TALLY_TOTAL);
+    const cleanPathRow = Array.from(
+      runOverlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]'),
+    ).find((el) => (el.textContent ?? "").includes("the clean path still runs to the end"));
+    expect(cleanPathRow).toBeDefined();
+    expect(
+      cleanPathRow!.parentElement?.querySelectorAll('[data-testid="leaf-row"]').length,
+    ).toBe(0);
+    expect(runOverlay().querySelectorAll('[data-testid="leaf-row"]').length).toBe(
+      TALLY_VISIBLE_LEAF_ROWS,
+    );
   }, 20_000);
 });
