@@ -86,8 +86,10 @@ These are retired, not ported, and each retirement is recorded where the test st
 - **AC1** — A pure server function resolves the pointer from `(entries, tracks, {track, release,
   wave})`. Every `QueueEntry` it reads comes from `listQueue`; no other ordering rule exists in it
   (no sort, no `seq` comparison).
-- **AC2** — Every behaviour of `tests/client/test_cr092_next_decision_resolver.py` (85 tests,
-  measured at `7f2a85c`) and `tests/client/test_cr095_next_consumes_published_order.py` is
+- **AC2** — Every behaviour of every test that reaches an AC10 symbol — `tests/client/test_cr092_next_decision_resolver.py` (85 tests,
+  measured at `7f2a85c`), `tests/client/test_cr095_next_consumes_published_order.py`, and any other
+  test file RED's census finds (C1 found `test_next_announces_the_wave_boundary.py` and
+  `test_next_lane_carries_release_and_wave.py`, missed by the gap analysis) — is
   classified in the RED commit into exactly one of: **ported** to a bun test of the server function
   or route, **kept** as a Python verb test (envelope, exit code, projection, context, transport
   failure), or **retired** under §S4. The classification table is in the RED commit message or a
