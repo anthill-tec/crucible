@@ -89,3 +89,9 @@ rename the `decision` field — over-correcting into the opposite error, and bun
 envelope rename, a vocabulary argument and the publisher into one CR. The decision is authored data
 in the roadmap; `next` points at it; the only defect is that the pointer has no publisher. One
 concern.
+
+## Coupling (recorded 2026-09-24, at CR-CRU-022's planning game)
+
+CR-CRU-098 moves the `next` resolver from the client to the server; CR-CRU-147 changes what `next`
+skips (VOID and SUPERSEDED CRs). Both touch the same resolver. **Whichever lands first owns it, and
+the other adapts** — if CR-CRU-147 lands first, this CR ports its dead-CR skip along with the other 77 behaviours. Never two resolvers.

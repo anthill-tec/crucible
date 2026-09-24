@@ -167,5 +167,20 @@ folded above: the stale LOCKED DN (now amended); the missing declaration journal
 size-weighting that could never be populated (replaced by story points); the per-wave forecast set
 against a per-release target (now release-scoped); the coupling to CR-CRU-147 (§S3) and to CR-CRU-018's
 responsive bands (§S5); the empty `fix`-kind distribution (moot — the forecast no longer samples per
-cycle kind); and the chart-library pick (uPlot). **The planning game for the 0.3.0 CRs** is recorded
-with the user before RED, and the points are written with `cr-plan --points` once §S1 ships.
+cycle kind); and the chart-library pick (uPlot). **The planning game for 0.3.0 — confirmed by the user 2026-09-24.** Written with
+`cr-plan --points` as this CR's close-out step, once §S1 ships, so the burndown has real data on day one.
+
+| CR | Points | Basis |
+| --- | --- | --- |
+| CR-CRU-139 | 8 | merged; 5 cycles, 33 ACs |
+| CR-CRU-015 | 8 | merged; 5 cycles, 20 ACs |
+| CR-CRU-018 | 13 | merged; 5 cycles + fix round, 2,699 lines, two engines, a new DN |
+| CR-CRU-022 | 13 | this CR |
+| CR-CRU-098 | 5 | resolver ported server-side, 77 behaviours carried |
+| CR-CRU-145 | 8 | renderer retired, 13 assertions migrated, 14 ACs |
+| CR-CRU-144 | 5 | classifier instrument + targeted-run tier |
+| CR-CRU-147 | 5 | next, wave card, strikethrough, two queue fields |
+| CR-CRU-141 | 3 | CI path gating |
+| CR-CRU-146 | 2 | hit area shipped in CR-018; pixel-offset step + assertion-only |
+
+Committed **70**, merged **29**, remaining **41**.

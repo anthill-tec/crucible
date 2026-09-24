@@ -95,3 +95,9 @@ the echo, which is how Model B found four drifted titles.
 - Changing how `status` is derived.
 - A client verb that writes `status` directly. Model B asked for none, and the derivation forbids it.
 - Deleting voided CRs from the store.
+
+## Coupling (recorded 2026-09-24, at CR-CRU-022's planning game)
+
+CR-CRU-098 moves the `next` resolver from the client to the server; CR-CRU-147 changes what `next`
+skips (VOID and SUPERSEDED CRs). Both touch the same resolver. **Whichever lands first owns it, and
+the other adapts** — if CR-CRU-098 lands first, this CR's skip is implemented in the server resolver, not the client. Never two resolvers.
