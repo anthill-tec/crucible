@@ -303,7 +303,11 @@ describe("CR-CRU-145 §S2 — cycle → linked runs → detail lands the SAME re
     expect(overlayViaChain!.querySelectorAll('[data-testid="suite-row"] [data-testid="tree-toggle"]').length).toBeGreaterThan(0);
     const toggleGlyphViaChain = overlayViaChain!.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim();
 
-    // Path B — the BDD index, direct entry.
+    // Path B — the BDD index, direct entry. Close the detail first the way a
+    // user does (the overlay's back chip): while a detail is open the tabs
+    // row is parked and hidden, so no user can click a tab from here.
+    document.querySelector<HTMLElement>('[data-testid="run-overlay"] .app-chip')?.click();
+    await settle();
     await clickTab("BDD");
     const row = document.querySelector<HTMLElement>('[data-testid="bdd-index-row"]');
     expect(row).not.toBeNull();
