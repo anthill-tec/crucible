@@ -1,6 +1,6 @@
 # CR-CRU-150 — `status` shows the work in flight, not the project's history
 
-**Type** feature · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
+**Type** feature · **Points** 5 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
 CR-CRU-030, CR-CRU-035, CR-CRU-094 · **Status** PENDING — filed 2026-09-24
 
 ## Problem
