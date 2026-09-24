@@ -2,39 +2,54 @@
 
 **Author:** Antony John
 **Co-author:** claude (orchestrator — crucible)
-**Date:** 2026-07-16
-**Status:** LOCKED (design round 2026-07-16 — user ask: "velocity computation…
-milestone delivery dates… an actual burndown chart"; ships 0.2.0)
-**Consumed by:** [PRD-crucible-v2.md](PRD-crucible-v2.md) (design input) ·
-CR-CRU-022 (implementation)
-**Depends on designs:** [DN-model-b-language.md](DN-model-b-language.md)
-(Cycle/CR/Wave ontology) · CR-CRU-011 (plans/cycles) · CR-CRU-014 (queue)
+**Date:** 2026-07-16 · **amended 2026-09-24** (CR-CRU-022 gap analysis + user rulings)
+**Status:** LOCKED 2026-07-16; **AMENDED and APPROVED 2026-09-24** — the SCRUM model below supersedes
+the size-weighted, per-wave, snapshot-based model this note first locked. Ships **0.3.0**.
+**Consumed by:** [PRD-crucible-v2.md](PRD-crucible-v2.md) (design input) · CR-CRU-022 (implementation)
+**Depends on designs:** [DN-model-b-language.md](DN-model-b-language.md) (Cycle/CR/Wave ontology) ·
+[DN-crucible-roadmap-view.md](DN-crucible-roadmap-view.md) (release-focused roadmap) ·
+[DN-crucible-responsive-model.md](DN-crucible-responsive-model.md) (bands) · CR-CRU-091 (declared release target)
+**Visual contract:** storyboard **F16** (placement + story-point rules) and **F14¾** (the analytics pane),
+both approved 2026-09-24.
+
+## What changed on 2026-09-24, and why
+
+The first lock (2026-07-16) was made before the roadmap became release-focused (2026-08-28), before
+per-CR declaration verbs replaced the bulk queue post, and without a way to size work. CR-CRU-022's gap
+analysis measured the consequences: **0 of 144 queue rows carried a size and no verb could set one**,
+the per-wave forecast could not be compared with a target that belongs to a *release*, and the snapshot
+table assumed a route that 0.3.0 removes. The user then ruled a SCRUM model:
+
+| Was | Now | Ruling |
+| --- | --- | --- |
+| Project-wide, per-wave analytics | **Scoped to the focused release**; waves order work inside it | user, 2026-09-24 |
+| `size` XS/S/M → "wCR" weights | **Story points**, Fibonacci 1·2·3·5·8·13, declared in the **planning game** | user, 2026-09-24 |
+| Velocity = cycles/day + wCR/week | **SCRUM velocity = story points merged per calendar week** | user, 2026-09-24 |
+| Burndown from queue snapshots | **SCRUM burndown**: points remaining vs days, ideal line to the target, labelled events | user, 2026-09-24 |
+| Per-wave `targetDate` via `queue-file` | The **release's declared target** (CR-CRU-091) | CR-022 re-base, 2026-08-28 |
+| Everything in the Roadmap pane | **Hybrid**: velocity in the Project band, release band in zone 3, burndown in the pane | user, 2026-09-24 |
 
 ## 1 Why
 
-Model-B execution already stamps every unit of work: runs carry timestamps and
-durations, cycles carry `activatedAt`/`doneAt`, plans carry `filedAt`/
-`closedAt` + the merge commit, and the CR-014 queue carries the full backlog
-with `wave`, `dependsOn` and `size`. That is a complete progress dataset —
-enough to DERIVE project progress reporting and delivery estimation without
-asking any actor to report anything new. This DN fixes the analytical model:
-definitions, formulas, honesty rules, API and UI surfaces. CRs implement it;
-they do not reinterpret it.
+Model-B execution already stamps every unit of work: runs carry timestamps and durations, cycles carry
+`activatedAt`/`doneAt`, plans carry `filedAt`/`closedAt` + the merge commit, and the queue carries each
+CR's release, wave and dependencies. What it lacked was an **estimate of size**. SCRUM supplies it the
+standard way — each CR is given story points in a planning game at design time — and everything else
+(velocity, burndown, forecast) is derived from that declaration plus the data already collected.
 
 ## 2 First principles (binding)
 
-1. **Zero new reporting.** Every metric derives from data already collected
-   (runs, cycles, plans, lifecycle events, queue). If a metric would need a
-   new agent-side field, it does not belong to this design.
-2. **Bands, never points.** Estimates are P50/P80 ranges. A single predicted
-   date is never rendered.
-3. **No fabrication.** Below the confidence gate, surfaces show the sample
-   count and say "insufficient history" — never an extrapolated value.
-4. **Scope changes are visible.** Backlog history is snapshotted; a widened
-   or narrowed queue renders as a step in the burndown, never rewritten
-   history.
-5. **Two clocks, kept apart.** Machine time and loop time measure different
-   things and are never summed into one number (§3).
+1. **One declaration, everything else derived.** The only new input is a CR's story points, declared
+   once at design. Every metric derives from that plus data already collected (runs, cycles, plans,
+   lifecycle events, queue). No agent reports anything new.
+2. **Bands, never points.** Estimates are P50/P80 ranges. A single predicted date is never rendered.
+3. **No fabrication.** Below the confidence gate, and wherever a CR is unpointed, surfaces show what is
+   missing and say so — never an extrapolated value, and never a default weight.
+4. **Scope changes are visible, and attributed.** Every declaration that moves the burndown (a CR added,
+   voided, superseded or re-pointed) is journalled with its author and time, and renders as a labelled
+   step — never rewritten history.
+5. **Two clocks, kept apart.** Machine time and loop time measure different things and are never summed
+   into one number (§3). Neither is velocity.
 
 ## 3 The two-clock model
 
@@ -57,120 +72,127 @@ LIVE ticking display on an ACTIVE cycle shows **attention time**
 `max(activatedAt, storeBootedAt)` — so service restarts RESUME from the
 persisted setpoint and infrastructure downtime is EXCLUDED from the ticking
 value. `loop(c)` as defined above (`doneAt − activatedAt`, downtime
-INCLUDED) is unchanged and remains what SEALED durations display and what
-§4-§6 velocity/forecast computations consume. Attention time is a display
-metric today; if analytics later want it, that is a new DN decision, not a
-silent swap.
+INCLUDED) is unchanged and remains what SEALED durations display.
+Attention time is a display metric today; if analytics later want it, that
+is a new DN decision, not a silent swap.
 
-## 4 Velocity
+**Amendment (2026-09-24):** under the SCRUM model these clocks are **flow** metrics, not velocity. They
+render as a secondary "flow" line beneath velocity (`exec 38m · gate 22m per cycle`). Every
+`cycleId`-linked run counts toward `exec(c)`, **including BDD e2e runs** (CR-CRU-015 landed them
+cycle-linked) and orchestrator gate runs bound to a cycle — resolving former open question 2.
 
-Over a window `W` (default: since first closed cycle; UI may narrow):
+## 4 Story points and the planning game
 
-- **Cycle velocity** = closed cycles in `W` ÷ days in `W` (`cyclesPerDay`).
-- **Weighted CR throughput** = Σ weights of CRs whose plans closed in `W` ÷
-  weeks in `W` (`weightedCrsPerWeek`). Weights from queue `size`:
-  `XS=1 · S=2 · M=3 · absent/unknown=1`.
-- **Per-cycle means:** `execMsPerCycle`, `gateMsPerCycle` (arithmetic means
-  over closed cycles in `W`; skipped cycles excluded, failed cycles included).
-- Every velocity payload carries `sampleCycles` so consumers can judge it.
+- **Scale:** planning-poker Fibonacci — **1 · 2 · 3 · 5 · 8 · 13**. Any other value is refused.
+- **When:** at design, during the CR's **gap analysis** (the planning game): the orchestrator proposes
+  points with reasoning; the user confirms or changes them.
+- **How:** `cr-plan --points N` — the per-CR declaration verb that already sets release and wave. There
+  is no bulk path.
+- **Re-pointing** after a release has started is allowed, and is a journalled scope change (§6).
+- **Unpointed CRs are never counted as 1.** A release containing unpointed CRs lists them as
+  *unpointed* on its band, excludes them from its point totals, and its forecast refuses (§7).
 
-## 5 Burndown
+## 5 Velocity (project-level)
 
-- **Backlog** = the registered queue (CR-014), weighted by `size` ("wCR").
-- **Snapshot semantics:** every `POST /queue` full-replace first archives the
-  prior entry set (`queue_snapshots(project_key, snapped_at, entries_json)`).
-- **Series:** remaining wCR over time. A CR burns down at its plan-close
-  timestamp (`plan-closed` point). A snapshot diff that changes total weight
-  emits a `scope-change` step. Release/wave boundaries annotate the series.
-- PENDING CRs never burn; an OPEN plan does not burn until closed with merge
-  (matches the derived-status model of CR-014).
+- **Definition:** story points of CRs whose plans **closed with a merge**, per **calendar week**.
+  Crucible has no sprints, so the calendar week is the iteration. (Waves were rejected as the iteration:
+  they vary too much in length to compare.)
+- **Displayed value:** the **mean of the last 3 completed weeks**, beside the weekly bars it came from.
+- **Scope:** project-level — all releases — because it measures the team's throughput, not a release's.
+  It lives in the **Project band**, the same on every tab (F16).
+- **Payload:** carries `sampleWeeks` and the weekly series, so a consumer can judge it. Weeks before the
+  first pointed merge are not zeros; they are absent.
 
-## 6 Forecast (Monte Carlo)
+## 6 Burndown (release-level)
 
-Procedure, per request (never persisted):
+A SCRUM burndown for the **focused release**:
 
-1. Build empirical distributions from THIS project's closed history:
-   `loop`-duration per cycle **kind** (`red-green`, `verify`, `fix`) and
-   cycles-per-CR grouped by **size**.
-2. For each of `N = 1000` draws: walk the REMAINING queue in topological
-   order (respecting `dependsOn`; a wave starts only when its dependency
-   waves complete; CRs on distinct tracks within a wave advance in parallel,
-   lanes bounded by the project's historical max concurrent open plans),
-   sampling cycles-per-CR then a duration per cycle.
-3. Collect completion times per wave and for the release boundary →
-   **P50/P80** timestamps.
-- **Confidence gate:** `sampleCycles < 15` → `status: "insufficient_history"`,
-  no band values in the payload (principle 3).
-- **Determinism for tests:** the implementation accepts a seed parameter
-  (test-only) so AC fixtures assert exact values.
+- **y:** story points remaining in the release; **x:** days, from the release's start to its declared
+  target (CR-CRU-091) or to today if later.
+- **Release start:** the earliest `filed_at` among the release's CRs.
+- **Ideal line:** a straight line from the points committed at release start to 0 on the target date.
+  With no declared target there is no ideal line (absent, not defaulted).
+- **Actual line:** steps **down** when a CR's plan closes with a merge; steps **up** when points are
+  added (a CR planned into the release, or re-pointed upward); steps **down** when points leave by
+  declaration (a CR voided, superseded, moved out, or re-pointed downward).
+- **Every step is labelled** with the CR and what moved it (`−8 · CR-139 merged`,
+  `+5 scope · CR-144 filed`), in F14¾'s style.
+- **Source of scope events:** an append-only **declaration journal** written by the per-CR verbs
+  (`cr-plan` incl. `--points`, `cr-void`, `cr-supersede`), each row carrying the CR, the verb, the
+  change, the author (the registered caller) and the time. No queue snapshots.
+- A CR whose `lifecycle.state` is VOID or SUPERSEDED contributes nothing to the remaining total
+  (CR-CRU-147's dead-CR predicate — whichever of 022 and 147 lands first owns it).
 
-## 7 Milestone targets & schedule health
+## 7 Forecast (Monte Carlo, release-level)
 
-- Queue entries accept an optional **per-wave** `targetDate` (ISO
-  `YYYY-MM-DD`, registered via `queue-file` — never edited from the UI).
-- **Schedule health** per wave with a target:
-  `P80 ≤ target` → `ahead`; `P50 ≤ target < P80` → `at-risk`;
-  `P50 > target` → `behind`.
+1. From the project's weekly velocity history (§5), build the empirical distribution of points per week.
+2. For each of `N = 1000` draws: sample weekly velocities until the release's **remaining points** reach
+   0; record the completion date. Waves order the work inside the release but do not change the total.
+3. **P50/P80** completion dates across the draws.
 
-## 8 API surface (additive, 0.2.0)
+- **Confidence gate:** fewer than **3 completed weeks** of pointed velocity (the velocity window) →
+  `status: "insufficient_history"` with no band values.
+- **Unpointed gate:** any remaining CR in the release unpointed → `status: "unpointed"`, naming them,
+  with no band values.
+- **Determinism for tests:** a seed parameter (test-only) so fixtures assert exact values.
+- Never persisted.
+
+## 8 Schedule health
+
+Against the **release's declared target** (CR-CRU-091): `P80 ≤ target` → `ahead`;
+`P50 ≤ target < P80` → `at-risk`; `P50 > target` → `behind`. No declared target → the field is
+**absent**, never defaulted. There is no per-wave target of any kind.
+
+## 9 API surface (additive, 0.3.0)
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/v2/projects/<key>/analytics/velocity` | `{cyclesPerDay, weightedCrsPerWeek, execMsPerCycle, gateMsPerCycle, sampleCycles}` |
-| `GET …/analytics/burndown` | `{points:[{ts, remainingWeighted, event, cr?}], boundaries:[…]}` |
-| `GET …/analytics/forecast` | `{perWave:[{wave, p50Ts, p80Ts, scheduleHealth?}], release:{…}, sampleCycles, status}` |
+| `GET /api/v2/projects/<key>/analytics/velocity` | `{pointsPerWeek, weeks:[{week, points}], sampleWeeks, flow:{execMsPerCycle, gateMsPerCycle, sampleCycles}}` |
+| `GET …/analytics/burndown?release=<label>` | `{release, committedPoints, target?, ideal?:[…], points:[{ts, remaining, event, cr, verb, delta}], unpointed:[cr]}` |
+| `GET …/analytics/forecast?release=<label>` | `{release, remainingPoints, p50Ts?, p80Ts?, scheduleHealth?, sampleWeeks, status}` |
 
-Plus: `queue_snapshots` table; `targetDate?` on queue entries. These reads
-follow the same JSON-only contract as every other v2 GET — there is no TOON
-form to build: CR-CRU-132 deleted the server's `?fmt=toon` / `Accept`
-rendering on 2026-09-14, and the parameter is now inert rather than
-negotiated. SSE: analytics are read-side derived —
-no new event kinds; the UI recomputes on the existing plan/queue SSE ticks.
+Plus: `points` on queue entries (set via `cr-plan --points`); the declaration journal. JSON only, like
+every v2 GET (CR-CRU-132 retired TOON rendering). No new SSE event kinds — the UI recomputes on the
+existing plan/queue ticks.
 
-## 9 UI surfaces
+## 10 UI surfaces (F16 + F14¾, approved 2026-09-24)
 
-- **Roadmap progress band** (above the queue table, testid
-  `roadmap-progress`): burndown sparkline · velocity with the exec/gate split
-  · release P50/P80 band · schedule-health chip when a target exists.
-- **Analytics pane** (testid `analytics-pane`, user-refined 2026-07-16):
-  clicking the progress band swaps the Roadmap pane to the full analytics
-  view — a one-rule pane state (`← roadmap` back chip): the full burndown
-  chart (testid `burndown-chart`, scope-change steps and wave/release
-  boundaries drawn explicitly), velocity detail (exec/gate split, sample
-  count), and the per-wave P50/P80 forecast table with schedule health.
-- **Charting library (user-directed 2026-07-16):** the storyboard's mono-art
-  burndown is representation only — the product uses a real charting library:
-  vendored, zero-build, VanJS-compatible, canvas/SVG line+step series with
-  annotation support (scope-change steps, boundary markers, P50/P80 bands),
-  SSE-driven live updates. Candidates to research on the web at CR-022's gap
-  analysis (uPlot's single-file vendorable form is the leading candidate;
-  Chart.js the fallback) — final pick is a gap-analysis decision with those
-  requirements as the gate, mirroring CR-014's graph-library rule.
-- Insufficient history renders the sample count in place of bands (never a
-  date). Storyboard: F14's CR-022 target strip (band) + frame F14¾ (the
-  analytics pane) are the visual contract.
+- **Project band → Velocity card:** `N pts / week` (3-week mean), the weekly bars, the sample, and a
+  secondary *flow* line with the exec/gate split. Project-level; every tab.
+- **Release band** in the **header of zone 3**, above the release-scoped table (testid
+  `roadmap-progress`): a burndown thumbnail, `remaining of committed pts`, velocity, the P50/P80 chip,
+  and the schedule-health chip when a target is declared. Tap → the analytics pane.
+- **Analytics pane** (testid `analytics-pane`; F14¾): the Roadmap pane swaps to the release's SCRUM
+  burndown (testid `burndown-chart`) and the forecast; `← roadmap`, Esc or back restores the roadmap with
+  scroll intact (CR-016 one-rule pane state). Velocity is not duplicated into the pane.
+- **Phone** (responsive DN): the band collapses to one ≥44px line; velocity rides the Project band's foot
+  strip; the pane fills the viewport and the chart scrolls inside its own box.
+- **Charting library — picked at CR-022 gap analysis: uPlot 1.6.32** (MIT, ~48 KB single
+  `iife.min.js`, zero-build, vendored beside VanJS). Stepped paths draw the actual line, high/low bands
+  draw P50/P80, hooks draw event labels and the target line. It renders to canvas, so unit tests assert
+  data and options while Playwright asserts pixels; colours are read from CSS variables at draw time so
+  the theme holds. Chart.js (~254 KB) was the fallback and buys nothing here.
 
-## 10 Vocabulary
+## 11 Vocabulary
 
 | Term | Meaning |
 |---|---|
-| wCR | weighted CR unit (size-weighted backlog unit) |
-| execution velocity | machine clock — agent run time per cycle |
-| loop velocity | wall clock — activate→done including gate latency |
-| gate latency | loop − execution; the human/orchestration overhead |
-| attention time | `activeMs` — accumulated server-up epochs; the ACTIVE ticking display (downtime excluded; CR-023 §S3a) |
+| story point | the planning-game estimate on a CR; Fibonacci 1·2·3·5·8·13 |
+| planning game | the orchestrator proposes points at gap analysis; the user confirms |
+| velocity | story points merged per calendar week (3-week mean) |
+| flow | the two clocks — exec and gate time per cycle; not velocity |
+| committed points | a release's points at its start |
+| scope-change step | a journalled declaration that moved the release's remaining points |
 | band | a P50/P80 range; the only legal estimate form |
-| scope-change step | burndown discontinuity from a queue re-registration |
+| unpointed | a CR with no story points; never defaulted |
 
-## 11 CR mapping & non-goals
+## 12 CR mapping & non-goals
 
-- **CR-CRU-022** implements this DN end-to-end (0.2.0, deps 011 + 014).
-- Non-goals (this design): cross-project analytics; agent/person productivity
-  scoring; UI-side target editing; Gantt scheduling; persisting forecasts.
+- **CR-CRU-022** implements this DN end-to-end (0.3.0).
+- Non-goals: cross-project analytics; person/agent productivity scoring; UI-side editing of points or
+  targets; Gantt scheduling; persisting forecasts; pointing releases already shipped.
 
-## 12 Open questions (tracked, non-blocking)
+## 13 Open questions (tracked, non-blocking)
 
-- Window controls on velocity (last-N-days selector) — UI-only, decide at
-  CR-022 gap analysis.
-- Whether BDD-tier runs join `exec(c)` once CR-015 lands (leaning yes —
-  they are cycle-linked runs like any other).
+- Velocity window controls (last-N-weeks selector) — UI-only; not in 0.3.0.
+- ~~Whether BDD-tier runs join `exec(c)`~~ — **resolved 2026-09-24: yes** (§3 amendment).
