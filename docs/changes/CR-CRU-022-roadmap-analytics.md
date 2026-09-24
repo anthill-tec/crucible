@@ -1,6 +1,6 @@
 # CR-CRU-022 — Roadmap analytics: SCRUM velocity, burndown and forecast
 
-**Status:** PENDING
+**Status:** COMPLETED (0.3.0)
 **Type:** feature
 **Priority:** P3
 **Depends on:** CR-CRU-011, CR-CRU-014, CR-CRU-091 (the declared release target this CR reads)
