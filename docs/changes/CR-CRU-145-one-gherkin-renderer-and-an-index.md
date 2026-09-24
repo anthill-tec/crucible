@@ -1,7 +1,13 @@
 # CR-CRU-145 — one Gherkin renderer, and the BDD tab is its index
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-015 · **Status** PENDING
+**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-015 · **Status** PENDING
 
+> **Gap analysis 2026-09-24** (baseline bun 2741/0, python 1930/0 at `1056f8f`). **Storyboard F11 is
+> redrawn to this CR's design and approved**: it is the visual contract. Folded in by user rulings:
+> progressive expansion (§S1), a verdict per browser (§S3, a codec defect measured here), and
+> `trace ↗` as the stored stack only, with `trace.zip` a named gap (§S3). Line citations are replaced
+> by symbol names; the old ones had drifted by hundreds of lines.
+>
 > **RE-SPECIFIED 2026-09-18 after the user read the shipped UI: *"I just noticed that the run detail
 > view from an e2e run actually renders the Gherkin results. So is the BDD only view an overkill?"***
 > The first draft of this CR said "give the BDD pane a run list, F11's collapsible tree with counts,
@@ -73,9 +79,9 @@ renders a tree of its own:
 - a row opens that run's detail — the same `/p/<key>/run/<id>` route (CR-CRU-016 §S3) the Runs pane
   and the Workflow chain use. No second route, no embedded copy.
 
-Nothing new is needed to find the runs: `visibleEvents()` (`public/app.js:461`) already holds the
-history client-side. The existing chain — `linkedRunsFor(cycleId)` (`:4082`), the `cycleId`-anchored
-evidence read (`:4305-4316`, CR-CRU-140 §S1), the first-class `cycleId` on the event (CR-CRU-094 §S1)
+Nothing new is needed to find the runs: `visibleEvents()` (`public/app.js`) already holds the
+history client-side. The existing chain — `linkedRunsFor(cycleId)`, the `cycleId`-anchored
+evidence read (CR-CRU-140 §S1), the first-class `cycleId` on the event (CR-CRU-094 §S1)
 — is the primary path and is left alone; this index is the direct-entry complement to it, not a fork.
 
 ### §S3 — what the drill-in genuinely lacks for a specification
