@@ -154,7 +154,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-146](CR-CRU-146-the-cycle-row-is-not-clickable-but-looks-it.md) | the history cycle row looks clickable and is not | fix | PENDING | 020, 021 | 7 (0.3.0) |
 | [CR-CRU-147](CR-CRU-147-a-voided-cr-is-not-queued-work.md) | a voided CR is not queued work, and its row says so | fix | PENDING | 091, 078 | 7 (0.3.0) |
 | [CR-CRU-148](CR-CRU-148-the-phone-compile-pane-collapses-to-zero-height.md) | the phone compile pane collapses to zero height | fix | COMPLETED (0.3.0) | 018 | 7 (0.3.0) |
-| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | PENDING | 141, 144, 145, 146, 147 | 7 (0.3.0) |
+| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | PENDING | 141, 144, 145, 146, 147, 150 | 7 (0.3.0) |
+| [CR-CRU-150](CR-CRU-150-status-shows-the-work-in-flight.md) | `status` shows the work in flight, not the project's history | feature | PENDING | 030, 035, 094 | 7 (0.3.0) |
 
 ## Deferred — post-0.2.0
 
