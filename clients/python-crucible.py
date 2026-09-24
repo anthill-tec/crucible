@@ -1202,7 +1202,7 @@ def cmd_cr_void(args):
 
 
 def cmd_next(args):
-    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/next,
     answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
     Delegates to the shared implementation."""
     return _axi().cmd_next(args, _resolve_project_dir(args.project_dir), _ops())
