@@ -7,6 +7,7 @@
 // the viewport + scroll-geometry assertions are new here.
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
+import { mountedPaneScroll } from "./pane-mount.ts";
 
 Step("the viewport is {int}x{int}", async ({ page }, width: number, height: number) => {
   await page.setViewportSize({ width, height });
@@ -61,19 +62,13 @@ Step("the page body does not scroll horizontally", async ({ page }) => {
   expect(bodyScrollWidth).toBeLessThanOrEqual(innerWidth);
 });
 
-// CR-CRU-029 — a tab click (workflow.steps.ts's "I click the {string}
-// workspace tab") flips `state.workspaceTab` synchronously, but VanJS's
-// reactive class/child bindings commit on the NEXT tick, not within the
-// click's own event-handler turn. A bare `.evaluate()`/`.boundingBox()` read
-// right after the click can therefore observe the PREVIOUS tab's still-
-// mounted `pane-scroll` (same testid, wrong content) before the swap lands —
-// `toHaveCount(1)` alone doesn't catch this since count stays 1 across the
-// swap. `workspace-runs` only exists in the DOM once the Runs pane (or its
-// run-detail) is the mounted tab, so waiting on it with an auto-retrying
-// `expect` absorbs that one tick reliably before any of the steps below read
-// pane-scroll's content.
+// CR-CRU-029: the one-tick tab-swap race, now documented and handled in ONE
+// place, pane-mount.ts's `mountedPaneScroll` (extracted by CR-CRU-148).
+// `workspace-runs` exists in the DOM only once the Runs pane (or its
+// run-detail) is the mounted tab, so waiting on it absorbs that tick before
+// any of the steps below read pane-scroll's content.
 async function waitForRunsPaneMounted(page: import("@playwright/test").Page) {
-  await expect(page.getByTestId("workspace-runs")).toBeVisible();
+  await mountedPaneScroll(page, "Runs");
 }
 
 // CR-CRU-029 §S1 — drives the vertical scroll to a named position (top /
