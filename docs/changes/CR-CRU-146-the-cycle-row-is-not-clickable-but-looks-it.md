@@ -1,7 +1,25 @@
 # CR-CRU-146 — the history cycle row looks clickable and is not
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-020, CR-CRU-021 · **Status** PENDING
+**Type** fix · **Points** 2 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-020, CR-CRU-021,
+CR-CRU-018 · **Status** PENDING
 
+> **Gap analysis 2026-09-25 — most of this CR shipped in CR-CRU-018** (DN-crucible-responsive-model
+> decision 11, merged `85bca00`). One `CycleLine` builder (`public/app.js`) now puts the ONE toggle
+> handler on the whole `.app-cycle-line` for both the active section and history, and the `→ Runs`
+> badge still stops propagation. `tests/workflow-cycle-row-toggle.test.ts` asserts clicks on the
+> label, status glyph, `▸ N runs` hint and empty space, the second click closing it, one shared toggle
+> state, and the badge carve-out. **What remains, measured:**
+>
+> 1. **The pixel hit-test.** Those tests run in happy-dom, which has no layout, so "several
+>    x-offsets across the row" and "the handler spans the row's width" (AC1, AC6) are unproven in a
+>    browser. CR-CRU-018's close-out handed exactly this to this CR.
+> 2. **§S2 is not met.** `.app-cycle-line` has no pointer affordance (`public/styles.css`), so over
+>    98% of a clickable row still shows the default cursor. Only the 13 px glyph
+>    (`.app-cycle-toggle`) shows `pointer`. The CR-group row directly above uses `.app-lens-toggle`
+>    (pointer, no text selection, hover highlight), so the toggleable cycle line reuses that class
+>    rather than inventing a second one. A line with no toggle (the active section's open span,
+>    ruling (a)) stays plain.
+>
 ## Problem
 
 **User-reported 2026-09-18:** *"The cycle click to open the cycle in workflow including history is
