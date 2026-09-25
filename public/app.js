@@ -5189,9 +5189,14 @@
     // state to disagree with it. Nested affordances (`→ Runs`) keep their own
     // behaviour by `stopPropagation`. `null` = no toggle: the active section's
     // ruling (a) renders the active cycle's open span inline, always.
+    // Same CR, §S2 — the affordance is decided alongside the handler: a
+    // toggleable line also carries `.app-lens-toggle` (the CR-group row's
+    // pointer affordance); a line with no toggle does not.
     const CycleLine = (toggle, ...children) =>
       div(
-        toggle === null ? { class: "app-cycle-line" } : { class: "app-cycle-line", onclick: toggle },
+        toggle === null
+          ? { class: "app-cycle-line" }
+          : { class: "app-cycle-line app-lens-toggle", onclick: toggle },
         ...children,
       );
 
