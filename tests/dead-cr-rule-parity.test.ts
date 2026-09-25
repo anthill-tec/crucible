@@ -212,12 +212,19 @@ describe("the Wave Card judges deadness the same way as isDeadCr, not by lifecyc
   });
 
   test("a PENDING member whose lifecycle.state is VOID still gets NO row (the drop itself is unaffected by this rewrite)", () => {
+    // A LIVE sibling in the same wave, deliberately: under CR-CRU-147 ruling 5
+    // ("a wave with no live work draws no box") a wave holding ONLY this dead
+    // member would draw no box at all, and `waveOneRowIds` would throw
+    // "fixture bug: no wave box for wave 1" instead of exercising ruling 2's
+    // row-drop this test actually pins. The live sibling keeps the box drawn
+    // so the two rulings do not entangle.
+    const LIVE_SIBLING = entry("CR-B-LIVE", "PENDING");
     const DEAD_VOID = entry("CR-B-3", "PENDING", {
       lifecycle: { state: "VOID", reason: "duplicate", at: 1700000000000 },
     });
     expect(
-      waveOneRowIds([DEAD_VOID]),
-      "a VOID member is dead work under isDeadCr and must draw no row",
-    ).toEqual([]);
+      waveOneRowIds([LIVE_SIBLING, DEAD_VOID]),
+      "a VOID member is dead work under isDeadCr and must draw no row \u2014 only its live sibling should",
+    ).toEqual(["CR-B-LIVE"]);
   });
 });

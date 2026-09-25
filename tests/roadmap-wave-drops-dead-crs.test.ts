@@ -304,6 +304,66 @@ const RULING4_LOOSE_ENTRIES: QueueFixture[] = [RULING4_LOOSE_RUNNING, RULING4_LO
 
 const RULING4_ALL_ENTRIES: QueueFixture[] = [...RULING4_WAVE_ENTRIES, ...RULING4_LOOSE_ENTRIES];
 
+// ── Ruling 5 (2026-09-25, at C3) — a wave with NO live work draws NO box ────
+//
+// "When every member of a wave is dead and none is running, the Wave Card
+// draws no box for that wave (no header, no `0` count). Its CRs stay
+// visible, struck through, in the zone-3 table." (gap-analysis box, ruling
+// 5; §S1 AC3's own "A wave with no live work draws no box" clause.)
+//
+// Two SEPARATE waves, on their own board, deliberately: ruling 5 needs (a) a
+// wave whose every member is dead and none running (no box at all, not an
+// empty one), and (b) a wave holding exactly one RUNNING dead member and
+// nothing else, so the empty-box rule must not also swallow the one ruling 4
+// still requires drawn. Reusing WAVE_ONE or RULING4_WAVE would perturb every
+// count those boards already pin.
+
+const RULING5_ALL_DEAD_WAVE = "ruling5-all-dead";
+const RULING5_RUNNING_ONLY_WAVE = "ruling5-running-only";
+
+const ruling5Entry = (
+  cr: string,
+  wave: string,
+  status: QueueStatus,
+  seq: number,
+  extra: Partial<QueueFixture> = {},
+): QueueFixture => ({
+  cr,
+  title: `${cr} — ruling 5 fixture`,
+  wave,
+  dependsOn: [],
+  status,
+  seq,
+  release: RELEASE,
+  ...extra,
+});
+
+/** Every member of this wave is dead and NONE is running — one VOID, one
+ *  SUPERSEDED, both PENDING. Ruling 5's own case: the wave must draw no box
+ *  at all, not an empty one. */
+const RULING5_ALL_DEAD_ENTRIES: QueueFixture[] = [
+  ruling5Entry("CR-R5-VOID", RULING5_ALL_DEAD_WAVE, "PENDING", 600, {
+    lifecycle: { state: "VOID", reason: "the whole wave was abandoned", at: 1_700_000_000_000 },
+  }),
+  ruling5Entry("CR-R5-SUP", RULING5_ALL_DEAD_WAVE, "PENDING", 610, {
+    lifecycle: { state: "SUPERSEDED", by: "CR-R5-SUCCESSOR", at: 1_700_000_000_000 },
+  }),
+];
+const RULING5_ALL_DEAD_IDS = ["CR-R5-VOID", "CR-R5-SUP"];
+
+/** A wave with exactly ONE member — running and dead. Ruling 4 beats ruling
+ *  5: it still draws its box, alone, even with no live member beside it. */
+const RULING5_RUNNING_ONLY_ENTRIES: QueueFixture[] = [
+  ruling5Entry("CR-R5-RUN", RULING5_RUNNING_ONLY_WAVE, "IN_PROGRESS", 620, {
+    lifecycle: { state: "VOID", reason: "voided after the plan was already opened", at: 1_700_000_000_000 },
+  }),
+];
+
+const RULING5_ALL_ENTRIES: QueueFixture[] = [
+  ...RULING5_ALL_DEAD_ENTRIES,
+  ...RULING5_RUNNING_ONLY_ENTRIES,
+];
+
 // ═════════════════════════════════════════════════════════════════════════
 // PURE SECTION — `focusedReleaseView` called directly, no DOM.
 // ═════════════════════════════════════════════════════════════════════════
@@ -489,6 +549,44 @@ describe("ruling 4 — a RUNNING dead CR stays drawn and counted; a non-running 
           `would be asserting the wrong thing`,
       ).not.toBe("IN_PROGRESS");
     }
+  });
+});
+
+function ruling5View(): { waves: WaveBoxLike[]; members: QueueFixture[] } {
+  return Logic.focusedReleaseView(PROPOSED, [], RULING5_ALL_ENTRIES);
+}
+
+describe("ruling 5 — a wave with no live work draws no box; ruling 4 still draws one for a running-only wave (pure view)", () => {
+  test("a wave whose every member is dead and none running has NO box in view.waves", () => {
+    const view = ruling5View();
+    const waveLabels = view.waves.map((box) => box.wave);
+    expect(
+      waveLabels,
+      `view.waves must not contain a box for "${RULING5_ALL_DEAD_WAVE}" — every member is dead ` +
+        `and none is running, so ruling 5 draws no box at all (got: ${JSON.stringify(waveLabels)})`,
+    ).not.toContain(RULING5_ALL_DEAD_WAVE);
+  });
+
+  test("the all-dead wave's members still appear in view.members for zone 3's table", () => {
+    const view = ruling5View();
+    const memberIds = view.members.map((member) => member.cr);
+    for (const dead of RULING5_ALL_DEAD_IDS) {
+      expect(
+        memberIds,
+        `view.members must still name ${dead} — ruling 5 removes the BOX, never the record`,
+      ).toContain(dead);
+    }
+  });
+
+  test("a wave holding ONE running dead member and nothing else still draws its box (ruling 4 beats ruling 5)", () => {
+    const view = ruling5View();
+    const box = view.waves.find((candidate) => candidate.wave === RULING5_RUNNING_ONLY_WAVE);
+    expect(
+      box,
+      `expected a box for "${RULING5_RUNNING_ONLY_WAVE}" — its one member is IN_PROGRESS, and ` +
+        `ruling 4 keeps a running dead member's wave drawn even with no live member beside it`,
+    ).not.toBeUndefined();
+    expect(box?.entries.map((entry) => entry.cr)).toEqual(["CR-R5-RUN"]);
   });
 });
 
@@ -795,5 +893,52 @@ describe("ruling 4 — the rendered Wave Card keeps a running dead CR drawn and 
       rowCrsRuling4,
       "CR-R-VOID is PENDING and non-running — it must not be drawn",
     ).not.toContain("CR-R-VOID");
+  });
+});
+
+describe("ruling 5 — the rendered Wave Card draws no box for an all-dead wave; ruling 4 still draws one for a running-only wave (real DOM)", () => {
+  test("the all-dead wave renders no [data-testid=\"roadmap-wave\"] element at all — no header, no `0` count", async () => {
+    await mountApp({
+      key: "wave-ruling5-no-box",
+      releases: [],
+      proposals: [
+        {
+          label: RELEASE,
+          targetAt: TARGET_040,
+          timestamp: 1_787_000_000,
+          waves: [RULING5_ALL_DEAD_WAVE, RULING5_RUNNING_ONLY_WAVE],
+        },
+      ],
+      queue: RULING5_ALL_ENTRIES,
+    });
+    expect(
+      waveNames(),
+      `no [data-testid="roadmap-wave"] element may carry data-wave="${RULING5_ALL_DEAD_WAVE}" — every ` +
+        `member is dead and none is running (rendered waves: ${JSON.stringify(waveNames())})`,
+    ).not.toContain(RULING5_ALL_DEAD_WAVE);
+  });
+
+  test("a wave with ONE running dead member and nothing else still renders its own box (ruling 4 beats ruling 5)", async () => {
+    await mountApp({
+      key: "wave-ruling5-running-only",
+      releases: [],
+      proposals: [
+        {
+          label: RELEASE,
+          targetAt: TARGET_040,
+          timestamp: 1_787_000_000,
+          waves: [RULING5_ALL_DEAD_WAVE, RULING5_RUNNING_ONLY_WAVE],
+        },
+      ],
+      queue: RULING5_ALL_ENTRIES,
+    });
+    expect(
+      waveEl(RULING5_RUNNING_ONLY_WAVE).getAttribute("data-cr-count"),
+      "the running-only wave's box holds one member (its running dead one) — data-cr-count must read 1",
+    ).toBe("1");
+    expect(
+      rowCrs(RULING5_RUNNING_ONLY_WAVE),
+      "CR-R5-RUN is IN_PROGRESS — ruling 4 keeps it drawn as the box's own row",
+    ).toContain("CR-R5-RUN");
   });
 });

@@ -607,18 +607,22 @@ describe("CR-CRU-078 §S4/AC9 — the in-flight release draws Start → wave con
     expect(gate!.getAttribute("data-version")).toBe("0.2.0");
     expect(gate!.getAttribute("data-kind")).toBe("proposed");
 
-    expect(waveNames()).toEqual(["5", "6"]);
+    expect(waveNames(), "CR-CRU-147 ruling 5: wave 6 holds only dead, non-running members, so it draws no box at all").toEqual(["5"]);
     // AC9 — authored order INSIDE the container: CR-E was authored before
     // CR-D even though CR-E depends on CR-D.
     expect(nodesInWave("5")).toEqual(["CR-E", "CR-D"]);
-    // CR-CRU-096 §S5/AC9a — wave 6 holds CR-F (SUPERSEDED) and CR-G (VOID).
-    // A `PENDING` row carrying a disposition is not work, so it gets NO row
-    // here at all. Nothing is lost: the box still STATES both members (AC3)
-    // and zone 3 still carries the dispositions, which is where that axis
-    // lives now.
-    expect(nodesInWave("6")).toEqual([]);
-    const waveSix = waveEls().find((w) => w.getAttribute("data-wave") === "6");
-    expect(waveSix!.getAttribute("data-cr-count")).toBe("2");
+    // CR-CRU-147 §S1 AC3, ruling 5 (2026-09-25, C3) — wave 6 holds ONLY CR-F
+    // (SUPERSEDED) and CR-G (VOID), both PENDING and neither running: every
+    // member of the wave is dead, so the Wave Card draws NO box for it at
+    // all — no header, no roadmap-wave element, no `0`/`2` count. This
+    // SUPERSEDES this test's earlier CR-CRU-096 §S5/AC9a reading, which had
+    // wave 6 still drawing an empty box that STATED both members. Nothing is
+    // lost: zone 3's table still carries both CRs, struck through, with
+    // their lifecycle badges.
+    expect(
+      waveEls().find((w) => w.getAttribute("data-wave") === "6"),
+      "wave 6 must render no roadmap-wave box — CR-F and CR-G are both dead and neither is running",
+    ).toBeUndefined();
     expect(lifecycleEl(rowFor("CR-F"))).not.toBeNull();
     expect(lifecycleEl(rowFor("CR-G"))).not.toBeNull();
   });
