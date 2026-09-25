@@ -86,3 +86,67 @@ Step(
     await expect(badge).toHaveText(status, { timeout: seconds * 1_000 });
   },
 );
+
+// CR-CRU-147 \u00a7S2 (cycle 526, C4) \u2014 the REAL disposition write, through the
+// route \u00a7S1's own server tests already drive (`POST
+// \u2026/queue/<cr>/void`, `src/v2.ts` `handleCrLifecycle`). Reuses the
+// orchestrator identity the queue-registration step above already opened
+// (`world.orchestratorId`), the same caller CR-092/147 requires
+// (`requireOrchestrator`).
+Step(
+  "cr {string} is voided with reason {string}",
+  async ({ request, world }, cr: string, reason: string) => {
+    const projectKey = world.projectKey as string;
+    const orchestratorId = world.orchestratorId as string;
+    const res = await request.post(
+      `/api/v2/projects/${projectKey}/queue/${cr}/void`,
+      { data: { agentId: orchestratorId, reason } },
+    );
+    expect(res.ok()).toBe(true);
+  },
+);
+
+// CR-CRU-147 \u00a7S2 AC3 \u2014 reachability, both input modes. The badge locator
+// matches EITHER the desktop table row or the phone-band card (\u00a7S2 is one
+// contract, two DOM shapes \u2014 `public/app.js`'s `RoadmapRow` renders the same
+// status badge testid in `card` mode, `ROADMAP_CARD_FIELD_TESTIDS` wraps it),
+// so the SAME steps drive both roadmap.feature (desktop hover) and
+// mobile-viewport-responsive.feature (phone tap).
+function statusBadgeLocator(page: import("@playwright/test").Page, cr: string) {
+  return page.locator(
+    `[data-testid="roadmap-row"][data-cr="${cr}"] [data-testid="roadmap-status-badge"], ` +
+      `[data-testid="roadmap-cr-card"][data-cr="${cr}"] [data-testid="roadmap-status-badge"]`,
+  );
+}
+
+Step("I hover the status badge for {string}", async ({ page }, cr: string) => {
+  await statusBadgeLocator(page, cr).hover();
+});
+
+Step("I tap the status badge for {string}", async ({ page }, cr: string) => {
+  await statusBadgeLocator(page, cr).tap();
+});
+
+// The tooltip's OWN visibility is the behavioural proof \u00a7S2 asks for \u2014 not
+// merely present in the DOM (a static assertion a `display:none` bubble would
+// still satisfy), but actually shown after the hover/tap that opened it, and
+// carrying the untruncated reason text (\u00a7S2: "the full reason, wrapped").
+Step(
+  "its lifecycle tooltip states the reason {string}",
+  async ({ page }, reason: string) => {
+    const tooltip = page.getByTestId("roadmap-status-tooltip");
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText(reason);
+  },
+);
+
+// AC1/AC3 negative half \u2014 before any hover/tap, the tooltip is not shown, so
+// the positive assertion above is proven to be caused by the interaction and
+// not by an always-visible bubble.
+Step(
+  "the status badge for {string} shows no lifecycle tooltip yet",
+  async ({ page }, cr: string) => {
+    void cr;
+    await expect(page.getByTestId("roadmap-status-tooltip")).toHaveCount(0);
+  },
+);

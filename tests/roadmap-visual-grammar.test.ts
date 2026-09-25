@@ -1920,7 +1920,7 @@ describe("AC22 — each state renders its declared colour", () => {
     }
   });
 
-  test("SUPERSEDED and VOID render distinguishably from each other on zone 3's row; the loose group draws neither as a node (CR-CRU-147 ruling 2)", async () => {
+  test("SUPERSEDED and VOID render distinguishably from each other on zone 3's STATUS badge; the loose group draws neither as a node (CR-CRU-147 \u00a7S2, cycle 526 C4 \u2014 supersedes this file's own earlier `roadmap-lifecycle-badge` reading)", async () => {
     // CR-CRU-096 AC9b used to have the node's disposition badge survive
     // AC9a's trim wherever a node still renders, including the AC18a loose
     // group, the untrimmed group. CR-CRU-147 \u00a7S1 AC3, ruling 2 (2026-09-25)
@@ -1930,11 +1930,37 @@ describe("AC22 — each state renders its declared colour", () => {
     // this board no longer has ANY node carrying either disposition \u2014
     // "distinguishably rendered" is provable only on the one surface left
     // that still draws them: zone 3's row.
-    const rows = await measureAll('[data-testid="roadmap-lifecycle-badge"]');
-    expect(rows.length).toBe(2);
+    //
+    // CR-CRU-147 \u00a7S2 (cycle 526, C4) RETIRES the separate
+    // `roadmap-lifecycle-badge` this test used to read here: the reason moves
+    // to a tooltip and the STATUS cell itself now NAMES the lifecycle state
+    // (never `PENDING`), carrying its own `data-lifecycle` attribute \u2014 so
+    // the axis is read off `roadmap-status-badge[data-lifecycle]` instead,
+    // and pinned to the EXACT words \u00a7S2's own AC names rather than merely
+    // "distinguishable".
+    const rows = await measureAll('[data-testid="roadmap-status-badge"][data-lifecycle]');
     expect(
-      new Set(rows.map((b) => `${b.color}|${b.text}`)).size,
-      "the two lifecycle states render identically on zone 3's row",
+      rows.length,
+      "exactly the two dead rows carry a status badge with data-lifecycle",
+    ).toBe(2);
+    const superseded = rows.find((b) => b.text.startsWith("SUPERSEDED"));
+    const dead = rows.find((b) => b.text === "VOID");
+    expect(
+      superseded,
+      `no SUPERSEDED status badge (have: ${rows.map((r) => r.text).join(" | ")})`,
+    ).toBeDefined();
+    expect(
+      dead,
+      `no VOID status badge (have: ${rows.map((r) => r.text).join(" | ")})`,
+    ).toBeDefined();
+    expect(
+      superseded!.text,
+      "078 AC27: a superseded row names its successor",
+    ).toBe("SUPERSEDED \u2192 CR-V-LIVE");
+    expect(dead!.text).toBe("VOID");
+    expect(
+      new Set(rows.map((b) => b.color)).size,
+      "VOID and SUPERSEDED render the same colour on zone 3's status badge",
     ).toBe(2);
     // This board's waves are all declared, so every box is TRIMMED and draws
     // no dispositioned row \u2014 hence no node badge on THIS board (AC9a).
@@ -2054,7 +2080,7 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     }
   });
 
-  test("the LIFECYCLE axis survives the strip on zone 3's row; the loose group draws no node badge at all (CR-CRU-147 ruling 2)", async () => {
+  test("the LIFECYCLE axis survives the strip on zone 3's STATUS badge; the loose group draws no node badge at all (CR-CRU-147 \u00a7S2, cycle 526 C4 \u2014 supersedes this file's own earlier `roadmap-lifecycle-badge` reading)", async () => {
     // CR-CRU-096 AC9b used to have the AC18a loose board (the untrimmed
     // group) still draw a NODE for a dispositioned member, so its badge
     // survived the strip too. CR-CRU-147 \u00a7S1 AC3, ruling 2 (2026-09-25)
@@ -2063,6 +2089,11 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     // node here \u2014 the node surface carries nothing to strip any more, and
     // the axis's survival under the strip is provable only on zone 3's row,
     // which \u00a7S8 still forbids reducing to `data-lifecycle` alone.
+    //
+    // CR-CRU-147 \u00a7S2 (cycle 526, C4) RETIRES the separate
+    // `roadmap-lifecycle-badge` this test used to read here: the STATUS
+    // badge itself now names the lifecycle state (never `PENDING`), so with
+    // colour stripped the words on THAT badge are what still must survive.
     await looseBoardStripped();
     const raw = await pageEl().evaluate(
       `(() => {
@@ -2073,7 +2104,7 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
          }));
          return {
            nodes: grab('[data-testid="roadmap-node-lifecycle"]'),
-           rows: grab('[data-testid="roadmap-lifecycle-badge"]'),
+           rows: grab('[data-testid="roadmap-status-badge"][data-lifecycle]'),
          };
        })()`,
     );
@@ -2088,10 +2119,10 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     expect(seen.rows.length).toBe(2);
     const superseded = seen.rows.find((e) => e.state === "SUPERSEDED");
     const dead = seen.rows.find((e) => e.state === "VOID");
-    expect(superseded, "no SUPERSEDED marker").toBeDefined();
-    expect(dead, "no VOID marker").toBeDefined();
-    expect(superseded!.text.toLowerCase()).toContain("superseded");
-    expect(dead!.text.toLowerCase()).toContain("void");
+    expect(superseded, "no SUPERSEDED status badge").toBeDefined();
+    expect(dead, "no VOID status badge").toBeDefined();
+    expect(superseded!.text).toBe("SUPERSEDED \u2192 CR-V-LIVE");
+    expect(dead!.text).toBe("VOID");
     expect(superseded!.text).not.toBe(dead!.text);
   });
 

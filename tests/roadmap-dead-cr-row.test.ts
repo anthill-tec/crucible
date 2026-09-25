@@ -1,0 +1,501 @@
+// CR-CRU-147 §S2 (cycle 526, C4) — a dead CR's roadmap TABLE ROW shows it dead:
+// the grid is kept, the STATUS cell names the state, the reason moves into a
+// tooltip on the status badge.
+//
+// Spec: docs/changes/CR-CRU-147-a-voided-cr-is-not-queued-work.md
+//       §S2 ("The row keeps the table's grid" / "The STATUS cell names the
+//       state" / "The reason is a tooltip") and its four §S2 ACs.
+// Storyboard: .lavish/crucible-v2-design.html, F17 (APPROVED 2026-09-24) —
+//       the row has the SAME six cells as a live row (id, title, points,
+//       depends-on, status[, track/wave when the region carries them]); the
+//       id, title and points are struck through and dimmed; the depends-on
+//       chips fade; the STATUS cell reads `VOID` or `SUPERSEDED → <successor>`
+//       and nothing is added to the row.
+//
+// SCOPE — the RENDERED DOM only (structural contract: which elements exist,
+// which classes and attributes they carry, what text the STATUS cell states).
+// Real computed style (actual `text-decoration: line-through`) and geometry
+// (no column overflow, no horizontal scrollbar) need a layout engine happy-dom
+// does not have — tests/roadmap-visual-grammar.test.ts already establishes
+// the pattern of splitting that half into real Chromium, and this CR's own
+// geometry AC is asserted there / in the e2e suite instead. Tooltip
+// reachability by hover (desktop) and tap (phone) is likewise e2e-only: a
+// static DOM has no pointer.
+//
+// CONTRACT THIS FILE PINS (not yet built — every assertion below is RED
+// against current production):
+//   • the row's id/title cells (`[data-column="cr"]`/`[data-column="title"]`)
+//     and its points span (`[data-testid="roadmap-points"]`) each carry a
+//     `dead` class when the entry carries a `lifecycle`, and never otherwise;
+//   • each depends-on chip (`[data-testid="roadmap-depends-chip"]`) carries a
+//     `faded` class under the same condition;
+//   • the row's separate `[data-testid="roadmap-lifecycle-badge"]` (the OLD
+//     surface that used to carry the reason inline) is GONE — the reason
+//     never renders as row text again;
+//   • the existing `[data-testid="roadmap-status-badge"]` gains a
+//     `data-lifecycle` attribute and reads `VOID` / `SUPERSEDED → <successor>`
+//     (never `PENDING`) when the entry is dead, with `PENDING`'s own
+//     `.pending` class token removed;
+//   • the badge is linked, via `aria-describedby`, to a
+//     `[data-testid="roadmap-status-tooltip"][role="tooltip"]` element that
+//     states the lifecycle state and the full, untruncated reason.
+//
+// ESCALATION (documented, not guessed): §S2's own scope text asks the tooltip
+// to read "state · date · who, then the full reason". `QueueLifecycle`
+// (`src/types.ts:416`) carries `state`, `by` (the SUPERSEDED successor only),
+// `reason` and `at` — there is no author/"who voided this" field on the wire
+// at all, for either state. F17's mock names a person ("vidushi") in that
+// slot, but nothing in this CR's own scope (§S1/§S2/§S3) adds an authoring
+// field to `QueueLifecycle`, and the gap-analysis box does not address it.
+// This file does NOT invent a source for "who" — it pins what the schema
+// actually carries (state, the reason verbatim, and — for SUPERSEDED — the
+// successor `by`) and leaves the "who" segment's exact source/format for the
+// GREEN implementer to resolve against the CR author, flagged here rather
+// than asserted on a guess.
+import { describe, test, expect, afterEach } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { settleDom } from "./helpers/dom-settle";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const VAN_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
+  "utf8",
+);
+const VAN_X_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
+  "utf8",
+);
+const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
+const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+
+// ── Fixture types (the wire shapes, `tests/roadmap-wave-drops-dead-crs.test.ts`
+//    verbatim) ────────────────────────────────────────────────────────────
+
+type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
+
+interface LifecycleFixture {
+  state: "SUPERSEDED" | "VOID";
+  by?: string;
+  reason?: string;
+  at: number;
+}
+
+interface QueueFixture {
+  cr: string;
+  title: string;
+  wave: string;
+  dependsOn: string[];
+  status: QueueStatus;
+  points?: number;
+  seq: number;
+  release: string;
+  lifecycle?: LifecycleFixture;
+}
+
+// ── AC29 (CR-CRU-096 convention) — every id below is synthetic (`CR-DR-*`):
+//    this file's assertions do not depend on the shape of this project's own
+//    backlog ─────────────────────────────────────────────────────────────
+
+const RELEASE = "0.9.0";
+const TARGET_AT = 1790500000;
+const WAVE = "9";
+
+/** 2026-09-24T00:00:00Z, epoch MILLISECONDS — `QueueLifecycle.at`'s own unit
+ *  (`src/types.ts:411`). Not asserted byte-exact below (see the file-header
+ *  ESCALATION on date FORMAT), only that the tooltip carries the state and
+ *  the reason. */
+const RETIRED_AT = Date.UTC(2026, 8, 24);
+
+const VOID_REASON =
+  "Voided at gap analysis 2026-09-24 (user ruling): the surface it targeted " +
+  "was retired and the repo went public, so the CI run it guarded is free now.";
+const SUPERSEDED_REASON = "Rolled into the broader rewrite CR-DR-SUCC delivers instead.";
+
+/** The one board every test in this file reuses: one LIVE row (AC4's own
+ *  regression guard), one VOID row and one SUPERSEDED row, all in the SAME
+ *  wave so `roadmapTableColumns` (`public/app-logic.mjs:1269`) computes the
+ *  SAME column set for all three — the base four (`cr, title, deps, status`),
+ *  with neither `wave` nor `track` (a single wave, no track declared), so the
+ *  "same cells, same columns" claim is provable without a column-set filter
+ *  getting in the way. */
+const QUEUE: QueueFixture[] = [
+  {
+    cr: "CR-DR-LIVE",
+    title: "CR-DR-LIVE — a scheduled row, unaffected",
+    wave: WAVE,
+    dependsOn: [],
+    status: "PENDING",
+    points: 5,
+    seq: 10,
+    release: RELEASE,
+  },
+  {
+    cr: "CR-DR-VOID",
+    title: "CR-DR-VOID — abandoned outright",
+    wave: WAVE,
+    dependsOn: ["CR-DR-LIVE"],
+    status: "PENDING",
+    points: 3,
+    seq: 20,
+    release: RELEASE,
+    lifecycle: { state: "VOID", reason: VOID_REASON, at: RETIRED_AT },
+  },
+  {
+    cr: "CR-DR-SUP",
+    title: "CR-DR-SUP — the work moved elsewhere",
+    wave: WAVE,
+    dependsOn: [],
+    status: "PENDING",
+    points: 8,
+    seq: 30,
+    release: RELEASE,
+    lifecycle: { state: "SUPERSEDED", by: "CR-DR-SUCC", reason: SUPERSEDED_REASON, at: RETIRED_AT },
+  },
+];
+
+// A snapshot of the fixture's OWN `status` values, taken before mounting —
+// AC2/Risk's own guard: "the queue's `status` field stays derived… the change
+// is to the cell, not the data." Mutating the fixture in place would make
+// this comparison vacuous, so the check re-reads `QUEUE` itself after mount.
+const STATUS_BEFORE_MOUNT = new Map(QUEUE.map((e) => [e.cr, e.status]));
+
+// ── Harness (`tests/roadmap-bare-dependency-annotation.test.ts` pattern) ───
+
+const TRACK_W = 800;
+const PITCH = 100;
+
+function rect(left: number, width: number): DOMRect {
+  const box = {
+    x: left,
+    y: 0,
+    left,
+    right: left + width,
+    top: 0,
+    bottom: 0,
+    width,
+    height: 0,
+    toJSON: () => box,
+  };
+  return box as unknown as DOMRect;
+}
+
+function installLayout(): void {
+  const proto = globalThis.Element.prototype as unknown as {
+    getBoundingClientRect: (this: Element) => DOMRect;
+  };
+  proto.getBoundingClientRect = function measured(this: Element): DOMRect {
+    const testid = this.getAttribute("data-testid") ?? "";
+    if (testid === "roadmap-strip-track") return rect(0, TRACK_W);
+    if (testid === "roadmap-strip-ruler") return rect(0, PITCH);
+    return rect(0, 0);
+  };
+}
+
+let cacheBust = 0;
+
+async function mountApp(): Promise<void> {
+  const key = "dead-cr-row-key";
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await GlobalRegistrator.register({ url: `http://localhost/p/${key}/roadmap` });
+  document.body.innerHTML = '<div id="app"></div>';
+  installLayout();
+
+  const okResponse = (body: unknown): Response =>
+    ({ ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) }) as
+      unknown as Response;
+
+  const scriptedFetch = async (url: string): Promise<Response> => {
+    if (/\/api\/v2\/projects\/[^/?]+\/release-proposals/.test(url)) {
+      return okResponse({
+        ok: true,
+        proposals: [{ label: RELEASE, targetAt: TARGET_AT, timestamp: 1_787_000_000, waves: [WAVE] }],
+        totalCount: 1,
+      });
+    }
+    if (/\/api\/v2\/projects\/[^/?]+\/releases/.test(url)) {
+      return okResponse({ ok: true, releases: [] });
+    }
+    if (/\/api\/v2\/projects\/[^/?]+\/queue/.test(url)) {
+      return okResponse({ ok: true, entries: QUEUE });
+    }
+    if (/\/api\/v2\/projects\/[^/?]+\/plans/.test(url)) {
+      return okResponse({ ok: true, plans: [] });
+    }
+    if (/\/api\/v2\/plans(?:\?|$)/.test(url)) return okResponse({ ok: true, plans: [] });
+    if (url.includes("/api/v2/projects")) {
+      return okResponse({
+        ok: true,
+        projects: [
+          {
+            key,
+            name: key,
+            type: "backend",
+            agentsOnline: 0,
+            agentsTotal: 0,
+            active: true,
+            lastActivity: Date.now(),
+          },
+        ],
+      });
+    }
+    if (url.includes("/api/v2/agents")) return okResponse({ ok: true, agents: [] });
+    if (url.includes("/api/v2/events")) return okResponse({ ok: true, events: [] });
+    if (url.includes("/api/v2/health")) {
+      return okResponse({ ok: true, version: "2.0.0-test", counts: { events: 0 } });
+    }
+    throw new Error(`roadmap-dead-cr-row.test.ts mountApp: unexpected fetch url ${url}`);
+  };
+  const scriptedGlobals = globalThis as unknown as { fetch: typeof fetch };
+  scriptedGlobals.fetch = scriptedFetch as unknown as typeof fetch;
+
+  (0, eval)(VAN_SRC);
+  (0, eval)(VAN_X_SRC);
+
+  cacheBust += 1;
+  await import(`${APP_LOGIC_PATH}?deadCrRow=${cacheBust}`);
+
+  (0, eval)(APP_JS_SRC);
+
+  await settle();
+}
+
+async function settle(ticks = 8): Promise<void> {
+  await settleDom({ ticks });
+}
+
+afterEach(async () => {
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+});
+
+// ── DOM readers ────────────────────────────────────────────────────────────
+
+const all = (selector: string): HTMLElement[] =>
+  Array.from(document.querySelectorAll<HTMLElement>(selector));
+
+const norm = (text: string | null | undefined): string =>
+  (text ?? "").replace(/\s+/g, " ").trim();
+
+const rowFor = (cr: string): HTMLElement => {
+  const row = all('[data-testid="roadmap-row"]').find((r) => r.getAttribute("data-cr") === cr);
+  if (row === undefined) throw new Error(`no table row rendered for ${cr}`);
+  return row;
+};
+
+const columnsOf = (row: HTMLElement): string[] =>
+  Array.from(row.querySelectorAll<HTMLElement>("[data-column]")).map(
+    (el) => el.getAttribute("data-column") ?? "",
+  );
+
+const statusBadgeOf = (cr: string): HTMLElement => {
+  const badge = rowFor(cr).querySelector<HTMLElement>('[data-testid="roadmap-status-badge"]');
+  if (badge === null) throw new Error(`${cr}'s row renders no [data-testid="roadmap-status-badge"]`);
+  return badge;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AC1 (+AC4) — the row keeps the table's grid; a dead row marks itself dead
+// and never leaks its reason into the row; a live row is untouched
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("CR-CRU-147 §S2 AC1/AC4 (cycle 526, C4) — the dead row's grid, and the live row beside it", () => {
+  test("a VOID and a SUPERSEDED row render the SAME columns as the live row, mark their id/title/points dead and their deps faded, and never render the reason as row text", async () => {
+    await mountApp();
+
+    const live = rowFor("CR-DR-LIVE");
+    const void_ = rowFor("CR-DR-VOID");
+    const sup = rowFor("CR-DR-SUP");
+
+    // "The row has the same cells, in the same columns, as a live row."
+    const liveColumns = columnsOf(live);
+    expect(liveColumns, "the fixture's own base column set").toEqual([
+      "cr",
+      "title",
+      "deps",
+      "status",
+    ]);
+    expect(columnsOf(void_), "the VOID row must carry the same columns as the live row").toEqual(
+      liveColumns,
+    );
+    expect(columnsOf(sup), "the SUPERSEDED row must carry the same columns as the live row").toEqual(
+      liveColumns,
+    );
+
+    // "Nothing is added to the row" — the OLD separate lifecycle badge, whose
+    // text used to carry the whole reason inline, is retired by §S2.
+    for (const row of [void_, sup]) {
+      expect(
+        row.querySelector('[data-testid="roadmap-lifecycle-badge"]'),
+        `${row.getAttribute("data-cr")} still renders the old [data-testid="roadmap-lifecycle-badge"]`,
+      ).toBeNull();
+    }
+
+    // The reason never renders as row text — it belongs in the tooltip only
+    // (AC3, asserted structurally below).
+    expect(norm(void_.textContent)).not.toContain(VOID_REASON);
+    expect(norm(sup.textContent)).not.toContain(SUPERSEDED_REASON);
+
+    // "The id, title and points are struck through" and "the depends-on
+    // chips fade" — the `dead`/`faded` class contract this file's header
+    // documents.
+    for (const [row, label] of [
+      [void_, "VOID"],
+      [sup, "SUPERSEDED"],
+    ] as const) {
+      const cr = row.querySelector<HTMLElement>('[data-column="cr"]');
+      const title = row.querySelector<HTMLElement>('[data-column="title"]');
+      const points = row.querySelector<HTMLElement>('[data-testid="roadmap-points"]');
+      expect(cr, `${label} row renders no id cell`).not.toBeNull();
+      expect(title, `${label} row renders no title cell`).not.toBeNull();
+      expect(points, `${label} row renders no points span`).not.toBeNull();
+      expect(cr!.classList.contains("dead"), `${label} row's id cell carries no "dead" class`).toBe(
+        true,
+      );
+      expect(
+        title!.classList.contains("dead"),
+        `${label} row's title cell carries no "dead" class`,
+      ).toBe(true);
+      expect(
+        points!.classList.contains("dead"),
+        `${label} row's points span carries no "dead" class`,
+      ).toBe(true);
+    }
+    const voidChip = void_.querySelector<HTMLElement>('[data-testid="roadmap-depends-chip"]');
+    expect(voidChip, "CR-DR-VOID declares one dependency and must render its chip").not.toBeNull();
+    expect(voidChip!.classList.contains("faded"), "the VOID row's depends-on chip is not faded").toBe(
+      true,
+    );
+
+    // AC4 — the LIVE row is untouched: same cells, no strikethrough marker,
+    // no default lifecycle attribute.
+    expect(live.hasAttribute("data-lifecycle"), "the live row must carry no data-lifecycle").toBe(
+      false,
+    );
+    const liveCr = live.querySelector<HTMLElement>('[data-column="cr"]');
+    const liveTitle = live.querySelector<HTMLElement>('[data-column="title"]');
+    const livePoints = live.querySelector<HTMLElement>('[data-testid="roadmap-points"]');
+    expect(liveCr!.classList.contains("dead"), "the live row's id cell must not be marked dead").toBe(
+      false,
+    );
+    expect(
+      liveTitle!.classList.contains("dead"),
+      "the live row's title cell must not be marked dead",
+    ).toBe(false);
+    expect(
+      livePoints!.classList.contains("dead"),
+      "the live row's points span must not be marked dead",
+    ).toBe(false);
+    expect(
+      live.querySelector('[data-testid="roadmap-status-tooltip"]'),
+      "the live row must render no status tooltip",
+    ).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AC2 — the STATUS cell names the lifecycle state, never PENDING; the
+// entry's own `status` field stays derived (display only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("CR-CRU-147 §S2 AC2 (cycle 526, C4) — the STATUS cell, and the untouched data beneath it", () => {
+  test("VOID reads `VOID`, SUPERSEDED reads `SUPERSEDED → <successor>`, and the row is never marked PENDING while dead", async () => {
+    await mountApp();
+
+    const voidBadge = statusBadgeOf("CR-DR-VOID");
+    const supBadge = statusBadgeOf("CR-DR-SUP");
+    const liveBadge = statusBadgeOf("CR-DR-LIVE");
+
+    expect(norm(voidBadge.textContent), "the VOID row's STATUS cell").toBe("VOID");
+    expect(
+      norm(supBadge.textContent),
+      "the SUPERSEDED row's STATUS cell (078 AC27: names its successor)",
+    ).toBe("SUPERSEDED → CR-DR-SUCC");
+
+    // "never PENDING" — the badge's own `pending` class token, which
+    // `entry.status.toLowerCase()` gives every PENDING row today, must not
+    // survive on a dead one; the badge instead names the lifecycle.
+    expect(voidBadge.classList.contains("pending"), "VOID row's badge still reads pending").toBe(
+      false,
+    );
+    expect(supBadge.classList.contains("pending"), "SUPERSEDED row's badge still reads pending").toBe(
+      false,
+    );
+    expect(voidBadge.getAttribute("data-lifecycle")).toBe("VOID");
+    expect(supBadge.getAttribute("data-lifecycle")).toBe("SUPERSEDED");
+
+    // The live row's own badge is unaffected.
+    expect(norm(liveBadge.textContent)).toBe("PENDING");
+    expect(liveBadge.hasAttribute("data-lifecycle")).toBe(false);
+
+    // "The queue read's `status` for the same CR is still the derived value:
+    // the change is to the cell, not the data." — the fixture object itself
+    // (what the mocked `GET …/queue` served) must be unmutated by the render.
+    expect(STATUS_BEFORE_MOUNT.get("CR-DR-VOID")).toBe("PENDING");
+    expect(STATUS_BEFORE_MOUNT.get("CR-DR-SUP")).toBe("PENDING");
+    expect(QUEUE.find((e) => e.cr === "CR-DR-VOID")!.status, "the stored status must stay derived").toBe(
+      "PENDING",
+    );
+    expect(QUEUE.find((e) => e.cr === "CR-DR-SUP")!.status, "the stored status must stay derived").toBe(
+      "PENDING",
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AC3 (unit half) — the reason lives in a tooltip on the status badge,
+// reachable via aria-describedby; e2e half (hover/tap reachability) lives in
+// tests/e2e/features/roadmap.feature and mobile-viewport-responsive.feature
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("CR-CRU-147 §S2 AC3 (cycle 526, C4) — the reason is the status badge's tooltip", () => {
+  test("the VOID and SUPERSEDED badges are described by a role=tooltip element carrying the state and the full, untruncated reason", async () => {
+    await mountApp();
+
+    for (const [cr, state, reason] of [
+      ["CR-DR-VOID", "VOID", VOID_REASON],
+      ["CR-DR-SUP", "SUPERSEDED", SUPERSEDED_REASON],
+    ] as const) {
+      const badge = statusBadgeOf(cr);
+      const describedBy = badge.getAttribute("aria-describedby");
+      expect(
+        describedBy,
+        `${cr}'s status badge carries no aria-describedby — the reason is not linked to it`,
+      ).not.toBeNull();
+      expect(describedBy, `${cr}'s aria-describedby is empty`).not.toBe("");
+
+      const tooltip = document.getElementById(describedBy!);
+      expect(tooltip, `${cr}: aria-describedby="${describedBy}" points at no element`).not.toBeNull();
+      expect(
+        tooltip!.getAttribute("data-testid"),
+        `${cr}'s tooltip carries the wrong data-testid`,
+      ).toBe("roadmap-status-tooltip");
+      expect(tooltip!.getAttribute("role"), `${cr}'s tooltip carries no role="tooltip"`).toBe(
+        "tooltip",
+      );
+
+      const text = norm(tooltip!.textContent);
+      expect(text.startsWith(state), `${cr}'s tooltip does not open with its own state "${state}"`).toBe(
+        true,
+      );
+      expect(
+        text.includes(reason),
+        `${cr}'s tooltip does not carry the full reason verbatim (got: "${text}")`,
+      ).toBe(true);
+
+      // The reason must not be a TRUNCATED prefix — "the full reason,
+      // wrapped" (§S2), never clipped.
+      expect(text.length).toBeGreaterThanOrEqual(reason.length);
+    }
+
+    // The successor is named on the badge itself (AC2/078 AC27); the tooltip
+    // is not required to repeat it, but must not OMIT the lifecycle state it
+    // opens with — already asserted above via `startsWith`.
+    const liveBadge = statusBadgeOf("CR-DR-LIVE");
+    expect(
+      liveBadge.hasAttribute("aria-describedby"),
+      "the live row's badge must carry no aria-describedby — it has no lifecycle reason to point at",
+    ).toBe(false);
+  });
+});
