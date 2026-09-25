@@ -3074,9 +3074,12 @@
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
       // The dead row's reason is the status badge's tooltip and never row
       // text: one bubble per dead entry, rendered BESIDE the row rather than in
-      // it (so nothing it says can widen a cell or the table), hidden until
-      // the badge is hovered (desktop) or tapped (phone band), then fixed under
-      // the badge, wrapped, at most the viewport's width.
+      // it (so nothing it says can widen a cell or the table), closed until
+      // the badge is hovered (desktop), tapped (phone band) or focused
+      // (keyboard), then fixed under the badge, wrapped, at most the viewport's
+      // width. Closed is visually hidden, never `hidden`: the bubble stays in
+      // the accessibility tree, so `aria-describedby` still announces the
+      // reason (ruling 7).
       const tip =
         lifecycle === null
           ? null
@@ -3086,7 +3089,6 @@
                 role: "tooltip",
                 "data-testid": "roadmap-status-tooltip",
                 class: "app-roadmap-status-tip",
-                hidden: true,
               },
               span({ class: "app-roadmap-status-tip-head" }, lifecycle.tip.head),
               lifecycle.tip.reason === null
@@ -3099,13 +3101,16 @@
         const width = Math.min(360, window.innerWidth - 16);
         tip.style.width = `${width}px`;
         tip.style.left = `${Math.max(8, Math.min(at.right - width, window.innerWidth - width - 8))}px`;
-        tip.hidden = false;
+        tip.classList.add("open");
         const below = at.bottom + 6;
         const fitsBelow = below + tip.offsetHeight <= window.innerHeight - 8;
         tip.style.top = `${fitsBelow ? below : Math.max(8, at.top - 6 - tip.offsetHeight)}px`;
       };
       const closeTip = () => {
-        tip.hidden = true;
+        tip.classList.remove("open");
+        tip.style.removeProperty("width");
+        tip.style.removeProperty("left");
+        tip.style.removeProperty("top");
       };
       const statusBadgeProps = {
         "data-testid": "roadmap-status-badge",
@@ -3118,8 +3123,9 @@
           tabindex: "0",
           // A mouse opens it on hover; a touch opens it on the tap's click
           // (touch pointerenter is ignored, so the tap cannot open-then-close
-          // it). The click stays on the badge: a tap reads the reason and does
-          // not also drill the row away.
+          // it); the keyboard opens it on focus and closes it on blur. The
+          // click stays on the badge: a tap reads the reason and does not also
+          // drill the row away.
           onpointerenter: (ev) => {
             if (ev.pointerType !== "mouse") return;
             tipHovered = true;
@@ -3132,6 +3138,9 @@
           },
           onclick: (ev) => {
             ev.stopPropagation();
+            openTip(ev.currentTarget);
+          },
+          onfocus: (ev) => {
             openTip(ev.currentTarget);
           },
           onblur: () => {

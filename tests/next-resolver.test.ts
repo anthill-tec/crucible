@@ -1026,23 +1026,21 @@ describe("CR-CRU-147 §S1 AC2 (ruling 1) — the dead-dependency HOLD's help[] n
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CR-CRU-147 C1 RED — §S1 AC5: ONE dead-CR rule. The gap analysis measured
-// (2026-09-24) that `next`'s internal `isActionable`/`lifecycleOf`
-// (src/next.ts:163-185) key deadness on whether `entry.lifecycle` is PRESENT
-// (an object, verbatim-ported from the client's `dict` test), while `isDeadCr`
-// (src/types.ts:484) keys on `lifecycle.state` being VOID or SUPERSEDED. They
-// diverge on two fixtures: a `lifecycle: null` row, and a row whose lifecycle
-// carries an UNRECOGNISED state (e.g. "PARKED") — both are LIVE under
-// `isDeadCr` (neither state is VOID/SUPERSEDED) but the presence-keyed reading
-// in `src/next.ts` treats a `lifecycle: null` row as not-actionable
-// (`entry.lifecycle === undefined` is false for null) and a row whose
-// lifecycle is any object (state PARKED included) as a DEAD dependency in
-// `nextTrigger` (`lifecycleOf` only excludes `null`, not an unrecognised
-// `state`). AC5 requires `next` to judge deadness with `isDeadCr` instead —
-// until GREEN unifies the predicate, the direct-offer assertions below fail
-// with DRAINED where NEXT is required, and the PARKED-as-dependency assertion
-// fails with `dead-dependency` where an ordinary `dependency` trigger is
-// required.
+// CR-CRU-147 §S1 AC5 — ONE dead-CR rule, pinned as a regression. The gap
+// analysis measured (2026-09-24) that `next` keyed deadness on whether
+// `entry.lifecycle` was PRESENT (an object, verbatim-ported from the client's
+// `dict` test), while `isDeadCr` (src/types.ts:488) keys on `lifecycle.state`
+// being VOID or SUPERSEDED. The two readings diverged on two fixtures: a
+// `lifecycle: null` row, and a row whose lifecycle carries an UNRECOGNISED
+// state (e.g. "PARKED") — both LIVE under `isDeadCr` (neither state is
+// VOID/SUPERSEDED), yet the presence-keyed reading excluded a `lifecycle:
+// null` row from the actionable set and reported a PARKED dependency as a
+// DEAD dependency in `nextTrigger`. GREEN routed both through `isDeadCr`:
+// `isActionable` (src/next.ts:165) is `PENDING && !isDeadCr(entry)` and
+// `deadLifecycleOf` (src/next.ts:170) returns a lifecycle only when
+// `isDeadCr` rules the row dead. The assertions below hold that line: each
+// live fixture is offered as NEXT (never DRAINED), and each live dependency
+// blocks as an ordinary `dependency` (never `dead-dependency`).
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifecycle's mere presence", () => {
@@ -1050,8 +1048,8 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
     const entries = [entry("CR-NEXTPTR-NULLLIVE", 10, { lifecycle: null as unknown as QueueLifecycle })];
     const answer = fields(entries);
     // isDeadCr({lifecycle: null}) is false: null carries no `state`, so it is not VOID/SUPERSEDED.
-    // The presence-keyed `isActionable` (`entry.lifecycle === undefined`) wrongly excludes it,
-    // draining the lane as though its one row were dead.
+    // The presence-keyed `isActionable` (`entry.lifecycle === undefined`) wrongly excluded it,
+    // draining the lane as though its one row were dead; `isActionable` now asks `isDeadCr`.
     expect(answer.decision).toBe("NEXT");
     expect(answer.cr).toBe("CR-NEXTPTR-NULLLIVE");
     expect(answer.decision).not.toBe("DRAINED");
@@ -1078,8 +1076,8 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
     ];
     const answer = fields(entries);
     // isDeadCr({lifecycle: {state: "PARKED"}}) is false: PARKED is neither VOID nor SUPERSEDED.
-    // The presence-keyed reading treats ANY lifecycle object as not-actionable, wrongly draining
-    // the lane as if this row were dead.
+    // The presence-keyed reading treated ANY lifecycle object as not-actionable, wrongly draining
+    // the lane as if this row were dead; `isActionable` (src/next.ts:165) now asks `isDeadCr`.
     expect(answer.decision).toBe("NEXT");
     expect(answer.cr).toBe("CR-NEXTPTR-PARKEDLIVE");
     expect(answer.decision).not.toBe("DRAINED");
@@ -1093,8 +1091,9 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
     const answer = fields(entries, { track: "1" });
     expect(answer.decision).toBe("HOLD");
     const trigger = answer.trigger as Record<string, unknown>;
-    // `lifecycleOf` (src/next.ts) treats ANY object — PARKED included — as dead, so today
-    // this reports dead-dependency with state "PARKED", a state isDeadCr never recognises.
+    // The presence-keyed `lifecycleOf` once treated ANY object — PARKED included — as dead, and
+    // reported dead-dependency with state "PARKED", a state isDeadCr never recognises.
+    // `deadLifecycleOf` (src/next.ts:170) now returns a lifecycle only when `isDeadCr` rules it dead.
     expect(trigger.kind).toBe("dependency");
     expect(trigger.kind).not.toBe("dead-dependency");
     expect(trigger).not.toHaveProperty("state");

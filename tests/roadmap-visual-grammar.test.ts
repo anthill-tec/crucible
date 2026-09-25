@@ -83,6 +83,13 @@ const capOf = (): number => {
   return value as number;
 };
 
+// The ONE dead-CR rule as the browser holds it (`public/app-logic.mjs`'s
+// `isDeadCr`, the state-based mirror of `src/types.ts`'s): a row is dead when
+// its `lifecycle.state` is VOID or SUPERSEDED, never merely because a
+// `lifecycle` key is present. The ambient tests/app-logic.d.ts predates the
+// export, so the module is cast to it here.
+const isDeadCr = (AppLogic as unknown as { isDeadCr: (entry: unknown) => boolean }).isDeadCr;
+
 /** The annotation a row declaring `declaredCount` dependencies renders, as a
  *  SHAPE, for a board whose ids abbreviate to numeric tails: at most the
  *  cap's worth of bare ids, and the remainder as a COUNT only when there IS a
@@ -444,9 +451,9 @@ const mergedMembers = (prefix: string, wave: string, count: number, from: number
     track: MEASURED_TRACK,
   }));
 
-/** Scheduled members — `PENDING` with the `lifecycle` key ABSENT, which is
- *  what `roadmapActionable` tests (`!("lifecycle" in entry)`), so a fixture
- *  that declared `lifecycle: undefined` would draw no rows at all. */
+/** Scheduled members — `PENDING` with the `lifecycle` key ABSENT, so each is
+ *  live under `roadmapActionable`'s rule (`PENDING` and not `isDeadCr`, which
+ *  judges `lifecycle.state`, never the key's presence) and draws a row. */
 const scheduledMembers = (
   prefix: string,
   wave: string,
@@ -1066,9 +1073,9 @@ async function captureLiveDeps(): Promise<string> {
     );
   }
   // The widest row the board can DRAW an annotation on, by `roadmapActionable`'s
-  // own rule (`public/app-logic.mjs`): PENDING, with no lifecycle disposition.
+  // own rule (`public/app-logic.mjs`): PENDING, and not dead under `isDeadCr`.
   const actionable = queue.filter(
-    (entry) => entry.status === "PENDING" && !("lifecycle" in entry),
+    (entry) => entry.status === "PENDING" && !isDeadCr(entry),
   );
   const widest = actionable.reduce<QueueFixture | null>(
     (best, entry) =>

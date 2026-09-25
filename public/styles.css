@@ -1809,7 +1809,22 @@ body {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.app-roadmap-status-tip[hidden] { display: none; }
+.app-roadmap-status-tip:not(.open) {
+  /* Closed is visually hidden, never `hidden`/display:none/visibility:hidden:
+     the bubble stays in the accessibility tree, so the badge's
+     aria-describedby still announces the reason while it is closed. */
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
 .app-roadmap-status-tip-head {
   display: block;
   margin-bottom: 3px;

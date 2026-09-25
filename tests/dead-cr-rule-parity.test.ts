@@ -27,7 +27,7 @@
 //       not cover, because it is about the MIRROR, not the drop.
 //
 // A `null`/`undefined` entry itself is NOT one of the parity fixtures: the
-// server `isDeadCr` (`src/types.ts:484`) reads `entry.lifecycle` unguarded on
+// server `isDeadCr` (`src/types.ts:488`) reads `entry.lifecycle` unguarded on
 // `entry`, so a null/undefined *entry* throws a `TypeError` rather than
 // answering `false` — the server does not accept that shape, so there is
 // nothing here for a mirror to match.

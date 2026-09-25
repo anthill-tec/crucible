@@ -182,6 +182,7 @@ const Logic = AppLogic as unknown as {
   briefCrTitle: (title: unknown, cr: unknown) => string;
   crStatusMark: (status: unknown) => string;
   lifecycleBadge: (lifecycle: unknown) => LifecycleBadge | null;
+  isDeadCr: (entry: unknown) => boolean;
 };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
@@ -1186,11 +1187,12 @@ const nodeStatusText = (cr: string): string =>
   (nodeFor(cr).querySelector('[data-testid="roadmap-node-status"]')?.textContent ?? "").trim();
 
 /** CR-CRU-096 §S4/AC12/AC12b — AC12's rule applied to the FIXTURE: the first
- *  actionable entry (`PENDING` carrying no `lifecycle`) in the published order
- *  among the rows given. The marker is one fact about the whole zone, so this
- *  is asked once over the drawn rows in document order and never per box. */
+ *  actionable entry (`PENDING` and not dead under `isDeadCr`, the state rule
+ *  `roadmapActionable` applies) in the published order among the rows given.
+ *  The marker is one fact about the whole zone, so this is asked once over
+ *  the drawn rows in document order and never per box. */
 const firstActionableCr = (entries: readonly QueueFixture[]): string | undefined =>
-  entries.find((entry) => entry.status === "PENDING" && !("lifecycle" in entry))?.cr;
+  entries.find((entry) => entry.status === "PENDING" && !Logic.isDeadCr(entry))?.cr;
 
 /** CR-CRU-096 §S4/AC12/AC13 — the annotation slot an entry EARNS, derived from
  *  the FIXTURE's own facts (its declared `dependsOn`, and whether the published

@@ -565,6 +565,13 @@ function collectHelpSurfaces(): HelpSurface[] {
 // widened. The remedy hierarchy the 0.2.2 note above records was walked in
 // order and neither of the first two reaches it; the entry states the reading
 // at its own line below.
+//
+// FOUR ROWS MOVE at CR-CRU-147's close-out on 2026-09-25 (the VERIFY FIX
+// round, cycle 527): two files are ADDED (43 entries -> 45) and one ceiling
+// is RAISED, 11 -> 12. A raise is the one move this table otherwise refuses,
+// so it is stated as one rather than folded in. Each reading was MEASURED by
+// this file's own checker on the feature branch after the round's last
+// content edit, and each is dated and reasoned at its own line below.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
   // ADDED 2026-09-18 by CR-CRU-015 §S4 — the SECOND entry this table has taken
@@ -645,6 +652,15 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "client", "test_mvn_crucible_axi.py")]: 10,
   [join("tests", "client", "test_python_crucible_axi.py")]: 9,
   [join("tests", "client", "test_queue_file_verb.py")]: 23,
+  // ADDED 2026-09-25 by CR-CRU-147's close-out (cycle 527). FOUR literals,
+  // all from the C2 RED (7fabc15), all fixture ids and not board ids: the
+  // expected TODAY values of the first four keys (:202 `CR-VOID-2`) and the
+  // per-row lifecycle map (:238 `CR-LIVE-2`, :238 `CR-VOID-3`, :239
+  // `CR-SUP-2`). `CR-LIVE`/`CR-VOID`/`CR-SUP` are not registered in
+  // SYNTHETIC_NAMESPACES, so the checker reads them as real namespaces. The
+  // ceiling may only shrink, and it shrinks to 0 the day those three prefixes
+  // are registered as synthetic.
+  [join("tests", "client", "test_queue_rows_carry_title_and_lifecycle.py")]: 4,
   [join("tests", "client", "test_rust_crucible_axi.py")]: 9,
   [join("tests", "cr009-release-bundle.test.ts")]: 1,
   [join("tests", "docs-project-delete-cascade-dn.test.ts")]: 1,
@@ -653,8 +669,25 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "releases.test.ts")]: 2,
   [join("tests", "roadmap-registration-routes.test.ts")]: 8,
   [join("tests", "roadmap-registration-store.test.ts")]: 5,
-  [join("tests", "roadmap-release-focus.test.ts")]: 11,
+  // RAISED 2026-09-25 by CR-CRU-147's close-out (cycle 527), 11 -> 12. The C4
+  // commit that moved three tests to the §S2 row contract (64f6e60) removed
+  // ONE `CR-CRU-085` (base :921, `toContain("CR-CRU-085")` on the retired
+  // lifecycle badge) and added TWO. Both new ones are the STATUS badge's
+  // asserted text, `SUPERSEDED → CR-CRU-085` (:945, :983). The id is the
+  // CR-F fixture's successor, and the badge's contract is to name it, so the
+  // literal is the asserted VALUE and not decoration on a message. The other
+  // ten are unchanged: nine `briefCrTitle` literals (:794–:808) and :1018.
+  [join("tests", "roadmap-release-focus.test.ts")]: 12,
   [join("tests", "storyboard-fidelity.test.ts")]: 3,
+  // ADDED 2026-09-25 by CR-CRU-147's close-out (cycle 527). ONE literal, from
+  // the C3 RED (e16b5b3): `CR-CRU-147 ruling 2` at :1135, which sits in an
+  // `expect()` MESSAGE. It is reported because that `expect`'s first argument
+  // opens a callback (`loose.map((node) => ...)`), and by AC10's documented
+  // boundary a callback beginning inside the call ends the message span. That
+  // over-report is the fail-loud direction, in the file that wrote it. The
+  // ceiling shrinks to 0 when the message loses the id or the span learns the
+  // shape.
+  [join("tests", "roadmap-wave-rows.test.ts")]: 1,
   [join("tests", "workflow-history-refinements.test.ts")]: 3,
 };
 
@@ -2502,8 +2535,54 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // are its final figures and not a mid-cycle reading. It clears the CASCADE
 // with it: tests/help-surface-order-independence.test.ts collects THIS file in
 // its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-09-25 by CR-CRU-147's CLOSE-OUT (the VERIFY FIX round, cycle
+// 527). `src` moves 779 -> 778 (-1). MEASURED with this file's own machinery
+// on the feature branch AFTER the FIX round's last content edit (ruling 7's
+// keyboard-reachable tooltip in public/app.js and public/styles.css, which
+// adds no citation, plus comment and helper fixes under tests/, which move no
+// head): `bun test tests/project-namespace-tripwire.test.ts -t "never below
+// its develop baseline"` reported, against the then-recorded 779/514/884,
+//
+//     -  "src": 779   +  "src": 778
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show b79c755:<path>` (the merge-base with `develop`),
+// attributes the one move. It is a REMOVAL, and every classified file this CR
+// touches is listed:
+//
+//   src -1:
+//     src/next.ts    4 -> 3 (-1): the lineage `CR-CRU-147` (base :163) is
+//       gone. It was a forward reference in `isActionable`'s docblock naming
+//       this CR as the owner of the job of unifying the predicate with
+//       `isDeadCr`. The C1 GREEN (8ac07cf) did that job and rewrote the
+//       docblock to describe the one rule, so the forward reference retired
+//       with the work it pointed at.
+//     src/types.ts and src/store.ts: C1/C2 edit both, and no changed line
+//       carries a citation, so neither moves.
+//
+//   public 0: public/app.js, public/app-logic.mjs, public/app-logic.d.mts and
+//     public/styles.css all change, and none moves. The three rewritten
+//     lines that carry a citation keep it: `CR-CRU-096` and `CR-CRU-078` in
+//     app-logic.mjs's `roadmapActionable` docblock, and `CR-CRU-091` in
+//     app.js's second-axis comment. `public` (514) re-measures at its
+//     recorded head.
+//
+//   clients 0: clients/_crucible_axi.py gains the queue rows' `title` and
+//     `lifecycle` (C2) with no citation, so `clients` (884) re-measures at
+//     its recorded head.
+//
+// A NET LOSS of one, and stated as one. It is not lineage shed from living
+// code: the citation promised work this CR has now done. `src` (778) is still
+// far above its 512 floor, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit, so these
+// are its final figures and not a mid-cycle reading. It clears the CASCADE
+// with it: tests/help-surface-order-independence.test.ts collects THIS file in
+// its child `bun test`, fired for the right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 779 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 778 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
   clients: { exts: [".py"], develop: 601, head: 884 },
 };
