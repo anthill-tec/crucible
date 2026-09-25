@@ -2,6 +2,37 @@
 
 **Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-091, CR-CRU-078 · **Status** PENDING
 
+> **Gap analysis 2026-09-25 — measured, with three user rulings.**
+>
+> - **`next` already skips dead CRs** (resolver since CR-092, now `src/next.ts` after CR-098). §S1's
+>   first AC stays, as a pinned regression test.
+> - **Ruling 1: a dead dependency keeps the HOLD.** A live CR whose `dependsOn` names a `VOID` or
+>   `SUPERSEDED` CR is held with trigger `dead-dependency` and told to re-point its `dependsOn`, as
+>   shipped since CR-092. §S1's second AC is rewritten to assert this. Not holding would reverse a
+>   ruled, shipped behaviour that no consumer asked to change, and no live CR on this board depends
+>   on a dead one.
+> - **Ruling 2: the Wave Card drops dead CRs everywhere.** A waved box's rows already exclude them.
+>   Its header count (`box.entries.length`, CR-096's whole membership) and the loose (unwaved) group
+>   still include them, and both drop them. A count that includes rows the card never draws would
+>   disagree with the 2026-09-23 ruling that the card does not list a dead CR.
+> - **Ruling 3: `queue` rows use a null column, not an omitted key.** The client's `queue` output is
+>   a uniform TOON table (CR-081: every row has the same keys), so a per-row omitted key cannot hold.
+>   Every row gains `title` and `lifecycle`: `VOID` or `SUPERSEDED`, or null for a live CR, the same
+>   way `planId` is null when there is no plan. Null means none, never an invented state.
+> - **Three dead-CR predicates, one rule.** `isDeadCr` (`src/types.ts`, state-based),
+>   `isActionable` (`src/next.ts`, keyed on whether a lifecycle exists) and `roadmapActionable`
+>   (`public/app-logic.mjs`, the same) all draw the line. The write side (`src/v2.ts`, queue POST)
+>   accepts only `VOID`/`SUPERSEDED` and stores a null lifecycle as absent, so on stored data they
+>   agree on every row (measured: 3 lifecycle rows, all `VOID`, 0 divergent). The server's two unify
+>   on `isDeadCr`. The browser module cannot import `src/`, so it keeps one state-based mirror, held
+>   to the server rule by a parity test. No behaviour changes.
+> - **§S2 is wholly unmet, measured in code.** `RoadmapRow` (`public/app.js`) renders the derived
+>   `status` badge (reads `PENDING`) and a separate `roadmap-lifecycle-badge` whose text carries the
+>   whole reason inline (`lifecycleBadge`, `public/app-logic.mjs`). Only that badge is struck through
+>   (`.app-roadmap-lifecycle.void`). The API row carries `title` for every CR, dead ones included
+>   (150/150), so the missing title F17 draws is a rendering defect, not a data one.
+>
+
 ## Problem
 
 **Reported by Model B (Sandesh #1384, 2026-09-23), independently reproduced here.** `cr-void` and
@@ -37,7 +68,8 @@ extends that ruling to the consumers AC27 did not reach. It does not reopen it.
 A CR whose `lifecycle.state` is `VOID` or `SUPERSEDED` is excluded from every surface that answers
 *what is the work*:
 
-- **`next`** never offers it, and never counts it as a dependency the offered CR still waits on.
+- **`next`** never offers it. A live CR that depends on it is HELD with trigger `dead-dependency`
+  until its `dependsOn` is re-pointed (CR-092, kept by ruling 1).
 - **The zone-2 Wave Card** does not list it (user ruling 2026-09-23). A wave card shows the wave's
   live work, and a dead CR is not part of it.
 - Wave-membership counts that describe live work do not count it.
@@ -78,13 +110,22 @@ the echo, which is how Model B found four drifted titles.
 
 **§S1**
 - [ ] `next` never returns a `VOID` or `SUPERSEDED` CR, asserted against a CR that would otherwise be
-      the next in sequence.
-- [ ] A live CR that `dependsOn` a dead one is not held waiting on it by `next`. The CR states
-      whether a dead dependency is satisfied or ignored and asserts it, rather than leaving it to
-      the implementer.
-- [ ] The zone-2 Wave Card does not render a dead CR, and its live-work counts exclude it.
+      the next in sequence. (Already met since CR-092; pinned here as a regression test.)
+- [ ] **A dead dependency HOLDS (ruling 1).** A live CR that `dependsOn` a `VOID` or `SUPERSEDED` CR
+      is returned by `next` as `decision=HOLD`, trigger `dead-dependency`, naming the dead CR and its
+      state (and successor, for `SUPERSEDED`), with the hint to re-point `dependsOn`. Asserted for
+      both states.
+- [ ] **The zone-2 Wave Card does not render a dead CR anywhere (ruling 2).** Not in a waved box's
+      rows, not in the loose (unwaved) group. The wave header's count (`roadmap-wave-count`,
+      `data-cr-count`) excludes it, and so do `hiddenCount` (`+N more`) and the merged roll-up.
+      Asserted on a wave holding one dead member of each state beside live ones.
 - [ ] The record survives: after `cr-void`, the queue read still returns the row with its derived
       `status` and its `lifecycle` object intact.
+- [ ] **One dead-CR rule.** `next` and every server reader judge deadness with `isDeadCr`
+      (`src/types.ts`); the presence-keyed `isActionable` test is gone. The browser module's mirror is
+      state-based, and a parity test runs the server rule and the mirror over the same fixtures,
+      including `lifecycle: null` and a lifecycle with an unrecognised state, and requires the same
+      answer on every one.
 
 **§S2**
 - [ ] A dead CR's roadmap table row has the same cells, in the same columns, as a live row: id,
@@ -99,10 +140,12 @@ the echo, which is how Model B found four drifted titles.
 - [ ] A row with no `lifecycle` key renders exactly as today, with no strikethrough and no default.
 
 **§S3**
-- [ ] Every `queue` row carries `title`, and carries `lifecycle.state` when present. Absent means
-      omitted, never defaulted.
-- [ ] Rows without a lifecycle render as they do today; no existing consumer of the `queue` envelope
-      breaks.
+- [ ] **Every `queue` row carries `title` and `lifecycle` (ruling 3):** `lifecycle` is `VOID` or
+      `SUPERSEDED` for a dead CR and null for a live one, never an invented state. The rows stay a
+      uniform table (every row the same keys, CR-081), asserted by round-tripping the verb's output
+      through the TOON decoder.
+- [ ] No existing consumer of the `queue` envelope breaks. The existing keys (`cr, wave, status,
+      planId`) keep their names, order and values.
 
 ## Risk
 
