@@ -19,6 +19,10 @@
 >   a uniform TOON table (CR-081: every row has the same keys), so a per-row omitted key cannot hold.
 >   Every row gains `title` and `lifecycle`: `VOID` or `SUPERSEDED`, or null for a live CR, the same
 >   way `planId` is null when there is no plan. Null means none, never an invented state.
+> - **Ruling 4 (2026-09-25, at C3): a running dead CR stays on the Wave Card.** The store lets a CR
+>   be voided or superseded while its plan is open. Such a CR is still `IN_PROGRESS`, and `next`
+>   holds its lane with trigger `in-flight`, so the card keeps drawing and counting it
+>   (CR-CRU-096 AC9c's carve-out stands). Measured: no such row on this board today.
 > - **Three dead-CR predicates, one rule.** `isDeadCr` (`src/types.ts`, state-based),
 >   `isActionable` (`src/next.ts`, keyed on whether a lifecycle exists) and `roadmapActionable`
 >   (`public/app-logic.mjs`, the same) all draw the line. The write side (`src/v2.ts`, queue POST)
@@ -119,6 +123,9 @@ the echo, which is how Model B found four drifted titles.
       rows, not in the loose (unwaved) group. The wave header's count (`roadmap-wave-count`,
       `data-cr-count`) excludes it, and so do `hiddenCount` (`+N more`) and the merged roll-up.
       Asserted on a wave holding one dead member of each state beside live ones.
+      **Except a running member (ruling 4):** an `IN_PROGRESS` member stays drawn, and counted in
+      its wave's header, whatever its lifecycle (CR-CRU-096 AC9c), because `next` holds its lane
+      as in-flight. It drops like any dead CR once it is no longer running.
 - [ ] The record survives: after `cr-void`, the queue read still returns the row with its derived
       `status` and its `lifecycle` object intact.
 - [ ] **One dead-CR rule.** `next` and every server reader judge deadness with `isDeadCr`
