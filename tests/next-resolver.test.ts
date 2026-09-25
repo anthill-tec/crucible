@@ -1059,10 +1059,10 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
 
   test("a live dependency carrying lifecycle: null blocks as an ORDINARY dependency, never a dead-dependency", () => {
     const entries = [
-      entry("CR-NEXTPTR-NULLDEP", 10, { lifecycle: null as unknown as QueueLifecycle }),
-      entry("CR-NEXTPTR-NULLTARGET", 20, { dependsOn: ["CR-NEXTPTR-NULLDEP"] }),
+      entry("CR-NEXTPTR-NULLDEP", 10, { track: "track-2", lifecycle: null as unknown as QueueLifecycle }),
+      entry("CR-NEXTPTR-NULLTARGET", 20, { track: "track-1", dependsOn: ["CR-NEXTPTR-NULLDEP"] }),
     ];
-    const answer = fields(entries);
+    const answer = fields(entries, { track: "1" });
     expect(answer.decision).toBe("HOLD");
     const trigger = answer.trigger as Record<string, unknown>;
     expect(trigger.kind).toBe("dependency");
@@ -1087,10 +1087,10 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
 
   test("a live dependency whose lifecycle carries an UNRECOGNISED state blocks as an ORDINARY dependency, never a dead-dependency", () => {
     const entries = [
-      entry("CR-NEXTPTR-PARKEDDEP", 10, { lifecycle: { state: "PARKED" } as unknown as QueueLifecycle }),
-      entry("CR-NEXTPTR-PARKEDTARGET", 20, { dependsOn: ["CR-NEXTPTR-PARKEDDEP"] }),
+      entry("CR-NEXTPTR-PARKEDDEP", 10, { track: "track-2", lifecycle: { state: "PARKED" } as unknown as QueueLifecycle }),
+      entry("CR-NEXTPTR-PARKEDTARGET", 20, { track: "track-1", dependsOn: ["CR-NEXTPTR-PARKEDDEP"] }),
     ];
-    const answer = fields(entries);
+    const answer = fields(entries, { track: "1" });
     expect(answer.decision).toBe("HOLD");
     const trigger = answer.trigger as Record<string, unknown>;
     // `lifecycleOf` (src/next.ts) treats ANY object — PARKED included — as dead, so today
