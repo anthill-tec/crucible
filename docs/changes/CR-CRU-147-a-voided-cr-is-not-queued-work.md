@@ -23,6 +23,9 @@
 >   be voided or superseded while its plan is open. Such a CR is still `IN_PROGRESS`, and `next`
 >   holds its lane with trigger `in-flight`, so the card keeps drawing and counting it
 >   (CR-CRU-096 AC9c's carve-out stands). Measured: no such row on this board today.
+> - **Ruling 5 (2026-09-25, at C3): a wave with no live work draws no box.** When every member of a
+>   wave is dead and none is running, the Wave Card draws no box for that wave (no header, no
+>   `0` count). Its CRs stay visible, struck through, in the zone-3 table.
 > - **Three dead-CR predicates, one rule.** `isDeadCr` (`src/types.ts`, state-based),
 >   `isActionable` (`src/next.ts`, keyed on whether a lifecycle exists) and `roadmapActionable`
 >   (`public/app-logic.mjs`, the same) all draw the line. The write side (`src/v2.ts`, queue POST)
@@ -126,6 +129,8 @@ the echo, which is how Model B found four drifted titles.
       **Except a running member (ruling 4):** an `IN_PROGRESS` member stays drawn, and counted in
       its wave's header, whatever its lifecycle (CR-CRU-096 AC9c), because `next` holds its lane
       as in-flight. It drops like any dead CR once it is no longer running.
+      **A wave with no live work draws no box (ruling 5):** when every member is dead and none is
+      running, the card draws no box, header or count for that wave.
 - [ ] The record survives: after `cr-void`, the queue read still returns the row with its derived
       `status` and its `lifecycle` object intact.
 - [ ] **One dead-CR rule.** `next` and every server reader judge deadness with `isDeadCr`
