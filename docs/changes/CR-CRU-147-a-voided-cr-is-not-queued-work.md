@@ -30,6 +30,10 @@
 >   superseded the CR, but the lifecycle held no author: the route passed it only to the
 >   declaration journal. The lifecycle now stores that same author when it is written. A
 >   lifecycle written before this change has none, and its tooltip omits who rather than guess.
+> - **Ruling 7 (2026-09-25, at VERIFY): the tooltip is reachable by keyboard.** VERIFY found the
+>   badge focusable and marked up with `aria-describedby`, but focus did not open the tooltip and
+>   the hidden bubble was out of the accessibility tree. Keyboard support is completed rather than
+>   dropped.
 > - **Three dead-CR predicates, one rule.** `isDeadCr` (`src/types.ts`, state-based),
 >   `isActionable` (`src/next.ts`, keyed on whether a lifecycle exists) and `roadmapActionable`
 >   (`public/app-logic.mjs`, the same) all draw the line. The write side (`src/v2.ts`, queue POST)
@@ -62,7 +66,7 @@ therefore reaches humans, not only `next`.
 
 **This is a consumer defect, not a data defect.** CR-CRU-091 §S2 made `lifecycle` a **second
 axis**, deliberately never folded into `status`. The PRD locks `status` as derived (PENDING = no
-plan, IN_PROGRESS = open plan, COMPLETED = closed + merge, `PRD-crucible-v2.md:350-352`): `status`
+plan, IN_PROGRESS = open plan, COMPLETED = closed + merge, `PRD-crucible-v2.md:441-442`): `status`
 answers *what happened to the work*, `lifecycle` answers *whether the work is still wanted*. The
 data is right. What is missing is that the surfaces that decide what is live work never read the
 second axis.
@@ -104,7 +108,7 @@ the right edge, giving the whole table a horizontal scrollbar. F17 draws the def
   points, depends-on and status. The **id, title and points are struck through** and dimmed, and the
   depends-on chips fade. Nothing is added to the row.
 - **The STATUS cell names the state:** `VOID`, or `SUPERSEDED → <successor>`, never `PENDING`. This
-  is **display only**. The queue's `status` field stays derived (PRD `:350-352`), and `lifecycle`
+  is **display only**. The queue's `status` field stays derived (PRD `:441-442`), and `lifecycle`
   stays the second axis (CR-091 §S2). The cell shows the lifecycle state when one exists, in place
   of the derived status.
 - **The reason is a tooltip** on the status badge (`ⓘ`): state · date · who, then the full reason,
@@ -157,6 +161,9 @@ the echo, which is how Model B found four drifted titles.
       the lifecycle as `author`, the same value the declaration journal records, and the queue read
       returns it. The tooltip names it. A lifecycle with no `author` renders its tooltip without
       one, never a placeholder.
+- [ ] **The tooltip is reachable by keyboard (ruling 7, at VERIFY).** A dead row's status badge
+      takes focus; focusing it opens the tooltip and moving focus away closes it. While closed, the
+      bubble is still in the accessibility tree, so `aria-describedby` announces the reason.
 - [ ] A row with no `lifecycle` key renders exactly as today, with no strikethrough and no default.
 
 **§S3**
