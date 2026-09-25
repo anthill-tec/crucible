@@ -1613,15 +1613,12 @@ body {
    removed the dispositioned PENDING row, and a node still renders for the
    loose group (AC18a, untrimmed) and for a running dispositioned CR (AC9c),
    where §S8 forbids `data-lifecycle` being the only channel. */
-.app-flow-node-lifecycle,
-.app-roadmap-lifecycle {
+.app-flow-node-lifecycle {
   font: 400 10px/1.4 var(--mono);
   color: var(--ink-faint);
 }
-.app-flow-node-lifecycle.superseded,
-.app-roadmap-lifecycle.superseded { font-style: italic; }
-.app-flow-node-lifecycle.void,
-.app-roadmap-lifecycle.void { text-decoration: line-through; }
+.app-flow-node-lifecycle.superseded { font-style: italic; }
+.app-flow-node-lifecycle.void { text-decoration: line-through; }
 /* CR-CRU-103 §S1/AC1/AC1a/AC2 — the approved artifact's own `.delivered`:
    `border:1.5px solid var(--line); border-radius:9px; background:var(--bg-2);
    padding:10px 13px; min-width:210px`, with `flex:0 0 auto` beside the
@@ -1716,7 +1713,7 @@ body {
   font: 400 12.5px/1.55 var(--sans);
   border-bottom: 1px solid var(--line);
 }
-.app-roadmap-row:last-child { border-bottom: 0; }
+.app-roadmap-row:last-of-type { border-bottom: 0; }
 .app-roadmap-head {
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
@@ -1746,8 +1743,7 @@ body {
 .app-roadmap-track { font: 400 11.5px/1.4 var(--mono); color: var(--ink-dim); }
 .app-roadmap-status,
 .app-roadmap-wave,
-.app-roadmap-track,
-.app-roadmap-lifecycle { flex: 0 0 auto; }
+.app-roadmap-track { flex: 0 0 auto; }
 /* AC22/AC23 — the row's status badge wears the SAME palette as its flowchart
    node, because node and row are one entry drawn twice and must not disagree
    about where it stands. Scoped to `.app-badge` so the column CELL, which
@@ -1773,6 +1769,54 @@ body {
   color: var(--ember);
   border-color: var(--ember);
 }
+/* F17 — a DEAD row keeps the live row's cells: its id, title and points are
+   struck through and dimmed, its depends-on chips fade, and its status badge
+   names the lifecycle (VOID reads faint and dashed, SUPERSEDED leans ember, so
+   the two differ by colour and by word). The ⓘ is drawn, not authored, so
+   the badge's own words stay exactly the state. */
+.app-roadmap-cell.dead,
+.app-roadmap-card-field.dead,
+.app-roadmap-points.dead {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+.app-roadmap-dep.faded { opacity: 0.45; }
+.app-badge.app-roadmap-status.void {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+.app-badge.app-roadmap-status.superseded {
+  color: var(--ember-dim);
+  border-color: var(--ember-dim);
+}
+.app-badge.app-roadmap-status[data-lifecycle] { cursor: help; }
+.app-badge.app-roadmap-status[data-lifecycle]::after { content: " \24D8"; }
+/* The reason's bubble: state · date · who over the full reason, wrapped.
+   It is FIXED (app.js places it under its badge when it opens), so it sits
+   above the table and can never widen a cell, a row or the pane. */
+.app-roadmap-status-tip {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font: 400 10.5px/1.5 var(--mono);
+  color: var(--ink);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-roadmap-status-tip[hidden] { display: none; }
+.app-roadmap-status-tip-head {
+  display: block;
+  margin-bottom: 3px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.app-roadmap-status-tip-reason { display: block; }
 
 /* CR-CRU-078 §S7 — SELECTION and the drill-through source: the highlight has
    to be visible on BOTH renderings of one entry (AC17) and the source has to

@@ -3066,10 +3066,79 @@
       const deps = entry.dependsOn ?? [];
       const lateDeps = opts.lateDeps ?? [];
       const columns = opts.columns;
-      // AC27 — the SECOND axis. Additive: the derived `status` badge below is
-      // rendered whatever this says, because "what happened to the work" and
-      // "is the work still wanted" are different questions (CR-CRU-091 §S2).
+      // AC27 — the SECOND axis. "What happened to the work" and "is the work
+      // still wanted" are different questions (CR-CRU-091 §S2), so the entry's
+      // derived `status` is never rewritten. A dead row's STATUS cell DISPLAYS
+      // the lifecycle in its place (VOID, or SUPERSEDED → successor); the data
+      // underneath is untouched.
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
+      // The dead row's reason is the status badge's tooltip and never row
+      // text: one bubble per dead entry, rendered BESIDE the row rather than in
+      // it (so nothing it says can widen a cell or the table), hidden until
+      // the badge is hovered (desktop) or tapped (phone band), then fixed under
+      // the badge, wrapped, at most the viewport's width.
+      const tip =
+        lifecycle === null
+          ? null
+          : span(
+              {
+                id: `roadmap-status-tip-${entry.cr.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+                role: "tooltip",
+                "data-testid": "roadmap-status-tooltip",
+                class: "app-roadmap-status-tip",
+                hidden: true,
+              },
+              span({ class: "app-roadmap-status-tip-head" }, lifecycle.tip.head),
+              lifecycle.tip.reason === null
+                ? null
+                : span({ class: "app-roadmap-status-tip-reason" }, lifecycle.tip.reason),
+            );
+      let tipHovered = false;
+      const openTip = (badge) => {
+        const at = badge.getBoundingClientRect();
+        const width = Math.min(360, window.innerWidth - 16);
+        tip.style.width = `${width}px`;
+        tip.style.left = `${Math.max(8, Math.min(at.right - width, window.innerWidth - width - 8))}px`;
+        tip.hidden = false;
+        const below = at.bottom + 6;
+        const fitsBelow = below + tip.offsetHeight <= window.innerHeight - 8;
+        tip.style.top = `${fitsBelow ? below : Math.max(8, at.top - 6 - tip.offsetHeight)}px`;
+      };
+      const closeTip = () => {
+        tip.hidden = true;
+      };
+      const statusBadgeProps = {
+        "data-testid": "roadmap-status-badge",
+        class: `app-badge app-roadmap-status ${(lifecycle === null ? entry.status : lifecycle.state).toLowerCase()}`,
+      };
+      if (lifecycle !== null) {
+        Object.assign(statusBadgeProps, {
+          "data-lifecycle": lifecycle.state,
+          "aria-describedby": tip.id,
+          tabindex: "0",
+          // A mouse opens it on hover; a touch opens it on the tap's click
+          // (touch pointerenter is ignored, so the tap cannot open-then-close
+          // it). The click stays on the badge: a tap reads the reason and does
+          // not also drill the row away.
+          onpointerenter: (ev) => {
+            if (ev.pointerType !== "mouse") return;
+            tipHovered = true;
+            openTip(ev.currentTarget);
+          },
+          onpointerleave: (ev) => {
+            if (ev.pointerType !== "mouse") return;
+            tipHovered = false;
+            if (document.activeElement !== ev.currentTarget) closeTip();
+          },
+          onclick: (ev) => {
+            ev.stopPropagation();
+            openTip(ev.currentTarget);
+          },
+          onblur: () => {
+            if (!tipHovered) closeTip();
+          },
+        });
+      }
       const laneBadge =
         active && opts.multiTrack && opts.plan
           ? span(
@@ -3124,6 +3193,10 @@
       }
       if (drillSource) props["data-drill-source"] = "true";
       if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
+      // §S2 — a dead row keeps the live row's cells; its id and title are
+      // struck through (and its points, below), and its depends-on chips fade.
+      const deadMark =
+        lifecycle !== null ? (column) => (column === "cr" || column === "title" ? " dead" : "") : () => "";
       const cell = (column, ...children) => {
         if (card) {
           // A card states EVERY column the table has, wave included whatever
@@ -3135,7 +3208,7 @@
             {
               "data-testid": ROADMAP_CARD_FIELD_TESTIDS[column],
               "data-column": column,
-              class: `app-roadmap-card-field app-roadmap-${column}`,
+              class: `app-roadmap-card-field app-roadmap-${column}${deadMark(column)}`,
             },
             column === "cr" || column === "title"
               ? null
@@ -3145,12 +3218,15 @@
         }
         return columns.includes(column)
           ? span(
-              { "data-column": column, class: `app-roadmap-cell app-roadmap-${column}` },
+              {
+                "data-column": column,
+                class: `app-roadmap-cell app-roadmap-${column}${deadMark(column)}`,
+              },
               ...children,
             )
           : null;
       };
-      return div(
+      const row = div(
         props,
         cell("cr", entry.cr),
         // AC11 — the brief title, the row's one required new column.
@@ -3159,7 +3235,10 @@
         // unpointed CR shows none, never a default.
         typeof entry.points === "number"
           ? span(
-              { "data-testid": "roadmap-points", class: "app-roadmap-points" },
+              {
+                "data-testid": "roadmap-points",
+                class: `app-roadmap-points${lifecycle === null ? "" : " dead"}`,
+              },
               `${entry.points} pts`,
             )
           : null,
@@ -3175,7 +3254,10 @@
           // consumers, `orderWarning` above among them, read the full ids.
           deps.map((d) =>
             span(
-              { "data-testid": "roadmap-depends-chip", class: "app-chip app-roadmap-dep" },
+              {
+                "data-testid": "roadmap-depends-chip",
+                class: `app-chip app-roadmap-dep${lifecycle === null ? "" : " faded"}`,
+              },
               L.bareDependencyId(entry.cr, d),
             ),
           ),
@@ -3183,25 +3265,12 @@
         cell(
           "status",
           span(
-            {
-              "data-testid": "roadmap-status-badge",
-              class: `app-badge app-roadmap-status ${entry.status.toLowerCase()}`,
-            },
-            roadmapStatusLabel(entry.status),
+            statusBadgeProps,
+            lifecycle === null ? roadmapStatusLabel(entry.status) : lifecycle.label,
           ),
         ),
         cell("wave", entry.wave),
         cell("track", entry.track ?? ""),
-        lifecycle === null
-          ? null
-          : span(
-              {
-                "data-testid": "roadmap-lifecycle-badge",
-                "data-lifecycle": lifecycle.state,
-                class: `app-badge app-roadmap-lifecycle ${lifecycle.state.toLowerCase()}`,
-              },
-              lifecycle.text,
-            ),
         orderWarning,
         laneBadge,
         // AC18 — the drill-through source, stated in WORDS beside the row's
@@ -3216,6 +3285,8 @@
             )
           : null,
       );
+      // The tooltip rides beside its row, so the zone places both.
+      return tip === null ? row : [row, tip];
     };
 
     // CR-CRU-078 §S5/AC10 — ZONE 3's body: the FOCUSED release's CRs and
@@ -3440,8 +3511,8 @@
     // on STATUS, so a running CR is drawn whatever its `lifecycle` (AC9c).
     // On both paths dropping the span would leave the disposition published
     // as the `data-lifecycle` ATTRIBUTE alone — colour and CSS with no TEXT,
-    // which is exactly what §S8 forbids. Zone 3's `roadmap-lifecycle-badge`
-    // (`:2535`) is the DETAIL surface, not a substitute for the node's word.
+    // which is exactly what §S8 forbids. Zone 3's status badge (its words and
+    // its tooltip) is the DETAIL surface, not a substitute for the node's word.
     // An entry with no `lifecycle` key still gets no attribute and no span:
     // absent, never defaulted.
     const RoadmapFlowNode = (entry, marked) => {
@@ -4673,7 +4744,12 @@
       div({ class: greyed("app-center") }, () => {
         const releases = Array.from(state.releases);
         const proposals = Array.from(state.releaseProposals);
-        const entries = Array.from(state.queue);
+        // Each entry is read as a SHALLOW COPY: the spread reads the entry's
+        // key set, so a key that ARRIVES on a refetch (a `lifecycle` written
+        // after the page loaded) re-renders the board. A plain read of a key
+        // the reactive entry does not hold yet subscribes to nothing, and the
+        // row would keep its live look until an unrelated field changed.
+        const entries = Array.from(state.queue, (entry) => ({ ...entry }));
         // AC28 — ONE monotonic sequence: the ledger's shipped rows in ascending
         // ship order, then the proposals read's live proposals ascending by
         // version. The two state slices stay separate and are joined by

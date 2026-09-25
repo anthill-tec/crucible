@@ -1213,20 +1213,42 @@ export function briefCrTitle(title, cr) {
  * An absent, malformed or unrecognised axis yields `null` — never a default.
  * A `SUPERSEDED` record with no `by` still says superseded rather than naming
  * an `undefined` successor.
+ *
+ * It also carries the table's STATUS-cell words (`label`) and the status
+ * badge's tooltip (`tip`). A dead row's cell names the lifecycle in place of
+ * the derived status: `VOID`, or `SUPERSEDED → <successor>`. That is DISPLAY
+ * only; the entry's `status` field is never touched. The tooltip's head reads
+ * state · date · who, where who is the lifecycle's own `author` (ruling 6),
+ * dropped when absent and never replaced by a placeholder. The reason is
+ * carried whole, because the row never renders it.
  */
 export function lifecycleBadge(lifecycle) {
   if (lifecycle === null || typeof lifecycle !== "object") return null;
   const nonEmpty = (value) =>
     typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  const reason = nonEmpty(lifecycle.reason);
+  const tip = (state) => {
+    const day = typeof lifecycle.at === "number" ? formatReleaseDate(lifecycle.at / 1000) : "";
+    const head = [state, day === "" ? null : day, nonEmpty(lifecycle.author)]
+      .filter((part) => part !== null)
+      .join(" · ");
+    return { head, reason };
+  };
   if (lifecycle.state === "SUPERSEDED") {
     const by = nonEmpty(lifecycle.by);
-    return { state: "SUPERSEDED", text: by === null ? "superseded" : `superseded by ${by}` };
+    return {
+      state: "SUPERSEDED",
+      text: by === null ? "superseded" : `superseded by ${by}`,
+      label: by === null ? "SUPERSEDED" : `SUPERSEDED → ${by}`,
+      tip: tip("SUPERSEDED"),
+    };
   }
   if (lifecycle.state === "VOID") {
-    const reason = nonEmpty(lifecycle.reason);
     return {
       state: "VOID",
       text: reason === null ? "void · abandoned" : `void · abandoned — ${reason}`,
+      label: "VOID",
+      tip: tip("VOID"),
     };
   }
   return null;

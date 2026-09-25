@@ -420,6 +420,10 @@ export interface QueueLifecycle {
   /** Why the work is not happening. Present for VOID. */
   reason?: string;
   at: number;
+  /** Who wrote the disposition (ruling 6): the same value the declaration
+   *  journal records for that write. Absent on a lifecycle written before
+   *  the ruling, and never defaulted. */
+  author?: string;
 }
 
 /**
