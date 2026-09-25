@@ -453,3 +453,52 @@ Step("I click the history cycle line for that cycle in its empty space", async (
   const { x, y } = await findWidestGap(page, world.cycleId as number);
   await page.mouse.click(x, y);
 });
+
+// CR-CRU-146 — the SAME hit-area proof at the PHONE band (DN-crucible-
+// responsive-model.md decision 11 is per-band: "cycle rows go full-width and
+// the row is the toggle"). Collected by mobile-viewport-responsive.feature,
+// so it runs under every phone project (chromium-mobile, webkit-iphone) with
+// a real TOUCH input, not a desktop mouse. The point is the widest gap
+// (`findWidestGap`), proven by `elementFromPoint` to resolve to the LINE
+// ITSELF — outside every child — before each tap, so a handler re-narrowed
+// to a child (the glyph, the label) reds here at phone width too.
+Step(
+  "tapping the history cycle line for that cycle in its empty space opens then closes its linked runs",
+  async ({ page, world }) => {
+    const cycleId = world.cycleId as number;
+    const row = historyCycleRow(page, cycleId);
+    await cycleLine(page, cycleId).scrollIntoViewIfNeeded();
+    await expect(row.getByTestId("cycle-span-closed"), "the row must start closed").toHaveCount(0);
+
+    const opening = await findWidestGap(page, cycleId);
+    const gapOffset = (point: { x: number; y: number }): HitOffset => ({
+      name: "the empty space inside the line (phone band)",
+      x: point.x,
+      y: point.y,
+      excludeBadge: true,
+      mustBeLineItself: true,
+    });
+    await assertPointOnLine(page, cycleId, gapOffset(opening));
+    await page.touchscreen.tap(opening.x, opening.y);
+
+    const openSpan = row.getByTestId("cycle-span-closed");
+    await expect(openSpan, "tapping the line's empty space must open the cycle's linked runs").toBeVisible();
+    await expect(
+      openSpan.getByTestId("linked-run-row"),
+      "the opened span must show exactly the two linked runs",
+    ).toHaveCount(2);
+    await expect(page.getByTestId("workspace-tab").filter({ hasText: "Workflow" })).toHaveClass(
+      /\bon\b/,
+    );
+
+    const closing = await findWidestGap(page, cycleId);
+    await assertPointOnLine(page, cycleId, gapOffset(closing));
+    await page.touchscreen.tap(closing.x, closing.y);
+
+    await expect(
+      row.getByTestId("cycle-span-closed"),
+      "tapping the line's empty space again must close the cycle's linked runs",
+    ).toHaveCount(0);
+  },
+);
+

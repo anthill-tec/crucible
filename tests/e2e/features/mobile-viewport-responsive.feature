@@ -159,3 +159,23 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the page body does not scroll horizontally
     And the analytics pane's chart scrolls inside its own container, not the page
 
+  # CR-CRU-146 (VERIFY F1) — DN-crucible-responsive-model.md decision 11
+  # ("cycle rows go full-width and the row is the toggle") is PER BAND, so the
+  # hit-area proof cycle-run-navigation.feature makes at desktop width is made
+  # here at the phone band too, under every phone project (chromium-mobile,
+  # webkit-iphone) with a real touch tap. The tapped point is the line's widest
+  # gap, proven by elementFromPoint to resolve to the line itself, outside
+  # every child, before each tap.
+  Scenario: CR-CRU-146 — at the phone band a history cycle line spans at least 90% of its row, and a tap on its own empty space opens its linked runs and a second tap closes them
+    Given a project named "MOB Cycle Line Project" is registered
+    And a cycle plan is filed for cr "CR-MOB-146" with a cycle labelled "c1 phone line"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "mob-cycleline-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "mob-cycleline-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "mob00146"
+    When I open the workspace for that project
+    And I expand the cr group for "CR-MOB-146"
+    Then the history cycle line for that cycle measures at least 90% of its row's width
+    And tapping the history cycle line for that cycle in its empty space opens then closes its linked runs
+
