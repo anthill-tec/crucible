@@ -55,6 +55,23 @@ function cycleLine(page: Page, cycleId: number): Locator {
 // just `getComputedStyle` on the line node) proves the point really lands
 // on the line itself and not a child that happens to reach that far.
 async function measureEmptySpaceCursor(page: Page, cycleId: number): Promise<string | null> {
+  const { x, y } = await findWidestGap(page, cycleId);
+  return page.evaluate(
+    (point: { x: number; y: number }) => {
+      const target = document.elementFromPoint(point.x, point.y);
+      return target ? getComputedStyle(target).cursor : null;
+    },
+    { x, y },
+  );
+}
+
+// The ONE gap search both `measureEmptySpaceCursor` (above) and the pixel
+// hit-test (below) aim at: the midpoint of the widest run of the cycle
+// line's own box not covered by any rendered child — the leading edge,
+// every inter-child gap, and the trailing edge are all candidates — at the
+// line's vertical centre. Viewport coordinates, as `elementFromPoint` and
+// `page.mouse`/`page.touchscreen` take them.
+async function findWidestGap(page: Page, cycleId: number): Promise<{ x: number; y: number }> {
   const line = cycleLine(page, cycleId);
   await expect(line).toBeVisible();
   return line.evaluate((el) => {
@@ -72,10 +89,7 @@ async function measureEmptySpaceCursor(page: Page, cycleId: number): Promise<str
       (best, g) => (g.end - g.start > best.end - best.start ? g : best),
       { start: rect.left, end: rect.left },
     );
-    const x = (widest.start + widest.end) / 2;
-    const y = rect.top + rect.height / 2;
-    const target = document.elementFromPoint(x, y);
-    return target ? getComputedStyle(target).cursor : null;
+    return { x: (widest.start + widest.end) / 2, y: rect.top + rect.height / 2 };
   });
 }
 
@@ -245,7 +259,7 @@ Step(
 // the AC names — each derived from a measured child rect (the status glyph,
 // the label, the widest inter-child gap, and the gap between the element
 // immediately before the `→ Runs` badge and the badge itself), never a
-// hard-coded pixel, mirroring the gap-search `measureEmptySpaceCursor` above
+// hard-coded pixel, using the same `findWidestGap` search `measureEmptySpaceCursor` above
 // already uses. `document.elementFromPoint` proves each point BEFORE it is
 // clicked (never merely assumed from the rect math), so a mis-aimed click
 // cannot pass vacuously; the widest-gap offset additionally proves the point
@@ -263,41 +277,19 @@ interface HitOffset {
 }
 
 // The real empty-space point inside a cycle line — the widest inter-child
-// gap. Same gap-search geometry as `measureEmptySpaceCursor` above,
-// duplicated (not shared) so that already-proven helper is left untouched.
-async function widestGapPoint(page: Page, cycleId: number): Promise<{ x: number; y: number }> {
-  const line = cycleLine(page, cycleId);
-  await expect(line).toBeVisible();
-  return line.evaluate((el) => {
-    const rect = el.getBoundingClientRect();
-    const children = Array.from(el.children) as HTMLElement[];
-    const rects = children.map((c) => c.getBoundingClientRect()).sort((a, b) => a.left - b.left);
-    const gaps: Array<{ start: number; end: number }> = [];
-    let occupiedUpTo = rect.left;
-    for (const r of rects) {
-      if (r.left > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: r.left });
-      occupiedUpTo = Math.max(occupiedUpTo, r.right);
-    }
-    if (rect.right > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: rect.right });
-    const widest = gaps.reduce(
-      (best, g) => (g.end - g.start > best.end - best.start ? g : best),
-      { start: rect.left, end: rect.left },
-    );
-    return { x: (widest.start + widest.end) / 2, y: rect.top + rect.height / 2 };
-  });
-}
+// gap — is `findWidestGap` above, shared with `measureEmptySpaceCursor`.
 
 // The four AC-named x-offsets, each derived from a real rendered child rect:
 // the status glyph (near the left edge — dead space before CR-146, per the
 // CR's own Problem-table measurement: only the SEPARATE `cycle-toggle`
 // drill-down chevron was ever clickable, never `.app-cycle-glyph`), the
-// label, the widest gap (via `widestGapPoint`), and the gap between the
+// label, the widest gap (via `findWidestGap`), and the gap between the
 // element immediately before the `→ Runs` badge (the sealed/ember timer) and
 // the badge itself (near the right edge, short of it).
 async function hitOffsets(page: Page, cycleId: number): Promise<HitOffset[]> {
   const line = cycleLine(page, cycleId);
   await expect(line).toBeVisible();
-  const gap = await widestGapPoint(page, cycleId);
+  const gap = await findWidestGap(page, cycleId);
   const measured = await line.evaluate((el) => {
     const rect = el.getBoundingClientRect();
     const y = rect.top + rect.height / 2;
@@ -458,7 +450,6 @@ Step(
 );
 
 Step("I click the history cycle line for that cycle in its empty space", async ({ page, world }) => {
-  const { x, y } = await widestGapPoint(page, world.cycleId as number);
+  const { x, y } = await findWidestGap(page, world.cycleId as number);
   await page.mouse.click(x, y);
 });
-
