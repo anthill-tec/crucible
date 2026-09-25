@@ -54,7 +54,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { startServer } from "../src/server.ts";
 import { codecs } from "../src/codecs/index.ts";
 import type { Codec } from "../src/codecs/index.ts";
-import type { RunSchema } from "../src/types.ts";
+import type { RunSchema, SuiteNode, TestLeaf } from "../src/types.ts";
 
 /** Runtime-only view of the not-yet-existing "playwright" registry entry —
  * mirrors tests/codec-parsepath.test.ts's `parsePathOf` helper so this file
@@ -522,7 +522,10 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     const eventId = "evt-bdd-dom-1";
     const tree: DomSuiteNode[] = [
       {
-        name: "Sample Feature › Scenario A passing",
+        // The passing scenario sits in its OWN all-green feature, so under
+        // the progressive default it folds at the feature level and "the rest
+        // don't render" is a clean bound (see the migration note below).
+        name: "Another Feature › Scenario A passing",
         status: "pass",
         children: [
           { name: "Given a thing", status: "pass", duration_ms: 5 },
@@ -555,22 +558,23 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // CR-CRU-038 §S1 — e2e is a BROAD tier -> Density presentation, but the
-    // run opens MINIMIZED regardless: NEITHER scenario's steps render until
-    // expanded, and nothing auto-fetches.
+    // MIGRATED 2026-09-24 (CR-CRU-145 §S1, authorized by the orchestrator):
+    // a codec:"playwright" run no longer opens MINIMIZED — it opens
+    // PROGRESSIVELY EXPANDED. The failing feature floats first and opens,
+    // and its failing scenario's steps render ON OPEN with no click; the
+    // all-green feature folds, so the passing scenario's steps never render.
+    // The non-playwright MINIMIZED default is pinned in
+    // tests/playwright-run-progressive-expansion.test.ts (the junit case).
     const failScenarioRow = Array.from(overlay!.querySelectorAll('[data-testid="suite-row"]')).find(
       (el) => (el.textContent ?? "").includes("Scenario B failing"),
     );
     expect(failScenarioRow).toBeDefined();
-    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
     expect(
       (failScenarioRow as HTMLElement).querySelector('[data-testid="tree-toggle"]')!.textContent?.trim(),
-    ).toBe("▸");
+    ).toBe("▾");
 
-    // Expand the failing scenario explicitly — its steps render on click.
-    (failScenarioRow as HTMLElement).click();
-    await new Promise((r) => setTimeout(r, 200));
-
+    // The failing scenario's Given/When/Then step names render like any
+    // other leaf name — with NO click.
     const whenBreaksLeaf = Array.from(overlay!.querySelectorAll('[data-testid="leaf-row"]')).find((el) =>
       (el.textContent ?? "").includes("When it breaks"),
     );
@@ -589,3 +593,256 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     expect(whenHappensLeaf).toBeUndefined();
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// CR-CRU-145 §S3 — the missing frame elements: a verdict PER BROWSER.
+//
+// Measured 2026-09-24 at gap analysis: `specToNode` flattens the results of
+// ALL of a spec's `tests` and keeps the LAST as the verdict — but a spec's
+// `tests` array is one entry PER PLAYWRIGHT PROJECT, not one per retry
+// (`playwright.config.ts`'s `testMatch` runs `mobile-viewport-responsive
+// .feature` under BOTH `chromium-mobile` and `webkit-iphone`). So today ONE
+// browser's verdict silently replaces the other's whenever both run the same
+// spec, and the dropped `projectName` means neither can even be told apart
+// once merged.
+//
+// THESE CASES ARE ADDITIVE — every existing case above is untouched, per the
+// non-goal ("existing behavior and unit coverage stand"). The fixtures below
+// use the SAME real reporter shape as `PLAYWRIGHT_REPORT` above (see that
+// fixture's provenance note): `spec.tests[i]` is one PROJECT's test replica,
+// carrying its OWN `projectName` and its OWN `results` (that project's own
+// attempts/retries, last-of-array is that project's last attempt).
+//
+// DESIGN CHOICE DECLARED FOR THE ORCHESTRATOR (the AC does not name a field):
+// the CR's own wording — "additive to the node shape" — is read as SuiteNode
+// gaining one new optional field, `browser`, sourced from `projectName`,
+// rather than folding the project into the composed `name` string (which
+// already composes Feature+Scenario and has no room for a third dimension
+// without inventing a second separator). `browser` is the word F11's own
+// prose uses throughout ("each scenario names the browser it ran in", "each
+// browser gets its own verdict") and is what these tests assert. If GREEN's
+// author prefers a different field name, this file is the place to change
+// it — but the field must exist and be OPTIONAL so every other codec's
+// SuiteNode (no `browser`) still typechecks.
+type ScenarioNode = SuiteNode & { browser?: string };
+
+// A single-project report — the ALREADY-EXISTING `PLAYWRIGHT_REPORT` fixture
+// carries `projectName: "chromium"` on both specs' sole `tests[0]` entry, and
+// the codec drops it today (no `browser` reaches `SuiteNode` at all).
+describe("CR-CRU-145 §S3 — projectName reaches each scenario as `browser`", () => {
+  test("a single-project report's scenario nodes each carry `browser` from the report's projectName", async () => {
+    const result: RunSchema = await playwrightCodec()!.parse(JSON.stringify(PLAYWRIGHT_REPORT));
+    const tree = result.tree as ScenarioNode[];
+    const scenarioA = tree.find((s) => s.name === "Sample Feature › Scenario A passing");
+    const scenarioB = tree.find((s) => s.name === "Sample Feature › Scenario B failing");
+    expect(scenarioA).toBeDefined();
+    expect(scenarioB).toBeDefined();
+    expect(scenarioA?.browser).toBe("chromium");
+    expect(scenarioB?.browser).toBe("chromium");
+  });
+});
+
+interface PwStepFixture {
+  title: string;
+  duration: number;
+  error?: { message: string; stack: string };
+}
+
+/** Builds one spec's `tests[]` entry for ONE Playwright project: its own
+ *  `projectName` and its own ordered `results` (retries within THAT project
+ *  only — never mixed with another project's attempts). */
+function projectTest(projectName: string, results: Array<{ status: string; steps: PwStepFixture[] }>) {
+  return {
+    timeout: 30000,
+    annotations: [],
+    expectedStatus: "passed",
+    projectId: projectName,
+    projectName,
+    results: results.map((r, i) => ({
+      workerIndex: 0,
+      parallelIndex: 0,
+      status: r.status,
+      duration: r.steps.reduce((sum, s) => sum + s.duration, 0),
+      retry: i,
+      steps: r.steps,
+      startTime: "2026-09-24T00:00:00.000Z",
+      annotations: [],
+      attachments: [],
+    })),
+    status: "expected",
+  };
+}
+
+const GIVEN_STEP: PwStepFixture = { title: "Given the board is open on a phone", duration: 3 };
+const CHROMIUM_PASS_STEP: PwStepFixture = { title: "Then the Roadmap pane scrolls inside its own box", duration: 2 };
+const WEBKIT_FAIL_STEP: PwStepFixture = {
+  title: "Then the Roadmap pane scrolls inside its own box",
+  duration: 1,
+  error: { message: "expected pane scrollTop > 0, got 0", stack: "Error: expected pane scrollTop > 0, got 0\n    at mobile-viewport.spec.ts:22:9" },
+};
+
+/** One feature, one spec, run under BOTH `chromium-mobile` (passing) and
+ *  `webkit-iphone` (failing) — the exact cross-browser collision §S3
+ *  describes, `mobile-viewport-responsive.feature`'s own scenario name kept
+ *  verbatim from F11's mock. `order` controls which project's `tests[]`
+ *  entry comes first, so the fix is proven independent of report order. */
+function twoProjectReport(order: "mobile-first" | "webkit-first") {
+  const mobile = projectTest("chromium-mobile", [{ status: "passed", steps: [GIVEN_STEP, CHROMIUM_PASS_STEP] }]);
+  const webkit = projectTest("webkit-iphone", [{ status: "failed", steps: [GIVEN_STEP, WEBKIT_FAIL_STEP] }]);
+  return {
+    config: { version: "1.61.1" },
+    suites: [
+      {
+        title: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
+        file: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
+        column: 0,
+        line: 0,
+        specs: [],
+        suites: [
+          {
+            title: "responsive phone band",
+            file: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
+            line: 3,
+            column: 6,
+            specs: [
+              {
+                title: "the pane scrolls in its own box",
+                ok: false,
+                tags: [],
+                tests: order === "mobile-first" ? [mobile, webkit] : [webkit, mobile],
+                id: "spec-cross-browser",
+                file: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
+                line: 6,
+                column: 3,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    errors: [],
+    stats: { startTime: "2026-09-24T00:00:00.000Z", duration: 6, expected: 1, skipped: 0, unexpected: 1, flaky: 0 },
+  };
+}
+
+describe("CR-CRU-145 §S3 — a verdict PER BROWSER: one spec run under two projects decodes to TWO scenario nodes", () => {
+  test("mobile-first report order: two nodes, each named with its own browser, each keeping its own verdict; the run summary counts both", async () => {
+    const result: RunSchema = await playwrightCodec()!.parse(JSON.stringify(twoProjectReport("mobile-first")));
+    const tree = result.tree as ScenarioNode[];
+    const crossBrowser = tree.filter((s) => s.name === "responsive phone band › the pane scrolls in its own box");
+
+    // POSITIVE — exactly two nodes, one per project, neither hiding the other.
+    expect(crossBrowser.length).toBe(2);
+    const chromiumNode = crossBrowser.find((s) => s.browser === "chromium-mobile");
+    const webkitNode = crossBrowser.find((s) => s.browser === "webkit-iphone");
+    expect(chromiumNode).toBeDefined();
+    expect(webkitNode).toBeDefined();
+
+    // POSITIVE — each browser's OWN verdict: the webkit failure is never
+    // hidden behind the chromium pass, and vice versa.
+    expect(chromiumNode?.status).toBe("pass");
+    expect(webkitNode?.status).toBe("fail");
+    expect(webkitNode?.children.find((c: TestLeaf) => c.status === "fail")?.failure?.message).toBe(
+      "expected pane scrollTop > 0, got 0",
+    );
+
+    // POSITIVE — the run summary counts BOTH nodes' leaves (2 steps each: 4
+    // total, 3 passed [chromium's 2 + webkit's Given], 1 failed).
+    expect(result.summary.total).toBe(4);
+    expect(result.summary.passed).toBe(3);
+    expect(result.summary.failed).toBe(1);
+  });
+
+  test("webkit-first report order: the SAME two verdicts resolve, independent of which project's tests[] entry comes first", async () => {
+    const result: RunSchema = await playwrightCodec()!.parse(JSON.stringify(twoProjectReport("webkit-first")));
+    const tree = result.tree as ScenarioNode[];
+    const crossBrowser = tree.filter((s) => s.name === "responsive phone band › the pane scrolls in its own box");
+
+    expect(crossBrowser.length).toBe(2);
+    const chromiumNode = crossBrowser.find((s) => s.browser === "chromium-mobile");
+    const webkitNode = crossBrowser.find((s) => s.browser === "webkit-iphone");
+    expect(chromiumNode?.status).toBe("pass");
+    expect(webkitNode?.status).toBe("fail");
+  });
+});
+
+describe("CR-CRU-145 §S3 — retries within ONE project still resolve to that project's own last attempt", () => {
+  test("two projects, each retried, each keep their OWN last attempt — never the globally-last result across both projects", async () => {
+    // Project A: fails, fails, then PASSES (3 attempts) — its own last is
+    // "pass". Project B: passes, then FAILS (2 attempts) — its own last is
+    // "fail". Today's flatten-and-take-last-across-ALL-tests bug would
+    // collapse this whole spec to ONE node carrying whichever project's
+    // `tests[]` entry happens to sit last in the report (project B here),
+    // silently dropping project A's node and its genuinely-passing verdict.
+    const failStep: PwStepFixture = {
+      title: "Then it eventually passes",
+      duration: 2,
+      error: { message: "flaky failure", stack: "Error: flaky failure\n    at retry.spec.ts:9:1" },
+    };
+    const passStep: PwStepFixture = { title: "Then it eventually passes", duration: 2 };
+    const projectA = projectTest("chromium", [
+      { status: "failed", steps: [GIVEN_STEP, failStep] },
+      { status: "failed", steps: [GIVEN_STEP, failStep] },
+      { status: "passed", steps: [GIVEN_STEP, passStep] },
+    ]);
+    const projectB = projectTest("firefox", [
+      { status: "passed", steps: [GIVEN_STEP, passStep] },
+      { status: "failed", steps: [GIVEN_STEP, failStep] },
+    ]);
+    const report = {
+      config: { version: "1.61.1" },
+      suites: [
+        {
+          title: "tests/e2e/features/retry-sample.feature.spec.js",
+          file: "tests/e2e/features/retry-sample.feature.spec.js",
+          column: 0,
+          line: 0,
+          specs: [],
+          suites: [
+            {
+              title: "Retry Feature",
+              file: "tests/e2e/features/retry-sample.feature.spec.js",
+              line: 3,
+              column: 6,
+              specs: [
+                {
+                  title: "a flaky scenario",
+                  ok: false,
+                  tags: [],
+                  tests: [projectA, projectB],
+                  id: "spec-retry",
+                  file: "tests/e2e/features/retry-sample.feature.spec.js",
+                  line: 6,
+                  column: 3,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      errors: [],
+      stats: { startTime: "2026-09-24T00:00:00.000Z", duration: 8, expected: 1, skipped: 0, unexpected: 1, flaky: 1 },
+    };
+
+    const result: RunSchema = await playwrightCodec()!.parse(JSON.stringify(report));
+    const tree = result.tree as ScenarioNode[];
+    const nodes = tree.filter((s) => s.name === "Retry Feature › a flaky scenario");
+    expect(nodes.length).toBe(2);
+
+    const chromiumNode = nodes.find((s) => s.browser === "chromium");
+    const firefoxNode = nodes.find((s) => s.browser === "firefox");
+    expect(chromiumNode).toBeDefined();
+    expect(firefoxNode).toBeDefined();
+
+    // POSITIVE — chromium's OWN last attempt (the 3rd) is "pass", carrying
+    // that attempt's own steps, not the 1st/2nd failing attempt's.
+    expect(chromiumNode?.status).toBe("pass");
+    expect(chromiumNode?.children.every((c: TestLeaf) => c.status === "pass")).toBe(true);
+
+    // POSITIVE — firefox's OWN last attempt (the 2nd) is "fail", independent
+    // of chromium's verdict sitting elsewhere in the same spec.
+    expect(firefoxNode?.status).toBe("fail");
+    expect(firefoxNode?.children.some((c: TestLeaf) => c.status === "fail")).toBe(true);
+  });
+});
+

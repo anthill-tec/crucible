@@ -320,6 +320,44 @@ export function workspaceTabs(project) {
 }
 
 /**
+ * The BDD tab's index: the BDD-bearing runs among `events`, newest first. A
+ * run is BDD-bearing when it is a test run the playwright codec decoded (the
+ * codec that produces Gherkin) — a junit unit run carries no specification.
+ * Each row carries only what the index names: when, who, its cycle (null
+ * when the run carries none, so the row reads as unbound rather than being
+ * hidden or attributed) and its verdict with counts.
+ */
+export function bddIndexRows(events) {
+  return (events ?? [])
+    .filter((e) => e.kind === "test" && e.codec === "playwright")
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .map((e) => {
+      const cycleId = e.context?.cycleId ?? e.cycleId;
+      const label = e.context?.cycle;
+      const hasLabel = typeof label === "string" && label.length > 0;
+      const cycle =
+        typeof cycleId === "number"
+          ? hasLabel
+            ? `cycle ${cycleId} · ${label}`
+            : `cycle ${cycleId}`
+          : null;
+      const passed = e.passed ?? 0;
+      const failed = e.failed ?? 0;
+      const pending = e.pending ?? 0;
+      return {
+        id: e.id,
+        timestamp: e.timestamp,
+        agentId: e.agentId,
+        cycle,
+        verdict: failed > 0 ? "fail" : passed > 0 ? "pass" : "pending",
+        passed,
+        failed,
+        pending,
+      };
+    });
+}
+
+/**
  * CR-CRU-044 §S2 / CR-CRU-057 §S3 — classify by the STORED role, and by
  * nothing else. A declared role (the agent's own, or the one stamped onto
  * the event at ingest, §S1) is the ONLY classification input: when `role` is
@@ -1604,6 +1642,7 @@ if (typeof window !== "undefined") {
     livenessGlyph,
     routeParse,
     workspaceTabs,
+    bddIndexRows,
     focusedReleaseView,
     compressWaveRuns,
     roadmapTableColumns,

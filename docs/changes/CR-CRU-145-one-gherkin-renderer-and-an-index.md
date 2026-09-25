@@ -1,7 +1,19 @@
 # CR-CRU-145 — one Gherkin renderer, and the BDD tab is its index
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-015 · **Status** PENDING
+**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-015 · **Status** COMPLETED (0.3.0)
 
+> **Close-out 2026-09-25.** Delivered as plan 158 in three RED+GREEN cycles (codec → run detail →
+> index and cutover) plus VERIFY, which approved with findings that were fixed in-cycle. **Named gap
+> (§S3):** Playwright's `trace.zip` (`trace: "retain-on-failure"`) is still not ingested, stored or
+> linked. A failing step offers its stored stack behind `stack ▸`, and nothing in the UI offers
+> `trace ↗`. Storing artifacts would be its own CR.
+>
+> **Gap analysis 2026-09-24** (baseline bun 2741/0, python 1930/0 at `1056f8f`). **Storyboard F11 is
+> redrawn to this CR's design and approved**: it is the visual contract. Folded in by user rulings:
+> progressive expansion (§S1), a verdict per browser (§S3, a codec defect measured here), and
+> `trace ↗` as the stored stack only, with `trace.zip` a named gap (§S3). Line citations are replaced
+> by symbol names; the old ones had drifted by hundreds of lines.
+>
 > **RE-SPECIFIED 2026-09-18 after the user read the shipped UI: *"I just noticed that the run detail
 > view from an e2e run actually renders the Gherkin results. So is the BDD only view an overkill?"***
 > The first draft of this CR said "give the BDD pane a run list, F11's collapsible tree with counts,
@@ -73,9 +85,9 @@ renders a tree of its own:
 - a row opens that run's detail — the same `/p/<key>/run/<id>` route (CR-CRU-016 §S3) the Runs pane
   and the Workflow chain use. No second route, no embedded copy.
 
-Nothing new is needed to find the runs: `visibleEvents()` (`public/app.js:461`) already holds the
-history client-side. The existing chain — `linkedRunsFor(cycleId)` (`:4082`), the `cycleId`-anchored
-evidence read (`:4305-4316`, CR-CRU-140 §S1), the first-class `cycleId` on the event (CR-CRU-094 §S1)
+Nothing new is needed to find the runs: `visibleEvents()` (`public/app.js`) already holds the
+history client-side. The existing chain — `linkedRunsFor(cycleId)`, the `cycleId`-anchored
+evidence read (CR-CRU-140 §S1), the first-class `cycleId` on the event (CR-CRU-094 §S1)
 — is the primary path and is left alone; this index is the direct-entry complement to it, not a fork.
 
 ### §S3 — what the drill-in genuinely lacks for a specification
@@ -129,14 +141,25 @@ verifying.
 ## Acceptance criteria
 
 **§S1 — one renderer**
-- [ ] A `codec: "playwright"` run's detail opens **progressively expanded**: every failing scenario
-      and the first scenarios of the first feature show their ordered `Given`/`When`/`Then` with
-      per-step status without clicking; green features fold; a scenario further down loads and
-      shows its steps when it scrolls into view, without a click. Asserted on a real ingested run.
+- [ ] A `codec: "playwright"` run's detail opens **progressively expanded**, per F11 B. Features are
+      ordered failures first. The **first feature in that order** is expanded: its failing scenarios
+      and its first scenarios show their ordered `Given`/`When`/`Then` with per-step status without
+      clicking, and its later scenarios have rows that load their steps when they scroll into view,
+      without a click. Every other feature containing a failure is expanded with its failing
+      scenarios' steps shown. Every other all-green feature is **folded** (no scenario rows until
+      clicked). In an all-green run, the report-first feature is the one expanded. Asserted on a
+      real ingested run. (Rule settled at C2 GREEN 2026-09-24, when two RED readings contradicted.)
 - [ ] A long run is neither fetched nor rendered in one go: opening a run with more scenarios than
       the initial expansion issues **no** per-suite read for a scenario that has not scrolled into
       view. Asserted on the requests made, not on timing.
 - [ ] A failing step still shows its message AT that step.
+- [ ] **A scenario that ran under two browsers opens that browser's own steps.** The suites read
+      (`?depth=suites`) carries each scenario node's `browser`; the per-suite read is narrowed by
+      browser as well as name; and the run detail keys every per-scenario state (loaded leaves,
+      loading flag, window, leaf keys) by (name, browser). Asserted on a two-browser run in which
+      the FIRST-listed browser passes and the second fails: expanding the failing browser's row
+      shows its failing step, never the passing browser's steps. (Found at C1 GREEN 2026-09-24: the
+      per-suite read returned the first same-named node, and the run detail keyed by name alone.)
 - [ ] Non-playwright runs' details are UNCHANGED — same default expansion as today, asserted, so this
       does not become a global behaviour change.
 - [ ] The drill-in's existing frame still applies to a playwright run: collapse works, per-scenario

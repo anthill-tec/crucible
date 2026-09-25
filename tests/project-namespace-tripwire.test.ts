@@ -2451,9 +2451,60 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // are its final figures and not a mid-cycle reading. It clears the CASCADE
 // with it: tests/help-surface-order-independence.test.ts collects THIS file in
 // its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-09-25 by CR-CRU-145's CLOSE-OUT (the C4 FIX round, cycle 519).
+// `public` moves 519 -> 514 (-5). MEASURED with this file's own machinery on
+// the feature branch AFTER the FIX round's last content edit (the BDD index
+// row's verdict glyph in public/app.js, which adds no citation, plus two
+// tests under tests/, which move no head): `bun test
+// tests/project-namespace-tripwire.test.ts -t "never below its develop
+// baseline"` reported, against the then-recorded 779/519/884,
+//
+//     -  "public": 519   +  "public": 514
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 1056f8f:<path>` (the branch's base on `develop`;
+// `develop`'s own later e2df749 is docs-only and gives the same counts),
+// attributes all five. Every one is a REMOVAL, and every classified file this
+// CR touches is listed:
+//
+//   public -5:
+//     public/app.js  291 -> 287 (-4): the C3 GREEN (b753ec5) retires the BDD
+//       pane's own Gherkin renderer, and the prose on that renderer left with
+//       it (base lines at 1056f8f): `CR-CRU-015` twice (:2906 the "renders the
+//       GHERKIN" section header; :3024 the pane naming its subject),
+//       `CR-CRU-122` once (:3096 the "words AND a spinner" read-in-flight note)
+//       and `CR-CRU-078` once (:3102 the "no skeleton of empty Gherkin chrome"
+//       note). A fifth mover nets to zero: the C2 GREEN (a25ff4e) rewrote the
+//       suite-row block, and its `CR-CRU-122 §S3` lazy-load comment (:6494)
+//       moved with it, one out and one in.
+//     public/styles.css 84 -> 83 (-1): `CR-CRU-015` once (:764, the "BDD
+//       section's Gherkin: feature ▸ scenario ▸ steps" block header),
+//       removed with the retired renderer's rules in b753ec5.
+//     public/app-logic.mjs 90 -> 90 (0): `bddIndexRows` adds no citation.
+//
+//   src 0: src/codecs/playwright.ts 3 -> 3, src/types.ts 60 -> 60 and
+//     src/v2.ts 247 -> 247. C1 and C2 edit all three, add no citation and
+//     remove none, so `src` (779) re-measures at its recorded head.
+//
+//   clients 0: this CR changes no file under `clients/`, so `clients` (884)
+//     could not have moved.
+//
+// A NET LOSS, and stated as one: `public` goes DOWN in this re-record. It is
+// not lineage being shed from living code. The five citations sat on code
+// this CR DELETES (the bespoke renderer, retired by §S2 for the one run
+// detail), and they left with it. No CR-CRU-145 citation is added under a
+// classified tree. `public` (514) is still far above its 378 floor, so the
+// directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit, so these
+// are its final figures and not a mid-cycle reading. It clears the CASCADE
+// with it: tests/help-surface-order-independence.test.ts collects THIS file in
+// its child `bun test`, fired for the right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 779 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 519 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
   clients: { exts: [".py"], develop: 601, head: 884 },
 };
 
