@@ -232,6 +232,11 @@ export interface ReleasePackage {
 export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;
+  /** §S1 AC3 — the box's LIVE membership: every member except a dead one
+   *  (`isDeadCr`) that is not `IN_PROGRESS`. A running dead member stays.
+   *  A wave whose every member is dead and none running draws no box at all
+   *  (ruling 5), so an entry here is never empty on that account.
+   *  The header count is its length. */
   entries: Entry[];
   /** CR-CRU-096 §S5 — the members this box DRAWS, in the server's published
    *  order. A window on `entries`, never a re-ordering of it. For a wave box
@@ -304,6 +309,13 @@ export interface FocusedReleaseView<Entry = unknown> {
   packagesState: "listed" | "empty" | "absent";
   tracks: string[];
 }
+
+/** §S1 AC5 — the browser's state-based mirror of `isDeadCr` in
+ *  `src/types.ts`: dead iff `lifecycle.state` is `VOID` or `SUPERSEDED`.
+ *  A null/undefined entry or lifecycle, or an unrecognised state, is live. */
+export declare function isDeadCr(
+  entry: { lifecycle?: { state?: string } | null } | null | undefined,
+): boolean;
 
 export declare function focusedReleaseView<Entry = unknown>(
   gate: ReleaseStripGate | null | undefined,
