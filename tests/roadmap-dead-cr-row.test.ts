@@ -81,6 +81,11 @@ interface LifecycleFixture {
   by?: string;
   reason?: string;
   at: number;
+  /** Ruling 6 (2026-09-25, C4) — `cr-void`/`cr-supersede` now store the
+   *  registered caller as `author` on the lifecycle, the same value the
+   *  declaration journal already records (`src/store.ts` `setQueueLifecycle`
+   *  / `appendDeclaration`); absent on a lifecycle written before the ruling. */
+  author?: string;
 }
 
 interface QueueFixture {
@@ -113,6 +118,9 @@ const VOID_REASON =
   "Voided at gap analysis 2026-09-24 (user ruling): the surface it targeted " +
   "was retired and the repo went public, so the CI run it guarded is free now.";
 const SUPERSEDED_REASON = "Rolled into the broader rewrite CR-DR-SUCC delivers instead.";
+/** Ruling 6 (C4) — the registered caller a `cr-void`/`cr-supersede` write
+ *  carries on the lifecycle as `author` (never a display-name guess). */
+const AUTHORED_AUTHOR = "orchestrator-9";
 
 /** The one board every test in this file reuses: one LIVE row (AC4's own
  *  regression guard), one VOID row and one SUPERSEDED row, all in the SAME
@@ -153,6 +161,17 @@ const QUEUE: QueueFixture[] = [
     seq: 30,
     release: RELEASE,
     lifecycle: { state: "SUPERSEDED", by: "CR-DR-SUCC", reason: SUPERSEDED_REASON, at: RETIRED_AT },
+  },
+  {
+    cr: "CR-DR-VOID-AUTHORED",
+    title: "CR-DR-VOID-AUTHORED — voided with an author on the lifecycle",
+    wave: WAVE,
+    dependsOn: [],
+    status: "PENDING",
+    points: 2,
+    seq: 40,
+    release: RELEASE,
+    lifecycle: { state: "VOID", reason: VOID_REASON, at: RETIRED_AT, author: AUTHORED_AUTHOR },
   },
 ];
 
@@ -496,6 +515,106 @@ describe("CR-CRU-147 §S2 AC3 (cycle 526, C4) — the reason is the status badge
     expect(
       liveBadge.hasAttribute("aria-describedby"),
       "the live row's badge must carry no aria-describedby — it has no lifecycle reason to point at",
+    ).toBe(false);
+  });
+});
+
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+// Ruling 6 (2026-09-25, at C4) \u2014 the lifecycle carries who: `cr-void` and
+// `cr-supersede` store the registered caller as `author` on the lifecycle
+// (the same value `src/store.ts`'s declaration journal already records), and
+// the tooltip names it, in order state \u00b7 date \u00b7 who \u00b7 reason. A lifecycle
+// with no `author` (written before this change) renders its tooltip without
+// one \u2014 never a placeholder such as "unknown" or "\u2014" standing in for it.
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+describe("CR-CRU-147 §S2 ruling 6 (cycle 526, C4) — the lifecycle's author, named in the tooltip", () => {
+  test("a lifecycle carrying `author` renders a tooltip naming it, positioned after the state and before the reason", async () => {
+    await mountApp();
+
+    // Fixture sanity — this row's lifecycle really does carry an author, so
+    // a passing assertion below is a real behavioural claim, not an accident
+    // of an undefined field stringifying to something matching.
+    expect(
+      QUEUE.find((e) => e.cr === "CR-DR-VOID-AUTHORED")!.lifecycle!.author,
+      "fixture sanity: CR-DR-VOID-AUTHORED must carry an author",
+    ).toBe(AUTHORED_AUTHOR);
+
+    const badge = statusBadgeOf("CR-DR-VOID-AUTHORED");
+    const describedBy = badge.getAttribute("aria-describedby");
+    expect(
+      describedBy,
+      "CR-DR-VOID-AUTHORED's status badge carries no aria-describedby — the reason (and who) is not linked to it",
+    ).not.toBeNull();
+
+    const tooltip = document.getElementById(describedBy!);
+    expect(
+      tooltip,
+      `CR-DR-VOID-AUTHORED: aria-describedby="${describedBy}" points at no element`,
+    ).not.toBeNull();
+
+    const text = norm(tooltip!.textContent);
+    expect(
+      text.includes(AUTHORED_AUTHOR),
+      `the tooltip does not name the lifecycle's author "${AUTHORED_AUTHOR}" (got: "${text}")`,
+    ).toBe(true);
+
+    // "state · date · who · reason" — who renders strictly between the state
+    // and the full reason. The date's own FORMAT stays unasserted, as the
+    // file-header ESCALATION already establishes for AC3; only WHO's order
+    // relative to state and reason is pinned here.
+    const stateIdx = text.indexOf("VOID");
+    const authorIdx = text.indexOf(AUTHORED_AUTHOR);
+    const reasonIdx = text.indexOf(VOID_REASON);
+    expect(stateIdx, "the tooltip's own state segment is missing").toBeGreaterThanOrEqual(0);
+    expect(reasonIdx, "the tooltip's full reason is missing").toBeGreaterThanOrEqual(0);
+    expect(
+      stateIdx < authorIdx,
+      `the author "${AUTHORED_AUTHOR}" must render AFTER the state (got tooltip: "${text}")`,
+    ).toBe(true);
+    expect(
+      authorIdx < reasonIdx,
+      `the author "${AUTHORED_AUTHOR}" must render BEFORE the reason (got tooltip: "${text}")`,
+    ).toBe(true);
+  });
+
+  test("a lifecycle with no `author` renders a tooltip with state, date and reason but no who segment, and no placeholder stands in for it", async () => {
+    await mountApp();
+
+    // CR-DR-VOID's fixture lifecycle carries no `author` at all — exactly
+    // "a lifecycle with no author (written before this change)" the ruling
+    // names.
+    expect(
+      QUEUE.find((e) => e.cr === "CR-DR-VOID")!.lifecycle!.author,
+      "fixture sanity: CR-DR-VOID must carry no author",
+    ).toBeUndefined();
+
+    const badge = statusBadgeOf("CR-DR-VOID");
+    const describedBy = badge.getAttribute("aria-describedby");
+    expect(describedBy, "CR-DR-VOID's status badge carries no aria-describedby").not.toBeNull();
+    const tooltip = document.getElementById(describedBy!);
+    expect(tooltip, `CR-DR-VOID: aria-describedby="${describedBy}" points at no element`).not.toBeNull();
+
+    const text = norm(tooltip!.textContent);
+    // The state and the reason still render — the ruling only says the WHO
+    // segment is dropped, not the rest of the tooltip's contract.
+    expect(text.startsWith("VOID"), `the tooltip must still open with its own state (got: "${text}")`).toBe(
+      true,
+    );
+    expect(
+      text.includes(VOID_REASON),
+      "the tooltip must still carry the full reason verbatim",
+    ).toBe(true);
+
+    // No placeholder stands in for the missing author — the exact two the
+    // ruling names.
+    expect(
+      /unknown/i.test(text),
+      `the tooltip must not use "unknown" as a stand-in for a missing author (got: "${text}")`,
+    ).toBe(false);
+    expect(
+      text.includes("—"),
+      `the tooltip must not use an em-dash placeholder for a missing author (got: "${text}")`,
     ).toBe(false);
   });
 });
