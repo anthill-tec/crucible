@@ -94,3 +94,22 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
     And I open the workspace for that project
     And I expand the cr group for "CR-CRB-4B"
     Then the history cycle line for that cycle shows the pointer cursor over its empty space
+
+  Scenario: CR-CRU-146 — pixel hit-test: a history cycle line's toggle fires at every measured x-offset across the row, the line spans at least 90% of the row's width, and clicking the "→ Runs" badge leaves that open/closed state unchanged
+    Given a project named "CRB Hit Test Project" is registered
+    And a cycle plan is filed for cr "CR-CRB-5" with a cycle labelled "c1 hit test"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb5-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "agent-crb5-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "crb00005"
+    When I open the workspace for that project
+    And I expand the cr group for "CR-CRB-5"
+    Then the history cycle line for that cycle measures at least 90% of its row's width
+    And clicking the history cycle line for that cycle at each measured x-offset opens then closes its linked runs
+    When I click the history cycle line for that cycle in its empty space
+    Then the cr group for "CR-CRB-5" shows cycle "c1 hit test" as a closed span containing the linked run for agent "agent-crb5-green"
+    When I click the cycle-to-runs badge for cycle "c1 hit test" in the cr group for "CR-CRB-5"
+    Then the "Runs" tab is selected
+    When I click the "Workflow" workspace tab
+    Then the cr group for "CR-CRB-5" shows cycle "c1 hit test" as a closed span containing the linked run for agent "agent-crb5-green"

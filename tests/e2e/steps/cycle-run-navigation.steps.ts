@@ -238,3 +238,227 @@ Step(
     expect(cursor).toBe("pointer");
   },
 );
+
+// ── CR-CRU-146 — pixel hit-test (real browser) + "the handler spans the row" ─
+// AC1/AC6 (docs/changes/CR-CRU-146-\u2026): the history cycle LINE (not the 13px
+// drill-down glyph) is the hit area, proven at the four REAL pixel x-offsets
+// the AC names — each derived from a measured child rect (the status glyph,
+// the label, the widest inter-child gap, and the gap between the element
+// immediately before the `→ Runs` badge and the badge itself), never a
+// hard-coded pixel, mirroring the gap-search `measureEmptySpaceCursor` above
+// already uses. `document.elementFromPoint` proves each point BEFORE it is
+// clicked (never merely assumed from the rect math), so a mis-aimed click
+// cannot pass vacuously; the widest-gap offset additionally proves the point
+// resolves to the LINE ITSELF, not a child — the behavioural proof that the
+// toggle handler sits on the line (a DOM listener cannot be read directly) —
+// so a refactor that re-narrows the handler to a child node reds that check
+// even before the open/close assertion does.
+
+interface HitOffset {
+  name: string;
+  x: number;
+  y: number;
+  excludeBadge: boolean;
+  mustBeLineItself: boolean;
+}
+
+// The real empty-space point inside a cycle line — the widest inter-child
+// gap. Same gap-search geometry as `measureEmptySpaceCursor` above,
+// duplicated (not shared) so that already-proven helper is left untouched.
+async function widestGapPoint(page: Page, cycleId: number): Promise<{ x: number; y: number }> {
+  const line = cycleLine(page, cycleId);
+  await expect(line).toBeVisible();
+  return line.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const children = Array.from(el.children) as HTMLElement[];
+    const rects = children.map((c) => c.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+    const gaps: Array<{ start: number; end: number }> = [];
+    let occupiedUpTo = rect.left;
+    for (const r of rects) {
+      if (r.left > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: r.left });
+      occupiedUpTo = Math.max(occupiedUpTo, r.right);
+    }
+    if (rect.right > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: rect.right });
+    const widest = gaps.reduce(
+      (best, g) => (g.end - g.start > best.end - best.start ? g : best),
+      { start: rect.left, end: rect.left },
+    );
+    return { x: (widest.start + widest.end) / 2, y: rect.top + rect.height / 2 };
+  });
+}
+
+// The four AC-named x-offsets, each derived from a real rendered child rect:
+// the status glyph (near the left edge — dead space before CR-146, per the
+// CR's own Problem-table measurement: only the SEPARATE `cycle-toggle`
+// drill-down chevron was ever clickable, never `.app-cycle-glyph`), the
+// label, the widest gap (via `widestGapPoint`), and the gap between the
+// element immediately before the `→ Runs` badge (the sealed/ember timer) and
+// the badge itself (near the right edge, short of it).
+async function hitOffsets(page: Page, cycleId: number): Promise<HitOffset[]> {
+  const line = cycleLine(page, cycleId);
+  await expect(line).toBeVisible();
+  const gap = await widestGapPoint(page, cycleId);
+  const measured = await line.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const y = rect.top + rect.height / 2;
+    const children = Array.from(el.children) as HTMLElement[];
+    const glyph = el.querySelector<HTMLElement>(".app-cycle-glyph");
+    const label = el.querySelector<HTMLElement>(".app-cycle-label");
+    const badge = el.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+    if (!glyph || !label || !badge) {
+      throw new Error(
+        "hitOffsets: expected the status glyph, label and → Runs badge to all render",
+      );
+    }
+    const glyphRect = glyph.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    const badgeRect = badge.getBoundingClientRect();
+    const badgeIndex = children.indexOf(badge);
+    const beforeBadge = badgeIndex > 0 ? children[badgeIndex - 1] : null;
+    if (!beforeBadge) {
+      throw new Error(
+        "hitOffsets: expected a rendered element immediately before the → Runs badge",
+      );
+    }
+    const beforeBadgeRect = beforeBadge.getBoundingClientRect();
+    return {
+      y,
+      glyphX: (glyphRect.left + glyphRect.right) / 2,
+      labelX: (labelRect.left + labelRect.right) / 2,
+      rightEdgeX: (beforeBadgeRect.right + badgeRect.left) / 2,
+    };
+  });
+
+  return [
+    {
+      name: "near the left edge (status glyph)",
+      x: measured.glyphX,
+      y: measured.y,
+      excludeBadge: false,
+      mustBeLineItself: false,
+    },
+    {
+      name: "over the label",
+      x: measured.labelX,
+      y: measured.y,
+      excludeBadge: false,
+      mustBeLineItself: false,
+    },
+    {
+      name: "the empty space right of the label",
+      x: gap.x,
+      y: gap.y,
+      excludeBadge: false,
+      mustBeLineItself: true,
+    },
+    {
+      name: "near the right edge, short of the → Runs badge",
+      x: measured.rightEdgeX,
+      y: measured.y,
+      excludeBadge: true,
+      mustBeLineItself: false,
+    },
+  ];
+}
+
+// `document.elementFromPoint` proof, run BEFORE every click: the point must
+// land inside the cycle line (on the line itself or a descendant it owns);
+// the "short of the badge" point must additionally NOT land inside the
+// badge; the widest-gap point must resolve to the LINE ITSELF (no child
+// covers it) — the behavioural proof that the toggle handler sits on the
+// line, since a DOM listener cannot be read directly.
+async function assertPointOnLine(page: Page, cycleId: number, offset: HitOffset): Promise<void> {
+  const line = cycleLine(page, cycleId);
+  const result = await line.evaluate(
+    (lineEl, args: { x: number; y: number }) => {
+      const target = document.elementFromPoint(args.x, args.y);
+      const badge = lineEl.querySelector('[data-testid="cycle-to-runs"]');
+      return {
+        insideLine: target !== null && (target === lineEl || lineEl.contains(target)),
+        isLineItself: target === lineEl,
+        insideBadge:
+          target !== null && badge !== null && (target === badge || badge.contains(target)),
+      };
+    },
+    { x: offset.x, y: offset.y },
+  );
+  expect(
+    result.insideLine,
+    `${offset.name}: point (${offset.x}, ${offset.y}) must land inside the cycle line`,
+  ).toBe(true);
+  if (offset.excludeBadge) {
+    expect(
+      result.insideBadge,
+      `${offset.name}: point (${offset.x}, ${offset.y}) must NOT land inside the → Runs badge`,
+    ).toBe(false);
+  }
+  if (offset.mustBeLineItself) {
+    expect(
+      result.isLineItself,
+      `${offset.name}: point (${offset.x}, ${offset.y}) must resolve to the line itself, ` +
+        "outside every child — the behavioural proof the handler sits on the line",
+    ).toBe(true);
+  }
+}
+
+Step(
+  "the history cycle line for that cycle measures at least 90% of its row's width",
+  async ({ page, world }) => {
+    const cycleId = world.cycleId as number;
+    const row = historyCycleRow(page, cycleId);
+    const line = cycleLine(page, cycleId);
+    await expect(line).toBeVisible();
+    const rowBox = await row.boundingBox();
+    const lineBox = await line.boundingBox();
+    if (!rowBox || !lineBox) {
+      throw new Error("the history cycle row/line bounding box is unavailable");
+    }
+    expect(rowBox.width).toBeGreaterThan(0);
+    expect(lineBox.width).toBeGreaterThanOrEqual(0.9 * rowBox.width);
+  },
+);
+
+Step(
+  "clicking the history cycle line for that cycle at each measured x-offset opens then closes its linked runs",
+  async ({ page, world }) => {
+    const cycleId = world.cycleId as number;
+    const offsets = await hitOffsets(page, cycleId);
+    expect(offsets.length).toBeGreaterThanOrEqual(4);
+
+    const row = historyCycleRow(page, cycleId);
+    const workflowTab = page.getByTestId("workspace-tab").filter({ hasText: "Workflow" });
+
+    for (const offset of offsets) {
+      await assertPointOnLine(page, cycleId, offset);
+      await expect(
+        row.getByTestId("cycle-span-closed"),
+        `${offset.name}: the row must start closed`,
+      ).toHaveCount(0);
+
+      await page.mouse.click(offset.x, offset.y);
+
+      const openSpan = row.getByTestId("cycle-span-closed");
+      await expect(openSpan, `clicking ${offset.name} must open the cycle's linked runs`).toBeVisible();
+      await expect(
+        openSpan.getByTestId("linked-run-row"),
+        `${offset.name}: the opened span must show exactly the two linked runs`,
+      ).toHaveCount(2);
+      // Negative bound: the click did not navigate away from Workflow.
+      await expect(workflowTab).toHaveClass(/\bon\b/);
+
+      await assertPointOnLine(page, cycleId, offset);
+      await page.mouse.click(offset.x, offset.y);
+
+      await expect(
+        row.getByTestId("cycle-span-closed"),
+        `clicking ${offset.name} again must close the cycle's linked runs`,
+      ).toHaveCount(0);
+    }
+  },
+);
+
+Step("I click the history cycle line for that cycle in its empty space", async ({ page, world }) => {
+  const { x, y } = await widestGapPoint(page, world.cycleId as number);
+  await page.mouse.click(x, y);
+});
+
