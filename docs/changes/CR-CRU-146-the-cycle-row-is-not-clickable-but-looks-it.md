@@ -100,19 +100,19 @@ them and must leave them green, untouched:
 
 **Remaining (this CR):**
 
-- [ ] **Pixel hit-test, in a real browser (e2e).** On the Workflow tab, a history cycle row is
+- [x] **Pixel hit-test, in a real browser (e2e).** On the Workflow tab, a history cycle row is
       clicked at **at least four x-offsets across its measured width** (near the left edge, over
       the label, in the empty space right of the label, and near the right edge short of the
       `→ Runs` badge). Each click opens that cycle's linked runs, and the next click at the same
       offset closes it. A click on the `→ Runs` badge navigates and does not toggle.
-- [ ] **The handler spans the row.** In the same browser run, the element carrying the toggle is
+- [x] **The handler spans the row.** In the same browser run, the element carrying the toggle is
       the cycle's line, and its measured width is at least 90% of the row's width, so a refactor
       that re-narrows the hit area to the glyph reds.
-- [ ] **§S2 — the affordance is honest.** A toggleable cycle line carries `.app-lens-toggle`, the
+- [x] **§S2 — the affordance is honest.** A toggleable cycle line carries `.app-lens-toggle`, the
       class the CR-group row already uses, and a line with no toggle does not. Asserted in the DOM
       (both rows) and in a real browser: the computed `cursor` over the line's empty space is
       `pointer` for a toggleable history row, and not `pointer` for the active section's open span.
-- [ ] No second hit-area mechanism: `CycleLine` remains the one place the line's handler and its
+- [x] No second hit-area mechanism: `CycleLine` remains the one place the line's handler and its
       class are decided.
 
 ## Risk
