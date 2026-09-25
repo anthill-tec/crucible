@@ -130,6 +130,51 @@ Step("I tap the status badge for {string}", async ({ page }, cr: string) => {
   await statusBadgeLocator(page, cr).tap();
 });
 
+// Ruling 7 (2026-09-25, at VERIFY) \u2014 the same badge is reachable by
+// keyboard: focusing it (Tab, or here a direct `.focus()` \u2014 Playwright has no
+// portable "land exactly here" Tab sequence across the surrounding chrome)
+// opens the tooltip the same way hover/tap already do.
+Step("I focus the status badge for {string}", async ({ page }, cr: string) => {
+  await statusBadgeLocator(page, cr).focus();
+});
+
+// "Moving focus away" \u2014 a direct `.blur()` on the badge itself, not a click
+// elsewhere in the page that could ALSO open some other control's own tooltip
+// or drill through a row and confound the assertion that follows.
+Step("I move focus away from the status badge for {string}", async ({ page }, cr: string) => {
+  await statusBadgeLocator(page, cr).evaluate((el) => (el as HTMLElement).blur());
+});
+
+// Ruling 7's own accessibility-tree requirement, read from the REAL browser's
+// computed style (unlike the happy-dom unit half, a real engine's cascade
+// answers this precisely): closed does not mean gone \u2014 no `hidden` attribute,
+// no `display:none`, no `visibility:hidden`. The reason stays readable in the
+// markup regardless.
+Step(
+  "the status badge for {string} keeps its lifecycle tooltip in the accessibility tree while closed",
+  async ({ page }, cr: string) => {
+    void cr;
+    const tooltip = page.getByTestId("roadmap-status-tooltip");
+    await expect(tooltip).toBeAttached();
+    const state = await tooltip.evaluate((el) => ({
+      hidden: el.hasAttribute("hidden"),
+      display: getComputedStyle(el).display,
+      visibility: getComputedStyle(el).visibility,
+    }));
+    expect(state.hidden, "the closed tooltip still carries a hidden attribute \u2014 ruling 7 forbids it").toBe(
+      false,
+    );
+    expect(
+      state.display,
+      "the closed tooltip's computed display is \"none\" \u2014 ruling 7 forbids hiding it that way",
+    ).not.toBe("none");
+    expect(
+      state.visibility,
+      'the closed tooltip\'s computed visibility is "hidden" \u2014 ruling 7 forbids hiding it that way',
+    ).not.toBe("hidden");
+  },
+);
+
 // The tooltip's OWN visibility is the behavioural proof \u00a7S2 asks for \u2014 not
 // merely present in the DOM (a static assertion a `display:none` bubble would
 // still satisfy), but actually shown after the hover/tap that opened it, and

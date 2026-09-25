@@ -70,6 +70,19 @@ const VAN_X_SRC = readFileSync(
 );
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+/** Same single-match technique as tests/coverage-trend-geometry.test.ts's
+ * `ruleBody()` (itself following tests/f13-fidelity.test.ts) \u2014 the FIRST rule
+ * in styles.css whose selector is the exact literal text given, returning its
+ * declaration body, or `undefined` if no such rule exists. Used below (ruling
+ * 7) to assert the `[hidden]`-attribute hiding rule is GONE, not merely that
+ * some rule happens not to match. */
+function ruleBody(selector: string): string | undefined {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(STYLES_SRC);
+  return match?.[1];
+}
 
 // ── Fixture types (the wire shapes, `tests/roadmap-wave-drops-dead-crs.test.ts`
 //    verbatim) ────────────────────────────────────────────────────────────
@@ -616,5 +629,113 @@ describe("CR-CRU-147 §S2 ruling 6 (cycle 526, C4) — the lifecycle's author, n
       text.includes("—"),
       `the tooltip must not use an em-dash placeholder for a missing author (got: "${text}")`,
     ).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Ruling 7 (2026-09-25, at VERIFY) — the tooltip is reachable by keyboard.
+// The badge already takes focus (`tabindex="0"`) and carries
+// `aria-describedby`; VERIFY found focus did not open the tooltip and the
+// closed bubble used the native `hidden` attribute, which drops it from the
+// accessibility tree — so `aria-describedby` announces nothing while closed.
+// Two contracts, pinned separately below:
+//   1. focusing the badge opens the tooltip; moving focus away closes it
+//      again (an observable state change either way — proven WITHOUT
+//      assuming which CSS technique renders "closed");
+//   2. whatever "closed" looks like, it is never the `hidden` attribute and
+//      never `display:none`/`visibility:hidden` on the tooltip itself — a
+//      visually-hidden-but-accessible pattern instead (asserted on the
+//      PROPERTY, not on a specific class name, per the CR's own note that
+//      happy-dom applies no stylesheet cascade: the DOM attribute and the
+//      styles.css source are the two things this file CAN check).
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("CR-CRU-147 §S2 ruling 7 (VERIFY) — the tooltip is reachable by keyboard", () => {
+  test("focusing a dead row's status badge opens its tooltip; moving focus away closes it again", async () => {
+    await mountApp();
+
+    const badge = statusBadgeOf("CR-DR-VOID");
+    const describedBy = badge.getAttribute("aria-describedby");
+    expect(describedBy, "CR-DR-VOID's status badge carries no aria-describedby").not.toBeNull();
+    const tooltip = document.getElementById(describedBy!);
+    expect(tooltip, `CR-DR-VOID: aria-describedby="${describedBy}" points at no element`).not.toBeNull();
+    const tip = tooltip!;
+
+    // A snapshot of every observable signal the tooltip could use to render
+    // "open" vs. "closed" (inline style + the hidden attribute) — deliberately
+    // NOT pinned to one specific property, since ruling 7 leaves the exact
+    // visually-hidden technique to the implementer. What must be true is that
+    // focus and blur each produce SOME observable change, in opposite
+    // directions, on this element.
+    const snapshot = (): string =>
+      `${tip.getAttribute("style") ?? ""}|class=${tip.className}|hidden=${tip.hasAttribute("hidden")}`;
+
+    const closedBeforeFocus = snapshot();
+
+    badge.focus();
+    await settle();
+    expect(
+      document.activeElement,
+      "harness sanity: badge.focus() did not move DOM focus onto the badge itself",
+    ).toBe(badge);
+
+    const openedAfterFocus = snapshot();
+    expect(
+      openedAfterFocus,
+      `focusing the badge produced no observable change on its tooltip (still "${openedAfterFocus}") — focusing the badge does not open the tooltip`,
+    ).not.toBe(closedBeforeFocus);
+
+    badge.blur();
+    await settle();
+    expect(
+      document.activeElement,
+      "harness sanity: badge.blur() did not move focus away from the badge",
+    ).not.toBe(badge);
+
+    const closedAfterBlur = snapshot();
+    expect(
+      closedAfterBlur,
+      `blurring the badge left its tooltip in the OPEN state ("${closedAfterBlur}") — moving focus away must close it`,
+    ).not.toBe(openedAfterFocus);
+  });
+
+  test("while closed, a dead row's status tooltip carries no hidden attribute and is not hidden via display:none/visibility:hidden, and still states the reason", async () => {
+    await mountApp();
+
+    const badge = statusBadgeOf("CR-DR-VOID");
+    const describedBy = badge.getAttribute("aria-describedby");
+    const tooltip = document.getElementById(describedBy!);
+    expect(tooltip, `CR-DR-VOID: aria-describedby="${describedBy}" points at no element`).not.toBeNull();
+    const tip = tooltip!;
+
+    // Closed (no interaction has happened yet since mount) — the tooltip must
+    // still be IN the accessibility tree: no `hidden` attribute at all.
+    expect(
+      tip.hasAttribute("hidden"),
+      'the closed tooltip carries a `hidden` attribute — ruling 7 forbids hiding it that way, since `hidden` drops it from the accessibility tree and "aria-describedby announces the reason" while closed would then announce nothing',
+    ).toBe(false);
+
+    // Nor may it be hidden via an inline style forcing the same outcome by a
+    // different name.
+    expect(tip.style.display, "the closed tooltip's inline style sets display:none").not.toBe("none");
+    expect(
+      tip.style.visibility,
+      "the closed tooltip's inline style sets visibility:hidden",
+    ).not.toBe("hidden");
+
+    // happy-dom applies no stylesheet cascade (established by
+    // tests/coverage-trend-geometry.test.ts and this file's siblings), so the
+    // CSS half of the same requirement is checked against the styles.css
+    // SOURCE directly: the rule that hides the tooltip via the `[hidden]`
+    // attribute selector must be gone — that selector is exactly the
+    // mechanism ruling 7 retires.
+    expect(
+      ruleBody(".app-roadmap-status-tip[hidden]"),
+      'public/styles.css still declares a `.app-roadmap-status-tip[hidden] { display: none; }` rule — ruling 7 requires the closed state to stay in the accessibility tree, which the native `hidden` attribute (and any rule keyed on it) cannot do',
+    ).toBeUndefined();
+
+    // The reason is still readable in the markup while closed — a
+    // visually-hidden bubble still carries its text, it just is not painted.
+    expect(norm(tip.textContent)).toContain(VOID_REASON);
   });
 });
