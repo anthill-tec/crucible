@@ -8,7 +8,7 @@
 // `help[]` wording lives in `src/hints.ts` beside every other v2 hint.
 import { nextHints } from "./hints.ts";
 import { normalizeTrack } from "./store.ts";
-import type { QueueEntry, QueueLifecycle } from "./types.ts";
+import { isDeadCr, type QueueEntry, type QueueLifecycle } from "./types.ts";
 
 /** §S2 — the four HOLD trigger kinds, in their fixed precedence. */
 export const HOLD_TRIGGER_KINDS: readonly string[] = ["in-flight", "dead-dependency", "dependency", "unknown-dependency"];
@@ -156,28 +156,26 @@ function entrySeq(entry: QueueEntry): number | undefined {
 }
 
 /**
- * §S2 — the TWO axes: `PENDING` on the derived status axis AND no `lifecycle`
- * disposition at all. Keyed on the lifecycle's PRESENCE, exactly as the
- * ported resolver keyed it — deliberately not `isDeadCr`, which judges the
- * lifecycle's `state` value rather than its presence. Unifying the two
- * predicates is CR-CRU-147's to do (see `isDeadCr`, src/types.ts) — until
- * then `next` draws the line here, on presence.
+ * §S2 — the TWO axes: `PENDING` on the derived status axis AND not dead.
+ * Deadness is the ONE dead-CR rule, `isDeadCr` (src/types.ts), which judges
+ * the lifecycle's `state` (VOID or SUPERSEDED) rather than its presence — so
+ * a `lifecycle: null` row, or one carrying any other state, is live work.
+ * `deadEntries` and `nextTrigger`'s dependency check draw the same line.
  */
 function isActionable(entry: QueueEntry): boolean {
-  return entry.status === "PENDING" && entry.lifecycle === undefined;
+  return entry.status === "PENDING" && !isDeadCr(entry);
 }
 
-/** A lifecycle disposition carried as an object (the resolver's `dict` test). */
-function lifecycleOf(entry: QueueEntry): QueueLifecycle | null {
-  const lifecycle: unknown = entry.lifecycle;
-  return typeof lifecycle === "object" && lifecycle !== null ? (lifecycle as QueueLifecycle) : null;
+/** The row's lifecycle when `isDeadCr` rules it dead, else null. */
+function deadLifecycleOf(entry: QueueEntry): QueueLifecycle | null {
+  return isDeadCr(entry) && entry.lifecycle ? entry.lifecycle : null;
 }
 
 /** The rows declared dead, named with their state and successor. */
 function deadEntries(rows: readonly QueueEntry[]): Array<{ cr: string; state: string; by?: string }> {
   const dead: Array<{ cr: string; state: string; by?: string }> = [];
   for (const row of rows) {
-    const lifecycle = lifecycleOf(row);
+    const lifecycle = deadLifecycleOf(row);
     if (lifecycle === null) continue;
     dead.push({ cr: row.cr, state: lifecycle.state, ...(lifecycle.by ? { by: lifecycle.by } : {}) });
   }
@@ -212,7 +210,7 @@ function nextTrigger(
     }
     // The status axis decides LANDED first.
     if (LANDED_STATUSES.has(entry.status)) continue;
-    const lifecycle = lifecycleOf(entry);
+    const lifecycle = deadLifecycleOf(entry);
     if (lifecycle !== null) dead.push({ cr: dep, lifecycle });
     else blockedBy.push({ cr: dep, status: entry.status });
   }
