@@ -76,13 +76,16 @@ Step(
 
 // The roadmap row's derived status badge, asserted live: the row is keyed by
 // its CR id, and the status badge inside it must reach the expected value
-// within the SSE-refetch window (no reload).
+// within the SSE-refetch window (no reload). CR-CRU-147 \u00a7S2 (cycle 526, C4)
+// \u2014 card-aware: at the phone band the release table renders
+// `roadmap-cr-card`s, not `roadmap-row`s (CR-CRU-018 AC8), so this step
+// reuses `statusBadgeLocator` below (declared as a hoisted `function`, so the
+// forward reference here is safe) rather than hard-coding the desktop-only
+// `roadmap-row` selector \u2014 the same badge testid either shape renders.
 Step(
   "the roadmap row for {string} shows status {string} within {int} seconds",
   async ({ page }, cr: string, status: string, seconds: number) => {
-    const badge = page.locator(
-      `[data-testid="roadmap-row"][data-cr="${cr}"] [data-testid="roadmap-status-badge"]`,
-    );
+    const badge = statusBadgeLocator(page, cr);
     await expect(badge).toHaveText(status, { timeout: seconds * 1_000 });
   },
 );

@@ -4812,6 +4812,48 @@ describe("CR-CRU-096 AC26 — zones 1 and 3 are untouched by this CR", () => {
     );
   };
 
+  // CR-CRU-147 §S2 (cycle 526, C4) redraws a DEAD CR's table row BY
+  // DEFINITION — its STATUS badge gains new words and keeps `data-lifecycle`
+  // (unchanged — CR-CRU-078 AC27 already set that attribute on the row), the
+  // retired `roadmap-lifecycle-badge` is gone, `dead`/`faded` classes appear
+  // on its id/title/points/deps, and a new
+  // `[data-testid="roadmap-status-tooltip"]` element rides BESIDE the row.
+  // §S2 AC4 itself says "a row with NO lifecycle key renders exactly as
+  // today" — i.e. AC26's byte-identical freeze was always a claim about a
+  // LIVE row; a dead row is expressly what this CR is scoped to change, so
+  // freezing it too would fail this CR's own GREEN build by definition.
+  //
+  // `zoneThreeLiveMarkup` reads the SAME zone-3 subtree `zoneMarkup` does, on
+  // a CLONE, then strips only:
+  //   • every `[data-testid="roadmap-row"][data-lifecycle]` — a dead row.
+  //     The `data-lifecycle` ATTRIBUTE on the row predates this CR (CR-CRU-078
+  //     AC27, present verbatim in the `63f07f5` baseline — `git show
+  //     63f07f5:public/app.js` line 2496), so the SAME rows are identified and
+  //     removed symmetrically on both the baseline and the current render;
+  //   • every `[data-testid="roadmap-status-tooltip"]` — the element this CR
+  //     adds beside a dead row. The baseline renders none, so stripping it
+  //     there is a no-op; only the current render's copy is ever removed.
+  // What remains — every LIVE row, in the SAME order, with the SAME markup —
+  // is still compared BYTE-FOR-BYTE below, so a LIVE row regressing under
+  // this CR still fails this test exactly as it did before §S2 landed.
+  // Nothing about the live-row guarantee is weakened.
+  const zoneThreeLiveMarkup = async (url: string): Promise<string> => {
+    await openWide(url);
+    return await readWide<string>(
+      `(() => {
+         const zone = document.querySelector('[data-zone="3"]');
+         if (!zone) return "";
+         const clone = zone.cloneNode(true);
+         clone
+           .querySelectorAll(
+             '[data-testid="roadmap-row"][data-lifecycle], [data-testid="roadmap-status-tooltip"]',
+           )
+           .forEach((el) => el.remove());
+         return clone.outerHTML;
+       })()`,
+    );
+  };
+
   test("the pre-CR baseline really did render", async () => {
     expect(
       baselineFailure,
@@ -4849,14 +4891,22 @@ describe("CR-CRU-096 AC26 — zones 1 and 3 are untouched by this CR", () => {
     ).toBe(before.one);
   });
 
-  test("zone 3's markup is byte-identical to the pre-CR baseline", async () => {
+  test("zone 3's LIVE rows are byte-identical to the pre-CR baseline; a dead row is excluded because CR-CRU-147 §S2 redraws it BY DEFINITION (cycle 526, C4)", async () => {
     expect(baselineFailure).toBe("");
-    const before = await zoneMarkup(baselineFixtureUrl);
-    const after = await zoneMarkup(surfaceFixtureUrl);
+    const before = await zoneThreeLiveMarkup(baselineFixtureUrl);
+    const after = await zoneThreeLiveMarkup(surfaceFixtureUrl);
+    // Non-vacuity: this fixture (`QUEUE`, above) carries two dead rows
+    // (CR-V-SUP, CR-V-VOID) among six — if the strip selector were wrong and
+    // removed EVERY row, both sides would trivially collapse to the same
+    // short empty-table string and the comparison below would prove nothing.
     expect(
-      after.three,
-      `zone 3's markup changed against ${baselineCommit.slice(0, 7)}, which AC26 freezes`,
-    ).toBe(before.three);
+      before.length,
+      "the stripped baseline collapsed to (near-)nothing — the live-row strip likely removed too much",
+    ).toBeGreaterThan(200);
+    expect(
+      after,
+      `zone 3's LIVE rows changed against ${baselineCommit.slice(0, 7)}, which AC26 freezes`,
+    ).toBe(before);
   });
 });
 

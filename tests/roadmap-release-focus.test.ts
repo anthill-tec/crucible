@@ -502,6 +502,16 @@ const statusText = (cr: string): string =>
   (rowFor(cr).querySelector('[data-testid="roadmap-status-badge"]')?.textContent ?? "").trim();
 const lifecycleEl = (row: HTMLElement): HTMLElement | null =>
   row.querySelector<HTMLElement>('[data-testid="roadmap-lifecycle-badge"]');
+// CR-CRU-147 §S2 (cycle 526, C4) — the separate `roadmap-lifecycle-badge`
+// `lifecycleEl` reads above is retired: the reason moves to a tooltip and
+// the STATUS badge itself now carries `data-lifecycle` and names the state.
+// `lifecycleEl` is kept (always null now) for the one test below that pins
+// its absence; every OTHER lifecycle-reading test reads this instead.
+const statusBadgeOf = (cr: string): HTMLElement => {
+  const badge = rowFor(cr).querySelector<HTMLElement>('[data-testid="roadmap-status-badge"]');
+  if (badge === null) throw new Error(`${cr}'s row renders no [data-testid="roadmap-status-badge"]`);
+  return badge;
+};
 
 async function clickGate(version: string): Promise<void> {
   const gate = all('[data-testid="roadmap-gate"]').find(
@@ -618,13 +628,20 @@ describe("CR-CRU-078 §S4/AC9 — the in-flight release draws Start → wave con
     // SUPERSEDES this test's earlier CR-CRU-096 §S5/AC9a reading, which had
     // wave 6 still drawing an empty box that STATED both members. Nothing is
     // lost: zone 3's table still carries both CRs, struck through, with
-    // their lifecycle badges.
+    // their STATUS badge naming the lifecycle (CR-CRU-147 §S2, cycle 526 C4
+    // — supersedes this test's earlier `roadmap-lifecycle-badge` reading).
     expect(
       waveEls().find((w) => w.getAttribute("data-wave") === "6"),
       "wave 6 must render no roadmap-wave box — CR-F and CR-G are both dead and neither is running",
     ).toBeUndefined();
-    expect(lifecycleEl(rowFor("CR-F"))).not.toBeNull();
-    expect(lifecycleEl(rowFor("CR-G"))).not.toBeNull();
+    expect(
+      rowFor("CR-F").querySelector('[data-testid="roadmap-status-badge"][data-lifecycle]'),
+      "CR-F's status badge carries no data-lifecycle",
+    ).not.toBeNull();
+    expect(
+      rowFor("CR-G").querySelector('[data-testid="roadmap-status-badge"][data-lifecycle]'),
+      "CR-G's status badge carries no data-lifecycle",
+    ).not.toBeNull();
   });
 
   test("no CR outside the focused release reaches the flowchart", async () => {
@@ -915,39 +932,58 @@ describe("CR-CRU-078 §S6/AC16 — no wave is rendered twice inside one region",
 // ── AC27 — the lifecycle SECOND axis, on both surfaces ──────────────────────
 
 describe("CR-CRU-078 AC27 — a dead CR does not read as live work, on the row AND on the node", () => {
-  test("a SUPERSEDED row names its successor and KEEPS its derived status — the two axes are additive", async () => {
+  test("a SUPERSEDED row's STATUS badge names its successor and carries data-lifecycle, while the entry's own `status` field stays derived (CR-CRU-147 \u00a7S2 AC2, cycle 526 C4 \u2014 supersedes this test's earlier `roadmap-lifecycle-badge` reading)", async () => {
     await mountApp();
 
-    const row = rowFor("CR-F");
-    const badge = lifecycleEl(row);
-    expect(badge).not.toBeNull();
-    expect(badge!.getAttribute("data-lifecycle")).toBe("SUPERSEDED");
-    expect((badge!.textContent ?? "").trim()).toContain("CR-CRU-085");
-    expect((badge!.textContent ?? "").toLowerCase()).toContain("superseded");
-    // ADDITIVE: `status` is still rendered, unchanged.
-    expect(statusText("CR-F")).toBe("PENDING");
+    // CR-CRU-147 \u00a7S2 (cycle 526, C4) RETIRES the separate
+    // `roadmap-lifecycle-badge` this test used to read: the STATUS badge
+    // itself now names the lifecycle state and carries `data-lifecycle`.
+    const badge = statusBadgeOf("CR-F");
+    expect(badge.getAttribute("data-lifecycle")).toBe("SUPERSEDED");
+    expect((badge.textContent ?? "").trim(), "078 AC27: a superseded row names its successor").toBe(
+      "SUPERSEDED \u2192 CR-CRU-085",
+    );
+    // The two axes stay additive at the DATA level (Risk's own guard): \u00a7S2
+    // has the CELL display the lifecycle IN PLACE of the derived status, so
+    // `statusText`/`roadmap-status-badge` no longer reads "PENDING" for this
+    // row — but the entry's own `status` field, what the queue read still
+    // returns, is untouched underneath.
+    expect(QUEUE.find((e) => e.cr === "CR-F")!.status, "the stored status must stay derived").toBe(
+      "PENDING",
+    );
   });
 
-  test("a VOID row is legible as abandoned, carries its reason, and also keeps its status", async () => {
+  test("a VOID row's STATUS badge reads VOID and carries data-lifecycle; its reason moves to the tooltip, never row/badge text, and the entry's own `status` field stays derived (CR-CRU-147 \u00a7S2 AC2/AC3, cycle 526 C4)", async () => {
     await mountApp();
 
-    const row = rowFor("CR-G");
-    const badge = lifecycleEl(row);
-    expect(badge).not.toBeNull();
-    expect(badge!.getAttribute("data-lifecycle")).toBe("VOID");
-    expect((badge!.textContent ?? "").toLowerCase()).toContain("abandoned");
-    expect((badge!.textContent ?? "")).toContain("the pipeline it served was retired");
-    expect(statusText("CR-G")).toBe("PENDING");
+    const badge = statusBadgeOf("CR-G");
+    expect(badge.getAttribute("data-lifecycle")).toBe("VOID");
+    expect((badge.textContent ?? "").trim()).toBe("VOID");
+    // The reason never renders as row/badge text (\u00a7S2's own contract) —
+    // it is the tooltip's, reached via aria-describedby.
+    expect(badge.textContent ?? "").not.toContain("the pipeline it served was retired");
+    const describedBy = badge.getAttribute("aria-describedby");
+    expect(describedBy, "CR-G's status badge carries no aria-describedby").not.toBeNull();
+    const tooltip = document.getElementById(describedBy!);
+    expect(tooltip, `aria-describedby="${describedBy}" points at no element`).not.toBeNull();
+    expect(tooltip!.getAttribute("data-testid")).toBe("roadmap-status-tooltip");
+    expect(tooltip!.textContent ?? "").toContain("the pipeline it served was retired");
+    expect(QUEUE.find((e) => e.cr === "CR-G")!.status, "the stored status must stay derived").toBe(
+      "PENDING",
+    );
   });
 
-  test("the two lifecycle states are distinguishable from each other and from every status value", async () => {
+  test("the two lifecycle states are distinguishable from each other and from every status value, on the STATUS badge (CR-CRU-147 \u00a7S2, cycle 526 C4)", async () => {
     await mountApp();
 
-    const superseded = (lifecycleEl(rowFor("CR-F"))!.textContent ?? "").trim();
-    const voided = (lifecycleEl(rowFor("CR-G"))!.textContent ?? "").trim();
+    const superseded = (statusBadgeOf("CR-F").textContent ?? "").trim();
+    const voided = (statusBadgeOf("CR-G").textContent ?? "").trim();
     expect(superseded).not.toBe(voided);
-    // Neither is mistakable for a status: both rows read PENDING, and neither
-    // badge says so.
+    expect(superseded).toBe("SUPERSEDED \u2192 CR-CRU-085");
+    expect(voided).toBe("VOID");
+    // Neither is mistakable for a status: \u00a7S2 has the cell DISPLAY the
+    // lifecycle in place of PENDING now, so this guards against the badge
+    // ever regressing to invent a status word alongside the lifecycle label.
     for (const text of [superseded, voided]) {
       for (const status of ["PENDING", "IN_PROGRESS", "COMPLETED", "COMPLETED_UNTRACKED"]) {
         expect(text).not.toContain(status);
@@ -955,7 +991,7 @@ describe("CR-CRU-078 AC27 — a dead CR does not read as live work, on the row A
     }
   });
 
-  test("both states stay legible on zone 3's row, and a TRIMMED wave draws no row for them at all", async () => {
+  test("both states stay legible on zone 3's STATUS badge, and a TRIMMED wave draws no row for them at all (CR-CRU-147 \u00a7S2, cycle 526 C4 \u2014 supersedes this test's earlier `roadmap-lifecycle-badge` reading)", async () => {
     await mountApp();
 
     // CR-CRU-096 AC9a — a dispositioned CR is not work, so a TRIMMED wave box
@@ -965,25 +1001,34 @@ describe("CR-CRU-078 AC27 — a dead CR does not read as live work, on the row A
     // AC9b keeps the node's badge wherever a node renders (the untrimmed
     // AC18a loose group, and a running dispositioned CR per AC9c). The FACT
     // this test exists for is unchanged — a VOID/SUPERSEDED CR's disposition
-    // is visible, additively with its derived status — and is asserted here
-    // on zone 3's row (`roadmap-lifecycle-badge`).
+    // is visible — and is asserted here on zone 3's row's STATUS badge.
+    // CR-CRU-147 \u00a7S2 (cycle 526, C4) RETIRES the separate
+    // `roadmap-lifecycle-badge` this test used to read here.
     expect(nodeCrs()).not.toContain("CR-F");
     expect(nodeCrs()).not.toContain("CR-G");
     expect(all('[data-testid="roadmap-node-lifecycle"]').length).toBe(0);
 
     const superseded = rowFor("CR-F");
     expect(superseded.getAttribute("data-lifecycle")).toBe("SUPERSEDED");
-    const supersededText = (lifecycleEl(superseded)?.textContent ?? "").trim();
+    const supersededBadge = statusBadgeOf("CR-F");
+    const supersededText = (supersededBadge.textContent ?? "").trim();
+    expect(supersededBadge.getAttribute("data-lifecycle")).toBe("SUPERSEDED");
     expect(supersededText.toLowerCase()).toContain("superseded");
     expect(supersededText).toContain("CR-CRU-085");
-    // The row keeps its derived status alongside: the two axes stay additive.
-    expect(statusText("CR-F")).toBe("PENDING");
+    // The two axes stay additive at the DATA level (Risk's own guard): the
+    // cell now DISPLAYS the lifecycle in place of the derived status (\u00a7S2),
+    // while the entry's own `status` field, what the queue read still
+    // returns, is untouched underneath.
+    expect(QUEUE.find((e) => e.cr === "CR-F")!.status).toBe("PENDING");
 
     const voided = rowFor("CR-G");
     expect(voided.getAttribute("data-lifecycle")).toBe("VOID");
-    const voidedText = (lifecycleEl(voided)?.textContent ?? "").trim();
-    expect(voidedText.toLowerCase()).toContain("abandoned");
+    const voidedBadge = statusBadgeOf("CR-G");
+    const voidedText = (voidedBadge.textContent ?? "").trim();
+    expect(voidedBadge.getAttribute("data-lifecycle")).toBe("VOID");
+    expect(voidedText).toBe("VOID");
     expect(voidedText).not.toBe(supersededText);
+    expect(QUEUE.find((e) => e.cr === "CR-G")!.status).toBe("PENDING");
   });
 
   test("an entry with NO `lifecycle` key renders exactly as today — absent, never defaulted", async () => {
