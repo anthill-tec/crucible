@@ -31,6 +31,54 @@ function historyCycleRow(page: Page, cycleId: number): Locator {
   );
 }
 
+// CR-CRU-146 §S2 — the row's `.app-cycle-line`, in EITHER section, for a
+// cycleId. Reuses `historyCycleRow`'s union selector so the same helper
+// resolves whichever of the two mutually-exclusive sections currently
+// renders that cycle (active-not-closed → the active `cycle-row`; done +
+// closed → the history `lens-cycle-row`).
+function cycleLine(page: Page, cycleId: number): Locator {
+  return historyCycleRow(page, cycleId).locator(".app-cycle-line");
+}
+
+// CR-CRU-146 §S2 — the computed `cursor` at a REAL point inside the line's
+// own box that sits in the WIDEST gap between its rendered children (glyph,
+// label, timer, `→ Runs` badge, `▸ N runs` hint) — i.e. genuinely empty
+// space, never a child's own hit area. Measured (not assumed): the timer
+// slot carries `margin-left: auto` (`.app-cycle-timer-slot`, `public/
+// styles.css`), which pushes the timer AND everything after it (the `→
+// Runs` badge) flush to the line's right edge — so for a row with a timer,
+// there is NO dead space past the badge at all; the real empty run sits
+// in the MIDDLE of the line, right of the label, before the timer starts.
+// Picking the single widest gap among the leading edge, every inter-child
+// gap, and the trailing edge finds that real empty space regardless of
+// which children a given row happens to render. `elementFromPoint` (not
+// just `getComputedStyle` on the line node) proves the point really lands
+// on the line itself and not a child that happens to reach that far.
+async function measureEmptySpaceCursor(page: Page, cycleId: number): Promise<string | null> {
+  const line = cycleLine(page, cycleId);
+  await expect(line).toBeVisible();
+  return line.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const children = Array.from(el.children) as HTMLElement[];
+    const rects = children.map((c) => c.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+    const gaps: Array<{ start: number; end: number }> = [];
+    let occupiedUpTo = rect.left;
+    for (const r of rects) {
+      if (r.left > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: r.left });
+      occupiedUpTo = Math.max(occupiedUpTo, r.right);
+    }
+    if (rect.right > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: rect.right });
+    const widest = gaps.reduce(
+      (best, g) => (g.end - g.start > best.end - best.start ? g : best),
+      { start: rect.left, end: rect.left },
+    );
+    const x = (widest.start + widest.end) / 2;
+    const y = rect.top + rect.height / 2;
+    const target = document.elementFromPoint(x, y);
+    return target ? getComputedStyle(target).cursor : null;
+  });
+}
+
 // ── noise seeding — makes the Runs pane genuinely scrollable so §S1's
 // `scrollIntoView` effect is a real, provable pane-scroll, not a no-op on an
 // already-fully-visible feed (mirrors drillin.steps.ts's scrollTop precedent).
@@ -166,5 +214,27 @@ Step(
     const marker = declaredMarker(page, world.cycleId as number);
     await expect(marker).not.toHaveClass(/app-accordion-collapsed/);
     await expect(marker.getByTestId("accordion-collapsed-cue")).toHaveCount(0);
+  },
+);
+
+// ── CR-CRU-146 §S2 — the affordance is honest at a glance ───────────────────
+// A toggleable cycle line's `cursor: pointer` must be readable ANYWHERE on
+// the line, not just on the 13px glyph — the SAME `.app-lens-toggle` class
+// the CR-group row already wears. A line with no toggle (the active
+// section's open span, ruling (a)) must show the browser default instead.
+
+Step(
+  "the active-section cycle line for that cycle shows the default cursor over its empty space, not pointer",
+  async ({ page, world }) => {
+    const cursor = await measureEmptySpaceCursor(page, world.cycleId as number);
+    expect(cursor).not.toBe("pointer");
+  },
+);
+
+Step(
+  "the history cycle line for that cycle shows the pointer cursor over its empty space",
+  async ({ page, world }) => {
+    const cursor = await measureEmptySpaceCursor(page, world.cycleId as number);
+    expect(cursor).toBe("pointer");
   },
 );

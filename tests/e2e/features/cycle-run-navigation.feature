@@ -78,3 +78,19 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
     Then an event card for "agent-crb3-red" becomes visible within 2 seconds
     And an event card for "agent-crb3-green" becomes visible within 2 seconds
     And the declared marker for that cycle no longer shows a collapsed cue
+
+  Scenario: CR-CRU-146 §S2 — a toggleable history cycle line carries the pointer cursor over its empty space, honestly signalling it opens; the active section's open-span line, which has no toggle, does not
+    Given a project named "CRB Cursor Project" is registered
+    And a cycle plan is filed for cr "CR-CRB-4A" with a cycle labelled "c1 cursor active"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    Then the active-section cycle line for that cycle shows the default cursor over its empty space, not pointer
+    Given a cycle plan is filed for cr "CR-CRB-4B" with a cycle labelled "c1 cursor history"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb4-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "agent-crb4-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "crb00004"
+    And I open the workspace for that project
+    And I expand the cr group for "CR-CRB-4B"
+    Then the history cycle line for that cycle shows the pointer cursor over its empty space

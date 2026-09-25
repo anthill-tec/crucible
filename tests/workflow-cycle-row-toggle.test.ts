@@ -184,6 +184,12 @@ function history(): HTMLElement {
   return el!;
 }
 
+function active(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('[data-testid="workflow-active"]');
+  expect(el).not.toBeNull();
+  return el!;
+}
+
 // Dispatches a REAL click event AT the given element specifically — a
 // `.click()` call synthesizes the click ON that node (it does not simulate
 // hitting a descendant), so a listener bound only to a different node (the
@@ -477,5 +483,190 @@ describe("CR-CRU-018 §S1 / CR-CRU-146 — the history cycle row's hit area is o
     expect(runsTab?.className).toMatch(/\bon\b/);
     // …and the row itself did NOT open as a side effect of that click.
     expect(row.querySelector('[data-testid="cycle-span-closed"]')).toBeNull();
+  });
+});
+
+// CR-CRU-146 §S2 — "the affordance is honest at a glance": a toggleable
+// cycle line must carry `.app-lens-toggle`, the SAME class the CR-group
+// row already uses for its own full-row toggle (`public/styles.css`'s
+// `.app-lens-toggle { cursor: pointer; user-select: none; }`), and a line
+// with no toggle must NOT carry it. Today `CycleLine` (public/app.js) never
+// applies the class at all — `toggle === null ? { class: "app-cycle-line" }
+// : { class: "app-cycle-line", onclick: toggle }` — so every assertion below
+// that expects the class to be PRESENT is RED against current production;
+// the assertions that expect it ABSENT already pass (there is nothing to
+// regress there, which is the point: the class must track the handler, not
+// the section).
+describe("CR-CRU-146 §S2 — a toggleable cycle line carries .app-lens-toggle, a non-toggleable one does not", () => {
+  test("an expandable HISTORY cycle row's .app-cycle-line carries app-lens-toggle", async () => {
+    const key = "lens-toggle-class-history-1";
+    const linkedRun = runEvent({
+      id: "evt-lens-toggle-class-history-1",
+      projectKey: key,
+      agentId: "agent-lens-toggle-class-history",
+      timestamp: Date.now(),
+      context: { cycleId: 950 },
+    });
+    const plan: PlanFixture = {
+      planId: 9500,
+      cr: "CR-LENSTOGGLECLASS-1",
+      projectKey: key,
+      status: "closed",
+      wave: "1",
+      merge: { commit: "lensToggleClassCommit1" },
+      cycles: [{ id: 950, label: "toggle-class expandable cycle", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Lens Toggle Class Project 1" })],
+      events: [linkedRun],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-LENSTOGGLECLASS-1"]',
+    )!;
+    expect(crGroup).not.toBeNull();
+    crGroup.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.click();
+    await settle();
+
+    const row = crGroup.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]')!;
+    expect(row).not.toBeNull();
+    // Sanity: this row IS the expandable one this test cares about — it has
+    // its own drill-down glyph, so a false pass from a non-expandable row
+    // slipping in unnoticed is ruled out.
+    expect(row.querySelector('[data-testid="cycle-toggle"]')).not.toBeNull();
+
+    const line = row.querySelector<HTMLElement>(".app-cycle-line")!;
+    expect(line).not.toBeNull();
+    expect(line.classList.contains("app-lens-toggle")).toBe(true);
+  });
+
+  test("the ACTIVE section's open cycle row (no toggle, ruling (a)) — its .app-cycle-line does NOT carry app-lens-toggle", async () => {
+    const key = "lens-toggle-class-active-1";
+    const plan: PlanFixture = {
+      planId: 9501,
+      cr: "CR-LENSTOGGLECLASS-2",
+      projectKey: key,
+      status: "open",
+      wave: "1",
+      cycles: [{ id: 951, label: "toggle-class active cycle", status: "active" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Lens Toggle Class Project 2" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const row = active().querySelector<HTMLElement>(
+      '[data-testid="cycle-row"][data-status="active"]',
+    )!;
+    expect(row).not.toBeNull();
+
+    const line = row.querySelector<HTMLElement>(".app-cycle-line")!;
+    expect(line).not.toBeNull();
+    expect(line.classList.contains("app-lens-toggle")).toBe(false);
+  });
+
+  test("a HISTORY cycle row that is NOT expandable (no toggle handler) — its .app-cycle-line does NOT carry app-lens-toggle either, so the class tracks the handler, not the section", async () => {
+    const key = "lens-toggle-class-history-2";
+    const plan: PlanFixture = {
+      planId: 9502,
+      cr: "CR-LENSTOGGLECLASS-3",
+      projectKey: key,
+      status: "closed",
+      wave: "1",
+      merge: { commit: "lensToggleClassCommit3" },
+      // "skipped" is neither "done" nor "active" — LensCycleRow's own
+      // `expandable` predicate is false, so CycleLine is called with `null`
+      // (no toggle, no linked runs to drill into).
+      cycles: [{ id: 952, label: "toggle-class skipped cycle", status: "skipped" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Lens Toggle Class Project 3" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-LENSTOGGLECLASS-3"]',
+    )!;
+    expect(crGroup).not.toBeNull();
+    crGroup.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.click();
+    await settle();
+
+    const row = crGroup.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]')!;
+    expect(row).not.toBeNull();
+    // Confirms this row really has no toggle handler at all (the glyph
+    // itself is absent) — so a class present here would be a class
+    // completely detached from any handler, the exact drift the AC forbids.
+    expect(row.querySelector('[data-testid="cycle-toggle"]')).toBeNull();
+
+    const line = row.querySelector<HTMLElement>(".app-cycle-line")!;
+    expect(line).not.toBeNull();
+    expect(line.classList.contains("app-lens-toggle")).toBe(false);
+  });
+
+  test("the element carrying .app-lens-toggle is the SAME element that carries the click handler — clicking the line (by class) opens the cycle's linked runs", async () => {
+    const key = "lens-toggle-class-history-3";
+    const linkedRun = runEvent({
+      id: "evt-lens-toggle-class-history-3",
+      projectKey: key,
+      agentId: "agent-lens-toggle-class-history-3",
+      timestamp: Date.now(),
+      context: { cycleId: 953 },
+    });
+    const plan: PlanFixture = {
+      planId: 9503,
+      cr: "CR-LENSTOGGLECLASS-4",
+      projectKey: key,
+      status: "closed",
+      wave: "1",
+      merge: { commit: "lensToggleClassCommit4" },
+      cycles: [{ id: 953, label: "toggle-class handler-parity cycle", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Lens Toggle Class Project 4" })],
+      events: [linkedRun],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-LENSTOGGLECLASS-4"]',
+    )!;
+    crGroup.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.click();
+    await settle();
+
+    const row = crGroup.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]')!;
+    const line = row.querySelector<HTMLElement>(".app-cycle-line")!;
+    expect(line).not.toBeNull();
+    // Precondition: the class is on THIS node.
+    expect(line.classList.contains("app-lens-toggle")).toBe(true);
+    // Starts collapsed.
+    expect(row.querySelector('[data-testid="cycle-span-closed"]')).toBeNull();
+
+    // Click dispatched AT the exact node found BY the class, not at some
+    // other descendant — if the handler ever lived on a different node than
+    // the one carrying the class (a second hit-area mechanism), this click
+    // would be a no-op and the span would never open.
+    clickAt(line);
+    await settle();
+
+    const closedSpan = row.querySelector('[data-testid="cycle-span-closed"]');
+    expect(closedSpan).not.toBeNull();
+    expect(
+      closedSpan!.querySelector('[data-testid="linked-run-row"]')?.getAttribute("data-run-id"),
+    ).toBe("evt-lens-toggle-class-history-3");
   });
 });
