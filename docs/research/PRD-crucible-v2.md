@@ -134,7 +134,7 @@ One ingest call = one immutable event on the project's timeline.
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
 | `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
-| `codec` | `"junit"` \| `"nextest"` \| `"playwright"` \| `"vitest"` \| `"tap"` \| `"rustc"` \| … | v2 — which codec normalized it; drives stack-aware rendering |
+| `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
@@ -240,7 +240,15 @@ registry** translating each tool's native output into one **canonical RunSchema*
   fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare `testsuite` root,
   file-or-directory `dataPath`, inline `data`), `rustc`, `javac`, `python`, `tsc`.
 - New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
-  links), `vitest`, `tap`. Adding a stack = adding a codec; no core changes.
+  links). Adding a stack = adding a codec; no core changes.
+- **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
+  The five stacks (bun, python, maven, rust, arduino) all report test results as JUnit XML (bun
+  `--reporter=junit`, `xmlrunner`, surefire, `cargo nextest`, the native g++ harness), so `junit`
+  serves them all; `playwright` serves frontend e2e. `vitest`, `tap` and a separate `nextest` codec,
+  listed here before, are **not needed**: no supported stack emits those formats (nextest writes
+  JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
+  section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
+  and CR-CRU-153 (the arduino stack's g++ compile output).
 - Every event is stamped with `stack` + `codec` (+ tool version) so the UI renders
   stack-aware views (§4.11) and BDD becomes first-class for frontend projects.
 - Parsed path: accept summary/tree/coverage as-is (validate shape, don't recompute).
