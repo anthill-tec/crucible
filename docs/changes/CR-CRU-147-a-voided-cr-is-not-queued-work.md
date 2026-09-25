@@ -26,6 +26,10 @@
 > - **Ruling 5 (2026-09-25, at C3): a wave with no live work draws no box.** When every member of a
 >   wave is dead and none is running, the Wave Card draws no box for that wave (no header, no
 >   `0` count). Its CRs stay visible, struck through, in the zone-3 table.
+> - **Ruling 6 (2026-09-25, at C4): the lifecycle carries who.** F17's tooltip names who voided or
+>   superseded the CR, but the lifecycle held no author: the route passed it only to the
+>   declaration journal. The lifecycle now stores that same author when it is written. A
+>   lifecycle written before this change has none, and its tooltip omits who rather than guess.
 > - **Three dead-CR predicates, one rule.** `isDeadCr` (`src/types.ts`, state-based),
 >   `isActionable` (`src/next.ts`, keyed on whether a lifecycle exists) and `roadmapActionable`
 >   (`public/app-logic.mjs`, the same) all draw the line. The write side (`src/v2.ts`, queue POST)
@@ -149,6 +153,10 @@ the echo, which is how Model B found four drifted titles.
       value: the change is to the cell, not the data.
 - [ ] The lifecycle reason is not rendered in the row. It is the status badge's tooltip (state ·
       date · who · reason), reachable by hover on desktop and by tap on the phone band.
+- [ ] **The lifecycle carries who (ruling 6).** `cr-void` and `cr-supersede` store their author on
+      the lifecycle as `author`, the same value the declaration journal records, and the queue read
+      returns it. The tooltip names it. A lifecycle with no `author` renders its tooltip without
+      one, never a placeholder.
 - [ ] A row with no `lifecycle` key renders exactly as today, with no strikethrough and no default.
 
 **§S3**
