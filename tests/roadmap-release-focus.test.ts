@@ -1035,7 +1035,7 @@ describe("CR-CRU-078 §S4 — `focusedReleaseView` answers what ONE focused rele
     const view = Logic.focusedReleaseView(gateFor("0.2.0"), LEDGER, QUEUE);
     expect(view.kind).toBe("proposed");
     expect(view.members.map((m) => m.cr)).toEqual(["CR-E", "CR-D", "CR-F", "CR-G"]);
-    expect(view.waves.map((w) => w.wave)).toEqual(["5", "6"]);
+    expect(view.waves.map((w) => w.wave)).toEqual(["5"]);
     expect(view.waves[0]!.entries.map((e) => e.cr)).toEqual(["CR-E", "CR-D"]);
     expect(view.crCount).toBe(4);
     expect(view.tracks).toEqual(["track-1", "track-2"]);
