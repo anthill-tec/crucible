@@ -87,17 +87,33 @@ glyph does not communicate that when the pointer is anywhere else on an 896 px r
 
 ## Acceptance criteria
 
-- [ ] Clicking the history cycle row — on its LABEL, on its status glyph, on the `▸ N runs` hint, and
-      on empty space in the line — opens that cycle's linked runs. Asserted at several x-offsets
-      across the row, not just one, so a narrow hit area cannot pass.
-- [ ] Clicking the row again closes it (the toggle stays a toggle).
-- [ ] The `→ Runs` badge still performs its OWN navigation and does NOT toggle the row —
-      asserted, since that is the regression this change could introduce.
-- [ ] The active-section cycle row and the history cycle row agree: whatever the hit area becomes,
-      both rows get it, asserted through the same predicate rather than two hand-written renders.
-- [ ] The CR-group row's existing full-row toggle keeps working, unchanged.
-- [ ] A test asserts the hit area is the ROW, not a glyph — e.g. the element carrying the handler
-      spans the row's width — so a later refactor that re-narrows it to the glyph reds.
+**Delivered by CR-CRU-018** (`tests/workflow-cycle-row-toggle.test.ts`, happy-dom). This CR re-runs
+them and must leave them green, untouched:
+
+- [x] Clicking the history cycle row — on its LABEL, on its status glyph, on the `▸ N runs` hint, and
+      on empty space in the line — opens that cycle's linked runs.
+- [x] Clicking the row again closes it (the toggle stays a toggle).
+- [x] The `→ Runs` badge still performs its OWN navigation and does NOT toggle the row.
+- [x] The active-section cycle row and the history cycle row are built through the same `CycleLine`
+      predicate (the active section passes no toggle, by ruling (a)).
+- [x] The CR-group row's existing full-row toggle keeps working, unchanged.
+
+**Remaining (this CR):**
+
+- [ ] **Pixel hit-test, in a real browser (e2e).** On the Workflow tab, a history cycle row is
+      clicked at **at least four x-offsets across its measured width** (near the left edge, over
+      the label, in the empty space right of the label, and near the right edge short of the
+      `→ Runs` badge). Each click opens that cycle's linked runs, and the next click at the same
+      offset closes it. A click on the `→ Runs` badge navigates and does not toggle.
+- [ ] **The handler spans the row.** In the same browser run, the element carrying the toggle is
+      the cycle's line, and its measured width is at least 90% of the row's width, so a refactor
+      that re-narrows the hit area to the glyph reds.
+- [ ] **§S2 — the affordance is honest.** A toggleable cycle line carries `.app-lens-toggle`, the
+      class the CR-group row already uses, and a line with no toggle does not. Asserted in the DOM
+      (both rows) and in a real browser: the computed `cursor` over the line's empty space is
+      `pointer` for a toggleable history row, and not `pointer` for the active section's open span.
+- [ ] No second hit-area mechanism: `CycleLine` remains the one place the line's handler and its
+      class are decided.
 
 ## Risk
 
