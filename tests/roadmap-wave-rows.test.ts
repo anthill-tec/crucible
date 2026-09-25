@@ -1083,8 +1083,8 @@ describe("CR-CRU-096 AC3 (non-regression) — the trim does not change the count
 // screenshot". An attribute is not text. So the assertion is on the TEXT.
 
 describe("CR-CRU-096 AC9b/AC9c — wherever a node renders, its disposition is stated in WORDS and not as an attribute alone", () => {
-  test("a running dispositioned CR keeps its row and its badge, and the untrimmed loose group states a VOID member's disposition in text", async () => {
-    // AC9c — IN_PROGRESS ∈ the row union whatever the `lifecycle`.
+  test("a running dispositioned CR keeps its row and its badge, and the loose group draws NO VOID member at all (CR-CRU-147 ruling 2)", async () => {
+    // AC9c — IN_PROGRESS \u2208 the row union whatever the `lifecycle`.
     await mountApp({ queue: board(RUNNING_DISPOSITIONED) });
     expectFocused040();
     expect(rowCrs("1")).toEqual(["CR-A", "CR-D"]);
@@ -1112,8 +1112,17 @@ describe("CR-CRU-096 AC9b/AC9c — wherever a node renders, its disposition is s
     expect(plain.hasAttribute("data-lifecycle")).toBe(false);
     expect(plain.querySelector('[data-testid="roadmap-node-lifecycle"]')).toBeNull();
 
-    // AC9b/AC18a — the second path: a dispositioned PENDING member, which a
-    // TRIMMED wave box would not draw, is drawn by the wave-less group.
+    // AC9b/AC18a used to have the wave-less group draw a dispositioned
+    // PENDING member a TRIMMED wave box would not. CR-CRU-147 \u00a7S1 AC3,
+    // ruling 2 (2026-09-25) SUPERSEDES that reading for a DEAD member: "the
+    // Wave Card drops a VOID/SUPERSEDED member everywhere", the loose group
+    // included. CR-V is PENDING (non-running) and VOID, so it now draws no
+    // node at all — only its live sibling CR-A does. The "disposition
+    // stated in words, not just an attribute" coverage this half of the
+    // test used to carry for a DEAD member stays proved above, on CR-D
+    // (running, ruling 4) — the one path left where a dead node still
+    // renders; CR-V's badge is reachable only through zone 3's table now
+    // (\u00a7S2), which this file does not render.
     await mountApp({ queue: board(LOOSE_DISPOSITIONED) });
     expect(flow().getAttribute("data-version")).toBe("0.4.0");
     // Located by being OUTSIDE every wave box, so nothing here names the
@@ -1121,17 +1130,13 @@ describe("CR-CRU-096 AC9b/AC9c — wherever a node renders, its disposition is s
     const loose = all('[data-testid="roadmap-node"]').filter(
       (node) => node.closest('[data-testid="roadmap-wave"]') === null,
     );
-    expect(loose.map((node) => node.getAttribute("data-cr"))).toEqual(["CR-A", "CR-V"]);
-
-    const dead = loose.find((node) => node.getAttribute("data-cr") === "CR-V");
-    if (dead === undefined) throw new Error("the loose group draws no node for the VOID member");
-    expect(dead.getAttribute("data-status")).toBe("PENDING");
-    expect(dead.getAttribute("data-lifecycle")).toBe("VOID");
-    const deadBadge = dead.querySelector<HTMLElement>('[data-testid="roadmap-node-lifecycle"]');
-    expect(deadBadge, "the loose group publishes VOID as an attribute only").not.toBeNull();
-    expect(norm(deadBadge!.textContent).toLowerCase()).toContain("void");
-    expect(norm(dead.textContent).toLowerCase()).toContain("void");
-    // The two dispositions do not render as one word.
-    expect(norm(deadBadge!.textContent)).not.toBe(norm(runningBadge!.textContent));
+    expect(
+      loose.map((node) => node.getAttribute("data-cr")),
+      "CR-CRU-147 ruling 2: the loose group draws only its live member \u2014 CR-V is VOID and non-running",
+    ).toEqual(["CR-A"]);
+    expect(
+      loose.find((node) => node.getAttribute("data-cr") === "CR-V"),
+      "CR-V (VOID, PENDING, non-running) must render no node anywhere in the loose group",
+    ).toBeUndefined();
   });
 });

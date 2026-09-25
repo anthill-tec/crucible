@@ -981,3 +981,132 @@ describe("CR-CRU-098 \u00a7S1/AC1/AC4/AC6 \u2014 wave/release lane details (port
     expect(answer.cr).not.toBe("CR-B0-1");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-147 C1 RED — §S1 AC2 (ruling 1) gap: a SUPERSEDED dead-dependency's HOLD
+// help[] re-points AT the successor, not merely "off it". Existing coverage
+// (HOLD_FIXTURES's pythonHelp comparison, line ~670) only exercises the VOID
+// member of HOLD_FIXTURES["dead-dependency"]; no existing test compares the
+// SUPERSEDED case's help[] against the literal src/hints.ts `nextHints.hold`
+// re-point wording (read at src/hints.ts:519-525). This closes that gap for
+// "both states" (dispatch prompt item 2). EXPECTED TO PASS TODAY: hints.ts's
+// dead-dependency branch already reads `trigger.by` (shipped since CR-092/098)
+// — this is a regression pin, not new RED.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("CR-CRU-147 §S1 AC2 (ruling 1) — the dead-dependency HOLD's help[] names the re-point target, for both dead states", () => {
+  test("a VOID dead-dependency's help tells the caller to re-point the dependsOn OFF it (no successor to name)", () => {
+    const fixture = HOLD_FIXTURES["dead-dependency"]!;
+    const answer = fields(fixture.entries);
+    expect(answer.decision).toBe("HOLD");
+    expect(answer.help).toEqual([
+      "re-point the dependsOn off it in docs/changes/README.md and re-run queue-file — " +
+        "CR-NEXTPTR-DEAD is VOID, so waiting will never clear this",
+      "next",
+    ]);
+  });
+
+  test("a SUPERSEDED dead-dependency's help tells the caller to re-point the dependsOn AT its successor, never merely off it", () => {
+    const entries = [
+      entry("CR-NEXTPTR-SUPDEAD", 10, { lifecycle: supersededLc("CR-NEXTPTR-SUPNEW") }),
+      entry("CR-NEXTPTR-SUPTARGET", 20, { dependsOn: ["CR-NEXTPTR-SUPDEAD"] }),
+    ];
+    const answer = fields(entries);
+    expect(answer.decision).toBe("HOLD");
+    expect(answer.help).toEqual([
+      "re-point the dependsOn at CR-NEXTPTR-SUPNEW in docs/changes/README.md and re-run queue-file — " +
+        "CR-NEXTPTR-SUPDEAD is SUPERSEDED, so waiting will never clear this",
+      "next",
+    ]);
+    expect(answer.help).not.toContain(
+      "re-point the dependsOn off it in docs/changes/README.md and re-run queue-file — " +
+        "CR-NEXTPTR-SUPDEAD is SUPERSEDED, so waiting will never clear this",
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-147 §S1 AC5 — ONE dead-CR rule, pinned as a regression. The gap
+// analysis measured (2026-09-24) that `next` keyed deadness on whether
+// `entry.lifecycle` was PRESENT (an object, verbatim-ported from the client's
+// `dict` test), while `isDeadCr` (src/types.ts:488) keys on `lifecycle.state`
+// being VOID or SUPERSEDED. The two readings diverged on two fixtures: a
+// `lifecycle: null` row, and a row whose lifecycle carries an UNRECOGNISED
+// state (e.g. "PARKED") — both LIVE under `isDeadCr` (neither state is
+// VOID/SUPERSEDED), yet the presence-keyed reading excluded a `lifecycle:
+// null` row from the actionable set and reported a PARKED dependency as a
+// DEAD dependency in `nextTrigger`. GREEN routed both through `isDeadCr`:
+// `isActionable` (src/next.ts:165) is `PENDING && !isDeadCr(entry)` and
+// `deadLifecycleOf` (src/next.ts:170) returns a lifecycle only when
+// `isDeadCr` rules the row dead. The assertions below hold that line: each
+// live fixture is offered as NEXT (never DRAINED), and each live dependency
+// blocks as an ordinary `dependency` (never `dead-dependency`).
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifecycle's mere presence", () => {
+  test("a PENDING row carrying lifecycle: null is LIVE — next offers it as NEXT rather than draining the lane as if it were dead", () => {
+    const entries = [entry("CR-NEXTPTR-NULLLIVE", 10, { lifecycle: null as unknown as QueueLifecycle })];
+    const answer = fields(entries);
+    // isDeadCr({lifecycle: null}) is false: null carries no `state`, so it is not VOID/SUPERSEDED.
+    // The presence-keyed `isActionable` (`entry.lifecycle === undefined`) wrongly excluded it,
+    // draining the lane as though its one row were dead; `isActionable` now asks `isDeadCr`.
+    expect(answer.decision).toBe("NEXT");
+    expect(answer.cr).toBe("CR-NEXTPTR-NULLLIVE");
+    expect(answer.decision).not.toBe("DRAINED");
+  });
+
+  test("a live dependency carrying lifecycle: null blocks as an ORDINARY dependency, never a dead-dependency", () => {
+    const entries = [
+      entry("CR-NEXTPTR-NULLDEP", 10, { track: "track-2", lifecycle: null as unknown as QueueLifecycle }),
+      entry("CR-NEXTPTR-NULLTARGET", 20, { track: "track-1", dependsOn: ["CR-NEXTPTR-NULLDEP"] }),
+    ];
+    const answer = fields(entries, { track: "1" });
+    expect(answer.decision).toBe("HOLD");
+    const trigger = answer.trigger as Record<string, unknown>;
+    expect(trigger.kind).toBe("dependency");
+    expect(trigger.kind).not.toBe("dead-dependency");
+    expect(trigger.blockedBy).toEqual([{ cr: "CR-NEXTPTR-NULLDEP", status: "PENDING" }]);
+  });
+
+  test('a PENDING row whose lifecycle carries an UNRECOGNISED state ({state: "PARKED"}) is LIVE — next offers it as NEXT', () => {
+    const entries = [
+      entry("CR-NEXTPTR-PARKEDLIVE", 10, {
+        lifecycle: { state: "PARKED" } as unknown as QueueLifecycle,
+      }),
+    ];
+    const answer = fields(entries);
+    // isDeadCr({lifecycle: {state: "PARKED"}}) is false: PARKED is neither VOID nor SUPERSEDED.
+    // The presence-keyed reading treated ANY lifecycle object as not-actionable, wrongly draining
+    // the lane as if this row were dead; `isActionable` (src/next.ts:165) now asks `isDeadCr`.
+    expect(answer.decision).toBe("NEXT");
+    expect(answer.cr).toBe("CR-NEXTPTR-PARKEDLIVE");
+    expect(answer.decision).not.toBe("DRAINED");
+  });
+
+  test("a live dependency whose lifecycle carries an UNRECOGNISED state blocks as an ORDINARY dependency, never a dead-dependency", () => {
+    const entries = [
+      entry("CR-NEXTPTR-PARKEDDEP", 10, { track: "track-2", lifecycle: { state: "PARKED" } as unknown as QueueLifecycle }),
+      entry("CR-NEXTPTR-PARKEDTARGET", 20, { track: "track-1", dependsOn: ["CR-NEXTPTR-PARKEDDEP"] }),
+    ];
+    const answer = fields(entries, { track: "1" });
+    expect(answer.decision).toBe("HOLD");
+    const trigger = answer.trigger as Record<string, unknown>;
+    // The presence-keyed `lifecycleOf` once treated ANY object — PARKED included — as dead, and
+    // reported dead-dependency with state "PARKED", a state isDeadCr never recognises.
+    // `deadLifecycleOf` (src/next.ts:170) now returns a lifecycle only when `isDeadCr` rules it dead.
+    expect(trigger.kind).toBe("dependency");
+    expect(trigger.kind).not.toBe("dead-dependency");
+    expect(trigger).not.toHaveProperty("state");
+    expect(trigger.blockedBy).toEqual([{ cr: "CR-NEXTPTR-PARKEDDEP", status: "PENDING" }]);
+  });
+
+  test("VOID and SUPERSEDED rows stay dead under the one-rule (isDeadCr agrees with today's presence-keyed reading on these two states)", () => {
+    for (const lifecycle of [voidLc(), supersededLc("CR-NEXTPTR-ONERULE-NEW")]) {
+      const entries = [entry("CR-NEXTPTR-ONERULE-DEAD", 10, { lifecycle }), entry("CR-NEXTPTR-ONERULE-ALIVE", 20)];
+      const answer = fields(entries);
+      expect(answer.decision).toBe("NEXT");
+      expect(answer.cr).toBe("CR-NEXTPTR-ONERULE-ALIVE");
+    }
+  });
+});
+

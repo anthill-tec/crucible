@@ -13,14 +13,25 @@
 //
 // The contract this file pins:
 //   • the loose box's `rows` are exactly the members it DRAWS — its whole
-//     membership, untrimmed, in the server's published order (AC18a: the row
-//     arrangement WITHOUT the trim; AC9b: which is why a merged or
-//     dispositioned member is still drawn there, badge and all);
+//     LIVE membership, untrimmed, in the server's published order (AC18a: the
+//     row arrangement WITHOUT the trim; AC9b: which is why a merged member is
+//     still drawn there, badge and all);
+//   • CR-CRU-147 §S1/AC3 (ruling 2, 2026-09-25) SUPERSEDES this file's own
+//     earlier reading of AC9b for a DEAD member: "the Wave Card drops dead
+//     CRs everywhere", the loose group included — a VOID or SUPERSEDED member
+//     is no longer drawn there either, whatever badge it would have carried.
+//     The badge stays reachable through zone 3's table (`view.members`, which
+//     keeps every dead CR), never through the Wave Card's own loose group. The
+//     one test below that exercised the retired reading is corrected in
+//     place, not deleted, because its OTHER two assertions (running and
+//     merged members still drawn) remain true;
 //   • its `hiddenCount` is `0`, because the group hides nothing and has no
 //     anchor for a `+N more` pointer (AC18a);
 //   • the TRIMMED path is untouched — same rows, same remainder (AC9/AC10/
 //     AC11a), so making the loose group honest cannot silently loosen the
-//     trim;
+//     trim; CR-CRU-147 §S1/AC3 additionally drops a dead member from a
+//     TRIMMED wave's `entries` too (its header count, `box.entries.length`,
+//     must not count it) — the AC9a test below is corrected the same way;
 //   • and every box is SELF-DESCRIBING: `rows` is a WINDOW on `entries` and
 //     `hiddenCount` is the scheduled remainder that window left out, so "what
 //     does this box draw" is answered ONCE, in the view, instead of being
@@ -158,16 +169,23 @@ describe("CR-CRU-096 AC18a — the `wave: null` loose box publishes what it DRAW
     expect(box.hiddenCount).toBe(0);
   });
 
-  test("`rows` is the loose box's WHOLE membership — merged, running and dispositioned alike", () => {
+  test("`rows` is the loose box's WHOLE LIVE membership — merged and running alike, but never a VOID/SUPERSEDED member (CR-CRU-147 §S1/AC3)", () => {
     const box = boxOf(MIXED_LOOSE, null);
-    // AC18a takes the row ARRANGEMENT without the trim, which is exactly why
-    // AC9b's badge stays reachable: a merged or VOID member is still drawn
-    // here, so `rows` must name it.
-    expect(ids(box.rows)).toEqual(ids(MIXED_LOOSE));
+    // AC18a takes the row ARRANGEMENT without the trim, which is why a merged
+    // or running member is still drawn here. CR-CRU-147 §S1/AC3 (ruling 2)
+    // SUPERSEDES this suite's earlier reading of AC9b for a DEAD member: the
+    // Wave Card drops a VOID/SUPERSEDED member everywhere, the loose group
+    // included, so CR-L-V1 (VOID) is named in neither `rows` nor `entries` —
+    // its badge stays reachable through zone 3's table (`view.members`), not
+    // through this group.
+    const liveIds = ids(MIXED_LOOSE).filter((cr) => cr !== "CR-L-V1");
+    expect(ids(box.entries)).toEqual(liveIds);
+    expect(ids(box.rows)).toEqual(liveIds);
     expect(box.rows).toEqual(box.entries);
     expect(box.hiddenCount).toBe(0);
     // The roll-up count is a fact about membership and is unchanged by any of
-    // this: two merged members, whether or not they are rows.
+    // this: two merged members, whether or not they are rows. CR-L-V1 is
+    // PENDING, not merged, so this count was never about it.
     expect(box.mergedCount).toBe(2);
   });
 
@@ -218,14 +236,20 @@ describe("CR-CRU-096 AC9/AC10/AC11a — the TRIMMED path is byte-for-byte what i
     expect(box.hiddenCount).toBe(1);
   });
 
-  test("a dispositioned PENDING member is still no row of a TRIMMED wave (AC9a)", () => {
+  test("a dispositioned PENDING member is no row of a TRIMMED wave, and CR-CRU-147 §S1/AC3 now drops it from `entries` too", () => {
     const withVoid = [
       ...NINE_WAVE,
       entry("CR-W-V", "1", "PENDING", 5, { lifecycle: { state: "SUPERSEDED", at: 1787000000 } }),
     ];
     const box = boxOf(withVoid, "1");
     expect(ids(box.rows)).not.toContain("CR-W-V");
-    expect(box.entries.map((member) => member.cr)).toContain("CR-W-V");
+    // CR-CRU-147 §S1/AC3 (ruling 2) SUPERSEDES this suite's earlier reading:
+    // `entries` drove the header's whole-membership count
+    // (`box.entries.length`, public/app.js:3604/3645), and the AC now requires
+    // that count to exclude a dead member too — so `entries` itself no longer
+    // names CR-W-V, not merely `rows`.
+    expect(ids(box.entries)).not.toContain("CR-W-V");
+    expect(box.entries.length).toBe(NINE_WAVE.length);
   });
 });
 

@@ -5897,7 +5897,13 @@ export class Store {
         return { changed: false };
       }
     }
-    const stamped: QueueLifecycle = { ...lifecycle, at: Date.now() };
+    const stamped: QueueLifecycle = {
+      ...lifecycle,
+      at: Date.now(),
+      // The lifecycle carries who (ruling 6): the same author the journal
+      // row below records, absent when the write carries none.
+      ...(author !== undefined ? { author } : {}),
+    };
     const previous =
       held.lifecycle_json === null ? null : (JSON.parse(held.lifecycle_json) as QueueLifecycle);
     this.db.transaction(() => {

@@ -83,6 +83,13 @@ const capOf = (): number => {
   return value as number;
 };
 
+// The ONE dead-CR rule as the browser holds it (`public/app-logic.mjs`'s
+// `isDeadCr`, the state-based mirror of `src/types.ts`'s): a row is dead when
+// its `lifecycle.state` is VOID or SUPERSEDED, never merely because a
+// `lifecycle` key is present. The ambient tests/app-logic.d.ts predates the
+// export, so the module is cast to it here.
+const isDeadCr = (AppLogic as unknown as { isDeadCr: (entry: unknown) => boolean }).isDeadCr;
+
 /** The annotation a row declaring `declaredCount` dependencies renders, as a
  *  SHAPE, for a board whose ids abbreviate to numeric tails: at most the
  *  cap's worth of bare ids, and the remainder as a COUNT only when there IS a
@@ -365,6 +372,14 @@ const LOOSE_QUEUE: QueueFixture[] = QUEUE.map((entry) =>
   entry.release === "0.2.0" ? { ...entry, wave: "" } : entry,
 );
 
+/** CR-CRU-147 \u00a7S1 AC3, ruling 2 (2026-09-25) SUPERSEDES AC18a's "draws every
+ *  member" reading above for a DEAD member: the Wave Card drops a
+ *  VOID/SUPERSEDED member everywhere, the loose group included. `CR-V-SUP`
+ *  and `CR-V-VOID` are both PENDING (non-running), so on `LOOSE_QUEUE` they
+ *  draw no node at all — only these four do. Every `looseBoard()` assertion
+ *  that used to expect all six now expects this set. */
+const LOOSE_DRAWN_CRS = ["CR-V-DONE", "CR-V-UNTRACKED", "CR-V-LIVE", "CR-V-PEND"];
+
 // ── CR-CRU-096 C5 — the boards the MEASUREMENT cycle needs ─────────────────
 //
 // C1–C4 deferred seven readings to a real engine, and each needs a board the
@@ -436,9 +451,9 @@ const mergedMembers = (prefix: string, wave: string, count: number, from: number
     track: MEASURED_TRACK,
   }));
 
-/** Scheduled members — `PENDING` with the `lifecycle` key ABSENT, which is
- *  what `roadmapActionable` tests (`!("lifecycle" in entry)`), so a fixture
- *  that declared `lifecycle: undefined` would draw no rows at all. */
+/** Scheduled members — `PENDING` with the `lifecycle` key ABSENT, so each is
+ *  live under `roadmapActionable`'s rule (`PENDING` and not `isDeadCr`, which
+ *  judges `lifecycle.state`, never the key's presence) and draws a row. */
 const scheduledMembers = (
   prefix: string,
   wave: string,
@@ -1058,9 +1073,9 @@ async function captureLiveDeps(): Promise<string> {
     );
   }
   // The widest row the board can DRAW an annotation on, by `roadmapActionable`'s
-  // own rule (`public/app-logic.mjs`): PENDING, with no lifecycle disposition.
+  // own rule (`public/app-logic.mjs`): PENDING, and not dead under `isDeadCr`.
   const actionable = queue.filter(
-    (entry) => entry.status === "PENDING" && !("lifecycle" in entry),
+    (entry) => entry.status === "PENDING" && !isDeadCr(entry),
   );
   const widest = actionable.reduce<QueueFixture | null>(
     (best, entry) =>
@@ -1405,9 +1420,11 @@ beforeEach(async () => {
   await pageEl().goto(fixtureUrl, { waitUntil: "load" });
 });
 
-/** The AC18a board: every one of the six focused CRs drawn, because the
- *  wave-less group takes no trim. Used by the assertions whose subject is a
- *  FACE a wave box no longer draws (merged, dimmed-merged). */
+/** The AC18a board: the loose group's WHOLE live membership drawn, because
+ *  it takes no trim. Under CR-CRU-147 ruling 2 that is `LOOSE_DRAWN_CRS`
+ *  (four of the six focused CRs) \u2014 the VOID and SUPERSEDED members are dead
+ *  and draw no node anywhere, loose group included. Used by the assertions
+ *  whose subject is a FACE a wave box no longer draws (merged, dimmed-merged). */
 const looseBoard = async (): Promise<void> => {
   await pageEl().goto(looseFixtureUrl, { waitUntil: "load" });
 };
@@ -1752,12 +1769,14 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
     const nodes = await measureAll('[data-testid="roadmap-node"]');
     expect(nodes.map((n) => n.cr)).toEqual(DRAWN_CRS);
     for (const node of nodes) expectRectangle(node, `CR node ${node.cr}`);
-    // …and on the AC18a board, where every FACE is drawn: a merged leaf and a
-    // dimmed-merged one are rectangles too, which is the half a trimmed wave
-    // box can no longer show.
+    // …and on the AC18a board, where every LIVE face is drawn: a merged leaf
+    // and a dimmed-merged one are rectangles too, which is the half a
+    // trimmed wave box can no longer show. CR-CRU-147 ruling 2 excludes the
+    // two dead members (CR-V-SUP, CR-V-VOID) here too, so "every FACE" is now
+    // `LOOSE_DRAWN_CRS`, not `FOCUSED_CRS`.
     await looseBoard();
     const everyFace = await measureAll('[data-testid="roadmap-node"]');
-    expect(everyFace.map((n) => n.cr)).toEqual(FOCUSED_CRS);
+    expect(everyFace.map((n) => n.cr)).toEqual(LOOSE_DRAWN_CRS);
     for (const node of everyFace) expectRectangle(node, `CR node ${node.cr}`);
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]'))
@@ -1908,29 +1927,58 @@ describe("AC22 — each state renders its declared colour", () => {
     }
   });
 
-  test("SUPERSEDED and VOID render distinguishably from each other — on the NODE's own badge and on zone 3's row", async () => {
-    // CR-CRU-096 AC9b — AC9a trims the dispositioned PENDING ROW out of a
-    // TRIMMED wave box and nothing more: the node's badge STAYS and renders
-    // wherever a node renders. So the axis is measured on BOTH surfaces that
-    // draw it — zone 3's row here, and the node badge on the AC18a loose
-    // board, the untrimmed group where a dispositioned member is drawn.
-    const rows = await measureAll('[data-testid="roadmap-lifecycle-badge"]');
-    expect(rows.length).toBe(2);
+  test("SUPERSEDED and VOID render distinguishably from each other on zone 3's STATUS badge; the loose group draws neither as a node (CR-CRU-147 \u00a7S2, cycle 526 C4 \u2014 supersedes this file's own earlier `roadmap-lifecycle-badge` reading)", async () => {
+    // CR-CRU-096 AC9b used to have the node's disposition badge survive
+    // AC9a's trim wherever a node still renders, including the AC18a loose
+    // group, the untrimmed group. CR-CRU-147 \u00a7S1 AC3, ruling 2 (2026-09-25)
+    // SUPERSEDES that for a DEAD member: "the Wave Card drops a
+    // VOID/SUPERSEDED member everywhere", the loose group included. Neither
+    // `CR-V-SUP` nor `CR-V-VOID` is running (ruling 4's own carve-out), so
+    // this board no longer has ANY node carrying either disposition \u2014
+    // "distinguishably rendered" is provable only on the one surface left
+    // that still draws them: zone 3's row.
+    //
+    // CR-CRU-147 \u00a7S2 (cycle 526, C4) RETIRES the separate
+    // `roadmap-lifecycle-badge` this test used to read here: the reason moves
+    // to a tooltip and the STATUS cell itself now NAMES the lifecycle state
+    // (never `PENDING`), carrying its own `data-lifecycle` attribute \u2014 so
+    // the axis is read off `roadmap-status-badge[data-lifecycle]` instead,
+    // and pinned to the EXACT words \u00a7S2's own AC names rather than merely
+    // "distinguishable".
+    const rows = await measureAll('[data-testid="roadmap-status-badge"][data-lifecycle]');
     expect(
-      new Set(rows.map((b) => `${b.color}|${b.text}`)).size,
-      "the two lifecycle states render identically on zone 3's row",
+      rows.length,
+      "exactly the two dead rows carry a status badge with data-lifecycle",
+    ).toBe(2);
+    const superseded = rows.find((b) => b.text.startsWith("SUPERSEDED"));
+    const dead = rows.find((b) => b.text === "VOID");
+    expect(
+      superseded,
+      `no SUPERSEDED status badge (have: ${rows.map((r) => r.text).join(" | ")})`,
+    ).toBeDefined();
+    expect(
+      dead,
+      `no VOID status badge (have: ${rows.map((r) => r.text).join(" | ")})`,
+    ).toBeDefined();
+    expect(
+      superseded!.text,
+      "078 AC27: a superseded row names its successor",
+    ).toBe("SUPERSEDED \u2192 CR-V-LIVE");
+    expect(dead!.text).toBe("VOID");
+    expect(
+      new Set(rows.map((b) => b.color)).size,
+      "VOID and SUPERSEDED render the same colour on zone 3's status badge",
     ).toBe(2);
     // This board's waves are all declared, so every box is TRIMMED and draws
-    // no dispositioned row — hence no node badge on THIS board (AC9a).
+    // no dispositioned row \u2014 hence no node badge on THIS board (AC9a).
     expect((await measureAll('[data-testid="roadmap-node-lifecycle"]')).length).toBe(0);
 
     await looseBoard();
     const nodes = await measureAll('[data-testid="roadmap-node-lifecycle"]');
-    expect(nodes.length, "the untrimmed loose group draws no node badge").toBe(2);
     expect(
-      new Set(nodes.map((b) => `${b.color}|${b.text}`)).size,
-      "the two lifecycle states render identically on the node badge",
-    ).toBe(2);
+      nodes.length,
+      "CR-V-SUP and CR-V-VOID are PENDING and non-running, so ruling 2 draws neither as a node \u2014 the loose group states no node badge at all",
+    ).toBe(0);
   });
 });
 
@@ -1975,7 +2023,10 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     // ink, ONE border colour and ONE opacity across every node, so anything
     // that still separates them is provably not colour.
     const nodes = await measureAll('[data-testid="roadmap-node"]');
-    expect(nodes.length).toBe(FOCUSED_CRS.length);
+    // CR-CRU-147 ruling 2: CR-V-SUP and CR-V-VOID (PENDING, non-running) are
+    // dead and draw no node, so the loose group's whole live membership is
+    // `LOOSE_DRAWN_CRS`, not all six `FOCUSED_CRS`.
+    expect(nodes.length).toBe(LOOSE_DRAWN_CRS.length);
     expect(new Set(nodes.map((n) => n.color)).size).toBe(1);
     expect(new Set(nodes.map((n) => n.borderColor)).size).toBe(1);
     expect(new Set(nodes.map((n) => n.opacity)).size).toBe(1);
@@ -1992,7 +2043,8 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
        }))`,
     );
     const rows = raw as { cr: string; status: string; statusText: string }[];
-    expect(rows.length).toBe(FOCUSED_CRS.length);
+    // CR-CRU-147 ruling 2: the loose group draws only its live members.
+    expect(rows.length).toBe(LOOSE_DRAWN_CRS.length);
     for (const row of rows) {
       expect(
         row.statusText,
@@ -2035,12 +2087,20 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     }
   });
 
-  test("the LIFECYCLE axis survives the strip on BOTH surfaces — the node badge and zone 3's row", async () => {
-    // CR-CRU-096 AC9b — measured on the AC18a loose board, the untrimmed
-    // group where a dispositioned member still draws a NODE. AC9a's trim only
-    // removes such a row from a wave BOX; it never removed the badge, and
-    // §S8 forbids `data-lifecycle` being the disposition's only channel — an
-    // attribute is not text and does not survive a greyscale screenshot.
+  test("the LIFECYCLE axis survives the strip on zone 3's STATUS badge; the loose group draws no node badge at all (CR-CRU-147 \u00a7S2, cycle 526 C4 \u2014 supersedes this file's own earlier `roadmap-lifecycle-badge` reading)", async () => {
+    // CR-CRU-096 AC9b used to have the AC18a loose board (the untrimmed
+    // group) still draw a NODE for a dispositioned member, so its badge
+    // survived the strip too. CR-CRU-147 \u00a7S1 AC3, ruling 2 (2026-09-25)
+    // SUPERSEDES that for a DEAD member: neither CR-V-SUP nor CR-V-VOID
+    // is running (ruling 4's own carve-out), so ruling 2 draws NEITHER as a
+    // node here \u2014 the node surface carries nothing to strip any more, and
+    // the axis's survival under the strip is provable only on zone 3's row,
+    // which \u00a7S8 still forbids reducing to `data-lifecycle` alone.
+    //
+    // CR-CRU-147 \u00a7S2 (cycle 526, C4) RETIRES the separate
+    // `roadmap-lifecycle-badge` this test used to read here: the STATUS
+    // badge itself now names the lifecycle state (never `PENDING`), so with
+    // colour stripped the words on THAT badge are what still must survive.
     await looseBoardStripped();
     const raw = await pageEl().evaluate(
       `(() => {
@@ -2051,7 +2111,7 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
          }));
          return {
            nodes: grab('[data-testid="roadmap-node-lifecycle"]'),
-           rows: grab('[data-testid="roadmap-lifecycle-badge"]'),
+           rows: grab('[data-testid="roadmap-status-badge"][data-lifecycle]'),
          };
        })()`,
     );
@@ -2059,17 +2119,18 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
       nodes: { state: string; text: string }[];
       rows: { state: string; text: string }[];
     };
-    expect(seen.nodes.length).toBe(2);
+    expect(
+      seen.nodes.length,
+      "CR-V-SUP and CR-V-VOID are PENDING and non-running, so the loose group draws neither as a node, and no node badge exists to strip",
+    ).toBe(0);
     expect(seen.rows.length).toBe(2);
-    for (const surface of [seen.nodes, seen.rows]) {
-      const superseded = surface.find((e) => e.state === "SUPERSEDED");
-      const dead = surface.find((e) => e.state === "VOID");
-      expect(superseded, "no SUPERSEDED marker").toBeDefined();
-      expect(dead, "no VOID marker").toBeDefined();
-      expect(superseded!.text.toLowerCase()).toContain("superseded");
-      expect(dead!.text.toLowerCase()).toContain("void");
-      expect(superseded!.text).not.toBe(dead!.text);
-    }
+    const superseded = seen.rows.find((e) => e.state === "SUPERSEDED");
+    const dead = seen.rows.find((e) => e.state === "VOID");
+    expect(superseded, "no SUPERSEDED status badge").toBeDefined();
+    expect(dead, "no VOID status badge").toBeDefined();
+    expect(superseded!.text).toBe("SUPERSEDED \u2192 CR-V-LIVE");
+    expect(dead!.text).toBe("VOID");
+    expect(superseded!.text).not.toBe(dead!.text);
   });
 
   test("a gate says whether it is shipped or proposed without colour", async () => {
@@ -2196,7 +2257,10 @@ describe("AC24 — only an IN_PROGRESS CR moves (sampled across frames)", () => 
       await looseBoard();
       const sampled = await sampleFrames();
       const statics = sampled.filter((s) => s.cr !== "CR-V-LIVE");
-      expect(statics.length).toBe(FOCUSED_CRS.length - 1);
+      // CR-CRU-147 ruling 2: CR-V-SUP and CR-V-VOID draw no node on the
+      // loose board either, so the statically-sampled set is
+      // `LOOSE_DRAWN_CRS` minus the one running member.
+      expect(statics.length).toBe(LOOSE_DRAWN_CRS.length - 1);
       for (const node of statics) {
         expect(
           node.faces,
@@ -2463,16 +2527,18 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
   });
 
   test("node order in the flowchart IS the authored seq order", async () => {
-    // The wave-less board (AC18a), where all six are drawn: order is the
-    // subject here, and a trimmed box would leave only two to order.
+    // The wave-less board (AC18a): order is the subject here, and a trimmed
+    // box would leave only two to order. CR-CRU-147 ruling 2 excludes
+    // CR-V-SUP and CR-V-VOID from this board too, so the drawn set to order
+    // is `LOOSE_DRAWN_CRS`, not all six `FOCUSED_CRS`.
     await looseBoard();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]'))
          .map((n) => ({ cr: n.getAttribute("data-cr"), seq: n.getAttribute("data-seq") }))`,
     );
     const nodes = raw as { cr: string; seq: string }[];
-    expect(nodes.map((n) => n.seq)).toEqual(["10", "11", "12", "13", "14", "15"]);
-    expect(nodes.map((n) => n.cr)).toEqual(FOCUSED_CRS);
+    expect(nodes.map((n) => n.seq)).toEqual(["10", "11", "12", "13"]);
+    expect(nodes.map((n) => n.cr)).toEqual(LOOSE_DRAWN_CRS);
   });
 
   test("every node is PAINTED in that declared order — no reordering by layout", async () => {
@@ -2484,7 +2550,9 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
        })`,
     );
     const painted = raw as { cr: string; top: number; left: number }[];
-    expect(painted.length).toBe(FOCUSED_CRS.length);
+    // CR-CRU-147 ruling 2: the loose group's whole live membership is
+    // `LOOSE_DRAWN_CRS` (four), not all six `FOCUSED_CRS`.
+    expect(painted.length).toBe(LOOSE_DRAWN_CRS.length);
     // Reading order: a node never appears ABOVE an earlier sibling, and within
     // one row never to its LEFT. Anything a force layout or a crossing
     // heuristic did would break one of the two.
@@ -4751,6 +4819,48 @@ describe("CR-CRU-096 AC26 — zones 1 and 3 are untouched by this CR", () => {
     );
   };
 
+  // CR-CRU-147 §S2 (cycle 526, C4) redraws a DEAD CR's table row BY
+  // DEFINITION — its STATUS badge gains new words and keeps `data-lifecycle`
+  // (unchanged — CR-CRU-078 AC27 already set that attribute on the row), the
+  // retired `roadmap-lifecycle-badge` is gone, `dead`/`faded` classes appear
+  // on its id/title/points/deps, and a new
+  // `[data-testid="roadmap-status-tooltip"]` element rides BESIDE the row.
+  // §S2 AC4 itself says "a row with NO lifecycle key renders exactly as
+  // today" — i.e. AC26's byte-identical freeze was always a claim about a
+  // LIVE row; a dead row is expressly what this CR is scoped to change, so
+  // freezing it too would fail this CR's own GREEN build by definition.
+  //
+  // `zoneThreeLiveMarkup` reads the SAME zone-3 subtree `zoneMarkup` does, on
+  // a CLONE, then strips only:
+  //   • every `[data-testid="roadmap-row"][data-lifecycle]` — a dead row.
+  //     The `data-lifecycle` ATTRIBUTE on the row predates this CR (CR-CRU-078
+  //     AC27, present verbatim in the `63f07f5` baseline — `git show
+  //     63f07f5:public/app.js` line 2496), so the SAME rows are identified and
+  //     removed symmetrically on both the baseline and the current render;
+  //   • every `[data-testid="roadmap-status-tooltip"]` — the element this CR
+  //     adds beside a dead row. The baseline renders none, so stripping it
+  //     there is a no-op; only the current render's copy is ever removed.
+  // What remains — every LIVE row, in the SAME order, with the SAME markup —
+  // is still compared BYTE-FOR-BYTE below, so a LIVE row regressing under
+  // this CR still fails this test exactly as it did before §S2 landed.
+  // Nothing about the live-row guarantee is weakened.
+  const zoneThreeLiveMarkup = async (url: string): Promise<string> => {
+    await openWide(url);
+    return await readWide<string>(
+      `(() => {
+         const zone = document.querySelector('[data-zone="3"]');
+         if (!zone) return "";
+         const clone = zone.cloneNode(true);
+         clone
+           .querySelectorAll(
+             '[data-testid="roadmap-row"][data-lifecycle], [data-testid="roadmap-status-tooltip"]',
+           )
+           .forEach((el) => el.remove());
+         return clone.outerHTML;
+       })()`,
+    );
+  };
+
   test("the pre-CR baseline really did render", async () => {
     expect(
       baselineFailure,
@@ -4788,14 +4898,22 @@ describe("CR-CRU-096 AC26 — zones 1 and 3 are untouched by this CR", () => {
     ).toBe(before.one);
   });
 
-  test("zone 3's markup is byte-identical to the pre-CR baseline", async () => {
+  test("zone 3's LIVE rows are byte-identical to the pre-CR baseline; a dead row is excluded because CR-CRU-147 §S2 redraws it BY DEFINITION (cycle 526, C4)", async () => {
     expect(baselineFailure).toBe("");
-    const before = await zoneMarkup(baselineFixtureUrl);
-    const after = await zoneMarkup(surfaceFixtureUrl);
+    const before = await zoneThreeLiveMarkup(baselineFixtureUrl);
+    const after = await zoneThreeLiveMarkup(surfaceFixtureUrl);
+    // Non-vacuity: this fixture (`QUEUE`, above) carries two dead rows
+    // (CR-V-SUP, CR-V-VOID) among six — if the strip selector were wrong and
+    // removed EVERY row, both sides would trivially collapse to the same
+    // short empty-table string and the comparison below would prove nothing.
     expect(
-      after.three,
-      `zone 3's markup changed against ${baselineCommit.slice(0, 7)}, which AC26 freezes`,
-    ).toBe(before.three);
+      before.length,
+      "the stripped baseline collapsed to (near-)nothing — the live-row strip likely removed too much",
+    ).toBeGreaterThan(200);
+    expect(
+      after,
+      `zone 3's LIVE rows changed against ${baselineCommit.slice(0, 7)}, which AC26 freezes`,
+    ).toBe(before);
   });
 });
 

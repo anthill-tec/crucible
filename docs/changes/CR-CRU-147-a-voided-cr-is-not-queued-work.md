@@ -1,8 +1,8 @@
 # CR-CRU-147 — a voided CR is not queued work, and its row says so
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-091, CR-CRU-078 · **Status** PENDING
+**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-091, CR-CRU-078 · **Status** PENDING
 
-> **Gap analysis 2026-09-25 — measured, with three user rulings.**
+> **Gap analysis 2026-09-25 — measured, with seven user rulings (1–3 at gap analysis, 4–7 during the cycles).**
 >
 > - **`next` already skips dead CRs** (resolver since CR-092, now `src/next.ts` after CR-098). §S1's
 >   first AC stays, as a pinned regression test.
@@ -19,6 +19,21 @@
 >   a uniform TOON table (CR-081: every row has the same keys), so a per-row omitted key cannot hold.
 >   Every row gains `title` and `lifecycle`: `VOID` or `SUPERSEDED`, or null for a live CR, the same
 >   way `planId` is null when there is no plan. Null means none, never an invented state.
+> - **Ruling 4 (2026-09-25, at C3): a running dead CR stays on the Wave Card.** The store lets a CR
+>   be voided or superseded while its plan is open. Such a CR is still `IN_PROGRESS`, and `next`
+>   holds its lane with trigger `in-flight`, so the card keeps drawing and counting it
+>   (CR-CRU-096 AC9c's carve-out stands). Measured: no such row on this board today.
+> - **Ruling 5 (2026-09-25, at C3): a wave with no live work draws no box.** When every member of a
+>   wave is dead and none is running, the Wave Card draws no box for that wave (no header, no
+>   `0` count). Its CRs stay visible, struck through, in the zone-3 table.
+> - **Ruling 6 (2026-09-25, at C4): the lifecycle carries who.** F17's tooltip names who voided or
+>   superseded the CR, but the lifecycle held no author: the route passed it only to the
+>   declaration journal. The lifecycle now stores that same author when it is written. A
+>   lifecycle written before this change has none, and its tooltip omits who rather than guess.
+> - **Ruling 7 (2026-09-25, at VERIFY): the tooltip is reachable by keyboard.** VERIFY found the
+>   badge focusable and marked up with `aria-describedby`, but focus did not open the tooltip and
+>   the hidden bubble was out of the accessibility tree. Keyboard support is completed rather than
+>   dropped.
 > - **Three dead-CR predicates, one rule.** `isDeadCr` (`src/types.ts`, state-based),
 >   `isActionable` (`src/next.ts`, keyed on whether a lifecycle exists) and `roadmapActionable`
 >   (`public/app-logic.mjs`, the same) all draw the line. The write side (`src/v2.ts`, queue POST)
@@ -51,7 +66,7 @@ therefore reaches humans, not only `next`.
 
 **This is a consumer defect, not a data defect.** CR-CRU-091 §S2 made `lifecycle` a **second
 axis**, deliberately never folded into `status`. The PRD locks `status` as derived (PENDING = no
-plan, IN_PROGRESS = open plan, COMPLETED = closed + merge, `PRD-crucible-v2.md:350-352`): `status`
+plan, IN_PROGRESS = open plan, COMPLETED = closed + merge, `PRD-crucible-v2.md:441-442`): `status`
 answers *what happened to the work*, `lifecycle` answers *whether the work is still wanted*. The
 data is right. What is missing is that the surfaces that decide what is live work never read the
 second axis.
@@ -93,7 +108,7 @@ the right edge, giving the whole table a horizontal scrollbar. F17 draws the def
   points, depends-on and status. The **id, title and points are struck through** and dimmed, and the
   depends-on chips fade. Nothing is added to the row.
 - **The STATUS cell names the state:** `VOID`, or `SUPERSEDED → <successor>`, never `PENDING`. This
-  is **display only**. The queue's `status` field stays derived (PRD `:350-352`), and `lifecycle`
+  is **display only**. The queue's `status` field stays derived (PRD `:441-442`), and `lifecycle`
   stays the second axis (CR-091 §S2). The cell shows the lifecycle state when one exists, in place
   of the derived status.
 - **The reason is a tooltip** on the status badge (`ⓘ`): state · date · who, then the full reason,
@@ -109,42 +124,54 @@ the echo, which is how Model B found four drifted titles.
 ## Acceptance criteria
 
 **§S1**
-- [ ] `next` never returns a `VOID` or `SUPERSEDED` CR, asserted against a CR that would otherwise be
+- [x] `next` never returns a `VOID` or `SUPERSEDED` CR, asserted against a CR that would otherwise be
       the next in sequence. (Already met since CR-092; pinned here as a regression test.)
-- [ ] **A dead dependency HOLDS (ruling 1).** A live CR that `dependsOn` a `VOID` or `SUPERSEDED` CR
+- [x] **A dead dependency HOLDS (ruling 1).** A live CR that `dependsOn` a `VOID` or `SUPERSEDED` CR
       is returned by `next` as `decision=HOLD`, trigger `dead-dependency`, naming the dead CR and its
       state (and successor, for `SUPERSEDED`), with the hint to re-point `dependsOn`. Asserted for
       both states.
-- [ ] **The zone-2 Wave Card does not render a dead CR anywhere (ruling 2).** Not in a waved box's
+- [x] **The zone-2 Wave Card does not render a dead CR anywhere (ruling 2).** Not in a waved box's
       rows, not in the loose (unwaved) group. The wave header's count (`roadmap-wave-count`,
       `data-cr-count`) excludes it, and so do `hiddenCount` (`+N more`) and the merged roll-up.
       Asserted on a wave holding one dead member of each state beside live ones.
-- [ ] The record survives: after `cr-void`, the queue read still returns the row with its derived
+      **Except a running member (ruling 4):** an `IN_PROGRESS` member stays drawn, and counted in
+      its wave's header, whatever its lifecycle (CR-CRU-096 AC9c), because `next` holds its lane
+      as in-flight. It drops like any dead CR once it is no longer running.
+      **A wave with no live work draws no box (ruling 5):** when every member is dead and none is
+      running, the card draws no box, header or count for that wave.
+- [x] The record survives: after `cr-void`, the queue read still returns the row with its derived
       `status` and its `lifecycle` object intact.
-- [ ] **One dead-CR rule.** `next` and every server reader judge deadness with `isDeadCr`
+- [x] **One dead-CR rule.** `next` and every server reader judge deadness with `isDeadCr`
       (`src/types.ts`); the presence-keyed `isActionable` test is gone. The browser module's mirror is
       state-based, and a parity test runs the server rule and the mirror over the same fixtures,
       including `lifecycle: null` and a lifecycle with an unrecognised state, and requires the same
       answer on every one.
 
 **§S2**
-- [ ] A dead CR's roadmap table row has the same cells, in the same columns, as a live row: id,
+- [x] A dead CR's roadmap table row has the same cells, in the same columns, as a live row: id,
       **title**, points, depends-on, status. The id, title and points are struck through. No cell of
       the row, and no row of the table, overflows its column or the table's width, asserted by
       measured geometry on a row whose reason is longer than the table is wide.
-- [ ] The STATUS cell reads `VOID` for a voided CR and `SUPERSEDED → <successor>` for a superseded
+- [x] The STATUS cell reads `VOID` for a voided CR and `SUPERSEDED → <successor>` for a superseded
       one (078 AC27), never `PENDING`. The queue read's `status` for the same CR is still the derived
       value: the change is to the cell, not the data.
-- [ ] The lifecycle reason is not rendered in the row. It is the status badge's tooltip (state ·
+- [x] The lifecycle reason is not rendered in the row. It is the status badge's tooltip (state ·
       date · who · reason), reachable by hover on desktop and by tap on the phone band.
-- [ ] A row with no `lifecycle` key renders exactly as today, with no strikethrough and no default.
+- [x] **The lifecycle carries who (ruling 6).** `cr-void` and `cr-supersede` store their author on
+      the lifecycle as `author`, the same value the declaration journal records, and the queue read
+      returns it. The tooltip names it. A lifecycle with no `author` renders its tooltip without
+      one, never a placeholder.
+- [x] **The tooltip is reachable by keyboard (ruling 7, at VERIFY).** A dead row's status badge
+      takes focus; focusing it opens the tooltip and moving focus away closes it. While closed, the
+      bubble is still in the accessibility tree, so `aria-describedby` announces the reason.
+- [x] A row with no `lifecycle` key renders exactly as today, with no strikethrough and no default.
 
 **§S3**
-- [ ] **Every `queue` row carries `title` and `lifecycle` (ruling 3):** `lifecycle` is `VOID` or
+- [x] **Every `queue` row carries `title` and `lifecycle` (ruling 3):** `lifecycle` is `VOID` or
       `SUPERSEDED` for a dead CR and null for a live one, never an invented state. The rows stay a
       uniform table (every row the same keys, CR-081), asserted by round-tripping the verb's output
       through the TOON decoder.
-- [ ] No existing consumer of the `queue` envelope breaks. The existing keys (`cr, wave, status,
+- [x] No existing consumer of the `queue` envelope breaks. The existing keys (`cr, wave, status,
       planId`) keep their names, order and values.
 
 ## Risk

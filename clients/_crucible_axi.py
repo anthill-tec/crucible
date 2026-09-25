@@ -2170,10 +2170,25 @@ def build_queue_rows(entries):
     uniform-table-safe rows: one dict per entry with the SAME scalar-only
     key-set, so the list round-trips as a TOON Construct-3 table (the same
     rule `build_status_rows` follows). `planId` is null when the queue entry
-    has no plan at all — which IS the fact the release ceremony needs."""
+    has no plan at all — which IS the fact the release ceremony needs.
+
+    Six columns, in order: `cr`, `wave`, `status` (the DERIVED status, never
+    the lifecycle folded in), `planId`, `title` (the entry's own title, null
+    when it has none) and `lifecycle` (the entry's `lifecycle.state` string —
+    `VOID` or `SUPERSEDED` — when a lifecycle object is present, null for a
+    live entry). A null column keeps the table uniform; it is never an
+    omitted key and never an invented state."""
     return [{"cr": e.get("cr"), "wave": e.get("wave"),
-             "status": e.get("status"), "planId": e.get("planId")}
+             "status": e.get("status"), "planId": e.get("planId"),
+             "title": e.get("title"), "lifecycle": _lifecycle_state(e)}
             for e in entries or []]
+
+
+def _lifecycle_state(entry):
+    """The entry's `lifecycle.state` string when a lifecycle object is
+    present, else None — the reason and successor never fold into it."""
+    lifecycle = entry.get("lifecycle")
+    return lifecycle.get("state") if isinstance(lifecycle, dict) else None
 
 
 def cr_merged_crs(records):

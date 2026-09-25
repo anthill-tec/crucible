@@ -61,7 +61,7 @@ interface QueueEntryWire {
   seq: number;
   release?: string;
   track?: string;
-  lifecycle?: { state: string; by?: string; reason?: string; at: number };
+  lifecycle?: { state: string; by?: string; reason?: string; at: number; author?: string };
   [key: string]: unknown;
 }
 
@@ -494,6 +494,67 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const stored = await entryOf(key, "CR-X");
         expect(stored).toBeDefined();
         expect(stored!.lifecycle!.state).toBe("VOID");
+      },
+    );
+
+    // Ruling 6 (C4) — the lifecycle now carries WHO wrote it: `cr-void` and
+    // `cr-supersede` store the same author the declaration journal already
+    // records for that write (src/store.ts appendDeclaration), reached here
+    // through `store.listQueueDeclarations` rather than a guessed literal —
+    // `declarationAuthor` (src/v2.ts) derives it from the registered caller.
+    test(
+      "cr-supersede → the lifecycle's author is the declaration journal's author for that write",
+      async () => {
+        boot();
+        const key = await seed("s8-supersede-author");
+        await propose(key, "0.2.0");
+        await plan(key, "CR-X", "0.2.0", 5, "the superseded one");
+
+        const res = await post(lifecyclePath(key, "CR-X", "supersede"), {
+          agentId: ORCH,
+          by: "CR-Y",
+        });
+        expect(res.status).toBe(200);
+
+        const journalled = handle!.store
+          .listQueueDeclarations(key)
+          .filter((d) => d.cr === "CR-X" && d.verb === "cr-supersede");
+        expect(journalled).toHaveLength(1);
+        const journalAuthor = journalled[0]!.author;
+        expect(journalAuthor).toBeDefined();
+
+        // POSITIVE — the queue read's lifecycle.author matches the journal,
+        // never a hardcoded ORCH literal.
+        expect(res.body.entry!.lifecycle!.author).toBe(journalAuthor);
+        const storedEntry = await entryOf(key, "CR-X");
+        expect(storedEntry!.lifecycle!.author).toBe(journalAuthor);
+      },
+    );
+
+    test(
+      "cr-void → the lifecycle's author is the declaration journal's author for that write",
+      async () => {
+        boot();
+        const key = await seed("s8-void-author");
+        await propose(key, "0.2.0");
+        await plan(key, "CR-X", "0.2.0", 5, "the voided one");
+
+        const res = await post(lifecyclePath(key, "CR-X", "void"), {
+          agentId: ORCH,
+          reason: "folded into CR-CRU-078",
+        });
+        expect(res.status).toBe(200);
+
+        const journalled = handle!.store
+          .listQueueDeclarations(key)
+          .filter((d) => d.cr === "CR-X" && d.verb === "cr-void");
+        expect(journalled).toHaveLength(1);
+        const journalAuthor = journalled[0]!.author;
+        expect(journalAuthor).toBeDefined();
+
+        expect(res.body.entry!.lifecycle!.author).toBe(journalAuthor);
+        const storedEntry = await entryOf(key, "CR-X");
+        expect(storedEntry!.lifecycle!.author).toBe(journalAuthor);
       },
     );
   });

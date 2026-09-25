@@ -1213,20 +1213,42 @@ export function briefCrTitle(title, cr) {
  * An absent, malformed or unrecognised axis yields `null` — never a default.
  * A `SUPERSEDED` record with no `by` still says superseded rather than naming
  * an `undefined` successor.
+ *
+ * It also carries the table's STATUS-cell words (`label`) and the status
+ * badge's tooltip (`tip`). A dead row's cell names the lifecycle in place of
+ * the derived status: `VOID`, or `SUPERSEDED → <successor>`. That is DISPLAY
+ * only; the entry's `status` field is never touched. The tooltip's head reads
+ * state · date · who, where who is the lifecycle's own `author` (ruling 6),
+ * dropped when absent and never replaced by a placeholder. The reason is
+ * carried whole, because the row never renders it.
  */
 export function lifecycleBadge(lifecycle) {
   if (lifecycle === null || typeof lifecycle !== "object") return null;
   const nonEmpty = (value) =>
     typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  const reason = nonEmpty(lifecycle.reason);
+  const tip = (state) => {
+    const day = typeof lifecycle.at === "number" ? formatReleaseDate(lifecycle.at / 1000) : "";
+    const head = [state, day === "" ? null : day, nonEmpty(lifecycle.author)]
+      .filter((part) => part !== null)
+      .join(" · ");
+    return { head, reason };
+  };
   if (lifecycle.state === "SUPERSEDED") {
     const by = nonEmpty(lifecycle.by);
-    return { state: "SUPERSEDED", text: by === null ? "superseded" : `superseded by ${by}` };
+    return {
+      state: "SUPERSEDED",
+      text: by === null ? "superseded" : `superseded by ${by}`,
+      label: by === null ? "SUPERSEDED" : `SUPERSEDED → ${by}`,
+      tip: tip("SUPERSEDED"),
+    };
   }
   if (lifecycle.state === "VOID") {
-    const reason = nonEmpty(lifecycle.reason);
     return {
       state: "VOID",
       text: reason === null ? "void · abandoned" : `void · abandoned — ${reason}`,
+      label: "VOID",
+      tip: tip("VOID"),
     };
   }
   return null;
@@ -1280,21 +1302,37 @@ export function roadmapTableColumns(entries) {
 const ROADMAP_WAVE_ROWS = 5;
 
 /**
- * CR-CRU-096 §S5/AC9/AC9a — ACTIONABLE, the same predicate the queue verbs
- * already use (`clients/_crucible_axi.py:1301`): `PENDING` on the
- * server-derived status axis AND carrying no `lifecycle` disposition.
- *
- * The second half is load-bearing here for the same reason it is there:
- * `deriveQueueStatus` cannot see `lifecycle` by signature, so a VOID or
- * SUPERSEDED CR with no plan reads `status: "PENDING"`. It is not work, so it
- * gets no row — and no information is lost, because zone 3's table carries the
- * disposition (`roadmap-lifecycle-badge`, CR-CRU-078 AC27's column).
- *
- * `entry` is guarded by the status read: a null member short-circuits before
- * the `in`, which is why the key test is the mirror of the Python one rather
- * than an `undefined` comparison that would treat `lifecycle: null` as work.
+ * §S1 AC5 — the browser's ONE dead-CR rule, a state-based mirror of
+ * `isDeadCr` in `src/types.ts` (this module cannot import `src/`, so it keeps
+ * this copy, and tests/dead-cr-rule-parity.test.ts holds the two to the same
+ * answer on every fixture). Dead iff `lifecycle.state` is `VOID` or
+ * `SUPERSEDED`; no lifecycle, a `null` one, or a state it does not recognise
+ * is live. A null or undefined `entry` is live too: the optional chain answers
+ * `undefined`, which is neither state. Exported by name just below.
  */
-const roadmapActionable = (entry) => entry?.status === "PENDING" && !("lifecycle" in entry);
+function isDeadCr(entry) {
+  const state = entry?.lifecycle?.state;
+  return state === "VOID" || state === "SUPERSEDED";
+}
+export { isDeadCr };
+
+/**
+ * CR-CRU-096 §S5/AC9/AC9a — ACTIONABLE: `PENDING` on the server-derived status
+ * axis AND not dead under `isDeadCr` above (a `lifecycle.state` of `VOID` or
+ * `SUPERSEDED`).
+ *
+ * The second half is load-bearing: `deriveQueueStatus` cannot see `lifecycle`
+ * by signature, so a VOID or SUPERSEDED CR with no plan reads
+ * `status: "PENDING"`. It is not work, so it gets no row — and no information
+ * is lost, because zone 3's table carries the disposition
+ * (`roadmap-lifecycle-badge`, CR-CRU-078 AC27's column).
+ *
+ * The test is on the STATE, not on whether a `lifecycle` key is present: a
+ * PENDING member carrying `lifecycle: null`, or a state `isDeadCr` does not
+ * recognise, is live work and gets its row. A null member short-circuits on
+ * the status read.
+ */
+const roadmapActionable = (entry) => entry?.status === "PENDING" && !isDeadCr(entry);
 
 /**
  * CR-CRU-096 §S3/AC6a — MERGED is `COMPLETED` **or** `COMPLETED_UNTRACKED`:
@@ -1400,7 +1438,8 @@ export function compressWaveRuns(labels) {
  * orchestrator's authored sequence (§S6), so membership filters it and nothing
  * re-sorts it.
  *
- * WAVES are that membership grouped by declared wave in FIRST-APPEARANCE
+ * WAVES are that membership's LIVE part (§S1 AC3: a dead member that is not
+ * running is skipped) grouped by declared wave in FIRST-APPEARANCE
  * order, so a wave interleaved by the authoring still appears exactly once
  * (AC16) with its own CRs in the order they were authored (AC9). A member
  * declaring no wave groups under `wave: null` — a real group the renderer
@@ -1448,6 +1487,15 @@ export function focusedReleaseView(gate, releases, entries) {
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
+    // §S1 AC3 (rulings 2, 4 and 5) — the Wave Card holds only LIVE membership:
+    // a member `isDeadCr` rules dead joins no box (so no header count, row,
+    // lane, `+N more` or roll-up, waved or loose) UNLESS it is still
+    // `IN_PROGRESS`. A running dead member stays drawn and counted, because
+    // `next` holds its lane as in-flight (AC9c's carve-out). The skip comes
+    // BEFORE the box lookup, so a wave with no live or running member never
+    // gets a box at all: no box, header or count (ruling 5). `members` itself
+    // is NOT filtered: it feeds zone 3's table, where a dead row stays visible.
+    if (isDeadCr(entry) && entry?.status !== "IN_PROGRESS") continue;
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
@@ -1486,7 +1534,8 @@ export function focusedReleaseView(gate, releases, entries) {
 
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the
   // membership it is a window on so the two cannot drift. `entries` stays the
-  // WHOLE membership, which is the one fact the header states (AC3); `rows` is
+  // WHOLE LIVE membership (a dead member that is not running was never
+  // grouped, see above), which is the one fact the header states (AC3); `rows` is
   // the members the box draws, and `hiddenCount` the SCHEDULED remainder the
   // `+N more` pointer states.
   //
@@ -1501,8 +1550,9 @@ export function focusedReleaseView(gate, releases, entries) {
   // Merged members (AC6a — `COMPLETED` and `COMPLETED_UNTRACKED` alike) are
   // excluded from a TRIMMED box by construction: neither predicate below
   // admits them, so they roll up (§S3) and are never rows. The loose group
-  // draws them like everything else, which is what keeps AC9b's lifecycle
-  // badge reachable there.
+  // draws them like everything else. A dispositioned member reaches the loose
+  // group (and AC9b's lifecycle badge there) only while it is `IN_PROGRESS`;
+  // otherwise it never entered `entries` (§S1 AC3, above).
   //
   // AC11a — a running CR outside the top five EXTENDS the list; it never
   // displaces a scheduled row. So the rows are re-projected by ONE filter over
@@ -1528,7 +1578,7 @@ export function focusedReleaseView(gate, releases, entries) {
       box.hiddenCount = actionable.length - scheduled.length;
     }
     // §S3/AC6 — the merged work the roll-up states: counted over the WHOLE
-    // membership, independently of the trim, so it is never the merged rows
+    // live membership, independently of the trim, so it is never the merged rows
     // shown (zero, by AC9) and never the project total.
     box.mergedCount = box.entries.filter(roadmapMerged).length;
     // CR-CRU-085 §S2/AC1/AC4/AC7 — the box's LANES, decided here beside the

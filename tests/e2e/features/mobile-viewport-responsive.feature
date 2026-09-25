@@ -108,6 +108,23 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the roadmap release table renders as cards, not a table, on the phone profile
     And the roadmap card for "CR-MOB-1" shows its id, status, wave and dependencies fields
 
+  # CR-CRU-147 \u00a7S2 (cycle 526, C4) \u2014 the reason bubble on the phone band: no
+  # hover exists here, so a TAP on the status badge must open the same
+  # tooltip hovering opens at desktop width (roadmap.feature). Reuses AC8's
+  # own registration idiom, then voids the CR through the real route exactly
+  # as the desktop scenario does.
+  Scenario: CR-CRU-147 \u00a7S2 AC3 \u2014 on the phone band, tapping a voided CR's status badge opens the same reason tooltip hovering opens at desktop width
+    Given a project named "MOB Dead CR Project" is registered
+    And a CR queue registering cr "CR-MOB-VOID" titled "mobile dead cr fixture" in wave "1" is posted for that project
+    When I open the workspace for that project
+    And I click the "Roadmap" workspace tab
+    Then the roadmap release table renders as cards, not a table, on the phone profile
+    And the status badge for "CR-MOB-VOID" shows no lifecycle tooltip yet
+    When cr "CR-MOB-VOID" is voided with reason "Voided on the phone-band fixture: this reason must open on TAP, with no pointer hover available at all on a touch-only profile."
+    Then the roadmap row for "CR-MOB-VOID" shows status "VOID" within 3 seconds
+    When I tap the status badge for "CR-MOB-VOID"
+    Then its lifecycle tooltip states the reason "this reason must open on TAP"
+
   # BORN GREEN, deliberately — a regression rail (CR-CRU-018 C5 F3). This
   # scenario PASSED at RED (9efb9ed): replayed by restoring that commit's
   # public/styles.css + public/app.js and running it alone on chromium-mobile.
