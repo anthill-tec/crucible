@@ -5300,8 +5300,15 @@ export class Store {
     return { cr: row.cr, planId: row.plan_id, cycleIds };
   }
 
-  /** §S0 — list a project's plans, optionally filtered by cr / track. */
-  listPlans(projectKey: string, filter?: { cr?: string; track?: string }): Plan[] {
+  /**
+   * §S0 — list a project's plans, optionally filtered by cr / track /
+   * status (§S1). The filter runs over the stored ROWS before toPlan(), so a
+   * filtered-out plan is never built and its commitBoundary never derived.
+   */
+  listPlans(
+    projectKey: string,
+    filter?: { cr?: string; track?: string; status?: string },
+  ): Plan[] {
     const rows = this.db
       .query<PlanRow, [string]>(
         `SELECT * FROM plans WHERE project_key = ? ORDER BY plan_id ASC`,
@@ -5311,9 +5318,30 @@ export class Store {
       .filter(
         (row) =>
           (filter?.cr === undefined || row.cr === filter.cr) &&
-          (filter?.track === undefined || row.track === filter.track),
+          (filter?.track === undefined || row.track === filter.track) &&
+          (filter?.status === undefined || Store.planStatusOf(row.status) === filter.status),
       )
       .map((row) => this.toPlan(row));
+  }
+
+  /**
+   * §S2 — two project-wide plan facts, independent of any list filter:
+   * `filed` (every plan the project has ever filed, whatever its status) and
+   * `lastClosedCr` (the cr of the plan with the latest closed_at, or null).
+   * Aborted plans carry no closed_at, so they never count as closed. Two
+   * cheap SQL reads — no plan is built.
+   */
+  planFacts(projectKey: string): { filed: number; lastClosedCr: string | null } {
+    const counted = this.db
+      .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM plans WHERE project_key = ?`)
+      .get(projectKey);
+    const latest = this.db
+      .query<{ cr: string }, [string]>(
+        `SELECT cr FROM plans WHERE project_key = ? AND closed_at IS NOT NULL
+         ORDER BY closed_at DESC, plan_id DESC LIMIT 1`,
+      )
+      .get(projectKey);
+    return { filed: counted?.n ?? 0, lastClosedCr: latest?.cr ?? null };
   }
 
   // ── CR-CRU-014 §S1 — the CR execution queue ─────────────────────────────
