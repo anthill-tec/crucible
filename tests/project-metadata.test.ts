@@ -203,7 +203,7 @@ describe("AC1 (§S1) — metadata persistence, deletion cascade, schema cost", (
     await archiveProject(handle, key);
     const del = await deleteProject(handle, key);
     expect(del.status).toBe(200);
-    expect((del.body as unknown as OkResponse).ok).toBe(true);
+    expect(((await del.json()) as OkResponse).ok).toBe(true);
 
     // A DIFFERENT project, same name, reusing the store — its metadata must
     // be genuinely empty, not inherited from the deleted row.
