@@ -93,35 +93,35 @@ unchanged.
 
 ## Acceptance criteria
 
-- **AC1 (§S1)** — Metadata written for a project survives a server restart on the same store, and
+- [x] **AC1 (§S1)** — Metadata written for a project survives a server restart on the same store, and
   deleting the project removes it (a re-created project with the same name starts with none). A
   store created by the previous build opens unchanged, with the same schema version.
-- **AC2 (§S2)** — An `ORCHESTRATOR` caller's `PATCH …/metadata` with `set` then `unset` leaves
+- [x] **AC2 (§S2)** — An `ORCHESTRATOR` caller's `PATCH …/metadata` with `set` then `unset` leaves
   exactly the expected map, keys it did not name untouched; an identical write answers
   `changed: false`.
-- **AC3 (§S2)** — Refused, with nothing written: an unregistered caller (`409`), a registered caller
+- [x] **AC3 (§S2)** — Refused, with nothing written: an unregistered caller (`409`), a registered caller
   of any other role and one with no role (`409`), and each `400` case listed in §S2, one test each.
-- **AC4 (§S3)** — `GET …/metadata` answers the map (`{}` for a project with none, the unknown-project
+- [x] **AC4 (§S3)** — `GET …/metadata` answers the map (`{}` for a project with none, the unknown-project
   refusal for a bad key); `GET /api/v2/projects` carries `metadata` on a project that has some and
   no `metadata` key on one that has none.
-- **AC5 (§S4)** — In EACH of the five clients: `project-meta` issues exactly one `GET …/metadata`
+- [x] **AC5 (§S4)** — In EACH of the five clients: `project-meta` issues exactly one `GET …/metadata`
   and reports the map; `project-meta --set A=x=1,2 --set B=y --unset C --agent <id>` issues exactly
   one `PATCH …/metadata` with `set: {A: "x=1,2", B: "y"}` and `unset: ["C"]`; a malformed `--set` is
   refused before any request; a server refusal is `ok:false` with its `help[]` and a non-zero exit.
-- **AC6 (§S4)** — `--format json` writes the same object as one JSON object, for a read and a write,
+- [x] **AC6 (§S4)** — `--format json` writes the same object as one JSON object, for a read and a write,
   in each of the five clients.
-- **AC7 (§S4)** — Each client's `project-meta --help` states that the map is readable by anything
+- [x] **AC7 (§S4)** — Each client's `project-meta --help` states that the map is readable by anything
   that reaches the board and holds non-secret facts only, and its `--agent` help says the flag is
   required for a write (`--set`/`--unset`) and never claims it is required for every call.
-- **AC8 (wiring)** — End to end against a real, ephemeral board: a registered orchestrator writes
+- [x] **AC8 (wiring)** — End to end against a real, ephemeral board: a registered orchestrator writes
   through the real `python-crucible.py project-meta` subprocess, a second `project-meta` read (TOON
   and `--format json`) returns the map, and `GET /api/v2/projects` carries it. A `report`-role
   caller's write is refused. No stubbed transport.
-- **AC9 (§S5)** — In EACH of the five clients, a `.env` holding `CRUCIBLE_PROJECT_KEY=` empty, and one
+- [x] **AC9 (§S5)** — In EACH of the five clients, a `.env` holding `CRUCIBLE_PROJECT_KEY=` empty, and one
   holding only whitespace, fail with the same error text and exit code as a `.env` without the key,
   and no request is made. The arduino client with an empty `.env` key and
   `CRUCIBLE_PROJECT_KEY` set in its environment still fails the same way.
-- **AC10 (§S6)** — A `report`-role and a role-less caller's `PATCH …/metadata` answers `409` with an
+- [x] **AC10 (§S6)** — A `report`-role and a role-less caller's `PATCH …/metadata` answers `409` with an
   error naming the metadata write and a `help[]` naming `project-meta`, and neither mentions
   roadmap registration; a roadmap route's refusal of the same caller is byte-identical to today's.
 
