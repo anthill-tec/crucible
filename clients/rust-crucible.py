@@ -482,7 +482,8 @@ def _parse_junit(junit_path):
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (nextest emits it
             # for `#[ignore]`d tests) is PENDING, never passed. Order matters:
             # failure/error first, then skipped, then pass. A skip does NOT
-            # fail its suite. Mirrors mvn-crucible.py:641, the reference.
+            # fail its suite. Mirrors `_parse_junit` in
+            # `clients/mvn-crucible.py`, the reference.
             if fail:
                 status = "fail"
                 failed += 1

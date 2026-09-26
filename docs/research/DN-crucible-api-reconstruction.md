@@ -17,19 +17,22 @@ stood on 2026-07-14, and it is read in the present tense throughout because that
 catalogs. Some of what it records has since been deliberately retired — most visibly the base
 URL's `CRUCIBLE_BASE`/`CRUCIBLE_URL` override in §1, which CR-CRU-139 replaced with a `[client]`
 table in the client fleet's own `crucible.toml` (a connection is configuration, not an export),
-and whose cited constant `arduino-crucible.py:21` no longer exists. The lines are left as
-written on purpose: a DN's value is that it says what WAS true, and rewriting it to match today
-would destroy the evidence the v2 rebuild was derived from. For current behaviour read the PRD
-and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded it.
+and whose cited constant — the base-URL constant at the top of the v1 `arduino-crucible.py`,
+succeeded by `_base_url` in `clients/arduino-crucible.py` — no longer exists. The lines are left
+as written on purpose: a DN's value is that it says what WAS true, and rewriting it to match today
+would destroy the evidence the v2 rebuild was derived from. Only its evidence cites have been
+touched since: each once named a line of a v1 script and now names the construct instead (or,
+where the v1 script is gone, that construct's successor in `clients/`). For current behaviour
+read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded it.
 
 ## 1 Service identity
 
 | Fact | Value | Evidence |
 |---|---|---|
-| Base URL | `http://localhost:3849` (override: `CRUCIBLE_BASE`) | every script/skill; `arduino-crucible.py:21` |
+| Base URL | `http://localhost:3849` (override: `CRUCIBLE_BASE`) | every script/skill; the v1 `arduino-crucible.py` base-URL constant (successor: `_base_url` in `clients/arduino-crucible.py`) |
 | Content type | `application/json` both directions | all clients |
-| Success shape | `{"ok": true, ...}` — clients branch on `resp.ok` | `rust-crucible.py:371,422` etc. |
-| Error shape | `{"ok": false, "error": "<actionable message>"}` | `bun-crucible.py:294` prints `resp['error']`; skills: "Read error responses — they tell you exactly what's wrong" |
+| Success shape | `{"ok": true, ...}` — clients branch on `resp.ok` | `_ingest_rustc_stderr` in `clients/rust-crucible.py` etc. |
+| Error shape | `{"ok": false, "error": "<actionable message>"}` | `_ingest_parsed` in `clients/bun-crucible.py` prints `resp['error']`; skills: "Read error responses — they tell you exactly what's wrong" |
 | Project key type | **UUID string, mandatory** — non-UUID rejected with HTTP 400 | crucible-report-java/bun Rules: "`projectKey` must be a valid UUID — string keys are rejected with 400" |
 | Client env contract | `CRUCIBLE_PROJECT_KEY` (+ `CRUCIBLE_PROJECT_NAME` for arduino) read from the SUT project's `.env` | all scripts' `_project_key()`; `arduino-crucible.py:_load_env` |
 
@@ -38,11 +41,11 @@ and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded i
 | # | Endpoint | Method | Purpose | Evidence |
 |---|---|---|---|---|
 | 1 | `/api/projects` | GET | List projects, optional `?name=` filter | all skill endpoint tables |
-| 2 | `/api/projects/add` | POST | Register a project (idempotent for clients: duplicate key → 400, ignored) | `arduino-crucible.py:80` |
+| 2 | `/api/projects/add` | POST | Register a project (idempotent for clients: duplicate key → 400, ignored) | `_ensure_project` in `clients/arduino-crucible.py` |
 | 3 | `/api/agents/heartbeat` | POST | Register agent + heartbeat (same endpoint for both) | all clients |
 | 4 | `/api/agents/remove` | POST | Unregister agent | all clients |
 | 5 | `/api/agents` | GET | List agents, optional `?projectKey=` | skill tables |
-| 6 | `/api/ingest` | POST | Raw ingest — server parses (format `junit`, `data` or `dataPath`) | `rust-crucible.py:401-443`, `mvn-crucible.py:353-365` |
+| 6 | `/api/ingest` | POST | Raw ingest — server parses (format `junit`, `data` or `dataPath`) | `_ingest_junit_axi` in `clients/rust-crucible.py`, `_ingest_junit_dir` in `clients/mvn-crucible.py` |
 | 7 | `/api/ingest/parsed` | POST | Pre-parsed ingest (summary + tree + optional coverage) | all clients |
 | 8 | `/api/ingest/compile` | POST | Compile/import failure ingest (errors text, optional format) | all clients |
 | 9 | `/api/ingest/clear` | POST | Clear ingested state for a project | skill tables |
@@ -81,8 +84,9 @@ and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded i
 ```
 - `status` ∈ `online | busy` (agent-protocol skill).
 - **`displayName` is honored ONLY inside `identity`** — top-level `displayName` is silently
-  ignored (java/bun/vscode skill Rules; `mvn-crucible.py:218` comment). Older clients
-  (`crucible-register` skill, `rust-crucible.py:360-369`) still send top-level
+  ignored (java/bun/vscode skill Rules; the v1 `mvn-crucible.py`'s `cmd_register` comment, now in
+  `cmd_register` in `clients/_crucible_axi.py`). Older clients (`crucible-register` skill, the
+  v1 `rust-crucible.py`'s `cmd_register`) still send top-level
   `displayName`/`source` — v2 must keep tolerating (ignoring) them.
 - `identity` is optional and **preserved across subsequent heartbeats** that omit it
   (agent-protocol: "send once, preserved across heartbeats").
@@ -108,11 +112,12 @@ and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded i
 - `dataPath` may be a **file** or a **directory** — directory means all `TEST-*.xml` inside
   (crucible-report-java: "directory is preferred for surefire").
 - Response: `{"ok": true, "summary": {"total": N, "passed": N, "failed": N, ...}}` —
-  clients print `passed/failed/total` from it (`rust-crucible.py:417-421`).
+  clients print `passed/failed/total` from it (`_ingest_junit_axi` in `clients/rust-crucible.py`).
 - JUnit semantics (mirrors every client-side parser): testcase with `<failure>` or
   `<error>` → fail; `<skipped>` → pending; else pass. `time` attr (seconds) → duration_ms.
   Root may be `<testsuites>` or a bare `<testsuite>`.
-- Historical parser quirk (python-crucible.py:268): "the server-side format=junit parser
+- Historical parser quirk (the v1 `python-crucible.py`'s parsed-ingest path, later `_ingest_parsed_dir`;
+  successor: `_parse_junit_dir` in `clients/python-crucible.py`): "the server-side format=junit parser
   historically labeled leaves" with class-qualified names — v2 leaf name = testcase `name`
   attr, suite node = testsuite `name` attr.
 
@@ -134,7 +139,8 @@ and `docs/RUNBOOK.md`; for lineage, read this and check the CR that superseded i
 ```
 - `coverage` optional; `branches` optional within it (rust/bun send lines+functions only;
   java/vscode add branches).
-- `name` (run label) optional — arduino sends the project name (`arduino-crucible.py:133`).
+- `name` (run label) optional — arduino sends the project name (`_run_native_tests_body` in
+  `clients/arduino-crucible.py`).
 - **Server safety net: coverage on a failing run is DISCARDED** — crucible-report-java:
   "Crucible's `recordEvent` discards coverage on failing runs as a safety net". (Client
   discipline: coverage only on full green regression.)

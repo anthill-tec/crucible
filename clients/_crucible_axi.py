@@ -494,7 +494,8 @@ def limit_disclosure_warnings():
     `[]`, or one `{code, detail}` per disclosure, in the shape
     `preflight_cycle_warnings` returns its finding.
 
-    The CLIENT's counterpart to the server's boot banner (src/server.ts:357),
+    The CLIENT's counterpart to the server's boot banner (the
+    `limitDisclosures` loop in `src/server.ts`, under `import.meta.main`),
     mirroring its SHAPE rather than copying its channel. A server boots once
     and discloses on the console it owns; a client has no boot -- each verb
     invocation IS its boot -- so the disclosure rides the envelope that
@@ -3813,7 +3814,8 @@ def server_failure_body(resp):
 
 def server_failure_help(resp):
     """The `help[]` the SERVER derived for a refusal (PURE) — the state-derived
-    steps `roadmapHints` (`src/hints.ts:358`) and `waveHints` build. AC6's "a
+    steps `roadmapHints` and `waveHints` (`src/hints.ts`) build — here
+    `roadmapHints`' `unproposedRelease` entry. AC6's "a
     `help[]` entry `release-propose --label 9.9.9`" is the server's answer,
     read back verbatim.
 

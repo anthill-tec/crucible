@@ -1336,12 +1336,12 @@ const roadmapActionable = (entry) => entry?.status === "PENDING" && !isDeadCr(en
 
 /**
  * CR-CRU-096 §S3/AC6a — MERGED is `COMPLETED` **or** `COMPLETED_UNTRACKED`:
- * one fact at two luminances (`public/styles.css:1416` — "the SAME green,
- * DIMMED"), the second being the same merge recorded before plan tracking
- * existed. The roll-up counts this set and neither row predicate admits it, so
- * the two readings cannot disagree — an earlier draft of AC6 that counted only
- * `COMPLETED` would have left an untracked-merged member counted nowhere and
- * drawn nowhere.
+ * one fact at two luminances (the `.app-flow-node.completed_untracked` rule
+ * in `public/styles.css` — "the SAME green, DIMMED"), the second being the
+ * same merge recorded before plan tracking existed. The roll-up counts this
+ * set and neither row predicate admits it, so the two readings cannot
+ * disagree — an earlier draft of AC6 that counted only `COMPLETED` would have
+ * left an untracked-merged member counted nowhere and drawn nowhere.
  */
 const roadmapMerged = (entry) =>
   entry?.status === "COMPLETED" || entry?.status === "COMPLETED_UNTRACKED";
@@ -1349,7 +1349,7 @@ const roadmapMerged = (entry) =>
 /**
  * CR-CRU-096 §S7/AC22 — the leading-integer READING of a wave label, or `null`
  * when the label carries no digit at all. `wave` is free TEXT on the wire, so
- * this is the same digit `waveNumber` (`src/store.ts:411`) reads server-side —
+ * this is the same digit `waveNumber` (`src/store.ts`) reads server-side —
  * except that "no integer" answers `null` here rather than lane `0`: the
  * server needs a lane to compute a seq block in, and this needs to know the
  * label has no numeric reading so it can join no run (AC22b). `/\d+/` is the
@@ -1433,7 +1433,7 @@ export function compressWaveRuns(labels) {
  *                `crs` at all shipped nothing this surface can name.
  *   - proposed — the CRs the orchestrator DECLARED into it (`entry.release`),
  *                revisable until it ships. The same join the server makes for
- *                a proposal's `waves[]` (`src/v2.ts:2053`).
+ *                a proposal's `waves[]` (`proposalBrief` in `src/v2.ts`).
  * Either way the ORDER is the queue's own: the payload is already the
  * orchestrator's authored sequence (§S6), so membership filters it and nothing
  * re-sorts it.
@@ -1520,11 +1520,12 @@ export function focusedReleaseView(gate, releases, entries) {
     // not this module's: "a CR with no declared wave is outside this
     // constraint entirely — never blocked, never blocking, and never confers
     // activeness on any wave". The store says the same thing in one line
-    // (`if (row.wave === "") continue;`, src/store.ts:3388 — re-pinned
-    // 2026-09-10 from :3377 (CR-CRU-118 §S4a added 11 comment lines above it),
-    // and before that 2026-09-09 from :3374, the `let active` declaration
-    // three lines above it, miscited on arrival rather than staled later),
-    // and a view that
+    // (`if (row.wave === "") continue;`, the loop in `waveScopeRefusal`
+    // (src/store.ts) — cited by line until it was rewritten by symbol; that
+    // line cite was re-pinned 2026-09-10 from :3377 (CR-CRU-118 §S4a added
+    // 11 comment lines above it), and before that 2026-09-09 from :3374, the
+    // `let active` declaration three lines above it, miscited on arrival
+    // rather than staled later), and a view that
     // flipped the flag anyway would publish `active: true` on a container the
     // server holds outside the rule — a release whose only runner declares no
     // wave would report an active wave that does not exist. The two halves of

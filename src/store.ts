@@ -495,7 +495,8 @@ export const WAVE_SEQ_STRIDE = 1000;
 /**
  * §S4 / CR-CRU-095 §S1 — the leading integer of a wave cell. `wave` is TEXT
  * (the queue has always stored the cell verbatim), so this is the lane number
- * the whole codebase reads out of it (`public/app-logic.mjs:479`); a cell
+ * the whole codebase reads out of it (`numericLabelCompare` in
+ * `public/app-logic.mjs`); a cell
  * carrying no integer is lane 0. The ONE digit read: `waveSeqBase` and the
  * queue's sort key both rest on it, so a wave's seq block and its position in
  * the published order cannot disagree about which lane it is.
@@ -1238,9 +1239,11 @@ const GATE_ROWS = recordProjection("gates", "gate");
  *   NO PROVENANCE — "derived from delivery OR ITS EVIDENCE", and the reason
  *     the two columns are not enough. THE ABSENCE OF A DATE IS NOT THE ABSENCE
  *     OF A SHIP. A dateless ship is reachable in production, measured
- *     2026-09-13 at three layers: `scripts/release.sh:733` adds
- *     `--released-at` only `if [ -n "$ship_date" ]`, and `release_ship_date`
- *     (`:405`) prints nothing and exits 0 whenever git cannot resolve the sha
+ *     2026-09-13 at three layers: `emit_release_milestone` in
+ *     `scripts/release.sh` then added `--released-at` only
+ *     `if [ -n "$ship_date" ]` (it now refuses a dateless ship instead), and
+ *     `release_ship_date` prints nothing and exits 0 whenever git cannot
+ *     resolve the sha
  *     (shallow clone, unfetched tag object); all five clients declare
  *     `--released-at` optional; and the route carries `releasedAt` only when
  *     well-formed, because CR-CRU-080 §S4 deliberately left a dateless release

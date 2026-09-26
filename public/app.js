@@ -1777,8 +1777,9 @@
 
     // Edit-in-place — name/type/sutRoot + liveness overrides (t1/t2/t3,
     // edited in seconds, wired as ms) + retention; PATCH carries ONLY the
-    // fields the user actually changed and NEVER the immutable key (§S1,
-    // src/v2.ts:771-773 — an echoed key would 400 against the live server).
+    // fields the user actually changed and NEVER the immutable key (§S1, the
+    // `projectKey` guard in `handleProjectPatch` (src/v2.ts) — an echoed key
+    // would 400 against the live server).
     // PATCH doesn't echo the updated project, so refetch to observe the edit.
     //
     // Cycle-28 fix (pre-existing cycle-27 defect): the name/type/sutRoot

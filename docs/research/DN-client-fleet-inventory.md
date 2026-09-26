@@ -195,7 +195,7 @@ avoids this entirely.
 **Verdict: arduino's handling is the more defensive/correct one; the other four share a latent
 crash-on-empty-body bug.** Low probability (the Crucible server always returns a JSON body today)
 but a real inconsistency between five otherwise-identical HTTP helpers, and the same class of
-finding as CR-050's `mvn-crucible.py:641` `<skipped/>` precedent — the CORRECT behavior sat in the
+finding as CR-050's `<skipped/>` precedent (`_parse_junit` in `clients/mvn-crucible.py`) — the CORRECT behavior sat in the
 client everyone assumed was just "the odd one out."
 
 ## §1 — SHARED (27) — lifts as-is, cosmetic differences only

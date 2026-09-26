@@ -298,7 +298,8 @@ const PROJECT_METADATA_REFUSAL: OrchestratorRefusal = {
  * help[] are unchanged), then the stored `Agent.role`.
  *
  * A row carrying NO role is REFUSED, never assumed: pre-CR-044 rows carry
- * none and a role is never fabricated (`src/types.ts:65-69`), so treating an
+ * none and a role is never fabricated (the `role` doc on `Agent` in
+ * `src/types.ts`), so treating an
  * absent declaration as an orchestrator would hand the roadmap to whatever
  * registered before roles existed. Both refusals return BEFORE anything is
  * read for the write, so nothing is stored on either.

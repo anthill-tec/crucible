@@ -43,7 +43,7 @@ Everything below was verified against the repo, not recalled.
 | Ruling | State today | Owner |
 |---|---|---|
 | **Tags are bare SemVer — `0.1.0`, not `v0.1.0`** | *As measured 2026-08-03:* the `v` prefix was hardcoded in **6 live sites** across `release.sh` and `release.yml`; a bare tag would make `create-release` find nothing and BOTH publish jobs refuse. **✅ SHIPPED — CR-CRU-061 §S1**: all six sites now match `^[0-9]+\.[0-9]+\.[0-9]+$`, the `#v` strips are gone, and `release.sh` asserts a set-and-empty `gitflow.prefix.versiontag`. | **CR-CRU-061 §S1** |
-| **Packaging takes the version from the GitHub tag automatically** | ✅ Python already did (hatch-vcs, `pyproject.toml:7,32`). *As measured:* npm did NOT — `package.json` was hand-bumped and CI merely *verified* it. **✅ SHIPPED — CR-CRU-061 §S2**: `publish-npm` now runs `npm version --no-git-tag-version --allow-same-version "$VERSION"`, SETTING the manifest from the tag, so a stale committed value cannot fail a release. | **CR-CRU-061 §S2** |
+| **Packaging takes the version from the GitHub tag automatically** | ✅ Python already did (hatch-vcs: `dynamic` in `pyproject.toml`, plus its `[tool.hatch.version]` table). *As measured:* npm did NOT — `package.json` was hand-bumped and CI merely *verified* it. **✅ SHIPPED — CR-CRU-061 §S2**: `publish-npm` now runs `npm version --no-git-tag-version --allow-same-version "$VERSION"`, SETTING the manifest from the tag, so a stale committed value cannot fail a release. | **CR-CRU-061 §S2** |
 
 **CR-CRU-061 was a release blocker and has landed** (§S1/§S6, §S2, §S5, §S4). No tag exists yet, so
 the format was still free; once `0.1.0` is cut it is published history on two registries — and the
