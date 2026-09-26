@@ -806,6 +806,18 @@ def plans_path(project_key):
     return f"/api/v2/projects/{project_key}/plans"
 
 
+# §S3 — the one status the `status` verb reads: the server filters the plans
+# collection by it, so the client never filters rows itself.
+PLANS_STATUS_OPEN = "open"
+
+
+def plans_status_path(path, status):
+    """§S3 (PURE) — a resolved plans-collection path (`plans_path` /
+    `ClientOps.plans_path`) narrowed to ONE plan status by the server's
+    `?status=` filter (`open`, `closed` or `aborted`)."""
+    return f"{path}?status={status}"
+
+
 class PlansFetchFailed(SystemExit):
     """CR-CRU-058 §S1 — the plans GET inside `open_plans` failed.
 
@@ -996,13 +1008,9 @@ def truncate_field(value, full=False):
     return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
 
 
-def last_closed_cr(plans):
-    """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
-    close), or None when no plan has closed yet — never a fabricated guess."""
-    closed = [p for p in (plans or []) if p.get("closedAt") is not None]
-    if not closed:
-        return None
-    return max(closed, key=lambda p: p.get("closedAt")).get("cr")
+# §S2 — the `lastClosedCr` value (the `cr` of the plan with the latest
+# `closedAt`) is computed by the SERVER only: every `GET …/plans` response
+# publishes it, over all the project's plans. No client computes it.
 
 
 # CR-CRU-056 §S3 — the CR-CRU-036-era client-side attach resolver
@@ -1236,6 +1244,13 @@ HELP_STEPS = {
     "status": ["cycle-activate <id>"],
     "cr-close": ["status"],
 }
+
+# §S4 — the `help[]` of `status`'s two empty-board states, told apart by the
+# server-published `filed`. `HELP_STEPS["status"]` stays the "work in flight"
+# help. "None open" (filed > 0): find the next CR, then file its plan.
+# "Never filed" (filed == 0): file the first plan.
+STATUS_NONE_OPEN_HELP = ["next", "plan-file --cr <cr> --cycle <label>"]
+STATUS_NEVER_FILED_HELP = ["plan-file --cr <cr> --cycle <label>"]
 
 # Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
 # snapshot has no resolved outcome of its own, so gate-run synthesises one from
@@ -2105,10 +2120,16 @@ class ClientOps:
 
 
 def cmd_status(args, project_dir, ops):
-    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
-    and return the queue as a uniform-table §S1 envelope plus a top-level
-    `lastClosedCr` — the `cr` of the plan with the latest `closedAt`."""
-    resp = ops.get(ops.plans_path(project_dir))
+    """§S3/§S4 — the work-in-flight READ verb (alias `plans`, no --agent).
+
+    Issues exactly ONE read, `GET …/plans?status=open`, and returns the open
+    plans (in the server's order) as a uniform-table §S1 envelope. The two
+    project facts `lastClosedCr` and `filed` are passed through from that
+    response unchanged — the client filters and recomputes nothing. With no
+    open plan, `filed` (never `lastClosedCr`) tells "none open" (filed > 0)
+    apart from "never filed" (filed == 0); each state carries its own help[]."""
+    resp = ops.get(plans_status_path(ops.plans_path(project_dir),
+                                     PLANS_STATUS_OPEN))
     if not resp.get("ok"):
         # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
         # (server unreachable / non-ok) is a DEFINITIVE unavailable data-state
@@ -2117,11 +2138,13 @@ def cmd_status(args, project_dir, ops):
         # next-step, and exit 0 so a session-start hook can never hang or fail.
         # This state is DISTINCT from the no-plan empty state below (that one
         # carries NO warning) — the status-unavailable warning is the signal.
+        # §S5 — the one field this degrade gains is `filed: null`: the board
+        # could not be read, so the plan count is UNKNOWN, not zero.
         detail = (f"could not reach the Crucible server to read the board: "
                   f"{resp.get('error')}")
         legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
         ops.emit("status", True,
-                 {"plans": [], "lastClosedCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0, "filed": None,
                   "help": [f"check the Crucible server is running / reachable "
                            f"at {ops.base_url}"]},
                  ops.context(project_dir),
@@ -2130,27 +2153,38 @@ def cmd_status(args, project_dir, ops):
         return 0
     plans = resp.get("plans", [])
     full_rows = build_status_rows(plans)
-    last = last_closed_cr(plans)
+    # §S2/§S3 — both project facts are the SERVER's, taken verbatim.
+    last = resp.get("lastClosedCr")
+    filed = resp.get("filed")
     # §S10 — the DEFAULT projection is the minimal base column set
     # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
     # to that base, never replaces it.
     fields = getattr(args, "fields", None)
     requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
     rows = select_status_fields(full_rows, requested)
-    # §S12 — the pre-computed `count` is the TOTAL plans available (unaffected
-    # by the --fields column projection), emitted even on an empty queue.
-    count = len(plans)
+    # §S3/§S12 — `count` is the number of rows (the open plans), unaffected by
+    # the --fields column projection, emitted even on an empty board.
+    count = len(rows)
     if not rows:
-        legacy = "status: ok=True — no plans filed for this project"
+        # §S4 — no plan is open. `filed` alone decides which empty state this
+        # is (an aborted-only board has filed > 0 but lastClosedCr null).
+        if filed == 0:
+            legacy = "status: ok=True — no plans filed for this project"
+            help_steps = STATUS_NEVER_FILED_HELP
+        else:
+            legacy = (f"status: ok=True — no open plans (filed={filed} "
+                      f"lastClosedCr={last})")
+            help_steps = STATUS_NONE_OPEN_HELP
         ops.emit("status", True,
-                 {"plans": [], "lastClosedCr": None, "count": 0,
-                  "help": HELP_STEPS["status"]},
+                 {"plans": [], "lastClosedCr": last, "count": 0,
+                  "filed": filed, "help": help_steps},
                  ops.context(project_dir), [], legacy)
         return 0
-    legacy = f"status: ok=True plans={len(rows)} lastClosedCr={last}"
+    legacy = (f"status: ok=True plans={count} lastClosedCr={last} "
+              f"filed={filed}")
     ops.emit("status", True,
              {"plans": rows, "lastClosedCr": last, "count": count,
-              "help": HELP_STEPS["status"]},
+              "filed": filed, "help": HELP_STEPS["status"]},
              ops.context(project_dir), [], legacy)
     return 0
 
