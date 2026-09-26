@@ -99,7 +99,26 @@ const SOURCE_EXT_ALTERNATION = SOURCE_EXTENSIONS.map((e) => e.slice(1)).join("|"
 
 // Defect 1: a path ending in a source extension, directly followed by a
 // colon and one or two dash-joined line numbers, with nothing sitting
-// between the extension and the colon.
+// between the extension and the colon. Two carve-outs apply AFTER the
+// match, in the checker below rather than in the pattern — the same
+// discipline BARE_LINE_RE's own two carve-outs follow, for the same
+// reason (both need to look past the match, which the pattern itself
+// cannot express without risking a silently shortened match):
+//   • a `:N:M` shape right after the match — a second bare colon-plus-
+//     digits — is the SAME stack-trace position defect 1b excludes: line,
+//     then column, captured verbatim from a real test run, never a
+//     citation. `run-detail.spec.ts:14:3` names a column, not a second
+//     line, and is never reported;
+//   • a path ROOTED at `tmp/` never names a repository file — it names a
+//     scratch fixture location a test creates under a temp directory and
+//     deletes. An absolute `/tmp/...` loses its leading `/` to this
+//     pattern's own match start (`[A-Za-z0-9_]` never allows `/` as its
+//     first character), so both spellings land here as `tmp/...` and both
+//     are excluded. A `tmp/` directory anywhere OTHER than the path's own
+//     root — `fixtures/tmp/real.ts`, say — is not this carve-out and stays
+//     reportable. Proven against the real tree by a self-test below: this
+//     repository has no top-level `tmp/` directory, so the carve-out can
+//     never quietly hide a genuine citation.
 const PATH_LINE_RE = new RegExp(
   String.raw`[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:${SOURCE_EXT_ALTERNATION}):\d+(?:-\d+)?`,
   "g",
@@ -197,6 +216,15 @@ export function findCitationViolations(
 
   for (const m of text.matchAll(PATH_LINE_RE)) {
     const cite = m[0];
+    // A `:N:M` shape right after this match is a stack-trace position, not
+    // a citation (see the PATH_LINE_RE comment above) 
+    // checked on the ORIGINAL text right after the match, the same way
+    // BARE_LINE_RE checks its own trailing `:M` below.
+    const pathAfterMatch = text.slice((m.index ?? 0) + cite.length, (m.index ?? 0) + cite.length + 8);
+    if (/^:\d/.test(pathAfterMatch)) continue;
+    // A path rooted at `tmp/` names a scratch fixture location, never a
+    // file this repository tracks (see the PATH_LINE_RE comment above).
+    if (cite.startsWith("tmp/")) continue;
     if (isExempt(citingFile, cite, exempt)) continue;
     violations.push({
       citingFile,
@@ -368,10 +396,12 @@ function resolveOutOfScopeRanges(text: string, declared: readonly OutOfScopeRang
   });
 }
 
-function withOutOfScopeRangesBlanked(relPath: string, text: string): string {
-  const declared = OUT_OF_SCOPE_RANGES[relPath];
-  if (!declared) return text;
-  const ranges = resolveOutOfScopeRanges(text, declared);
+// Blanks a resolved set of [startLine, endLine] ranges (inclusive) out of
+// TEXT, line by line. Factored out of `withOutOfScopeRangesBlanked` so a
+// self-test can exercise the SAME blanking step directly, against synthetic
+// ranges it resolves itself, without needing a real file's relPath key in
+// `OUT_OF_SCOPE_RANGES`.
+function blankRanges(text: string, ranges: readonly [number, number][]): string {
   const lines = text.split("\n");
   for (const [startLine, endLine] of ranges) {
     for (let ln = startLine; ln <= endLine; ln++) {
@@ -380,6 +410,13 @@ function withOutOfScopeRangesBlanked(relPath: string, text: string): string {
     }
   }
   return lines.join("\n");
+}
+
+function withOutOfScopeRangesBlanked(relPath: string, text: string): string {
+  const declared = OUT_OF_SCOPE_RANGES[relPath];
+  if (!declared) return text;
+  const ranges = resolveOutOfScopeRanges(text, declared);
+  return blankRanges(text, ranges);
 }
 
 // ---------------------------------------------------------------------------
@@ -650,6 +687,52 @@ describe("the citation checker — bare line references (defect 1b)", () => {
   });
 });
 
+describe("the citation checker — path:line citations (defect 1): stack-trace positions and tmp/ fixtures", () => {
+  test("does NOT fire on a path:line:col stack-trace position, even into a real source extension", () => {
+    const stackPosition = ["run-detail", ".spec.ts", ":", "14", ":", "3"].join("");
+    const text = `the captured fixture trace reads "at ${stackPosition}" verbatim`;
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("a path:line WITHOUT a trailing :col is still reported — the stack-trace exclusion needs an actual column, not just a second colon anywhere later", () => {
+    const citation = ["fixtures/planted", ".ts", ":", "14"].join("");
+    const text = `the trace reads ${citation} and stops there, no column follows`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      {
+        citingFile: "planted-doc.md",
+        cite: citation,
+        reason: "path:line citation into a source file (must cite by symbol, never by line)",
+      },
+    ]);
+  });
+
+  test("does NOT fire on a path rooted at tmp/, a scratch fixture location no repo file ever occupies", () => {
+    const citation = ["tmp/bun-fixture/sample", ".test.ts", ":", "2"].join("");
+    const text = `the captured transcript names ${citation} for its throwaway fixture`;
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("does NOT fire on an absolute /tmp/ path — the same scratch root, spelled with its leading slash", () => {
+    const citation = ["/tmp/bun-fixture/sample", ".test.ts", ":", "2"].join("");
+    const text = `the captured transcript names ${citation} for its throwaway fixture`;
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("a tmp/ directory NOT at the path's root is still reported — the carve-out is a ROOT carve-out, not a directory-name pass anywhere in the path", () => {
+    const citation = ["fixtures/tmp/real", ".ts", ":", "5"].join("");
+    const text = `the trace reads ${citation} and stops there`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      {
+        citingFile: "planted-doc.md",
+        cite: citation,
+        reason: "path:line citation into a source file (must cite by symbol, never by line)",
+      },
+    ]);
+  });
+});
+
 describe("bare line references — real-world false positives, closed this cycle", () => {
   test("the real teardown-contract's throwaway high port produces no bare-line violation", () => {
     const relPath = "tests/e2e/teardown-contracts/non-ephemeral.contract.ts";
@@ -704,7 +787,15 @@ describe("bare line references — real-world false positives, closed this cycle
 // a citation into a real third-party type-declaration file by path:line
 // (naming a real file outside this repository's own trees, but still a line
 // citation the guard exists to forbid, not a parser's test input). Both stay
-// in the worklist below.
+// in the worklist below, and a THIRD category also lives in this same list,
+// for the same reason `docs/changes/` stays out of scope entirely (S4): a
+// citation that only EXISTS because it is a verbatim quote of a
+// `docs/changes/` record is that same record, not a pointer, wherever the
+// quote happens to be copied to -- the roadmap type-scale guard's bare line
+// numbers, each a word-for-word quote of a `TYPE_SCALE.row` field lifted
+// from CR-CRU-103's own Correction table, and the AC2 quote in
+// `test_cr097_cr_help_namespace_neutral.py`, once restored to the exact
+// wording CR-CRU-097's own spec states.
 const EXEMPT_FIXTURES: ExemptFixture[] = [
   {
     citingFile: "tests/playwright-codec.test.ts",
@@ -752,6 +843,56 @@ const EXEMPT_FIXTURES: ExemptFixture[] = [
     citingFile: "tests/client/test_cr088_failure_detail_names_its_leaf.py",
     text: ["d", ".test.ts", ":", "15"].join(""),
     reason: "the same throwaway-fixture transcript's third frame.",
+  },
+  {
+    citingFile: "tests/roadmap-visual-grammar.test.ts",
+    text: [":", "76"].join(""),
+    reason:
+      "a verbatim quote of CR-CRU-103's own Correction table -- the CR row entry, mono 11px -- copied " +
+      "into `TYPE_SCALE`'s `row:` field so a failure names the table entry (see the comment above " +
+      "`TYPE_SCALE`); the same record-not-pointer reasoning `docs/changes/` is carved out for " +
+      "entirely -- the line number is quoted from the SPEC's own page, not a pointer into this " +
+      "repository's source tree.",
+  },
+  {
+    citingFile: "tests/roadmap-visual-grammar.test.ts",
+    text: [":", "72"].join(""),
+    reason: "the same Correction table, its wave-header row (mono 10px uppercase), quoted the same way.",
+  },
+  {
+    citingFile: "tests/roadmap-visual-grammar.test.ts",
+    text: [":", "81"].join(""),
+    reason:
+      "the same Correction table's row-annotation entry, quoted twice in `TYPE_SCALE` (once for the " +
+      "status leaf, once for the annotation leaf) -- one entry covers both occurrences, since the " +
+      "exemption is keyed on the exact string, not a count.",
+  },
+  {
+    citingFile: "tests/roadmap-visual-grammar.test.ts",
+    text: [":", "120"].join(""),
+    reason: "the same Correction table, its pointer row (mono 9.5px, centred), quoted the same way.",
+  },
+  {
+    citingFile: "tests/roadmap-visual-grammar.test.ts",
+    text: [":", "100"].join(""),
+    reason: "the same Correction table, its status-pill row (mono 10px, bordered), quoted the same way.",
+  },
+  {
+    citingFile: "tests/roadmap-visual-grammar.test.ts",
+    text: [":", "97"].join(""),
+    reason: "the same Correction table, its zone-3-cells row (mono 11.5px), quoted the same way.",
+  },
+  {
+    citingFile: "tests/client/test_cr097_cr_help_namespace_neutral.py",
+    text: ["rust-crucible.py", ":", "2413"].join(""),
+    reason:
+      "the AC2 verbatim quote from CR-CRU-097's own spec (`docs/changes/CR-CRU-097-project-" +
+      "independence-is-not-asserted.md`), which names the fifth client's file and line INSIDE the " +
+      "quoted sentence itself, exactly as the spec's own AC2 text does; a GREEN agent dropped the " +
+      "line number while rewriting this file's OTHER, non-quoted citations, breaking the quote's " +
+      "fidelity, and it is restored verbatim rather than left broken -- the same record-not-pointer " +
+      "reasoning `docs/changes/` is carved out for entirely, since a verbatim quote of that record is " +
+      "that record, wherever it is copied to.",
   },
 ];
 
@@ -874,23 +1015,48 @@ describe("scope carve-outs (§S4/§S5)", () => {
     expect(tooLong).toEqual([]);
   });
 
-  test("the tripwire file's undated design-rationale citations survive the range carve-out and stay reportable", () => {
-    const relPath = "tests/project-namespace-tripwire.test.ts";
+  test("the repository has no top-level tmp/ directory, so the tmp/-root carve-out can never quietly hide a real citation", () => {
     const allRelPaths = listAllRepoFiles();
-    const repo = realRepo(allRelPaths);
-    const rawText = readFileSync(join(REPO_ROOT, relPath), "utf8");
-    const blankedText = withOutOfScopeRangesBlanked(relPath, rawText);
-    const violations = findCitationViolations(relPath, blankedText, repo, EXEMPT_FIXTURES);
-    // Proves the carve-out is the RANGE, not the FILE: exactly the two
-    // undated path:line citations outside every declared range still fire,
-    // named here so a future range that accidentally swallows them, or a
-    // GREEN rewrite that silently drops them, is caught by an exact mismatch
-    // rather than a vanishing count.
+    expect(allRelPaths.some((p) => p === "tmp" || p.startsWith("tmp/"))).toBe(false);
+  });
+
+  test("proves the range carve-out on SYNTHETIC text: a dated note inside a content-anchored range is blanked before the checker ever sees it, while an undated cite outside the range stays reportable", () => {
+    // Stands in for the tripwire file's own out-of-scope ranges (§S4's
+    // carve-out), but on invented text this file fully controls, so the
+    // property survives the day the tripwire's own two undated citations
+    // are finally rewritten (as they now have been) instead of pinning to
+    // whatever the real file happens to still contain.
+    const relPath = "fixtures/synthetic-tripwire.test.ts";
+    const undatedCite = ["fixtures/undated", ".ts", ":", "9"].join("");
+    const datedCite = ["fixtures/dated", ".ts", ":", "5"].join("");
+    const text = [
+      `// RULED, NOT CODED: ordinary design-rationale prose, undated, citing ${undatedCite} directly.`,
+      `// dated note (cycle 1). Adds a synthetic allow-list entry, citing ${datedCite} for provenance.`,
+      "const STABLE_DECL = 1;",
+    ].join("\n");
+    const declared: OutOfScopeRange[] = [
+      {
+        startMarker: "dated note (cycle 1).",
+        endMarker: "const STABLE_DECL",
+        reason: "synthetic \u2014 stands in for one of the tripwire file's own dated-note ranges",
+      },
+    ];
+
+    // Without the carve-out, BOTH cites fire — proving the range is doing
+    // real work rather than the property holding vacuously.
+    const rawViolations = findCitationViolations(relPath, text, fakeRepo({}), []);
+    expect(rawViolations).toHaveLength(2);
+
+    const ranges = resolveOutOfScopeRanges(text, declared);
+    const blankedText = blankRanges(text, ranges);
+    const violations = findCitationViolations(relPath, blankedText, fakeRepo({}), []);
     expect(violations).toEqual([
-      expect.objectContaining({ citingFile: relPath, reason: expect.stringContaining("path:line citation") }),
-      expect.objectContaining({ citingFile: relPath, reason: expect.stringContaining("path:line citation") }),
+      {
+        citingFile: relPath,
+        cite: undatedCite,
+        reason: "path:line citation into a source file (must cite by symbol, never by line)",
+      },
     ]);
-    expect(violations).toHaveLength(2);
   });
 });
 
