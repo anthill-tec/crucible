@@ -15,6 +15,7 @@ import {
   identityHints,
   milestoneHints,
   projectDeleteHints,
+  projectMetadataHints,
   roadmapHints,
   waveHints,
 } from "./hints.ts";
@@ -272,6 +273,26 @@ function declarationAuthor(caller: { agentId: string }): string {
 const ROADMAP_ROLE: AgentRole = "ORCHESTRATOR";
 
 /**
+ * §S6 — what an orchestrator-only route calls its own work in a refusal: the
+ * error's subject and the help[] naming its verbs. The roadmap wording is the
+ * default, so every roadmap route's refusal is unchanged.
+ */
+type OrchestratorRefusal = {
+  work: string;
+  help: (agentId: string, role: string | undefined, required: string) => string[];
+};
+
+const ROADMAP_REFUSAL: OrchestratorRefusal = {
+  work: "roadmap registration",
+  help: roadmapHints.notOrchestrator,
+};
+
+const PROJECT_METADATA_REFUSAL: OrchestratorRefusal = {
+  work: "a project metadata write",
+  help: projectMetadataHints.notOrchestrator,
+};
+
+/**
  * CR-CRU-091 §S3 — the caller-auth seam, plus the role the five roadmap verbs
  * require. `requireRegisteredCaller` first (its 409 and its state-derived
  * help[] are unchanged), then the stored `Agent.role`.
@@ -286,6 +307,7 @@ function requireOrchestrator(
   store: Store,
   projectKey: string,
   body: V2Body,
+  refusal: OrchestratorRefusal = ROADMAP_REFUSAL,
 ): { agentId: string } | { fail: Response } {
   const caller = requireRegisteredCaller(store, projectKey, body);
   if ("fail" in caller) return caller;
@@ -295,8 +317,8 @@ function requireOrchestrator(
   return {
     fail: fail(
       409,
-      `agent ${caller.agentId} carries ${found} — roadmap registration requires ${ROADMAP_ROLE}`,
-      { help: roadmapHints.notOrchestrator(caller.agentId, role, ROADMAP_ROLE) },
+      `agent ${caller.agentId} carries ${found} — ${refusal.work} requires ${ROADMAP_ROLE}`,
+      { help: refusal.help(caller.agentId, role, ROADMAP_ROLE) },
     ),
   };
 }
@@ -3475,7 +3497,7 @@ async function handleProjectMetadataPatch(
   if ("fail" in pk) return pk.fail;
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
-  const caller = requireOrchestrator(store, pk.key, body);
+  const caller = requireOrchestrator(store, pk.key, body, PROJECT_METADATA_REFUSAL);
   if ("fail" in caller) return caller.fail;
 
   const change = parseMetadataChange(body as Record<string, unknown>);
