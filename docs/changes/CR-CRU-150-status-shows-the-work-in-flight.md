@@ -142,7 +142,9 @@ no-argument dashboard does not take the flag.
   write exactly one JSON object to stdout whose keys and values equal the `axi` object of the
   same invocation with `--format toon`, on all four exit paths (work in flight, none open, never
   filed, unavailable). `--format toon` and no flag produce today's TOON output. A value other
-  than `toon` or `json` is refused by argument parsing.
+  than `toon` or `json` is refused by argument parsing. The `status`/`plans` help text and each
+  client's `cmd_status` docstring describe the open plans, `filed` and `--format`; none still
+  describes the unfiltered plan list.
 - **AC12 (§S8)** — AC10's end-to-end run is repeated with `--format json`, and the parsed object
   carries the open plans as `plans`, and the server's `filed` and `lastClosedCr`.
 
