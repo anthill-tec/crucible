@@ -45,6 +45,11 @@ export interface Project {
    * reserved together — is `Store.acceptedMilestoneTypes`, resolved from the
    * single definition in `src/store.ts`. */
   milestoneTypes?: string[];
+  /** §S1/§S3 — the project's own flat map of non-secret string facts, keyed
+   * by environment-variable-shaped names. ABSENT when the project has none,
+   * as `milestoneTypes` is; written only through
+   * `PATCH /api/v2/projects/<key>/metadata`. */
+  metadata?: Record<string, string>;
 }
 
 /**

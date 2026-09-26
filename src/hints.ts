@@ -37,6 +37,7 @@ export const hints: Record<
   | "cycleInput"
   | "cycleStatus"
   | "plansStatusFilter"
+  | "projectMetadataInput"
   | "duplicateOpenPlan"
   | "closedPlan"
   | "nonTerminalCycles"
@@ -147,6 +148,13 @@ export const hints: Record<
   plansStatusFilter: [
     "status must be one of: open | closed | aborted — or omit it to list every plan",
     "GET …/plans?status=open — the work in flight; composes with ?cr=<cr> and ?track=<track>",
+  ],
+  /** §S2 — a PATCH …/metadata body refused before anything is written. */
+  projectMetadataInput: [
+    "PATCH /api/v2/projects/<key>/metadata {agentId, set?: {KEY: \"value\", …}, unset?: [\"KEY\", …]} — name at least one key in a non-empty set or unset",
+    "every key is an environment-variable name (^[A-Z][A-Z0-9_]*$), every set value a string, and no key appears in both set and unset",
+    "CRUCIBLE_PROJECT_KEY is refused — a project's identity stays local, never in its metadata",
+    "the map is readable by anything that reaches the board: hold non-secret facts only",
   ],
   /** CR-CRU-024 §S4 — a second open plan filed for a cr that already has one. */
   duplicateOpenPlan: [

@@ -3443,6 +3443,89 @@ async function handleProjectDelete(store: Store, key: string, req: Request): Pro
   return json({ ok: true, changed: true, deleted });
 }
 
+// §S2 — a metadata key is an environment-variable name.
+const METADATA_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
+// §S2 — the project's identity stays local: never a metadata key.
+const METADATA_RESERVED_KEY = "CRUCIBLE_PROJECT_KEY";
+
+/**
+ * §S3 — GET …/projects/<key>/metadata: the project's map, `{}` when it holds
+ * none. Open to any reader; an unknown project answers `requireProject`'s
+ * refusal.
+ */
+function handleProjectMetadataGet(store: Store, key: string, req: Request, url: URL): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  return reply(req, url, { ok: true, metadata: store.getProjectMetadata(pk.key) });
+}
+
+/**
+ * §S2 — PATCH …/projects/<key>/metadata {agentId, set?, unset?}. Order: the
+ * project, the body, then `requireOrchestrator` (both 409 refusals return
+ * before anything is read for the write), then every shape rule, and only
+ * then the store's one-transaction apply. A change notifies the `projects`
+ * stream from inside the store, as `updateProject` does.
+ */
+async function handleProjectMetadataPatch(
+  store: Store,
+  key: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  const caller = requireOrchestrator(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+
+  const change = parseMetadataChange(body as Record<string, unknown>);
+  if ("error" in change) {
+    return fail(400, change.error, { help: hints.projectMetadataInput });
+  }
+  const { metadata, changed } = store.applyProjectMetadata(pk.key, change);
+  return json({ ok: true, metadata, changed });
+}
+
+/**
+ * §S2 — every shape rule a metadata write must pass, checked in full before
+ * anything is written: a non-empty `set` or `unset`, environment-variable
+ * keys, string values, no key in both, and never the reserved identity key.
+ */
+function parseMetadataChange(
+  raw: Record<string, unknown>,
+): { set: Record<string, string>; unset: string[] } | { error: string } {
+  const rawSet = raw.set ?? {};
+  const rawUnset = raw.unset ?? [];
+  if (typeof rawSet !== "object" || rawSet === null || Array.isArray(rawSet)) {
+    return { error: "set must be an object of {KEY: \"value\"}" };
+  }
+  if (!Array.isArray(rawUnset)) return { error: "unset must be an array of keys" };
+  const setEntries = Object.entries(rawSet as Record<string, unknown>);
+  if (setEntries.length === 0 && rawUnset.length === 0) {
+    return { error: "a metadata write must name at least one key in a non-empty set or unset" };
+  }
+  const set: Record<string, string> = {};
+  for (const [metaKey, value] of setEntries) {
+    if (!METADATA_KEY_RE.test(metaKey)) {
+      return { error: `set key ${JSON.stringify(metaKey)} is not an environment-variable name` };
+    }
+    if (typeof value !== "string") return { error: `set value for ${metaKey} must be a string` };
+    set[metaKey] = value;
+  }
+  const unset: string[] = [];
+  for (const metaKey of rawUnset as unknown[]) {
+    if (typeof metaKey !== "string" || !METADATA_KEY_RE.test(metaKey)) {
+      return { error: `unset key ${JSON.stringify(metaKey)} is not an environment-variable name` };
+    }
+    if (Object.hasOwn(set, metaKey)) return { error: `key ${metaKey} is named in both set and unset` };
+    unset.push(metaKey);
+  }
+  if (Object.hasOwn(set, METADATA_RESERVED_KEY) || unset.includes(METADATA_RESERVED_KEY)) {
+    return { error: `${METADATA_RESERVED_KEY} is refused — a project's identity stays local` };
+  }
+  return { set, unset };
+}
+
 // CR-CRU-012 §S1 — the PATCHable field set; anything else 400s by name.
 const PATCHABLE_FIELDS = new Set([
   "name",
@@ -3941,6 +4024,16 @@ export function handleV2(
     // the `release` type, this one answers whichever type the caller names.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "milestones") {
       return handleProjectMilestones(store, segments[0]!, req, url);
+    }
+    // §S2/§S3 — the project's metadata map: an open read and an
+    // orchestrator-only write, on the same path.
+    if (segments.length === 2 && segments[1] === "metadata") {
+      if (req.method === "GET") {
+        return handleProjectMetadataGet(store, segments[0]!, req, url);
+      }
+      if (req.method === "PATCH") {
+        return handleProjectMetadataPatch(store, segments[0]!, req);
+      }
     }
     // CR-CRU-014 §S1 — the project's CR execution queue (roadmap).
     if (segments.length === 2 && segments[1] === "queue") {

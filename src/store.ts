@@ -99,6 +99,9 @@ interface ProjectRow {
   // CR-CRU-130 §S4 — this project's DECLARED milestone vocabulary, joined in
   // from `project_milestone_types`; NULL = declared nothing.
   milestone_types?: string | null;
+  // §S1 — the project's metadata map as JSON object text, joined in from
+  // `project_metadata` (`{}` when the project holds none).
+  metadata_json?: string | null;
 }
 
 interface AgentRow {
@@ -2481,6 +2484,17 @@ export class Store {
         types_json TEXT NOT NULL
       );
 
+      -- §S1 — a project's metadata: one row per (project, key), so a set
+      -- is an upsert and an unset a delete. A new TABLE in the base pass, on
+      -- the project_milestone_types precedent above: no chain step, no schema
+      -- version.
+      CREATE TABLE IF NOT EXISTS project_metadata (
+        project_key TEXT NOT NULL,
+        meta_key TEXT NOT NULL,
+        meta_value TEXT NOT NULL,
+        PRIMARY KEY (project_key, meta_key)
+      );
+
       -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). The table
       -- itself arrived ADDITIVELY (CREATE TABLE IF NOT EXISTS, no chain step):
       -- a full-replace POST rewrites a project's rows wholesale, so
@@ -2588,7 +2602,10 @@ export class Store {
   private static readonly PROJECT_SELECT =
     `SELECT projects.*,
             (SELECT types_json FROM project_milestone_types
-              WHERE project_key = projects.key) AS milestone_types
+              WHERE project_key = projects.key) AS milestone_types,
+            (SELECT json_group_object(meta_key, meta_value)
+               FROM (SELECT meta_key, meta_value FROM project_metadata
+                      WHERE project_key = projects.key ORDER BY meta_key)) AS metadata_json
        FROM projects`;
 
   getProject(key: string): Project | null {
@@ -2621,6 +2638,55 @@ export class Store {
    */
   acceptedMilestoneTypes(key: string): string[] {
     return milestoneVocabulary(this.getProject(key)?.milestoneTypes ?? []);
+  }
+
+  /**
+   * §S1 — a project's metadata map (`{}` when it holds none), keys sorted.
+   */
+  getProjectMetadata(key: string): Record<string, string> {
+    const rows = this.db
+      .query<{ meta_key: string; meta_value: string }, [string]>(
+        `SELECT meta_key, meta_value FROM project_metadata WHERE project_key = ? ORDER BY meta_key`,
+      )
+      .all(key);
+    const metadata: Record<string, string> = {};
+    for (const row of rows) metadata[row.meta_key] = row.meta_value;
+    return metadata;
+  }
+
+  /**
+   * §S2 — apply a metadata write in ONE transaction: each `set` key is
+   * upserted (last write wins), each `unset` key deleted (absent is a no-op).
+   * Validation lives at the route boundary, so reaching here means the write
+   * is authorised and well-formed. Answers the whole map after the write and
+   * whether any row actually changed; a change notifies the `projects` stream
+   * after the transaction commits, as every project write does.
+   */
+  applyProjectMetadata(
+    key: string,
+    change: { set: Record<string, string>; unset: string[] },
+  ): { metadata: Record<string, string>; changed: boolean } {
+    let changed = false;
+    this.db.transaction(() => {
+      for (const [metaKey, value] of Object.entries(change.set)) {
+        const result = this.db
+          .query(
+            `INSERT INTO project_metadata (project_key, meta_key, meta_value) VALUES (?, ?, ?)
+             ON CONFLICT(project_key, meta_key) DO UPDATE SET meta_value = excluded.meta_value
+             WHERE meta_value IS NOT excluded.meta_value`,
+          )
+          .run(key, metaKey, value);
+        if (result.changes > 0) changed = true;
+      }
+      for (const metaKey of change.unset) {
+        const result = this.db
+          .query(`DELETE FROM project_metadata WHERE project_key = ? AND meta_key = ?`)
+          .run(key, metaKey);
+        if (result.changes > 0) changed = true;
+      }
+    })();
+    if (changed) this.emit("projects", key);
+    return { metadata: this.getProjectMetadata(key), changed };
   }
 
   /** CR-CRU-012 §S1b — is the project currently archived? (false if unknown). */
@@ -2781,6 +2847,8 @@ export class Store {
       // CR-CRU-130 §S4 — and so does the vocabulary it declared, for the same
       // reason and on the same terms: not a reported count.
       this.db.query(`DELETE FROM project_milestone_types WHERE project_key = ?`).run(key);
+      // §S1 — its metadata dies with it, on the same terms: not a reported count.
+      this.db.query(`DELETE FROM project_metadata WHERE project_key = ?`).run(key);
       this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
     })();
     // Emitted only after the transaction COMMITS — a rolled-back teardown
@@ -2809,6 +2877,13 @@ export class Store {
       // its own; the seeded words it starts with are not its declaration.
       ...(row.milestone_types !== null && row.milestone_types !== undefined
         ? { milestoneTypes: JSON.parse(row.milestone_types) as string[] }
+        : {}),
+      // §S3 — key ABSENT when the project holds no metadata, as
+      // `milestoneTypes` is.
+      ...(row.metadata_json !== null &&
+      row.metadata_json !== undefined &&
+      row.metadata_json !== "{}"
+        ? { metadata: JSON.parse(row.metadata_json) as Record<string, string> }
         : {}),
     };
   }
