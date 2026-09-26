@@ -1,6 +1,6 @@
 # CR-CRU-150 — `status` shows the work in flight, not the project's history
 
-**Type** feature · **Points** 8 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
+**Type** feature · **Points** 13 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
 CR-CRU-030, CR-CRU-035, CR-CRU-094 · **Status** PENDING — filed 2026-09-24
 
 ## Problem
@@ -102,6 +102,17 @@ on every exit path: the three §S4 states and the §S5 degrade, whose signal a p
 `warnings[].code` value `status-unavailable`. Exit codes and the stderr line are unchanged. The
 no-argument dashboard does not take the flag.
 
+### §S9 — the release ceremony reads its landings through `queue`
+
+`scripts/release.sh` attributes each CR to a release from the merge commit its closed plan
+recorded. It read those commits from `plans --fields mergeCommit`, which §S3 narrows to the open
+plans, so it must read them from `queue`, the read for every CR and plan (§S6; user ruling
+2026-09-26, option A). `GET …/queue` publishes, on each entry, `mergeCommit`: the merge commit
+of that CR's most recently closed plan, or `null` when it has none. The `queue` verb carries it
+as a seventh column after the six it has today, which keep their names, order and values. The
+ceremony takes each CR's landing commit from that column and no longer calls `plans` or
+`status`.
+
 ## Acceptance criteria
 
 - **AC1 (§S1)** — On a board with open, closed and aborted plans, `GET …/plans?status=open`
@@ -113,7 +124,8 @@ no-argument dashboard does not take the flag.
   parameter returns the same `plans` array it returns today.
 - **AC3 (§S2)** — On the AC1 board, every `GET …/plans` response (unfiltered, `?status=open`,
   `?cr=<cr>`) carries `filed` equal to the project's total plan count and `lastClosedCr` equal to
-  the `cr` with the latest `closedAt`. On a board of only aborted plans, `lastClosedCr` is `null`
+  the `cr` with the latest `closedAt` (two plans closed at the same `closedAt`: the higher
+  `planId`). On a board of only aborted plans, `lastClosedCr` is `null`
   and `filed` equals the number of aborted plans. On a project with no plans, `filed` is `0` and
   `lastClosedCr` is `null`.
 - **AC4 (§S3)** — `cmd_status` issues exactly one read, `GET …/plans?status=open`. Its rows are
@@ -147,10 +159,20 @@ no-argument dashboard does not take the flag.
   describes the unfiltered plan list.
 - **AC12 (§S8)** — AC10's end-to-end run is repeated with `--format json`, and the parsed object
   carries the open plans as `plans`, and the server's `filed` and `lastClosedCr`.
+- **AC13 (§S9)** — On a board holding a CR with a closed plan (merge commit recorded), a CR whose
+  only plan is aborted, a CR with an open plan and a queued CR with no plan, `GET …/queue` gives
+  the first its merge commit as `mergeCommit` and the other three `null`. A CR with two closed
+  plans gets the merge commit of the one closed later.
+- **AC14 (§S9)** — The `queue` verb's rows are `cr, wave, status, planId, title, lifecycle,
+  mergeCommit`, in that order; the first six are unchanged; `mergeCommit` equals the server's value.
+- **AC15 (§S9)** — `scripts/release.sh` calls neither `plans` nor `status`, takes each CR's
+  landing commit from `queue`'s `mergeCommit`, and `tests/release-provenance.test.ts` passes in
+  full.
 
 ## Non-goals
 
-- **Changing `queue`, `next` or the board.** They read other routes or the unfiltered list.
+- **Changing `next` or the board.** They read other routes or the unfiltered list. `queue` changes
+  only by the one added column (§S9).
 - **Changing what a plan's status means.** `open`, `closed` and `aborted` are unchanged.
 - **Serving a newer client from an older server.** Server and clients install together as one
   version-locked operation, so no client-side fallback is built for an older server.
