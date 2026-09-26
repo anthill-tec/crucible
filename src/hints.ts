@@ -36,6 +36,7 @@ export const hints: Record<
   | "planFileInput"
   | "cycleInput"
   | "cycleStatus"
+  | "plansStatusFilter"
   | "duplicateOpenPlan"
   | "closedPlan"
   | "nonTerminalCycles"
@@ -141,6 +142,11 @@ export const hints: Record<
   /** CR-CRU-024 §S4 — a cycle PATCH with an out-of-set status. */
   cycleStatus: [
     "status must be one of: pending | active | done | skipped | failed",
+  ],
+  /** §S1 — GET …/plans?status= with a value outside the accepted set. */
+  plansStatusFilter: [
+    "status must be one of: open | closed | aborted — or omit it to list every plan",
+    "GET …/plans?status=open — the work in flight; composes with ?cr=<cr> and ?track=<track>",
   ],
   /** CR-CRU-024 §S4 — a second open plan filed for a cr that already has one. */
   duplicateOpenPlan: [

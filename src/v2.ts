@@ -1896,17 +1896,34 @@ async function handleProjectStop(store: Store, key: string, req: Request): Promi
   return json({ ok: true, checkpointed });
 }
 
-/** GET …/plans (+?cr=&track=) — closed plans carry the derived commitBoundary. */
+/** §S1 — the plan statuses GET …/plans?status= accepts. */
+const PLAN_LIST_STATUSES: ReadonlySet<string> = new Set(["open", "closed", "aborted"]);
+
+/**
+ * GET …/plans (+?cr=&track=&status=) — closed plans carry the derived
+ * commitBoundary. §S1: an optional `status` (open | closed | aborted) filters
+ * the rows before any plan is built; any other value, the empty string
+ * included, is refused 400. §S2: every response also carries the project-wide
+ * `lastClosedCr` and `filed`, computed over ALL plans regardless of filters.
+ */
 function handlePlansList(store: Store, key: string, req: Request, url: URL): Response {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const cr = url.searchParams.get("cr") ?? undefined;
   const track = url.searchParams.get("track") ?? undefined;
+  const status = url.searchParams.get("status") ?? undefined;
+  if (status !== undefined && !PLAN_LIST_STATUSES.has(status)) {
+    return fail(400, `invalid status: ${JSON.stringify(status)} (expected open | closed | aborted)`, {
+      help: hints.plansStatusFilter,
+    });
+  }
   const plans = store.listPlans(pk.key, {
     ...(cr !== undefined ? { cr } : {}),
     ...(track !== undefined ? { track } : {}),
+    ...(status !== undefined ? { status } : {}),
   });
-  return reply(req, url, { ok: true, plans });
+  const { lastClosedCr, filed } = store.planFacts(pk.key);
+  return reply(req, url, { ok: true, plans, lastClosedCr, filed });
 }
 
 /**

@@ -1,6 +1,6 @@
 # CR-CRU-150 — `status` shows the work in flight, not the project's history
 
-**Type** feature · **Points** 8 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
+**Type** feature · **Points** 13 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
 CR-CRU-030, CR-CRU-035, CR-CRU-094 · **Status** PENDING — filed 2026-09-24
 
 ## Problem
@@ -102,49 +102,78 @@ on every exit path: the three §S4 states and the §S5 degrade, whose signal a p
 `warnings[].code` value `status-unavailable`. Exit codes and the stderr line are unchanged. The
 no-argument dashboard does not take the flag.
 
+### §S9 — the release ceremony reads its landings through `landings`
+
+`scripts/release.sh` attributes each CR to a release from the merge commit its closed plan
+recorded, and reports a closed plan that recorded none. It read both from `plans --fields
+mergeCommit`, which §S3 narrows to the open plans. Its input is the **closed plans**, which
+exist whether or not the queue holds their CR, so `queue` cannot stand in (user ruling
+2026-09-26, option C). A new read-only verb, `landings`, in all five clients through one shared
+implementation, issues exactly one read, `GET …/plans?status=closed` (§S1), and returns one row
+per closed plan, in the server's order: `cr`, and `mergeCommit` (the commit the plan recorded,
+or `null` when it recorded none). It takes `--format {toon,json}` exactly as §S8 defines it for
+`status`. A failed read is `ok:true`, no rows, a `landings-unavailable` warning, exit 0, the
+same shape as `status`'s degrade. The ceremony reads `landings --format json` and calls neither
+`plans` nor `status`; `queue` is unchanged.
+
 ## Acceptance criteria
 
-- **AC1 (§S1)** — On a board with open, closed and aborted plans, `GET …/plans?status=open`
+- [x] **AC1 (§S1)** — On a board with open, closed and aborted plans, `GET …/plans?status=open`
   returns exactly the open plans, `?status=closed` exactly the closed ones and `?status=aborted`
   exactly the aborted ones; `?status=open&cr=<cr>` returns only that CR's open plan. The response
   to `?status=open` carries no plan with a `commitBoundary`.
-- **AC2 (§S1)** — `GET …/plans?status=<anything else>` (including the empty string) answers `400`,
+- [x] **AC2 (§S1)** — `GET …/plans?status=<anything else>` (including the empty string) answers `400`,
   `ok:false`, with a `help[]` naming `open`, `closed` and `aborted`. `GET …/plans` with no `status`
   parameter returns the same `plans` array it returns today.
-- **AC3 (§S2)** — On the AC1 board, every `GET …/plans` response (unfiltered, `?status=open`,
+- [x] **AC3 (§S2)** — On the AC1 board, every `GET …/plans` response (unfiltered, `?status=open`,
   `?cr=<cr>`) carries `filed` equal to the project's total plan count and `lastClosedCr` equal to
-  the `cr` with the latest `closedAt`. On a board of only aborted plans, `lastClosedCr` is `null`
+  the `cr` with the latest `closedAt` (two plans closed at the same `closedAt`: the higher
+  `planId`). On a board of only aborted plans, `lastClosedCr` is `null`
   and `filed` equals the number of aborted plans. On a project with no plans, `filed` is `0` and
   `lastClosedCr` is `null`.
-- **AC4 (§S3)** — `cmd_status` issues exactly one read, `GET …/plans?status=open`. Its rows are
+- [x] **AC4 (§S3)** — `cmd_status` issues exactly one read, `GET …/plans?status=open`. Its rows are
   that response's plans in order, `count` equals the number of rows, and `lastClosedCr` and
   `filed` equal the response's values.
-- **AC5 (§S4)** — Three boards produce the three states of the §S4 table, field for field,
+- [x] **AC5 (§S4)** — Three boards produce the three states of the §S4 table, field for field,
   including `help[]`: work in flight; none open (one board with a closed plan, one with only
   aborted plans); never filed.
-- **AC6 (§S5)** — On a failed plans read the envelope is today's `status-unavailable` degrade
+- [x] **AC6 (§S5)** — On a failed plans read the envelope is today's `status-unavailable` degrade
   byte for byte, except for one added field, `filed: null`.
-- **AC7 (§S2)** — `last_closed_cr` is defined nowhere in `clients/` or `crucible_axi/`. CR-094's
+- [x] **AC7 (§S2)** — `last_closed_cr` is defined nowhere in `clients/` or `crucible_axi/`. CR-094's
   inventory test is amended to pin that the value is published by the server, not computed by any
   client.
-- **AC8 (§S6)** — `STATUS-CONTRACT.md` is version 3.0.0. Its field table, terminal states, degrade
+- [x] **AC8 (§S6)** — `STATUS-CONTRACT.md` is version 3.0.0. Its field table, terminal states, degrade
   shape and row schema describe §S1–§S5, including `filed`. It names `queue` as the read for every
   CR and plan. It documents `--format json` (§S8) with an example object. No sentence in it
   describes the old behaviour as current.
-- **AC9 (§S7)** — `status` is called through the shared `cmd_status` from `status`, its alias
+- [x] **AC9 (§S7)** — `status` is called through the shared `cmd_status` from `status`, its alias
   `plans` and the no-argument dashboard in EACH of `bun-crucible.py`, `python-crucible.py`,
   `rust-crucible.py`, `mvn-crucible.py` and `arduino-crucible.py`, and the AC5 "none open" and
   "never filed" states are asserted for each of the five.
-- **AC10 (wiring)** — End to end against a real, ephemeral board holding open, closed and aborted
+- [x] **AC10 (wiring)** — End to end against a real, ephemeral board holding open, closed and aborted
   plans: the `status` verb's envelope has the open plans as rows, and `filed` and `lastClosedCr`
   equal the server's values. No stubbed transport.
-- **AC11 (§S8)** — In EACH of the five clients, `status --format json` and `plans --format json`
+- [x] **AC11 (§S8)** — In EACH of the five clients, `status --format json` and `plans --format json`
   write exactly one JSON object to stdout whose keys and values equal the `axi` object of the
   same invocation with `--format toon`, on all four exit paths (work in flight, none open, never
   filed, unavailable). `--format toon` and no flag produce today's TOON output. A value other
-  than `toon` or `json` is refused by argument parsing.
-- **AC12 (§S8)** — AC10's end-to-end run is repeated with `--format json`, and the parsed object
+  than `toon` or `json` is refused by argument parsing. The `status`/`plans` help text and each
+  client's `cmd_status` docstring describe the open plans, `filed` and `--format`; none still
+  describes the unfiltered plan list.
+- [x] **AC12 (§S8)** — AC10's end-to-end run is repeated with `--format json`, and the parsed object
   carries the open plans as `plans`, and the server's `filed` and `lastClosedCr`.
+- [x] **AC13 (§S9)** — In EACH of the five clients, `landings` issues exactly one read,
+  `GET …/plans?status=closed`. On a board holding a plan closed with a merge commit, a plan
+  closed without one, an aborted plan and an open plan, its rows are exactly the two closed
+  plans, in the server's order, each `{cr, mergeCommit}` with `null` for the one that recorded
+  none. `--format json` writes the same object as one JSON object (§S8's rule). A failed read
+  is `ok:true`, `landings:[]`, a `landings-unavailable` warning, exit 0.
+- [x] **AC14 (§S9)** — `scripts/release.sh` calls neither `plans` nor `status`, takes each
+  closed plan's landing commit (and each closed plan that recorded none) from
+  `landings --format json`, and `tests/release-provenance.test.ts` passes in full.
+- [x] **AC15 (§S9)** — End to end against a real, ephemeral board: the `landings` verb, run as a
+  real client subprocess, returns exactly the closed plans the server's own
+  `GET …/plans?status=closed` returns, with their merge commits. No stubbed transport.
 
 ## Non-goals
 

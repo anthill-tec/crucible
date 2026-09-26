@@ -107,8 +107,14 @@ def _run_main(module, argv):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def _plans_response(plans):
-    return {"ok": True, "plans": plans}
+def _plans_response(plans, *, last_closed_cr=None, filed=0):
+    """§S2/§S3 (the status open-plans change) — every `GET .../plans` response now carries the
+    two server-published, PROJECT-WIDE facts (`lastClosedCr`/`filed`)
+    alongside `plans`; `cmd_status` takes them from here verbatim, never
+    recomputing either from the rows it just received. Defaults keep every
+    call site that does not care about the two facts unchanged."""
+    return {"ok": True, "plans": plans,
+            "lastClosedCr": last_closed_cr, "filed": filed}
 
 
 class _BaseStatusTest(unittest.TestCase):
@@ -228,25 +234,37 @@ class StatusQueueTableTest(_BaseStatusTest):
                            "a CLOSED plan (all cycles terminal) must report activeCycleLabel "
                            "as null, not fabricate one")
 
-    def test_status_last_closed_cr_is_the_plan_with_latest_closedat(self):
-        """CR-CRU-094 §S4/AC7 -- the DISCRIMINATION that gives the field its
-        meaning (LATEST `closedAt`, not list order / highest planId) survives
-        the rename; it is not dropped in it."""
-        plans = _plans_response([
-            {"planId": "plan-1", "cr": "CR-OLD", "status": "closed", "cycles": [],
-             "merge": {"commit": "aaa"}, "closedAt": 1000},
-            {"planId": "plan-2", "cr": "CR-NEW", "status": "closed", "cycles": [],
-             "merge": {"commit": "bbb"}, "closedAt": 5000},
-            {"planId": "plan-3", "cr": "CR-OPEN", "wave": "4", "status": "open", "cycles": []},
-        ])
+    def test_status_last_closed_cr_is_taken_from_the_response_not_derived_from_rows(self):
+        """§S2/§S3 (AC4/AC7) REWRITE of
+        `test_status_last_closed_cr_is_the_plan_with_latest_closedat`, which
+        built `lastClosedCr` by scanning the CLOSED plans the CLIENT itself
+        received (derive-from-rows) -- exactly the client-side computation
+        §S2 deletes. The value is now computed ONCE, on the SERVER, over
+        ALL the project's plans, and published as a top-level field on
+        EVERY `GET .../plans` response -- including the `status=open`
+        filtered read `cmd_status` now issues, whose `plans[]` therefore
+        carries no closed row at all. So the fixture below carries only the
+        OPEN plan in `plans[]`, while `lastClosedCr` rides the response
+        top-level, proving the client takes it from there rather than
+        deriving it from rows that could not possibly contain it."""
+        plans = _plans_response(
+            [{"planId": "plan-3", "cr": "CR-OPEN", "wave": "4", "status": "open",
+              "cycles": []}],
+            last_closed_cr="CR-NEW", filed=5)
         with mock.patch.object(self.module, "_get", return_value=plans):
             code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         axi = self._decode_axi(out)
-        self.assertEqual(axi.get("lastClosedCr"), "CR-NEW",
-                          "lastClosedCr must be the plan with the LATEST closedAt, not "
-                          "the highest planId or list order")
+        self.assertEqual(
+            axi.get("lastClosedCr"), "CR-NEW",
+            "lastClosedCr must be TAKEN FROM THE RESPONSE verbatim -- the "
+            "fixture's plans[] (the status=open-filtered read) carries no "
+            "closed plan at all, so a client that still tried to DERIVE the "
+            "value from rows would find nothing and answer None")
+        self.assertEqual(
+            axi.get("filed"), 5,
+            "filed must likewise be taken from the response verbatim")
         self.assertNotIn(
             "lastRunCr", axi,
             f"the old key must be ABSENT from the envelope -- an envelope "
@@ -256,7 +274,7 @@ class StatusQueueTableTest(_BaseStatusTest):
     def test_status_no_closed_plans_last_closed_cr_is_explicit_null(self):
         plans = _plans_response([
             {"planId": "plan-1", "cr": "CR-OPEN", "wave": "1", "status": "open", "cycles": []},
-        ])
+        ], last_closed_cr=None, filed=1)
         with mock.patch.object(self.module, "_get", return_value=plans):
             code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
 
@@ -270,33 +288,42 @@ class StatusQueueTableTest(_BaseStatusTest):
         self.assertIsNone(axi.get("lastClosedCr"),
                            "no closed plan exists yet -- lastClosedCr must be explicit "
                            "null, never a fabricated guess")
+        self.assertEqual(axi.get("filed"), 1)
         self.assertNotIn(
             "lastRunCr", axi,
             f"the old key must be ABSENT from the envelope -- an envelope "
             f"carrying BOTH keys is the dual-key state the rename forbids; "
             f"got {sorted(axi)!r}")
 
-    def test_status_empty_queue_is_explicit_ok_true_not_error(self):
-        """CR-CRU-035 §S1: this NO-OPEN-PLAN empty state (a reachable server,
-        zero plans filed) must stay DISTINCT from the status-unavailable
-        degrade (AXI principle 5) -- it carries NO status-unavailable
-        warning, unlike a plans-fetch failure."""
-        with mock.patch.object(self.module, "_get", return_value=_plans_response([])):
+    def test_status_never_filed_state_reports_filed_zero_and_plan_file_only_help(self):
+        """§S4/AC5 REWRITE of
+        `test_status_empty_queue_is_explicit_ok_true_not_error`: an empty
+        board is now ONE of TWO distinguishable states (never filed vs. none
+        open), told apart by `filed`. This fixture is the "never filed"
+        row of the §S4 table: `filed:0`, `lastClosedCr:null`, and a help[]
+        naming `plan-file` ONLY (no `next` -- there is nothing to advance)."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr=None, filed=0)):
             code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
 
         self.assertEqual(code, 0, "an empty queue is NOT an error -- must exit 0")
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), True)
         self.assertEqual(axi.get("plans"), [])
-        # CR-CRU-094 §S4/AC7 -- the empty-board shape: the last-closed-CR key
-        # is present and EXPLICITLY null (no plan has closed because no plan
-        # exists), the old key is gone, and the never-empty-stdout contract
-        # below is unchanged by the rename.
+        self.assertEqual(axi.get("count"), 0)
         self.assertIn(
             "lastClosedCr", axi,
             f"an empty board must still carry the key as an explicit null; "
             f"got {sorted(axi)!r}")
         self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertEqual(
+            axi.get("filed"), 0,
+            "filed:0 is what makes this the 'never filed' state, distinct "
+            "from a board with closed/aborted history and zero open plans")
+        self.assertEqual(
+            axi.get("help"), ["plan-file --cr <cr> --cycle <label>"],
+            f"the 'never filed' help is plan-file ONLY; got {axi!r}")
         self.assertNotIn(
             "lastRunCr", axi,
             f"the old key must be ABSENT from the empty-board envelope too; "
@@ -310,6 +337,74 @@ class StatusQueueTableTest(_BaseStatusTest):
         self.assertIn("no plan", combined,
                       f"an empty queue must carry a DEFINITIVE empty-state message "
                       f"(never bare empty stdout); got stdout={out!r} stderr={err!r}")
+
+    def test_status_none_open_on_a_board_with_closed_history_names_next_then_plan_file(self):
+        """§S4/AC5 -- the OTHER empty-board state: a board that HAS
+        filed plans (`filed>0`) but none currently open. `lastClosedCr` is
+        still published (a real closed CR), and help[] names `next` THEN
+        `plan-file`, never `cycle-activate` (nothing to activate)."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr="CR-DONE", filed=4)):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(
+            axi.get("filed"), 4,
+            "filed>0 tells 'none open' apart from 'never filed' even though "
+            "both report an empty plans[]")
+        self.assertEqual(axi.get("lastClosedCr"), "CR-DONE")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"],
+            f"'none open' help names next then plan-file, NOT "
+            f"cycle-activate; got {axi!r}")
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_none_open_aborted_only_board_last_closed_cr_stays_null(self):
+        """§S4/AC5 -- the aborted-only variant Model B asked for
+        (#1391): `filed>0` (the aborted plans still count) but
+        `lastClosedCr` is null (an aborted plan never has a `closedAt`)."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr=None, filed=2)):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 2)
+        self.assertIsNone(
+            axi.get("lastClosedCr"),
+            "an aborted-only board must still report lastClosedCr null even "
+            "though filed>0 -- filed alone tells it apart from never-filed")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"])
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_reads_exactly_one_status_open_filtered_path(self):
+        """AC4 -- 'cmd_status issues exactly one read, GET .../plans?status=open'."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr=None, filed=0)) as get_mock:
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertEqual(
+            get_mock.call_count, 1,
+            f"cmd_status must issue EXACTLY one plans read; got "
+            f"{get_mock.call_args_list!r}")
+        called_path = get_mock.call_args.args[0] if get_mock.call_args.args \
+            else get_mock.call_args.kwargs.get("path")
+        self.assertTrue(
+            str(called_path).endswith("?status=open"),
+            f"the one read must carry the status=open filter (§S3); "
+            f"got path={called_path!r}")
 
     def test_status_tolerant_when_plans_fetch_fails_emits_ok_true_status_unavailable_and_exits_zero(self):
         """CR-CRU-035 §S1 RETARGET (was
@@ -348,6 +443,14 @@ class StatusQueueTableTest(_BaseStatusTest):
             f"the unavailable envelope must still carry the last-closed-CR key "
             f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
         self.assertIsNone(axi.get("lastClosedCr"))
+        # §S5/AC6 (the status open-plans change) -- the degrade adds ONE field: filed, also an
+        # explicit null (the board could not be read, so the number is
+        # unknown, not zero).
+        self.assertIn(
+            "filed", axi,
+            f"the unavailable envelope must carry `filed` as an explicit "
+            f"null too; got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("filed"))
         self.assertNotIn(
             "lastRunCr", axi,
             f"the old key must be ABSENT from the envelope -- an envelope "
@@ -364,6 +467,7 @@ class StatusQueueTableTest(_BaseStatusTest):
 
     def test_status_plans_fetch_is_bounded_by_a_short_timeout(self):
         """§S1 bounded fetch -- the underlying urlopen call must pass a short
+
         `timeout=` so an unreachable/slow server can't hang a session-start
         hook forever."""
         fake_response = mock.MagicMock()

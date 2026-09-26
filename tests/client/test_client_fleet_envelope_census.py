@@ -3309,6 +3309,33 @@ class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
             f"an unreadable board has no closed plan to report -- the field "
             f"must be null, never a fabricated or stale value: {offenders!r}")
 
+    def test_every_changed_verb_reports_the_filed_key(self):
+        """§S5/AC6 (the status open-plans change) -- the unavailable degrade adds ONE field to
+        this same shape: `filed`. Measured on the exact same (client, verb)
+        census this class already builds against an unreachable server."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = self.census[client_key].get(verb) or {}
+            if "filed" not in axi:
+                offenders[f"{client_key}:{verb}"] = sorted(axi)
+        self.assertEqual(
+            offenders, {},
+            f"every client must report `filed` on BOTH registered names of "
+            f"the verb, even on the unavailable degrade; envelope keys "
+            f"seen: {offenders!r}")
+
+    def test_the_filed_key_is_an_explicit_null_on_an_unreadable_board(self):
+        """§S5 -- 'the board could not be read, so the number is
+        unknown, not zero': the degrade's `filed` must be an EXPLICIT null,
+        never a fabricated `0`."""
+        offenders = {f"{c}:{v}": self.census[c].get(v, {}).get("filed")
+                     for c, v in self._pairs()
+                     if (self.census[c].get(v) or {}).get("filed") is not None}
+        self.assertEqual(
+            offenders, {},
+            f"an unreadable board's plan count is UNKNOWN -- filed must be "
+            f"null, never 0 or a stale value: {offenders!r}")
+
     def test_no_changed_verb_envelope_still_carries_the_old_key(self):
         """AC7's clean break, measured on the wire rather than in the source: a
         response carrying BOTH keys fails the AC."""

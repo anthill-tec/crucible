@@ -28,6 +28,7 @@ import argparse
 import collections
 import contextlib
 import datetime
+import functools
 import importlib.util
 import io
 import json
@@ -716,7 +717,26 @@ def echoed_cycle_id(resp):
     return AXI_UNSET
 
 
-def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
+# §S8 — the two encodings `emit_axi` can write the same `axi` object in.
+AXI_FORMAT_TOON = "toon"
+AXI_FORMAT_JSON = "json"
+AXI_FORMATS = (AXI_FORMAT_TOON, AXI_FORMAT_JSON)
+
+
+def axi_object(verb, ok, result_fields, context, warnings):
+    """Build the §S1 `axi` object — the ONE place its keys are assembled.
+
+    Every encoding `emit_axi` writes (TOON by default, JSON on request) is
+    this same dict, so the two can never carry different keys or values."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
+    axi.update(result_fields)
+    axi["context"] = context
+    axi["warnings"] = list(warnings) + limit_disclosure_warnings()
+    return axi
+
+
+def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
+             fmt=AXI_FORMAT_TOON):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
     optional human-readable line to stderr (interactive only).
 
@@ -735,12 +755,16 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     the boot banner: a refused `value`, or a `crucible.toml` that could not be
     read, that nobody is told about is a client running at a number its
     operator did not choose. A per-verb or per-client wiring would be five
-    places for four of them to be right."""
-    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
-    axi.update(result_fields)
-    axi["context"] = context
-    axi["warnings"] = list(warnings) + limit_disclosure_warnings()
-    sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+    places for four of them to be right.
+
+    §S8 — `fmt=AXI_FORMAT_JSON` writes the same `axi` object (from
+    `axi_object`) as ONE unwrapped JSON object instead; the stderr line is
+    unchanged either way."""
+    axi = axi_object(verb, ok, result_fields, context, warnings)
+    if fmt == AXI_FORMAT_JSON:
+        sys.stdout.write(json.dumps(axi, ensure_ascii=False) + "\n")
+    else:
+        sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
     if legacy_line is not None:
         print(legacy_line, file=sys.stderr)
 
@@ -804,6 +828,22 @@ def plans_path(project_key):
     resolution stays client-side (each client owns its `.env`/project-dir
     layout — the same scope boundary `axi_context` observes)."""
     return f"/api/v2/projects/{project_key}/plans"
+
+
+# §S3 — the one status the `status` verb reads: the server filters the plans
+# collection by it, so the client never filters rows itself.
+PLANS_STATUS_OPEN = "open"
+
+# §S9 — the one status the `landings` verb reads: the closed plans, each with
+# the merge commit it recorded.
+PLANS_STATUS_CLOSED = "closed"
+
+
+def plans_status_path(path, status):
+    """§S3 (PURE) — a resolved plans-collection path (`plans_path` /
+    `ClientOps.plans_path`) narrowed to ONE plan status by the server's
+    `?status=` filter (`open`, `closed` or `aborted`)."""
+    return f"{path}?status={status}"
 
 
 class PlansFetchFailed(SystemExit):
@@ -996,13 +1036,9 @@ def truncate_field(value, full=False):
     return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
 
 
-def last_closed_cr(plans):
-    """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
-    close), or None when no plan has closed yet — never a fabricated guess."""
-    closed = [p for p in (plans or []) if p.get("closedAt") is not None]
-    if not closed:
-        return None
-    return max(closed, key=lambda p: p.get("closedAt")).get("cr")
+# §S2 — the `lastClosedCr` value (the `cr` of the plan with the latest
+# `closedAt`) is computed by the SERVER only: every `GET …/plans` response
+# publishes it, over all the project's plans. No client computes it.
 
 
 # CR-CRU-056 §S3 — the CR-CRU-036-era client-side attach resolver
@@ -1236,6 +1272,13 @@ HELP_STEPS = {
     "status": ["cycle-activate <id>"],
     "cr-close": ["status"],
 }
+
+# §S4 — the `help[]` of `status`'s two empty-board states, told apart by the
+# server-published `filed`. `HELP_STEPS["status"]` stays the "work in flight"
+# help. "None open" (filed > 0): find the next CR, then file its plan.
+# "Never filed" (filed == 0): file the first plan.
+STATUS_NONE_OPEN_HELP = ["next", "plan-file --cr <cr> --cycle <label>"]
+STATUS_NEVER_FILED_HELP = ["plan-file --cr <cr> --cycle <label>"]
 
 # Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
 # snapshot has no resolved outcome of its own, so gate-run synthesises one from
@@ -2105,10 +2148,21 @@ class ClientOps:
 
 
 def cmd_status(args, project_dir, ops):
-    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
-    and return the queue as a uniform-table §S1 envelope plus a top-level
-    `lastClosedCr` — the `cr` of the plan with the latest `closedAt`."""
-    resp = ops.get(ops.plans_path(project_dir))
+    """§S3/§S4 — the work-in-flight READ verb (alias `plans`, no --agent).
+
+    Issues exactly ONE read, `GET …/plans?status=open`, and returns the open
+    plans (in the server's order) as a uniform-table §S1 envelope. The two
+    project facts `lastClosedCr` and `filed` are passed through from that
+    response unchanged — the client filters and recomputes nothing. With no
+    open plan, `filed` (never `lastClosedCr`) tells "none open" (filed > 0)
+    apart from "never filed" (filed == 0); each state carries its own help[].
+
+    §S8 — `args.format` picks the encoding (`toon`, the default, or `json`)
+    on every exit path; the `axi` object, exit code and stderr line are the
+    same either way."""
+    emit = _status_emitter(args, ops)
+    resp = ops.get(plans_status_path(ops.plans_path(project_dir),
+                                     PLANS_STATUS_OPEN))
     if not resp.get("ok"):
         # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
         # (server unreachable / non-ok) is a DEFINITIVE unavailable data-state
@@ -2117,41 +2171,99 @@ def cmd_status(args, project_dir, ops):
         # next-step, and exit 0 so a session-start hook can never hang or fail.
         # This state is DISTINCT from the no-plan empty state below (that one
         # carries NO warning) — the status-unavailable warning is the signal.
+        # §S5 — the one field this degrade gains is `filed: null`: the board
+        # could not be read, so the plan count is UNKNOWN, not zero.
         detail = (f"could not reach the Crucible server to read the board: "
                   f"{resp.get('error')}")
         legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
-        ops.emit("status", True,
-                 {"plans": [], "lastClosedCr": None, "count": 0,
-                  "help": [f"check the Crucible server is running / reachable "
-                           f"at {ops.base_url}"]},
-                 ops.context(project_dir),
-                 [{"code": "status-unavailable", "detail": detail}],
-                 legacy)
+        emit("status", True,
+             {"plans": [], "lastClosedCr": None, "count": 0, "filed": None,
+              "help": [f"check the Crucible server is running / reachable "
+                       f"at {ops.base_url}"]},
+             ops.context(project_dir),
+             [{"code": "status-unavailable", "detail": detail}],
+             legacy)
         return 0
     plans = resp.get("plans", [])
     full_rows = build_status_rows(plans)
-    last = last_closed_cr(plans)
+    # §S2/§S3 — both project facts are the SERVER's, taken verbatim.
+    last = resp.get("lastClosedCr")
+    filed = resp.get("filed")
     # §S10 — the DEFAULT projection is the minimal base column set
     # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
     # to that base, never replaces it.
     fields = getattr(args, "fields", None)
     requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
     rows = select_status_fields(full_rows, requested)
-    # §S12 — the pre-computed `count` is the TOTAL plans available (unaffected
-    # by the --fields column projection), emitted even on an empty queue.
-    count = len(plans)
+    # §S3/§S12 — `count` is the number of rows (the open plans), unaffected by
+    # the --fields column projection, emitted even on an empty board.
+    count = len(rows)
     if not rows:
-        legacy = "status: ok=True — no plans filed for this project"
-        ops.emit("status", True,
-                 {"plans": [], "lastClosedCr": None, "count": 0,
-                  "help": HELP_STEPS["status"]},
-                 ops.context(project_dir), [], legacy)
-        return 0
-    legacy = f"status: ok=True plans={len(rows)} lastClosedCr={last}"
-    ops.emit("status", True,
-             {"plans": rows, "lastClosedCr": last, "count": count,
-              "help": HELP_STEPS["status"]},
+        # §S4 — no plan is open. `filed` alone decides which empty state this
+        # is (an aborted-only board has filed > 0 but lastClosedCr null).
+        if filed == 0:
+            legacy = "status: ok=True — no plans filed for this project"
+            help_steps = STATUS_NEVER_FILED_HELP
+        else:
+            legacy = (f"status: ok=True — no open plans (filed={filed} "
+                      f"lastClosedCr={last})")
+            help_steps = STATUS_NONE_OPEN_HELP
+        emit("status", True,
+             {"plans": [], "lastClosedCr": last, "count": 0,
+              "filed": filed, "help": help_steps},
              ops.context(project_dir), [], legacy)
+        return 0
+    legacy = (f"status: ok=True plans={count} lastClosedCr={last} "
+              f"filed={filed}")
+    emit("status", True,
+         {"plans": rows, "lastClosedCr": last, "count": count,
+          "filed": filed, "help": HELP_STEPS["status"]},
+         ops.context(project_dir), [], legacy)
+    return 0
+
+
+def build_landings_rows(plans):
+    """§S9 (PURE) — one uniform-table row per closed plan, in the given
+    (server's) order: `cr`, and `mergeCommit`, the commit the plan RECORDED
+    (`merge.commit`), or null when it recorded none. The derived
+    `commitBoundary` is not read: the recorded commit is the fact."""
+    rows = []
+    for plan in plans or []:
+        merge = plan.get("merge")
+        commit = merge.get("commit") if isinstance(merge, dict) else None
+        rows.append({"cr": plan.get("cr"), "mergeCommit": commit})
+    return rows
+
+
+def cmd_landings(args, project_dir, ops):
+    """§S9 — the closed plans and the merge commit each recorded, for programs
+    such as the release ceremony (read-only, no --agent).
+
+    Issues exactly ONE read, `GET …/plans?status=closed`, and returns one
+    `{cr, mergeCommit}` row per closed plan in the server's order. `--format`
+    picks the encoding exactly as for `status` (§S8). A failed read degrades
+    the way `status` does: ok:true, no rows, a `landings-unavailable`
+    warning, exit 0."""
+    emit = _status_emitter(args, ops)
+    resp = ops.get(plans_status_path(ops.plans_path(project_dir),
+                                     PLANS_STATUS_CLOSED))
+    if not resp.get("ok"):
+        detail = (f"could not reach the Crucible server to read the closed "
+                  f"plans: {resp.get('error')}")
+        legacy = f"[crucible] landings: board unavailable — {resp.get('error')}"
+        emit("landings", True,
+             {"landings": [], "count": 0,
+              "help": [f"check the Crucible server is running / reachable "
+                       f"at {ops.base_url}"]},
+             ops.context(project_dir),
+             [{"code": "landings-unavailable", "detail": detail}],
+             legacy)
+        return 0
+    rows = build_landings_rows(resp.get("plans", []))
+    emit("landings", True,
+         {"landings": rows, "count": len(rows), "help": ["status"]},
+         ops.context(project_dir), [],
+         f"landings: ok=True closed={len(rows)}")
     return 0
 
 
@@ -2456,6 +2568,27 @@ def status_namespace(**extra_fields):
     precisely the silent fleet-wide regression §S1's classification exists to
     prevent."""
     return argparse.Namespace(project_dir=None, fields=None, **extra_fields)
+
+
+def add_status_format_arg(parser):
+    """§S8 — the `--format {toon,json}` flag of `status`, its alias `plans`
+    and `landings` (§S9), registered here so the five clients cannot drift
+    into five flag surfaces. The no-argument dashboard is not offered it
+    (`status_namespace` carries no `format`)."""
+    parser.add_argument(
+        "--format", choices=AXI_FORMATS, default=AXI_FORMAT_TOON,
+        help="Output encoding: `toon` (default) or `json` — the same axi "
+             "object as one unwrapped JSON object, for programs.")
+
+
+def _status_emitter(args, ops):
+    """§S8 — the envelope writer `cmd_status` and `cmd_landings` use: the
+    client's own `ops.emit`
+    for TOON (today's path, untouched), the shared `emit_axi` in JSON mode for
+    `--format json`. A Namespace without `format` (the dashboard's) is TOON."""
+    if getattr(args, "format", AXI_FORMAT_TOON) == AXI_FORMAT_JSON:
+        return functools.partial(emit_axi, fmt=AXI_FORMAT_JSON)
+    return ops.emit
 
 
 def cmd_stop(args, project_dir, ops):

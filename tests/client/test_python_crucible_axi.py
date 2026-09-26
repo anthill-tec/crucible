@@ -748,6 +748,14 @@ class PythonCrucibleStatusHookSafeTest(_BasePythonAxiTest):
             f"the unavailable envelope must still carry the last-closed-CR key "
             f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
         self.assertIsNone(axi.get("lastClosedCr"))
+        # §S5/AC6 (the status open-plans change) — the degrade adds ONE field: filed, also an
+        # explicit null (the board could not be read, so the number is
+        # unknown, not zero).
+        self.assertIn(
+            "filed", axi,
+            f"the unavailable envelope must carry `filed` as an explicit "
+            f"null too; got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("filed"))
         self.assertNotIn(
             "lastRunCr", axi,
             f"the old key must be ABSENT from the envelope -- an envelope "
@@ -762,14 +770,41 @@ class PythonCrucibleStatusHookSafeTest(_BasePythonAxiTest):
             f"the help[] hint must point at reaching/starting the Crucible "
             f"server; got {help_steps!r}")
 
-    def test_status_no_open_plan_still_exits_zero_with_definitive_empty_state(self):
-        """Characterization -- existing behavior preserved: a REACHABLE server
-        with no open plan is the OTHER definitive empty state (`count:0`),
-        and it must stay DISTINCT from the status-unavailable degrade above
-        (AXI principle 5 -- never an ambiguous/conflated empty state)."""
+    def test_status_never_filed_reports_filed_zero_and_plan_file_only_help(self):
+        """§S4/AC5 REWRITE of
+        `test_status_no_open_plan_still_exits_zero_with_definitive_empty_state`,
+        which pinned only `count:0`/`plans:[]` -- now ONE of TWO
+        distinguishable empty-board states, told apart by `filed`. This is
+        the "never filed" row: `filed:0`, `lastClosedCr:null`, help[] names
+        `plan-file` ONLY (nothing to advance)."""
         code, out, _err, _p, _g, _pa = self._run(
             ["status", "--project-dir", self.tmpdir],
-            get_return=self._no_open_plans_at_all())
+            get_return={"ok": True, "plans": [], "lastClosedCr": None, "filed": 0})
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 0)
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertEqual(
+            axi.get("help"), ["plan-file --cr <cr> --cycle <label>"],
+            f"the 'never filed' help is plan-file ONLY; got {axi!r}")
+        self.assertEqual(
+            axi.get("warnings"), [],
+            "the no-plan empty state must NOT carry the status-unavailable "
+            "warning -- it is a DIFFERENT definitive state than the "
+            "server-unreachable degrade")
+
+    def test_status_none_open_on_a_board_with_closed_history_names_next_then_plan_file(self):
+        """§S4/AC5 -- the OTHER empty-board state: a board that HAS
+        filed plans (`filed>0`) but none currently open. `lastClosedCr` is
+        still published, and help[] names `next` THEN `plan-file`, never
+        `cycle-activate` (nothing to activate)."""
+        code, out, _err, _p, _g, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return={"ok": True, "plans": [], "lastClosedCr": "CR-DONE", "filed": 4})
 
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -777,10 +812,55 @@ class PythonCrucibleStatusHookSafeTest(_BasePythonAxiTest):
         self.assertEqual(axi.get("plans"), [])
         self.assertEqual(axi.get("count"), 0)
         self.assertEqual(
-            axi.get("warnings"), [],
-            "the no-plan empty state must NOT carry the status-unavailable "
-            "warning -- it is a DIFFERENT definitive state than the "
-            "server-unreachable degrade")
+            axi.get("filed"), 4,
+            "filed>0 tells 'none open' apart from 'never filed' even though "
+            "both report an empty plans[]")
+        self.assertEqual(axi.get("lastClosedCr"), "CR-DONE")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"],
+            f"'none open' help names next then plan-file, NOT "
+            f"cycle-activate; got {axi!r}")
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_none_open_aborted_only_board_last_closed_cr_stays_null(self):
+        """§S4/AC5 -- the aborted-only variant Model B asked for
+        (#1391): `filed>0` (the aborted plans still count) but
+        `lastClosedCr` is null (an aborted plan never has a `closedAt`)."""
+        code, out, _err, _p, _g, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return={"ok": True, "plans": [], "lastClosedCr": None, "filed": 2})
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 2)
+        self.assertIsNone(
+            axi.get("lastClosedCr"),
+            "an aborted-only board must still report lastClosedCr null even "
+            "though filed>0 -- filed alone tells it apart from never-filed")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"])
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_reads_exactly_one_status_open_filtered_path(self):
+        """AC4 -- 'cmd_status issues exactly one read, GET .../plans?status=open'."""
+        code, out, _err, _p, get_mock, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return={"ok": True, "plans": [], "lastClosedCr": None, "filed": 0})
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertEqual(
+            get_mock.call_count, 1,
+            f"cmd_status must issue EXACTLY one plans read; got "
+            f"{get_mock.call_args_list!r}")
+        called_path = get_mock.call_args.args[0] if get_mock.call_args.args \
+            else get_mock.call_args.kwargs.get("path")
+        self.assertTrue(
+            str(called_path).endswith("?status=open"),
+            f"the one read must carry the status=open filter (§S3); "
+            f"got path={called_path!r}")
 
     def test_status_plans_fetch_is_bounded_by_a_short_timeout(self):
         """§S1 bounded fetch -- the underlying urlopen call must pass a short
