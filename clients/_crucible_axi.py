@@ -2267,6 +2267,110 @@ def cmd_landings(args, project_dir, ops):
     return 0
 
 
+# ── §S4 — `project-meta`: a project's metadata map, read and written ─────────
+
+PROJECT_META_VERB = "project-meta"
+
+
+def project_metadata_path(project_key):
+    """§S4 — `…/projects/<key>/metadata`, the one route the verb reads (GET)
+    and writes (PATCH)."""
+    return f"/api/v2/projects/{project_key}/metadata"
+
+
+def parse_meta_set(raw):
+    """§S4 — the argparse `type=` for one `--set K=V` (PURE): split on the
+    FIRST `=`, so a value may itself hold `=` and commas. A value with no `=`,
+    or an empty key, is refused HERE — by argument parsing, before any request
+    — rather than sent for the server to refuse."""
+    key, sep, value = raw.partition("=")
+    if not sep:
+        raise argparse.ArgumentTypeError(
+            f"--set {raw!r} has no '=': write it as KEY=VALUE")
+    if not key:
+        raise argparse.ArgumentTypeError(
+            f"--set {raw!r} has an empty key before the '=': write it as KEY=VALUE")
+    return key, value
+
+
+def add_project_meta_args(parser):
+    """§S4 — the `--set`/`--unset`/`--format` flags of `project-meta`,
+    registered here so the five clients cannot drift into five flag surfaces.
+    Each client adds its own `--agent` and project-dir flags, as for every
+    other verb."""
+    parser.add_argument(
+        "--set", dest="meta_set", action="append", type=parse_meta_set,
+        default=None, metavar="KEY=VALUE",
+        help="Set one key (split on the FIRST '='); repeatable. A write: "
+             "requires --agent.")
+    parser.add_argument(
+        "--unset", dest="meta_unset", action="append", default=None,
+        metavar="KEY",
+        help="Remove one key; repeatable. A write: requires --agent.")
+    add_status_format_arg(parser)
+
+
+def project_meta_refusal_fields(resp, base_url):
+    """§S4 — the result fields of a refused or failed `project-meta` request
+    (PURE): the server's own `help[]` carried verbatim (whether the transport
+    handed back the parsed body or flattened it into `error`), the server's
+    error as the detail, and the reachability step when the call never
+    landed."""
+    resp = resp or {}
+    parsed = server_failure_body(resp) or {}
+    steps = resp.get("help")
+    if isinstance(steps, list) and steps:
+        help_steps = [str(s) for s in steps]
+    else:
+        help_steps = (server_failure_help(resp)
+                      or [f"check the Crucible server is running / reachable "
+                          f"at {base_url}", PROJECT_META_VERB])
+    return {"error": parsed.get("error") or resp.get("error"),
+            "help": help_steps}
+
+
+def cmd_project_meta(args, project_dir, ops):
+    """§S4 — a project's metadata map (a copy of its .env facts).
+
+    With no `--set`/`--unset` it READS: exactly one `GET …/metadata`, no
+    `--agent`. With any, it WRITES: the identity is resolved FIRST (a hard stop
+    precedes any request), then exactly one `PATCH …/metadata` carrying
+    `{agentId, set, unset}`; the envelope adds the server's `changed`. Unlike
+    `status`/`landings`, a refused or failed request never degrades: it is
+    ok:false with the server's `help[]` and a non-zero exit. `--format` picks
+    the encoding exactly as for `status` (§S8)."""
+    emit = _status_emitter(args, ops)
+    pairs = getattr(args, "meta_set", None) or []
+    unset = list(getattr(args, "meta_unset", None) or [])
+    write = bool(pairs or unset)
+    agent_id = ops.agent_id(args) if write else None
+    path = project_metadata_path(ops.project_key(project_dir))
+    if write:
+        body = {"agentId": agent_id}
+        if pairs:
+            body["set"] = dict(pairs)
+        if unset:
+            body["unset"] = unset
+        resp = ops.patch(path, body) or {}
+    else:
+        resp = ops.get(path) or {}
+    context = ops.context(project_dir, agent_id=agent_id)
+    if not resp.get("ok"):
+        fields = project_meta_refusal_fields(resp, ops.base_url)
+        emit(PROJECT_META_VERB, False, fields, context, [],
+             f"project-meta: ok=False error={fields['error']}")
+        return 1
+    metadata = resp.get("metadata") or {}
+    fields = {"metadata": metadata}
+    if write:
+        fields["changed"] = bool(resp.get("changed", False))
+    fields["help"] = [PROJECT_META_VERB]
+    emit(PROJECT_META_VERB, True, fields, context, [],
+         f"project-meta: ok=True keys={len(metadata)}"
+         + (f" changed={fields['changed']}" if write else ""))
+    return 0
+
+
 # ── CR-CRU-081 §S2 — the `queue` READ verb (the landing-record sources) ─────
 
 # CR-CRU-129 §S3 — the record type the landing read ASKS FOR. It is the whole

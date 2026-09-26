@@ -110,11 +110,11 @@ def _load_env(pd):
                 continue
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip().strip('"').strip("'")
-    # The SUBPROJECT's .env is authoritative (matches the rest of the fleet —
-    # python/rust/bun read only the project .env); ambient env is a fallback
-    # only, so a caller's own CRUCIBLE_PROJECT_* can never hijack an explicit
-    # --project-dir.
-    key = env.get("CRUCIBLE_PROJECT_KEY") or os.environ.get("CRUCIBLE_PROJECT_KEY")
+    # The SUBPROJECT's .env is authoritative for the key (matches the rest of
+    # the fleet — python/rust/bun/mvn read only the project .env): an empty or
+    # absent .env key is a missing one, never filled from the ambient env. The
+    # name keeps its ambient fallback.
+    key = env.get("CRUCIBLE_PROJECT_KEY", "").strip()
     name = env.get("CRUCIBLE_PROJECT_NAME") or os.environ.get("CRUCIBLE_PROJECT_NAME")
     if not key:
         sys.exit(f"[crucible] CRUCIBLE_PROJECT_KEY not set in {path}")
@@ -954,6 +954,12 @@ def cmd_landings(args):
     per --format. Delegates to the shared implementation."""
     return _axi().cmd_landings(args, _project_dir(args), _ops())
 
+def cmd_project_meta(args):
+    """§S4 — a project's metadata map: a read (GET …/metadata, no
+    --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
+    required). Delegates to the shared implementation."""
+    return _axi().cmd_project_meta(args, _project_dir(args), _ops())
+
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
 # The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
@@ -1391,6 +1397,24 @@ def main():
                              "writes one JSON object.")
     _axi().add_status_format_arg(lv)
     lv.set_defaults(func=cmd_landings)
+
+    # §S4 — the project metadata map: read, or write with --set/--unset.
+    # Not `common`'s child: its `--agent` is required only for a write, so the
+    # verb declares its own, beside the project-dir flag alone.
+    pmv = sub.add_parser("project-meta",
+                         help="A project's metadata map (a copy of its .env facts). "
+                              "Readable by anything that reaches the board: "
+                              "non-secret facts only. No flags reads it; "
+                              "--set KEY=VALUE / --unset KEY write it (requires "
+                              "--agent); --format json writes one JSON object.")
+    _axi().add_project_meta_args(pmv)
+    pmv.add_argument("--agent",
+                     help="Registered agent id — required only for a write "
+                          "(--set/--unset), which posts as a live registered "
+                          "ORCHESTRATOR caller; a read (no --set/--unset) needs "
+                          "none. An unregistered id is refused by the server (409).")
+    _add_project_dir_arg(pmv)
+    pmv.set_defaults(func=cmd_project_meta)
 
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot

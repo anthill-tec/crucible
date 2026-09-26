@@ -37,6 +37,7 @@ export const hints: Record<
   | "cycleInput"
   | "cycleStatus"
   | "plansStatusFilter"
+  | "projectMetadataInput"
   | "duplicateOpenPlan"
   | "closedPlan"
   | "nonTerminalCycles"
@@ -147,6 +148,13 @@ export const hints: Record<
   plansStatusFilter: [
     "status must be one of: open | closed | aborted — or omit it to list every plan",
     "GET …/plans?status=open — the work in flight; composes with ?cr=<cr> and ?track=<track>",
+  ],
+  /** §S2 — a PATCH …/metadata body refused before anything is written. */
+  projectMetadataInput: [
+    "PATCH /api/v2/projects/<key>/metadata {agentId, set?: {KEY: \"value\", …}, unset?: [\"KEY\", …]} — name at least one key in a non-empty set or unset",
+    "every key is an environment-variable name (^[A-Z][A-Z0-9_]*$), every set value a string, and no key appears in both set and unset",
+    "CRUCIBLE_PROJECT_KEY is refused — a project's identity stays local, never in its metadata",
+    "the map is readable by anything that reaches the board: hold non-secret facts only",
   ],
   /** CR-CRU-024 §S4 — a second open plan filed for a cr that already has one. */
   duplicateOpenPlan: [
@@ -397,6 +405,16 @@ export const authHints = {
 };
 
 /**
+ * The first move every orchestrator-only refusal hands back: re-declare the
+ * caller with the role the route requires. Shared by the roadmap and the
+ * project-metadata refusals so both name the same call, word for word.
+ */
+const reDeclareRole = (agentId: string, role: string | undefined, required: string): string =>
+  role === undefined
+    ? `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${agentId} with role ${required} — its row predates declared roles and carries none, and a role is never fabricated`
+    : `re-register ${agentId} with role ${required}: POST /api/v2/agents/register {projectKey, agentId, role: "${required}"} — it currently holds ${role}`;
+
+/**
  * CR-CRU-091 §S3/§S8 — the roadmap-registration refusals. Every entry is
  * STATE-DERIVED (AXI P9): it names the state actually found — the role the
  * caller holds, the release nobody proposed, the container the cr really sits
@@ -411,9 +429,7 @@ export const roadmapHints = {
    * which is refused rather than assumed, so the help says so out loud.
    */
   notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
-    role === undefined
-      ? `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${agentId} with role ${required} — its row predates declared roles and carries none, and a role is never fabricated`
-      : `re-register ${agentId} with role ${required}: POST /api/v2/agents/register {projectKey, agentId, role: "${required}"} — it currently holds ${role}`,
+    reDeclareRole(agentId, role, required),
     "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
     "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
   ],
@@ -487,6 +503,19 @@ export const roadmapHints = {
   unregisteredCr: (cr: string): string[] => [
     `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> — a lifecycle disposition belongs to a registered cr, and neither verb creates one`,
     "GET /api/v2/projects/<key>/queue — the crs this project actually holds",
+  ],
+};
+
+/**
+ * §S6 — a non-orchestrator's project-metadata write. Its own words, not the
+ * roadmap's: the refusal names the metadata write and `project-meta`, and
+ * says a read needs no role at all.
+ */
+export const projectMetadataHints = {
+  notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
+    reDeclareRole(agentId, role, required),
+    "a project metadata write is orchestrator work: project-meta --set/--unset requires it, while project-meta with neither only reads the map and needs no role",
+    "an agent already exercising a TDD role should hand the write to its orchestrator rather than re-declaring its own role",
   ],
 };
 
