@@ -30,7 +30,7 @@
 // closePlan() (commit-boundary-routes.test.ts confirms a merge-commit close
 // alone — no run ingestion — is enough for store.ts's deriveCommitBoundary to
 // publish a `{mergeCommit, closedAt}` boundary).
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { startServer } from "../src/server.ts";
 
 interface CyclePayload {
@@ -75,6 +75,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    setSystemTime();
   });
 
   function withFixtureAgent(body: unknown): unknown {
@@ -378,6 +379,36 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
     ).json()) as PlansListResponse;
     expect(byCr.filed).toBe(4);
     expect(byCr.lastClosedCr).toBe(board.closedLateCr);
+  });
+
+  test("tie-break: two plans on the SAME board closed at the IDENTICAL closedAt — lastClosedCr is the one with the HIGHER planId, not simply the first/last row found", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const key = await createProject(`plans-status-tie-${crypto.randomUUID()}`);
+    const lowPlan = await filePlan(key, "CR-T-TIE-LOW");
+    const highPlan = await filePlan(key, "CR-T-TIE-HIGH");
+    expect(Number(highPlan.planId)).toBeGreaterThan(Number(lowPlan.planId));
+
+    // System-clock injection (bun:test's setSystemTime, the idiom
+    // tests/commit-boundary-derivation.test.ts and siblings use): the store
+    // stamps `closed_at` from `Date.now()` with no injectable clock of its
+    // own, so pinning the SAME instant across both closes — never advancing
+    // it between them — is the only honest way to force a genuine tie
+    // (rather than a real-clock race that could pass for the wrong reason).
+    setSystemTime(new Date("2026-09-20T12:00:00.000Z"));
+    await closeFiledPlan(key, lowPlan, "tie-low-sha");
+    await closeFiledPlan(key, highPlan, "tie-high-sha");
+    setSystemTime();
+
+    const res = await getJson(scopedPlansPath(key));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlansListResponse;
+    const lowRow = body.plans.find((p) => p.cr === lowPlan.cr);
+    const highRow = body.plans.find((p) => p.cr === highPlan.cr);
+    // Proves the tie is GENUINE — both plans really share one closed_at —
+    // rather than the assertion below passing by real-clock coincidence.
+    expect(lowRow?.commitBoundary?.closedAt).toEqual(highRow?.commitBoundary?.closedAt);
+
+    expect(body.lastClosedCr).toBe(highPlan.cr);
   });
 
   test("an aborted-only board: lastClosedCr is null, filed equals the aborted count (2)", async () => {

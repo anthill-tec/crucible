@@ -39,6 +39,21 @@ RED today (measured against `clients/_crucible_axi.py:2168-2176`): every row
 `row["title"]`/`row["lifecycle"]` raise `KeyError` on every row, in every
 test below, including through the real `queue` verb's own decoded output.
 
+§S9/AC13/AC14 RED tests (added) — the queue verb's rows gain a
+SEVENTH column, `mergeCommit`, after `lifecycle`: the merge commit of the
+cr's most recently CLOSED plan (by `closed_at`, never by `planId` or filing
+order), or `null` when it has none. This is the release ceremony's new
+landing-commit source (`scripts/release.sh` no longer reads `plans --fields
+mergeCommit`, which §S3 narrowed to the open plans). The pre-existing
+six-column pins below (`test_existing_four_keys_keep_their_names_order_and_
+values`, `test_rows_stay_a_uniform_table_across_live_void_and_superseded_
+entries`, and the e2e header pin) are REWRITTEN to seven columns — the
+criterion each already stated ("the existing keys keep their order", "every
+row shares one key set") is unchanged; only the count grows, taken from
+AC14, never from what today's code emits. RED today: `build_queue_rows`
+(clients/_crucible_axi.py:2231) emits no `mergeCommit` key at all, so every
+`row["mergeCommit"]` access below raises `KeyError`.
+
 Invocation:
     python3 -m unittest tests.client.test_queue_rows_carry_title_and_lifecycle
 """
@@ -184,6 +199,38 @@ class BuildQueueRowsCarriesTitleAndLifecycleTest(unittest.TestCase):
             f"lifecycle=None on its row — never an invented state such as "
             f"'LIVE' or the derived status; got {rows[0]!r}")
 
+    def test_row_carries_the_entrys_merge_commit_verbatim(self):
+        """§S9/AC14 — the seventh column, `mergeCommit`, carries
+        the entry's OWN `mergeCommit` value verbatim — the client is a pure
+        carrier, deriving nothing itself (the server derives it, AC13)."""
+        entry = self._live_entry()
+        entry["mergeCommit"] = "abc1234"
+        rows = self.axi.build_queue_rows([entry])
+
+        self.assertEqual(
+            rows[0]["mergeCommit"], "abc1234",
+            f"row must carry the entry's own mergeCommit verbatim; got "
+            f"{rows[0]!r}")
+
+    def test_row_merge_commit_is_null_when_the_entry_has_no_merge_commit(self):
+        """§S9/AC13 — a cr with no closed plan (or whose only
+        plans are aborted) carries `mergeCommit: null`, a COLUMN never an
+        omitted key — the same idiom `planId`/`title`/`lifecycle` use."""
+        entry = self._live_entry()
+        self.assertNotIn("mergeCommit", entry, "fixture bug: this entry "
+                                                "must carry no mergeCommit "
+                                                "key at all")
+        rows = self.axi.build_queue_rows([entry])
+
+        self.assertIn(
+            "mergeCommit", rows[0],
+            f"a commit-less entry's row must still carry the `mergeCommit` "
+            f"KEY (a null column); got {rows[0]!r}")
+        self.assertIsNone(
+            rows[0]["mergeCommit"],
+            f"a commit-less entry's row must carry mergeCommit=None; got "
+            f"{rows[0]!r}")
+
     def test_existing_four_keys_keep_their_names_order_and_values(self):
         entry = self._dead_entry("CR-VOID-2", "VOID")
         entry["wave"] = "7"
@@ -204,9 +251,9 @@ class BuildQueueRowsCarriesTitleAndLifecycleTest(unittest.TestCase):
             f"untouched by the two new columns; got {row!r}")
         remaining = list(row.keys())[4:]
         self.assertEqual(
-            remaining, ["title", "lifecycle"],
-            f"title and lifecycle must land AFTER the existing four keys, "
-            f"in that order (title then lifecycle); got "
+            remaining, ["title", "lifecycle", "mergeCommit"],
+            f"title, lifecycle and mergeCommit must land AFTER the existing "
+            f"four keys, in that order (§S9/AC14); got "
             f"{list(row.keys())!r}")
 
     def test_rows_stay_a_uniform_table_across_live_void_and_superseded_entries(self):
@@ -228,9 +275,10 @@ class BuildQueueRowsCarriesTitleAndLifecycleTest(unittest.TestCase):
         self.assertEqual(
             key_sets[0],
             frozenset({"cr", "wave", "status", "planId", "title",
-                      "lifecycle"}),
+                      "lifecycle", "mergeCommit"}),
             f"the uniform key set must be exactly cr/wave/status/planId/"
-            f"title/lifecycle; got {sorted(key_sets[0])!r}")
+            f"title/lifecycle/mergeCommit (§S9/AC14); got "
+            f"{sorted(key_sets[0])!r}")
 
         by_cr = {row["cr"]: row["lifecycle"] for row in rows}
         self.assertEqual(
@@ -311,18 +359,29 @@ class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
     `cr,wave,status,planId` per row, so the decoded rows' shared key set is
     `{cr,wave,status,planId}` — missing `title`/`lifecycle` entirely — and
     every row-level `row.get("title")`/`row.get("lifecycle")` assertion below
-    fails against real board data, not a hand-built fixture."""
+    fails against real board data, not a hand-built fixture.
+
+    §S9/AC13/AC14 (added) — a FOURTH cr, `MERGED_CR`, carries a
+    REAL plan (filed, activated, done, then closed with a merge commit) — the
+    only one of the four with an actual `plans` row — so its `mergeCommit` is
+    the one non-null value on the board, and the header pin below grows to
+    seven columns. `MERGED_CR` is added rather than reusing `LIVE_CR` so the
+    pre-existing `status`/`wave` pins on `LIVE_CR` (still PENDING, no plan)
+    stay meaningful and untouched."""
 
     ORCHESTRATOR = "cr147-c2-queue-e2e-orchestrator"
     LIVE_CR = "CR-Q147-LIVE"
     VOID_CR = "CR-Q147-VOID"
     SUPERSEDED_CR = "CR-Q147-SUPERSEDED"
     SUCCESSOR_CR = "CR-Q147-SUCCESSOR"
+    MERGED_CR = "CR-Q150-MERGED"
     WAVE = "1"
     LIVE_TITLE = "the live cr keeps working"
     VOID_TITLE = "the voided cr is abandoned"
     SUPERSEDED_TITLE = "the superseded cr moved on"
+    MERGED_TITLE = "the merged cr already shipped"
     VOID_REASON = "duplicated by another effort"
+    MERGE_COMMIT = "queue-e2e-mergecommit-1"
 
     @classmethod
     def setUpClass(cls):
@@ -390,6 +449,40 @@ class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
             f"/api/v2/projects/{cls.key}/queue/{cls.SUPERSEDED_CR}/supersede",
             {"by": cls.SUCCESSOR_CR, "agentId": cls.ORCHESTRATOR})
         assert superseded.get("ok"), f"cr-supersede failed: {superseded!r}"
+
+        # §S9/AC13 — MERGED_CR: registered the same way, then a
+        # REAL plan filed (bare POST /plans, no `release`, so it is a plain
+        # plans row rather than a second cr-plan call), activated, sealed
+        # done and closed WITH a merge commit — the only route that ever
+        # stamps `plans.merge_commit`/`closed_at` (src/store.ts `closePlan`).
+        merged_plan = _http(
+            cls.base, f"/api/v2/projects/{cls.key}/queue/plan",
+            {"cr": cls.MERGED_CR, "title": cls.MERGED_TITLE,
+             "release": RELEASE_LABEL, "wave": cls.WAVE,
+             "agentId": cls.ORCHESTRATOR})
+        assert merged_plan.get("ok"), f"cr-plan failed for MERGED_CR: {merged_plan!r}"
+        filed = _http(
+            cls.base, f"/api/v2/projects/{cls.key}/plans",
+            {"agentId": cls.ORCHESTRATOR, "cr": cls.MERGED_CR,
+             "cycles": [{"label": "solo"}]})
+        assert filed.get("ok"), f"plan-file failed for MERGED_CR: {filed!r}"
+        plan_id = filed["planId"]
+        cycle_id = filed["cycles"][0]["id"]
+        activated = _http(
+            cls.base,
+            f"/api/v2/projects/{cls.key}/plans/{plan_id}/cycles/{cycle_id}",
+            {"agentId": cls.ORCHESTRATOR, "status": "active"}, method="PATCH")
+        assert activated.get("ok"), f"cycle activate failed: {activated!r}"
+        done = _http(
+            cls.base,
+            f"/api/v2/projects/{cls.key}/plans/{plan_id}/cycles/{cycle_id}",
+            {"agentId": cls.ORCHESTRATOR, "status": "done"}, method="PATCH")
+        assert done.get("ok"), f"cycle done failed: {done!r}"
+        closed = _http(
+            cls.base, f"/api/v2/projects/{cls.key}/plans/{plan_id}",
+            {"agentId": cls.ORCHESTRATOR, "status": "closed",
+             "merge": {"commit": cls.MERGE_COMMIT}}, method="PATCH")
+        assert closed.get("ok"), f"plan close failed: {closed!r}"
 
         cls.project_dir = os.path.join(cls._tmpdir, "project")
         os.makedirs(cls.project_dir)
@@ -469,9 +562,10 @@ class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
         self.assertEqual(
             key_sets.pop(),
             frozenset({"cr", "wave", "status", "planId", "title",
-                      "lifecycle"}),
+                      "lifecycle", "mergeCommit"}),
             f"the `queue` table header must be exactly "
-            f"cr,wave,status,planId,title,lifecycle; got rows={rows!r}")
+            f"cr,wave,status,planId,title,lifecycle,mergeCommit "
+            f"(§S9/AC14); got rows={rows!r}")
 
         live_row = by_cr[self.LIVE_CR]
         void_row = by_cr[self.VOID_CR]
@@ -528,6 +622,30 @@ class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
             (self.WAVE, "PENDING"),
             f"the live row's existing `wave`/`status` fields must be "
             f"untouched by the new columns; got {live_row!r}")
+
+        # §S9/AC13/AC14 — mergeCommit end to end: MERGED_CR (the
+        # one cr on this board with an actual CLOSED plan carrying a merge
+        # commit) reads its exact commit; the three plan-less/plan-less-
+        # equivalent crs above (no plan, or a plan whose lifecycle predates
+        # any close) all read null. This is the server's DERIVED value, read
+        # through the real `queue` verb — never a client-side computation.
+        merged_row = by_cr[self.MERGED_CR]
+        self.assertEqual(
+            merged_row.get("mergeCommit"), self.MERGE_COMMIT,
+            f"the merged cr's row must carry its closed plan's merge commit "
+            f"verbatim, as the SERVER derived it; got {merged_row!r}")
+        self.assertIsNone(
+            live_row.get("mergeCommit"),
+            f"the live cr's row must carry mergeCommit=None — it has no "
+            f"plan at all; got {live_row!r}")
+        self.assertIsNone(
+            void_row.get("mergeCommit"),
+            f"the voided cr's row must carry mergeCommit=None — it has no "
+            f"plan at all, only a lifecycle; got {void_row!r}")
+        self.assertIsNone(
+            superseded_row.get("mergeCommit"),
+            f"the superseded cr's row must carry mergeCommit=None — it has "
+            f"no plan at all, only a lifecycle; got {superseded_row!r}")
 
 
 if __name__ == "__main__":
