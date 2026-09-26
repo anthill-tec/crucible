@@ -6,12 +6,13 @@ CR-CRU-030, CR-CRU-035, CR-CRU-094 · **Status** PENDING — filed 2026-09-24
 ## Problem
 
 **Reported by Model B (Sandesh #1389, 2026-09-24), reproduced here.** `status` returns every plan
-the project has ever filed. On this board today that is `plans[138]`: 130 `closed`, 8 `aborted`,
-**0 `open`**, `count: 138`. Model B measured `plans[31]`, mostly closed, against production.
+the project has ever filed. On this board on 2026-09-26 that is 142 plans: 133 `closed`,
+9 `aborted`, **0 `open`**. One `status` read takes about a second and 132 KB, all of it history.
+Model B measured `plans[31]`, mostly closed, against production.
 
 **This is not a defect in the verb.** CR-030 §S6, the verb's origin, asks for "the queue table
 (`cr`, `wave`, `status`, active cycle, `mergeCommit`) plus `lastRunCr`", which is every plan, and
-`cmd_status` has passed `GET …/plans` through unfiltered since then. `STATUS-CONTRACT.md:40` says
+`cmd_status` has passed `GET …/plans` through unfiltered since then. `STATUS-CONTRACT.md` says
 "one uniform row per **open** plan". That sentence was written by CR-035, whose spec described the
 verb as "already degrades on no open plan (… empty envelope)", which it never did. The contract's
 own row schema (`status`: "`open` / closed", a `mergeCommit` column) still describes every plan.
@@ -21,90 +22,116 @@ every session start pays for, and prints, the whole history:
 
 - **The output is unbounded.** It grows by one row per CR, forever, into a surface whose job is
   "what is in flight".
-- **The read is the expensive one.** `GET …/plans` returns closed plans "with the derived
-  `commitBoundary`" (`src/v2.ts:1899`), the per-plan derivation CR-CRU-126 measured as the plan
-  read's cost.
+- **The read is the expensive one.** `GET …/plans` returns closed plans with the derived
+  `commitBoundary`, the per-plan derivation CR-CRU-126 measured as the plan read's cost.
 - **Consumers filter it themselves.** Model B's CR-MDB-019 hook drops `status == closed` on its
   side.
 
-**User ruling 2026-09-24:** scope `status` to open plans (option 3 of three offered: fix the
-contract sentence, reply only, or change the verb).
+**User rulings.** 2026-09-24: scope `status` to open plans. 2026-09-26: the filter runs on the
+**server**, and "never filed" is told from "none open" by a **key-value field** a program can test,
+not by `help[]` or `warnings[]` text, which are AXI's surfaces for agents.
 
 ## Scope
 
-### §S1 — `plans[]` is the open plans
+### §S1 — the plans route filters by status
 
-`status` rows are the plans whose status is `open`. Closed and aborted plans are not rows.
-`count` is the number of rows it reports: the open plans, still unaffected by `--fields`.
+`GET /api/v2/projects/<key>/plans` accepts an optional `status` query parameter whose value is one
+of the plan statuses `open`, `closed`, `aborted`. It composes with the existing `cr` and `track`
+filters. The filter is applied to the stored rows **before** they are turned into plans, so a
+filtered-out plan is never built and its `commitBoundary` is never derived. Any other `status`
+value is refused: `400`, `ok:false`, and a `help[]` naming the three accepted values. Without the
+parameter the route returns what it returns today, so the board and every other caller are
+unchanged.
 
-### §S2 — `lastClosedCr` is kept
+### §S2 — the plans route publishes two project facts
 
-The last CR to close stays on the envelope (CR-CRU-094): an orchestrator starting a session still
-learns what just landed. It is no longer derivable from the rows, so it must come from somewhere
-that is not the full plan list. **Where** is this CR's first design question (below).
+Every `GET …/plans` response carries two top-level fields beside `plans`, computed over **all** of
+the project's plans whatever `status`, `cr` or `track` filter the request carried:
 
-### §S3 — the empty state says "nothing in flight"
+- **`lastClosedCr`** — the `cr` of the plan with the latest `closedAt`, or `null` when no plan has
+  closed. Aborted plans have no `closedAt` and never count.
+- **`filed`** — the number of plans the project has ever filed, whatever their status.
 
-A reachable board with no open plan is `ok:true`, `plans:[]`, `count:0`, `warnings:[]`, a `help[]`
-naming the next move, and `lastClosedCr` still set when any plan has ever closed. The contract's
-"no plan filed" state becomes "no plan open". The `status-unavailable` degrade is unchanged.
+This moves the `lastClosedCr` computation (CR-CRU-094) from the client to the server: the client
+function `last_closed_cr` is deleted, and the one place the value is computed is the server.
 
-### §S3a — "never filed" and "none open" stay distinguishable (Model B's request, #1391)
+### §S3 — `status` reads the open plans
 
-Today a consumer tells "no plan filed" (`count:0`) from "nothing open" (rows, all closed). Under
-§S1 both arrive as `plans:[]`, `count:0`. `lastClosedCr` separates them only when some plan has
-closed: a board holding only **aborted** plans has `lastClosedCr: null` and would read as "never
-filed". The envelope therefore carries **one explicit signal** that differs between the two
-states, named in the contract (design question 3).
+`cmd_status` reads `GET …/plans?status=open`. Its `plans[]` rows are the rows that read returns, in
+the order the server publishes them. `count` is the number of rows, still unaffected by
+`--fields`. `lastClosedCr` and `filed` are passed through from the response unchanged. The client
+does not filter or recompute anything itself.
 
-### §S4 — the contract says what the verb does
+### §S4 — three reachable states, told apart by `filed`
 
-`STATUS-CONTRACT.md` states §S1–§S3. It is a **breaking** change to the rows a consumer gets, so
-the version goes **2.0.0 → 3.0.0**, with a line naming what changed.
+| State | `plans` | `count` | `filed` | `lastClosedCr` | `help[]` |
+|---|---|---|---|---|---|
+| **Work in flight** | the open plans | > 0 | > 0 | as published | `cycle-activate <id>` (as today) |
+| **None open** | `[]` | 0 | > 0 | as published (`null` on an aborted-only board) | `next`, then `plan-file --cr <cr> --cycle <label>` |
+| **Never filed** | `[]` | 0 | 0 | `null` | `plan-file --cr <cr> --cycle <label>` |
 
-### §S5 — all five clients
+All three are `ok:true`, `warnings:[]`, exit 0. `filed` is the signal that separates "never filed"
+from "none open", including the aborted-only board where `lastClosedCr` is `null` (Model B's
+request, #1391).
+
+### §S5 — the unavailable degrade is unchanged, plus `filed`
+
+When the plans read fails, the envelope is today's `status-unavailable` degrade, with `filed: null`
+added: the board could not be read, so the number is unknown, not zero.
+
+### §S6 — the contract says what the verb does
+
+`clients/STATUS-CONTRACT.md` states §S1–§S5. It is a **breaking** change to the rows a consumer
+gets, so the version goes **2.0.0 → 3.0.0**, with a line naming what changed. It names `queue` (with
+`cr-plan --full`) as the read for every CR and plan; `status` gains no flag for it (settled by
+Model B's answer, #1391).
+
+### §S7 — all five clients
 
 Every client reaches `status`, and the no-argument dashboard, through the one shared `cmd_status`.
 
-## Design questions for the gap analysis (to the user, not the implementer)
-
-1. **Filter on the server or the client?** A server filter (e.g. `GET …/plans?status=open`)
-   removes the closed plans' `commitBoundary` derivation from every session start, which is the
-   cost that matters. A client filter changes only what is printed. If it is the server, then
-   `lastClosedCr` (§S2) needs its own source: the server publishing it, or a cheap read of the
-   latest `cr-merged` milestone.
-2. ~~**Is there still a way to see every plan?**~~ **Settled by Model B's answer (#1391):** no
-   `--all`. `queue` (with `cr-plan --full`) is the read for every CR and plan, and the contract names
-   it as such.
-3. **Which signal separates "never filed" from "none open"** (§S3a): a `help[]` line or warning
-   code that differs, or a total-plans figure beside `count`. Model B accepts either; the contract
-   names the one chosen.
-
 ## Acceptance criteria
 
-- **AC1** — On a board with open, closed and aborted plans, `status` rows are exactly the open
-  plans, in the order the server publishes them, and `count` equals the number of rows.
-- **AC2** — `lastClosedCr` is the `cr` of the most recently closed plan, exactly as today, on every
-  terminal state including "no plan open".
-- **AC3** — A board whose plans are all closed or aborted answers `ok:true`, `plans:[]`, `count:0`,
-  `warnings:[]`, a `help[]` naming the next move, and a non-null `lastClosedCr`.
-- **AC4** — The `status-unavailable` degrade is byte-identical to today's.
-- **AC5** — `STATUS-CONTRACT.md` is version 3.0.0, and its field table, terminal states and row
-  schema describe §S1–§S3. No sentence in it describes the old behaviour as current.
-- **AC6** — All five clients and the no-argument dashboard go through the one `cmd_status`, and the
-  AC1–AC3 behaviour is asserted for each.
-- **AC7** — Whatever the gap analysis rules on design question 1 is asserted by its own AC,
-  added to this spec before the branch cut.
-- **AC8** — §S3a: three boards (no plan ever filed; only aborted plans; only closed plans) each
-  produce `plans:[]` and `count:0`, and the named signal tells the first apart from the other two
-  on every one of them, including the aborted-only board where `lastClosedCr` is null.
-- **AC9** — The contract names `queue` as the read for every CR and plan, and `status` gains no
-  flag for it.
+- **AC1 (§S1)** — On a board with open, closed and aborted plans, `GET …/plans?status=open`
+  returns exactly the open plans, `?status=closed` exactly the closed ones and `?status=aborted`
+  exactly the aborted ones; `?status=open&cr=<cr>` returns only that CR's open plan. The response
+  to `?status=open` carries no plan with a `commitBoundary`.
+- **AC2 (§S1)** — `GET …/plans?status=<anything else>` (including the empty string) answers `400`,
+  `ok:false`, with a `help[]` naming `open`, `closed` and `aborted`. `GET …/plans` with no `status`
+  parameter returns the same `plans` array it returns today.
+- **AC3 (§S2)** — On the AC1 board, every `GET …/plans` response (unfiltered, `?status=open`,
+  `?cr=<cr>`) carries `filed` equal to the project's total plan count and `lastClosedCr` equal to
+  the `cr` with the latest `closedAt`. On a board of only aborted plans, `lastClosedCr` is `null`
+  and `filed` equals the number of aborted plans. On a project with no plans, `filed` is `0` and
+  `lastClosedCr` is `null`.
+- **AC4 (§S3)** — `cmd_status` issues exactly one read, `GET …/plans?status=open`. Its rows are
+  that response's plans in order, `count` equals the number of rows, and `lastClosedCr` and
+  `filed` equal the response's values.
+- **AC5 (§S4)** — Three boards produce the three states of the §S4 table, field for field,
+  including `help[]`: work in flight; none open (one board with a closed plan, one with only
+  aborted plans); never filed.
+- **AC6 (§S5)** — On a failed plans read the envelope is today's `status-unavailable` degrade
+  byte for byte, except for one added field, `filed: null`.
+- **AC7 (§S2)** — `last_closed_cr` is defined nowhere in `clients/` or `crucible_axi/`. CR-094's
+  inventory test is amended to pin that the value is published by the server, not computed by any
+  client.
+- **AC8 (§S6)** — `STATUS-CONTRACT.md` is version 3.0.0. Its field table, terminal states, degrade
+  shape and row schema describe §S1–§S5, including `filed`. It names `queue` as the read for every
+  CR and plan. No sentence in it describes the old behaviour as current.
+- **AC9 (§S7)** — `status` is called through the shared `cmd_status` from `status`, its alias
+  `plans` and the no-argument dashboard in EACH of `bun-crucible.py`, `python-crucible.py`,
+  `rust-crucible.py`, `mvn-crucible.py` and `arduino-crucible.py`, and the AC5 "none open" and
+  "never filed" states are asserted for each of the five.
+- **AC10 (wiring)** — End to end against a real, ephemeral board holding open, closed and aborted
+  plans: the `status` verb's envelope has the open plans as rows, and `filed` and `lastClosedCr`
+  equal the server's values. No stubbed transport.
 
 ## Non-goals
 
-- **Changing `queue`, `next` or the board.** They read other routes.
+- **Changing `queue`, `next` or the board.** They read other routes or the unfiltered list.
 - **Changing what a plan's status means.** `open`, `closed` and `aborted` are unchanged.
+- **Serving a newer client from an older server.** Server and clients install together as one
+  version-locked operation, so no client-side fallback is built for an older server.
 
 ## Model B
 
@@ -116,6 +143,6 @@ were asked (#1390) whether the change is acceptable. **Their answer (#1391, 2026
 2. **Nothing of theirs reads closed or aborted rows.** The one consumer is
    `hooks-src/scripts/ambient-board-status` (CR-MDB-019). It drops `closed` rows and treats every
    other status as open, `aborted` included, so this change also fixes that for them.
-3. **No `--all` wanted.** They read `queue` (plus `cr-plan --full`) for every plan (AC9).
+3. **No `--all` wanted.** They read `queue` (plus `cr-plan --full`) for every plan (§S6).
 4. **One request:** keep "no plan filed" and "nothing open" distinguishable, the aborted-only board
-   included (§S3a, AC8). They re-pin the hook to 3.0.0 when the release ships.
+   included. `filed` does this (§S4). They re-pin the hook to 3.0.0 when the release ships.
