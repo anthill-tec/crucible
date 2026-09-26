@@ -28,6 +28,7 @@ import argparse
 import collections
 import contextlib
 import datetime
+import functools
 import importlib.util
 import io
 import json
@@ -716,7 +717,26 @@ def echoed_cycle_id(resp):
     return AXI_UNSET
 
 
-def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
+# §S8 — the two encodings `emit_axi` can write the same `axi` object in.
+AXI_FORMAT_TOON = "toon"
+AXI_FORMAT_JSON = "json"
+AXI_FORMATS = (AXI_FORMAT_TOON, AXI_FORMAT_JSON)
+
+
+def axi_object(verb, ok, result_fields, context, warnings):
+    """Build the §S1 `axi` object — the ONE place its keys are assembled.
+
+    Every encoding `emit_axi` writes (TOON by default, JSON on request) is
+    this same dict, so the two can never carry different keys or values."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
+    axi.update(result_fields)
+    axi["context"] = context
+    axi["warnings"] = list(warnings) + limit_disclosure_warnings()
+    return axi
+
+
+def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
+             fmt=AXI_FORMAT_TOON):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
     optional human-readable line to stderr (interactive only).
 
@@ -735,12 +755,16 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     the boot banner: a refused `value`, or a `crucible.toml` that could not be
     read, that nobody is told about is a client running at a number its
     operator did not choose. A per-verb or per-client wiring would be five
-    places for four of them to be right."""
-    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
-    axi.update(result_fields)
-    axi["context"] = context
-    axi["warnings"] = list(warnings) + limit_disclosure_warnings()
-    sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+    places for four of them to be right.
+
+    §S8 — `fmt=AXI_FORMAT_JSON` writes the same `axi` object (from
+    `axi_object`) as ONE unwrapped JSON object instead; the stderr line is
+    unchanged either way."""
+    axi = axi_object(verb, ok, result_fields, context, warnings)
+    if fmt == AXI_FORMAT_JSON:
+        sys.stdout.write(json.dumps(axi, ensure_ascii=False) + "\n")
+    else:
+        sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
     if legacy_line is not None:
         print(legacy_line, file=sys.stderr)
 
@@ -2127,7 +2151,12 @@ def cmd_status(args, project_dir, ops):
     project facts `lastClosedCr` and `filed` are passed through from that
     response unchanged — the client filters and recomputes nothing. With no
     open plan, `filed` (never `lastClosedCr`) tells "none open" (filed > 0)
-    apart from "never filed" (filed == 0); each state carries its own help[]."""
+    apart from "never filed" (filed == 0); each state carries its own help[].
+
+    §S8 — `args.format` picks the encoding (`toon`, the default, or `json`)
+    on every exit path; the `axi` object, exit code and stderr line are the
+    same either way."""
+    emit = _status_emitter(args, ops)
     resp = ops.get(plans_status_path(ops.plans_path(project_dir),
                                      PLANS_STATUS_OPEN))
     if not resp.get("ok"):
@@ -2143,13 +2172,13 @@ def cmd_status(args, project_dir, ops):
         detail = (f"could not reach the Crucible server to read the board: "
                   f"{resp.get('error')}")
         legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
-        ops.emit("status", True,
-                 {"plans": [], "lastClosedCr": None, "count": 0, "filed": None,
-                  "help": [f"check the Crucible server is running / reachable "
-                           f"at {ops.base_url}"]},
-                 ops.context(project_dir),
-                 [{"code": "status-unavailable", "detail": detail}],
-                 legacy)
+        emit("status", True,
+             {"plans": [], "lastClosedCr": None, "count": 0, "filed": None,
+              "help": [f"check the Crucible server is running / reachable "
+                       f"at {ops.base_url}"]},
+             ops.context(project_dir),
+             [{"code": "status-unavailable", "detail": detail}],
+             legacy)
         return 0
     plans = resp.get("plans", [])
     full_rows = build_status_rows(plans)
@@ -2175,17 +2204,17 @@ def cmd_status(args, project_dir, ops):
             legacy = (f"status: ok=True — no open plans (filed={filed} "
                       f"lastClosedCr={last})")
             help_steps = STATUS_NONE_OPEN_HELP
-        ops.emit("status", True,
-                 {"plans": [], "lastClosedCr": last, "count": 0,
-                  "filed": filed, "help": help_steps},
-                 ops.context(project_dir), [], legacy)
+        emit("status", True,
+             {"plans": [], "lastClosedCr": last, "count": 0,
+              "filed": filed, "help": help_steps},
+             ops.context(project_dir), [], legacy)
         return 0
     legacy = (f"status: ok=True plans={count} lastClosedCr={last} "
               f"filed={filed}")
-    ops.emit("status", True,
-             {"plans": rows, "lastClosedCr": last, "count": count,
-              "filed": filed, "help": HELP_STEPS["status"]},
-             ops.context(project_dir), [], legacy)
+    emit("status", True,
+         {"plans": rows, "lastClosedCr": last, "count": count,
+          "filed": filed, "help": HELP_STEPS["status"]},
+         ops.context(project_dir), [], legacy)
     return 0
 
 
@@ -2490,6 +2519,26 @@ def status_namespace(**extra_fields):
     precisely the silent fleet-wide regression §S1's classification exists to
     prevent."""
     return argparse.Namespace(project_dir=None, fields=None, **extra_fields)
+
+
+def add_status_format_arg(parser):
+    """§S8 — the `--format {toon,json}` flag of `status` and its alias `plans`,
+    registered here so the five clients cannot drift into five flag surfaces.
+    The no-argument dashboard is not offered it (`status_namespace` carries no
+    `format`)."""
+    parser.add_argument(
+        "--format", choices=AXI_FORMATS, default=AXI_FORMAT_TOON,
+        help="Output encoding: `toon` (default) or `json` — the same axi "
+             "object as one unwrapped JSON object, for programs.")
+
+
+def _status_emitter(args, ops):
+    """§S8 — the envelope writer `cmd_status` uses: the client's own `ops.emit`
+    for TOON (today's path, untouched), the shared `emit_axi` in JSON mode for
+    `--format json`. A Namespace without `format` (the dashboard's) is TOON."""
+    if getattr(args, "format", AXI_FORMAT_TOON) == AXI_FORMAT_JSON:
+        return functools.partial(emit_axi, fmt=AXI_FORMAT_JSON)
+    return ops.emit
 
 
 def cmd_stop(args, project_dir, ops):
