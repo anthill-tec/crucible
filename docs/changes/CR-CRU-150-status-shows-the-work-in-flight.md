@@ -1,6 +1,6 @@
 # CR-CRU-150 — `status` shows the work in flight, not the project's history
 
-**Type** feature · **Points** 5 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
+**Type** feature · **Points** 8 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-24) · **Depends on**
 CR-CRU-030, CR-CRU-035, CR-CRU-094 · **Status** PENDING — filed 2026-09-24
 
 ## Problem
@@ -29,7 +29,9 @@ every session start pays for, and prints, the whole history:
 
 **User rulings.** 2026-09-24: scope `status` to open plans. 2026-09-26: the filter runs on the
 **server**, and "never filed" is told from "none open" by a **key-value field** a program can test,
-not by `help[]` or `warnings[]` text, which are AXI's surfaces for agents.
+not by `help[]` or `warnings[]` text, which are AXI's surfaces for agents. The same day: a program
+that reads `status` (a hook script, a tool) gets it as JSON on request, with the same fields as the
+AXI envelope (`--format json`).
 
 ## Scope
 
@@ -81,7 +83,7 @@ added: the board could not be read, so the number is unknown, not zero.
 
 ### §S6 — the contract says what the verb does
 
-`clients/STATUS-CONTRACT.md` states §S1–§S5. It is a **breaking** change to the rows a consumer
+`clients/STATUS-CONTRACT.md` states §S1–§S8. It is a **breaking** change to the rows a consumer
 gets, so the version goes **2.0.0 → 3.0.0**, with a line naming what changed. It names `queue` (with
 `cr-plan --full`) as the read for every CR and plan; `status` gains no flag for it (settled by
 Model B's answer, #1391).
@@ -89,6 +91,16 @@ Model B's answer, #1391).
 ### §S7 — all five clients
 
 Every client reaches `status`, and the no-argument dashboard, through the one shared `cmd_status`.
+
+### §S8 — a program can ask for JSON
+
+`status` and its alias `plans` accept `--format {toon,json}`, default `toon`, in all five clients.
+`toon` is today's output. `json` writes the same envelope as ONE JSON object on stdout: every key
+the AXI envelope's `axi` object carries (`verb`, `ok`, `tier`, `plans`, `lastClosedCr`, `count`,
+`filed`, `help`, `context`, `warnings`) with the same values, unwrapped (no `axi` key). This holds
+on every exit path: the three §S4 states and the §S5 degrade, whose signal a program reads as the
+`warnings[].code` value `status-unavailable`. Exit codes and the stderr line are unchanged. The
+no-argument dashboard does not take the flag.
 
 ## Acceptance criteria
 
@@ -117,7 +129,8 @@ Every client reaches `status`, and the no-argument dashboard, through the one sh
   client.
 - **AC8 (§S6)** — `STATUS-CONTRACT.md` is version 3.0.0. Its field table, terminal states, degrade
   shape and row schema describe §S1–§S5, including `filed`. It names `queue` as the read for every
-  CR and plan. No sentence in it describes the old behaviour as current.
+  CR and plan. It documents `--format json` (§S8) with an example object. No sentence in it
+  describes the old behaviour as current.
 - **AC9 (§S7)** — `status` is called through the shared `cmd_status` from `status`, its alias
   `plans` and the no-argument dashboard in EACH of `bun-crucible.py`, `python-crucible.py`,
   `rust-crucible.py`, `mvn-crucible.py` and `arduino-crucible.py`, and the AC5 "none open" and
@@ -125,6 +138,13 @@ Every client reaches `status`, and the no-argument dashboard, through the one sh
 - **AC10 (wiring)** — End to end against a real, ephemeral board holding open, closed and aborted
   plans: the `status` verb's envelope has the open plans as rows, and `filed` and `lastClosedCr`
   equal the server's values. No stubbed transport.
+- **AC11 (§S8)** — In EACH of the five clients, `status --format json` and `plans --format json`
+  write exactly one JSON object to stdout whose keys and values equal the `axi` object of the
+  same invocation with `--format toon`, on all four exit paths (work in flight, none open, never
+  filed, unavailable). `--format toon` and no flag produce today's TOON output. A value other
+  than `toon` or `json` is refused by argument parsing.
+- **AC12 (§S8)** — AC10's end-to-end run is repeated with `--format json`, and the parsed object
+  carries the open plans as `plans`, and the server's `filed` and `lastClosedCr`.
 
 ## Non-goals
 
@@ -145,4 +165,5 @@ were asked (#1390) whether the change is acceptable. **Their answer (#1391, 2026
    other status as open, `aborted` included, so this change also fixes that for them.
 3. **No `--all` wanted.** They read `queue` (plus `cr-plan --full`) for every plan (§S6).
 4. **One request:** keep "no plan filed" and "nothing open" distinguishable, the aborted-only board
-   included. `filed` does this (§S4). They re-pin the hook to 3.0.0 when the release ships.
+   included. `filed` does this (§S4). They re-pin the hook to 3.0.0 when the release ships, and
+   can switch it to `status --format json` (§S8) in the same step.
