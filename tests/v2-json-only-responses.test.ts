@@ -156,7 +156,7 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   { path: () => "/api/v2/events", keys: ["ok", "events", "openRuns"] },
   { path: (c) => `/api/v2/events/${c.eventId}`, keys: ["ok", "event"] },
   { path: (c) => `/api/v2/status?project=${c.key}`, keys: ["ok", "status"] },
-  { path: (c) => `/api/v2/projects/${c.key}/plans`, keys: ["ok", "plans"] },
+  { path: (c) => `/api/v2/projects/${c.key}/plans`, keys: ["ok", "plans", "lastClosedCr", "filed"] },
   { path: (c) => `/api/v2/projects/${c.key}/queue`, keys: ["ok", "entries", "tracks"] },
   { path: (c) => `/api/v2/projects/${c.key}/releases`, keys: ["ok", "releases"] },
   {
