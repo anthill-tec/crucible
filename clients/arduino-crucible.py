@@ -946,6 +946,14 @@ def cmd_queue(args):
     to the shared implementation."""
     return _axi().cmd_queue(args, _project_dir(args), _ops())
 
+
+def cmd_landings(args):
+    """§S9 — the closed plans and the merge commit each recorded, for programs
+    such as the release ceremony (read-only, no --agent): GET
+    …/plans?status=closed, one {cr, mergeCommit} row per closed plan, encoded
+    per --format. Delegates to the shared implementation."""
+    return _axi().cmd_landings(args, _project_dir(args), _ops())
+
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
 # The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
@@ -1374,6 +1382,15 @@ def main():
                         help="Read the registered CR queue (GET …/queue) plus the "
                              "cr-merged milestone ids as a TOON-AXI table. Read-only.")
     qv.set_defaults(func=cmd_queue)
+
+    # §S9 — the closed plans' landing commits READ verb (no --agent)
+    lv = sub.add_parser("landings", parents=[common],
+                        help="The closed plans and the merge commit each recorded — for "
+                             "programs such as the release ceremony (GET "
+                             "…/plans?status=closed). Read-only; --format json "
+                             "writes one JSON object.")
+    _axi().add_status_format_arg(lv)
+    lv.set_defaults(func=cmd_landings)
 
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot

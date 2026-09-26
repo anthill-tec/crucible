@@ -452,39 +452,36 @@ release_tags() {
 }
 
 # CR-CRU-081 §S1 — the CR → landing-sha map the project ALREADY keeps: every
-# CLOSED plan's `merge.commit`, read through the client's existing `plans` verb
-# (its `mergeCommit` column). One line per closed plan, `<cr> <sha>`, with the
-# sha absent when the plan recorded none. No new read surface, no DB access,
-# and — the whole point of CR-CRU-081 — no prose parsed.
+# CLOSED plan's `merge.commit`, read through the client's `landings` verb (§S9:
+# the closed plans, each with the merge commit it recorded, as one JSON object
+# under `--format json`). One line per closed plan, `<cr> <sha>`, with the sha
+# absent when the plan recorded none. No DB access, and — the whole point of
+# CR-CRU-081 — no prose parsed.
 #
-# Tolerant by construction: an unreachable or failing client yields NO lines, so
-# provenance is simply omitted rather than invented. A release is published
-# before it is reported and must never fail on its own provenance.
+# Tolerant by construction: an unreachable or failing client, or output that is
+# not the expected JSON object, yields NO lines, so provenance is simply omitted
+# rather than invented. A release is published before it is reported and must
+# never fail on its own provenance.
 plan_merge_map() {
     local client
     client="$(repo_root)/clients/python-crucible.py"
 
-    python3 "$client" plans --fields mergeCommit 2>/dev/null \
-        | awk '
-            /^[[:space:]]*plans\[[0-9]+\]\{/ {
-                header = $0
-                sub(/^[^{]*\{/, "", header)
-                sub(/\}.*$/, "", header)
-                cols = split(header, name, ",")
-                for (i = 1; i <= cols; i++) col[name[i]] = i
-                next
-            }
-            cols > 0 {
-                row = $0
-                gsub(/"/, "", row)
-                if (split(row, v, ",") < cols) next
-                cr = v[col["cr"]]
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
-                if (cr !~ /^CR-[A-Z]+-[0-9]+$/) next
-                if (v[col["status"]] != "closed") next
-                sha = v[col["mergeCommit"]]
-                print cr, (sha == "null" ? "" : sha)
-            }' \
+    python3 "$client" landings --format json 2>/dev/null \
+        | python3 -c '
+import json, re, sys
+try:
+    rows = json.load(sys.stdin).get("landings") or []
+except (ValueError, AttributeError):
+    rows = []
+for row in rows if isinstance(rows, list) else []:
+    if not isinstance(row, dict):
+        continue
+    cr = row.get("cr")
+    if not isinstance(cr, str) or not re.fullmatch(r"CR-[A-Z]+-[0-9]+", cr):
+        continue
+    sha = row.get("mergeCommit")
+    print(cr, sha if isinstance(sha, str) else "")
+' 2>/dev/null \
         | sort -u || true
 }
 

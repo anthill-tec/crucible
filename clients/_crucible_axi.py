@@ -834,6 +834,10 @@ def plans_path(project_key):
 # collection by it, so the client never filters rows itself.
 PLANS_STATUS_OPEN = "open"
 
+# §S9 — the one status the `landings` verb reads: the closed plans, each with
+# the merge commit it recorded.
+PLANS_STATUS_CLOSED = "closed"
+
 
 def plans_status_path(path, status):
     """§S3 (PURE) — a resolved plans-collection path (`plans_path` /
@@ -2218,6 +2222,51 @@ def cmd_status(args, project_dir, ops):
     return 0
 
 
+def build_landings_rows(plans):
+    """§S9 (PURE) — one uniform-table row per closed plan, in the given
+    (server's) order: `cr`, and `mergeCommit`, the commit the plan RECORDED
+    (`merge.commit`), or null when it recorded none. The derived
+    `commitBoundary` is not read: the recorded commit is the fact."""
+    rows = []
+    for plan in plans or []:
+        merge = plan.get("merge")
+        commit = merge.get("commit") if isinstance(merge, dict) else None
+        rows.append({"cr": plan.get("cr"), "mergeCommit": commit})
+    return rows
+
+
+def cmd_landings(args, project_dir, ops):
+    """§S9 — the closed plans and the merge commit each recorded, for programs
+    such as the release ceremony (read-only, no --agent).
+
+    Issues exactly ONE read, `GET …/plans?status=closed`, and returns one
+    `{cr, mergeCommit}` row per closed plan in the server's order. `--format`
+    picks the encoding exactly as for `status` (§S8). A failed read degrades
+    the way `status` does: ok:true, no rows, a `landings-unavailable`
+    warning, exit 0."""
+    emit = _status_emitter(args, ops)
+    resp = ops.get(plans_status_path(ops.plans_path(project_dir),
+                                     PLANS_STATUS_CLOSED))
+    if not resp.get("ok"):
+        detail = (f"could not reach the Crucible server to read the closed "
+                  f"plans: {resp.get('error')}")
+        legacy = f"[crucible] landings: board unavailable — {resp.get('error')}"
+        emit("landings", True,
+             {"landings": [], "count": 0,
+              "help": [f"check the Crucible server is running / reachable "
+                       f"at {ops.base_url}"]},
+             ops.context(project_dir),
+             [{"code": "landings-unavailable", "detail": detail}],
+             legacy)
+        return 0
+    rows = build_landings_rows(resp.get("plans", []))
+    emit("landings", True,
+         {"landings": rows, "count": len(rows), "help": ["status"]},
+         ops.context(project_dir), [],
+         f"landings: ok=True closed={len(rows)}")
+    return 0
+
+
 # ── CR-CRU-081 §S2 — the `queue` READ verb (the landing-record sources) ─────
 
 # CR-CRU-129 §S3 — the record type the landing read ASKS FOR. It is the whole
@@ -2522,10 +2571,10 @@ def status_namespace(**extra_fields):
 
 
 def add_status_format_arg(parser):
-    """§S8 — the `--format {toon,json}` flag of `status` and its alias `plans`,
-    registered here so the five clients cannot drift into five flag surfaces.
-    The no-argument dashboard is not offered it (`status_namespace` carries no
-    `format`)."""
+    """§S8 — the `--format {toon,json}` flag of `status`, its alias `plans`
+    and `landings` (§S9), registered here so the five clients cannot drift
+    into five flag surfaces. The no-argument dashboard is not offered it
+    (`status_namespace` carries no `format`)."""
     parser.add_argument(
         "--format", choices=AXI_FORMATS, default=AXI_FORMAT_TOON,
         help="Output encoding: `toon` (default) or `json` — the same axi "
@@ -2533,7 +2582,8 @@ def add_status_format_arg(parser):
 
 
 def _status_emitter(args, ops):
-    """§S8 — the envelope writer `cmd_status` uses: the client's own `ops.emit`
+    """§S8 — the envelope writer `cmd_status` and `cmd_landings` use: the
+    client's own `ops.emit`
     for TOON (today's path, untouched), the shared `emit_axi` in JSON mode for
     `--format json`. A Namespace without `format` (the dashboard's) is TOON."""
     if getattr(args, "format", AXI_FORMAT_TOON) == AXI_FORMAT_JSON:
