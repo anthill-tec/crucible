@@ -372,7 +372,9 @@ class AggregatesCountTest(_BaseAxiConventionsTest):
         )
 
     def test_status_empty_queue_count_is_zero_with_definitive_message(self):
-        with mock.patch.object(self.module, "_get", return_value=_plans_response([])):
+        # "Nothing ever filed" (§S4): the server publishes filed 0 and no lastClosedCr.
+        never_filed = {**_plans_response([]), "filed": 0, "lastClosedCr": None}
+        with mock.patch.object(self.module, "_get", return_value=never_filed):
             code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
 
         self.assertEqual(code, 0, "an empty queue is NOT an error -- must exit 0")
