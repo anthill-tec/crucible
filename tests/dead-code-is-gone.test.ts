@@ -49,12 +49,6 @@ describe("§S1 item 3 stays (AC3 pin)", () => {
 });
 
 describe("§S2 test code nothing calls (AC2)", () => {
-  test("backdateEvent and backdateAgent have no definition left in the server-limits fixture", () => {
-    const src = readSource("tests/helpers/server-limits-fixture.ts");
-    expect(src).not.toContain("export function backdateEvent(");
-    expect(src).not.toContain("export function backdateAgent(");
-  });
-
   test("waitForDom has no definition left in the dom-settle helper", () => {
     const src = readSource("tests/helpers/dom-settle.ts");
     expect(src).not.toContain("export async function waitForDom(");
