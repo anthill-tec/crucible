@@ -102,16 +102,19 @@ on every exit path: the three §S4 states and the §S5 degrade, whose signal a p
 `warnings[].code` value `status-unavailable`. Exit codes and the stderr line are unchanged. The
 no-argument dashboard does not take the flag.
 
-### §S9 — the release ceremony reads its landings through `queue`
+### §S9 — the release ceremony reads its landings through `landings`
 
 `scripts/release.sh` attributes each CR to a release from the merge commit its closed plan
-recorded. It read those commits from `plans --fields mergeCommit`, which §S3 narrows to the open
-plans, so it must read them from `queue`, the read for every CR and plan (§S6; user ruling
-2026-09-26, option A). `GET …/queue` publishes, on each entry, `mergeCommit`: the merge commit
-of that CR's most recently closed plan, or `null` when it has none. The `queue` verb carries it
-as a seventh column after the six it has today, which keep their names, order and values. The
-ceremony takes each CR's landing commit from that column and no longer calls `plans` or
-`status`.
+recorded, and reports a closed plan that recorded none. It read both from `plans --fields
+mergeCommit`, which §S3 narrows to the open plans. Its input is the **closed plans**, which
+exist whether or not the queue holds their CR, so `queue` cannot stand in (user ruling
+2026-09-26, option C). A new read-only verb, `landings`, in all five clients through one shared
+implementation, issues exactly one read, `GET …/plans?status=closed` (§S1), and returns one row
+per closed plan, in the server's order: `cr`, and `mergeCommit` (the commit the plan recorded,
+or `null` when it recorded none). It takes `--format {toon,json}` exactly as §S8 defines it for
+`status`. A failed read is `ok:true`, no rows, a `landings-unavailable` warning, exit 0, the
+same shape as `status`'s degrade. The ceremony reads `landings --format json` and calls neither
+`plans` nor `status`; `queue` is unchanged.
 
 ## Acceptance criteria
 
@@ -159,20 +162,22 @@ ceremony takes each CR's landing commit from that column and no longer calls `pl
   describes the unfiltered plan list.
 - **AC12 (§S8)** — AC10's end-to-end run is repeated with `--format json`, and the parsed object
   carries the open plans as `plans`, and the server's `filed` and `lastClosedCr`.
-- **AC13 (§S9)** — On a board holding a CR with a closed plan (merge commit recorded), a CR whose
-  only plan is aborted, a CR with an open plan and a queued CR with no plan, `GET …/queue` gives
-  the first its merge commit as `mergeCommit` and the other three `null`. A CR with two closed
-  plans gets the merge commit of the one closed later.
-- **AC14 (§S9)** — The `queue` verb's rows are `cr, wave, status, planId, title, lifecycle,
-  mergeCommit`, in that order; the first six are unchanged; `mergeCommit` equals the server's value.
-- **AC15 (§S9)** — `scripts/release.sh` calls neither `plans` nor `status`, takes each CR's
-  landing commit from `queue`'s `mergeCommit`, and `tests/release-provenance.test.ts` passes in
-  full.
+- **AC13 (§S9)** — In EACH of the five clients, `landings` issues exactly one read,
+  `GET …/plans?status=closed`. On a board holding a plan closed with a merge commit, a plan
+  closed without one, an aborted plan and an open plan, its rows are exactly the two closed
+  plans, in the server's order, each `{cr, mergeCommit}` with `null` for the one that recorded
+  none. `--format json` writes the same object as one JSON object (§S8's rule). A failed read
+  is `ok:true`, `landings:[]`, a `landings-unavailable` warning, exit 0.
+- **AC14 (§S9)** — `scripts/release.sh` calls neither `plans` nor `status`, takes each
+  closed plan's landing commit (and each closed plan that recorded none) from
+  `landings --format json`, and `tests/release-provenance.test.ts` passes in full.
+- **AC15 (§S9)** — End to end against a real, ephemeral board: the `landings` verb, run as a
+  real client subprocess, returns exactly the closed plans the server's own
+  `GET …/plans?status=closed` returns, with their merge commits. No stubbed transport.
 
 ## Non-goals
 
-- **Changing `next` or the board.** They read other routes or the unfiltered list. `queue` changes
-  only by the one added column (§S9).
+- **Changing `queue`, `next` or the board.** They read other routes or the unfiltered list.
 - **Changing what a plan's status means.** `open`, `closed` and `aborted` are unchanged.
 - **Serving a newer client from an older server.** Server and clients install together as one
   version-locked operation, so no client-side fallback is built for an older server.
