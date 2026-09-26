@@ -36,6 +36,7 @@ merely "at least one").
 """
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
 
+import argparse
 import ast
 import contextlib
 import importlib.util
@@ -470,96 +471,40 @@ class Ac7ProjectMetaHelpTest(unittest.TestCase):
 # the flag is required for a WRITE, never for every call.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _help_kwarg_literal(node):
-    """The LITERAL half of a `help=...` kwarg's value: a bare string constant
-    returns itself; `<literal> + extra` (the base-text-plus-extra idiom
-    `_add_workflow_agent_arg` uses) returns just the literal LEFT side,
-    independent of whatever any one call site's `extra=` appends. Anything
-    else (an f-string, a bare name) returns None rather than guessing."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
-            and isinstance(node.left, ast.Constant) and isinstance(node.left.value, str)):
-        return node.left.value
-    return None
-
-
 def _project_meta_agent_help_text(path):
-    """§S4/AC7 (extended) — the FULL text `--agent` renders for THIS client's
-    `project-meta` subparser specifically: the base text whichever function
-    declares `--agent`'s help (`_add_workflow_agent_arg` in four clients, the
-    shared `common` parser directly in arduino) PLUS the per-call `extra=`
-    the project-meta wiring passes it, if any — read via `ast` (never a
-    running import, and never argparse's own line-wrapped `--help`
-    rendering, which could split a multi-word phrase like "every workflow
-    verb" across two lines and hide a match by accident).
+    """§S4/AC7 (extended) — the help THIS client's `project-meta` subparser
+    renders for its `--agent` option, read from the client's REAL argparse
+    parser: the module is loaded, `main()` is driven with `project-meta
+    --help` (argparse exits before any verb runs), and the `project-meta`
+    subparser is captured as `add_parser` builds it. The text returned is
+    that subparser's own `--agent` action's help — exactly what `--help`
+    prints for it, before argparse's line wrapping (which could split a
+    multi-word phrase like "every workflow verb" and hide a match) — never a
+    shared helper's definition, a parent parser's source, or whichever
+    `--agent` the file happens to declare first.
 
     Returns None when no `project-meta` subparser is registered at all — the
     AC7 test above already reports that as its own failure; this helper is
     never asked to invent a health check for it.
     """
-    tree = ast.parse(path.read_text(), filename=str(path))
+    module = _load_module(path, f"project_meta_agent_help_{path.stem.replace('-', '_')}")
+    captured = {}
+    real_add_parser = argparse._SubParsersAction.add_parser
 
-    pmv_name = None
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
-            continue
-        call = node.value
-        if not (isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser"):
-            continue
-        if not (call.args and isinstance(call.args[0], ast.Constant)
-                and call.args[0].value == "project-meta"):
-            continue
-        target = node.targets[0]
-        if isinstance(target, ast.Name):
-            pmv_name = target.id
-        break
-    if pmv_name is None:
+    def recording_add_parser(subparsers, name, **kwargs):
+        parser = real_add_parser(subparsers, name, **kwargs)
+        if name == "project-meta":
+            captured["parser"] = parser
+        return parser
+
+    with mock.patch.object(argparse._SubParsersAction, "add_parser", recording_add_parser):
+        _run_main(module, ["project-meta", "--help"])
+    parser = captured.get("parser")
+    if parser is None:
         return None
-
-    # The base text `_add_workflow_agent_arg` itself declares (four clients).
-    base_text = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_add_workflow_agent_arg":
-            for inner in ast.walk(node):
-                if not (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
-                        and inner.func.attr == "add_argument"):
-                    continue
-                for kw in inner.keywords:
-                    if kw.arg == "help":
-                        base_text = _help_kwarg_literal(kw.value)
-            break
-
-    if base_text is not None:
-        # The per-project-meta-call `extra=` THIS file's own wiring passes:
-        # `_add_workflow_agent_arg(pmv, extra=...)`.
-        extra_text = ""
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id == "_add_workflow_agent_arg"):
-                continue
-            if not (node.args and isinstance(node.args[0], ast.Name)
-                    and node.args[0].id == pmv_name):
-                continue
-            for kw in node.keywords:
-                if kw.arg == "extra":
-                    extra_text = _help_kwarg_literal(kw.value) or ""
-            break
-        return base_text + extra_text
-
-    # arduino: `--agent` is declared directly on the shared `common` parser
-    # (a parent of project-meta's own subparser), never through
-    # `_add_workflow_agent_arg` at all.
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "add_argument"):
-            continue
-        if not (node.args and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value == "--agent"):
-            continue
-        for kw in node.keywords:
-            if kw.arg == "help":
-                return _help_kwarg_literal(kw.value)
+    for action in parser._actions:
+        if "--agent" in action.option_strings:
+            return action.help
     return None
 
 
