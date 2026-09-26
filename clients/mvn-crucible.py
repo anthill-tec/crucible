@@ -1736,6 +1736,12 @@ def cmd_landings(args):
     per --format. Delegates to the shared implementation."""
     return _axi().cmd_landings(args, _resolve_project_dir(args.project_dir), _ops())
 
+def cmd_project_meta(args):
+    """§S4 — a project's metadata map: a read (GET …/metadata, no
+    --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
+    required). Delegates to the shared implementation."""
+    return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
+
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
 # The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
@@ -2345,6 +2351,18 @@ def main():
     _add_project_args(lv)
     _axi().add_status_format_arg(lv)
     lv.set_defaults(func=cmd_landings)
+
+    # §S4 — the project metadata map: read, or write with --set/--unset
+    pmv = sub.add_parser("project-meta",
+                         help="A project's metadata map (a copy of its .env facts). "
+                              "Readable by anything that reaches the board: "
+                              "non-secret facts only. No flags reads it; "
+                              "--set KEY=VALUE / --unset KEY write it (requires "
+                              "--agent); --format json writes one JSON object.")
+    _axi().add_project_meta_args(pmv)
+    _add_workflow_agent_arg(pmv, extra=" Required only for a write (--set/--unset).")
+    _add_project_args(pmv)
+    pmv.set_defaults(func=cmd_project_meta)
 
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot
