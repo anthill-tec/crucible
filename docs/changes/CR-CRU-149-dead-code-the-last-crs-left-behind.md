@@ -52,7 +52,6 @@ turned out to be used are under "Measured and excluded" with the reason.
 
 | # | Symbol | Where | Evidence |
 |---|---|---|---|
-| 4 | `backdateEvent`, `backdateAgent` | `tests/helpers/server-limits-fixture.ts` | no caller |
 | 5 | `waitForDom` | `tests/helpers/dom-settle.ts` | no caller (`settleDom` in the same file is used) |
 | 6 | `_no_active_cycle_plans` | `tests/client/test_{python,rust,mvn,arduino}_crucible_axi.py`, `test_bun_crucible_toon_envelope.py` | no caller; left by CR-056's re-point (`8410214`) |
 | 6b | `_no_open_plans_at_all` | `tests/client/test_{python,rust,mvn,arduino}_crucible_axi.py` | no caller; added by CR-030 (`c8ae2f3`), never called. **New in this census.** |
@@ -84,6 +83,10 @@ turned out to be used are under "Measured and excluded" with the reason.
   `readline`, `daemon_threads`, `__enter__`/`__exit__`): framework and protocol hooks.
 - **`open_plan_1`, `open_plan_2`** in `test_status_verb_shows_open_plans_end_to_end.py`: the stored
   ids are unread, but the calls that produce them are the fixture.
+- **`backdateEvent`, `backdateAgent`** (`tests/helpers/server-limits-fixture.ts`), filed as item 4:
+  nothing imports them, but `projectLastActiveAgo` in the same file calls both, and two live test
+  files use it. The census counted importers and missed in-file callers (found by C1 GREEN,
+  2026-09-27). Live code; inlining them would be refactoring, a non-goal.
 - **`scripts/plans-contention-curve.ts`**: CR-126 §S2a's run-it-deliberately harness.
 - **CSS**: no dead selectors.
 - **Duplicate predicates**: duplication, not dead code.
@@ -128,7 +131,8 @@ out.
 
 - **AC1** — The RED commit carries this census table, re-measured at the branch cut and updated,
   not re-argued.
-- **AC2** — Items 1, 2, 4, 5, 6, 6b and every item of 7 and 8 have no definition left.
+- **AC2** — Items 1, 2, 5, 6, 6b and every item of 7 and 8 have no definition left (item 4 proved
+  live and moved to "Measured and excluded").
 - **AC3** — Item 3, `project_config_path`, stays, with its reason in the census table.
 - **AC4** — Item 9: `crucible.db` is untracked and ignored. The server's store resolution is
   unchanged (its tests are green untouched).
