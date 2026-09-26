@@ -481,3 +481,152 @@ describe("AC4 (§S3) — open reads: single-project metadata + the project list"
     expect(brief && "metadata" in brief).toBe(false);
   });
 });
+
+// ── AC10 (§S6, VERIFY cycle 536) — a metadata refusal names its own verb ────
+//
+// A `report`-role and a role-less caller's write is refused today too (the
+// shared `requireOrchestrator` gate already stops both), but with the WRONG
+// words: "roadmap registration requires ORCHESTRATOR" and a help[] naming
+// release-propose/cr-plan/wave-sequence/cr-supersede/cr-void — the generic
+// roadmap wording `handleProjectMetadataPatch` borrows wholesale from
+// `requireOrchestrator` (src/v2.ts). RED here on the WORDING alone;
+// the 409 status and "nothing written" half already pass (and stay pinned).
+
+describe("AC10 (§S6) — a metadata refusal names its own verb, never roadmap registration", () => {
+  test("a `report`-role caller's PATCH …/metadata is refused 409, naming the metadata write and `project-meta`, never 'roadmap registration' or a roadmap verb", async () => {
+    const handle = boot();
+    const key = await createProject(handle, "ac10-report-role");
+    await registerAgent(handle, key, OTHER_ROLE_AGENT, "report");
+
+    const res = await patchMetadata(handle, key, { agentId: OTHER_ROLE_AGENT, set: { FOO: "1" } });
+    expect(res.status).toBe(409);
+    const body = res.body as ErrResponse;
+    expect(body.ok).toBe(false);
+
+    expect(body.error.toLowerCase()).not.toContain("roadmap registration");
+    expect(body.error.toLowerCase()).toContain("metadata");
+
+    const help = (body.help ?? []).join(" \n ");
+    expect(help).not.toContain("roadmap registration");
+    expect(help.toLowerCase()).toContain("project-meta");
+    for (const roadmapVerb of ["release-propose", "cr-plan", "wave-sequence", "cr-supersede", "cr-void"]) {
+      expect(help).not.toContain(roadmapVerb);
+    }
+
+    const after = await getMetadata(handle, key);
+    expect((after.body as MetadataResponse).metadata).toEqual({});
+  });
+
+  test("a role-LESS caller's PATCH …/metadata is refused 409, naming the metadata write and `project-meta`, never 'roadmap registration' or a roadmap verb", async () => {
+    const handle = boot();
+    const key = await createProject(handle, "ac10-roleless");
+    handle.store.touchAgent(key, ROLELESS_AGENT);
+    expect(handle.store.getAgent(key, ROLELESS_AGENT)?.role).toBeUndefined();
+
+    const res = await patchMetadata(handle, key, { agentId: ROLELESS_AGENT, set: { FOO: "1" } });
+    expect(res.status).toBe(409);
+    const body = res.body as ErrResponse;
+    expect(body.ok).toBe(false);
+
+    expect(body.error.toLowerCase()).not.toContain("roadmap registration");
+    expect(body.error.toLowerCase()).toContain("metadata");
+
+    const help = (body.help ?? []).join(" \n ");
+    expect(help).not.toContain("roadmap registration");
+    expect(help.toLowerCase()).toContain("project-meta");
+    for (const roadmapVerb of ["release-propose", "cr-plan", "wave-sequence", "cr-supersede", "cr-void"]) {
+      expect(help).not.toContain(roadmapVerb);
+    }
+
+    const after = await getMetadata(handle, key);
+    expect((after.body as MetadataResponse).metadata).toEqual({});
+  });
+
+  // Regression pin — captured VERBATIM from `requireOrchestrator`/
+  // `roadmapHints.notOrchestrator` as they read TODAY (both in src/v2.ts and
+  // src/hints.ts respectively): a LITERAL string, never a re-derivation from the
+  // live function, so a GREEN that narrows the metadata route's refusal by
+  // reshaping the SHARED helper (rather than adding a metadata-specific one)
+  // and accidentally reshapes the roadmap wording fails HERE, byte for byte.
+  test("regression pin — a roadmap route's own refusal of a report-role caller is BYTE-IDENTICAL to today's", async () => {
+    const handle = boot();
+    const key = await createProject(handle, "ac10-roadmap-unchanged-report");
+    await registerAgent(handle, key, OTHER_ROLE_AGENT, "report");
+
+    const res = await postJson(handle, `/api/v2/projects/${key}/queue/plan`, {
+      agentId: OTHER_ROLE_AGENT,
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as ErrResponse;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe(
+      `agent ${OTHER_ROLE_AGENT} carries role report — roadmap registration requires ORCHESTRATOR`,
+    );
+    expect(body.help).toEqual([
+      `re-register ${OTHER_ROLE_AGENT} with role ORCHESTRATOR: POST /api/v2/agents/register {projectKey, agentId, role: "ORCHESTRATOR"} — it currently holds report`,
+      "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
+      "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
+    ]);
+  });
+
+  test("regression pin — a roadmap route's own refusal of a role-less caller is BYTE-IDENTICAL to today's", async () => {
+    const handle = boot();
+    const key = await createProject(handle, "ac10-roadmap-unchanged-roleless");
+    handle.store.touchAgent(key, ROLELESS_AGENT);
+
+    const res = await postJson(handle, `/api/v2/projects/${key}/queue/plan`, {
+      agentId: ROLELESS_AGENT,
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as ErrResponse;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe(
+      `agent ${ROLELESS_AGENT} carries no declared role — roadmap registration requires ORCHESTRATOR`,
+    );
+    expect(body.help).toEqual([
+      `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${ROLELESS_AGENT} with role ORCHESTRATOR — its row predates declared roles and carries none, and a role is never fabricated`,
+      "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
+      "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
+    ]);
+  });
+});
+
+// ── TEST GAP (b), VERIFY cycle 536 — non-ASCII / long values round-trip ─────
+//
+// TEST-ONLY: these may already pass (the store's own column is a plain SQLite
+// TEXT value; nothing in §S1's schema truncates or re-encodes it). Reported
+// honestly either way rather than assumed.
+
+describe("TEST GAP (b), VERIFY cycle 536 — non-ASCII and long metadata values round-trip exactly", () => {
+  test("a non-ASCII value round-trips EXACTLY through PATCH then GET", async () => {
+    const handle = boot();
+    const key = await createProject(handle, "gap-b-non-ascii");
+    await registerAgent(handle, key, ORCH, "ORCHESTRATOR");
+
+    const value = "Café — 東京";
+    const write = await patchMetadata(handle, key, { agentId: ORCH, set: { PROJECT_NAME: value } });
+    expect(write.status).toBe(200);
+    expect((write.body as MetadataResponse).metadata.PROJECT_NAME).toBe(value);
+
+    const read = await getMetadata(handle, key);
+    expect(read.status).toBe(200);
+    expect((read.body as MetadataResponse).metadata.PROJECT_NAME).toBe(value);
+  });
+
+  test("a 10,000-character value round-trips EXACTLY through PATCH then GET", async () => {
+    const handle = boot();
+    const key = await createProject(handle, "gap-b-long-value");
+    await registerAgent(handle, key, ORCH, "ORCHESTRATOR");
+
+    const value = "x".repeat(10000);
+    const write = await patchMetadata(handle, key, { agentId: ORCH, set: { PROJECT_TOKEN: value } });
+    expect(write.status).toBe(200);
+    expect((write.body as MetadataResponse).metadata.PROJECT_TOKEN.length).toBe(10000);
+    expect((write.body as MetadataResponse).metadata.PROJECT_TOKEN).toBe(value);
+
+    const read = await getMetadata(handle, key);
+    expect(read.status).toBe(200);
+    expect((read.body as MetadataResponse).metadata.PROJECT_TOKEN).toBe(value);
+  });
+});
+

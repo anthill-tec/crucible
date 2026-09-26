@@ -49,7 +49,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.test_client_fleet_envelope_census import (
+    declare_and_require_board, install_project_limits)
 from tests.client.test_cr054_fleet_inventory import CLIENT_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -462,3 +463,223 @@ class Ac7ProjectMetaHelpTest(unittest.TestCase):
             f"§S4/AC7 — `project-meta --help` must state that the map is "
             f"readable by anything that reaches the board and holds "
             f"non-secret facts only; offending help text: {wrong!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §S4/AC7 (extended, VERIFY cycle 536) — `project-meta --agent`'s help says
+# the flag is required for a WRITE, never for every call.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _help_kwarg_literal(node):
+    """The LITERAL half of a `help=...` kwarg's value: a bare string constant
+    returns itself; `<literal> + extra` (the base-text-plus-extra idiom
+    `_add_workflow_agent_arg` uses) returns just the literal LEFT side,
+    independent of whatever any one call site's `extra=` appends. Anything
+    else (an f-string, a bare name) returns None rather than guessing."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+            and isinstance(node.left, ast.Constant) and isinstance(node.left.value, str)):
+        return node.left.value
+    return None
+
+
+def _project_meta_agent_help_text(path):
+    """§S4/AC7 (extended) — the FULL text `--agent` renders for THIS client's
+    `project-meta` subparser specifically: the base text whichever function
+    declares `--agent`'s help (`_add_workflow_agent_arg` in four clients, the
+    shared `common` parser directly in arduino) PLUS the per-call `extra=`
+    the project-meta wiring passes it, if any — read via `ast` (never a
+    running import, and never argparse's own line-wrapped `--help`
+    rendering, which could split a multi-word phrase like "every workflow
+    verb" across two lines and hide a match by accident).
+
+    Returns None when no `project-meta` subparser is registered at all — the
+    AC7 test above already reports that as its own failure; this helper is
+    never asked to invent a health check for it.
+    """
+    tree = ast.parse(path.read_text(), filename=str(path))
+
+    pmv_name = None
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
+            continue
+        call = node.value
+        if not (isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser"):
+            continue
+        if not (call.args and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == "project-meta"):
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name):
+            pmv_name = target.id
+        break
+    if pmv_name is None:
+        return None
+
+    # The base text `_add_workflow_agent_arg` itself declares (four clients).
+    base_text = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_add_workflow_agent_arg":
+            for inner in ast.walk(node):
+                if not (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                        and inner.func.attr == "add_argument"):
+                    continue
+                for kw in inner.keywords:
+                    if kw.arg == "help":
+                        base_text = _help_kwarg_literal(kw.value)
+            break
+
+    if base_text is not None:
+        # The per-project-meta-call `extra=` THIS file's own wiring passes:
+        # `_add_workflow_agent_arg(pmv, extra=...)`.
+        extra_text = ""
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_add_workflow_agent_arg"):
+                continue
+            if not (node.args and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == pmv_name):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "extra":
+                    extra_text = _help_kwarg_literal(kw.value) or ""
+            break
+        return base_text + extra_text
+
+    # arduino: `--agent` is declared directly on the shared `common` parser
+    # (a parent of project-meta's own subparser), never through
+    # `_add_workflow_agent_arg` at all.
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"):
+            continue
+        if not (node.args and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "--agent"):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "help":
+                return _help_kwarg_literal(kw.value)
+    return None
+
+
+class Ac7ProjectMetaAgentHelpTest(unittest.TestCase):
+    """§S4/AC7 (extended, VERIFY cycle 536) — `project-meta`'s `--agent` help
+    must say the flag is required for a WRITE (`--set`/`--unset`) and must
+    NEVER claim it is required for every call. Today four clients (bun, mvn,
+    python, rust) reuse `_add_workflow_agent_arg`'s base text verbatim —
+    "REQUIRED (§S2b): every workflow verb posts as a live registered caller"
+    — and merely APPEND "Required only for a write (--set/--unset)." rather
+    than replacing the blanket claim, so the rendered help holds BOTH the
+    correct qualifier and the wrong universal one at once. Arduino's own
+    `--agent` help never mentions a write at all. RED against all five
+    today, for two different reasons — reported per-client below."""
+
+    def test_every_client_agent_help_requires_a_write_never_every_call(self):
+        wrong_every_call = {}
+        bare_required = {}
+        missing_write_mention = {}
+        missing_verb = {}
+        for client, path in CLIENT_FILES.items():
+            help_text = _project_meta_agent_help_text(path)
+            if help_text is None:
+                missing_verb[client] = None
+                continue
+            if "every workflow verb" in help_text:
+                wrong_every_call[client] = help_text
+            if "REQUIRED" in help_text:
+                bare_required[client] = help_text
+            if "--set" not in help_text and "write" not in help_text.lower():
+                missing_write_mention[client] = help_text
+        self.assertEqual(
+            missing_verb, {},
+            f"§S4/AC7 — no `project-meta` subcommand is registered yet in: "
+            f"{sorted(missing_verb)!r}")
+        self.assertEqual(
+            missing_write_mention, {},
+            f"§S4/AC7 (extended) — `project-meta --agent`'s help must say "
+            f"the flag is required for a WRITE (--set/--unset); it is "
+            f"silent about writing at all in: {missing_write_mention!r}")
+        self.assertEqual(
+            wrong_every_call, {},
+            f"§S4/AC7 (extended) — `project-meta --agent`'s help must "
+            f"never claim the flag is required for EVERY call ('every "
+            f"workflow verb posts as a live registered caller' is the "
+            f"generic per-verb --agent wording (shared by every OTHER "
+            f"workflow verb), wrong here since a bare "
+            f"`project-meta` read never carries --agent at all); offending: "
+            f"{wrong_every_call!r}")
+        self.assertEqual(
+            bare_required, {},
+            f"§S4/AC7 (extended) — `project-meta --agent`'s help must not "
+            f"contain a bare, unqualified 'REQUIRED' (only the qualified "
+            f"'Required ... for a write' is correct here); offending: "
+            f"{bare_required!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST GAP (a), VERIFY cycle 536 — `project-meta` against an UNREACHABLE
+# board (a real connection-refused, never a stubbed transport).
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ProjectMetaUnreachableBoardTest(unittest.TestCase):
+    """TEST GAP (a), VERIFY cycle 536 — `project-meta` (read form) against a
+    board nothing is listening on: a REAL connection-refused through the
+    real client transport (`_get`, never mocked). Driven against
+    `python-crucible.py` as the reference client for the ONE shared
+    implementation §S4 describes (`cmd_project_meta`/`project_meta_refusal_
+    fields` in `clients/_crucible_axi.py`, which every client's own
+    `cmd_project_meta` delegates to identically).
+
+    TEST-ONLY gap: this MAY ALREADY PASS. `project-meta`'s read explicitly
+    does NOT tolerantly degrade (§S4: "a refused or failed request is
+    ok:false ... and a non-zero exit" — unlike `status`/`landings`), so an
+    unreachable board should already surface as `ok:false` through the same
+    error-shaping every other non-degrading verb uses; reported honestly
+    either way in the RED report rather than assumed."""
+
+    def test_project_meta_read_against_an_unreachable_board_is_ok_false_nonzero_exit_with_a_server_check_help(self):
+        module = _load_module(CLIENT_FILES["python"],
+                              "project_meta_c2_python_unreachable_board_under_test")
+        tmpdir = tempfile.mkdtemp(prefix="project-meta-c2-unreachable-")
+        saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
+        try:
+            with open(os.path.join(tmpdir, ".env"), "w") as fh:
+                fh.write(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
+            install_project_limits(tmpdir)
+            # §S2 — the unreachable board is DECLARED in this
+            # project's own file (never a stub, never a mocked `_get`): a
+            # real socket connect to a closed local port.
+            declare_and_require_board(tmpdir, "http://127.0.0.1:1", "python-crucible.py")
+            for k in ENV_KEYS:
+                os.environ.pop(k, None)
+            code, out, err = _run_main(module, ["project-meta", "--project-dir", tmpdir])
+        finally:
+            for k, v in saved_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        self.assertNotEqual(
+            code, 0,
+            f"python: `project-meta` against an unreachable board must "
+            f"exit non-zero (a metadata read never tolerantly degrades); "
+            f"stdout={out!r} stderr={err!r}")
+        toon = module._toon()
+        decoded = toon.decode(out)
+        self.assertIn(
+            "axi", decoded,
+            f"stdout must still decode as a TOON envelope; got {out!r}")
+        axi = decoded["axi"]
+        self.assertIs(
+            axi.get("ok"), False,
+            f"python: an unreachable board must answer ok:false; got {axi!r}")
+        help_ = axi.get("help") or []
+        self.assertTrue(
+            any("board" in str(h).lower() or "server" in str(h).lower()
+                or "reach" in str(h).lower() for h in help_),
+            f"python: the refusal's help[] must name the SERVER-reachability "
+            f"check as the next step; got {help_!r}")
+
