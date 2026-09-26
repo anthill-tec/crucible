@@ -1,7 +1,7 @@
 # CR-CRU-154 — a project carries its own metadata
 
-**Type** feature · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-26) · **Depends on**
-— · **Status** PENDING — filed 2026-09-26
+**Type** feature · **Points** 8 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-26) ·
+**Depends on** CR-CRU-091, CR-CRU-130, CR-CRU-150 · **Status** PENDING — filed 2026-09-26
 
 ## Problem
 
@@ -11,53 +11,105 @@ schema of rules, and the values belong to the project. They want a project's reg
 mirrored on the board, so that any session or harness can read a project's identity from Crucible
 rather than from a checkout. The project's own `.env` stays authoritative; the board holds a copy.
 
-Crucible's project record (`GET /api/v2/projects`) carries `key`, `name`, `type`, `sutRoot`,
-`liveness` and `retention`, and `PATCH …/projects/<key>` edits those fields one validated field at a
-time. There is no free-form place for a project's own facts.
+Crucible's project record (`GET /api/v2/projects`) carries `key`, `name`, `type`, `sutRoot` and the
+configured fields (`liveness`, `retention`, `allowRunDeletion`, `milestoneTypes`). There is no
+free-form place for a project's own facts, and no single-project read.
 
-Model B's example keys: `PROJECT_NAME`, `PROJECT_TOKEN`, `PROJECT_ACRONYM`, `ORCHESTRATOR_LABEL`,
-`SANDESH_PROJECT`, `PROJECT_STACKS`, `REPO_OWNER`. `CRUCIBLE_PROJECT_KEY` stays local only: it is how
-the project is found. Last write wins; no history. Model B will fit their `init --register` to
-whatever shape ships.
+Model B's keys (#1401): `PROJECT_NAME`, `PROJECT_TOKEN` (the project's lower-case slug, from which
+CR and agent ids derive: an identifier, not a credential), `PROJECT_ACRONYM`, `ORCHESTRATOR_LABEL`,
+`SANDESH_PROJECT`, `PROJECT_STACKS`, `REPO_OWNER`; fewer than 20, the longest a comma-separated stack
+list. `CRUCIBLE_PROJECT_KEY` stays local only: it is how the project is found.
 
-**User ruling 2026-09-26:** Crucible owns it, in 0.3.0, before CR-CRU-149.
+**User rulings 2026-09-26:** Crucible owns it, in 0.3.0, before CR-CRU-149. Writes go to their own
+route and are **orchestrator only, enforced by the server**; reads are open and the project record
+carries the map. The map holds **non-secret facts only**, stated in the contract, with no server
+refusal (a key-name rule would refuse Model B's own `PROJECT_TOKEN`; value heuristics are
+guesswork). **Keys are environment-variable names** and there are **no numeric caps**. The board
+does **not** show or edit it. Model B's preferences (#1401) are adopted: merge per key, `--unset`
+removes, last write wins, no history.
 
-## Scope (provisional — settled at gap analysis)
+## Scope
 
-### §S1 — a project holds a flat metadata map
+### §S1 — the store keeps a project's metadata
 
-A project record carries `metadata`: a flat map of string keys to string values, which Crucible
-stores and returns and never interprets. It is written and read through the project routes
-(`PATCH`/`GET …/projects/<key>`, and the project list), last write wins.
+A project's metadata is a flat map of string keys to string values, kept in its own table, created
+in the base schema pass the way CR-CRU-130 created `project_milestone_types`, so it costs no
+migration step and no schema version. Deleting a project deletes its metadata in the same
+transaction as the rest of its rows.
 
-### §S2 — a client verb pair writes and reads it
+### §S2 — one route writes it, and only an orchestrator may
 
-`project-meta --set K=V …` writes (orchestrator only) and `project-meta` reads, in all five clients
-through one shared implementation, as the usual AXI envelope, with `--format json` for programs
-(the §S8 rule of CR-CRU-150: a program such as `init` gets JSON).
+`PATCH /api/v2/projects/<key>/metadata` takes `{agentId, set?: {K: V, …}, unset?: [K, …]}`:
 
-### §S3 — the board is readable by anything that reaches it
+- The caller must be a registered agent whose role is `ORCHESTRATOR` (`requireOrchestrator`); both
+  refusals return before anything is written.
+- `set` writes each named key (last write wins); `unset` removes each named key; a key absent from
+  both is untouched. Removing a key that is not there is a no-op.
+- Refused with `400` and a `help[]`, writing nothing: a body with neither a non-empty `set` nor a
+  non-empty `unset`; a key that is not an environment-variable name (`^[A-Z][A-Z0-9_]*$`); a `set`
+  value that is not a string; a key in both `set` and `unset`; the key `CRUCIBLE_PROJECT_KEY`
+  (identity stays local).
+- The answer is `{ok: true, metadata: <the whole map after the write>, changed: <bool>}`. A change
+  notifies the board's `projects` stream, as every project write does.
 
-The board has no authentication. Whatever is mirrored there is readable by every client of the
-board, so the contract states that the map holds non-secret facts only.
+### §S3 — reads are open
 
-## Design questions for the gap analysis (to the user)
+`GET /api/v2/projects/<key>/metadata` answers `{ok: true, metadata: <map>}` (`{}` when none), with
+the usual unknown-project refusal. Every project record the server publishes (the project list, the
+orientation read) carries `metadata` when the project has any, and omits the key when it has none,
+as `milestoneTypes` does.
 
-1. **Secrets.** Model B's list includes `PROJECT_TOKEN`; what it holds is asked of Model B (reply to
-   #1399). Does the server refuse secret-shaped keys, or does the contract only say "non-secret"?
-2. **Shape.** A `metadata` field on the project record through the existing `PATCH`, or its own
-   sub-resource (`…/projects/<key>/metadata`)?
-3. **Write semantics.** Does `--set` merge per key or replace the map, and how is a key removed?
-4. **Who may write.** Is "orchestrator only" enforced by the server (the registered caller's role)
-   or only by the client?
-5. **Bounds.** Limits on key count, key length and value length (a bounded surface: the board shows
-   projects).
+### §S4 — the client verb `project-meta`
+
+In all five clients, through one shared implementation:
+
+- `project-meta` reads (one `GET …/metadata`, no `--agent`).
+- `project-meta --set K=V [--set K=V …] [--unset K …] --agent <id>` writes: each `--set` splits on
+  the FIRST `=`, so a value may contain `=` and commas; a malformed `--set` is refused by argument
+  parsing, before any request.
+- The envelope's `metadata` is the map the server returned; writes also carry `changed`. A refused
+  or failed request is `ok:false` with the server's `help[]`, and a non-zero exit.
+- `--format {toon,json}` as CR-CRU-150 §S8 defines it: `json` is the same object as one JSON
+  object, for programs such as `init --register`.
+- The verb's `--help` says the map is readable by anything that reaches the board and must hold
+  non-secret facts only.
 
 ## Acceptance criteria
 
-Written at gap analysis, once the questions above are ruled.
+- **AC1 (§S1)** — Metadata written for a project survives a server restart on the same store, and
+  deleting the project removes it (a re-created project with the same name starts with none). A
+  store created by the previous build opens unchanged, with the same schema version.
+- **AC2 (§S2)** — An `ORCHESTRATOR` caller's `PATCH …/metadata` with `set` then `unset` leaves
+  exactly the expected map, keys it did not name untouched; an identical write answers
+  `changed: false`.
+- **AC3 (§S2)** — Refused, with nothing written: an unregistered caller (`409`), a registered caller
+  of any other role and one with no role (`409`), and each `400` case listed in §S2, one test each.
+- **AC4 (§S3)** — `GET …/metadata` answers the map (`{}` for a project with none, the unknown-project
+  refusal for a bad key); `GET /api/v2/projects` carries `metadata` on a project that has some and
+  no `metadata` key on one that has none.
+- **AC5 (§S4)** — In EACH of the five clients: `project-meta` issues exactly one `GET …/metadata`
+  and reports the map; `project-meta --set A=x=1,2 --set B=y --unset C --agent <id>` issues exactly
+  one `PATCH …/metadata` with `set: {A: "x=1,2", B: "y"}` and `unset: ["C"]`; a malformed `--set` is
+  refused before any request; a server refusal is `ok:false` with its `help[]` and a non-zero exit.
+- **AC6 (§S4)** — `--format json` writes the same object as one JSON object, for a read and a write,
+  in each of the five clients.
+- **AC7 (§S4)** — Each client's `project-meta --help` states that the map is readable by anything
+  that reaches the board and holds non-secret facts only.
+- **AC8 (wiring)** — End to end against a real, ephemeral board: a registered orchestrator writes
+  through the real `python-crucible.py project-meta` subprocess, a second `project-meta` read (TOON
+  and `--format json`) returns the map, and `GET /api/v2/projects` carries it. A `report`-role
+  caller's write is refused. No stubbed transport.
+
+## Non-goals
+
+- **Board UI.** The board neither shows nor edits metadata.
+- **History.** Last write wins; nothing is journaled.
+- **Interpreting keys.** Crucible stores and returns them; nothing reads one.
+- **Secret detection.** The contract says non-secret; the server does not guess.
+- **Numeric caps.** None until a real need appears; then they are configuration (CR-CRU-131).
 
 ## Model B
 
 Model B runs released clients only, so this reaches them with the 0.3.0 release, and they are told
-in its notes. Their `init --register` fits whatever ships.
+in its notes. Their `init --register` writes only the keys their schema declares, so merge per key
+never clobbers anything else (#1401).
