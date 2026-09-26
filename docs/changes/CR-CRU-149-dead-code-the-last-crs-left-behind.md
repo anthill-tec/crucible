@@ -24,7 +24,13 @@ the two pre-existing pi-lens warnings (a `zip()` without `strict=` in the shared
 type warnings in `test_next_lane_carries_release_and_wave.py`) stay **out** of scope, being live
 code.
 
-## Census (re-measured 2026-09-26 at `develop` `de7f5ef`)
+## Census (re-measured 2026-09-26 at `develop` `de7f5ef`; re-run at the branch cut, `8f7cae3`, 2026-09-27)
+
+**Branch-cut re-run (AC1), 2026-09-27 at `8f7cae3`, after CR-CRU-154 landed:** unchanged. Items 1–11
+hold as listed; vulture reports the same 58 lines (nothing CR-CRU-154 added); `tsc
+--noUnusedLocals` the same 17 test-file errors (plus `reply`'s two excluded parameters); the
+citation scan 838 in scope (98 still landing on their construct, 506 moved, 100 no longer
+matching, 104 with no identifier to check, 28 unresolved paths, 2 out of range); e2e 734/0.
 
 **Method.** `knip@5` over the TS/JS tree (entries: `src/server.ts`, `bin/`, `public/app.js`,
 `scripts/`, every test), `vulture` (confidence ≥ 60) over `clients/`, `crucible_axi/` and
