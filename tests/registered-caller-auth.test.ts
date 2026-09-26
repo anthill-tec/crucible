@@ -487,7 +487,7 @@ describe("§S2b — POST .../projects/<key>/stop refuses an unregistered caller"
   test("no agentId, or a ghost agentId -> 409 both times (not the ordinary 200 {ok:true, checkpointed:...} shape); the active cycle stays active", async () => {
     const h = boot();
     const key = seedProject(h.store);
-    const { planId, cycleId } = await fileAndActivate(key, "CR-STOP-NOAGENT");
+    const { cycleId } = await fileAndActivate(key, "CR-STOP-NOAGENT");
 
     const noAgent = await postJson(projectPath(key, "/stop"), {});
     expectUnregisteredRefusal(noAgent, (await noAgent.json()) as ErrResponse);
@@ -598,7 +598,7 @@ describe("§S2b — POST /api/v2/gates refuses an unregistered caller; no gate e
 
 describe("§S2b boundary — POST/PATCH /api/v2/projects (the dashboard's management surface) stay authentication-free", () => {
   test("POST /api/v2/projects with NO agentId still creates the project (201-equivalent 200, ok:true, changed:true) — BORN GREEN, pinning the boundary", async () => {
-    const h = boot();
+    boot();
     const res = await postJson("/api/v2/projects", { name: `boundary-${crypto.randomUUID()}` });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; changed: boolean; project: { key: string } };

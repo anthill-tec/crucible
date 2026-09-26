@@ -2142,22 +2142,6 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _fleet_context(cr=None):
-    """Env auto-context shared by gates + milestones: `cr` (when supplied),
-    `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
-    OMITTED (never fabricated) so an unset WORKFLOW_WAVE yields no `wave` key."""
-    ctx = {}
-    if cr:
-        ctx["cr"] = cr
-    wave = os.environ.get("WORKFLOW_WAVE")
-    if wave:
-        ctx["wave"] = wave
-    role = os.environ.get("WORKFLOW_ROLE")
-    if role:
-        ctx["track"] = role
-    return ctx
-
-
 def _post_gate(project_dir, agent_id, gate, context=None, release=None):
     """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
     `release` is the label of the release the gate gates; it rides on to the

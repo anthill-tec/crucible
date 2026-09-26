@@ -495,7 +495,6 @@ describe("§S2 — retention honesty: a day bar with NO matching within-retentio
   test("2 day bars, one backed by a live event (drillable) and one backed ONLY by the coverageTrend rollup point (no matching event) — the rollup-only bar renders dimmed + aria-disabled and produces NO drill row on click; the live-backed bar is unaffected", async () => {
     const key = "drill-retention-1";
     const liveDay = dayAt(LATEST, 1); // 2026-05-31
-    const rollupOnlyDay = dayAt(LATEST, 0); // 2026-06-01 (LATEST) — no event
     const liveDayMs = Date.parse(`${liveDay}T00:00:00.000Z`);
 
     await mountApp({

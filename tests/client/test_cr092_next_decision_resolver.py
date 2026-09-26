@@ -304,7 +304,6 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
         by_cr = {e["cr"]: e for e in entries}
         for cr, _wave, spelling in cls.declared[:len(cls.SPELLINGS)]:
             cls.stored[spelling] = by_cr[cr].get("track")
-        cls.other_stored = by_cr["CR-TRK-OTHER"].get("track")
 
     @classmethod
     def _declare(cls, cr, wave, track):

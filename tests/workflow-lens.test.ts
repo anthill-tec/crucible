@@ -805,7 +805,6 @@ describe("§S3 history lens — group rollups", () => {
 describe("§S4 #2 — no hidden `.app-hidden-data` compatibility span in the workflow pane DOM", () => {
   test("a mixed history fixture (a fully-done CR group + a partially-done CR group, both expanded) renders zero `.app-hidden-data` elements anywhere under the workflow pane", async () => {
     const key = "hidden-data-retire-1";
-    const now = Date.now();
     const planAllDone: PlanFixture = {
       planId: 741,
       cr: "CR-HD-ALL-DONE",

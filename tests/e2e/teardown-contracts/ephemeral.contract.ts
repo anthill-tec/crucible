@@ -58,7 +58,7 @@
 // ephemeral.playwright.config.ts — not imported directly here, for the
 // same bun:sqlite-under-Node reason.
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { seedProject, teardownSeededProjects, E2E_PORT } from "../steps/harness.ts";
+import { seedProject, teardownSeededProjects } from "../steps/harness.ts";
 
 // RED-FIXUP (cycle 180) — `projectExists` originally queried ONLY
 // `GET /api/v2/projects?archived=true`. Verified by reading

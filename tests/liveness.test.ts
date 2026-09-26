@@ -1,6 +1,6 @@
 // CR-CRU-001 §S3 — Liveness (computed, never stored)
 import { describe, test, expect } from "bun:test";
-import { DEFAULT_LIVENESS, type Agent, type LivenessConfig } from "../src/types.ts";
+import { type Agent, type LivenessConfig } from "../src/types.ts";
 import { Store } from "../src/store.ts";
 
 // Agent objects returned by listAgents/livenessOf carry a computed `liveness`

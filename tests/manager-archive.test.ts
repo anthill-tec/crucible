@@ -203,12 +203,6 @@ afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
 });
 
-function manager(): HTMLElement {
-  const el = document.querySelector('[data-testid="projects-manager"]') as HTMLElement | null;
-  if (el === null) throw new Error("projects-manager container not found");
-  return el;
-}
-
 function managerRow(key: string): HTMLElement {
   const el = document.querySelector(
     `[data-testid="manager-project-row"][data-project-key="${key}"]`,

@@ -50,7 +50,7 @@ import { Database } from "bun:sqlite";
 import * as storeModule from "../src/store.ts";
 import { Store, MIGRATIONS, SCHEMA_VERSION, waveSeqBase } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
-import type { QueueEntry, QueueStatus, RunEvent } from "../src/types.ts";
+import type { QueueEntry, QueueStatus } from "../src/types.ts";
 
 // ── scratch dirs ───────────────────────────────────────────────────────────
 

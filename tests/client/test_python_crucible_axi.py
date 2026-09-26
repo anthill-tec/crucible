@@ -348,19 +348,6 @@ class _BasePythonAxiTest(unittest.TestCase):
                         {"id": active_id - 1, "status": "done"}]},
         ])
 
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-quiet", "cr": "CR-CRU-030", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
-        ])
-
-    def _no_open_plans_at_all(self):
-        """CR-CRU-036 §S1 tolerant case: no open plan exists at all (a
-        lightweight project) — the query is DEFINITIVE (ok:True, empty plans
-        list), not a failure, but there is simply no open plan to carry an
-        active cycle. The guard must PROCEED, never withhold."""
-        return _open_plans_response([])
-
     def _plans_fetch_failure(self):
         """CR-CRU-036 §S1 tolerant case: the plans GET itself fails (infra
         hiccup / a non-UUID project key 400ing server-side) — NOT proof of

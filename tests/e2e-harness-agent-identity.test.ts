@@ -28,7 +28,6 @@
 // functions GREEN will modify, which is what makes it an honest RED bed for
 // this CR's specific contract (harness identity, not UI behaviour).
 import { afterEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { request, type APIRequestContext } from "@playwright/test";
 import { startServer } from "../src/server.ts";
 import {
@@ -40,8 +39,6 @@ import {
   registerAgent,
   RUSTC_ERRORS,
 } from "./e2e/steps/harness.ts";
-
-const REPO_ROOT = join(import.meta.dir, "..");
 
 let handle: ReturnType<typeof startServer> | undefined;
 let ctx: APIRequestContext | undefined;

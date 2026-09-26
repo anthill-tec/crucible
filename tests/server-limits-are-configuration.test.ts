@@ -92,7 +92,6 @@ import * as path from "node:path";
 import {
   activeFlags,
   boot,
-  clearEnv,
   declare,
   documentOnly,
   eventCount,
@@ -102,7 +101,6 @@ import {
   restoreServerLimitsFixture,
   scratch,
   serverConfigDir,
-  setEnv,
   writeConfig,
   writeRaw,
   type LimitDeclaration,

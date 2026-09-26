@@ -512,8 +512,6 @@ class _AskingTests:
 
 class _EnvelopeContractTests:
 
-    SUCCESS_CALLS = None  # filled in below (argv, post_return)
-
     def _each_verb(self):
         return (
             (["release-propose", "--label", "0.4.0", "--target", "2026-09-01",

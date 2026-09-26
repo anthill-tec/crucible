@@ -51,14 +51,14 @@
 //   • the three zones carry no `data-zone` identity, so AC25 cannot name them.
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server } from "bun";
-import type { Browser, Page } from "playwright";
+import type { Browser, Page } from "@playwright/test";
 import * as AppLogic from "../public/app-logic.mjs";
 import { declaredClientBoard } from "./helpers/client-board.ts";
 

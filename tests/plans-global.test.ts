@@ -180,7 +180,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
     const keyA = await createProject("global-plans-a");
     const keyB = await createProject("global-plans-b");
 
-    const planAOpen = await filePlan(keyA, "CR-GLOBAL-A-OPEN");
+    await filePlan(keyA, "CR-GLOBAL-A-OPEN");
     const planBToClose = await filePlan(keyB, "CR-GLOBAL-B-CLOSED");
     await closePlan(keyB, planBToClose);
 

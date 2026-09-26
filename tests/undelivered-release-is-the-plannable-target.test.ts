@@ -384,7 +384,7 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
     "consumer 5 (src/store.ts:2905) — a REVISION leaves exactly one undelivered release carrying " +
       "the new target, and the superseded date stays auditable",
     async () => {
-      const server = boot();
+      boot();
       const key = await seedProject();
 
       const first = await post(proposalsPath(key), {

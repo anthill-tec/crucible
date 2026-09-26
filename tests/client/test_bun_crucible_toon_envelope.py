@@ -498,12 +498,6 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             f.write(FAKE_BUN_SCRIPT_TEMPLATE.format(python=sys.executable))
         os.chmod(self.fake_bun, 0o755)
 
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-1", "cr": "CR-Q", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
-        ])
-
     def _active_cycle_plans(self, active_id=51):
         return _open_plans_response([
             {"planId": "plan-active", "cr": "CR-Q", "status": "open",

@@ -285,12 +285,10 @@ TOOLCHAIN_SPLIT_CELLS = {
     "arduino": ("unit",),
 }
 
-# The two clients whose toolchain makes NO tier split, so §S3 says every cell
-# is declared.
-NO_SPLIT_CLIENTS = ("bun", "python")
-
-# ESCALATION 1 — the cells those two clients ship no target for. `regression`
-# is excluded because the whole suite IS that tier's target, never a fallback.
+# ESCALATION 1 — the cells bun and python (the two clients whose toolchain
+# makes NO tier split, so §S3 says every cell is declared) ship no target for.
+# `regression` is excluded because the whole suite IS that tier's target, never
+# a fallback.
 _DECLARED_CELLS_WITH_NO_TARGET = tuple(sorted(TIER_VOCABULARY - {"regression"}))
 
 # What a refusal must name, per stack. bun's and python's are AC6a's own words;

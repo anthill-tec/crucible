@@ -29,14 +29,6 @@ interface ErrResponse {
   [key: string]: unknown;
 }
 
-const JUNIT_3CASE_1FAIL = [
-  '<testsuite name="Suite1" tests="3">',
-  '<testcase name="t1" time="0.01"/>',
-  '<testcase name="t2" time="0.02"/>',
-  '<testcase name="t3" time="0.03"><failure message="boom">trace</failure></testcase>',
-  "</testsuite>",
-].join("\n");
-
 describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", () => {
   let handle: ReturnType<typeof startServer> | undefined;
 

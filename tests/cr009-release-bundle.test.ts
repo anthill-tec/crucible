@@ -1006,7 +1006,6 @@ describe("§S4 docs — RELEASING.md", () => {
 
   test("documents the TestPyPI rehearsal loop via scripts/release.sh checkpoint, and that an untagged checkpoint derives a clean X.Y.Z.devN via no-local-version", () => {
     const doc = readText(relPath);
-    const lower = doc.toLowerCase();
 
     expect(doc).toContain("checkpoint");
     expect(doc).toContain("release.sh");

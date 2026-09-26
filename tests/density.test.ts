@@ -263,7 +263,7 @@ function mountedTreeRowCount(overlay: Element): number {
 
 async function mountAtRunCold(
   eventId: string,
-  tier: string,
+  _tier: string,
   detail: EventDetailFixture,
   brief: EventBriefFixture,
   localStorageSeed?: Record<string, string>,

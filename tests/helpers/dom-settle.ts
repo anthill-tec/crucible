@@ -27,7 +27,7 @@
 // So a 20ms sleep buys no RENDER a 0ms macrotask yield does not already give,
 // and none of the delayed channels is covered here BY DESIGN: a test that
 // needs a poll tick waits for it explicitly (`waitForPollTick`) and a test
-// that needs a reveal waits for that reveal (`waitForDom`) — real waits on
+// that needs a reveal waits for that reveal — real waits on
 // real events, rather than a fixed sleep that happens to be long enough.
 //
 // THE CALL EXPRESSIONS ARE THE HANDLES, the line numbers only approximate
@@ -49,8 +49,8 @@
 // and so the number of chances pending work gets to land, is exactly what each
 // caller already asked for.
 //
-// A test that needs a specific outcome should wait for THAT outcome
-// (`waitForDom` below), not for a duration.
+// A test that needs a specific outcome should wait for THAT outcome, not for a
+// duration.
 
 export interface SettleOptions {
   /** Macrotask yields — the caller's own tick count, unchanged. */
@@ -72,24 +72,4 @@ const sleep = (ms: number): Promise<void> => {
 export async function settleDom(options: SettleOptions = {}): Promise<void> {
   const { ticks = 8, stepMs = 0 } = options;
   for (let i = 0; i < ticks; i++) await sleep(stepMs);
-}
-
-/** Wait for a CONDITION instead of a duration — the honest tool when a test
- *  knows what it is waiting for. Polls on the same short step the flush uses
- *  and fails with the caller's own description, so a timeout reads as the
- *  unmet expectation rather than as "this test timed out". */
-export async function waitForDom(
-  what: string,
-  condition: () => boolean,
-  options: { timeoutMs?: number; stepMs?: number } = {},
-): Promise<void> {
-  const { timeoutMs = 2_000, stepMs = 2 } = options;
-  const startedAt = Date.now();
-  for (;;) {
-    if (condition()) return;
-    if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error(`timed out after ${String(Date.now() - startedAt)}ms waiting for ${what}`);
-    }
-    await sleep(stepMs);
-  }
 }

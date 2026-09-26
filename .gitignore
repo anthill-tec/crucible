@@ -39,3 +39,4 @@ uv.lock
 # ignored rather than deleted — the point is that no `git add -A` can ever
 # commit it.
 .lean-ctx/
+/crucible.db
