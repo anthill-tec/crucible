@@ -1,6 +1,6 @@
 # CR-CRU-157 — the agent card tells the truth about the agent
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27
+**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27
 
 ## Problem
 
