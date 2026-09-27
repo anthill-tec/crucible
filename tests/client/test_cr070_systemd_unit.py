@@ -8,12 +8,13 @@ At RED `crucible-axi` had NO systemd surface at all: `STAGE_ORDER` was
 promised the unit as a follow-up CR. Every test in this file therefore failed
 on a MISSING contract, and each names which one. Those same three comments
 survive, GREEN having turned the promise into a reference to the unit this CR
-landed: `cli.py:292` ("the systemd `--user` unit the [unit] install stage
-writes", on why `serve` propagates its child's exit code), `install.py:132`
+landed: `cmd_serve` in `crucible_axi/cli.py` ("the systemd `--user` unit the
+[unit] install stage writes", on why `serve` propagates its child's exit
+code), the comment over `SERVER_HOST_ENV_VAR` in `crucible_axi/install.py`
 ("the systemd `--user` unit the [unit] stage writes", on why `serve` composes
-the child env explicitly) and `install.py:668` ("the systemd `--user` unit
-that" renders this argv into its `ExecStart`, on why it is never a bare
-`crucible-server`/`bun`/`bunx` token).
+the child env explicitly) and `server_launch_argv` in `crucible_axi/install.py`
+("the systemd `--user` unit that" renders this argv into its `ExecStart`, on
+why it is never a bare `crucible-server`/`bun`/`bunx` token).
 
 The contract these tests pin, deliberately kept to the SMALLEST invented
 surface so the GREEN phase is free in everything else:

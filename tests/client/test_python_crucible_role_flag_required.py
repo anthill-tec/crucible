@@ -4,7 +4,8 @@ stops implying the agentId carries the role.
 
 Contract pinned verbatim from
 docs/changes/CR-CRU-044-phase-as-first-class-data.md §S3/§S4 (as corrected
-2026-07-28). `python-crucible.py:1413` today is FREE TEXT
+2026-07-28). The `register` subparser's `--role` in `main` (`python-crucible.py`)
+today is FREE TEXT
 (`r.add_argument("--role", default="report", help=...)` -- no `choices=`
 at all) -- unlike bun/rust/mvn, this client accepts ANY string, including
 out-of-enum values, silently. §S3's python-specific work is "add the enum +

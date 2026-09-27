@@ -24,8 +24,8 @@ successor `test_cr046_official_toon_roundtrip.py` -- which deliberately did NOT
 skip a missing module: the raise itself is the RED signal). `bun-crucible.py`
 also does not
 yet reference `_crucible_axi` anywhere (confirmed by reading the source --
-`_emit_axi`/`_axi_context` are still standalone local functions at
-~L1099/~L1079), so the wiring tests below fail too, and will keep failing
+`_emit_axi`/`_axi_context` are still standalone local functions of
+bun-crucible.py), so the wiring tests below fail too, and will keep failing
 until bun-crucible.py's `_axi_context` is made to DELEGATE to (produce
 identical output to) the shared module's `axi_context`, and its `_emit_axi`
 similarly delegates to `emit_axi`.
@@ -798,11 +798,13 @@ class StatusContractDocTest(unittest.TestCase):
 #     no_report_help(verb, artifact, remedy=None)        -> list[str]
 #     no_report_warning(verb, artifact, exit_code, output) -> dict
 #
-# Shape follows `gate_step_abort_help` / `gate_step_abort_warning` (:722-740):
+# Shape follows `gate_step_abort_help` / `gate_step_abort_warning`:
 # PURE, no I/O, `help[]` ends with "status", warning is {code, detail}.
 #
-# These are also the FIRST assertions rust's `_no_junit_help` (:360) and mvn's
-# inline `no-test-reports` warning (`_emit_compile_fallback_axi` :894-909) have
+# These are also the FIRST assertions rust's `_no_junit_help` (in
+# rust-crucible.py until the C1 re-point onto `no_report_help`) and mvn's
+# inline `no-test-reports` warning (`_emit_compile_fallback_axi` in
+# mvn-crucible.py) have
 # ever had -- CR-CRU-064's Risk note measured both as currently UNGUARDED --
 # so both artifact flavours ("junit.xml", "surefire reports") are asserted
 # here: the C1 re-point must not silently change what those two clients emit.
@@ -1830,7 +1832,7 @@ class CmdStatusOpenPlansOnlyContractTest(unittest.TestCase):
     that), so this is where the §S3/§S4/§S5 contract is proved with full
     control over the `GET …/plans` response shape.
 
-    RED (confirmed by reading `cmd_status`, clients/_crucible_axi.py:2107):
+    RED (confirmed by reading `cmd_status` in clients/_crucible_axi.py):
     today it GETs `ops.plans_path(project_dir)` UNFILTERED (no `status=open`
     query at all), computes `lastClosedCr` itself via `last_closed_cr(plans)`
     instead of reading the response's own `lastClosedCr`, never reads or

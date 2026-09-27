@@ -18,7 +18,7 @@
 //
 //   // AC2 — ADDITIVE. `resolveDbPath(opts): string` keeps its EXACT signature
 //   // and return type and DELEGATES to resolveStore(opts).path. No existing
-//   // call site (src/server.ts:192, tests/db-path-resolution.test.ts,
+//   // call site (`startServer` in src/server.ts, tests/db-path-resolution.test.ts,
 //   // tests/e2e/teardown-contracts/crucible-db-isolation.test.ts) is edited.
 //
 //   export interface ServerHandle {
@@ -26,9 +26,9 @@
 //     storeResolution: StoreResolution;   // AC1 — additive, beside the rest
 //   }
 //
-//   // AC3 — the shared healthPayload() closure (src/server.ts:200), consumed
-//   // by GET /api/health (226) and passed into handleV2 (235), gains ONE
-//   // additive key so both routes cannot drift:
+//   // AC3 — the shared healthPayload() closure (in `startServer`,
+//   // src/server.ts), consumed by GET /api/health and passed into handleV2,
+//   // gains ONE additive key so both routes cannot drift:
 //   //   store: { path, rule }
 //
 // AC1 is asserted from the RETURNED handle, never by capturing console — the

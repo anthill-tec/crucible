@@ -22,11 +22,11 @@
 //
 // RED-PHASE STATE on this branch (measured 2026-09-17), assertion by assertion:
 //
-//   * `_bun_test_cmd` (clients/bun-crucible.py:500) builds
+//   * `_bun_test_cmd` (clients/bun-crucible.py) builds
 //     `[bun, test, …targets, --reporter=junit, --reporter-outfile=…]` and the
 //     module declares NO integer constant at all — so the two "client emits
 //     --timeout 30000" tests and the "declared exactly once" test FAIL.
-//   * release.yml's `Bun suite` step (:146) runs bare `bun test` — the
+//   * release.yml's `Bun suite` step runs bare `bun test` — the
 //     workflow test FAILS.
 //   * The derived-equality test FAILS from both ends at once, which is the
 //     point of it: it never retypes 30000.

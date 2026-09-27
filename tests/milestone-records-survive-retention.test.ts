@@ -2,7 +2,7 @@
 //
 // ── The incident this file reproduces ──────────────────────────────────────
 // On 2026-09-13 this project lost every release it has ever shipped. Not to a
-// crash and not to an operator: to `enforceRetention` (src/store.ts:3063)
+// crash and not to an operator: to `enforceRetention` (src/store.ts)
 // working exactly as designed. A release is a ROW IN `events`
 // (kind='milestone', payload.type='release'); `events` is a capped ring
 // buffer; one CR's worth of TDD ingests appended 165 rows and the oldest 165
@@ -23,10 +23,12 @@
 //
 // ── Two vocabularies are READ, never copied ────────────────────────────────
 // 1. The accepted milestone types are read off the SERVER'S OWN refusal
-//    (`type must be one of: …`, src/v2.ts:1264-1265), which interpolates
-//    `MILESTONE_TYPES` (src/v2.ts:1165) verbatim. A test holding its own copy
-//    of the list stops tracking the server the moment a type is added, and
-//    would then claim survival for a vocabulary the server no longer has.
+//    (`type must be one of: …`, `handleMilestones` in src/v2.ts), which
+//    interpolates the accepted set (`MILESTONE_TYPES` when this was written,
+//    now `acceptedMilestoneTypes` in src/store.ts) verbatim. A test holding
+//    its own copy of the list stops tracking the server the moment a type is
+//    added, and would then claim survival for a vocabulary the server no
+//    longer has.
 // 2. The retention cap is read back off the PROJECT after the fixture
 //    configures it (`store.getProject(key).retention`). No assertion here
 //    names 100, 2000 or any other number: a test that hardcodes the limit it
@@ -34,15 +36,16 @@
 //
 // 🚨 FINDING — the CR text and the code disagree about the six types.
 // The spec (§S1) calls the six `MILESTONE_TYPES` "release, cr-merged,
-// release-proposal, gap-analysis, design-review, custom". The actual set at
-// src/v2.ts:1165-1172 is {gap-analysis, design-review, STAGE-FLIP, custom,
-// cr-merged, release} — it contains `stage-flip`, which the spec omits, and it
-// does NOT contain `release-proposal`, which is not a POST /milestones type at
-// all but its own record written through POST …/release-proposals
-// (`recordReleaseProposal`, src/store.ts:2296). Reading the vocabulary from
-// the server rather than the spec makes this file correct either way, and the
-// proposal is covered explicitly beside it because it is a SEVENTH record kind
-// on the record side of the line, not one of the six.
+// release-proposal, gap-analysis, design-review, custom". The actual set in
+// `MILESTONE_TYPES` (then in src/v2.ts; since replaced by
+// `acceptedMilestoneTypes` in src/store.ts) is {gap-analysis, design-review,
+// STAGE-FLIP, custom, cr-merged, release} — it contains `stage-flip`, which
+// the spec omits, and it does NOT contain `release-proposal`, which is not a
+// POST /milestones type at all but its own record written through POST
+// …/release-proposals (`recordReleaseProposal` in src/store.ts). Reading the
+// vocabulary from the server rather than the spec makes this file correct
+// either way, and the proposal is covered explicitly beside it because it is
+// a SEVENTH record kind on the record side of the line, not one of the six.
 //
 // ── Safety ─────────────────────────────────────────────────────────────────
 // Every store here is an mkdtempSync scratch file or ":memory:", and every
@@ -362,10 +365,12 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
 
   // ─────────────────────────────────────────────────────────────────────────
   // AC1 — `gate` is lifted on the SAME terms, which is strictly more than
-  // LIVE_GATE (src/store.ts:3072) exempts today: that predicate protects only
+  // LIVE_GATE (then an exemption predicate of `enforceRetention` in
+  // src/store.ts, since removed) exempts today: that predicate protects only
   // a gate that is BOTH unretired AND version-stamped, so a versionless gate
   // and a retired one are prunable right now. Same for a proposal no longer
-  // live, which LIVE_PROPOSAL (:3079) deliberately stops protecting.
+  // live, which LIVE_PROPOSAL (its sibling predicate, likewise removed)
+  // deliberately stops protecting.
   //
   // RETARGETED by CR-CRU-130 §S2. The subject is untouched — a record survives
   // BECAUSE it is a record, not because an exemption predicate happened to
@@ -490,7 +495,7 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
         releases: (await get(`/api/v2/projects/${key}/releases`)).body,
         proposals: (await get(`/api/v2/projects/${key}/release-proposals`)).body,
         // The roadmap strip and the queue read the SAME published answer
-        // (src/store.ts:4085-4087 — "every reader … consumes this verbatim").
+        // (`listQueue` in src/store.ts — "every reader … consumes this verbatim").
         queue: (await get(`/api/v2/projects/${key}/queue`)).body,
       });
 

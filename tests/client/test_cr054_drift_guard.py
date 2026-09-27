@@ -454,9 +454,10 @@ class DriftGuardCatchesReintroducedDuplicateOnScratchFilesTest(unittest.TestCase
 # CR-CRU-064 §S5 — the no-report helper is DEFINED ONCE.
 #
 # The CR's Context measured the drift this guard closes: rust owns
-# `_no_junit_help(verb)` (`rust-crucible.py:360`, consumed at :900/:1396/:1523)
-# and mvn inlines the `no-test-reports` warning dict inside
-# `_emit_compile_fallback_axi` (`mvn-crucible.py:894-909`) -- two local
+# `_no_junit_help(verb)` (`rust-crucible.py`, consumed by `_regression_ingest_run`,
+# `_smoke_test` and `_workspace_regression_run`) and mvn inlines the
+# `no-test-reports` warning dict inside
+# `_emit_compile_fallback_axi` (`mvn-crucible.py`) -- two local
 # implementations of ONE fleet concept, the CR-CRU-054 drift class, while the
 # shared module carries no no-report helper at all. AC3 requires the local
 # definition GONE and both clients emitting through
@@ -503,7 +504,8 @@ class NoClientDefinesItsOwnNoReportHelperTest(unittest.TestCase):
 
     def test_the_no_test_reports_warning_code_literal_lives_only_in_the_shared_module(self):
         """The warning CODE is the half that catches mvn: it is inlined at
-        `mvn-crucible.py:905` rather than sourced from the shared builder, so
+        `_emit_compile_fallback_axi` in `mvn-crucible.py` rather than sourced from
+        the shared builder, so
         the code string is a second, hand-copied definition."""
         offenders = sorted(
             name for name, src in self._non_shared_client_sources().items()
@@ -543,7 +545,7 @@ class NoClientDefinesItsOwnNoReportHelperTest(unittest.TestCase):
                 missing[client] = absent
         self.assertEqual(
             missing, {},
-            f"CR-CRU-064 AC3: rust (:900/:1396/:1523) and mvn's compile/"
+            f"CR-CRU-064 AC3: rust's no-junit exits and mvn's compile/"
             f"no-reports path must emit through the shared "
             f"{SHARED_NO_REPORT_HELPERS} -- a clean cutover, no aliases; "
             f"clients not referencing them: {missing!r}")

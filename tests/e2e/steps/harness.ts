@@ -73,7 +73,8 @@ function assertEphemeralTarget(action: string): void {
 // and self-cleaning (every key created is registered for `teardownSeededProjects`).
 //
 // CR-CRU-015 §S3 — the optional `type` (the POST's own `backend|frontend`
-// field, src/v2.ts:316) is threaded through because the BDD tab is gated to
+// field, read by `handleProjectCreate` in src/v2.ts) is threaded through
+// because the BDD tab is gated to
 // FRONTEND projects (`workspaceTabs`, public/app-logic.mjs), so a scenario
 // about that tab cannot use a default-typed fixture. Omitted, the field is not
 // sent at all and the server's own default applies — every existing caller is
@@ -167,12 +168,13 @@ export const HARNESS_AGENT_ID = "e2e-harness";
  * boundary. Every helper that hits a `requireRegisteredCaller` route
  * (CR-CRU-056) calls this with the id it is about to send, so the id is a live
  * registered agent by the time the real request goes out — whether the caller
- * registered it (`seeding.steps.ts:24`), generated it and registered nothing
+ * registered it (`seeding.steps.ts`'s "an online agent ... is registered"
+ * step), generated it and registered nothing
  * (`cycle-run-navigation.steps.ts`'s `crb-filler-*`), or supplied no id at all
  * (`filePlan`).
  *
  * Safe to call UNCONDITIONALLY: registration is idempotent by construction —
- * `handleAgentTouch` (`src/v2.ts:499`) branches on `hasAgent` and merely skips
+ * `handleAgentTouch` (`src/v2.ts`) branches on `hasAgent` and merely skips
  * the lifecycle-event journal on a repeat, so a re-register of a live id is a
  * no-op touch, never a duplicate row and never a 409.
  *
@@ -389,7 +391,7 @@ export async function filePlan(
   wave?: string,
 ): Promise<PlanFileResponse> {
   // CR-CRU-060 §S2 — `filePlan` is handed no id by ANY of its call sites
-  // (gates.steps.ts:22, wave-backfill.steps.ts:21, workflow.steps.ts:19), so
+  // (the Steps in gates.steps.ts, wave-backfill.steps.ts and workflow.steps.ts), so
   // it registers one for itself rather than growing a new required argument.
   await ensureRegistered(request, projectKey, HARNESS_AGENT_ID);
   const res = await request.post(`/api/v2/projects/${projectKey}/plans`, {

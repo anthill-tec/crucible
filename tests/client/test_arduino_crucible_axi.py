@@ -391,17 +391,6 @@ class _BaseArduinoAxiTest(unittest.TestCase):
                         {"id": active_id - 1, "status": "done"}]},
         ])
 
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-quiet", "cr": "CR-CRU-030", "status": "open",
-             "cycles": [{"id": 60, "status": "pending"}, {"id": 61, "status": "done"}]},
-        ])
-
-    def _no_open_plans_at_all(self):
-        """CR-CRU-036 §S1 tolerant case: no open plan exists at all (a
-        lightweight project) — the guard must PROCEED, never withhold."""
-        return _open_plans_response([])
-
     def _plans_fetch_failure(self):
         """CR-CRU-036 §S1 tolerant case: the plans GET itself fails (infra
         hiccup / a non-UUID project key 400ing server-side) — not proof of
@@ -663,7 +652,7 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
         test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
         against the SAME `while proc.poll() is None:` polling loop
         arduino-crucible.py's `cmd_gate_run` already wires up (confirmed by
-        reading the function body at arduino-crucible.py:868)."""
+        reading the function body of `cmd_gate_run` in arduino-crucible.py)."""
         saved_path = os.environ.get("PATH", "")
         fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-arduino-interim-")
         fake_path = os.path.join(fake_bin_dir, "no-mistakes")

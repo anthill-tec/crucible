@@ -14,10 +14,11 @@
 // hiddenCount, mergedCount, lanes, soloRows }`). Its own comment states the
 // `false` branch is "UNREACHABLE by construction", which was true while a
 // release held ONE wave and is false now that 0.2.0 holds waves 5 and 6.
-// The renderer reads that flag verbatim: `data-active` at public/app.js:3072
-// and the `Wave ${box.wave}${box.active === true ? " · active" : ""}` label
-// at :3100. So a proposed release with two waves renders `· active` on BOTH
-// boxes, and a release with nothing in flight renders it anyway.
+// The renderer reads that flag verbatim: `data-active` and the
+// `Wave ${box.wave}${box.active === true ? " · active" : ""}` label, both in
+// `RoadmapFlowWave` (public/app.js). So a proposed release with two waves
+// renders `· active` on BOTH boxes, and a release with nothing in flight
+// renders it anyway.
 //
 // Every assertion below therefore FAILS against current production, and each
 // fails for that one reason — the marker is a RELEASE fact where §S4 requires
@@ -56,8 +57,9 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-/** The marker as the renderer writes it (public/app.js:3100) — a MIDDLE DOT
- *  (U+00B7), stated once so no assertion below can pin a lookalike. */
+/** The marker as the renderer writes it (`RoadmapFlowWave` in
+ *  public/app.js) — a MIDDLE DOT (U+00B7), stated once so no assertion
+ *  below can pin a lookalike. */
 const MARKER = " \u00b7 active";
 
 // ── Fixture types (the wire shapes, as tests/roadmap-wave-header.test.ts
@@ -122,7 +124,8 @@ interface QueueFixture {
 // The waves differ in SIZE as well as in activeness (4 vs 3), so an assertion
 // cannot pass by reading the wrong box, and no track is declared anywhere:
 // lanes exist only above one track, so the header's identity phrase is the
-// wave and its marker and nothing else (public/app.js:3097-3101).
+// wave and its marker and nothing else (the header of `RoadmapFlowWave` in
+// public/app.js).
 //
 // TWO_WAVE_BOARD_IDLE is the SAME board with the running cr set back to
 // PENDING — §S4's second AC, the branch the current comment calls

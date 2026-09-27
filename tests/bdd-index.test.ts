@@ -2,7 +2,7 @@
 // runs, honouring the hierarchy it sits in (cycle → agent-run → detail).
 //
 // MEASURED ON THIS BRANCH (158ec48): `BddPanel`/`BddFeed` (public/app.js
-// ~L3040-3117) render the LATEST BDD run's Gherkin inline and nothing else
+// at 158ec48) render the LATEST BDD run's Gherkin inline and nothing else
 // — no list, no "which run", no cycle. There is no `[data-testid=
 // "bdd-index-row"]` anywhere. Every test below is RED until GREEN replaces
 // the BDD pane's content with an index.

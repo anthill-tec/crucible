@@ -41,7 +41,7 @@ already names, even while an instance is listening on it. Renumbering a running
 instance orphans every client whose file names the old port.
 
 `TheManifestRecordsTheBytesTheInstallWroteTest` -- the ruling that makes the
-write safe. `_operator_config_is_untouched` (crucible_axi/install.py:1546-1589)
+write safe. `_operator_config_is_untouched` (crucible_axi/install.py)
 compares a file the install AUTHORED against the `[manifest]` stage's recording
 of what it wrote, not against the shipped template: without that, every machine
 that ever probed a port would read as operator-edited forever and CR-CRU-138
@@ -50,7 +50,7 @@ with NO recording (an older install, or one placed by hand) still falls back to
 the template comparison, so the fail-safe direction is unchanged.
 
 `TheUnitCarriesNoListenerEnvironmentTest` -- `_unit_environment()`
-(install.py:1091-1114) stops forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST`; the unit
+(crucible_axi/install.py) stops forwarding `CRUCIBLE_PORT`/`CRUCIBLE_HOST`; the unit
 boots the server and the server reads its own file. `CRUCIBLE_DB` STAYS (§S3 --
 the store path is how the server FINDS that file, so it precedes it).
 
@@ -1376,7 +1376,7 @@ class TheUnitCarriesNoListenerEnvironmentTest(_InstallerConnectionCase):
         return found
 
     def test_the_rendered_unit_forwards_the_store_and_carries_no_listener_variables(self):
-        """AC: `_unit_environment()` (install.py:1091-1114) no longer forwards
+        """AC: `_unit_environment()` (crucible_axi/install.py) no longer forwards
         `CRUCIBLE_PORT`/`CRUCIBLE_HOST`; `CRUCIBLE_DB` keeps being forwarded
         (§S3 -- the store path is how the server FINDS its file, so it precedes
         configuration discovery). The unit boots the server, the server reads

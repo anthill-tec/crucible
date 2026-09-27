@@ -56,8 +56,8 @@
 //
 // RED phase — expected to FAIL against current production, which renders a
 // header, `box.rows.map(RoadmapFlowNode)` and the `+N more` pointer
-// (public/app.js:2792-2853) and NOTHING ELSE: there is no roll-up element and
-// no annotation slot anywhere in the wave box.
+// (`RoadmapFlowWave` in public/app.js) and NOTHING ELSE: there is no roll-up
+// element and no annotation slot anywhere in the wave box.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -108,7 +108,7 @@ interface PackageFixture {
   version: string;
 }
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (`src/v2.ts`) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -118,7 +118,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (`src/v2.ts`) — what `GET …/release-proposals`
  *  publishes. */
 interface ProposalFixture {
   label: string;
@@ -135,7 +135,7 @@ interface LifecycleFixture {
   at: number;
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes, in the
+/** `QueueEntry` (`src/types.ts`) — what `GET …/queue` publishes, in the
  *  canonical order (CR-CRU-095 §S1: release → wave → seq). The ORDER OF THIS
  *  ARRAY is the server's published order and the only order zone 2 may use
  *  (CR-CRU-091 AC18 forbids re-deriving `seq`; CR-CRU-095 deleted the last
@@ -156,7 +156,7 @@ interface QueueFixture {
 // ── Fixtures ────────────────────────────────────────────────────────────────
 //
 // One board shape, reused (C2's): 0.1.0 shipped, 0.4.0 proposed (the DEFAULT
-// FOCUS — `releaseStripFocusIndex`, public/app-logic.mjs:179, focuses the
+// FOCUS — `releaseStripFocusIndex` in public/app-logic.mjs focuses the
 // first proposed gate, and 0.4.0's timestamp precedes 0.5.0's), 0.5.0 proposed
 // but not focused. Every test swaps only the FOCUSED release's wave-1
 // membership — and, for AC5, only the focused PROPOSAL's declared target.
@@ -181,7 +181,7 @@ const PROPOSED_040: ProposalFixture = {
 };
 
 /** AC5's three GATE STATES, which is the only thing that varies between these
- *  three: `resolveGateDate` (public/app-logic.mjs:80) answers `dated` for a
+ *  three: `resolveGateDate` (public/app-logic.mjs) answers `dated` for a
  *  usable epoch, `absent` for a proposal that declares no target, and
  *  `unusable` for a field that is there but is not a usable epoch. The roll-up
  *  states a phrase derived from THAT — nothing here writes a second resolver
@@ -298,11 +298,12 @@ const NEXT_ORDER_MARKED = "CR-N-5";
 const NEXT_ORDER_SEQ_FIRST = "CR-N-3";
 
 /** AC12 against a RUNNING member: IN_PROGRESS is not actionable (`PENDING`
- *  with no `lifecycle`, `clients/_crucible_axi.py:1301`), so the runner is a
- *  row (AC9's union) but never the marked one — and the marked row is the
- *  first PENDING member, which here is published after it. Both are on ONE
- *  render, which is what lets the marked row's styling be compared against the
- *  ember the runner really does earn. */
+ *  with no `lifecycle` as the client once ruled it; its successor is
+ *  `isActionable` in `src/next.ts`), so the runner is a row (AC9's union) but
+ *  never the marked one — and the marked row is the first PENDING member,
+ *  which here is published after it. Both are on ONE render, which is what
+ *  lets the marked row's styling be compared against the ember the runner
+ *  really does earn. */
 const NEXT_WITH_RUNNER: QueueFixture[] = [
   member("CR-P-1", "IN_PROGRESS", 10),
   member("CR-P-2", "PENDING", 20),
@@ -314,8 +315,8 @@ const RUNNER_MARKED = "CR-P-2";
  *  UNSATISFIED dependency. `CR-H-2` depends on `CR-H-1`, which is IN_PROGRESS
  *  and therefore neither merged nor actionable, so:
  *    • the plan pointer's answer here is HOLD with `CR-H-1` as the trigger
- *      (`resolve_next`, `clients/_crucible_axi.py:1473`) — a state zone 2 does
- *      not represent at all;
+ *      (`resolveNext` in `src/next.ts`, successor of the client's
+ *      `resolve_next`) — a state zone 2 does not represent at all;
  *    • a dependency walk that "skipped to the next satisfiable CR" would mark
  *      `CR-H-3`, which declares nothing.
  *  The marker states POSITION IN THE PUBLISHED ORDER, so it is on `CR-H-2`.
@@ -350,10 +351,10 @@ const DEPS_WAVE: QueueFixture[] = [
 ];
 
 /** AC15 — the drill regression. `roadmapDrillable` is `IN_PROGRESS ||
- *  COMPLETED` (public/app.js:2678) and merged CRs no longer render rows, so
- *  the ONE drillable row a wave box can hold is a running one. The PENDING row
- *  beside it is the marked one, and clicking THAT must still do what a row
- *  click has always done — select — with the annotation not swallowing it. */
+ *  COMPLETED` (public/app.js) and merged CRs no longer render rows, so the ONE
+ *  drillable row a wave box can hold is a running one. The PENDING row beside
+ *  it is the marked one, and clicking THAT must still do what a row click has
+ *  always done — select — with the annotation not swallowing it. */
 const DRILL_WAVE: QueueFixture[] = [
   member("CR-G-1", "IN_PROGRESS", 10),
   member("CR-G-2", "PENDING", 20),
@@ -524,7 +525,9 @@ function waveEl(wave: string): HTMLElement {
 
 /** The wave's ROWS, read through the node selector AC28 pins and scoped to the
  *  wave box exactly as the e2e step scopes it
- *  (`tests/e2e/steps/roadmap-graph.steps.ts:84`). */
+ *  (the "the roadmap flowchart for release {string} renders wave {string}
+ *  holding {int} CR nodes within {int} seconds" step in
+ *  `tests/e2e/steps/roadmap-graph.steps.ts`). */
 const rowEls = (wave: string): HTMLElement[] =>
   Array.from(waveEl(wave).querySelectorAll<HTMLElement>('[data-testid="roadmap-node"]'));
 
@@ -637,7 +640,7 @@ const markedRows = (wave: string): string[] =>
 
 // ── The CSS reader: what the SHIPPED stylesheet declares for a real element ──
 //
-// C1's `animatingSelectors` (tests/roadmap-wave-header.test.ts:409) as C2
+// C1's `animatingSelectors` (tests/roadmap-wave-header.test.ts) as C2
 // generalised it: every rule in public/styles.css that declares `prop` is
 // collected, and the LAST one whose selector the given element MATCHES wins —
 // source order, specificity ignored, which for this stylesheet's flat
@@ -716,9 +719,9 @@ function expectFocused040(): void {
 }
 
 /** The gate state the focused release actually resolved to, read off the
- *  render itself (`public/app.js:2910`). Every AC5 fixture asserts this before
- *  it asserts a phrase, so a phrase can never be attributed to the wrong
- *  state. */
+ *  render itself (`RoadmapFlowGate` in `public/app.js`). Every AC5 fixture
+ *  asserts this before it asserts a phrase, so a phrase can never be
+ *  attributed to the wrong state. */
 function gateState(): string {
   const gate = document.querySelector<HTMLElement>('[data-testid="roadmap-flow-gate"]');
   if (gate === null) throw new Error('no [data-testid="roadmap-flow-gate"] rendered');
@@ -783,7 +786,8 @@ describe("CR-CRU-096 §S3/AC5 — the wave renders the roll-up: `N merged` plus 
     // AC5's phrase comes from the gate STATE, so an absent target cannot
     // produce a day: `formatReleaseDate` answers `""` for one and
     // `resolveGateDate` reports `absent` precisely so the surface says why it
-    // is empty rather than conjuring 1970 (public/app-logic.mjs:43-46).
+    // is empty rather than conjuring 1970 (the doc comment on
+    // `formatReleaseDate` in public/app-logic.mjs).
     expect(absentPhrase).not.toMatch(/\d{4}-\d{2}-\d{2}/);
 
     // The SAME state on a different wave: the phrase is a projection of the
@@ -796,8 +800,9 @@ describe("CR-CRU-096 §S3/AC5 — the wave renders the roll-up: `N merged` plus 
     expect(rollupCount("1")).toBe(2);
 
     // `unusable` — the field is there and is not an epoch. A data defect must
-    // not read as a plan nobody authored (public/app-logic.mjs:69-70), so this
-    // state also states a phrase and also states no day.
+    // not read as a plan nobody authored (the `unusable` case documented on
+    // `resolveGateDate` in public/app-logic.mjs), so this state also states a
+    // phrase and also states no day.
     await mountApp({ queue: board(R29), proposals: [PROPOSED_040_BAD_TARGET, PROPOSED_050] });
     expectFocused040();
     expect(gateState()).toBe("unusable");
@@ -944,9 +949,10 @@ describe("CR-CRU-096 §S3/AC7 — the roll-up is wave chrome: no CR identity, no
     const node = rowEls("1")[0]!;
 
     // Non-vacuity: the CR row really IS a bordered, filled, clickable
-    // rectangle in the shipped stylesheet (public/styles.css:1323-1335), so
-    // "the aggregate declares none of that" is a real difference and not an
-    // assertion about two elements that both declare nothing.
+    // rectangle in the shipped stylesheet (the `.app-flow-node` rule in
+    // public/styles.css), so "the aggregate declares none of that" is a real
+    // difference and not an assertion about two elements that both declare
+    // nothing.
     expect(declared(node, "border")).not.toBeNull();
     expect(declared(node, "background")).not.toBeNull();
     expect(declared(node, "cursor")).toBe("pointer");
@@ -1010,12 +1016,12 @@ describe("CR-CRU-096 §S4/AC12 — the first actionable row in the published ord
     // asserted FIRST so this reader is exercised against a real rendered row
     // while the marker below is still red, and so the comparison target is
     // the shipped grammar rather than a hardcoded token
-    // (public/styles.css:1372-1377).
+    // (the `.app-flow-node.in_progress` rule in public/styles.css).
     expect(declared(runner, "animation")).not.toBeNull();
     const ember = declared(runner, "color");
     expect(ember).not.toBeNull();
-    // `▶` is IN_PROGRESS's own status mark (`▶ in progress`,
-    // public/app-logic.mjs:1015) and rides on the RUNNER's row, so it is the
+    // `▶` is IN_PROGRESS's own status mark (`▶ in progress`, `CR_STATUS_MARK`
+    // in public/app-logic.mjs) and rides on the RUNNER's row, so it is the
     // MARKED row and the marker that may not wear it. `▸` is what §5 reserves
     // and live introduces none — the zone-wide prohibition holds today and
     // must survive this cycle.
@@ -1243,7 +1249,7 @@ describe("CR-CRU-096 §S4/AC15 — the annotation does not cost the row its clic
 
     expect(rowCrs("1")).toEqual(["CR-G-1", "CR-G-2"]);
 
-    // `roadmapDrillable` is IN_PROGRESS || COMPLETED (public/app.js:2678) and
+    // `roadmapDrillable` is IN_PROGRESS || COMPLETED (public/app.js) and
     // merged CRs render no rows, so the running row is the drillable one and
     // it still says so before it is clicked.
     const runner = rowFor("1", "CR-G-1");

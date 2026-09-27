@@ -8,7 +8,7 @@
 // already-loaded `state.events` feed (project-scoped, CR-CRU-032 §S4) —
 // NEVER from the coverageTrend series itself (that series has no per-run
 // identity, only one point per day). Clicking a heat slice opens the
-// EXISTING run drill-in (`openDrillin`, public/app.js:640) as a pane state
+// EXISTING run drill-in (`openDrillin` in public/app.js) as a pane state
 // — the same `/run/<eventId>` contract tests/coverage-click.test.ts already
 // pins for the coverage-meter click.
 //
@@ -495,7 +495,6 @@ describe("§S2 — retention honesty: a day bar with NO matching within-retentio
   test("2 day bars, one backed by a live event (drillable) and one backed ONLY by the coverageTrend rollup point (no matching event) — the rollup-only bar renders dimmed + aria-disabled and produces NO drill row on click; the live-backed bar is unaffected", async () => {
     const key = "drill-retention-1";
     const liveDay = dayAt(LATEST, 1); // 2026-05-31
-    const rollupOnlyDay = dayAt(LATEST, 0); // 2026-06-01 (LATEST) — no event
     const liveDayMs = Date.parse(`${liveDay}T00:00:00.000Z`);
 
     await mountApp({

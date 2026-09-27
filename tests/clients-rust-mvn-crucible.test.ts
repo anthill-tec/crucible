@@ -55,9 +55,9 @@
 // NOT assumed): `POST /api/v2/runs {projectKey, agentId, codec, dataPath|
 // data, tier, context}` is the v2 equivalent of v1 `/api/ingest` (codec
 // "junit" via `parseJunitPath` supports BOTH a single file AND a directory
-// of `TEST-*.xml` — src/codecs/junit.ts:195-215); `POST /api/v2/runs/parsed`
+// of `TEST-*.xml` — `parseJunitPath` in src/codecs/junit.ts); `POST /api/v2/runs/parsed`
 // is the v2 equivalent of v1 `/api/ingest/parsed`; `POST /api/v2/runs/compile`
-// is the v2 equivalent of v1 `/api/ingest/compile`. `runMeta()` (v2.ts:378)
+// is the v2 equivalent of v1 `/api/ingest/compile`. `runMeta()` (src/v2.ts)
 // accepts `tier` only when it's a member of the server's TIERS set (`unit`,
 // `module`, `integration`, `e2e`, `regression`, `bdd`) — all four values
 // pinned below (unit/module/e2e/regression) are valid members.
@@ -790,9 +790,9 @@ describe("clients/rust-crucible.py — byte-compatible CLI surface (existing fla
 // CR-CRU-050 §S1/§S1b — rust has TWO client-side JUnit parse sites, both
 // with the identical unguarded `status = "fail" if fail else "pass"` / bare
 // `else: passed += 1` and a hardcoded `"pending": 0`:
-//   site 1: `_regression_ingest_run` (rust-crucible.py:700-763), driving the
+//   site 1: `_regression_ingest_run` (rust-crucible.py), driving the
 //           `regression-ingest` verb.
-//   site 2: `_workspace_regression_run` (rust-crucible.py:1246-1307), driving
+//   site 2: `_workspace_regression_run` (rust-crucible.py), driving
 //           `workspace-regression` — the ORCHESTRATOR PRE-MERGE-GATE path.
 // A fix touching only site 1 is the likely partial fix the CR calls out —
 // both are covered here, each with its own fixture and its own assertions.
@@ -956,14 +956,14 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
 });
 
 // CR-CRU-050 §S2 — the auto-ingest / test verbs' SINGLE-report-dir path
-// (`_ingest_junit_axi`, rust-crucible.py:836-858) hands the junit XML to the
+// (`_ingest_junit_axi` in rust-crucible.py) hands the junit XML to the
 // SERVER's codec (POST /api/v2/runs) rather than the client's own
 // `_parse_junit` — the server already classifies `<skipped/>` as pending
 // correctly (§S4 — no server change in this CR's scope), so the counts here
 // are a POSITIVE pin, never a RED. What this CR DID fix client-side is purely
-// the PRINTING: the TOON `run:` block (`_emit_ingest_axi`,
-// rust-crucible.py:362-377) and the plain "ingest junit: ..." stderr line
-// (rust-crucible.py:852-855) both build from `resp.get("run")` — which the
+// the PRINTING: the TOON `run:` block (`_emit_ingest_axi` in
+// rust-crucible.py) and the plain "ingest junit: ..." stderr line
+// (printed by `_ingest_junit_axi` itself) both build from `resp.get("run")` — which the
 // server response already carried `pending` on — yet dropped the key when
 // printing. Both now carry it, which is what the test below pins.
 describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir path (server-parsed, correct counts) carries pending in the TOON run: block and the 'ingest junit:' print line", () => {
@@ -1560,21 +1560,21 @@ describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flag
   });
 });
 
-// CR-CRU-050 §S1/§S1b/§S3/§S2 — mvn-crucible.py:641 (`_parse_junit`) is the
+// CR-CRU-050 §S1/§S1b/§S3/§S2 — `_parse_junit` (mvn-crucible.py) is the
 // REFERENCE implementation this whole CR fixed the other four clients
 // toward, and MUST NOT CHANGE. `regression` (cmd_regression → _regression_run)
 // ALWAYS routes through `_parse_junit` regardless of report-dir count, so it
 // is the deterministic way to pin that reference behaviour directly. mvn's
 // COUNTING was therefore already correct before this CR; what this CR DID
 // change on mvn, per the dispatch's Part C, is purely its PRINT surfaces: the
-// TOON `run:` block (`_emit_ingest_summary_axi`, mvn-crucible.py:377-392)
+// TOON `run:` block (`_emit_ingest_summary_axi` in mvn-crucible.py)
 // dropped `pending` from the printed envelope even though the summary it's
 // built from already carried the real count, and — separately — the
-// single-report-dir path's OWN TOON block (`_emit_ingest_axi_resp`,
-// mvn-crucible.py:361-374) and its "ingest junit: ..." stderr line
-// (mvn-crucible.py:720-722) did the same for the SERVER-parsed junit-dir path.
+// single-report-dir path's OWN TOON block (`_emit_ingest_axi_resp` in
+// mvn-crucible.py) and its "ingest junit: ..." stderr line
+// (printed by `_ingest_junit_dir`) did the same for the SERVER-parsed junit-dir path.
 // All three now carry `pending`, which is what the tests below pin.
-describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:641) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block carries pending (fake mvnw)", () => {
+describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (`_parse_junit` in clients/mvn-crucible.py) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block carries pending (fake mvnw)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1615,7 +1615,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // CONFIRMATION (not a RED) — mvn-crucible.py:641 already gets this right.
+    // CONFIRMATION (not a RED) — `_parse_junit` (mvn-crucible.py) already gets this right.
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.failed).toBe(1);
     expect(event.summary?.passed).toBe(1);
@@ -1688,7 +1688,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir p
     expect(block).toContain("pending: 1");
 
     // §S2 (extended) — the plain "ingest junit: ..." stderr line
-    // (mvn-crucible.py:720-722).
+    // (`_ingest_junit_dir` in mvn-crucible.py).
     expect(res.stderr).toContain("ingest junit:");
     expect(res.stderr).toContain("pending=1");
   });

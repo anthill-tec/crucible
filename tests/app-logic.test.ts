@@ -664,9 +664,9 @@ describe("CR-CRU-094 §S1/AC3 — app-logic's context.cycleId consumers, guarded
 // WHY HERE: this file owns the browser's pure predicates. The SERVER's rule is
 // imported (`declaredTracks`, src/store.ts) and the BROWSER's is reached the
 // only way production reaches it — `declaredLabel`/`distinctLabels` are
-// module-private, and `focusedReleaseView(...).tracks`
-// (public/app-logic.mjs:1537) IS `distinctLabels(members, "track")`, the same
-// call the wave lanes (:1482/:1487) and `roadmapTableColumns` (:1202) make.
+// module-private, and `focusedReleaseView(...).tracks` (its return, in
+// public/app-logic.mjs) IS `distinctLabels(members, "track")`, the same
+// call the wave lanes (`laneTracks`) and `roadmapTableColumns` make.
 // Exporting the private pair to test it would mint a surface AC6 does not ask
 // for; driving the real consumer measures the real predicate.
 //

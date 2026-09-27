@@ -60,7 +60,7 @@ interface LifecycleFixture {
   at: number;
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes, in the
+/** `QueueEntry` (`src/types.ts`) — what `GET …/queue` publishes, in the
  *  server's canonical order (CR-CRU-095 §S1). The ORDER OF THIS ARRAY is the
  *  published order and the only order zone 2 may use. */
 interface QueueFixture {
@@ -108,8 +108,8 @@ const PROPOSED: StripGateLike = {
 };
 
 /** `wave: ""` is the wire's own way of declaring NO wave
- *  (`src/types.ts:392`), and `declaredLabel` (public/app-logic.mjs:1082)
- *  reads it as the `null` group. */
+ *  (the `wave` field of `QueueEntry` in `src/types.ts`), and `declaredLabel`
+ *  (public/app-logic.mjs) reads it as the `null` group. */
 const LOOSE = "";
 
 const entry = (
@@ -245,7 +245,8 @@ describe("CR-CRU-096 AC9/AC10/AC11a — the TRIMMED path is byte-for-byte what i
     expect(ids(box.rows)).not.toContain("CR-W-V");
     // CR-CRU-147 §S1/AC3 (ruling 2) SUPERSEDES this suite's earlier reading:
     // `entries` drove the header's whole-membership count
-    // (`box.entries.length`, public/app.js:3604/3645), and the AC now requires
+    // (`box.entries.length`, `RoadmapFlowWave` in public/app.js), and the AC now
+    // requires
     // that count to exclude a dead member too — so `entries` itself no longer
     // names CR-W-V, not merely `rows`.
     expect(ids(box.entries)).not.toContain("CR-W-V");
@@ -257,11 +258,9 @@ describe("CR-CRU-116 §S1 — the loose box is not a wave, so it holds no wave's
   // §S1 places a CR with no declared wave OUTSIDE the single-active-wave
   // constraint entirely: "never blocked, never blocking, and never confers
   // activeness on any wave". The store spends one line on it
-  // (`if (row.wave === "") continue;`, src/store.ts:3388 — re-pinned
-  // 2026-09-10 from :3377 (CR-CRU-118 §S4a added 11 comment lines above it),
-  // and before that 2026-09-09 from :3374, which is the `let active`
-  // declaration three lines above it; that range was miscited on arrival,
-  // not staled by a later edit).
+  // (`if (row.wave === "") continue;`, in `waveScopeRefusal` in src/store.ts
+  // — once cited by line number and re-pinned twice, the second time
+  // because CR-CRU-118 §S4a added 11 comment lines above it).
   //
   // The view module is the OTHER half of that one fact, and the two halves
   // must agree. §S4 made `active` a per-box fact by flipping it for any box

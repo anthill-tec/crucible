@@ -7,9 +7,9 @@
 // "400 listing its id" + "closes once every cycle is terminal" shapes.
 // What CR-CRU-048 actually adds, per the ACs (verbatim):
 //   - "the message NAMES the blocking cycle id(s) AND label(s)" — today only
-//     the numeric id is named (src/store.ts:1528's template string, and the
-//     `openCycles` field is id-only) — label is NOT surfaced anywhere in the
-//     response. RED until GREEN adds it.
+//     the numeric id is named (the refusal template string in `closePlan` in
+//     src/store.ts, and the `openCycles` field is id-only) — label is NOT
+//     surfaced anywhere in the response. RED until GREEN adds it.
 //   - "the refusal message should NAME abort as the remedy" (gap-analysis,
 //     §S2) — today `hints.nonTerminalCycles` (src/hints.ts) tells the caller
 //     to transition cycles or inspect them via GET, but never mentions

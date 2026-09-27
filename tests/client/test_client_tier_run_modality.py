@@ -58,7 +58,8 @@ colour means nothing:
          makes) and the client refuses it as undeclared, so no maven runs at
          all.
   RED  `RustSplitCellsTest` — all THREE methods. `rust-crucible.py` hands
-         `add_tier_verbs` an EMPTY mapping (`clients/rust-crucible.py:2647`),
+         `add_tier_verbs` an EMPTY mapping (its call in `main` in
+         `clients/rust-crucible.py`),
          so `unit`, `integration` and `e2e` all refuse, and cargo's `--lib` /
          `--test <t>` / profile selection — the split §S3 names — is reachable
          only through the untiered `test` verb.
@@ -78,7 +79,7 @@ colour means nothing:
   RED  `RustHigherTiersStopReportingAsUnitTest` — all THREE. `_smoke_test`
          builds its `/api/v2/runs` payload with no `tier` key at all, so
          `smoke-test`, its `-P e2e` drive and `docker-e2e-gate` all land on
-         `src/store.ts:1911`'s `tier: meta?.tier ?? "unit"` — the board
+         `recordTestEvent` in `src/store.ts`: `tier: meta?.tier ?? "unit"` — the board
          records rust's docker e2e gate as a unit run.
   RED  `ArduinoTierClaimMatchesTheWireTest.
          test_every_arduino_verb_that_sends_a_tier_names_it_in_its_own_help` —
@@ -139,8 +140,9 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
 
   1. AC6a says the declared cells are "all six tiers in bun and python (where
      every cell is declared)", and AC5 says every pre-existing tier-named verb
-     "keeps its behaviour" — naming bun `regression` :2010 and python
-     `regression` :1373. In a fixture project that declares NOTHING, the
+     "keeps its behaviour" — naming bun `regression` and python
+     `regression` (each client's `cmd_regression`). In a fixture project that
+     declares NOTHING, the
      strict reading of AC6a makes those two verbs refuse, which fails AC5 and
      cycle 378's `{Bun,Python}EarnedTierTest`. This file rules the collision
      the only way that leaves both satisfiable — `regression` is "every tier
@@ -158,9 +160,9 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
      bun/python ones are the AC's own words.
   3. AC13's Context is measurably WRONG about the client it describes, and the
      DN's row it came from with it. "Today this client stamps nothing at all"
-     and "`:1067` reads 'tier unit (§S3)' … while the code sends no `tier` at
+     and "[arduino's `test` help] reads 'tier unit (§S3)' … while the code sends no `tier` at
      all" are both false: `_run_native_tests_body` has posted `"tier": tier`
-     since before this CR was cut (`develop`:576, unchanged), and cycle 377
+     since before this CR was cut (on `develop` too, unchanged), and cycle 377
      replaced those two help strings with the shared registrar's. The census
      that produced "arduino — none, no tier literal anywhere" scanned `tier=`
      KEYWORD literals only, and arduino states its tiers POSITIONALLY
@@ -168,8 +170,8 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
      (`"tier": "unit"`). AC13(i) is therefore a PIN here, not a RED.
   4. The SAME blind spot hides two unearned stamps AC3 (cycle 378, closed)
      could not see: `arduino cmd_test` sends `unit` for a verb whose name is
-     not a tier, and `arduino cmd_auto_ingest` (`clients/arduino-crucible.py`
-     :729) hardcodes `"tier": "unit"` in its payload dict — for a verb that
+     not a tier, and `arduino cmd_auto_ingest` (`clients/arduino-crucible.py`)
+     hardcodes `"tier": "unit"` in its payload dict — for a verb that
      runs no tests at all, which is exactly the case AC3 calls "the worse
      case". Neither is asserted as an AC3 site here (cycle 379 is
      AC6/AC6a/AC12/AC13); the `test` one surfaces through AC13's help-vs-wire
@@ -285,12 +287,10 @@ TOOLCHAIN_SPLIT_CELLS = {
     "arduino": ("unit",),
 }
 
-# The two clients whose toolchain makes NO tier split, so §S3 says every cell
-# is declared.
-NO_SPLIT_CLIENTS = ("bun", "python")
-
-# ESCALATION 1 — the cells those two clients ship no target for. `regression`
-# is excluded because the whole suite IS that tier's target, never a fallback.
+# ESCALATION 1 — the cells bun and python (the two clients whose toolchain
+# makes NO tier split, so §S3 says every cell is declared) ship no target for.
+# `regression` is excluded because the whole suite IS that tier's target, never
+# a fallback.
 _DECLARED_CELLS_WITH_NO_TARGET = tuple(sorted(TIER_VOCABULARY - {"regression"}))
 
 # What a refusal must name, per stack. bun's and python's are AC6a's own words;
@@ -1141,8 +1141,8 @@ class RustHigherTiersStopReportingAsUnitTest(_RustModalityCase):
 
     RED — all three. `_smoke_test` builds its `/api/v2/runs` payload with no
     `tier` key at all, so `smoke-test`, its `-P e2e` drive and
-    `docker-e2e-gate` all land on `src/store.ts:1911`'s
-    `tier: meta?.tier ?? "unit"` and the board records rust's docker e2e gate
+    `docker-e2e-gate` all land on `recordTestEvent` in `src/store.ts`:
+    `tier: meta?.tier ?? "unit"`, and the board records rust's docker e2e gate
     as a unit run. See ESCALATION 5 for what the DN does and does not say about
     the mapping."""
 
@@ -1171,7 +1171,7 @@ class RustHigherTiersStopReportingAsUnitTest(_RustModalityCase):
                 payload.get("tier"), expected,
                 f"AC12 — rust `{verb}`: this run is not a unit run, and a "
                 f"tier-less body lands on the server's ?? unit default "
-                f"(`src/store.ts:1911`), so the board reports it as one. POST "
+                f"(`recordTestEvent` in `src/store.ts`), so the board reports it as one. POST "
                 f"body carried tier={payload.get('tier')!r}, expected "
                 f"{expected!r}.")
 

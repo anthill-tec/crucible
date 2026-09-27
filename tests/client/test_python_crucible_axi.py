@@ -348,19 +348,6 @@ class _BasePythonAxiTest(unittest.TestCase):
                         {"id": active_id - 1, "status": "done"}]},
         ])
 
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-quiet", "cr": "CR-CRU-030", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
-        ])
-
-    def _no_open_plans_at_all(self):
-        """CR-CRU-036 §S1 tolerant case: no open plan exists at all (a
-        lightweight project) — the query is DEFINITIVE (ok:True, empty plans
-        list), not a failure, but there is simply no open plan to carry an
-        active cycle. The guard must PROCEED, never withhold."""
-        return _open_plans_response([])
-
     def _plans_fetch_failure(self):
         """CR-CRU-036 §S1 tolerant case: the plans GET itself fails (infra
         hiccup / a non-UUID project key 400ing server-side) — NOT proof of
@@ -626,7 +613,7 @@ class PythonCrucibleVerbEnvelopeTest(_BasePythonAxiTest):
         test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
         against the SAME `while proc.poll() is None:` polling loop
         python-crucible.py's `cmd_gate_run` already wires up (confirmed by
-        reading the function body at python-crucible.py:1188)."""
+        reading the function body, `cmd_gate_run` in python-crucible.py)."""
         saved_path = os.environ.get("PATH", "")
         fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-py-interim-")
         fake_path = os.path.join(fake_bin_dir, "no-mistakes")
@@ -1239,7 +1226,7 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         )
 
     def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
-        """CR-CRU-038 §S2b -- `_run_logged` (python-crucible.py:279-287)
+        """CR-CRU-038 §S2b -- `_run_logged` (python-crucible.py)
         ALWAYS captures the real xmlrunner combined stdout+stderr; that
         captured output must flow into the /api/v2/runs/parsed payload as
         `raw` so the server-stored run carries real output for the

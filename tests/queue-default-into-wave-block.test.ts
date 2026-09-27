@@ -9,8 +9,9 @@
 //
 // ── What is broken today ───────────────────────────────────────────────────
 //
-// `replaceQueue` writes `declaredSeq ?? index` (src/store.ts:3498), where
-// `declaredSeq = entry.seq ?? snapshot?.seq` (:3476). A declared seq wins, a
+// `replaceQueue` writes `declaredSeq ?? index` (src/store.ts), where
+// `declaredSeq = entry.seq ?? snapshot?.seq` (in the same method). A declared
+// seq wins, a
 // HELD seq survives a re-import (CR-091 carry-forward), and a row with NEITHER
 // takes its ARRAY POSITION in the post — 0..93 on the live board. That value
 // is on a different scale from `wave-sequence`'s `waveSeqBase(wave) + n`
@@ -25,7 +26,8 @@
 // or assigned in that wave AND inside its block) + 1`, or `waveSeqBase(wave)
 // + 1` when the block is empty. For an all-defaulted wave (a fresh import)
 // that is exactly `base + position`, mirroring `wave-sequence`'s `base +
-// index + 1` (src/store.ts:3733/3749); for a wave already holding an
+// index + 1` (`sequenceQueueWave`/`densifyWave` in src/store.ts); for a wave
+// already holding an
 // authored block, a row added later is APPENDED after it (AC12a) — never a
 // collision, never a disturbed authored order. A held value OUTSIDE the block
 // (legacy positional `62`) does not count toward the slot (AC12b) — the next
@@ -83,7 +85,7 @@ interface AnyBody {
 
 const ORCH = "orchestrator-1";
 
-/** §S2's one predicate (`inWaveBlock`, src/store.ts:462-465), imported rather than re-derived. */
+/** §S2's one predicate (`inWaveBlock` in src/store.ts), imported rather than re-derived. */
 function expectInBlock(cr: string, wave: string, seq: number | undefined): void {
   expect(seq, `${cr} (wave ${JSON.stringify(wave)}) has no seq`).toBeDefined();
   expect(
@@ -949,7 +951,8 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const held = (await get(`/api/v2/projects/${key}/queue`)).body.entries!;
 
       // The thousandth member would take wave 6's base: refused BY NAME, as
-      // wave-sequence refuses it (src/v2.ts:2245-2248), in ONE wording that
+      // wave-sequence refuses it (`handleWaveSequence` in src/v2.ts), in ONE
+      // wording that
       // states the seq that would leave the block (AC12h) and ONE help[] (AC12i).
       const refused = await bulk(key, rows(WAVE_SEQ_STRIDE));
 

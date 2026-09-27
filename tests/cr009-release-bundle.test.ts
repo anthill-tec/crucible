@@ -148,9 +148,9 @@ describe("§S5 docs — README quick start", () => {
   // CR-CRU-139 §S4 — the front page is the one document nobody reads twice.
   // `README.md:77` tells a first-time operator that `crucible-axi serve`
   // "honours `CRUCIBLE_HOST` / `CRUCIBLE_PORT`"; it honours neither
-  // (`src/server.ts:158`), and the flags it does honour WRITE the server's
-  // `crucible.toml` rather than pass a per-run value
-  // (`crucible_axi/cli.py:368-375`).
+  // (`resolveListener` in `src/server.ts`), and the flags it does honour
+  // WRITE the server's `crucible.toml` rather than pass a per-run value
+  // (`cmd_serve` in `crucible_axi/cli.py`).
   //
   // The README carries NO retirement record, and that is deliberate rather
   // than an omission: a quick start's job is to be true today, and the record
@@ -180,7 +180,7 @@ describe("§S5 docs — RUNBOOK", () => {
   // server and HOW ITS LISTENER IS SET, loopback by default". That rule is
   // unchanged and still load-bearing; only its subject moved. It asserted the
   // two env var names "read from src/server.ts" — and src/server.ts stopped
-  // reading them in C1 (`:158`), so the assertion had quietly become a
+  // reading them in C1 (`resolveListener`), so the assertion had quietly become a
   // requirement that the RUNBOOK keep documenting a knob that does nothing.
   // The listener is `[server] host`/`port` in the server's own crucible.toml
   // now, so that is what the document must carry.
@@ -370,8 +370,8 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
     const files = npmPackDryRunFiles();
 
     // POSITIVE — the runtime paths the server actually needs (src/server.ts
-    // resolves PUBLIC_DIR package-relative and reads package.json for
-    // pkg.version at :92/:15; there are no runtime deps to worry about),
+    // resolves `PUBLIC_DIR` package-relative and reads package.json into
+    // `pkg` for `pkg.version`; there are no runtime deps to worry about),
     // plus the licence file the registry page renders.
     for (const required of ["bin/", "src/", "public/", "LICENSE"]) {
       const present = files.some((f) => f === required || f.startsWith(required));
@@ -1006,11 +1006,11 @@ describe("§S4 docs — RELEASING.md", () => {
 
   test("documents the TestPyPI rehearsal loop via scripts/release.sh checkpoint, and that an untagged checkpoint derives a clean X.Y.Z.devN via no-local-version", () => {
     const doc = readText(relPath);
-    const lower = doc.toLowerCase();
 
     expect(doc).toContain("checkpoint");
     expect(doc).toContain("release.sh");
-    // Exact hatch-vcs config identifier, matching pyproject.toml:33.
+    // Exact hatch-vcs config identifier, matching `raw-options` under
+    // `[tool.hatch.version]` in pyproject.toml.
     expect(doc).toContain("no-local-version");
     // The devN suffix shape produced by an untagged checkpoint upload.
     expect(doc).toMatch(/\.dev[Nn]?\b|devN/);
@@ -1590,7 +1590,8 @@ describe("CR-CRU-066 §S4/AC6 docs — RUNBOOK reconciled", () => {
   // subject moved, because the form it named stopped working.
   //
   // It asserted two `VAR=value crucible-axi serve` invocations. Nothing reads
-  // those variables since C1 (`src/server.ts:158`), and C4's retirement guard
+  // those variables since C1 (`resolveListener` in `src/server.ts`), and C4's
+  // retirement guard
   // (tests/docs-runbook-documents-every-limit.test.ts) reports a line ASSIGNING
   // a retired connection variable as presenting it as live configuration — so
   // the old form required the RUNBOOK to carry the exact line another guard
@@ -1599,8 +1600,9 @@ describe("CR-CRU-066 §S4/AC6 docs — RUNBOOK reconciled", () => {
   //
   // The subject is the mechanism that replaced them, and it is a real one:
   // `crucible-axi serve --host/--port` WRITES the listener into the server's
-  // own `crucible.toml` and then boots it (`crucible_axi/cli.py:368-375`,
-  // `crucible_axi/install.py:559`). So both halves are kept and the
+  // own `crucible.toml` and then boots it (`cmd_serve` in
+  // `crucible_axi/cli.py`, `write_listener_settings` in
+  // `crucible_axi/install.py`). So both halves are kept and the
   // anti-deletion property holds in both directions — the command line that
   // sets the listener AND the declaration that command writes must each stay
   // documented, and deleting either fails this test.
@@ -1630,7 +1632,8 @@ describe("CR-CRU-066 §S4/AC6 docs — RUNBOOK reconciled", () => {
 });
 
 describe("CR-CRU-066 §S4/AC6 docs — install.sh header prose reconciled", () => {
-  // Defect 6 — install.sh:4/:16/:18-20 still call the hosting URL an
+  // Defect 6 — install.sh's header comment (its usage lines and its hosting-URL NOTE) still
+  // call the hosting URL an
   // unfinished human-gated step and leave `<crucible>` as a placeholder.
   test("install.sh no longer presents its hosting URL as an unfinished, human-gated step", () => {
     const script = readText("install.sh");
@@ -1640,7 +1643,7 @@ describe("CR-CRU-066 §S4/AC6 docs — install.sh header prose reconciled", () =
     expect(script).toContain(INSTALL_SH_RAW_URL);
   });
 
-  // Defect 6 — install.sh:10 still claims a skill-set install.
+  // Defect 6 — install.sh's header comment (its stage summary) still claims a skill-set install.
   test("install.sh claims no skill-set install and names the two real stages", () => {
     const script = readText("install.sh");
     expect(script).not.toMatch(/skill/i);

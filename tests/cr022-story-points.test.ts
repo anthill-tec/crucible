@@ -4,9 +4,9 @@
 // Design: docs/research/DN-crucible-analytics.md §4
 //
 // Baseline (measured 2026-09-24 gap analysis, still true at this RED pass,
-// re-confirmed against src/v2.ts:2959-3042 (handleCrPlan) and
-// src/store.ts:5542-5620 (upsertQueueEntry) / src/store.ts:352-357
-// (QueuePlanInput) / src/types.ts:437-462 (QueueEntry)): no `--points`
+// re-confirmed against `handleCrPlan` (src/v2.ts) and `upsertQueueEntry`
+// (src/store.ts) / `QueuePlanInput` (src/store.ts) / `QueueEntry`
+// (src/types.ts)): no `--points`
 // exists on `cr-plan`, `QueuePlanInput` carries only {cr,release,wave,
 // title}, `upsertQueueEntry` never reads or stores a `points` field (0/144
 // queue rows carried the old `size`, and nothing has since changed that),

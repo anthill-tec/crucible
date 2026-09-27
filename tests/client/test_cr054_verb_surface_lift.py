@@ -475,7 +475,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
         # Re-pinned 2026-09-12 (CR-CRU-124 C1 FIX), "planId']}/cycles\"," ->
         # "}/cycles\",": CR-CRU-124 §S3 gave `cycle-add` a `--plan <id>` that
         # names the target plan DIRECTLY, so the plan id no longer necessarily
-        # comes from a resolved plan dict — `clients/_crucible_axi.py:2564`
+        # comes from a resolved plan dict — `cmd_cycle_add` in clients/_crucible_axi.py
         # now posts to f"…/{plan_id}/cycles" where it once posted to
         # f"…/{plan['planId']}/cycles". The production change is CORRECT and is
         # the CR's entire point; only this guard's text marker went stale, so

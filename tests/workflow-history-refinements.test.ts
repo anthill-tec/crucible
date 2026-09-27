@@ -47,8 +47,8 @@
 //   - §S1.1 ordering: waves render newest-first (wave label numeric
 //     descending); within a wave, CR groups render by plan `closedAt`
 //     descending. `closedAt` is a real field already returned by the server
-//     (`Plan.closedAt`, src/types.ts:168) — this file's `PlanFixture` adds it
-//     as an optional passthrough, not a new data-model concept.
+//     (`Plan.closedAt`, `Plan` in src/types.ts) — this file's `PlanFixture` adds
+//     it as an optional passthrough, not a new data-model concept.
 //   - §S1.3 exclusion: a CR group whose plan `status` is "open" never
 //     renders inside `[data-testid="workflow-history"]` — it renders solely
 //     inside `[data-testid="workflow-active"]`. Wave-boundary-state
@@ -105,7 +105,7 @@ interface PlanFixture {
   planId: number | string;
   cr: string;
   projectKey: string;
-  // CR-CRU-125 — `aborted` is a real `Plan.status` (src/types.ts:346, added by
+  // CR-CRU-125 — `aborted` is a real `Plan.status` (`Plan` in src/types.ts, added by
   // CR-CRU-024 §S6: a declared workflow the user discarded, after which the cr
   // may re-file). This fixture widens to it because CR-CRU-125's subject IS
   // the aborted-beside-open shape; every pre-existing fixture is unaffected.
@@ -732,7 +732,7 @@ describe("§S2.1/§S2.2 history cycle drill-down — toggle linked runs, drill i
 // this pins the run-list-WITHIN-a-cycle ordering only, a distinct axis.
 //
 // RED phase: `linkedRuns` in `public/app-logic.mjs`'s `workflowLens`
-// (~line 328) is built as `new Map(); // cycleId -> runs (input order)` —
+// is built as `new Map(); // cycleId -> runs (input order)` —
 // each run is `.push()`ed onto its cycle's list strictly in the ORDER the
 // `events` array arrives in, with no timestamp sort at all. This fixture
 // deliberately feeds the 3 linked events to `mountApp` OUT of timestamp
@@ -898,11 +898,11 @@ describe("§S2.3 active-cycle drill-down parity — RULED (a): always-inline run
 // History entry misreports the live CR as `0/2 cycles` ✗ ⊘.
 //
 // DRIFT-1's correction is load-bearing for the assertions below:
-// `LensCrGroup` (public/app.js:4611-4621) is the ONLY producer of
+// `LensCrGroup` (public/app.js) is the ONLY producer of
 // `[data-testid="cr-group"]` and is reached solely through `WorkflowHistory`
-// (:4739-4751); `WorkflowActive` (:4384-4425) renders open plans straight
-// from `scopedPlans()` and identifies its CR through `crRootProps` →
-// `[data-testid="workflow-cr-root"][data-cr]` (:4378-4382). So the count
+// (public/app.js); `WorkflowActive` (public/app.js) renders open plans
+// straight from `scopedPlans()` and identifies its CR through `crRootProps`
+// (public/app.js) → `[data-testid="workflow-cr-root"][data-cr]`. So the count
 // inside History is ZERO and the Active panel's marker is the CR ROOT — never
 // a `cr-group`, which the Active panel does not emit at all.
 describe("CR-CRU-125 §S1/§S2 — a live CR renders in Active only, never in History (DOM)", () => {

@@ -6,19 +6,19 @@
 // shows the passing browser's content.
 //
 // SEAMS UNDER TEST (measured on this branch, e289470, before C2 GREEN):
-//   - src/v2.ts handleEventGet ~L3789: `?suite=<name>` does
+//   - src/v2.ts handleEventGet, its `?suite=<name>` branch: does
 //     `(event.tree ?? []).find((node) => node.name === suite)` — always the
 //     FIRST same-named node; `browser` never read from the query.
-//   - src/v2.ts handleEventGet ~L3797-3802: `?depth=suites` maps each node to
+//   - src/v2.ts handleEventGet, its `?depth=suites` branch: maps each node to
 //     `{name, status, counts}` — `browser` dropped from the skeleton reply.
-//   - public/app.js RunDetailBody (~L5953): `suiteLeaves` (~L5956),
-//     `suiteLoading` (~L5962) and `suiteWindow` (~L5965) are all keyed by
-//     `suite.name` alone; `loadSuite` (~L6001-6013) fetches `?suite=<name>`
+//   - public/app.js RunDetailBody: its `suiteLeaves`,
+//     `suiteLoading` and `suiteWindow` maps are all keyed by
+//     `suite.name` alone; `loadSuite` fetches `?suite=<name>`
 //     with no browser and matches the reply by `name` alone; `expandSuite`
-//     (~L6024-6027) early-returns once ANY node of that name has loaded, so
+//     early-returns once ANY node of that name has loaded, so
 //     a second same-named suite-row never issues its own fetch at all;
-//     `HeatStrip` (~L6216-6227), `resolveRaw` (~L6395-6410, keys leaves by
-//     `suite.name`) and `TestBody` (~L6467-6498, `leavesMap[suite.name]`)
+//     `HeatStrip`, `resolveRaw` (keys leaves by
+//     `suite.name`) and `TestBody` (`leavesMap[suite.name]`)
 //     all read the same name-only map.
 //
 // DESIGN CHOICES DECLARED HERE — the AC names the DEFECT, not the wire

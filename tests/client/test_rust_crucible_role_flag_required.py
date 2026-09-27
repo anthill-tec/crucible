@@ -4,8 +4,9 @@ implying the agentId carries the role.
 
 Contract pinned verbatim from
 docs/changes/CR-CRU-044-phase-as-first-class-data.md §S3/§S4 (as corrected
-2026-07-28 -- see the table at line 91 of that doc). `rust-crucible.py:2058`
-has the correct enum already (a MULTI-LINE `add_argument(` call -- confirmed
+2026-07-28 -- see the table at line 91 of that doc). The `register`
+subparser's `--role` in `main` (clients/rust-crucible.py) has the correct
+enum already (a MULTI-LINE `add_argument(` call -- confirmed
 by reading the unfiltered region, per the CR's own note that a single-line
 grep on this file misses it) but ALSO `default="report"`, so `--role` is
 optional today. §S3's rust-specific work is "drop the default -> required".

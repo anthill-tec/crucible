@@ -23,11 +23,11 @@ THE API THIS RED PINS, and why each piece exists:
         normalise its `--track`. Without this the fleet would answer `2`
         differently on the read path (`next`) and the write path
         (`wave-sequence`), which is the exact inconsistency the fleet standard
-        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:362-365).
+        exists to prevent. Mirrors `normalizeTrack` (src/store.ts).
 
     queue_tracks(queue) -> [str]
         §S3, as CR-CRU-108 §S2 leaves it: the tracks the queue READ published
-        (`declaredTracks`, src/store.ts:393), NOT a set the client derives.
+        (`declaredTracks` in src/store.ts), NOT a set the client derives.
         `len > 1` is still the whole definition of "multi-track", and the
         values are still echoed as stored rather than re-spelled — the rule
         simply has one home now, on the server that owns the normalisation.
@@ -304,7 +304,6 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
         by_cr = {e["cr"]: e for e in entries}
         for cr, _wave, spelling in cls.declared[:len(cls.SPELLINGS)]:
             cls.stored[spelling] = by_cr[cr].get("track")
-        cls.other_stored = by_cr["CR-TRK-OTHER"].get("track")
 
     @classmethod
     def _declare(cls, cr, wave, track):

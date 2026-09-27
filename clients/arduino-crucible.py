@@ -339,7 +339,8 @@ def _parse_junit(path):
             total += 1
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase is PENDING, never
             # passed. Order matters: failure/error first, then skipped, then
-            # pass. A skip does NOT fail its suite. Mirrors mvn-crucible.py:641.
+            # pass. A skip does NOT fail its suite. Mirrors `_parse_junit` in
+            # `clients/mvn-crucible.py`.
             if bad:
                 status = "fail"
                 failed += 1

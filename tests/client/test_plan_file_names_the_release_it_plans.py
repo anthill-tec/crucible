@@ -26,7 +26,7 @@ What is asserted, and why in these three shapes:
 RED, measured against the fleet today (2026-09-12): no client declares
 `--release` on `plan-file` — `argparse` answers `unrecognized arguments:
 --release` and exits 2 — and `cmd_plan_file` builds its payload with no
-`release` key at all (`clients/_crucible_axi.py:2760`). The pass-side class
+`release` key at all (`cmd_plan_file` in `clients/_crucible_axi.py`). The pass-side class
 below pins what the addition must NOT disturb, and passes today.
 
 ESCALATION (recorded, not guessed — see this file's report):

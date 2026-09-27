@@ -65,9 +65,10 @@
 // `truncate_field_chars` (`truncate_field(value, full=…)`) and
 // `roadmap_list_rows` (`truncate_rows(rows, full=…)`); it does NOT reach
 // `error_detail_chars`, which is composed at warning time and takes no `full`
-// argument at all (clients/_crucible_axi.py:1388). A document promising
-// `--full` over all three would be wrong about the software, so the set is
-// DERIVED from the descriptions and the false claim is forbidden.
+// argument at all (`no_report_warning` in clients/_crucible_axi.py). A
+// document promising `--full` over all three would be wrong about the
+// software, so the set is DERIVED from the descriptions and the false claim is
+// forbidden.
 //
 // ── Safety ────────────────────────────────────────────────────────────────
 //
@@ -517,13 +518,15 @@ function retirementReport(md: string, names: readonly string[]): string[] {
  * This was `readFileSync(file).includes("DEFAULT_RETENTION")`, which tested
  * "the name never appears anywhere in `src`" — a different and strictly worse
  * claim than "the symbol is gone", and one the source refutes for the best
- * possible reason. `src/limits.ts:5`, `src/server.ts:301` and `src/types.ts:31`
- * each name the constant inside a sentence explaining that it was DELETED and
- * why (it was a number one author chose, reachable by nobody, and it evicted
- * every release this project had ever shipped). Prose recording a deletion is
- * EVIDENCE OF COMPLIANCE, not a violation of it — the distinction
- * tests/limits-have-no-environment-layer.test.ts:348-351 already draws for
- * `docs/`, and `src` differs from a document only in ADDITIONALLY containing
+ * possible reason. The header comment of `src/limits.ts`, the doc comment on
+ * `retentionDisclosure` in `src/server.ts` and the doc comment on
+ * `Project.retention` in `src/types.ts` each name the constant inside a
+ * sentence explaining that it was DELETED and why (it was a number one author
+ * chose, reachable by nobody, and it evicted every release this project had
+ * ever shipped). Prose recording a deletion is EVIDENCE OF COMPLIANCE, not a
+ * violation of it — the distinction the comment over `SHIPPED_TREES` in
+ * tests/limits-have-no-environment-layer.test.ts already draws for `docs/`,
+ * and `src` differs from a document only in ADDITIONALLY containing
  * declarations. So the declaration is what is matched, and the lineage stays.
  * (Ruled 2026-09-14; the fifth proxy this CR retires.)
  */
@@ -842,12 +845,13 @@ describe("CR-CRU-131 §S1b — the retired variables are recorded as RETIRED", (
 // form ("### Retired environment variables", `docs/RUNBOOK.md:220-231`).
 //
 // Why this cycle and not later: `docs/RUNBOOK.md:232` states that
-// `CRUCIBLE_PORT` is "untouched and still read", which `src/server.ts:158`
-// contradicts in so many words, and `:520`/`:526`/`:530` hand an operator a
-// table row and two runnable examples for a variable the server stopped
-// reading in C1. An operator who follows them gets a board on the default
-// port and nothing telling them why — the silent failure this CR exists to
-// remove, reached through the documentation instead of the code.
+// `CRUCIBLE_PORT` is "untouched and still read", which the doc comment on
+// `resolveListener` in `src/server.ts` contradicts in so many words, and the
+// RUNBOOK's "Environment variables (port / bind / database)" section hands an
+// operator a table row and two runnable examples for a variable the server
+// stopped reading in C1. An operator who follows them gets a board on the
+// default port and nothing telling them why — the silent failure this CR
+// exists to remove, reached through the documentation instead of the code.
 
 /**
  * The lines of one top-level table of a toml document — walked rather than
@@ -906,7 +910,8 @@ describe("CR-CRU-139 §S4 — the retired CONNECTION variables are recorded as R
     const md = collapse(text(RUNBOOK));
     // Wrong in KIND, not only in name: `crucible-axi serve --host/--port`
     // WRITES the listener into the server's own `crucible.toml` and then boots
-    // it (`crucible_axi/cli.py:368-375`, `crucible_axi/install.py:559`). A
+    // it (`cmd_serve` in `crucible_axi/cli.py`, which calls
+    // `write_listener_settings` in `crucible_axi/install.py`). A
     // document calling that an alias for an export teaches a model in which
     // the setting evaporates with the shell — which is the confusion this CR
     // exists to end, so the stale framing is forbidden by its own words.
@@ -1012,7 +1017,8 @@ describe("CR-CRU-139 §S4 — the connection figures are READ from the shipped f
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // §S3 promised this and nothing shipped it: `grep` across both shipped tomls
-// finds ONE mention of either surviving variable (`src/crucible.toml:16`), and
+// finds ONE mention of either surviving variable (in the "This is NOT the
+// file you edit" header comment of `src/crucible.toml`), and
 // that line explains where the OPERATOR's file is found — not why the store
 // path may not move into it. So a reader who has just learned that the
 // listener lives in this file has nothing telling them the store and the
@@ -1027,7 +1033,8 @@ describe("CR-CRU-139 §S4 — the connection figures are READ from the shipped f
 // `.env` and never the store path. Requiring each file to explain the other's
 // variable would put an explanation where the datum is inert, and this repo
 // already forbids exactly that in the file under test —
-// `clients/crucible.toml:40-41`: "documentation must not teach a knob that
+// the "Why only the CLIENT's three limits are here" comment in
+// `clients/crucible.toml`: "documentation must not teach a knob that
 // provably does nothing where it sits". The ownership split is the same one
 // that decides which limits each file declares.
 
@@ -1036,8 +1043,8 @@ describe("CR-CRU-139 §S4 — the connection figures are READ from the shipped f
  * the reason that datum cannot become a line in the file.
  */
 const SURVIVING_ENV: ReadonlyArray<{ file: string; name: string; why: RegExp }> = [
-  // src/server.ts:66 — the store path is how the server FINDS the file, so it
-  // is answered before any file can be read.
+  // `resolveStore` in src/server.ts — the store path is how the server FINDS
+  // the file, so it is answered before any file can be read.
   { file: SHIPPED_DATA[0], name: "CRUCIBLE_DB", why: /before|precede|finds?|found|discover/i },
   // clients/*-crucible.py — identity, read from the project `.env`.
   { file: SHIPPED_DATA[1], name: "CRUCIBLE_PROJECT_KEY", why: /identit|\.env|who\b|precede|before/i },

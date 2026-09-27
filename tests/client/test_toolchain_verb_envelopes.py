@@ -285,14 +285,15 @@ class RustEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase
         CR-CRU-064 §S6 -- driven with an explicit `--min-free-g 1`, matching
         its `workspace-regression`/`pre-merge-gate` siblings, so this test's
         pass no longer depends on how much free disk THIS box happens to
-        have. Undriven, it inherits `rust-crucible.py:2180`'s 80 GB default
-        floor (guard at `:1331`/`cmd_docker_e2e_gate`'s `cmd_smoke_test`
-        wrapper at `:1327`) and failed on CI run 31677479804 with
-        `disk-guard-abort`; it passed here only because this box measures
-        486 GB free (measured, not assumed) -- an ambient pass a naive 'it
-        passes' assertion could not tell apart from a real one, which is
-        why the argv and the absent warning code are pinned explicitly
-        below rather than trusted implicitly."""
+        have. Undriven, it inherits the 80 GB default floor of the
+        `docker-e2e-gate` `--min-free-g` flag declared in `main` in
+        `rust-crucible.py` (enforced by the `_disk_guard` call in
+        `_smoke_test`, which `cmd_docker_e2e_gate` wraps) and failed on CI
+        run 31677479804 with `disk-guard-abort`; it passed here only because
+        this box measures 486 GB free (measured, not assumed) -- an ambient
+        pass a naive 'it passes' assertion could not tell apart from a real
+        one, which is why the argv and the absent warning code are pinned
+        explicitly below rather than trusted implicitly."""
         emits, axi, result = self._drive("docker-e2e-gate",
                                          extra_argv=["--min-free-g", "1"])
         self._assert_full_envelope("rust", "docker-e2e-gate", emits, axi, result,
@@ -1114,12 +1115,12 @@ class ZeroDiscoveryVsNoReportWarningCodeTest(unittest.TestCase):
 # CR-CRU-064's Implementation notes (C1) measured this per site: rust's
 # `regression-ingest` already threads a real captured cause through (full
 # detail); rust's `smoke-test`/`workspace-regression` inherit their child's
-# stderr (nothing captured, by design); but mvn's `_emit_compile_fallback_
-# axi` (mvn-crucible.py:894) calls `no_report_warning(verb, "surefire
-# reports", rc, "")` -- read directly at mvn-crucible.py:911 -- with a
-# HARD-CODED empty `output` string, even though `_compile_fallback`
-# (mvn-crucible.py:812) captures the real `mvn clean test-compile` build log
-# via `subprocess.run(..., capture_output=True)` one frame down and returns
+# stderr (nothing captured, by design); but mvn's `_emit_compile_fallback_axi`
+# in mvn-crucible.py calls `no_report_warning(verb, "surefire reports", rc,
+# "")` -- read directly in that function's body -- with a HARD-CODED empty
+# `output` string, even though `_compile_fallback` in mvn-crucible.py captures
+# the real `mvn clean test-compile` build log via `subprocess.run(...,
+# capture_output=True)` one frame down and returns
 # ONLY `rc` to its caller. AC2 is explicit this is a gap, not parity: "AC2
 # is not considered met at the mvn site until [the capture is threaded out
 # of `_compile_fallback`]". C3 threads that capture out; this pins the end
@@ -1159,7 +1160,7 @@ class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
     compile fallback), then on the fallback's own `mvn clean test-compile`
     invocation writes a recognisable compile-error message and exits 1."""
 
-    # `_last_non_empty_line` (clients/_crucible_axi.py:746) takes the last
+    # `_last_non_empty_line` (clients/_crucible_axi.py) takes the last
     # NON-EMPTY line of the capture -- real maven puts the `symbol:` detail
     # AFTER "cannot find symbol", so that fragment (asserted here previously)
     # sits on the fixture's MIDDLE line, never the last one. Pointing this at
@@ -1169,13 +1170,13 @@ class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
     CAUSE_FRAGMENT = "class MissingHelper"
 
     # The exact detail `no_report_warning` composes when `output` carries NO
-    # cause (clients/_crucible_axi.py:801-804) -- i.e. the text this site's
-    # detail read BEFORE C3 threaded `build_output` through. A test that only
-    # greps for CAUSE_FRAGMENT would still pass if the helper were later
-    # changed to embed the whole raw capture (CAUSE_FRAGMENT would still be
-    # in there); asserting this blank-capture form is ABSENT is what proves
-    # the real captured build output -- not some other text -- reached the
-    # detail.
+    # cause (the no-cause branch of `no_report_warning` in
+    # clients/_crucible_axi.py) -- i.e. the text this site's detail read BEFORE
+    # C3 threaded `build_output` through. A test that only greps for
+    # CAUSE_FRAGMENT would still pass if the helper were later changed to embed
+    # the whole raw capture (CAUSE_FRAGMENT would still be in there); asserting
+    # this blank-capture form is ABSENT is what proves the real captured build
+    # output -- not some other text -- reached the detail.
     BLANK_CAPTURE_TAIL = ("no runner output reached this envelope, so the "
                           "runner's own stream is the only evidence left")
 

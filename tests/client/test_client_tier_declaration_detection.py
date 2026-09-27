@@ -121,8 +121,8 @@ ESCALATIONS recorded at the time of writing (full text in the report):
   3. §S6's rust consequence names `_regression_ingest_run` as "the
      workspace-regression body it already has", and those are two different
      bodies in the shipped client: `_regression_ingest_run` is the per-crate
-     `-p <crate>` coverage regression (it posts `tier="regression"`,
-     `clients/rust-crucible.py:952`) and `_workspace_regression_run` is the
+     `-p <crate>` coverage regression (its ingest payload posts
+     `tier="regression"`) and `_workspace_regression_run` is the
      `--workspace` one (it posts NO tier at all). This file asserts the
      OBSERVABLE both share — cargo runs a nextest regression that is not the
      `--lib` unit selection, and the ingest carries `regression` — so it holds

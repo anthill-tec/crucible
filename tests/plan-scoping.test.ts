@@ -17,15 +17,16 @@
 //     CR-011 empty state ("no open plan — file one via POST …").
 //
 // Current code facts (verified against public/app.js on this branch):
-//   - navigate() (~L49) sets state.route with NO clear, NO fetch.
-//   - the popstate handler (~L84-86) is EVEN THINNER: `state.route =
+//   - navigate() (`navigate` in app.js) sets state.route with NO clear, NO fetch.
+//   - the popstate handler (app.js's `popstate` window listener) is EVEN
+//     THINNER: `state.route =
 //     L.routeParse(location.pathname)` — no clear, no fetch, no tab reset.
-//   - refetchPlans() (~L134) early-returns off-workspace and is invoked
+//   - refetchPlans() (`refetchPlans` in app.js) early-returns off-workspace and is invoked
 //     ONLY from refetch() (poll timer / would-be SSE onopen/onmessage).
-//   - WorkflowActive() (~L1799-1800) does
+//   - WorkflowActive() (`WorkflowActive` in app.js) does
 //     `state.plans.filter((p) => p.status === "open")` — NO projectKey
 //     check at all.
-//   - WorkflowHistory() (~L2051-2055) passes `plans: state.plans` (ALL
+//   - WorkflowHistory() (`WorkflowHistory` in app.js) passes `plans: state.plans` (ALL
 //     plans, unfiltered) into L.workflowLens() — only `events` is filtered
 //     by projectKey there.
 // So every pin below is expected to FAIL against current production: a
@@ -67,7 +68,7 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (public/app.js ~L153-154).
+// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js).
 // Every pin except the explicit regression pin settles on ticks far below
 // this, so it can never be the poll fallback quietly doing the work.
 const POLL_INTERVAL_MS = 5000;
@@ -94,7 +95,7 @@ interface CycleFixture {
 }
 
 // NOTE: this is the new-for-C1 contract — every plan carries `projectKey`
-// verbatim (src/types.ts:164, already a real server field). Existing test
+// verbatim (`Plan` in src/types.ts, already a real server field). Existing test
 // files (workflow-tab.test.ts, timeline-plan-integration.test.ts) predate
 // this CR and never scripted a per-key-scoped plans endpoint, so their
 // PlanFixture omits it; this file's mock is the FIRST to actually key the

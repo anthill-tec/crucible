@@ -121,16 +121,17 @@ describe("§S4 RUNBOOK — database path resolution order", () => {
   // `CRUCIBLE_DB` is one of them" (CR-CRU-043 §S4). That rule still holds; its
   // SUBJECT moved. It used to LOCATE the table by `CRUCIBLE_PORT` and require
   // `CRUCIBLE_PORT`/`CRUCIBLE_HOST` beside `CRUCIBLE_DB` — and since C1 the
-  // server reads neither (`src/server.ts:158`), so the old form required the
-  // RUNBOOK to keep documenting two dead knobs, and the C4 retirement guard
+  // server reads neither (`resolveListener` in `src/server.ts`), so the old
+  // form required the RUNBOOK to keep documenting two dead knobs, and the C4
+  // retirement guard
   // (tests/docs-runbook-documents-every-limit.test.ts) reports the very rows
   // it demanded as "presented as a configuration table row". Two guards
   // demanding opposite things about one line is why the re-subject happens in
   // the cycle that retires them rather than after it.
   //
   // The table is now located by `CRUCIBLE_DB` — this file's own subject, and a
-  // variable that is still read (`src/server.ts:66`) — and its membership is
-  // pinned in BOTH directions, which the old form never did: the two
+  // variable that is still read (`resolveStore` in `src/server.ts`) — and its
+  // membership is pinned in BOTH directions, which the old form never did: the two
   // environment-resolved survivors are present, and no retired connection
   // variable is.
   test("the environment-variable table lists the variables that are still read, and no retired one", () => {

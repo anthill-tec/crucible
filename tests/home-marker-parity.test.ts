@@ -25,16 +25,16 @@
 //
 // Current code facts (verified against public/app.js and public/app-
 // logic.mjs on this branch):
-//   - refetchPlans() (app.js ~L164) early-returns off-workspace — home NEVER
+//   - refetchPlans() (`refetchPlans` in app.js) early-returns off-workspace — home NEVER
 //     fetches plan data at all, from any code path (cold, poll, or nav).
-//   - scopeChanged() (app.js ~L81) only fires refetchPlans()/refetchCore()
+//   - scopeChanged() (`scopeChanged` in app.js) only fires refetchPlans()/refetchCore()
 //     `if (state.route.page === "workspace")` — arriving at home via
 //     navigation cannot repopulate state.plans even after this CR adds the
 //     global route, unless that gate is widened.
-//   - runFeed() (app.js ~L740) calls `L.timelineRows(events, state.plans)`
+//   - runFeed() (`runFeed` in app.js) calls `L.timelineRows(events, state.plans)`
 //     on BOTH home and workspace with the SAME state.plans, unfiltered by
 //     project on home.
-//   - planCycleIndex() (app-logic.mjs ~L275) keys SOLELY on the bare numeric
+//   - planCycleIndex() (`planCycleIndex` in app-logic.mjs) keys SOLELY on the bare numeric
 //     `cycle.id` — `index.set(cycle.id, {cycle, plan})` — across ALL plans
 //     in the array with no projectKey component, so two projects sharing a
 //     numeric cycle id COLLIDE (last-plan-in-array wins the Map slot).
@@ -45,7 +45,7 @@
 //     plan does not exempt its OWN unlinked runs from the heuristic today;
 //     only per-event cycleId linkage does (§S3.4's capability-conditional
 //     rule does not exist yet).
-//   - scopedPlans() (app.js ~L1833) treats `p.projectKey === undefined` as a
+//   - scopedPlans() (`scopedPlans` in app.js) treats `p.projectKey === undefined` as a
 //     MATCH (tolerant, C1's sanctioned legacy-fixture allowance) — not the
 //     strict "undeclared = excluded" rule this file pins.
 // So every pin below is expected to FAIL against current production.

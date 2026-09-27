@@ -26,7 +26,8 @@
 // flagged separately rather than guessed.
 //
 // BOUNDARY — `focusedReleaseView(...).members` also feeds the zone-3 roadmap
-// TABLE (public/app.js:3250), where a dead row must STAY visible (§S2). So
+// TABLE (`RoadmapTableZone` in public/app.js), where a dead row must STAY
+// visible (§S2). So
 // nothing here requires a dead CR to be gone from `view.members` — one test
 // below asserts the opposite, that `view.members` still names every one of
 // them.
@@ -45,15 +46,18 @@
 //
 // RED phase — expected to FAIL against current production, which:
 //   • renders both `data-cr-count` and the `roadmap-wave-count` header text
-//     from `box.entries.length` (public/app.js:3604/3645) with no dead-CR
+//     from `box.entries.length` (`RoadmapFlowWave` in public/app.js) with no
+//     dead-CR
 //     filter at all, so a wave carrying two dead PENDING members reads its
 //     RAW membership count, dead CRs included;
 //   • computes `box.mergedCount` as `box.entries.filter(roadmapMerged)`
-//     (public/app-logic.mjs:1533) filtering on `status` alone, so a dead CR
+//     (`focusedReleaseView` in public/app-logic.mjs) filtering on `status`
+//     alone, so a dead CR
 //     whose derived `status` is `COMPLETED`/`COMPLETED_UNTRACKED` is counted
 //     in the roll-up;
 //   • draws the `wave: null` loose group as `box.rows.map(RoadmapFlowNode)`
-//     where `box.rows = box.entries.slice()` (public/app-logic.mjs:1517-1519)
+//     where `box.rows = box.entries.slice()` (`focusedReleaseView` in
+//     public/app-logic.mjs)
 //     with no filter at all, so a dead loose member is drawn as a node.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
@@ -152,8 +156,8 @@ const entry = (
 
 /** Eight LIVE PENDING members, split evenly across two tracks so the box also
  *  publishes lanes (CR-CRU-085 §S2) — the surface AC3's "not in … lanes"
- *  clause names. Eight actionable, five scheduled (`ROADMAP_WAVE_ROWS`,
- *  public/app-logic.mjs:1280), three hidden. */
+ *  clause names. Eight actionable, five scheduled (`ROADMAP_WAVE_ROWS` in
+ *  public/app-logic.mjs), three hidden. */
 const WAVE_ONE_LIVE_PENDING: QueueFixture[] = [
   entry("CR-W-1", "PENDING", 10, { track: "alpha" }),
   entry("CR-W-2", "PENDING", 20, { track: "beta" }),
@@ -178,7 +182,7 @@ const WAVE_ONE_MERGED: QueueFixture[] = [
  *  SUPERSEDED (carrying `by`) beside the live PENDING members, plus a VOID
  *  member whose DERIVED status is COMPLETED — the case that makes the
  *  merged roll-up's exclusion non-vacuous, since `roadmapMerged`
- *  (public/app-logic.mjs:1308) reads `status` alone and does not know about
+ *  (public/app-logic.mjs) reads `status` alone and does not know about
  *  `lifecycle` at all. */
 const WAVE_ONE_DEAD: QueueFixture[] = [
   entry("CR-VOID-1", "PENDING", 120, {
@@ -202,8 +206,9 @@ const WAVE_ONE_MERGED_COUNT = WAVE_ONE_MERGED.length; // 3
 const WAVE_ONE_HIDDEN_COUNT = WAVE_ONE_LIVE_PENDING.length - WAVE_ONE_LIVE_ROWS.length; // 3
 
 /** The loose (`wave: ""`) group: one live member, one dead one. `wave: ""` is
- *  the wire's own way of declaring none (`src/types.ts:392`); `declaredLabel`
- *  (public/app-logic.mjs:1237) reads it as the `null` group. */
+ *  the wire's own way of declaring none (the `wave` field of `QueueEntry` in
+ *  `src/types.ts`); `declaredLabel` (public/app-logic.mjs) reads it as the
+ *  `null` group. */
 const LOOSE_LIVE: QueueFixture = { ...entry("CR-L-1", "PENDING", 200), wave: "" };
 const LOOSE_DEAD: QueueFixture = {
   ...entry("CR-L-VOID", "PENDING", 210, {
@@ -816,9 +821,9 @@ function rollupCount(wave: string): number {
 }
 
 /** The loose group renders no `data-testid="roadmap-wave"` box at all
- *  (`public/app.js:3596-3599`, `class: "app-flow-loose"`) —
- *  tests/roadmap-visual-grammar.test.ts:3806 already uses this same class
- *  selector to find it. */
+ *  (`RoadmapFlowWave` in `public/app.js`, `class: "app-flow-loose"`) —
+ *  tests/roadmap-visual-grammar.test.ts (its "the same 29 members drawn
+ *  UNTRIMMED…" test) already uses this same class selector to find it. */
 function looseEl(): HTMLElement {
   const el = document.querySelector<HTMLElement>(".app-flow-loose");
   if (el === null) throw new Error("no .app-flow-loose (the wave: null loose group) rendered");

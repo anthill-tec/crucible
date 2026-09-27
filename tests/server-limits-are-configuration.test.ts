@@ -7,9 +7,9 @@
 // every release this project had ever shipped (PRD §4.7). CR-CRU-129 removed
 // that one. This file covers the three the SERVER still enforces:
 //
-//   run_abandon_ms       src/store.ts:836  `runAbandonAfterMs()`  — the sweep
-//   project_inactive_ms  src/v2.ts:366     `projectInactiveMs()`  — the read
-//   retention            src/store.ts:744  `defaultRetention()`   — the cap
+//   run_abandon_ms       `runAbandonAfterMs()` in src/store.ts  — the sweep
+//   project_inactive_ms  `projectInactiveMs()` in src/v2.ts     — the read
+//   retention            `defaultRetention()` in src/store.ts   — the cap
 //
 // The client's three (`truncate_field_chars`, `error_detail_chars`,
 // `roadmap_list_rows`) are NOT here and must not be: a limit is owned by the
@@ -92,7 +92,6 @@ import * as path from "node:path";
 import {
   activeFlags,
   boot,
-  clearEnv,
   declare,
   documentOnly,
   eventCount,
@@ -102,7 +101,6 @@ import {
   restoreServerLimitsFixture,
   scratch,
   serverConfigDir,
-  setEnv,
   writeConfig,
   writeRaw,
   type LimitDeclaration,
@@ -165,7 +163,8 @@ async function limits(): Promise<LimitsModule> {
     throw new Error(
       `CR-CRU-131 §S1: src/limits.ts does not load. The server's limits must resolve from a ` +
         `\`crucible.toml\` beside its own configuration, through ONE loader — not from literals ` +
-        `at src/store.ts:834, src/v2.ts:362 and src/store.ts:744. (${String(cause)})`,
+        `behind \`runAbandonAfterMs\` (src/store.ts), \`projectInactiveMs\` (src/v2.ts) and ` +
+        `\`defaultRetention\` (src/store.ts). (${String(cause)})`,
     );
   }
   for (const name of [
@@ -339,8 +338,9 @@ describe("CR-CRU-131 §S1b — every server limit declares itself", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // RED, all of them: nothing reads a file today. `runAbandonAfterMs()` falls
-// back to `DEFAULT_RUN_ABANDON_MS` (src/store.ts:834), `projectInactiveMs()` to
-// `DEFAULT_PROJECT_INACTIVE_MS` (src/v2.ts:362), and `defaultRetention()` to
+// back to `DEFAULT_RUN_ABANDON_MS` (in src/store.ts, since retired),
+// `projectInactiveMs()` to `DEFAULT_PROJECT_INACTIVE_MS` (in src/v2.ts, since
+// retired), and `defaultRetention()` to
 // `undefined` — so a configured file changes nothing and every assertion below
 // reads the compiled number instead of the configured one.
 
@@ -947,7 +947,8 @@ describe("CR-CRU-131 §S1b — a limit is owned by the process that enforces it"
 // With the environment layer retired there is nothing beneath the file, so
 // `recommended` has to be reachable WITHOUT the file being valid — the loader
 // carries the shipped table as its last resort and says so, in the shape
-// CR-CRU-129's boot disclosure established (src/server.ts:311).
+// CR-CRU-129's boot disclosure established (`retentionDisclosure` in
+// src/server.ts).
 
 describe("CR-CRU-131 §S1b — a malformed or absent crucible.toml degrades and discloses", () => {
   test("a file with a syntax error does not crash the server: every limit runs at its recommendation", async () => {

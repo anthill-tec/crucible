@@ -31,8 +31,8 @@
 //
 // Singular/plural decision: no counter-evidence found for `1 agent`
 // (singular) in the F13 mock or spec text beyond the plural `N agents`
-// wording (crucible-v2-design.html:675, "group headers carry an N agents
-// aggregate only"). Using singular `1 agent` for exactly one
+// wording (the `F13` frame of .lavish/crucible-v2-design.html, "group
+// headers carry an N agents aggregate only"). Using singular `1 agent` for exactly one
 // fleet-registered participant per the dispatch brief's default.
 //
 // New testid/attribute contract this file introduces for GREEN (does not

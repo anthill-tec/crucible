@@ -328,8 +328,8 @@ function ageToPreUnification(db: Database, at: number): void {
 /**
  * A READ-ONLY replica of the live store, or the STATED reason there is none.
  *
- * The repo's idiom for a live subject (`liveBoardQueue`,
- * tests/queue-release-membership-mandatory.test.ts:278-308): the reason is
+ * The repo's idiom for a live subject (`liveBoardQueue` in
+ * tests/queue-release-membership-mandatory.test.ts): the reason is
  * returned, the case STATES it and returns, and what is lost is the proof's
  * REACH — a real population grown over months — never the proof, which the
  * synthetic population always runs.

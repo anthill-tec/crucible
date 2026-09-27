@@ -4,10 +4,10 @@
 // Spec: docs/changes/CR-CRU-032-runs-boundary-anchor-fetch.md §S4
 //
 // Current code fact (verified against public/app.js on this branch):
-//   `refetchCore` (app.js ~L156-173) fetches ONE all-projects
+//   `refetchCore` (app.js) fetches ONE all-projects
 //   `/api/v2/events?limit=50` into `state.events`, unconditionally — the
 //   SAME call regardless of `state.route.page`. The workspace Runs pane
-//   (`visibleEvents()` / `WorkspaceRunsFeed`, app.js ~L283-289, ~L1548)
+//   (`visibleEvents()` / `WorkspaceRunsFeed`, both in app.js)
 //   then FILTERS that shared slice client-side by `projectKey`, so a
 //   project's Runs tab only ever sees its slice of the recent 50 events
 //   ACROSS ALL PROJECTS — never its own `retention`-sized window. This is
@@ -15,10 +15,10 @@
 //
 // Fix under test (not yet implemented — every test below is RED against
 // current production): mirror the existing `refetchPlans` surface-aware
-// split (app.js ~L184-195, CR-CRU-026 §S3.2) — on a WORKSPACE route,
+// split (in app.js, CR-CRU-026 §S3.2) — on a WORKSPACE route,
 // `refetchCore`'s events call must become
 //   `/api/v2/events?project=<key>&limit=<project.retention ?? MANAGER_RETENTION_DEFAULT>`
-// (`MANAGER_RETENTION_DEFAULT = 100`, app.js ~L1078) so the Runs tab shows
+// (`MANAGER_RETENTION_DEFAULT = 100`, in app.js) so the Runs tab shows
 // THAT project's own runs up to ITS retention. HOME must keep the
 // unchanged collective `/api/v2/events?limit=50` call.
 //
@@ -254,7 +254,7 @@ function renderedRunCardIds(): string[] {
 // §S4 regression pin — home->workspace->home navigation helpers (mirrors
 // tests/home-marker-parity.test.ts's badgeFor/clickBackToProjects
 // convention, using the app-logo click instead of the "← projects" chip so
-// the SAME element/onclick (`navigate("/")`, app.js ~L389-401) is exercised
+// the SAME element/onclick (`navigate("/")` in `Logo`, app.js) is exercised
 // on both surfaces).
 function badgeFor(name: string): HTMLElement {
   const badge = Array.from(
@@ -356,7 +356,8 @@ describe("§S4 AC4 — HOME still fetches the recent-N collective ?limit=50 (unc
       homeEvents: [],
     });
 
-    // Byte-identical to today's hardcoded literal (app.js ~L161) — no
+    // Byte-identical to today's hardcoded literal (the home branch of
+    // `refetchCore`, app.js) — no
     // `project` param sneaks in on home, and the query string is untouched.
     expect(eventsCalls).toContain("/api/v2/events?limit=50");
 
@@ -372,9 +373,9 @@ describe("§S4 AC4 — HOME still fetches the recent-N collective ?limit=50 (unc
 // ── §S4 regression (gate-caught) — CR-026 §S0 equivalence breaks ────────
 //
 // Root cause (confirmed in code, public/app.js): §S4 made `refetchCore`
-// (app.js ~L164) surface-aware — a WORKSPACE landing replaces the SHARED
+// (app.js) surface-aware — a WORKSPACE landing replaces the SHARED
 // `state.events` with that project's own scoped set. But `scopeChanged()`
-// (app.js ~L101-111) only calls `refetchCore()` `if (state.route.page ===
+// (`scopeChanged` in app.js) only calls `refetchCore()` `if (state.route.page ===
 // "workspace")` — NOT on a home landing. So a workspace->home navigation
 // restores global PLANS (refetchPlans is unconditional) but leaves
 // `state.events` scoped to the last-visited workspace's project. Home's

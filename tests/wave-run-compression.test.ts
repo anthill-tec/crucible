@@ -25,7 +25,7 @@ import * as AppLogic from "../public/app-logic.mjs";
 
 /** The ambient tests/app-logic.d.ts predates this export, so the module is
  *  cast to the one boundary under test (the house pattern, shared with
- *  tests/roadmap-release-focus.test.ts:153). */
+ *  the `Logic` cast in tests/roadmap-release-focus.test.ts). */
 const Logic = AppLogic as unknown as {
   compressWaveRuns: (labels: unknown) => string[];
 };
@@ -110,7 +110,8 @@ describe("CR-CRU-096 §S7/AC22b — the labels are a SET in ASCENDING numeric or
   });
 
   test("an unusable label is no wave at all: the empty string and every non-string are dropped, and a non-array reads as none", () => {
-    // `wave` is a free string on the wire (`src/types.ts:392`), and the empty
+    // `wave` is a free string on the wire (the `wave` field of `QueueEntry` in
+    // `src/types.ts`), and the empty
     // string is how the wire declares NO wave — a summary that rendered it
     // would state a wave the release never spanned.
     expect(Logic.compressWaveRuns(["1", "", "2"])).toEqual([`1${EN}2`]);

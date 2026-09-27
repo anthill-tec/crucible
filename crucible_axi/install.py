@@ -295,8 +295,9 @@ def server_config_path() -> str:
     """The SERVER's operator-editable configuration, beside its own database
     (CR-CRU-138 §S2).
 
-    `src/limits.ts:158-159` resolves it as `join(dirname(store), "crucible.toml")`
-    and `store_dir()` already mirrors the rule that finds that store, so this
+    `serverConfigPath` (`src/limits.ts`) resolves it as
+    `join(dirname(store), "crucible.toml")` and `store_dir()` already mirrors
+    the rule that finds that store, so this
     is the server's own path computed in python rather than a second opinion
     about where the server looks. Nothing wrote into that directory before
     this CR, which is why an operator could edit every server limit and change
@@ -311,7 +312,7 @@ def resolved_server_config_path() -> str:
 
     `server_config_path()` answers where an INSTALL puts the file; this answers
     where a BOOT looks for it, and the two differ whenever the store does. It
-    mirrors `resolveStore` (`src/server.ts:39-79`) rule for rule, since the
+    mirrors `resolveStore` (`src/server.ts`) rule for rule, since the
     server reads its configuration from `dirname(store)`:
     `$CRUCIBLE_DB`, else an ALREADY-EXISTING `<cwd>/data/crucible.db` (adopt
     only -- what keeps a checkout's own board in use), else the XDG store.

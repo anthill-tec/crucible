@@ -5,9 +5,12 @@ The rule (PRD §4.13, user ruling 2026-09-14): a limit is configuration, never a
 constant compiled into source. Three of the six live on this side of the wire,
 and all five clients reach them on every call:
 
-    truncate_field_chars   clients/_crucible_axi.py:516 -> used at :519
-    error_detail_chars     clients/_crucible_axi.py:1045 -> used at :1106, :1119
-    roadmap_list_rows      clients/_crucible_axi.py:3563 -> used at :3720
+    truncate_field_chars   TRUNCATE_LIMIT -> used by `truncate_field`
+    error_detail_chars     NO_REPORT_DETAIL_MAX -> used by `no_report_warning`
+    roadmap_list_rows      ROADMAP_LIST_LIMIT -> used by `truncate_rows`
+
+(the constants as they stood at RED; their readers are in
+clients/_crucible_axi.py)
 
 The server's three (`run_abandon_ms`, `project_inactive_ms`, `retention`) are
 NOT here and must not be. A limit is owned by the process that ENFORCES it: a
@@ -38,7 +41,8 @@ of the wire, and an API kept warm on the chance is an API nothing keeps honest.
 
 `bind_project_dir` rather than a `project_dir=` parameter threaded through
 `truncate_field` / `truncate_rows` / `no_report_warning`, for the reason this
-module's own scope boundary already states (clients/_crucible_axi.py:16-19):
+module's own scope boundary already states (the "Scope boundary" paragraph
+of the clients/_crucible_axi.py module docstring):
 project-dir resolution stays CLIENT-specific and arrives ALREADY RESOLVED. The
 client resolves its root exactly once, hands it over, and the pure formatters
 keep their pure signatures.
@@ -205,7 +209,7 @@ def _load_module_by_path(path, cache_key):
 
 def _run_main(module, argv):
     """Drive a client's REAL entry point and capture both streams (the sibling
-    convention, e.g. tests/client/test_bun_crucible_axi_conventions.py:153)."""
+    convention, e.g. `_run_main` in tests/client/test_bun_crucible_axi_conventions.py)."""
     full_argv = ["bun-crucible.py"] + argv
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -232,8 +236,8 @@ def _seam(axi, name):
         raise AssertionError(
             "CR-CRU-131 §S1: clients/_crucible_axi.py exports no `%s`. The client's three "
             "display limits must resolve through ONE seam in the shared module -- all five "
-            "clients inherit it -- not from the module constants TRUNCATE_LIMIT (:516), "
-            "NO_REPORT_DETAIL_MAX (:1045) and ROADMAP_LIST_LIMIT (:3563), each of which is "
+            "clients inherit it -- not from the module constants TRUNCATE_LIMIT, "
+            "NO_REPORT_DETAIL_MAX and ROADMAP_LIST_LIMIT, each of which is "
             "currently bound as a DEFAULT ARGUMENT at definition time and so can never see an "
             "operator's edit." % (name,))
     return found
@@ -520,7 +524,7 @@ class TruncateFieldCharsResolutionTest(_ClientLimitsTestCase):
 
     def test_the_operators_value_decides_the_cut_and_no_value_falls_to_recommended(self):
         """RED. `truncate_field` binds `limit=TRUNCATE_LIMIT` as a default
-        argument (clients/_crucible_axi.py:519), so the configured file changes
+        argument (clients/_crucible_axi.py), so the configured file changes
         nothing and the cut lands on the compiled number."""
         shipped = self.shipped("truncate_field_chars")
         width = shipped["min"]
@@ -569,7 +573,7 @@ class ErrorDetailCharsResolutionTest(_ClientLimitsTestCase):
 
     def test_the_operators_value_bounds_the_failure_detail_and_no_value_falls_to_recommended(self):
         """RED. `no_report_warning` sizes its cause fragment off
-        NO_REPORT_DETAIL_MAX (clients/_crucible_axi.py:1106, :1119), a module
+        NO_REPORT_DETAIL_MAX (clients/_crucible_axi.py), a module
         constant, so the configured file changes nothing."""
         shipped = self.shipped("error_detail_chars")
         bound = shipped["min"]
@@ -616,7 +620,7 @@ class RoadmapListRowsResolutionTest(_ClientLimitsTestCase):
 
     def test_the_operators_value_decides_the_list_length_and_no_value_falls_to_recommended(self):
         """RED. `truncate_rows` binds `limit=ROADMAP_LIST_LIMIT` as a default
-        argument (clients/_crucible_axi.py:3722)."""
+        argument (clients/_crucible_axi.py)."""
         shipped = self.shipped("roadmap_list_rows")
         rows = shipped["min"]
         self.assertLess(rows, shipped["recommended"],
@@ -953,7 +957,8 @@ class ClientLimitDegradationTest(_ClientLimitsTestCase):
     """With the environment layer retired there is nothing beneath the file, so
     `recommended` has to be reachable WITHOUT the file being valid: the loader
     carries the shipped table as its last resort and SAYS SO, in the shape
-    CR-CRU-129's boot disclosure established (src/server.ts:311)."""
+    CR-CRU-129's boot disclosure established (`retentionDisclosure` in
+    src/server.ts)."""
 
     def test_a_file_with_a_syntax_error_degrades_to_each_limits_own_recommendation(self):
         file = self.write_raw("[limits.truncate_field_chars\nrecommended = = 5\n")

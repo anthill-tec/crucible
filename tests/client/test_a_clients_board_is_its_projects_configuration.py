@@ -66,10 +66,11 @@ follow. A grep proves nothing about behaviour. Both directions are driven:
 ── HOW THIS FAILS IF THE CODE DOES NOTHING ──────────────────────────
 
 Every client binds its base URL at IMPORT from the environment, with the
-shipped default as a literal in the module (`clients/bun-crucible.py:91`,
-rust:87, mvn:93, python:86, and arduino:71 spelling it `CRUCIBLE` and honouring
-`CRUCIBLE_BASE` as a second choice). `clients/crucible.toml` has no `[client]`
-table at all, and nothing reads one. So today:
+shipped default as a literal in the module (each client's own `CRUCIBLE_URL`
+constant, since replaced by `_base_url` in `clients/bun-crucible.py`, with
+arduino spelling it `CRUCIBLE` and honouring `CRUCIBLE_BASE` as a second
+choice). `clients/crucible.toml` has no `[client]` table at all, and nothing
+reads one. So today:
 
   * criterion 1 fails because NO board records anything -- with the retired
     variables scrubbed, all five clients resolve `http://localhost:3849`, which

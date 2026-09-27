@@ -887,7 +887,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   });
 
   // ── RED addendum (cycle 13, gap 3) — POST /plans `wave` coercion ─────────
-  // src/v2.ts:537 currently accepts ONLY strings for `wave`
+  // `handlePlanFile` (src/v2.ts) currently accepts ONLY strings for `wave`
   // (`typeof body.wave === "string" ? body.wave : undefined`) — a numeric
   // wave (e.g. the orchestrator's real plan 4, filed with `wave: 4`) is
   // silently coerced to `undefined` and stored NULL, with no 400 at all.

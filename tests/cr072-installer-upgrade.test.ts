@@ -11,10 +11,11 @@
 // TECHNIQUE — behavioural, not source-text.
 // `install.sh`'s only existing coverage is tests/cr009-release-bundle.test.ts
 // §S1, which asserts the SOURCE TEXT contains "uv tool install crucible-axi"
-// (cr009-release-bundle.test.ts:209). A source-text assertion is exactly what
-// let this defect ship: the string was present and correct-looking, and the
-// behaviour was a silent no-op. So every test here EXECUTES the real
-// install.sh as a subprocess and asserts on what it actually CALLED.
+// (its test "install.sh implements the §S1 uv → crucible-axi flow"). A
+// source-text assertion is exactly what let this defect ship: the string was
+// present and correct-looking, and the behaviour was a silent no-op. So every
+// test here EXECUTES the real install.sh as a subprocess and asserts on what
+// it actually CALLED.
 //
 // The world is a throwaway tmp dir holding a stub `uv` and (when the world
 // models a machine that already has Crucible) a stub `crucible-axi`, both

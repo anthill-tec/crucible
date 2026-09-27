@@ -15,7 +15,8 @@
 // The trap is measured, not hypothetical: the 0.1.0 ledger row carries
 // `releasedAt = 1787149125`, which is 2026-08-19 read as SECONDS and
 // 1970-01-21 read as MILLISECONDS. Both fields use seconds
-// (`src/types.ts:218-223`, `src/store.ts:2154`, `public/app-logic.mjs:874`).
+// (`RunEvent` in `src/types.ts`, `listReleases` in `src/store.ts`,
+// `formatReleaseDate` in `public/app-logic.mjs`).
 //
 // ── AC18, verbatim ─────────────────────────────────────────────────────────
 // "The published `seq` is consumed, not re-derived, by its only in-tree
@@ -24,7 +25,8 @@
 // yield `data.seq` `10, 20, 30` — the surviving `seq: index` derivation yields
 // `0, 1, 2`."
 // `QueueEntry.seq` is published on EVERY entry, read verbatim from the column
-// (`src/types.ts:397-404`), so a payload without one is a DEFECT, not a shape
+// (`QueueEntry` in `src/types.ts`), so a payload without one is a DEFECT,
+// not a shape
 // to paper over. Contract this file pins for that case: the position is
 // OMITTED entirely — the same "no carried position" state a container node
 // occupies. An index fallback would reintroduce exactly the two-meanings
@@ -126,7 +128,7 @@ describe("CR-CRU-091 §S1/AC3 — ONE formatter, taking epoch SECONDS, for both 
 
   test("ISO `YYYY-MM-DD`, UTC — the format the surface already uses for a day, to the day", () => {
     // `coverageHeatSlices` already buckets a day as
-    // `new Date(ts).toISOString().slice(0, 10)` (public/app-logic.mjs:463), and
+    // `new Date(ts).toISOString().slice(0, 10)` (public/app-logic.mjs), and
     // the storyboard gate dates are ISO. A release date is a DAY: no clock
     // component, and no locale, which would render differently per viewer.
     const rendered = Logic.formatReleaseDate(1787149125);

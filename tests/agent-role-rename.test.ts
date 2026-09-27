@@ -504,7 +504,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     /**
      * Builds a raw sqlite file using the CURRENT (pre-CR-059) `projects` +
      * `agents` + `events` CREATE TABLE statements (byte-for-byte the shapes
-     * at src/store.ts:330-379, hand-copied — NOT driven through the Store
+     * in `createBaseTables` (src/store.ts), hand-copied — NOT driven through the Store
      * class), seeded with a mix mirroring the live board's declared/
      * inferred/unclassified split (299 of 338 classified live; here 18 of
      * 20, same "mostly classified, small unclassified tail" shape).

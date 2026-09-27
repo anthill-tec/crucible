@@ -47,20 +47,22 @@ calls byte-identical is the COPY, so each entry's body is compared with its
 internal whitespace runs collapsed -- wrapping is a rendering artefact of the
 terminal width, the words are the contract.
 
-BUN'S MODULE-DOCSTRING VERB TABLE (`clients/bun-crucible.py:34`, which reads
+BUN'S MODULE-DOCSTRING VERB TABLE (`clients/bun-crucible.py`'s own module
+docstring, which reads
 `plan-file  File a cycle plan: --cr, --title, one --cycle "<label>" per cycle
 →`) is deliberately NOT asserted here. MEASURED at `a7fe101`, when that line
 still carried the superseded `--cycles` spelling: `bun-crucible.py --help`
 renders `_CLI_DESCRIPTION`, never `__doc__` -- CR-CRU-097 §S2 severed that
-wiring on purpose ("deliberately NOT `__doc__`",
-`clients/bun-crucible.py:2179-2201`), and a drive of the root help finds zero
+wiring on purpose ("deliberately NOT `__doc__`", the comment above
+`_CLI_DESCRIPTION` in `clients/bun-crucible.py`), and a drive of the root help finds zero
 occurrences of the table's own wording (re-measured 2026-09-17: `per cycle`
 appears nowhere in the rendered help, which spells the same verb as "File a
 cycle plan; prints the ASSIGNED numeric cycle ids"). It is a design record,
 not user-visible output, so a test asserting on it would pin prose. GREEN duly
 made that comment-only correction, which is why the line quoted above is the
 repeatable form and the only `--cycles` left in that client is the argparse
-flag itself (`clients/bun-crucible.py:2336`).
+flag itself (the `plan-file` subparser's `--cycles` in `main`
+(`clients/bun-crucible.py`)).
 
 RED phase, against `a7fe101`:
   * every client renders `--cycles` BEFORE `--cycle` (measured: the options
@@ -70,7 +72,7 @@ RED phase, against `a7fe101`:
     `Comma-separated cycle labels, e.g. "a,b,c".` -- so the legacy test fails
     five for five;
   * `_next_start_help` emits `--cycles "<c1,c2>"`
-    (`clients/_crucible_axi.py:1481-1490`), so both AC8 shared-function tests
+    (`clients/_crucible_axi.py` at `a7fe101`), so both AC8 shared-function tests
     and the driven-envelope test fail.
 The two tests that PASS ON ARRIVAL are stated as such in their docstrings:
 cycle 366 already shipped a repeatable-flag help string, byte-identical across

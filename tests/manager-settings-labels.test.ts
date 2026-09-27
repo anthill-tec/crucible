@@ -1,7 +1,7 @@
 // CR-CRU-032 §S5 — project-settings edit-form integrity: field labels + the
 // run-deletion toggle label.
 //
-// Today (verified, public/app.js:1247-1307 — ManagerRowEdit) the manager's
+// Today (verified, `ManagerRowEdit` in public/app.js) the manager's
 // edit-in-place form renders EIGHT BARE inputs with NO labels at all:
 //   manager-edit-name        (text input)
 //   manager-edit-type        (select: backend/frontend)
@@ -29,13 +29,13 @@
 //   asserts via `label.contains(field)`.
 //
 //   Concretely (van.js hyperscript), GREEN adds `label` to the `van.tags`
-//   destructure (public/app.js:14) and wraps each field, e.g.:
+//   destructure (at the top of public/app.js) and wraps each field, e.g.:
 //     label({ "data-testid": "manager-edit-name-label" }, "Name",
 //       input({ "data-testid": "manager-edit-name", ... }))
 //
 // Wording pinned (this file asserts these substrings, case-insensitively):
 //   - retention label mentions the Runs-timeline WINDOW it governs (§S4,
-//     public/app.js:158-175: "the workspace Runs window is governed by the
+//     `refetchCore` in public/app.js: "the workspace Runs window is governed by the
 //     routed project's own `retention`") — e.g. "Retention (runs shown in
 //     the timeline window)". Test regex: /window|timeline|runs shown/i.
 //   - allow-deletion label names the destructive action AND reads as
@@ -275,7 +275,7 @@ describe("Projects manager — edit-in-place field labels (§S5.1)", () => {
 
 // ─────────────────────────────────────────────────────────────────────────
 // §S5.1 (AC2) — the retention field's label states it governs the
-// Runs-timeline window (per §S4, public/app.js:158-175).
+// Runs-timeline window (per §S4, public/app.js's `refetchCore`).
 // ─────────────────────────────────────────────────────────────────────────
 describe("Projects manager — retention label wording (§S5.1 AC2)", () => {
   test("retention label mentions the runs/timeline window it governs", async () => {

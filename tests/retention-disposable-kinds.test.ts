@@ -1,8 +1,9 @@
 // CR-CRU-129 §S2 — retention has nothing structural left to reach.
 //
 // After §S1 the cap governs `test`, `compile` and `lifecycle` and NOTHING
-// else, and the two exemption predicates (`LIVE_GATE`, src/store.ts:3072;
-// `LIVE_PROPOSAL`, :3079) become unreachable — `LIVE_PROPOSAL` can never match,
+// else, and the two exemption predicates (`LIVE_GATE` and `LIVE_PROPOSAL`,
+// both local to `enforceRetention` in src/store.ts) become unreachable —
+// `LIVE_PROPOSAL` can never match,
 // because no milestone remains in the table it queries. The CR removes them
 // rather than leaving dead SQL implying a protection the schema now provides,
 // and says in as many words what replaces them:
@@ -56,7 +57,7 @@ const emptyTree: SuiteNode[] = [];
 
 /**
  * The complete kind vocabulary the store can write — `test`, `compile`,
- * `lifecycle`, `gate`, `milestone` (src/store.ts:2955-2961, where `toEvent`
+ * `lifecycle`, `gate`, `milestone` (`toEvent` in src/store.ts, where it
  * narrows a row's kind). Held here so "structural" can be computed as
  * EVERYTHING MINUS DISPOSABLE rather than listed a second time: move a kind
  * onto the disposable list and it leaves the structural set automatically,
@@ -496,7 +497,8 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
   // ─────────────────────────────────────────────────────────────────────────
   // User ruling, 2026-09-13: NO HARDCODED LIMITS IN CODE. The per-project cap
   // is already configuration (`projects.retention`); its FALLBACK is not —
-  // `DEFAULT_RETENTION = 100` (src/store.ts:688) is a magic number with no
+  // `DEFAULT_RETENTION = 100` (then a top-level constant in src/store.ts)
+  // is a magic number with no
   // configuration channel at all, while the abandon deadline two declarations
   // below it already has one (`runAbandonAfterMs`, src/store.ts, "read per
   // sweep, not cached: the deadline is operational configuration").

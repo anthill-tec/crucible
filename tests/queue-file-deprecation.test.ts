@@ -48,7 +48,8 @@
 // the idioms in that report have SINCE MOVED, so read the current pins, not
 // that snapshot: the sibling tests/queue-release-membership-mandatory.test.ts
 // no longer reads §S2's finding as `union[union.length - 1]`, it NAMES the
-// code as `INHERITED_CODE` and records why at its :177-181; and the
+// code as `INHERITED_CODE` and records why in that constant's doc comment;
+// and the
 // whole-union pin — length six, the shipped five unchanged by value and in
 // order — lives in THIS file now, in its final test ("the deprecation code
 // joins the QueueWarning union as a SIXTH member…").

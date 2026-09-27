@@ -91,7 +91,7 @@ tier honest as a suite grows (D3 makes it mechanical).
 
 **The mapping is the client's contract. It was contracted by CR-CRU-008 §S2 — "send `tier` per
 subcommand (unit/module/e2e/regression map)" — implemented in ONE client, and drifted everywhere
-else.** `mvn-crucible.py:867` states it verbatim: *"CR-CRU-008 §S2 tier map: the subcommand name IS
+else.** `_run_surefire_tier` in `clients/mvn-crucible.py` states it verbatim: *"CR-CRU-008 §S2 tier map: the subcommand name IS
 the tier (unit/module)"*, with `_run_surefire_tier(args, extra, "unit")` passing `tier=label` into
 the ingest. CR-CRU-008 is COMPLETED (merged `f0d5b99`); the design is shipped, so what remains is
 drift. CR-CRU-111 completes it.

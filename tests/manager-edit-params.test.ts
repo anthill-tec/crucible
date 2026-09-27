@@ -10,16 +10,17 @@
 // re-tested): `PATCH /api/v2/projects/<key>` accepts
 // `{liveness:{t1_ms?,t2_ms?,t3_ms?}}` (partial merge onto existing
 // overrides; validate-all-before-write) and `{retention:<number>}`
-// (src/v2.ts:742-836). The manager row VIEW already renders
+// (`handleProjectPatch` in src/v2.ts). The manager row VIEW already renders
 // `liveness T1 60s / T2 300s / T3 1h (defaults)` (or override values without
 // the defaults label) and `retention N runs` (public/app.js
-// MANAGER_LIVENESS_DEFAULTS/MANAGER_RETENTION_DEFAULT/livenessLabel,
-// ~line 835-860; pinned F12-verbatim in tests/projects-manager.test.ts
-// lines 369-424) — this file reuses that same view-text contract to assert
+// MANAGER_LIVENESS_DEFAULTS/MANAGER_RETENTION_DEFAULT/livenessLabel;
+// pinned F12-verbatim by tests/projects-manager.test.ts's liveness and
+// retention-cap tests under "Projects manager — project list rendering
+// (§S2)") — this file reuses that same view-text contract to assert
 // the post-save flip.
 //
 // New testids this file DEFINES (none exist on the branch yet — GREEN must
-// add them inside ManagerRowEdit, public/app.js ~line 960):
+// add them inside `ManagerRowEdit` in public/app.js):
 //   `manager-edit-t1` / `manager-edit-t2` / `manager-edit-t3` — three
 //     liveness inputs, prefilled with the CURRENT EFFECTIVE value in
 //     SECONDS (default 60/300/3600, or the override in seconds).
@@ -104,7 +105,8 @@ function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectF
   };
 }
 
-// PATCH wire name -> store-internal name (src/v2.ts:747-749, WIRE_TO_INTERNAL).
+// PATCH wire name -> store-internal name, WIRE_TO_INTERNAL (the server's
+// `LIVENESS_WIRE_KEYS` in src/v2.ts).
 const WIRE_TO_INTERNAL: Record<string, keyof LivenessFixture> = {
   t1_ms: "staleAfterMs",
   t2_ms: "tombstoneAfterMs",
@@ -117,7 +119,8 @@ let patchCalls: CapturedCall[] = [];
 
 /** Same mountApp harness convention as tests/projects-manager.test.ts, with
  * a PATCH mock that performs the SAME wire-to-internal liveness translation
- * + partial merge the real server does (src/v2.ts:799-816) — a naive
+ * + partial merge the real server does (in `handleProjectPatch` in
+ * src/v2.ts) — a naive
  * Object.assign(target, patchBody) would silently corrupt the liveness
  * shape (wire keys t1_ms/t2_ms/t3_ms are not the store's staleAfterMs/
  * tombstoneAfterMs/pruneAfterMs field names), which would make the
@@ -169,8 +172,8 @@ async function mountApp(opts: MountOpts): Promise<void> {
       }
       body = { ok: true, changed: true };
     } else if (url.includes("/api/v2/projects") && url.includes("archived=true")) {
-      // ProjectsManager() pulls the archived slice on every mount
-      // (public/app.js ~line 1133) — none of this file's fixtures are
+      // ProjectsManager() (`ProjectsManager` in public/app.js) pulls the
+      // archived slice on every mount — none of this file's fixtures are
       // archived, so an empty list keeps the fold at "archived (0)"
       // (rendered as absent per §S1b convention) and out of scope here.
       body = { ok: true, projects: [] };
@@ -423,7 +426,8 @@ describe("Projects manager — edit-in-place liveness + retention PATCH argv (§
 
 // ─────────────────────────────────────────────────────────────────────────
 // Post-save view text — reuses the F12-verbatim contract already pinned in
-// tests/projects-manager.test.ts (lines 369-424): "(defaults)" drops once an
+// tests/projects-manager.test.ts (its liveness and retention-cap tests):
+// "(defaults)" drops once an
 // override exists, "retention N runs" tracks the new value.
 // ─────────────────────────────────────────────────────────────────────────
 describe("Projects manager — edit-in-place liveness + retention view-text flip (§S2 gap)", () => {

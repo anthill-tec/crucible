@@ -22,7 +22,8 @@
 //     There is no uv provisioning step at all → assertion 1 fails. This is the
 //     measured defect: CI run 31677479804 produced 102 bun failures of which
 //     **98** were `error: Executable not found in $PATH: "uv"`, because
-//     `tests/clients-bun-crucible.test.ts:83` spawns the client fleet as
+//     `runScript` (tests/clients-bun-crucible.test.ts) spawns the client
+//     fleet as
 //     `["uv", "run", SCRIPT_PATH, …]` (PEP 723, CR-CRU-046 §S3) and
 //     `oven-sh/setup-bun` provides bun, not uv.
 //
@@ -32,10 +33,13 @@
 //     (→ assertion 2 fails; `tests/client/test_cr046_uv_env_gate.py`'s
 //     `setUpClass` raises ``RuntimeError: `uv` is not on PATH … Remedy:
 //     install uv.``), no dependency-install step at all (→ assertion 3 fails;
-//     `test_cr040_coverage_tooling.py:172` needs the gate venv's python to run
-//     `-m coverage`, and `pyproject.toml:27` already declares
+//     `test_gate_venv_python_can_execute_coverage_module`
+//     (tests/client/test_cr040_coverage_tooling.py) needs the gate venv's
+//     python to run `-m coverage`, and the `dev` extra in `pyproject.toml`
+//     already declares
 //     `dev = ["coverage>=7"]`), and no `build` install (→ assertion 4 fails;
-//     `tests/client/test_crucible_axi_wheel_packaging.py:121` raises
+//     `CrucibleAxiWheelPackagingTest.setUpClass`
+//     (tests/client/test_crucible_axi_wheel_packaging.py) raises
 //     ``RuntimeError: no interpreter on this machine can `import build```).
 //
 //   * Assertions 5 (AC9 — no `if:` on a test job, CR-CRU-062 §S0) and 6
@@ -168,7 +172,7 @@ describe("CR-CRU-063 §S1 — uv is provisioned on the jobs that drive the clien
       provisioning.length,
       "release.yml job 'test-bun' has no uv provisioning step (expected an " +
         "`astral-sh/setup-uv` `uses:` or an explicit uv install `run:`). " +
-        "tests/clients-bun-crucible.test.ts:83 spawns the client fleet as " +
+        "tests/clients-bun-crucible.test.ts's runScript spawns the client fleet as " +
         '["uv", "run", SCRIPT_PATH, …]; without uv on PATH the suite emits ' +
         '`error: Executable not found in $PATH: "uv"` 98 times.\n' +
         `test-bun steps:\n${stepInventory(steps)}`,
@@ -217,9 +221,11 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
       installers.length,
       "release.yml job 'test-python' has no step installing the project's " +
         "`dev` optional-dependency group (expected an install whose args carry " +
-        "the extra, e.g. `.[dev]`). tests/client/test_cr040_coverage_tooling.py:172 " +
+        "the extra, e.g. `.[dev]`). tests/client/test_cr040_coverage_tooling.py's " +
+        "test_gate_venv_python_can_execute_coverage_module " +
         "requires the gate venv's python to execute `-m coverage`, and " +
-        "pyproject.toml:27 already declares `dev = [\"coverage>=7\"]` — §S2/AC8: " +
+        "pyproject.toml's `dev` extra already declares `dev = [\"coverage>=7\"]` " +
+        "— §S2/AC8: " +
         "consume that group, never restate its contents in YAML.\n" +
         `test-python steps:\n${stepInventory(steps)}`,
     ).toBeGreaterThan(0);
@@ -230,7 +236,7 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
 
     // NEGATIVE duplication check (the positive contract above is on the parsed
     // graph, per AC7). A version constraint or a bare coverage install in YAML
-    // is a second declaration of pyproject.toml:27 and the two will drift.
+    // is a second declaration of pyproject.toml's `dev` extra and the two will drift.
     expect(
       raw.includes("coverage>="),
       "release.yml contains the version constraint `coverage>=` — that duplicates " +
@@ -254,7 +260,7 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
     expect(
       installers.length,
       "release.yml job 'test-python' has no step installing `build`. " +
-        "tests/client/test_crucible_axi_wheel_packaging.py:121 raises " +
+        "tests/client/test_crucible_axi_wheel_packaging.py's setUpClass raises " +
         "``RuntimeError: no interpreter on this machine can `import build`… " +
         "Remedy: `python3 -m pip install --upgrade build``` — the same package " +
         "the `build` job already installs; that asymmetry is the bug (§S2).\n" +
@@ -353,8 +359,8 @@ describe("0.2.0 release (CR-CRU-112 §S1 / CR-CRU-096 AC26) — test-bun owns th
 // its own CR says is settled by running commands.
 //
 // Measured on this branch at RED time:
-//   * release.yml carries FOUR literal `bun-version: "1.4.2"` entries (:121
-//     test-bun, :201 test-e2e, :384 publish-npm, :444 dry-run-npm) — four
+//   * release.yml carries FOUR literal `bun-version: "1.4.2"` entries (in the
+//     test-bun, test-e2e, publish-npm and dry-run-npm jobs) — four
 //     sites, so the site-count assertion FAILS with 4 where 1 is required.
 //   * package.json declares no `packageManager`. Its `engines.bun` (`>=1.2`)
 //     is the compatibility FLOOR that CR-CRU-087's own gap analysis (D2)

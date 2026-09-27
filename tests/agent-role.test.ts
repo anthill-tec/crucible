@@ -45,7 +45,8 @@
 //
 // Callers to update in public/app.js (not tested directly here beyond the
 // EventCard integration below — same call shape at all three sites):
-//   public/app.js:709, :2165, :2201 currently call `L.phaseRole(e.agentId)`
+//   `EventCard`, `LinkedRunRow` and `InlineRunEntry` (public/app.js)
+//   currently call `L.phaseRole(e.agentId)`
 //   directly on an EVENT, ignoring the owning agent's stored role. GREEN
 //   must look the agent up from `state.agents` by `e.agentId` and call
 //   `L.agentRole({ agentId: e.agentId, role: matchedAgent?.role })`

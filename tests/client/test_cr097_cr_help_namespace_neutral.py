@@ -33,10 +33,10 @@ path (hyphenated filenames), and `main()` driven with `sys.argv` patched --
 the SAME idiom as every sibling harness here (`test_cr061_gate_run_skip_
 passthrough.py`, `test_cr054_drift_guard.py`, ...).
 
-RED phase: every test below fails against TODAY's tree --
-`arduino-crucible.py:1079`, `bun-crucible.py:2330`, `mvn-crucible.py:1896`,
-`python-crucible.py:1352` render `CR id, e.g. CR-CRU-008.` and
-`rust-crucible.py:2413` renders `CR id, e.g. CR-NAI-203.`
+RED phase: every test below fails against TODAY's tree -- the `plan-file`
+`--cr` help built in `main` of `arduino-crucible.py`, `bun-crucible.py`,
+`mvn-crucible.py` and `python-crucible.py` renders `CR id, e.g. CR-CRU-008.` and
+the same help in `main` in `rust-crucible.py` renders `CR id, e.g. CR-NAI-203.`
 
 Invocation:
     python3 -m pytest tests/client/test_cr097_cr_help_namespace_neutral.py -q

@@ -25,7 +25,7 @@
 // Every directory is a fresh OS tmpdir (tests/boot-safety.test.ts's
 // convention), NEVER inside the repo. `CRUCIBLE_DB` is set only so the config
 // path RESOLVES beside it (`serverConfigPath()` in src/limits.ts ->
-// `resolveStore()` in src/server.ts:65) — no database at that path is ever
+// `resolveStore()` in src/server.ts) — no database at that path is ever
 // opened or created, every Store a caller opens is ":memory:", and the live
 // `data/crucible.db` is never touched.
 import { expect } from "bun:test";
@@ -58,9 +58,9 @@ export interface LimitDeclaration {
  * and the scan that forbids them cannot drift into two lists. A fourth
  * retirement extends this array by one line and both consumers follow.
  *
- * All three were live overrides on release/0.2.0 before C2: src/store.ts:747
- * (`defaultRetention`), src/store.ts:843 (`runAbandonAfterMs`) and
- * src/v2.ts:371 (`projectInactiveMs`). Each read a number out of the process
+ * All three were live overrides on release/0.2.0 before C2: `defaultRetention`
+ * (src/store.ts), `runAbandonAfterMs` (src/store.ts) and
+ * `projectInactiveMs` (src/v2.ts). Each read a number out of the process
  * environment ahead of the file — a limit with no `description`, no
  * `recommended`, no `min` and no `max`, which is the exact condition PRD §4.13
  * exists to end.
@@ -112,11 +112,12 @@ export const BOOTSTRAP_ENV: readonly string[] = [
  * defect was that it was a second way to set a number, so naming it at all
  * teaches a mechanism that must not exist. The connection retirement is the
  * opposite: the code that stopped reading these SAYS SO where it used to read
- * them (`src/server.ts:158`, `:368`; `clients/_crucible_axi.py:127`, `:298`,
- * `:440`, `:441`), because a reader who arrives at the resolver holding an
- * export in their hand has to be told why it does nothing. Feeding these four
- * to that scan would convict CR-CRU-139's own lineage prose and leave GREEN a
- * choice between weakening the scan and deleting the explanation.
+ * them (`resolveListener` and `startServer` in `src/server.ts`; the
+ * `CLIENT_TABLE` comment, `shipped_board` and `resolve_base_url` in
+ * `clients/_crucible_axi.py`), because a reader who arrives at the resolver
+ * holding an export in their hand has to be told why it does nothing. Feeding
+ * these four to that scan would convict CR-CRU-139's own lineage prose and
+ * leave GREEN a choice between weakening the scan and deleting the explanation.
  *
  * So this list is consumed by the DOCUMENTATION guards — the RUNBOOK must
  * record each of these as retired and must present none of them as live
@@ -155,8 +156,9 @@ export function clearEnv(name: string): void {
 /**
  * A scratch directory standing in for the server's own configuration
  * directory, pointed at by the SAME rule that resolves the database path
- * (`CRUCIBLE_DB`, src/server.ts:65). No database is opened there — every Store
- * in every caller is ":memory:"; only the config PATH is resolved from it.
+ * (`CRUCIBLE_DB`, `resolveStore` in src/server.ts). No database is opened
+ * there — every Store in every
+ * caller is ":memory:"; only the config PATH is resolved from it.
  *
  * Every RETIRED variable is cleared, so nothing a caller asserts can pass on a
  * value the file did not supply — including one inherited from the shell that
@@ -249,7 +251,7 @@ const emptyTree: SuiteNode[] = [];
 /**
  * A project whose agents never tombstone within the horizon a sweep is driven
  * to. `sweepOpenRuns` settles an open run as `agent died` BEFORE it ever
- * considers the abandon deadline (src/store.ts:3737-3742), so a run-abandon
+ * considers the abandon deadline (src/store.ts), so a run-abandon
  * test that let its agent tombstone would be measuring liveness and reporting
  * it as a deadline. The thresholds are derived from the horizon under test,
  * never pinned.

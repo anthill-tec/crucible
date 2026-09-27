@@ -1977,8 +1977,8 @@ def _next_entry(cr, seq, status="PENDING", wave="5", release=None, track=None,
 
 def _published_tracks(entries):
     """CR-CRU-108 §S1/AC1 — what `GET …/queue` publishes BESIDE its entries:
-    the sorted distinct non-blank TRIMMED `track` values (`declaredTracks`,
-    src/store.ts:380, called from `handleQueueGet`).
+    the sorted distinct non-blank TRIMMED `track` values (`declaredTracks`
+    (src/store.ts), called from `handleQueueGet`).
 
     The stub stands in for the SERVER, so it must state the server's fact. A
     stub that omitted `tracks` would serve a payload no live read produces,

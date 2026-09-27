@@ -392,7 +392,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
 
   // CR-CRU-037 §S1 — `agentsOnline` must equal the HIGHLIGHTED set (every
   // non-tombstoned agent: online + stale), not just `liveness === "online"`.
-  // Today src/v2.ts (~line 297) filters on "online" only, so a still-
+  // Today `handleProjectsList` in src/v2.ts filters on "online" only, so a still-
   // highlighted "stale" agent silently drops out of the count while its row
   // stays lit in the UI — the count disagrees with what is on screen.
   describe("GET /api/v2/projects — agentsOnline counts the highlighted (non-tombstoned) set (CR-CRU-037 §S1)", () => {

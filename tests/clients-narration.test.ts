@@ -17,22 +17,24 @@
 //
 // Ground truth read directly from src/v2.ts (NOT assumed) before writing
 // these tests:
-//   - `message` already exists on the wire today: handleAgentTouch (v2.ts:296)
-//     accepts an arbitrary `message: string` on BOTH register and heartbeat
-//     (same route, "/api/v2/agents/register" OR "/api/v2/agents/heartbeat" —
-//     v2.ts:1059) and stores it via `store.touchAgent(...opts)`. So narration
+//   - `message` already exists on the wire today: `handleAgentTouch`
+//     (src/v2.ts) accepts an arbitrary `message: string` on BOTH register
+//     and heartbeat (same route, "/api/v2/agents/register" OR
+//     "/api/v2/agents/heartbeat" — dispatched in `handleV2` (src/v2.ts))
+//     and stores it via `store.touchAgent(...opts)`. So narration
 //     needs NO new API — confirms the spec's "no new API" claim; these tests
 //     exercise the CLIENT side only (clients/bun-crucible.py,
 //     clients/mvn-crucible.py), never src/v2.ts.
-//   - Lifecycle-event journaling ground truth (v2.ts:306-323): `const existed
+//   - Lifecycle-event journaling ground truth (`handleAgentTouch` in
+//     src/v2.ts): `const existed
 //     = store.hasAgent(...)`; `if (!existed) store.recordLifecycleEvent(...,
 //     "registered")`. A repeat register/heartbeat call against an ALREADY
 //     existing agent id does NOT journal a lifecycle event today — this is
 //     the correct, already-shipped behavior the narration mechanism must
 //     keep riding (item 3 below pins it as a regression guard, not a
 //     blocker: repeated calls already fail to journal).
-//   - `GET /api/v2/events` (handleEventsList, v2.ts:931 → eventBrief,
-//     v2.ts:891) returns EVERY event kind mixed together — `kind: "test" |
+//   - `GET /api/v2/events` (`handleEventsList` (src/v2.ts) → `eventBrief`
+//     (src/v2.ts)) returns EVERY event kind mixed together — `kind: "test" |
 //     "compile" | "lifecycle"` sits right on the brief — so a test can
 //     filter `events.filter(e => e.kind === "lifecycle")` without reading
 //     any per-kind endpoint.
@@ -560,7 +562,7 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
 // ── CR-CRU-047 §S3 — SECOND PASS. `--dots` is WITHDRAWN. ───────────────────
 //
 // ROOT CAUSE, corrected (2026-07-28, read this before the tests below).
-// `clients/bun-crucible.py:1177`/`:1316` ALREADY `env.pop("CLAUDECODE", None)`
+// `cmd_test`/`cmd_regression` in clients/bun-crucible.py ALREADY `env.pop("CLAUDECODE", None)`
 // before running the wrapped `bun test` — the client already defends itself
 // against bun's agent-quieting. The remaining gap is narrower: only
 // `CLAUDECODE` is popped, not `AGENT`/`REPL_ID` (also agent-quieting
@@ -799,7 +801,7 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
   );
 
   test(
-    "`test` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:1177 extends beyond CLAUDECODE",
+    "`test` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop in `cmd_test` (clients/bun-crucible.py) extends beyond CLAUDECODE",
     async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const baseUrl = `http://localhost:${handle.server.port}`;
@@ -839,7 +841,7 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
   );
 
   test(
-    "`regression` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:1316 extends beyond CLAUDECODE",
+    "`regression` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop in `cmd_regression` (clients/bun-crucible.py) extends beyond CLAUDECODE",
     async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const baseUrl = `http://localhost:${handle.server.port}`;

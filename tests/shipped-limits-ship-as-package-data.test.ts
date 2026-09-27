@@ -3,8 +3,9 @@
 //
 // ── What C1 and C2 left, measured 2026-09-14 ──────────────────────────────
 //
-// `SHIPPED` (src/limits.ts:90) is a TypeScript literal and `_SHIPPED_LIMITS`
-// (clients/_crucible_axi.py:120) is a Python literal, so the six limit
+// `SHIPPED` (a table then in src/limits.ts) is a TypeScript literal and
+// `_SHIPPED_LIMITS` (a table then in clients/_crucible_axi.py) is a Python
+// literal, so the six limit
 // declarations exist in FOUR places: those two source tables, `data/crucible
 // .toml` and the repo-root `crucible.toml` template. That is a drift farm, and
 // it means the last resort is still a NUMBER IN A RESOLVER — which §S1c
@@ -41,10 +42,10 @@
 // ── HOW EACH TEST FAILS IF THE CODE DOES NOTHING ─────────────────────────
 //
 //   scan          -> 24 offenders, measured: 18 `recommended`/`min`/`max`
-//                    numeric literals (9 at src/limits.ts:96-129, 9 at
-//                    clients/_crucible_axi.py:125-155) plus 6 limit names
-//                    declared beside a `description` (src/limits.ts:91/104/117,
-//                    clients/_crucible_axi.py:121/134/147).
+//                    numeric literals (9 in src/limits.ts's `SHIPPED`, 9 in
+//                    clients/_crucible_axi.py's `_SHIPPED_LIMITS`) plus 6 limit
+//                    names declared beside a `description` (the three entry
+//                    keys of each of those two tables).
 //   travel        -> no `crucible.toml` in the packed tarball at all
 //                    (package.json `files` is ["bin/","src/","public/"]).
 //   one datum     -> the mutation is invisible: the probe reads `SHIPPED`,

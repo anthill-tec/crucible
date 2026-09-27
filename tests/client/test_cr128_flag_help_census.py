@@ -24,8 +24,8 @@ Nothing here is a seventh walker's worth of new convention. `CLIENT_FILES`,
 `AXI_MODULE_PATH` and `EXPECTED_CLIENT_COUNT` come from
 `tests/client/test_client_tier_surface.py`; `_load_module_by_path` comes from
 `tests/client/test_cr054_verb_surface_lift.py`; the shrink-only dated exemption
-ceiling follows `PRE_CR_ASSERTION_RESIDUE` at
-`tests/project-namespace-tripwire.test.ts:504`.
+ceiling follows `PRE_CR_ASSERTION_RESIDUE` in
+`tests/project-namespace-tripwire.test.ts`.
 
 What is RED here and what is a GREEN-GUARD, stated per test, because a suite
 that does not say which of its members were born green is a suite whose colour
@@ -162,7 +162,7 @@ FLAG_COUNT_FLOOR = {
 FLEET_FLAG_COUNT_FLOOR = 374
 
 # §S1's nomination, anchored on the DECLARATION (client + subparser verb), never
-# on a line number: adding `help=` to `python-crucible.py:1524` shifts every
+# on a line number: adding `help=` to python's `auto-ingest` `--agent` shifts every
 # line below it, so a line-pinned test would rot the moment GREEN ran. These six
 # are the `required=True` `--agent` declarations that carry no description --
 # `auto-ingest` in four clients, mvn's `pre-merge-gate` and rust's
@@ -206,8 +206,8 @@ UNTOUCHED_KEYWORD_PIN = {
 }
 
 # §S3.4's residue — the `"If set"` openers on flags that take a VALUE, pinned as
-# a dated CEILING exactly as `PRE_CR_ASSERTION_RESIDUE` is at
-# `tests/project-namespace-tripwire.test.ts:504`: a file may shrink freely, it
+# a dated CEILING exactly as `PRE_CR_ASSERTION_RESIDUE` is in
+# `tests/project-namespace-tripwire.test.ts`: a file may shrink freely, it
 # may not grow, and a file ABSENT from this table must be at ZERO. Measured
 # 2026-09-13 by this file's own checker: 19 declarations, every one of them
 # `--agent`, describing the ingest SIDE-EFFECT ("If set, ingest surefire ...")

@@ -4,7 +4,7 @@ Four defects, all client-side, pinned here in the four shapes the spec's
 acceptance criteria name (docs/changes/CR-CRU-124-cycle-add-cannot-target-the-
 plan-it-means.md):
 
-- **§S1** `resolve_single_plan` (`clients/_crucible_axi.py:246-270`) filters by
+- **§S1** `resolve_single_plan` (`clients/_crucible_axi.py`) filters by
   `open_only`, then by `cr`, then demands exactly one candidate. `cycle-add`
   passes `open_only=False`, so a CR carrying an ABORTED plan beside its OPEN
   one yields two candidates → `"ambiguous"` → no POST. Since abort +
@@ -12,17 +12,18 @@ plan-it-means.md):
   aborted can never receive a cycle through the client again. Asserted on the
   PURE resolver (the exact shape that refused on 2026-09-12) and again at the
   end of the client, where the POST either fires or does not.
-- **§S2** `resolve_plan_or_emit`'s ambiguity branch (`:387-392`) rebuilds its
+- **§S2** the ambiguity branch of `resolve_plan_or_emit`
+  (`clients/_crucible_axi.py`) rebuilds its
   candidate list filtered by `open_only` ONLY — never by `cr` — so it
   enumerates every plan on the board and then tells the caller to pass the flag
   they already passed. The live failure printed all 113. `cmd_cr_close`
-  (`:2480-2496`) already filters by `args.cr` first; the shared helper must
-  behave like the one correct call site.
+  (`clients/_crucible_axi.py`) already filters by `args.cr` first; the
+  shared helper must behave like the one correct call site.
 - **§S3** there is no `--plan <id>` escape, even though the route takes the
   plan id in its path and needs no resolution at all.
-- **§S4** `cmd_cycle_add` (`:2450-2451`) POSTs `{label, agentId}` and nothing
-  else, while the route has ALWAYS accepted `kind`: `parseCycleInput`
-  (`src/v2.ts:1359-1375`) reads `{label, kind?}`, validates against
+- **§S4** `cmd_cycle_add` (`clients/_crucible_axi.py`) POSTs
+  `{label, agentId}` and nothing else, while the route has ALWAYS accepted
+  `kind`: `parseCycleInput` (`src/v2.ts`) reads `{label, kind?}`, validates against
   `CYCLE_KINDS` and defaults to `red-green` when omitted. So every verify and
   fix cycle ever filed through this verb is stored as `red-green`. NO server
   change is needed or wanted — which is why the §S4 criteria are asserted by
@@ -545,7 +546,7 @@ class CycleAddDeclaresBothFlagsInEveryClientTest(unittest.TestCase):
     def test_the_kind_help_names_the_three_kinds_the_route_accepts(self):
         """§S4 — the flag's whole value is that a caller can pick the right
         kind; a help entry that names no vocabulary sends them to the source.
-        The three are `parseCycleInput`'s own set (src/v2.ts:1370)."""
+        The three are `parseCycleInput`'s own set (`CYCLE_KINDS` in src/v2.ts)."""
         for client, result in self.surfaces.items():
             block = _flag_help_block(result.stdout, KIND_FLAG)
             unnamed = [kind for kind in CYCLE_KINDS if kind not in block]
@@ -759,8 +760,8 @@ class CycleAddBodyWithoutAKindIsUnchangedTest(_BaseCycleAddTest):
     """§S4/AC3 (regression pin) — "today's behaviour byte-identical for every
     existing caller", measured on the REQUEST BODY: an omitted `--kind` must
     leave the field out entirely so the server's own default applies
-    (`parseCycleInput`, src/v2.ts:1366-1369), never send a client-chosen
-    `red-green`."""
+    (the omitted-kind branch of `parseCycleInput` in src/v2.ts), never send
+    a client-chosen `red-green`."""
 
     PROJECT_KEY = "cycle-add-default-kind-key"
 

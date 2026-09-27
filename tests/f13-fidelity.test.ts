@@ -550,8 +550,8 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
   // ── CR-CRU-037 §S3 — untitled plan renders as its CR, no orchestrator suffix ──
   // The ` — <orchestrator>` suffix must render ONLY when the plan carries a
   // real title; on an untitled plan (title null/undefined) the CR root must
-  // render JUST the CR, even when `orchestrator` is set. Today public/app.js
-  // (~line 2555) gates the suffix on `plan.orchestrator !== undefined` alone,
+  // render JUST the CR, even when `orchestrator` is set. Today the CR-root
+  // row in `WorkflowActive` (public/app.js) gates the suffix on `plan.orchestrator !== undefined` alone,
   // independent of title — so this currently FAILS (renders the suffix).
   test('CR-CRU-037 §S3 — a plan with NO title but an orchestrator set renders the CR alone, with NO " — <orchestrator>" suffix (untitled reads as its CR, never the orchestrator)', async () => {
     const key = "f13-fidelity-untitled-with-orch";
@@ -1032,9 +1032,9 @@ describe("§S6 #3 RED addendum (cycle 13, gap 1) — open-span runs render as ON
 // INLINE on one row: `🧪 <agent> <ratio> · 🧪 <agent> <ratio> · awaiting
 // orchestrator confirm`") is a contract for the case where the active cycle
 // HAS linked runs. On inspection, `public/app.js` `OpenSpan(cycleId)`
-// (~line 1278) unconditionally pushes the trailing "awaiting orchestrator
+// unconditionally pushes the trailing "awaiting orchestrator
 // confirm" annotation regardless of how many entries `linkedRunsFor(cycleId)`
-// returns, and `CycleRow` (~line 1348) unconditionally calls `OpenSpan` for
+// returns, and `CycleRow` in public/app.js unconditionally calls `OpenSpan` for
 // ANY `active` cycle — so with ZERO cycleId-linked runs, today's UI still
 // renders a bare `[data-testid="open-span"]` container holding nothing but
 // the annotation: an "awaiting orchestrator confirm" floating with nothing

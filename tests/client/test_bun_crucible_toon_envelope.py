@@ -27,8 +27,8 @@ RED phase: as of this writing `cmd_register`/`cmd_unregister`/`cmd_plan_file`/
 ad-hoc human-readable line straight to stdout (confirmed by reading
 clients/bun-crucible.py) and never call `clients/toon.py`'s `encode()` at all
 for these verbs (`_toon()` today is only ever `.decode()`d, for the no-mistakes
-axi stream in `cmd_gate_run` -- the loader at `bun-crucible.py:1783`, the decode
-it now delegates to at `_crucible_axi.py:6207`). Every test
+axi stream in `cmd_gate_run` -- the loader `_toon` in `bun-crucible.py`, the decode
+it now delegates to `_decode_axi_snapshot` in `_crucible_axi.py`). Every test
 below therefore fails: `toon.decode(stdout)` either raises (stdout is plain
 text, not TOON) or yields a dict with no top-level "axi" key -- real
 behavioral RED, not a missing-symbol accident. There is also no GET-plans
@@ -497,12 +497,6 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         with open(self.fake_bun, "w") as f:
             f.write(FAKE_BUN_SCRIPT_TEMPLATE.format(python=sys.executable))
         os.chmod(self.fake_bun, 0o755)
-
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-1", "cr": "CR-Q", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
-        ])
 
     def _active_cycle_plans(self, active_id=51):
         return _open_plans_response([

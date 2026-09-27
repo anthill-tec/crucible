@@ -676,7 +676,8 @@ def _parse_junit_file(junit_path):
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (bun emits it for
             # BOTH `test.skip` and `test.todo`) is PENDING, never passed. Order
             # matters: failure/error first, then skipped, then pass. A skip does
-            # NOT fail its suite. Mirrors mvn-crucible.py:641, the reference.
+            # NOT fail its suite. Mirrors `_parse_junit` in
+            # `clients/mvn-crucible.py`, the reference.
             if fail:
                 status = "fail"
                 failed += 1
@@ -2140,22 +2141,6 @@ def _agent_id(args):
     Raises `_crucible_axi.AgentIdentityRequired`, which `main` converts into
     the ok:false hard-stop envelope + a non-zero exit, POSTing nothing."""
     return _axi().require_agent_id(args)
-
-
-def _fleet_context(cr=None):
-    """Env auto-context shared by gates + milestones: `cr` (when supplied),
-    `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
-    OMITTED (never fabricated) so an unset WORKFLOW_WAVE yields no `wave` key."""
-    ctx = {}
-    if cr:
-        ctx["cr"] = cr
-    wave = os.environ.get("WORKFLOW_WAVE")
-    if wave:
-        ctx["wave"] = wave
-    role = os.environ.get("WORKFLOW_ROLE")
-    if role:
-        ctx["track"] = role
-    return ctx
 
 
 def _post_gate(project_dir, agent_id, gate, context=None, release=None):

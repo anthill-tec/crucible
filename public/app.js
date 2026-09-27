@@ -1777,8 +1777,9 @@
 
     // Edit-in-place — name/type/sutRoot + liveness overrides (t1/t2/t3,
     // edited in seconds, wired as ms) + retention; PATCH carries ONLY the
-    // fields the user actually changed and NEVER the immutable key (§S1,
-    // src/v2.ts:771-773 — an echoed key would 400 against the live server).
+    // fields the user actually changed and NEVER the immutable key (§S1, the
+    // `projectKey` guard in `handleProjectPatch` (src/v2.ts) — an echoed key
+    // would 400 against the live server).
     // PATCH doesn't echo the updated project, so refetch to observe the edit.
     //
     // Cycle-28 fix (pre-existing cycle-27 defect): the name/type/sutRoot
@@ -3516,7 +3517,8 @@
     // CR-CRU-096 AC9b — the node's lifecycle badge STAYS, and renders
     // wherever a node renders. AC9a trims the dispositioned PENDING ROW out
     // of a wave box, but it does NOT make this badge unreachable: the loose
-    // group draws its membership UNTRIMMED (AC18a, `:2854`) and AC9's union is
+    // group draws its membership UNTRIMMED (AC18a, the `app-flow-loose`
+    // branch of `RoadmapFlowWave` below) and AC9's union is
     // on STATUS, so a running CR is drawn whatever its `lifecycle` (AC9c).
     // On both paths dropping the span would leave the disposition published
     // as the `data-lifecycle` ATTRIBUTE alone — colour and CSS with no TEXT,

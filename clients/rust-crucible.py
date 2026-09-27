@@ -482,7 +482,8 @@ def _parse_junit(junit_path):
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (nextest emits it
             # for `#[ignore]`d tests) is PENDING, never passed. Order matters:
             # failure/error first, then skipped, then pass. A skip does NOT
-            # fail its suite. Mirrors mvn-crucible.py:641, the reference.
+            # fail its suite. Mirrors `_parse_junit` in
+            # `clients/mvn-crucible.py`, the reference.
             if fail:
                 status = "fail"
                 failed += 1
@@ -1338,36 +1339,6 @@ def _clippy_workspace_gate(project_dir, agent):
               file=sys.stderr)
     return {"exit": result.returncode, "errors": err_count, "lints": warn_count,
             "warnings": warnings}
-
-
-def _disk_precheck(label, min_free_g=50):
-    """rust-orchestration.md (Disk hygiene) Disk Hygiene guard.
-
-    A full `--all-features` / llvm-cov workspace run can leave 100-200G+ of `target/`
-    artifacts. CR-245 drove `/home` to disk-full mid-run; CR-255 left a root-owned
-    docker bind-mount orphan when a worktree finish couldn't reclaim it. Surface disk
-    state BEFORE the heavy build and nudge recovery when free space is low, so we catch
-    the problem before ENOSPC rather than after. Best-effort + non-fatal (informational).
-    """
-    try:
-        df = subprocess.run(["df", "-BG", "/home"], capture_output=True, text=True)
-        line = df.stdout.strip().splitlines()[-1] if df.stdout.strip() else ""
-    except Exception:
-        return None
-    print(f"[crucible:{label}] disk /home: {line}", file=sys.stderr)
-    parts = line.split()
-    free_g = int(parts[3].rstrip("G")) if len(parts) >= 4 and parts[3].rstrip("G").isdigit() else None
-    if free_g is not None and free_g < min_free_g:
-        print(f"[crucible:{label}] ⚠ LOW DISK — {free_g}G free on /home (<{min_free_g}G). A full "
-              f"--all-features coverage run can need 100-200G+ of target artifacts; you may hit "
-              f"ENOSPC mid-run. Reclaim FIRST (rust-orchestration.md (Disk hygiene), orchestrator-only):",
-              file=sys.stderr)
-        print("    cargo sweep --time 7      # drop target/ artifacts older than 7 days",
-              file=sys.stderr)
-        print("    cargo cache --autoclean   # ~/.cargo registry hygiene", file=sys.stderr)
-        print("    # btrfs/snapper pinning freed space? sudo snapper -c home list && delete old snapshots",
-              file=sys.stderr)
-    return free_g
 
 
 def _disk_free_g(mount="/home"):

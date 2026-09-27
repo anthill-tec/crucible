@@ -15,7 +15,7 @@ docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md §S9:
     one first"), never a silent orphan ... An explicit WORKFLOW_CYCLE_ID
     still overrides the auto-resolution."
 
-RED phase: today `_cycle_id_and_warnings` (bun-crucible.py ~L1129) only ever
+RED phase: today `_cycle_id_and_warnings` (then in bun-crucible.py; since removed) only ever
 reads WORKFLOW_CYCLE_ID from env; when unset it emits a soft `no-cycle-id`
 WARNING and proceeds with an explicit-null cycleId (confirmed by reading the
 source) -- it never attaches from the active cycle, and never hard-errors.

@@ -1,6 +1,6 @@
 """CR-CRU-133 (cycle 464) — a declared target is run on its own terms.
 
-`clients/bun-crucible.py`'s `_bun_run_script_cmd` (`:479`) states in its own
+`_bun_run_script_cmd` (`clients/bun-crucible.py`) states in its own
 docstring that a DECLARED tier target "is run BY NAME (`bun run test:unit`),
 never by re-parsing its body … and the client never classifies what the project
 declared", and then appends `--reporter=junit --reporter-outfile=<path>` —
@@ -32,7 +32,7 @@ implements a decision rather than re-deriving one):
   * §S3's richer starvation message rides the EXISTING additive keywords of
     the SHARED `no_report_help(verb, artifact, remedy=None)` /
     `no_report_warning(verb, artifact, exit_code, output, cause=None)`
-    (`clients/_crucible_axi.py:1365,1384`, 11 call sites / 22 helper calls
+    (both in `clients/_crucible_axi.py`, 11 call sites / 22 helper calls
     across five clients).
     Neither helper's required-parameter shape may change, and this client may
     not grow a local copy — `tests/client/test_cr054_drift_guard.py` guards

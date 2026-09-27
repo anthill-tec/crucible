@@ -512,8 +512,6 @@ class _AskingTests:
 
 class _EnvelopeContractTests:
 
-    SUCCESS_CALLS = None  # filled in below (argv, post_return)
-
     def _each_verb(self):
         return (
             (["release-propose", "--label", "0.4.0", "--target", "2026-09-01",
@@ -947,7 +945,7 @@ class RoadmapVerbsLandOnceTest(unittest.TestCase):
             f"missing {missing!r}")
 
     def test_each_client_delegator_is_a_thin_wrapper(self):
-        """The `queue-file` shape (`clients/python-crucible.py:1100-1104`):
+        """The `queue-file` shape (`cmd_queue_file` in `clients/python-crucible.py`):
         the client body is one `return _axi().<impl>(args, <project dir>,
         _ops())` call. Anything longer means logic leaked into a client."""
         offenders = {}

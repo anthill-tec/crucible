@@ -11,9 +11,10 @@ RED, and why each test below fails against the current tree (read, not guessed):
   nothing in the package composed a server launch. Every `serve` test
   therefore failed at the parser or on "no launch call was ever made". No
   line can be cited for that any more, and none is: GREEN landed the
-  subparser these tests forced (`cli.py:67`, `p_serve = sub.add_parser(`)
-  beside the `install` one (`cli.py:42`), and `main` dispatches through the
-  `_COMMANDS` table (`cli.py:337`, `handler = _COMMANDS.get(args.command)`).
+  subparser these tests forced (`p_serve = sub.add_parser(` in `_build_parser`)
+  beside the `install` one (also in `_build_parser`), and `main` in
+  `crucible_axi/cli.py` dispatches through the `_COMMANDS` table
+  (`handler = _COMMANDS.get(args.command)`).
 
   What the tests PIN (the contract §S3 states, plus the follow-up systemd
   `--user` unit's requirement of a minimal PATH):
@@ -46,7 +47,7 @@ RED, and why each test below fails against the current tree (read, not guessed):
 §S1b / AC7 -- the install creates its target directory
   At RED nothing in `crucible_axi/` created `target_dir` (no
   `makedirs`/`mkdir` anywhere in the package) while the default was -- and
-  still is -- `~/.crucible` (`cli.py:45`,
+  still is -- `~/.crucible` (`_build_parser`'s `install` subparser,
   `default=os.path.expanduser("~/.crucible"),`). So on a clean machine the
   server stage provisioned and the [manifest] stage then died
   `FileNotFoundError: .../crucible-clients.json`; `run_install` recorded it

@@ -10,7 +10,7 @@ docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md §S2:
     typecheck/compile gate) returns the §S1 envelope."
 
 RED phase (C2 VERIFY finding, gap 2/SHOULD-FIX): `cmd_check`
-(`clients/bun-crucible.py` ~L824) still `print()`s ad-hoc human-readable
+(`clients/bun-crucible.py`) still `print()`s ad-hoc human-readable
 lines straight to stdout ("[crucible] running: ...", "[crucible] tsc
 exit=...") and never calls the shared `_emit_axi`/§S1 envelope builder at
 all -- confirmed by reading the function directly. `toon.decode` on its

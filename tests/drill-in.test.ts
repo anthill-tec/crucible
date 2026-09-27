@@ -2040,7 +2040,8 @@ describe("F4½ anatomy — status-chips row above the heat-strip (Density presen
 //   `Spinner()` — ONE component, ONE CSS rule. Renders a single element with
 //     `data-testid="spinner"` and class `app-spinner`; `public/styles.css`
 //     declares `@keyframes app-spin` and drives it from an `.app-spinner`
-//     rule (the `app-run-pulse` convention at styles.css:1096, a semantic
+//     rule (the `app-run-pulse` convention, `@keyframes app-run-pulse` in
+//     public/styles.css, a semantic
 //     class plus its own keyframes — followed, not reused: a pulse means
 //     "this is happening live", a spinner means "wait, this is loading").
 //   §S2 — `RunDetailBody`'s loading branch renders it while the initial

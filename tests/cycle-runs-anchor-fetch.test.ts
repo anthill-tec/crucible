@@ -582,7 +582,8 @@ describe("§S2 cycle-to-runs anchor-fetch — in-window happy path unchanged", (
 // test is about the `cycle-to-runs` PILL'S OWN live/dim state, which
 // `CycleToRunsBadge` (public/app.js) currently ignores entirely — it
 // hardcodes `live = cycleId !== undefined && cycleId !== null` and never
-// reads `state.anchorFeedback` (set at app.js:4129 on a confirmed-pruned
+// reads `state.anchorFeedback` (set in `anchorFetchRuns` (public/app.js)
+// on a confirmed-pruned
 // anchor response). Today this pill NEVER dims after the click, no matter
 // how many times a confirmed-pruned anchor-fetch resolves — this test
 // pins the FIX contract that it must.
@@ -808,14 +809,16 @@ describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly 
 //   - NOTED, not asserted (no AC covers it, so no test here invents one): the
 //     History tree also renders INFERRED cycles, which carry NO id, and
 //     `workflowLens` gives an inferred cycle the status `active` whenever its
-//     latest run failed (public/app-logic.mjs:903). Widening the predicate to
+//     latest run failed (the inferred-cycle branch of `workflowLens` in
+//     public/app-logic.mjs). Widening the predicate to
 //     `active` therefore hands `CycleToRunsBadge(undefined)` a second class of
 //     id-less rows, which render a pill whose own `live` gate is false — a
 //     pill that does nothing. This is PRE-EXISTING, not introduced here (an
 //     inferred `done` cycle already reaches the same dead pill under CR-CRU-025),
 //     but §S2 doubles the surface it shows on. Worth a GREEN decision.
 
-// The CR-CRU-032 §S3 pruned sentence, verbatim (public/app.js:2141) — §S4's
+// The CR-CRU-032 §S3 pruned sentence, verbatim (the `pruned` entry of
+// `ANCHOR_FEEDBACK_TEXT` in public/app.js) — §S4's
 // second AC is a regression pin on this exact wording.
 const PRUNED_FEEDBACK_TEXT =
   "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.";
@@ -879,11 +882,11 @@ function anchorFeedbackText(): string | null {
 // ESCALATION (found by running, not by reading): §S2's AC asks for ONE plan
 // whose active cycle's row is asserted "both in `CycleRow`/Active-workflow
 // panel and `LensCycleRow`/Workflow History". No single plan can satisfy that.
-// `workflowLens` (public/app-logic.mjs:930-933, CR-CRU-020 §S1.3) filters
+// `workflowLens` (public/app-logic.mjs, CR-CRU-020 §S1.3) filters
 // `c.status !== "open"` — "the history lens is closed-plans-only: an OPEN
 // plan's CR node renders solely in the ACTIVE view" — while the Active panel
-// renders ONLY open plans (`WorkflowActive`'s `openPlans` filter,
-// public/app.js:4365). So an open plan reaches the first call site and never
+// renders ONLY open plans (the `openPlans` filter in `WorkflowActive`
+// (public/app.js)). So an open plan reaches the first call site and never
 // the second, and a closed plan the reverse. The two call sites are therefore
 // driven here by the same cycles under the two plan statuses that can actually
 // reach them: the ACTIVE panel with the plan OPEN, and History with the plan

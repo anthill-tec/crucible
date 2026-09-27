@@ -70,8 +70,8 @@ _PLACEHOLDERS = {
 
 def _expected_next_start_template(cr, wave):
     """The EXACT literal `_next_start_help` built
-    (clients/_crucible_axi.py:2392-2402 at 7f2a85c; deleted by this CR, the
-    template is now `nextHints.start`, src/hints.ts:503-510), reconstructed
+    (in clients/_crucible_axi.py at 7f2a85c; deleted by this CR, the
+    template is now the `start` entry of `nextHints` (src/hints.ts)), reconstructed
     independently — this
     is the format `src/next.ts` must publish verbatim as `help[0]` for a NEXT
     decision (CR-107 §S1's mandate: `--cycle`, never `--cycles`)."""

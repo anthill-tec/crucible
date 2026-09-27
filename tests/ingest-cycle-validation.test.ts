@@ -65,11 +65,6 @@ interface PlanFileResponse {
   [key: string]: unknown;
 }
 
-interface PlansListResponse {
-  ok: true;
-  plans: PlanFileResponse[];
-}
-
 interface RunsPostResponse {
   ok: boolean;
   changed?: boolean;

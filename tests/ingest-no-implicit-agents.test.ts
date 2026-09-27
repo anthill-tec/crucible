@@ -10,8 +10,8 @@
 //
 // RED phase: src/store.ts's recordTestEvent/recordCompileEvent/
 // recordGateEvent each call `this.touchAgent(projectKey, agentId)`
-// UNCONDITIONALLY before inserting the event (see store.ts:816-817,
-// store.ts:849-850, store.ts:903-904 — "§S3 implicit heartbeat — creates the
+// UNCONDITIONALLY before inserting the event (see the `touchAgent` call in
+// each of those three methods in store.ts — "§S3 implicit heartbeat — creates the
 // agent row if new, bumps lastSeen") and src/v2.ts's handleRuns/
 // handleRunsParsed/handleRunsCompile/handleGates never check
 // store.hasAgent() first — every ingest below from an unregistered agentId

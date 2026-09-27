@@ -27,7 +27,7 @@
 //       not cover, because it is about the MIRROR, not the drop.
 //
 // A `null`/`undefined` entry itself is NOT one of the parity fixtures: the
-// server `isDeadCr` (`src/types.ts:488`) reads `entry.lifecycle` unguarded on
+// server `isDeadCr` (src/types.ts) reads `entry.lifecycle` unguarded on
 // `entry`, so a null/undefined *entry* throws a `TypeError` rather than
 // answering `false` — the server does not accept that shape, so there is
 // nothing here for a mirror to match.
@@ -36,7 +36,7 @@
 //   • exports no `isDeadCr` from public/app-logic.mjs at all — every parity
 //     test below fails on `typeof Logic.isDeadCr` before it ever compares an
 //     answer;
-//   • answers `roadmapActionable` (public/app-logic.mjs:1297) off
+//   • answers `roadmapActionable` (public/app-logic.mjs) off
 //     `!("lifecycle" in entry)`, so a PENDING member carrying
 //     `lifecycle: null` or `{state:"PARKED"}` is excluded from
 //     `box.rows`/`box.soloRows` even though it is live, undead work.

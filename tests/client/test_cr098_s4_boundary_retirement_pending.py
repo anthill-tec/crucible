@@ -75,8 +75,10 @@ def _method_names(path: Path, class_name: str) -> set:
 
 def _names_a_retirement_comment(path: Path) -> bool:
     """A comment naming BOTH this CR and the §S4 reason — the shape
-    `test_cr108`'s own deletion note sets (test_cr092_next_decision_resolver.py
-    :541-546, "was deleted here ... its ... claim survives ... below")."""
+    `test_cr108`'s own deletion note sets (the note just above
+    `test_the_server_refuses_exactly_what_the_helper_refuses` in
+    test_cr092_next_decision_resolver.py, "was deleted here ... its ... claim
+    survives ... below")."""
     text = path.read_text(encoding="utf-8")
     return "CR-CRU-098" in text and (
         "§S4" in text or "retired" in text.lower())

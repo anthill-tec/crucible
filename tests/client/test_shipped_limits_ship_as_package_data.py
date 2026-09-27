@@ -1,7 +1,8 @@
 """CR-CRU-131 §S1c -- the CLIENT's shipped defaults are PACKAGE DATA, and the
 shipped declaration and the shipped documentation are ONE datum.
 
-`_SHIPPED_LIMITS` (clients/_crucible_axi.py:120) is a Python literal today, so
+`_SHIPPED_LIMITS` (in clients/_crucible_axi.py, since retired for the package
+data `shipped_limits` reads) is a Python literal today, so
 the three client limit declarations exist in the source AND in a
 `crucible.toml`. §S1c rules that out in as many words: "the last resort is a
 DATA FILE in the distribution, not a number in a resolver. This is what makes

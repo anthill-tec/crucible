@@ -16,8 +16,9 @@
 // NOT superseded: CR-CRU-021 §S1 AC2 — "entering a workspace defaults to the
 // Workflow pane" — is a SEPARATE, BEHAVIOURAL contract and stands untouched.
 // Re-ordering a band is presentation; changing what loads on arrival is
-// behaviour. The landing pane is hard-coded "Workflow" (public/app.js:119,
-// 2386, 2563), never derived from TAB_NAMES[0], so the §S1 AC2 and §S1 AC3
+// behaviour. The landing pane is hard-coded "Workflow" (the
+// `state.workspaceTab = "Workflow"` assignment in `navigate`, public/app.js),
+// never derived from TAB_NAMES[0], so the §S1 AC2 and §S1 AC3
 // blocks below are UNCHANGED by this CR and must stay green as-is.
 //
 // Drives the REAL production public/app.js shell inside a happy-dom window —
