@@ -2,10 +2,12 @@
 
 **Author:** Antony John
 **Co-author:** claude (orchestrator — crucible)
-**Date:** 2026-07-16 · **amended 2026-09-24** (CR-CRU-022 gap analysis + user rulings)
+**Date:** 2026-07-16 · **amended 2026-09-24** (CR-CRU-022 gap analysis + user rulings) ·
+**amended 2026-09-27** (velocity follows the flow — CR-CRU-161, user rulings)
 **Status:** LOCKED 2026-07-16; **AMENDED and APPROVED 2026-09-24** — the SCRUM model below supersedes
 the size-weighted, per-wave, snapshot-based model this note first locked. Ships **0.3.0**.
-**Consumed by:** [PRD-crucible-v2.md](PRD-crucible-v2.md) (design input) · CR-CRU-022 (implementation)
+**Consumed by:** [PRD-crucible-v2.md](PRD-crucible-v2.md) (design input) · CR-CRU-022 (implementation) ·
+CR-CRU-161 (rolling-window velocity) · CR-CRU-160 (the burndown's size and projection)
 **Depends on designs:** [DN-model-b-language.md](DN-model-b-language.md) (Cycle/CR/Wave ontology) ·
 [DN-crucible-roadmap-view.md](DN-crucible-roadmap-view.md) (release-focused roadmap) ·
 [DN-crucible-responsive-model.md](DN-crucible-responsive-model.md) (bands) · CR-CRU-091 (declared release target)
@@ -28,6 +30,19 @@ table assumed a route that 0.3.0 removes. The user then ruled a SCRUM model:
 | Burndown from queue snapshots | **SCRUM burndown**: points remaining vs days, ideal line to the target, labelled events | user, 2026-09-24 |
 | Per-wave `targetDate` via `queue-file` | The **release's declared target** (CR-CRU-091) | CR-022 re-base, 2026-08-28 |
 | Everything in the Roadmap pane | **Hybrid**: velocity in the Project band, release band in zone 3, burndown in the pane | user, 2026-09-24 |
+
+## What changed on 2026-09-27, and why
+
+Measured on the dev board: the calendar-week model read **16 pts/week** from one completed week while
+**96 points** had merged since that Monday, and the 0.3.0 forecast could not exist before its own
+target (its third completed week closes about two weeks after it). Agentic delivery is continuous and
+bursty; the throughput limit is the human approvals, not the agents. The user ruled:
+
+| Was | Now | Ruling |
+| --- | --- | --- |
+| Velocity = points per completed calendar week, mean of the last 3 | **Points merged in a trailing window of N days, shown per day** | user, 2026-09-27 |
+| Forecast samples completed weeks; refuses under 3 | **Forecast samples days in the window; refuses until the history spans one window** | user, 2026-09-27 |
+| One fixed iteration | **The window is per project: 3, 7 or 14 days, default 7**, set in the projects manager | user, 2026-09-27 |
 
 ## 1 Why
 
@@ -94,14 +109,22 @@ cycle-linked) and orchestrator gate runs bound to a cycle — resolving former o
 
 ## 5 Velocity (project-level)
 
-- **Definition:** story points of CRs whose plans **closed with a merge**, per **calendar week**.
-  Crucible has no sprints, so the calendar week is the iteration. (Waves were rejected as the iteration:
-  they vary too much in length to compare.)
-- **Displayed value:** the **mean of the last 3 completed weeks**, beside the weekly bars it came from.
+- **Definition (amended 2026-09-27):** story points of CRs whose plans **closed with a merge** inside
+  the project's trailing **velocity window** of N days, ending now, divided by N: **points per day**.
+  Today's merges count. It changes on every merge. Crucible has no sprints and agentic work does not
+  arrive in them, so the iteration is a rolling window, not a calendar period. (Calendar weeks, the
+  2026-09-24 rule, were retired: they discard the current period and forecast nothing until three have
+  closed.)
+- **The window:** **3, 7 or 14 days**, per project, default **7**, set in the projects manager (F12)
+  and stored on the project. Measured 2026-09-27: 3 days tracks the current pace; 7 keeps the forecast
+  on seven day-samples; 14 suits a slower project. A day with no merge is a real zero (the approvals
+  are the bottleneck), so a short window swings with idle days.
+- **Displayed value:** the per-day rate (`22 pts / day`) with the window it covers (`last 7 days`) and
+  the window's daily bars.
 - **Scope:** project-level — all releases — because it measures the team's throughput, not a release's.
   It lives in the **Project band**, the same on every tab (F16).
-- **Payload:** carries `sampleWeeks` and the weekly series, so a consumer can judge it. Weeks before the
-  first pointed merge are not zeros; they are absent.
+- **Payload:** carries the window, the daily series and how many days of pointed history exist, so a
+  consumer can judge it. Days before the first pointed merge are not zeros; they are absent.
 
 ## 6 Burndown (release-level)
 
@@ -125,13 +148,14 @@ A SCRUM burndown for the **focused release**:
 
 ## 7 Forecast (Monte Carlo, release-level)
 
-1. From the project's weekly velocity history (§5), build the empirical distribution of points per week.
-2. For each of `N = 1000` draws: sample weekly velocities until the release's **remaining points** reach
-   0; record the completion date. Waves order the work inside the release but do not change the total.
+1. From the project's **daily** pointed throughput inside its velocity window (§5), build the empirical
+   distribution of points per day; days with no merge are zeros.
+2. For each of `N = 1000` draws: sample days until the release's **remaining points** reach 0; record the
+   completion date. Waves order the work inside the release but do not change the total.
 3. **P50/P80** completion dates across the draws.
 
-- **Confidence gate:** fewer than **3 completed weeks** of pointed velocity (the velocity window) →
-  `status: "insufficient_history"` with no band values.
+- **Confidence gate (amended 2026-09-27):** until the project's pointed history spans **one full
+  window** → `status: "insufficient_history"`, stating the days it has and needs, with no band values.
 - **Unpointed gate:** any remaining CR in the release unpointed → `status: "unpointed"`, naming them,
   with no band values.
 - **Determinism for tests:** a seed parameter (test-only) so fixtures assert exact values.

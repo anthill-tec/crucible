@@ -151,11 +151,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-143](CR-CRU-143-a-conditional-key-is-not-an-unexpected-one.md) | a conditional key is not an unexpected one | hotfix | COMPLETED (0.2.2) | 138 | 7 (0.2.2) |
 | [CR-CRU-144](CR-CRU-144-a-tier-is-claimed-not-measured.md) | a tier is claimed, never measured | fix | VOID | 111 | 7 (0.3.0) |
 | [CR-CRU-145](CR-CRU-145-one-gherkin-renderer-and-an-index.md) | one Gherkin renderer, and the BDD tab is its index | fix | COMPLETED (0.3.0) | 015 | 7 (0.3.0) |
-| [CR-CRU-146](CR-CRU-146-the-cycle-row-is-not-clickable-but-looks-it.md) | the history cycle row looks clickable and is not | fix | PENDING | 020, 021, 018 | 7 (0.3.0) |
-| [CR-CRU-147](CR-CRU-147-a-voided-cr-is-not-queued-work.md) | a voided CR is not queued work, and its row says so | fix | PENDING | 091, 078 | 7 (0.3.0) |
+| [CR-CRU-146](CR-CRU-146-the-cycle-row-is-not-clickable-but-looks-it.md) | the history cycle row looks clickable and is not | fix | COMPLETED (0.3.0) | 020, 021, 018 | 7 (0.3.0) |
+| [CR-CRU-147](CR-CRU-147-a-voided-cr-is-not-queued-work.md) | a voided CR is not queued work, and its row says so | fix | COMPLETED (0.3.0) | 091, 078 | 7 (0.3.0) |
 | [CR-CRU-148](CR-CRU-148-the-phone-compile-pane-collapses-to-zero-height.md) | the phone compile pane collapses to zero height | fix | COMPLETED (0.3.0) | 018 | 7 (0.3.0) |
-| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | PENDING | 145, 146, 147, 150 | 7 (0.3.0) |
-| [CR-CRU-150](CR-CRU-150-status-shows-the-work-in-flight.md) | `status` shows the work in flight, not the project's history | feature | PENDING | 030, 035, 094 | 7 (0.3.0) |
+| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | COMPLETED (0.3.0) | 145, 146, 147, 150 | 7 (0.3.0) |
+| [CR-CRU-150](CR-CRU-150-status-shows-the-work-in-flight.md) | `status` shows the work in flight, not the project's history | feature | COMPLETED (0.3.0) | 030, 035, 094 | 7 (0.3.0) |
+| [CR-CRU-154](CR-CRU-154-a-project-carries-its-own-metadata.md) | a project carries its own metadata | feature | COMPLETED (0.3.0) | 091, 130, 150 | 7 (0.3.0) |
+| [CR-CRU-155](CR-CRU-155-each-test-run-keeps-its-reports-to-itself.md) | each test run keeps its reports to itself | fix | COMPLETED (0.3.0) | — | 7 (0.3.0) |
+| [CR-CRU-156](CR-CRU-156-the-velocity-card-sits-below-vitals.md) | the Velocity card sits below Vitals | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-159](CR-CRU-159-a-heat-strip-click-brings-its-test-into-view.md) | a heat-strip click brings its test into view | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-157](CR-CRU-157-the-agent-card-tells-the-truth-about-the-agent.md) | the agent card tells the truth about the agent | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-158](CR-CRU-158-a-runs-detail-stays-responsive-while-agents-run.md) | a run's detail stays responsive while agents run | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-161](CR-CRU-161-velocity-follows-the-flow-not-the-calendar.md) | velocity follows the flow, not the calendar | feature | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-160](CR-CRU-160-the-burndown-fills-its-pane-and-draws-f16s-projection.md) | the burndown fills its pane and draws F16's projection | fix | PENDING | 161 | 7 (0.3.0) |
 | [CR-CRU-151](CR-CRU-151-a-run-says-which-stack-produced-it.md) | a run says which stack produced it, and the board keeps it | fix | PENDING | 112 | 8 (0.4.0) |
 | [CR-CRU-153](CR-CRU-153-the-arduino-stacks-compile-errors-are-decoded.md) | the arduino stack's compile errors are decoded | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | PENDING | 151 | 8 (0.4.0) |
