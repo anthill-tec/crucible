@@ -1,12 +1,12 @@
 // Citations into source code must name the CONSTRUCT they cite — a function,
 // constant, type or selector — never a line number. A line drifts the moment
 // the file it points into grows or shrinks; a symbol does not. This file is
-// the standing guard: it scans the in-scope trees for exactly the four ways
-// a citation goes stale, and it proves each of those four checks fires (and
+// the standing guard: it scans the in-scope trees for exactly the five ways
+// a citation goes stale, and it proves each of those five checks fires (and
 // that a correct citation does not) before it ever asks the real tree a
 // question.
 //
-// THE FOUR DEFECTS, in the order the checker looks for them:
+// THE FIVE DEFECTS, in the order the checker looks for them:
 //   1. a `path:line` (or `path:line-line`) citation into a source file —
 //      forbidden outright, regardless of whether the line still lands
 //      anywhere sensible;
@@ -36,6 +36,14 @@
 //      repository;
 //   3. a citation naming a backticked identifier that does not occur, as a
 //      whole word, in the file it is cited against.
+//   4. a WORD-FORM line citation (VERIFY finding, cycle 540; AC8 widened) —
+//      a path glued to `LNN`, GitHub's own `~LNN`/`~LNN-MM` line-permalink
+//      shorthand, or the word form `line NN`/`lines NN-MM`/`~line NN`, each
+//      still a pointer at a line rather than a construct. See
+//      `PATH_ADJACENT_L_RE`, `TILDE_L_RE` and `WORD_LINE_RE` below for the
+//      three notations, and `nearbySourcePathMention` for why the tilde and
+//      word forms fire only near a named source file, never on ordinary
+//      prose that happens to contain the word "line" and a number.
 //
 // THE CHECKER IS A PURE FUNCTION OVER TEXT (`findCitationViolations`): given
 // a file's text and a small `RepoAccess` (resolve a path, read a resolved
@@ -168,6 +176,166 @@ const IDENT_TOKEN = String.raw`\`([A-Za-z_$][\w$]*)\``;
 const PATH_TOKEN = String.raw`\`?([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:${SOURCE_EXT_ALTERNATION}))\`?`;
 const BY_SYMBOL_RE = new RegExp(`${IDENT_TOKEN}\\s*(?:\\(\\s*${PATH_TOKEN}\\s*\\)|\\bin\\s+${PATH_TOKEN})`, "g");
 
+// Defect 4 (VERIFY finding, cycle 540; user ruling 2026-09-27; AC8 widened):
+// a WORD-FORM line citation into a source file — the two colon notations
+// above (a path immediately followed by a colon and a number, or that same
+// bare colon-plus-number with no path in sight) are not the only shape a
+// line pointer takes. Three notations, each its own pattern rather than one
+// "smarter" regex, the same discipline PATH_LINE_RE/BARE_LINE_RE already
+// follow (numbers below spelled `NNN`/`MMM`, never a real digit, for the
+// same reason `BARE_LINE_RE`'s own comment spells its example `:NNN`, so
+// this file's OWN explanatory prose never becomes a citation the tree check
+// then reports against itself):
+//   • a bare `LNNN`/`LNNN-MMM` GLUED directly onto a source path with no
+//     tilde (`PATH_ADJACENT_L_RE`) — reported only when the path sits
+//     immediately before it, since a lone `LNNN` with nothing naming a file
+//     anywhere near it is not distinguishable from an arbitrary label;
+//   • the `~LNNN`/`~LNNN-MMM` tilde-line shorthand (`TILDE_L_RE`), GitHub's
+//     own line-permalink notation;
+//   • the word form `line NN` / `lines NN-MM` / `~line NN` (`WORD_LINE_RE`).
+// The tilde form and the word form are each reported ONLY when a source
+// path or a backticked source-file construct sits somewhere in the SAME
+// SENTENCE, itself bounded by the SAME PARAGRAPH (`nearbySourcePathMention`/
+// `paragraphRanges`/`sentenceRangeWithin` below) — the same "adjacent to a
+// named file" requirement `PATH_LINE_RE` and `BY_SYMBOL_RE` apply
+// structurally, expressed here as a proximity check because the word form's
+// grammar does not glue the path and the number together.
+//
+// A PARAGRAPH, not a fixed character window: a real citing comment routinely
+// names the file ONCE and then lists several tilde-line markers afterward —
+// this project's own dom-settle helper's timer-audit comment names one
+// source file once and then lists a dozen such markers, several hundred
+// characters past that one mention. A fixed radius short enough to avoid
+// false positives elsewhere would silently miss most of that list, and a
+// radius long enough to reach it would just as silently start pairing an
+// UNRELATED path with an unrelated word-line marker hundreds of characters
+// away in the next paragraph. A paragraph boundary is content the author
+// already drew, not a number this checker invents, so it is the one width
+// that scales with the real prose instead of guessing at it. A paragraph is
+// delimited by a line that is blank, or blank apart from a lone comment
+// leader (`//`, `#`, `/*`, `*/`, `*`, `<!--`, `-->`) with nothing else on
+// it — the exact shape this repository's own multi-line comments already
+// use as an in-comment paragraph break.
+//
+// Without a paragraph check at all, ordinary prose that merely contains the
+// word "line" next to a number — a bare count with no unit named at all, or
+// a count that PRECEDES the word ("line" never matched by a pattern that
+// requires digits AFTER it) — would never even reach the check, and a
+// sentence naming a line of some UNRELATED thing (an output stream, not a
+// source file), with no file named anywhere in the same paragraph, is
+// excluded BY the check. Two further carve-outs apply to the word form
+// specifically, checked in code after the match, never by widening the
+// pattern:
+//   • a line number inside a SPEC RECORD (an acceptance criterion, spelled
+//     "<record> AC line NN" in this project's own prose) names a position
+//     in a document, not source — excluded whenever "AC" sits directly
+//     before "line";
+//   • a captured runtime stack trace — Python's own `File "mod.py", line
+//     NN, in fn` shape — names a STACK POSITION, not an authored citation,
+//     whatever happens to sit nearby — excluded whenever the text right
+//     after the digits continues `, in `.
+
+// A line that is blank, or blank apart from a single comment leader, marks a
+// PARAGRAPH BOUNDARY (see the comment above). Anchored with `^`/`$` and run
+// with the `m` flag, one test per line.
+const PARAGRAPH_BREAK_LINE_RE = /^[ \t]*(?:\/\/|#|\/\*|\*\/|\*|<!--|-->)?[ \t]*$/;
+
+// Splits TEXT into [start, end) character ranges, one per paragraph — a
+// maximal run of lines that are NOT paragraph-boundary lines. Blank/leader
+// lines themselves belong to no paragraph.
+function paragraphRanges(text: string): [number, number][] {
+  const lines = text.split("\n");
+  const ranges: [number, number][] = [];
+  let paraStart: number | null = null;
+  let charIndex = 0;
+  for (const line of lines) {
+    const lineStart = charIndex;
+    if (PARAGRAPH_BREAK_LINE_RE.test(line)) {
+      if (paraStart !== null) {
+        ranges.push([paraStart, lineStart]);
+        paraStart = null;
+      }
+    } else if (paraStart === null) {
+      paraStart = lineStart;
+    }
+    charIndex = lineStart + line.length + 1;
+  }
+  if (paraStart !== null) ranges.push([paraStart, text.length]);
+  return ranges;
+}
+
+const PATH_ADJACENT_L_RE = new RegExp(
+  String.raw`[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:${SOURCE_EXT_ALTERNATION})[:\s]+L\d+(?:-\d+)?`,
+  "g",
+);
+
+const TILDE_L_RE = /~L\d+(?:-\d+)?/g;
+
+const WORD_LINE_RE = /~?\blines?\b\s+\d+(?:-\d+)?/g;
+
+// Not a citation pattern itself — used only to decide whether text SURROUNDING
+// a tilde/word-form match is "about" a source file at all. No `g` flag: each
+// call is a fresh, stateless `.test()`.
+const SOURCE_PATH_MENTION_RE = new RegExp(
+  String.raw`[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:${SOURCE_EXT_ALTERNATION})`,
+);
+
+// A DOCS-RECORD mention: a `docs/changes/` path, or any path ending in
+// `.md`. Never a SOURCE file per `SOURCE_EXTENSIONS` (`.md` is deliberately
+// absent from that list) — the same reasoning `docs/changes/` is carved out
+// of §S4 entirely, generalised to any `.md` record (a design note under
+// `docs/research/` describing a fixture's provenance is exactly as much a
+// RECORD, not a pointer, as a `docs/changes/` spec is).
+const DOCS_MENTION_RE = /\bdocs\/changes\/[A-Za-z0-9_.\/-]*|\b[A-Za-z0-9_][A-Za-z0-9_.\/-]*\.md\b/g;
+
+// Which kind of file ("source" or "docs") is named CLOSEST BEFORE
+// `matchStartInParagraph`, within one paragraph's own text — or `null` if no
+// path of either kind precedes the match at all. NEAREST PRECEDING, never
+// nearest in either direction and never "anywhere in the paragraph": this is
+// the fix for two real defects VERIFY's hand-check found this cycle in the
+// first (any-mention-anywhere) design:
+//   • a paragraph that opens by naming a source file ONCE, then lists one
+//     word-line marker per SENTENCE afterward (a bulleted "current code
+//     facts" comment, one bullet — one sentence — per marker) still
+//     resolves each later marker back to that SAME opening mention, because
+//     nothing else names a file in between; a check scoped to the marker's
+//     own SENTENCE would lose every marker after the first;
+//   • a paragraph whose FIRST sentence cites a spec record ("see the table
+//     at line NN of that doc", naming a `docs/changes/*.md` or research
+//     `.md` file) and whose SECOND, unrelated sentence happens to name a
+//     real source file resolves the first sentence's marker against the
+//     record it actually follows, never against the source file that comes
+//     LATER — a check that also looked FORWARD, or that ignored order and
+//     just took whichever mention was closest by raw character count, could
+//     still pick the wrong one.
+// A paragraph boundary still bounds the search (see the file header) so an
+// EARLIER paragraph's file never governs a later, unrelated one.
+function nearestPrecedingMentionType(paragraphText: string, matchStartInParagraph: number): "source" | "docs" | null {
+  let bestPos = -1;
+  let bestType: "source" | "docs" | null = null;
+  const scan = (re: RegExp, type: "source" | "docs") => {
+    for (const m of paragraphText.matchAll(re)) {
+      const pos = m.index ?? 0;
+      if (pos < matchStartInParagraph && pos > bestPos) {
+        bestPos = pos;
+        bestType = type;
+      }
+    }
+  };
+  scan(new RegExp(SOURCE_PATH_MENTION_RE.source, "g"), "source");
+  scan(DOCS_MENTION_RE, "docs");
+  return bestType;
+}
+
+function nearbySourcePathMention(paragraphs: readonly [number, number][], text: string, matchStart: number): boolean {
+  for (const [start, end] of paragraphs) {
+    if (matchStart < start || matchStart >= end) continue;
+    return nearestPrecedingMentionType(text.slice(start, end), matchStart - start) === "source";
+  }
+  return false;
+}
+const WORD_FORM_LINE_REASON = "word-form line citation into a source file (must cite by symbol, never by line)";
+
 export interface Violation {
   citingFile: string;
   cite: string;
@@ -276,6 +444,39 @@ export function findCitationViolations(
         reason: `backticked identifier \`${identifier}\` does not occur in ${resolved}`,
       });
     }
+  }
+
+  for (const m of text.matchAll(PATH_ADJACENT_L_RE)) {
+    const cite = m[0];
+    if (isExempt(citingFile, cite, exempt)) continue;
+    violations.push({ citingFile, cite, reason: WORD_FORM_LINE_REASON });
+  }
+
+  const paragraphs = paragraphRanges(text);
+
+  for (const m of text.matchAll(TILDE_L_RE)) {
+    const cite = m[0];
+    const matchStart = m.index ?? 0;
+    if (!nearbySourcePathMention(paragraphs, text, matchStart)) continue;
+    if (isExempt(citingFile, cite, exempt)) continue;
+    violations.push({ citingFile, cite, reason: WORD_FORM_LINE_REASON });
+  }
+
+  for (const m of text.matchAll(WORD_LINE_RE)) {
+    const cite = m[0];
+    const matchStart = m.index ?? 0;
+    const matchEnd = matchStart + cite.length;
+    // "AC line 267": a spec-record reference (an acceptance criterion), not
+    // a pointer into source (see the file header).
+    const beforeMatch = text.slice(Math.max(0, matchStart - 6), matchStart);
+    if (/\bAC\s*$/.test(beforeMatch)) continue;
+    // A captured Python traceback: `File "mod.py", line 42, in fn` (see the
+    // file header).
+    const afterMatch = text.slice(matchEnd, matchEnd + 8);
+    if (/^,\s*in\b/.test(afterMatch)) continue;
+    if (!nearbySourcePathMention(paragraphs, text, matchStart)) continue;
+    if (isExempt(citingFile, cite, exempt)) continue;
+    violations.push({ citingFile, cite, reason: WORD_FORM_LINE_REASON });
   }
 
   return violations;
@@ -730,6 +931,172 @@ describe("the citation checker — path:line citations (defect 1): stack-trace p
         reason: "path:line citation into a source file (must cite by symbol, never by line)",
       },
     ]);
+  });
+});
+
+describe("the citation checker — word-form line references (defect 4, VERIFY cycle 540)", () => {
+  test("fires on a tilde-line marker glued directly onto a source path, `path ~L123`", () => {
+    const path = ["fixtures/planted", ".ts"].join("");
+    const marker = ["~L", "123"].join("");
+    const text = `The retry loop lives at ${path} ${marker}, past the guard clause.`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      { citingFile: "planted-doc.md", cite: marker, reason: WORD_FORM_LINE_REASON },
+    ]);
+  });
+
+  test("fires on a tilde-line RANGE, `~L123-130`, sitting in a sentence that names a source file elsewhere", () => {
+    const path = ["handler", ".ts"].join("");
+    const marker = ["~L", "123", "-", "130"].join("");
+    const text = `\`handleEventDelete\` inside \`${path}\` still needs a look, ${marker} closely.`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      { citingFile: "planted-doc.md", cite: marker, reason: WORD_FORM_LINE_REASON },
+    ]);
+  });
+
+  test("fires on a bare `L123` (no tilde) right after a source path", () => {
+    const path = ["fixtures/planted", ".ts"].join("");
+    const marker = ["L", "123"].join("");
+    const cite = `${path} ${marker}`;
+    const text = `See ${cite} for the loop.`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([{ citingFile: "planted-doc.md", cite, reason: WORD_FORM_LINE_REASON }]);
+  });
+
+  test("fires on the tilde word form, `~line 45`, in a sentence naming a backticked construct of a source file", () => {
+    const path = ["citations", ".ts"].join("");
+    const marker = ["~line", " ", "45"].join("");
+    const text = `The construct sits inside \`${path}\`; watch ${marker} there.`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      { citingFile: "planted-doc.md", cite: marker, reason: WORD_FORM_LINE_REASON },
+    ]);
+  });
+
+  test("fires on the plain word form, `line 91`, adjacent to a source path", () => {
+    const path = ["fixtures/example", ".ts"].join("");
+    const marker = ["line", " ", "91"].join("");
+    const text = `The guard clause in ${path} starts around ${marker}, according to the note.`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      { citingFile: "planted-doc.md", cite: marker, reason: WORD_FORM_LINE_REASON },
+    ]);
+  });
+
+  test("fires on the plural range word form, `lines 12-20`, used as a pointer into a source file", () => {
+    const path = ["fixtures/example", ".py"].join("");
+    const marker = ["lines", " ", "12", "-", "20"].join("");
+    const text = `The retry loop spans ${path} ${marker}, roughly.`;
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([
+      { citingFile: "planted-doc.md", cite: marker, reason: WORD_FORM_LINE_REASON },
+    ]);
+  });
+
+  test("does NOT fire on a line number inside a spec record, `AC line 267`, even beside a named source path", () => {
+    const path = ["fixtures/example", ".ts"].join("");
+    const acLine = ["AC", " ", "line", " ", "267"].join("");
+    const text = `${["CR-CRU", "-030"].join("")}'s ${acLine} still names ${path} the same way it always has.`;
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("does NOT fire on a captured Python traceback line, `File \"mod.py\", line 42, in fn`", () => {
+    const text = 'the captured failure reads File "mod.py", line 42, in some_function verbatim';
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("does NOT fire on ordinary prose that says \"one line\" — no number follows the word at all", () => {
+    const text = "The diff is one line, nothing more.";
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("does NOT fire on \"line 3 of the output\" inside fixture text with no source file named anywhere close by", () => {
+    const text = "The captured transcript's assertion checks that line 3 of the output reads the retry count.";
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("does NOT fire on a \"10-line cap\" — the number precedes the word, never matched by a pattern needing digits AFTER it", () => {
+    const text = "The changelog entry enforces a 10-line cap on any single bullet.";
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("does NOT fire on \"a 2-line diff\" — same reason, the number precedes the word", () => {
+    const text = "The rewrite produced a 2-line diff for that file.";
+    expect(findCitationViolations("planted-doc.md", text, fakeRepo({}), [])).toEqual([]);
+  });
+
+  test("fires on EVERY marker in a paragraph that names its source file ONCE, up front, then lists one marker per sentence", () => {
+    // Stands in for this project's own "Current code facts" bulleted-comment
+    // style: the file is named once, in a colon-terminated intro, and every
+    // bullet AFTER it is its own separate sentence with no repeat mention —
+    // proves the context check reaches back across sentence boundaries
+    // WITHIN one paragraph, not just within the marker's own sentence.
+    const path = ["public/app", ".js"].join("");
+    const m1 = ["~L", "49"].join("");
+    const m2 = ["~L", "84", "-", "86"].join("");
+    const m3 = ["~L", "134"].join("");
+    const text = [
+      `Current code facts (verified against ${path} on this branch):`,
+      `  - navigate() (${m1}) sets state.route with NO clear, NO fetch.`,
+      `  - the popstate handler (${m2}) is EVEN THINNER: no reset either.`,
+      `  - refetchPlans() (${m3}) early-returns off-workspace.`,
+    ].join("\n");
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations.map((v) => v.cite)).toEqual([m1, m2, m3]);
+  });
+
+  test("does NOT fire on a word-line marker whose NEAREST preceding mention is a spec record, even though an unrelated source file is named later in the SAME paragraph", () => {
+    // Stands in for a real false positive VERIFY's hand-check found this
+    // cycle: a citation into a docs/changes record (out of scope per §S4)
+    // sat in the paragraph's FIRST sentence, and an unrelated source file
+    // happened to be named in its SECOND sentence — an any-mention-anywhere-
+    // in-paragraph check fired on the record's own line number.
+    const docsPath = ["docs/changes/CR-FIXTURE", "-999-planted", ".md"].join("");
+    const marker = ["line", " ", "91"].join("");
+    const sourcePath = ["fixtures/unrelated", ".ts"].join("");
+    const text = [
+      `Contract pinned verbatim from ${docsPath} (see the table at ${marker} of that doc).`,
+      `The seam lives in ${sourcePath} and is unrelated to that record.`,
+    ].join(" ");
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([]);
+  });
+
+  test("a word-line marker still fires when the NEAREST preceding mention in the same paragraph genuinely IS a source file, even after a docs-record mention earlier in that paragraph", () => {
+    const docsPath = ["docs/changes/CR-FIXTURE", "-999-planted", ".md"].join("");
+    const sourcePath = ["fixtures/real", ".ts"].join("");
+    const marker = ["line", " ", "91"].join("");
+    const text = [
+      `Contract pinned verbatim from ${docsPath}, unrelated to what follows.`,
+      `The retry loop lives in ${sourcePath}; see ${marker} for the guard.`,
+    ].join(" ");
+    const violations = findCitationViolations("planted-doc.md", text, fakeRepo({}), []);
+    expect(violations).toEqual([{ citingFile: "planted-doc.md", cite: marker, reason: WORD_FORM_LINE_REASON }]);
+  });
+});
+
+describe("word-form line references — real-world cases closed this cycle", () => {
+  test("the real dom-settle helper's twelve app.js timer citations are ALL caught, not just the ones textually adjacent to the one `app.js` mention", () => {
+    const relPath = "tests/helpers/dom-settle.ts";
+    const allRelPaths = listAllRepoFiles();
+    const repo = realRepo(allRelPaths);
+    const text = readFileSync(join(REPO_ROOT, relPath), "utf8");
+    const wordFormHits = findCitationViolations(relPath, text, repo, EXEMPT_FIXTURES).filter((v) =>
+      v.reason.includes("word-form line citation"),
+    );
+    expect(wordFormHits).toHaveLength(12);
+  });
+
+  test("the real rust-crucible role-flag test's spec-record line reference produces no word-form violation, even beside its own real source-path mentions", () => {
+    const relPath = "tests/client/test_rust_crucible_role_flag_required.py";
+    const allRelPaths = listAllRepoFiles();
+    const repo = realRepo(allRelPaths);
+    const text = readFileSync(join(REPO_ROOT, relPath), "utf8");
+    const wordFormHits = findCitationViolations(relPath, text, repo, EXEMPT_FIXTURES).filter(
+      (v) => v.reason.includes("word-form line citation") && v.cite.includes("91"),
+    );
+    expect(wordFormHits).toEqual([]);
   });
 });
 
