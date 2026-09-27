@@ -370,6 +370,23 @@ sys.exit(int(os.environ.get("FAKE_MAKE_EXIT_CODE", "0")))
 """
 
 _MVNW_TAIL = """
+import glob
+import shutil
+
+# A faithful Maven: surefire/failsafe write where `-D<kind>.reportsDirectory`
+# points. The fixture lays the run's reports at Maven's own default
+# `[module/]target/<kind>-reports`; given the property, the run delivers them
+# there instead, as the real plugins do.
+for _kind in ("surefire", "failsafe"):
+    _prefix = "-D" + _kind + ".reportsDirectory="
+    _dest = next((a[len(_prefix):] for a in sys.argv[1:] if a.startswith(_prefix)), None)
+    if not _dest:
+        continue
+    for _src in glob.glob(os.path.join(os.getcwd(), "**", "target", _kind + "-reports",
+                                       "TEST-*.xml"), recursive=True):
+        os.makedirs(_dest, exist_ok=True)
+        shutil.move(_src, os.path.join(_dest, os.path.basename(_src)))
+
 code = int(os.environ.get("FAKE_MVN_EXIT_CODE", "0"))
 if code:
     sys.stdout.write("[ERROR] /src/main/java/Probe.java:[1,1] cannot find symbol\\n")

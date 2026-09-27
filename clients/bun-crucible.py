@@ -89,7 +89,6 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-DEFAULT_REPORTS = "test-reports"
 DEFAULT_JUNIT = "junit.xml"
 # The STACK this client's runs belong to — the server's own `{tier, stack,
 # context}` field (`src/v2.ts`), stated once so the ingest that claims it and
@@ -462,9 +461,10 @@ def cmd_unregister(args):
                                  unregister_fn=_unregister_agent)
 
 
-def _reports_dir(package_dir, arg_value):
-    rd = arg_value or DEFAULT_REPORTS
-    return rd if os.path.isabs(rd) else os.path.join(package_dir, rd)
+def _reports_dir(package_dir, arg_value, agent_id=None):
+    """The run's reports dir under the package (the shared rule,
+    `run_reports_dir`)."""
+    return _axi().run_reports_dir(package_dir, arg_value, agent_id)
 
 
 def _junit_path(reports_dir):
@@ -1285,7 +1285,7 @@ def cmd_test(args, tier=None):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
-    reports_dir = _reports_dir(package_dir, args.reports)
+    reports_dir = _reports_dir(package_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
     junit_path = _junit_path(reports_dir)
@@ -1419,7 +1419,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
-    reports_dir = _reports_dir(package_dir, args.reports)
+    agent = getattr(args, "agent", None)
+    reports_dir = _reports_dir(package_dir, args.reports, agent)
     os.makedirs(reports_dir, exist_ok=True)
     # CR-CRU-015 §S2 — a declared target may state that its report is decoded
     # by the BOARD; that report is written into this same reports dir, so it is
@@ -1428,7 +1429,10 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     _wipe(reports_dir, *([raw_report["path"]] if raw_report else []))
     junit_path = _junit_path(reports_dir)
     coverage_on = bool(args.coverage)
-    coverage_dir = os.path.join(package_dir, "coverage")
+    # Coverage follows the run: an agent's own directory holds its lcov too;
+    # otherwise bun keeps writing it to the package's `coverage/`.
+    per_agent = _axi().reports_dir_is_agents_own(args.reports, agent)
+    coverage_dir = os.path.join(reports_dir if per_agent else package_dir, "coverage")
     env = os.environ.copy()
 
     # Gate-run lifecycle bracket (CR-CRU-021 §S5): identical to cmd_test —
@@ -2042,6 +2046,9 @@ def _axi():
 # bun-local wrappers keep bun's project_dir-based signatures (resolving the key
 # from `.env` first) and DELEGATE, so extraction is byte-identical.
 _AXI_UNSET = _axi().AXI_UNSET
+# The `--reports` help every running verb carries: the shared per-agent rule,
+# resolved under the package.
+_REPORTS_HELP = _axi().REPORTS_HELP + " Relative to the package."
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
@@ -2224,7 +2231,7 @@ def _add_bun_arg(p):
 
 
 def _add_reports_arg(p):
-    p.add_argument("--reports", help=f"Reports dir under the package (default: {DEFAULT_REPORTS}).")
+    p.add_argument("--reports", help=_REPORTS_HELP)
 
 
 def _add_log_arg(p):

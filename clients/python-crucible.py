@@ -239,6 +239,8 @@ def _axi():
 
 
 _AXI_UNSET = _axi().AXI_UNSET
+# The `--reports` help every running verb carries: the shared per-agent rule.
+_REPORTS_HELP = _axi().REPORTS_HELP
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
@@ -452,9 +454,9 @@ def cmd_unregister(args):
 # ── Toolchain: unittest/xmlrunner test + regression + auto-ingest + check ────
 
 
-def _reports_dir(project_dir, arg_value):
-    rd = arg_value or DEFAULT_REPORTS
-    return rd if os.path.isabs(rd) else os.path.join(project_dir, rd)
+def _reports_dir(project_dir, arg_value, agent_id=None):
+    """The run's reports dir (the shared rule, `run_reports_dir`)."""
+    return _axi().run_reports_dir(project_dir, arg_value, agent_id)
 
 
 def _wipe(reports_dir):
@@ -646,10 +648,20 @@ def _ingest_compile(project_dir, agent_id, errors_text):
     return 0 if resp.get("ok") else 1
 
 
-def _collect_coverage(python, project_dir, env):
+def _collect_coverage(python, project_dir, env, data_file=None):
     """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
-    Returns None if coverage.py or the lcov output is unavailable."""
-    lcov_path = os.path.join(project_dir, "coverage.lcov")
+    Returns None if coverage.py or the lcov output is unavailable.
+
+    `data_file` is where the run wrote coverage.py's data when it reported
+    into the agent's own directory; the lcov is derived beside it. Absent, the
+    data file and the lcov keep their project-root locations."""
+    if data_file:
+        lcov_path = os.path.join(os.path.dirname(data_file), "coverage.lcov")
+        lcov_cmd = [python, "-m", "coverage", "lcov", f"--data-file={data_file}",
+                    "-o", lcov_path]
+    else:
+        lcov_path = os.path.join(project_dir, "coverage.lcov")
+        lcov_cmd = [python, "-m", "coverage", "lcov", "-o", lcov_path]
     # NOTE: no PYTHONSAFEPATH here (CR-CRU-040 §S1) — matches _regression_run. A real
     # coverage.py install wins over the stray top-level `coverage/` (bun lcov)
     # namespace-dir shadow on its own — a regular package beats a namespace package
@@ -663,7 +675,7 @@ def _collect_coverage(python, project_dir, env):
     # not specific to this client, and would cost a 3.11 floor (`python -P`) to
     # defend — deliberately left unguarded.
     cov_env = dict(env)
-    r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
+    r = subprocess.run(lcov_cmd,
                        cwd=project_dir, env=cov_env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
         print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})",
@@ -707,7 +719,7 @@ def cmd_test(args, tier=None, verb="test"):
     caller invoked), exactly as the gate verbs elsewhere pass theirs."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
-    reports_dir = _reports_dir(project_dir, args.reports)
+    reports_dir = _reports_dir(project_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
 
@@ -806,15 +818,21 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
     preflight_warnings = list(preflight_warnings)
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
-    reports_dir = _reports_dir(project_dir, args.reports)
+    agent = getattr(args, "agent", None)
+    reports_dir = _reports_dir(project_dir, args.reports, agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
     env = os.environ.copy()
 
     run_cmd = _xmlrunner_cmd(python, None, args.start_dir, args.pattern, reports_dir)
     coverage_on = bool(args.coverage)
+    # Coverage follows the run: an agent's own directory holds coverage.py's
+    # data file too; otherwise it stays where coverage.py puts it (cwd).
+    data_file = (os.path.join(reports_dir, ".coverage")
+                 if _axi().reports_dir_is_agents_own(args.reports, agent) else None)
     if coverage_on:
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
+                   *([f"--data-file={data_file}"] if data_file else []),
                    "-m", "xmlrunner", "discover", "-s", args.start_dir,
                    "-p", args.pattern, "-o", reports_dir]
         # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
@@ -872,7 +890,8 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
         return result.returncode or 1
 
     summary, tree, files = _parse_junit_dir(reports_dir)
-    coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
+    coverage = (_collect_coverage(python, project_dir, env, data_file)
+                if coverage_on else None)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(), files=files)
     ok = bool(resp.get("ok")) and summary["failed"] == 0
@@ -1335,7 +1354,7 @@ def _add_discover_args(p):
                    help="Discovery start dir (default: tests)")
     p.add_argument("--pattern", default="test_*.py",
                    help="Discovery filename pattern (default: test_*.py)")
-    p.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    p.add_argument("--reports", help=_REPORTS_HELP)
 
 
 def _add_log_arg(p):
@@ -1385,7 +1404,7 @@ def _add_declared_tier_args(p):
                         "target and the verb refuses.")
     p.add_argument("--pattern", default="test_*.py",
                    help="Discovery filename pattern (default: test_*.py)")
-    p.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    p.add_argument("--reports", help=_REPORTS_HELP)
     _add_python_arg(p)
     _add_log_arg(p)
     _add_gate_cycle_arg(p)

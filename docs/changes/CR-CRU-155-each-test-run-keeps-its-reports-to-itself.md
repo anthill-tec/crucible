@@ -59,7 +59,10 @@ its outputs into the agent's directory the way its tool allows:
   and raw-report paths and `--coverage-dir`; python: the xmlrunner output directory and coverage.py's
   data file).
 - **mvn:** the client passes the locations to Maven (`-Dsurefire.reportsDirectory`,
-  `-Dfailsafe.reportsDirectory`, and JaCoCo's output where the plugin accepts it).
+  `-Dfailsafe.reportsDirectory`, and JaCoCo's output where the plugin accepts it). A POM that pins
+  `reportsDirectory` in its plugin configuration overrides that property, so, as for arduino, when
+  the agent's directory holds no results after the run but `target/surefire-reports` or
+  `target/failsafe-reports` do, the client moves them in and warns (user ruling 2026-09-27).
 - **arduino:** the client passes the locations to `make` (`REPORTS_DIR=`, `COVERAGE_DIR=`), a
   documented contract for the project's Makefile. A Makefile that ignores them still works: the
   client moves what it wrote into the agent's directory right after the run and says so in a
@@ -70,27 +73,28 @@ its outputs into the agent's directory the way its tool allows:
 
 ## Acceptance criteria
 
-- **AC1 (§S1)** — In EACH of the five clients, a run with `--agent A` and no `--reports` ingests the
+- [x] **AC1 (§S1)** — In EACH of the five clients, a run with `--agent A` and no `--reports` ingests the
   results from `test-reports/A/` (for the stack's tool-written outputs, after moving them there), and
   a run by agent B in the same project, at the same time, neither reads nor clears A's directory.
-- **AC2 (§S1)** — The python client no longer empties the shared `test-reports/`: an agent's run
+- [x] **AC2 (§S1)** — The python client no longer empties the shared `test-reports/`: an agent's run
   clears only its own `test-reports/<agent>/`, and a file placed in another agent's directory survives
   it.
-- **AC3 (§S1)** — An agent's directory is still there after its run, holding that run's results.
-- **AC4 (§S2)** — A run without `--agent` uses today's locations; `--reports <dir>` is used as given;
+- [x] **AC3 (§S1)** — An agent's directory is still there after its run, holding that run's results.
+- [x] **AC4 (§S2)** — A run without `--agent` uses today's locations; `--reports <dir>` is used as given;
   `auto-ingest` of a given directory is unchanged.
-- **AC5 (§S2)** — Coverage follows the run: `regression --coverage` and the pre-merge gate (bun) read
+- [x] **AC5 (§S2)** — Coverage follows the run: `regression --coverage` and the pre-merge gate (bun) read
   the coverage the run wrote in the agent's directory, and ingest the same line and function figures
   as today on the same tree.
-- **AC6 (§S2)** — A declared raw report (bun's `test:e2e` `playwright.json`) is written to and sent
+- [x] **AC6 (§S2)** — A declared raw report (bun's `test:e2e` `playwright.json`) is written to and sent
   from the agent's directory.
-- **AC7 (§S3)** — mvn passes the agent's directory to surefire and failsafe; arduino passes
+- [x] **AC7 (§S3)** — mvn passes the agent's directory to surefire and failsafe, and when a POM's own
+  `reportsDirectory` overrides it, moves the results into the agent's directory and warns; arduino passes
   `REPORTS_DIR`/`COVERAGE_DIR` to `make` and, when the Makefile ignores them, moves the output and
   warns; rust moves nextest's JUnit and llvm-cov's output before reading them. Each is asserted on
   the command the client builds and on where the ingested files came from.
-- **AC8 (wiring)** — End to end, two agents running the bun client against one real ephemeral board
+- [x] **AC8 (wiring)** — End to end, two agents running the bun client against one real ephemeral board
   at the same time, in one project, each file their OWN results (distinct counts).
-- **AC9** — The clients' `--reports` help text states the per-agent default, and rust's states the
+- [x] **AC9** — The clients' `--reports` help text states the per-agent default, and rust's states the
   narrowed-not-closed window.
 
 ## Non-goals

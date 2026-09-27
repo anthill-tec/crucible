@@ -362,7 +362,7 @@ class _DeclaredTargetCase(unittest.TestCase):
         return f"bun test {paths}"
 
     def junit_path(self, project=None):
-        return str(Path(project or self.project) / "test-reports" / "junit.xml")
+        return str(Path(project or self.project) / "test-reports" / AGENT / "junit.xml")
 
     # ── driving ────────────────────────────────────────────────────────────
 

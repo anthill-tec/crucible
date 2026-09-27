@@ -2060,3 +2060,74 @@ class CmdStatusOpenPlansOnlyContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedRunReportsDirTableTest(unittest.TestCase):
+    """CR-CRU-155 \u00a7S1/\u00a7S2 -- a direct table test of the shared
+    `run_reports_dir`/`reports_dir_is_agents_own` (clients/_crucible_axi.py),
+    the ONE rule every client's `_run_reports_dir` delegates to: an explicit
+    `--reports` wins over everything else, an absolute result passes through
+    unchanged, and a run with no agent id keeps today's shared default."""
+
+    def setUp(self):
+        self.axi = _load_axi_module()
+
+    def test_reports_dir_is_agents_own_table(self):
+        cases = [
+            # (reports_arg, agent_id, expected)
+            (None, "agent-x", True),
+            ("", "agent-x", True),
+            ("explicit/dir", "agent-x", False),
+            (None, None, False),
+            (None, "", False),
+        ]
+        for reports_arg, agent_id, expected in cases:
+            with self.subTest(reports_arg=reports_arg, agent_id=agent_id):
+                self.assertEqual(
+                    self.axi.reports_dir_is_agents_own(reports_arg, agent_id),
+                    expected,
+                    f"reports_dir_is_agents_own({reports_arg!r}, {agent_id!r}) "
+                    f"must be {expected!r}",
+                )
+
+    def test_run_reports_dir_table(self):
+        base_dir = "/base/project"
+        cases = [
+            # (reports_arg, agent_id, expected, label)
+            (None, None, os.path.join(base_dir, "test-reports"),
+             "no --reports and no agent keeps today's shared default"),
+            (None, "agent-x", os.path.join(base_dir, "test-reports", "agent-x"),
+             "no --reports with an agent uses the agent's OWN directory"),
+            ("custom/dir", "agent-x", os.path.join(base_dir, "custom/dir"),
+             "an explicit --reports WINS over the agent's own directory"),
+            ("custom/dir", None, os.path.join(base_dir, "custom/dir"),
+             "an explicit --reports is used as given with no agent too"),
+            ("/abs/explicit", "agent-x", "/abs/explicit",
+             "an ABSOLUTE explicit --reports passes through verbatim, "
+             "never re-nested under base_dir or the agent id"),
+            ("/abs/explicit", None, "/abs/explicit",
+             "an absolute --reports passes through with no agent too"),
+        ]
+        for reports_arg, agent_id, expected, label in cases:
+            with self.subTest(reports_arg=reports_arg, agent_id=agent_id):
+                got = self.axi.run_reports_dir(base_dir, reports_arg, agent_id)
+                self.assertEqual(
+                    os.path.normpath(got), os.path.normpath(expected),
+                    f"{label}: run_reports_dir({base_dir!r}, {reports_arg!r}, "
+                    f"{agent_id!r}) = {got!r}, expected {expected!r}",
+                )
+
+    def test_run_reports_dir_a_relative_explicit_reports_still_resolves_under_base_dir(self):
+        # A NEGATIVE/bound check alongside the table above: an explicit but
+        # RELATIVE --reports must resolve under base_dir, never be treated as
+        # already-absolute or left dangling relative to the CWD.
+        got = self.axi.run_reports_dir("/base/project", "my-reports", "agent-x")
+        self.assertEqual(got, os.path.join("/base/project", "my-reports"))
+        self.assertNotIn(
+            "agent-x", got,
+            "an explicit --reports must never be nested by agent id",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

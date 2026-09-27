@@ -608,6 +608,40 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     return json.loads(body) if body else {"ok": True}
 
 
+# The reports location every client resolves its run's outputs under. One
+# rule for the fleet: an explicit `--reports` is used as given; a run made by an
+# agent with none stated reports into that agent's OWN directory beneath the
+# shared root, so two agents in one project never write, read or clear each
+# other's results; a run by no agent keeps the shared root.
+DEFAULT_REPORTS_DIR = "test-reports"
+
+REPORTS_HELP = (f"Per-agent by default: {DEFAULT_REPORTS_DIR}/<agent> when --agent "
+                f"is given, else {DEFAULT_REPORTS_DIR}. An explicit dir is used "
+                f"as given.")
+
+
+def reports_dir_is_agents_own(reports_arg, agent_id):
+    """True when a run reports into the agent's OWN directory: an agent id and
+    no explicit `reports_arg`. That is the client's cue that everything else
+    the run writes for itself -- a raw report, its coverage -- belongs in that
+    same directory rather than at the tool's usual spot."""
+    return bool(agent_id) and not reports_arg
+
+
+def run_reports_dir(base_dir, reports_arg, agent_id=None):
+    """Where a run writes, reads and clears its reports: `reports_arg` as given
+    when stated, else the agent's own `test-reports/<agent>` when an agent id
+    is given, else the shared `test-reports`. A relative result resolves under
+    `base_dir`."""
+    if reports_arg:
+        chosen = reports_arg
+    elif reports_dir_is_agents_own(reports_arg, agent_id):
+        chosen = os.path.join(DEFAULT_REPORTS_DIR, agent_id)
+    else:
+        chosen = DEFAULT_REPORTS_DIR
+    return chosen if os.path.isabs(chosen) else os.path.join(base_dir, chosen)
+
+
 def abbrev_home(path):
     """Render an absolute path with `~` for the home dir (§S14). A path outside
     the home directory is returned unchanged."""

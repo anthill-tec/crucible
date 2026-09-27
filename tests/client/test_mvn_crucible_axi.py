@@ -240,10 +240,18 @@ else:
 # A fake `mvnw` substituted for the real Maven Wrapper: writes a Surefire
 # JUnit report and exits 0, regardless of the goal it was invoked with --
 # `_mvn_base()` prefers an executable `./mvnw` in the maven dir over `mvn`.
+# Like real Surefire it writes where `-Dsurefire.reportsDirectory` points,
+# else to its own default `target/surefire-reports`.
+_FAKE_MVNW_SUREFIRE_DIR = (
+    "import sys\n"
+    "d = next((a.split('=', 1)[1] for a in sys.argv[1:]"
+    " if a.startswith('-Dsurefire.reportsDirectory=')),"
+    " os.path.join('target', 'surefire-reports'))\n"
+    "os.makedirs(d, exist_ok=True)\n"
+)
 _FAKE_MVNW_TEST_BODY = '''#!/usr/bin/env python3
 import os
-os.makedirs(os.path.join("target", "surefire-reports"), exist_ok=True)
-with open(os.path.join("target", "surefire-reports", "TEST-FixtureTest.xml"), "w") as f:
+''' + _FAKE_MVNW_SUREFIRE_DIR + '''with open(os.path.join(d, "TEST-FixtureTest.xml"), "w") as f:
     f.write(%r)
 print("[fake-mvnw] wrote surefire report")
 ''' % PASS_SUREFIRE_XML
@@ -1229,8 +1237,8 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         fake_mvnw_body = (
             "#!/usr/bin/env python3\n"
             "import os\n"
-            "os.makedirs(os.path.join('target', 'surefire-reports'), exist_ok=True)\n"
-            "with open(os.path.join('target', 'surefire-reports', 'TEST-FixtureTest.xml'), 'w') as f:\n"
+            + _FAKE_MVNW_SUREFIRE_DIR +
+            "with open(os.path.join(d, 'TEST-FixtureTest.xml'), 'w') as f:\n"
             f"    f.write({PASS_SUREFIRE_XML!r})\n"
             f"print({marker!r})\n"
         )
@@ -1269,8 +1277,8 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         fake_mvnw_body = (
             "#!/usr/bin/env python3\n"
             "import os\n"
-            "os.makedirs(os.path.join('target', 'surefire-reports'), exist_ok=True)\n"
-            "with open(os.path.join('target', 'surefire-reports', 'TEST-FixtureTest.xml'), 'w') as f:\n"
+            + _FAKE_MVNW_SUREFIRE_DIR +
+            "with open(os.path.join(d, 'TEST-FixtureTest.xml'), 'w') as f:\n"
             f"    f.write({PASS_SUREFIRE_XML!r})\n"
             f"print({marker!r})\n"
         )

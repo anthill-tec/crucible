@@ -528,6 +528,83 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
         _close_gate_identity(pd, identity)
 
 
+def _run_reports_dir(args, pd):
+    """Where this run's native reports go and are read from, by the shared rule
+    (`run_reports_dir`): an explicit `--reports` as given, else the agent's own
+    directory. None for a run with neither, which keeps the Makefile's own
+    `<native_dir>/reports` and `<native_dir>/coverage` exactly as before."""
+    reports_arg = getattr(args, "reports", None)
+    agent = getattr(args, "agent", None)
+    if not reports_arg and not agent:
+        return None
+    return _axi().run_reports_dir(pd, reports_arg, agent)
+
+
+def _coverage_dir(native_dir, own_dir):
+    """The run's lcov dir: `coverage/` inside its own directory when it has one,
+    else the Makefile's own `<native_dir>/coverage`."""
+    return os.path.join(own_dir or native_dir, "coverage")
+
+
+def _make_reports_env(own_dir, want_coverage):
+    """The documented `make` contract: REPORTS_DIR (and, on a coverage run,
+    COVERAGE_DIR) point at the run's own directory, overriding any ambient
+    value. That directory is created and its previous TEST-*.xml / lcov.info
+    cleared first. None without an own directory: `make` then runs with the
+    inherited environment, as before."""
+    if own_dir is None:
+        return None
+    os.makedirs(own_dir, exist_ok=True)
+    stale = glob.glob(os.path.join(own_dir, "TEST-*.xml"))
+    stale += glob.glob(os.path.join(_coverage_dir(None, own_dir), "lcov.info"))
+    for path in stale:
+        os.remove(path)
+    env = os.environ.copy()
+    env["REPORTS_DIR"] = own_dir
+    if want_coverage:
+        env["COVERAGE_DIR"] = _coverage_dir(None, own_dir)
+    return env
+
+
+def _move_ignored_outputs(native_dir, own_dir, want_coverage):
+    """A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
+    `reports/`/`coverage/`: move that output into the run's own directory and
+    return one warning per variable ignored. Nothing to do without an own
+    directory, or when the Makefile honoured the contract."""
+    if own_dir is None:
+        return []
+    warnings = []
+    if not glob.glob(os.path.join(own_dir, "TEST-*.xml")):
+        written = glob.glob(os.path.join(native_dir, "reports", "TEST-*.xml"))
+        for path in written:
+            shutil.move(path, os.path.join(own_dir, os.path.basename(path)))
+        if written:
+            warnings.append(_ignored_contract_warning("REPORTS_DIR", native_dir,
+                                                      "reports", own_dir))
+    if want_coverage:
+        own_cov = _coverage_dir(None, own_dir)
+        written_lcov = os.path.join(_coverage_dir(native_dir, None), "lcov.info")
+        if (not os.path.exists(os.path.join(own_cov, "lcov.info"))
+                and os.path.exists(written_lcov)):
+            os.makedirs(own_cov, exist_ok=True)
+            shutil.move(written_lcov, os.path.join(own_cov, "lcov.info"))
+            warnings.append(_ignored_contract_warning("COVERAGE_DIR", native_dir,
+                                                      "coverage", own_cov))
+    return warnings
+
+
+def _ignored_contract_warning(variable, native_dir, fixed, moved_to):
+    """The warning for a Makefile that ignored one of the `make` contract's
+    variables: what it ignored, where it wrote, and where the client moved it."""
+    print(f"[crucible] WARN: the Makefile ignored {variable} and wrote to "
+          f"{native_dir}/{fixed}; moved into {moved_to}", file=sys.stderr)
+    return {"code": "makefile-ignored-reports-dir",
+            "detail": f"the Makefile under {native_dir} ignored {variable} and "
+                      f"wrote to its own {fixed}/; the client moved it into "
+                      f"{moved_to}. Honour {variable} in the Makefile so the "
+                      f"run writes there directly."}
+
+
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                            preflight_warnings=(), target="junit"):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
@@ -547,22 +624,32 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     _ensure_project(key, name, pd)
+    own_dir = _run_reports_dir(args, pd)
+    make_env = _make_reports_env(own_dir, want_coverage)
     # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
     # run that spends its wall clock waiting says so in its own envelope. The
     # untiered `test` verb and `regression` run this same body and are left
     # alone, because the shared check is scoped to `unit` by the tier it is
     # handed.
     with _axi().ChildRunTiming() as timing:
-        run = subprocess.run(["make", target], cwd=native_dir,
-                             capture_output=True, text=True)
-    reports = sorted(glob.glob(os.path.join(native_dir, "reports", "TEST-*.xml")))
+        if make_env is None:
+            run = subprocess.run(["make", target], cwd=native_dir,
+                                 capture_output=True, text=True)
+        else:
+            run = subprocess.run(["make", target], cwd=native_dir,
+                                 capture_output=True, text=True, env=make_env)
+    # A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
+    # dirs: its output is moved into the run's own directory, and said so.
+    preflight_warnings += _move_ignored_outputs(native_dir, own_dir, want_coverage)
+    reports_dir = own_dir or os.path.join(native_dir, "reports")
+    reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
     if not reports:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
         # stderr and exited 1 with EMPTY stdout. The stderr text and the exit
         # code are preserved verbatim (AC5); the envelope is what is added, and
         # it carries the CALLER's `verb` (this body backs test AND regression).
         sys.stderr.write(run.stdout + run.stderr)
-        message = f"[crucible] no JUnit (reports/TEST-*.xml) under {native_dir}"
+        message = f"[crucible] no JUnit (TEST-*.xml) under {reports_dir}"
         sys.stderr.write(message + "\n")
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "TEST-*.xml")},
@@ -592,10 +679,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
 
     coverage = None
     if want_coverage:
-        coverage = _collect_lcov(os.path.join(native_dir, "coverage", "lcov.info"))
+        coverage = _collect_lcov(os.path.join(_coverage_dir(native_dir, own_dir),
+                                              "lcov.info"))
         if coverage is None:
             print(f"[crucible] WARN: --coverage set but no lcov at "
-                  f"{native_dir}/coverage/lcov.info — ingesting WITHOUT coverage",
+                  f"{_coverage_dir(native_dir, own_dir)}/lcov.info — ingesting WITHOUT coverage",
                   file=sys.stderr)
 
     if not args.agent and not os.environ.get("AGENT_ID"):
@@ -1168,6 +1256,16 @@ def _add_declared_tier_args(p):
     `--project-dir` ride the `common` parent, as they do for every verb here."""
     _add_native_dir_arg(p)
     _add_gate_cycle_arg(p)
+    _add_reports_arg(p)
+
+
+_REPORTS_HELP = _axi().REPORTS_HELP
+
+
+def _add_reports_arg(p):
+    """The run's reports dir, handed to `make` as REPORTS_DIR (COVERAGE_DIR
+    beneath it) and read back from there (the shared rule)."""
+    p.add_argument("--reports", help=_REPORTS_HELP)
 
 
 def _read_declared_make_target(args, target):
@@ -1229,6 +1327,7 @@ def main():
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
     t.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     _add_gate_cycle_arg(t)
+    _add_reports_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -1247,13 +1346,13 @@ def main():
                  cmd_unit,
                  "Runs the native host tests (`make junit`) under --dir -> "
                  "/api/v2/runs/parsed.",
-                 (_add_native_dir_arg, _add_gate_cycle_arg)),
+                 (_add_native_dir_arg, _add_gate_cycle_arg, _add_reports_arg)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "
                  "/api/v2/runs/parsed; --coverage attaches lcov.",
                  (_add_native_dir_arg, _add_native_coverage_arg,
-                  _add_gate_cycle_arg))),
+                  _add_gate_cycle_arg, _add_reports_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         parents=[common])
 

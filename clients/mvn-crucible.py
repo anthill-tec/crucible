@@ -619,6 +619,78 @@ def _warn_if_stale(dirs):
                 return
 
 
+def _run_reports_dir(args, project_dir):
+    """The directory this run's surefire/failsafe reports go to and are read
+    from, by the shared rule (`run_reports_dir`): an explicit `--reports` as
+    given, else the agent's own directory. None for a run with neither, which
+    keeps Maven's own `target/{surefire,failsafe}-reports` exactly as before."""
+    reports_arg = getattr(args, "reports", None)
+    agent = getattr(args, "agent", None)
+    if not reports_arg and not agent:
+        return None
+    return _axi().run_reports_dir(project_dir, reports_arg, agent)
+
+
+def _prepare_reports_dir(reports_dir):
+    """Create the run's own reports dir and clear the TEST-*.xml a previous run
+    left there, so only this run's results are read. Nothing else is touched."""
+    if reports_dir is None:
+        return
+    os.makedirs(reports_dir, exist_ok=True)
+    for stale in glob.glob(os.path.join(reports_dir, "TEST-*.xml")):
+        os.remove(stale)
+
+
+def _reports_dir_flags(reports_dir, kinds):
+    """`-D<kind>.reportsDirectory=<dir>` for each plugin in `kinds` ('surefire',
+    'failsafe'), pointing Maven at the run's own directory; none without one."""
+    if reports_dir is None:
+        return []
+    return [f"-D{kind}.reportsDirectory={reports_dir}" for kind in kinds]
+
+
+def _run_read_dirs(maven_dir, module, kinds, reports_dir):
+    """The dirs holding this run's reports: the run's own directory when it has
+    one (both plugins write there), else Maven's per-kind `target` dirs."""
+    if reports_dir is not None:
+        return [reports_dir]
+    dirs = []
+    for kind in kinds:
+        dirs += _report_dirs(maven_dir, module, kind)
+    return dirs
+
+
+def _claim_pinned_reports(maven_dir, module, kinds, reports_dir):
+    """A POM that pins surefire's/failsafe's own `reportsDirectory` in its
+    plugin configuration overrides the `-D` location, so Maven wrote to its
+    `target/<kind>-reports` instead. When the run's own directory holds no
+    TEST-*.xml after the run but those dirs do, move them in and return one
+    warning per plugin that was overridden; nothing to do otherwise."""
+    if reports_dir is None or glob.glob(os.path.join(reports_dir, "TEST-*.xml")):
+        return []
+    warnings = []
+    for kind in kinds:
+        written = []
+        for d in _report_dirs(maven_dir, module, kind):
+            written += glob.glob(os.path.join(d, "TEST-*.xml"))
+        for path in written:
+            shutil.move(path, os.path.join(reports_dir, os.path.basename(path)))
+        if written:
+            print(f"[crucible] WARN: the POM's own {kind} reportsDirectory "
+                  f"overrode -D{kind}.reportsDirectory; moved "
+                  f"{len(written)} report(s) into {reports_dir}", file=sys.stderr)
+            warnings.append({
+                "code": "pom-reports-directory-overrode",
+                "detail": f"the POM's own {kind} reportsDirectory overrode "
+                          f"-D{kind}.reportsDirectory: Maven wrote to "
+                          f"target/{kind}-reports, and the client moved "
+                          f"{len(written)} report(s) into {reports_dir}. Drop "
+                          f"the pinned reportsDirectory (or set it from "
+                          f"${{{kind}.reportsDirectory}}) so the run writes "
+                          f"there directly."})
+    return warnings
+
+
 def _parse_junit(dirs):
     """Parse all TEST-*.xml across `dirs` into (summary, tree, files). Each
     file's root is a <testsuite>; testcases with <failure>/<error> → fail,
@@ -811,9 +883,14 @@ def _ingest_compile(project_dir, agent, output, context=None):
     return 0 if resp.get("ok") else 1
 
 
-def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
+def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
+                  pooled=False):
     """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
     None → return None so the caller can run the compile fallback.
+
+    `pooled` — the one dir is the run's own directory, where every reactor
+    module's surefire writes; there, more than one report is more than one
+    source, read as many dirs were before that directory pooled them.
 
     CR-CRU-058 §S1 — returns the INGEST STATE (`{resp, summary, files}`) rather
     than a bare bool, so the caller can emit a `run:` block. Those counts are
@@ -825,7 +902,9 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
     if not existing:
         return None
     _warn_if_stale(existing)
-    if len(existing) == 1:
+    many_sources = pooled and len(
+        glob.glob(os.path.join(existing[0], "TEST-*.xml"))) > 1
+    if len(existing) == 1 and not many_sources:
         resp = _ingest_junit_dir(project_dir, agent, existing[0], tier=tier,
                                  context=context)
         # The junit-dir path ingests the DIR (the server parses it), so the
@@ -865,7 +944,10 @@ def _run_surefire_tier(args, goal_extra, label):
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
-    cmd = _mvn_base(maven_dir) + ["clean", "test"] + goal_extra + common
+    reports_dir = _run_reports_dir(args, project_dir)
+    _prepare_reports_dir(reports_dir)
+    cmd = (_mvn_base(maven_dir) + ["clean", "test"] + goal_extra + common
+           + _reports_dir_flags(reports_dir, ("surefire",)))
     env = os.environ.copy()
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
@@ -877,7 +959,8 @@ def _run_surefire_tier(args, goal_extra, label):
         def _xml_total():
             return sum(
                 len(glob.glob(os.path.join(d, "TEST-*.xml")))
-                for d in _report_dirs(maven_dir, module, "surefire")
+                for d in _run_read_dirs(maven_dir, module, ("surefire",),
+                                        reports_dir)
             )
 
         narrator = _Narrator(
@@ -894,19 +977,26 @@ def _run_surefire_tier(args, goal_extra, label):
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
-    dirs = _report_dirs(maven_dir, getattr(args, "module", None), "surefire")
+    pinned_warnings = _claim_pinned_reports(maven_dir, getattr(args, "module", None),
+                                            ("surefire",), reports_dir)
+    dirs = _run_read_dirs(maven_dir, getattr(args, "module", None), ("surefire",),
+                          reports_dir)
     # CR-CRU-056 §S3 — no client-side cycle resolution: a bound agent's run is
     # server-stamped with its registered cycle.
     ctx = _run_context()
     # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
-    ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx)
+    # A `module` run over a reactor pools every module's reports in the run's
+    # own directory, so it keeps the many-source parsed ingest it always had.
+    ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx,
+                             pooled=label == "module" and reports_dir is not None)
     if ingested:
         rc = 0
         # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
         # helper before this: the run they measured now rides a real envelope,
         # emitted HERE (the verb), never inside the shared ingest helpers.
         _emit_tier_run_axi(label, ingested, project_dir, args.agent,
-                           warnings=_axi().unit_run_wall_vs_cpu_warnings(
+                           warnings=pinned_warnings
+                           + _axi().unit_run_wall_vs_cpu_warnings(
                                label, "mvn", timing))
     else:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
@@ -1051,7 +1141,10 @@ def _run_failsafe_tier(args, goals, label):
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
-    cmd = _mvn_base(maven_dir) + goals + common
+    reports_dir = _run_reports_dir(args, project_dir)
+    _prepare_reports_dir(reports_dir)
+    cmd = (_mvn_base(maven_dir) + goals + common
+           + _reports_dir_flags(reports_dir, ("surefire", "failsafe")))
     env = os.environ.copy()
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
@@ -1060,9 +1153,10 @@ def _run_failsafe_tier(args, goals, label):
     if not args.agent:
         return result.returncode
     module = getattr(args, "module", None)
-    fs = _dirs_with_xml(_report_dirs(maven_dir, module, "failsafe"))
-    su = _dirs_with_xml(_report_dirs(maven_dir, module, "surefire"))
-    dirs = fs + su
+    pinned_warnings = _claim_pinned_reports(maven_dir, module, ("failsafe", "surefire"),
+                                            reports_dir)
+    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, module, ("failsafe", "surefire"),
+                                         reports_dir))
     if not dirs:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
                                              args.agent, common)
@@ -1077,7 +1171,7 @@ def _run_failsafe_tier(args, goals, label):
                           tier=label, files=files)
     # CR-CRU-058 §S1 — the run this body measured rides a real envelope.
     _emit_tier_run_axi(label, {"resp": resp, "summary": summary, "files": files},
-                       project_dir, args.agent)
+                       project_dir, args.agent, warnings=pinned_warnings)
     return 0 if summary["failed"] == 0 else 1
 
 
@@ -1246,6 +1340,9 @@ def _regression_run(args, identity=None, verb="regression",
         common = common + ["-P", cov_profile]
 
     cmd = _mvn_base(maven_dir) + ["clean", args.goal] + common
+    reports_dir = _run_reports_dir(args, project_dir)
+    _prepare_reports_dir(reports_dir)
+    cmd += _reports_dir_flags(reports_dir, ("surefire", "failsafe"))
     env = os.environ.copy()
     # §S3 (§S0b's named finding) — this unguarded print landed on stdout AHEAD
     # of the envelope, leaving the stream prose-then-envelope, never a clean
@@ -1260,8 +1357,8 @@ def _regression_run(args, identity=None, verb="regression",
         def _xml_total():
             return sum(
                 len(glob.glob(os.path.join(d, "TEST-*.xml")))
-                for d in (_report_dirs(maven_dir, None, "surefire")
-                          + _report_dirs(maven_dir, None, "failsafe"))
+                for d in _run_read_dirs(maven_dir, None, ("surefire", "failsafe"),
+                                        reports_dir)
             )
 
         def _tick(message):
@@ -1275,9 +1372,10 @@ def _regression_run(args, identity=None, verb="regression",
     result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
     print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
 
-    su = _dirs_with_xml(_report_dirs(maven_dir, None, "surefire"))
-    fs = _dirs_with_xml(_report_dirs(maven_dir, None, "failsafe"))
-    dirs = su + fs
+    preflight_warnings += _claim_pinned_reports(maven_dir, None, ("surefire", "failsafe"),
+                                                reports_dir)
+    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, None, ("surefire", "failsafe"),
+                                         reports_dir))
     if not dirs:
         print("[regression] no surefire/failsafe reports — capturing compile output",
               file=sys.stderr)
@@ -1324,13 +1422,19 @@ def cmd_test(args, tier=None):
     exactly as `unit`/`module` pass theirs to `_run_surefire_tier`. There is no
     `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A `-Dtest=`
     pattern says nothing about the dependency the matched tests take, so absent a
-    stated tier this run claims none on EITHER ingest path — the junit-dir one and
-    the multi-module parsed one — and the server applies its own default."""
+    stated tier this run claims none, and the server applies its own default.
+
+    An ingesting run always has an agent, so its reports sit in ONE directory
+    (the run's own; every module writes there) and ingest via the junit-dir
+    path."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     extra = [f"-Dtest={args.test}"] if getattr(args, "test", None) else []
-    cmd = _mvn_base(maven_dir) + ["clean", "test"] + extra + common
+    reports_dir = _run_reports_dir(args, project_dir)
+    _prepare_reports_dir(reports_dir)
+    cmd = (_mvn_base(maven_dir) + ["clean", "test"] + extra + common
+           + _reports_dir_flags(reports_dir, ("surefire",)))
     env = os.environ.copy()
     # CR-CRU-094 §S3 — PRE-FLIGHT, before maven spawns and while `--cycle` can
     # still be supplied: ask the board whether this agent is bound and say so
@@ -1345,25 +1449,20 @@ def cmd_test(args, tier=None):
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
-    dirs = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "surefire"))
+    preflight_warnings = list(preflight_warnings) + _claim_pinned_reports(
+        maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
+    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, getattr(args, "module", None),
+                                         ("surefire",), reports_dir))
     if not dirs:
         # No reports → tests didn't compile. Ingest the build output as compile.
         rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common)
         return rc
     _warn_if_stale(dirs)
     ctx = _run_context()
-    if len(dirs) == 1:
-        resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx)
-        _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
-                              preflight_warnings)
-        failed = (resp.get("run") or {}).get("failed") or 0
-    else:
-        summary, tree, files = _parse_junit(dirs)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier, context=ctx,
-                              files=files)
-        _emit_ingest_summary_axi("test", resp, summary, files, project_dir, args.agent,
-                                 warnings=preflight_warnings)
-        failed = summary["failed"]
+    resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx)
+    _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
+                          preflight_warnings)
+    failed = (resp.get("run") or {}).get("failed") or 0
     if failed and failed > 0:
         return 1
     return 0 if resp.get("ok") else 1
@@ -1941,6 +2040,15 @@ def _add_log_arg(p):
                                  "Lets an agent read a long run back instead of re-running.")
 
 
+_REPORTS_HELP = _axi().REPORTS_HELP
+
+
+def _add_reports_arg(p):
+    """The run's reports dir, handed to surefire/failsafe as their
+    `reportsDirectory` and read back from there (the shared rule)."""
+    p.add_argument("--reports", help=_REPORTS_HELP)
+
+
 # ── CR-CRU-111 §S1/AC5 — the flags each tier-named verb OWNS ─────────────
 #
 # These four verbs pre-date the shared tier registration and keep every flag
@@ -2035,7 +2143,7 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
           "(`mvn -P<target>`)",
     read=_read_declared_profile,
     run=_run_declared_profile,
-    add_args=(_add_declared_tier_args,),
+    add_args=(_add_declared_tier_args, _add_reports_arg),
     # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
     # vocabulary itself, so the enumeration is the lookup above asked for each
     # tier: the same parse, without the single-name filter.
@@ -2138,26 +2246,31 @@ def main():
         dict(unit=tier_verb(
                  cmd_unit,
                  "Runs `mvn clean test -Dtest=<pattern>` and ingests surefire.",
-                 (_add_unit_tier_args, _add_mvn_flags, _add_log_arg)),
+                 (_add_unit_tier_args, _add_mvn_flags, _add_log_arg,
+                  _add_reports_arg)),
              module=tier_verb(
                  cmd_module,
                  "Runs `mvn clean test [-pl <module> -am]` — maven's own "
                  "reactor scoping — and ingests surefire.",
-                 (_add_module_tier_args, _add_mvn_flags, _add_log_arg)),
+                 (_add_module_tier_args, _add_mvn_flags, _add_log_arg,
+                  _add_reports_arg)),
              integration=tier_verb(
                  cmd_integration,
                  "Runs `mvn clean integration-test` — the failsafe half of "
                  "maven's own lifecycle — and ingests failsafe+surefire.",
-                 (_add_integration_tier_args, _add_mvn_flags, _add_log_arg)),
+                 (_add_integration_tier_args, _add_mvn_flags, _add_log_arg,
+                  _add_reports_arg)),
              e2e=tier_verb(
                  cmd_e2e,
                  "Runs failsafe IT / @QuarkusIntegrationTest. No coverage.",
-                 (_add_e2e_tier_args, _add_mvn_flags, _add_log_arg)),
+                 (_add_e2e_tier_args, _add_mvn_flags, _add_log_arg,
+                  _add_reports_arg)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full reactor `mvn clean verify` with JaCoCo "
                  "coverage, parsed.",
-                 (_add_regression_tier_args, _add_mvn_flags, _add_log_arg))),
+                 (_add_regression_tier_args, _add_mvn_flags, _add_log_arg,
+                  _add_reports_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_args,))
 
@@ -2229,6 +2342,7 @@ def main():
     _add_mvn_flags(te)
     _add_project_args(te)
     _add_log_arg(te)
+    _add_reports_arg(te)
     te.set_defaults(func=cmd_test)
 
     ck = sub.add_parser("check", help="CHECK gate: mvn clean test-compile → ingest /api/v2/runs/compile on failure (§S2).")
