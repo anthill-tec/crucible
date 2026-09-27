@@ -840,7 +840,6 @@ def _claim_output(written_path, own_dir, name):
 
 
 def cmd_auto_ingest(args):
-
     """Detect: junit XML present → ingest tests. Absent → cargo check stderr → ingest compile."""
     project_dir = _resolve_project_dir(args.project_dir)
     # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is

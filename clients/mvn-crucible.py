@@ -883,9 +883,14 @@ def _ingest_compile(project_dir, agent, output, context=None):
     return 0 if resp.get("ok") else 1
 
 
-def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
+def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
+                  pooled=False):
     """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
     None → return None so the caller can run the compile fallback.
+
+    `pooled` — the one dir is the run's own directory, where every reactor
+    module's surefire writes; there, more than one report is more than one
+    source, read as many dirs were before that directory pooled them.
 
     CR-CRU-058 §S1 — returns the INGEST STATE (`{resp, summary, files}`) rather
     than a bare bool, so the caller can emit a `run:` block. Those counts are
@@ -897,7 +902,9 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
     if not existing:
         return None
     _warn_if_stale(existing)
-    if len(existing) == 1:
+    many_sources = pooled and len(
+        glob.glob(os.path.join(existing[0], "TEST-*.xml"))) > 1
+    if len(existing) == 1 and not many_sources:
         resp = _ingest_junit_dir(project_dir, agent, existing[0], tier=tier,
                                  context=context)
         # The junit-dir path ingests the DIR (the server parses it), so the
@@ -978,7 +985,10 @@ def _run_surefire_tier(args, goal_extra, label):
     # server-stamped with its registered cycle.
     ctx = _run_context()
     # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
-    ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx)
+    # A `module` run over a reactor pools every module's reports in the run's
+    # own directory, so it keeps the many-source parsed ingest it always had.
+    ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx,
+                             pooled=label == "module" and reports_dir is not None)
     if ingested:
         rc = 0
         # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
