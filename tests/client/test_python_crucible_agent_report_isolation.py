@@ -240,10 +240,8 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
             f"summary -- narrowing the wipe to the agent's own directory "
             f"must not mean the wipe stops happening; got summary={summary!r}",
         )
-        with open(stale_path) as f:
-            remaining = f.read()
-        self.assertNotIn(
-            "STALE_FROM_A_PRIOR_RUN", remaining,
+        self.assertFalse(
+            os.path.exists(stale_path),
             "the stale planted testcase must not survive inside the "
             "agent's own directory -- only ANOTHER agent's directory is "
             "protected from the wipe",
