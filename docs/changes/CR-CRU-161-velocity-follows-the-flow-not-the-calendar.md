@@ -30,9 +30,9 @@ they forecast anything.
 
 ### §S1 — rolling-window throughput (user ruling 2026-09-27)
 
-Velocity is the points merged in the trailing **window** of N days, ending now, expressed as a rate
-(points per week, so the card reads as before). It updates on every merge. The current, partial day
-counts.
+Velocity is the points merged in the trailing **window** of N days, ending now, expressed as
+**points per day** (user ruling 2026-09-27: at agentic pace a day is the natural unit; the forecast
+already samples days). It updates on every merge. The current, partial day counts.
 
 ### §S2 — the forecast samples days
 
@@ -44,14 +44,18 @@ needs. `unpointed` and `scheduleHealth` are unchanged.
 
 ### §S3 — the window is per project
 
-A project carries its velocity window: **7, 14 or 28 days**, default **7** (user ruling 2026-09-27). It is set in the projects
+A project carries its velocity window: **3, 7 or 14 days**, default **7** (user rulings 2026-09-27).
+Measured on the dev board that day: a 3-day window reads the current pace (128 pts/wk-equivalent),
+7 days keeps the forecast steady on 7 day-samples, 14 suits a slower project. Throughput is bounded
+by the human approvals, not the agents, so idle days are real and a short window swings with them. It is set in the projects
 manager (`/manage`, F12) beside retention, stored on the project and returned by the project read.
 Any other value is refused by the server.
 
 ### §S4 — the velocity card and the flow line
 
-The Velocity card (F16) shows the rate, the window it covers (`last 7 days`) and daily bars for the
-window in place of weekly bars. The flow line (exec · gate per cycle) is unchanged.
+The Velocity card (F16) shows the rate in points per day (e.g. `22 pts / day`), the window it covers
+(`last 7 days`) and daily bars for the window in place of weekly bars. The phone band's foot-strip
+figure (`project-band-velocity`) and the release band's rate read per day too. The flow line (exec · gate per cycle) is unchanged.
 
 ### §S5 — the design follows
 
@@ -60,11 +64,12 @@ model. The orchestrator makes the storyboard edit at close-out.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — Velocity is the points merged in the trailing window divided by its length in weeks,
-      including today's merges, asserted against fixed merge fixtures for 7, 14 and 28 days.
+- [ ] **AC1** — Velocity is the points merged in the trailing window divided by its length in days,
+      including today's merges, asserted against fixed merge fixtures for 3, 7 and 14 days, and every
+      surface that shows it (Velocity card, phone foot strip, release band) reads `pts / day`.
 - [ ] **AC2** — The forecast samples daily throughput (zero days included) and is dated as soon as
       the pointed history spans one window; below that it refuses naming the days it has and needs.
-- [ ] **AC3** — A project's window is 7, 14 or 28 days (default 7), editable in the projects manager
+- [ ] **AC3** — A project's window is 3, 7 or 14 days (default 7), editable in the projects manager
       in a real browser, and any other value is refused by the server.
 - [ ] **AC4** — Changing a project's window changes its velocity and forecast on the next read.
 - [ ] **AC5** — On the dev board's own history, 0.3.0 gets a dated forecast.
