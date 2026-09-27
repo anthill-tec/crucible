@@ -802,7 +802,45 @@ def _clean_stale_junit(project_dir, profile=None):
                 os.remove(p)
 
 
+# nextest writes its JUnit, and llvm-cov its lcov, at paths the tool fixes
+# under `target/`; a run with its own reports directory moves them there right
+# after the tool exits and reads them only from there.
+_OWN_JUNIT_FILE = "junit.xml"
+_OWN_LCOV_FILE = "lcov.info"
+
+
+def _run_reports_dir(args, project_dir):
+    """The run's own reports directory by the shared rule (`run_reports_dir`):
+    an explicit `--reports` as given, else the agent's own directory. None for
+    a run with neither, which reads the tool's fixed paths as before. The
+    directory is created and the junit/lcov a previous run moved there cleared,
+    so only this run's outputs are read from it."""
+    reports_arg = getattr(args, "reports", None)
+    agent = getattr(args, "agent", None)
+    if not reports_arg and not agent:
+        return None
+    own_dir = _axi().run_reports_dir(project_dir, reports_arg, agent)
+    os.makedirs(own_dir, exist_ok=True)
+    for name in (_OWN_JUNIT_FILE, _OWN_LCOV_FILE):
+        stale = os.path.join(own_dir, name)
+        if os.path.exists(stale):
+            os.remove(stale)
+    return own_dir
+
+
+def _claim_output(written_path, own_dir, name):
+    """Move a tool-written output into the run's own directory and return the
+    path to read it from. Without an own directory, or when the tool wrote
+    nothing, the path is returned as it was."""
+    if own_dir is None or not written_path or not os.path.exists(written_path):
+        return written_path
+    claimed = os.path.join(own_dir, name)
+    shutil.move(written_path, claimed)
+    return claimed
+
+
 def cmd_auto_ingest(args):
+
     """Detect: junit XML present → ingest tests. Absent → cargo check stderr → ingest compile."""
     project_dir = _resolve_project_dir(args.project_dir)
     # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is
@@ -928,6 +966,7 @@ def _regression_ingest_run(args, preflight_warnings=()):
         subprocess.run(["cargo", "clean", "-p", c], cwd=project_dir, capture_output=True)
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[crucible] cleaned: {', '.join(crates)}", file=sys.stderr)
+    own_dir = _run_reports_dir(args, project_dir)
 
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")  # dev machine cap, per rust-orchestration.md
@@ -943,7 +982,10 @@ def _regression_ingest_run(args, preflight_warnings=()):
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir, env=env)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
 
-    junit_path = f"{project_dir}/target/nextest/ci/junit.xml"
+    junit_path = _claim_output(f"{project_dir}/target/nextest/ci/junit.xml",
+                               own_dir, _OWN_JUNIT_FILE)
+    lcov_path = _claim_output(f"{project_dir}/target/lcov.info",
+                              own_dir, _OWN_LCOV_FILE)
     if not os.path.exists(junit_path):
         _emit_axi("regression-ingest", False,
                   {"help": _axi().no_report_help("regression-ingest",
@@ -968,7 +1010,7 @@ def _regression_ingest_run(args, preflight_warnings=()):
     pending = summary["pending"]
     total = summary["total"]
 
-    coverage = _parse_lcov(f"{project_dir}/target/lcov.info")
+    coverage = _parse_lcov(lcov_path)
 
     payload = {
         "projectKey": _project_key(project_dir),
@@ -1113,6 +1155,7 @@ def cmd_test(args, tier=None, select=(), profile=None):
     verb = tier or "test"
     profile = profile or args.profile
     _clean_stale_junit(project_dir, profile)
+    own_dir = _run_reports_dir(args, project_dir)
     crate_selection = ["-p", args.crate] if args.crate else ["--workspace"]
     cmd = (["cargo", "nextest", "run"] + crate_selection + list(select)
            + ["-P", profile])
@@ -1145,7 +1188,8 @@ def cmd_test(args, tier=None, select=(), profile=None):
     if args.agent:
         # Test may have failed; ingest result regardless (junit captures fail state).
         # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml.
-        junit_path = _resolve_junit_path(project_dir, profile)
+        junit_path = _claim_output(_resolve_junit_path(project_dir, profile),
+                                   own_dir, _OWN_JUNIT_FILE)
         if junit_path:
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context())
@@ -1496,6 +1540,7 @@ def _smoke_test(args, verb):
     smoke_rc = 1
     try:
         _clean_stale_junit(project_dir)
+        own_dir = _run_reports_dir(args, project_dir)
         env = os.environ.copy()
         env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
         if args.with_docker:
@@ -1522,9 +1567,10 @@ def _smoke_test(args, verb):
         # Ingest JUnit regardless of exit code (failed tests still report).
         ci_junit = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
         default_junit = f"{project_dir}/target/nextest/default/junit.xml"
-        junit_path = ci_junit if os.path.exists(ci_junit) else (
-            default_junit if os.path.exists(default_junit) else None
-        )
+        junit_path = _claim_output(
+            ci_junit if os.path.exists(ci_junit) else (
+                default_junit if os.path.exists(default_junit) else None),
+            own_dir, _OWN_JUNIT_FILE)
         if not junit_path:
             _emit_axi(verb, False,
                       {"help": _axi().no_report_help(verb, "junit.xml")},
@@ -1633,6 +1679,7 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
 def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     """Build + run + ingest body (wrapped by cmd_workspace_regression's disk guard +
     post-run reclaim). Assumes the workspace was already `cargo clean`ed."""
+    own_dir = _run_reports_dir(args, project_dir)
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
     # --failure-mode all: tolerate corrupt .profraw from tests that spawn + SIGKILL an
@@ -1658,7 +1705,10 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     result = subprocess.run(cmd, cwd=project_dir, env=env, stdout=sys.stderr)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
 
-    junit_path = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
+    junit_path = _claim_output(f"{project_dir}/target/nextest/{args.profile}/junit.xml",
+                               own_dir, _OWN_JUNIT_FILE)
+    lcov_path = _claim_output(f"{project_dir}/{args.lcov_output}",
+                              own_dir, _OWN_LCOV_FILE)
     if not os.path.exists(junit_path):
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "junit.xml")},
@@ -1680,7 +1730,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     pending = summary["pending"]
     total = summary["total"]
 
-    coverage = _parse_lcov(f"{project_dir}/{args.lcov_output}")
+    coverage = _parse_lcov(lcov_path)
 
     payload = {
         "projectKey": _project_key(project_dir),
@@ -2279,6 +2329,17 @@ def _add_log_arg(p):
     )
 
 
+_REPORTS_HELP = (_axi().REPORTS_HELP
+                 + " nextest's junit and llvm-cov's lcov are written by the tool "
+                   "to its fixed target/ paths and moved here right after the run, "
+                   "before they are read: the window between the tool writing and "
+                   "the client moving is narrowed, not closed.")
+
+
+def _add_reports_arg(p):
+    p.add_argument("--reports", help=_REPORTS_HELP)
+
+
 # CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
 # by every refusal the shared registrar builds here. Cargo's own split covers
 # `unit`/`integration`/`e2e`; nothing in cargo describes a MODULE boundary or a
@@ -2398,6 +2459,7 @@ def _add_regression_tier_args(p):
                         "free /home is still below this (default: 80).")
     p.add_argument("--keep-target", action="store_true",
                    help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).")
+    _add_reports_arg(p)
 
 
 _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
@@ -2433,6 +2495,7 @@ def _add_cargo_tier_run_args(p):
     p.add_argument("--agent", help="If set, auto-ingest junit after the run")
     _add_gate_cycle_arg(p)
     _add_log_arg(p)
+    _add_reports_arg(p)
 
 
 def _add_unit_tier_args(p):
@@ -2562,6 +2625,7 @@ def main():
     g.add_argument("--features", help="Optional --features flag")
     _add_gate_cycle_arg(g)
     _add_project_dir_arg(g)
+    _add_reports_arg(g)
     g.set_defaults(func=cmd_regression_ingest)
 
     # --- New subcommands ---
@@ -2581,6 +2645,7 @@ def main():
     t.add_argument("--agent", help="If set, auto-ingest junit after the run")
     _add_project_dir_arg(t)
     _add_log_arg(t)
+    _add_reports_arg(t)
     t.set_defaults(func=cmd_test)
 
     c = sub.add_parser(
@@ -2659,6 +2724,7 @@ def main():
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
     _add_project_dir_arg(w)
+    _add_reports_arg(w)
     w.set_defaults(func=cmd_workspace_regression)
 
     st = sub.add_parser(
@@ -2694,6 +2760,7 @@ def main():
              "or CRUCIBLE_COMPOSE_FILE in .env, else docker auto-discovery (compose.yaml).",
     )
     _add_project_dir_arg(st)
+    _add_reports_arg(st)
     st.set_defaults(func=cmd_smoke_test)
 
     du = sub.add_parser(
