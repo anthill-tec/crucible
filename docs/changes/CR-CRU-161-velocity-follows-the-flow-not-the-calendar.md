@@ -73,5 +73,7 @@ model. The orchestrator makes the storyboard edit at close-out.
       in a real browser, and any other value is refused by the server.
 - [ ] **AC4** — Changing a project's window changes its velocity and forecast on the next read.
 - [ ] **AC5** — On the dev board's own history, 0.3.0 gets a dated forecast.
+- [ ] **AC7** — The Velocity card and the projects manager match storyboard **F18 §1–2**, checked in a
+      real browser at VERIFY.
 - [ ] **AC6** — Every existing analytics test still passes, or is re-pinned in this CR's RED where it
       pinned the calendar-week model, each such change named in the RED report.

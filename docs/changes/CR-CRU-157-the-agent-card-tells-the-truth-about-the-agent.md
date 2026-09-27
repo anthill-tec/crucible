@@ -47,3 +47,5 @@ the server (user ruling 2026-09-26).
       on the board's agent read.
 - [ ] Between runs, the agent's card shows idle with its role and cycle, in a real browser.
 - [ ] A run that fails to ingest leaves the refusal on the card, not a stale count.
+- [ ] The card's states match storyboard **F19** (drawn 2026-09-27, the visual contract), checked in a
+      real browser at VERIFY.

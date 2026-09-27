@@ -35,3 +35,4 @@ The run-detail header stays pinned (CR-CRU-016 §S1); only the pane's scroller m
 - [ ] The same holds for a cell whose suite was still collapsed (its leaves load on the click) and
       for a spec run whose feature was folded.
 - [ ] Clicking a cell whose node is already in view does not move the pane.
+- [ ] The behaviour matches storyboard **F20** (drawn 2026-09-27, the visual contract).

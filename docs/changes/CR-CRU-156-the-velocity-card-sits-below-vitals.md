@@ -24,7 +24,7 @@ the agents, above Vitals.
   (`VelocityCard`'s own comment: its heading is deliberately not a `pane-section-title` handle). It
   stays as it is.
 - **The storyboard.** F16's mock Project pane draws the Project card then Velocity, with no Vitals.
-  The orchestrator redraws it with Vitals above Velocity at close-out.
+  **F18 §1** (drawn 2026-09-27, before RED) is the visual contract for the new order.
 - **Cost.** 1 point holds: a reorder, a comment and one test.
 
 ## Scope
@@ -40,7 +40,8 @@ changes: content, reads, and behaviour at every band.
 - [ ] **AC1** — In the workspace Project pane, `vitals-rail` precedes `project-velocity` in document
       order, and the agent rows precede both, asserted on the rendered DOM.
 - [ ] **AC2** — Every existing Project-pane, velocity and responsive-band test passes unchanged.
-- [ ] **AC3** — F16's mock Project pane shows Vitals above Velocity (orchestrator, at close-out).
+- [ ] **AC3** — The live pane matches storyboard **F18 §1** (Project card, agents, Vitals, Velocity),
+      checked in a real browser at VERIFY.
 
 ## Cycles
 

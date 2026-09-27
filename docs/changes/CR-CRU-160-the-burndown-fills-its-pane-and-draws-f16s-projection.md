@@ -52,5 +52,5 @@ plot, never below or outside it.
       traces with their date labels and the target label, asserted in a real browser.
 - [ ] **AC3** — With a refused forecast, the plot area states the reason, and no traces are drawn.
 - [ ] **AC4** — With the 0.3.0 history (36 steps), no label is drawn outside the plot area.
-- [ ] **AC5** — Storyboard F16 still matches the live chart; the orchestrator updates it at close-out
-      where the two differ.
+- [ ] **AC5** — The live chart matches storyboard **F18 §3** (drawn 2026-09-27, the visual contract),
+      including the refusal stated inside the plot, checked in a real browser at VERIFY.
