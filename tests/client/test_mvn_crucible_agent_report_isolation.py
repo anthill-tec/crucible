@@ -334,5 +334,65 @@ class AgentDirectorySurvivesTest(_BaseMvnIsolationTest):
         )
 
 
+class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
+    """The fallback for a POM that pins surefire's/failsafe's own
+    `reportsDirectory` in its plugin configuration, which overrides the `-D`
+    location: Maven writes to its `target/<kind>-reports` anyway. The client
+    moves what it wrote into the agent's own directory right after the run,
+    reads it from there, and says so in a warning naming `reportsDirectory`."""
+
+    def test_reports_a_pinned_pom_wrote_to_target_are_moved_into_the_agents_directory_and_warned(self):
+        def pinned_pom_run(cmd, cwd, env, log_path, narrator=None):
+            # The POM's own <reportsDirectory> wins: the -D flags are ignored.
+            for kind, name, suite in (
+                    ("surefire", "TEST-Fixture.xml",
+                     _junit_suite("com.acme.FixtureTest", 1, 0, "test_passes")),
+                    ("failsafe", "TEST-FixtureIT.xml",
+                     _junit_suite("com.acme.FixtureIT", 2, 1, "test_it"))):
+                directory = os.path.join(cwd, "target", f"{kind}-reports")
+                os.makedirs(directory, exist_ok=True)
+                with open(os.path.join(directory, name), "w") as f:
+                    f.write(suite)
+            return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module, "_run_logged", side_effect=pinned_pom_run), \
+             post_patch as post_mock, get_patch:
+            code, out, err = _run_main(self.module, [
+                "integration", "--project-dir", self.tmpdir, "--agent", "agent-pinned",
+            ])
+
+        own_dir = os.path.join(self.tmpdir, "test-reports", "agent-pinned")
+        moved = sorted(os.path.basename(p) for p in
+                       glob.glob(os.path.join(own_dir, "TEST-*.xml")))
+        self.assertEqual(
+            moved, ["TEST-Fixture.xml", "TEST-FixtureIT.xml"],
+            f"both reports the pinned POM wrote to target/ must be MOVED into "
+            f"{own_dir}; found {moved!r}; stderr={err!r}")
+        for kind in ("surefire", "failsafe"):
+            left = glob.glob(os.path.join(self.tmpdir, "target", f"{kind}-reports",
+                                          "TEST-*.xml"))
+            self.assertEqual(left, [], f"{kind} reports must be moved, not copied")
+
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
+        assert ingest_call is not None
+        summary = ingest_call[0][1]["summary"]
+        self.assertEqual(
+            (summary["passed"], summary["failed"], summary["total"]), (2, 1, 3),
+            f"the ingest must read the moved reports; got summary={summary!r}")
+        self.assertEqual(code, 1, "one planted failure makes the run red")
+
+        toon = _load_module(REPO_ROOT / "clients" / "toon.py",
+                            "toon_for_mvn_pinned_pom_fallback")
+        warnings = toon.decode(out)["axi"].get("warnings") or []
+        overridden = [w for w in warnings
+                      if "reportsdirectory" in str(w.get("detail", "")).lower()]
+        self.assertEqual(
+            len(overridden), 2,
+            f"one warning per plugin whose location the POM overrode, each "
+            f"naming reportsDirectory; got warnings={warnings!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -181,8 +181,11 @@ JUNIT = (
     '<testcase classname="DetectorProbeTest" name="probe" time="0.001"/>'
     '</testsuite>'
 )
-for kind in ("surefire-reports", "failsafe-reports"):
-    d = os.path.join("target", kind)
+for kind in ("surefire", "failsafe"):
+    # Like the real plugins: `-D<kind>.reportsDirectory` wins over the default.
+    prefix = "-D" + kind + ".reportsDirectory="
+    d = next((a[len(prefix):] for a in sys.argv[1:] if a.startswith(prefix)),
+             os.path.join("target", kind + "-reports"))
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "TEST-DetectorProbeTest.xml"), "w") as f:
         f.write(JUNIT)

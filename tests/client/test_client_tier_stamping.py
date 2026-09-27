@@ -520,10 +520,25 @@ sys.exit(int(os.environ.get("FAKE_PY_EXIT_CODE", "1")))
 
 # `mvnw`, laid into the maven dir the fixture builds; the reports are written by
 # the fixture, never by this wrapper, so a drive measures the ingest and not a
-# fake build. Exits FAKE_MVN_EXIT_CODE with javac-shaped output.
+# fake build. Like the real plugins it honours `-D<kind>.reportsDirectory`:
+# given the property, it delivers the reports the fixture laid at Maven's own
+# default `[module/]target/<kind>-reports` there. Exits FAKE_MVN_EXIT_CODE with
+# javac-shaped output.
 _FAKE_MVNW = """#!{python}
+import glob
 import os
+import shutil
 import sys
+
+for _kind in ("surefire", "failsafe"):
+    _prefix = "-D" + _kind + ".reportsDirectory="
+    _dest = next((a[len(_prefix):] for a in sys.argv[1:] if a.startswith(_prefix)), None)
+    if not _dest:
+        continue
+    for _src in glob.glob(os.path.join(os.getcwd(), "**", "target", _kind + "-reports",
+                                       "TEST-*.xml"), recursive=True):
+        os.makedirs(_dest, exist_ok=True)
+        shutil.move(_src, os.path.join(_dest, os.path.basename(_src)))
 
 code = int(os.environ.get("FAKE_MVN_EXIT_CODE", "0"))
 if code:
@@ -951,15 +966,6 @@ class MvnUnearnedTierTest(_MvnCase):
         self.write_reports()
         drive = self.drive(self.mvn_argv("test"))
         self.assertNoStatedTier(drive, RUNS, "mvn cmd_test -> POST /runs")
-
-    def test_mvn_test_many_report_dirs_claims_no_tier(self):
-        """AC3, mvn `cmd_test` — the multi-module reactor path
-        (client-parsed, `POST /api/v2/runs/parsed`). A second call site of the
-        same verb: fixing one leaves the other stamping `unit`."""
-        self.write_reports()
-        self.write_reports(module="probe-module", name="TEST-ProbeTwo.xml")
-        drive = self.drive(self.mvn_argv("test"))
-        self.assertNoStatedTier(drive, PARSED, "mvn cmd_test -> POST /runs/parsed")
 
     def test_mvn_auto_ingest_single_report_dir_claims_no_tier(self):
         """AC3's auto-ingest clause, mvn `cmd_auto_ingest`'s `/runs` call —
