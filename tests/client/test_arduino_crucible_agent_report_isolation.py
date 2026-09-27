@@ -371,3 +371,89 @@ class AgentDirectorySurvivesTest(_BaseArduinoIsolationTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentDirectoryCoverageIgnoredByMakefileMoveAndReadTest(_BaseArduinoIsolationTest):
+    """AC7 -- when a Makefile ignores BOTH REPORTS_DIR and COVERAGE_DIR (writes
+    its own fixed reports/ and coverage/), the client must move BOTH the
+    JUnit AND the lcov into the agent's own directory, warn about the
+    ignored COVERAGE_DIR specifically, and ingest coverage parsed from the
+    MOVED lcov.info -- never the one left (or since-moved-away) at the
+    project's fixed <native_dir>/coverage/lcov.info."""
+
+    def test_regression_coverage_run_moves_lcov_into_the_agents_directory_and_warns_about_coverage_dir(self):
+        native_dir = _write_native_make_fixture(self.tmpdir, honor_env=False,
+                                                write_coverage=True)
+        post_patch, get_patch = self._mocked_transport()
+        with post_patch as post_mock, get_patch:
+            code, out, err = _run_main(self.module, [
+                "regression", "--project-dir", self.tmpdir,
+                "--agent", "agent-cov-legacy", "--coverage",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        own_dir = os.path.join(self.tmpdir, "test-reports", "agent-cov-legacy")
+        own_lcov = os.path.join(own_dir, "coverage", "lcov.info")
+        self.assertTrue(
+            os.path.exists(own_lcov),
+            f"the Makefile's ignored lcov.info must be MOVED into {own_lcov}; "
+            f"stdout={out!r} stderr={err!r}",
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(native_dir, "coverage", "lcov.info")),
+            "lcov.info must be MOVED out of the project's fixed coverage/, "
+            "not merely copied, once the client relocates a Makefile's "
+            "ignored coverage output",
+        )
+
+        axi = self._decode_axi(out)
+        warnings = axi.get("warnings") or []
+        self.assertTrue(
+            any("coverage_dir" in str(w.get("detail", "")).lower() for w in warnings),
+            f"a Makefile that ignored COVERAGE_DIR must be called out in a "
+            f"warning naming it; got warnings={warnings!r}",
+        )
+
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
+        assert ingest_call is not None
+        coverage = ingest_call[0][1].get("coverage")
+        self.assertIsNotNone(
+            coverage,
+            "the ingested payload must carry coverage parsed from the MOVED "
+            "lcov.info, not an absent/fixed-path read",
+        )
+        assert coverage is not None
+        self.assertEqual(
+            (coverage["lines"]["total"], coverage["lines"]["covered"]), (2, 2),
+            f"the ingested line coverage must reflect the MOVED lcov's real "
+            f"fixture values (LF:2/LH:2); got coverage={coverage!r}",
+        )
+        self.assertEqual(
+            (coverage["functions"]["total"], coverage["functions"]["covered"]), (1, 1),
+            f"the ingested function coverage must reflect the MOVED lcov's "
+            f"real fixture values (FNF:1/FNH:1); got coverage={coverage!r}",
+        )
+
+
+class ReportsHelpTextTest(_BaseArduinoIsolationTest):
+    """AC9 -- the `--reports` help text states the per-agent default."""
+
+    def test_test_verb_reports_help_states_the_per_agent_default(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             mock.patch.object(sys, "argv", ["arduino-crucible.py", "test", "--help"]), \
+             self.assertRaises(SystemExit):
+            self.module.main()
+        help_text = out.getvalue()
+        reports_lines = [line for line in help_text.splitlines() if "--reports" in line]
+        self.assertTrue(reports_lines, f"no --reports line found in help text {help_text!r}")
+        self.assertTrue(
+            any("agent" in line.lower() for line in reports_lines),
+            f"the --reports help text must state the per-agent default "
+            f"(test-reports/<agent>); got {reports_lines!r}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

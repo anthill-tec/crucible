@@ -394,5 +394,185 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
             f"naming reportsDirectory; got warnings={warnings!r}")
 
 
+class ModuleRegressionAndTestVerbsUseTheAgentsOwnDirectoryTest(_BaseMvnIsolationTest):
+    """AC1/AC7 -- coverage gap: `module`, `regression` and the untiered `test`
+    verb each resolve their reports directory through the SAME shared
+    `_run_reports_dir`/`_reports_dir_flags` helpers `unit`/`integration`
+    already have tests for above -- pinning that each of THESE three verbs
+    also passes `-D{surefire,failsafe}.reportsDirectory` at the agent's own
+    `test-reports/<agent>/`, never Maven's shared default."""
+
+    def test_module_tier_run_with_agent_passes_surefire_reports_directory_at_the_agents_own_directory(self):
+        fake_run = _make_fake_mvn_run(
+            surefire_content=_junit_suite("com.acme.ModuleTest", 1, 0, "test_passes"))
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module, "_run_logged",
+                                side_effect=fake_run) as run_logged_mock, \
+             post_patch, get_patch:
+            code, out, err = _run_main(self.module, [
+                "module", "--project-dir", self.tmpdir, "--agent", "agent-module",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        cmd = run_logged_mock.call_args_list[0][0][0]
+        expected_dir = os.path.join(self.tmpdir, "test-reports", "agent-module")
+        surefire_flags = [a for a in cmd if a.startswith("-Dsurefire.reportsDirectory=")]
+        self.assertEqual(
+            len(surefire_flags), 1,
+            f"expected exactly ONE -Dsurefire.reportsDirectory flag pointing "
+            f"at the agent's own directory in the mvn `module` command; got cmd={cmd!r}",
+        )
+        self.assertEqual(
+            os.path.normpath(surefire_flags[0].split("=", 1)[1]),
+            os.path.normpath(expected_dir),
+            f"-Dsurefire.reportsDirectory must point at {expected_dir}; "
+            f"got {surefire_flags[0]!r}",
+        )
+
+    def test_regression_run_with_agent_passes_both_surefire_and_failsafe_reports_directory_flags(self):
+        fake_run = _make_fake_mvn_run(
+            surefire_content=_junit_suite("com.acme.RegTest", 1, 0, "test_passes"),
+            failsafe_content=_junit_suite("com.acme.RegIT", 1, 0, "test_passes_it"),
+        )
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module, "_run_logged",
+                                side_effect=fake_run) as run_logged_mock, \
+             post_patch, get_patch:
+            code, out, err = _run_main(self.module, [
+                "regression", "--project-dir", self.tmpdir, "--agent", "agent-regr",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        cmd = run_logged_mock.call_args_list[0][0][0]
+        expected_dir = os.path.join(self.tmpdir, "test-reports", "agent-regr")
+        for prop in ("surefire.reportsDirectory", "failsafe.reportsDirectory"):
+            flags = [a for a in cmd if a.startswith(f"-D{prop}=")]
+            self.assertEqual(
+                len(flags), 1,
+                f"expected exactly one -D{prop} flag in the `regression` "
+                f"command; got cmd={cmd!r}",
+            )
+            self.assertEqual(
+                os.path.normpath(flags[0].split("=", 1)[1]),
+                os.path.normpath(expected_dir),
+                f"-D{prop} must point at {expected_dir}; got {flags[0]!r}",
+            )
+
+    def test_untiered_test_verb_run_with_agent_passes_surefire_reports_directory_at_the_agents_own_directory(self):
+        fake_run = _make_fake_mvn_run(
+            surefire_content=_junit_suite("com.acme.PlainTest", 1, 0, "test_passes"))
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module, "_run_logged",
+                                side_effect=fake_run) as run_logged_mock, \
+             post_patch, get_patch:
+            code, out, err = _run_main(self.module, [
+                "test", "--project-dir", self.tmpdir, "--agent", "agent-plain",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        cmd = run_logged_mock.call_args_list[0][0][0]
+        expected_dir = os.path.join(self.tmpdir, "test-reports", "agent-plain")
+        surefire_flags = [a for a in cmd if a.startswith("-Dsurefire.reportsDirectory=")]
+        self.assertEqual(
+            len(surefire_flags), 1,
+            f"expected exactly ONE -Dsurefire.reportsDirectory flag pointing "
+            f"at the agent's own directory in the untiered `test` command; "
+            f"got cmd={cmd!r}",
+        )
+        self.assertEqual(
+            os.path.normpath(surefire_flags[0].split("=", 1)[1]),
+            os.path.normpath(expected_dir),
+            f"-Dsurefire.reportsDirectory must point at {expected_dir}; "
+            f"got {surefire_flags[0]!r}",
+        )
+
+
+class ModuleTierMultiModuleReactorStillIngestsViaParsedTest(_BaseMvnIsolationTest):
+    """AC1/AC7 -- before this CR, a multi-module reactor's `module` tier read
+    TWO physical `target/surefire-reports/` dirs (one per module, discovered
+    by `_report_dirs`' glob) and so always ingested via
+    `POST /api/v2/runs/parsed` with `tier: module` (pinned by the bun test
+    "'module' tier: TWO reactor surefire-reports dirs" in
+    tests/clients-rust-mvn-crucible.test.ts). With `--agent`, every module's
+    surefire plugin honours the SAME `-Dsurefire.reportsDirectory=<agent dir>`
+    override -- real Maven applies one system property fleet-wide, never
+    per-module -- so a real multi-module reactor run lands ALL its
+    TEST-*.xml in that ONE agent directory. `_smart_ingest` must still
+    recognise this as a multi-source reactor run and ingest via
+    /api/v2/runs/parsed, never silently switch to the single-dir
+    /api/v2/runs junit-dir fast path just because there is now only one
+    PHYSICAL directory to read."""
+
+    def test_module_tier_reactor_run_with_agent_still_ingests_via_runs_parsed_with_tier_module(self):
+        def two_module_reactor_run(cmd, cwd, env, log_path, narrator=None):
+            reports_dir = _flag_value(cmd, "-Dsurefire.reportsDirectory=")
+            self.assertIsNotNone(reports_dir, f"cmd={cmd!r}")
+            assert reports_dir is not None
+            os.makedirs(reports_dir, exist_ok=True)
+            with open(os.path.join(reports_dir, "TEST-ModuleA.xml"), "w") as f:
+                f.write(_junit_suite("com.acme.moduleA.ModuleATest", 1, 0, "a"))
+            with open(os.path.join(reports_dir, "TEST-ModuleB.xml"), "w") as f:
+                f.write(_junit_suite("com.acme.moduleB.ModuleBTest", 1, 0, "b"))
+            return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module, "_run_logged",
+                                side_effect=two_module_reactor_run), \
+             post_patch as post_mock, get_patch:
+            code, out, err = _run_main(self.module, [
+                "module", "--project-dir", self.tmpdir, "--agent", "agent-reactor",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        parsed_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(
+            parsed_call,
+            f"a multi-module reactor's `module` tier run must ingest via "
+            f"/api/v2/runs/parsed, exactly as it did before this CR's "
+            f"per-agent routing collapsed both modules' surefire output into "
+            f"ONE physical directory -- got POST calls="
+            f"{[c[0][0] for c in post_mock.call_args_list]!r}; stdout={out!r}",
+        )
+        assert parsed_call is not None
+        payload = parsed_call[0][1]
+        self.assertEqual(
+            payload.get("tier"), "module",
+            f"the parsed ingest must still carry tier='module'; got "
+            f"payload={payload!r}",
+        )
+        self.assertEqual(
+            (payload["summary"]["passed"], payload["summary"]["failed"],
+             payload["summary"]["total"]),
+            (2, 0, 2),
+            f"both modules' testcases must be counted; got "
+            f"summary={payload['summary']!r}",
+        )
+        self.assertFalse(
+            any(c[0][0] == "/api/v2/runs" for c in post_mock.call_args_list),
+            f"must NEVER take the single-dir junit-dir fast path once BOTH "
+            f"modules' reports land together in the agent's own directory; "
+            f"calls={[c[0][0] for c in post_mock.call_args_list]!r}",
+        )
+
+
+class ReportsHelpTextTest(_BaseMvnIsolationTest):
+    """AC9 -- the `--reports` help text states the per-agent default."""
+
+    def test_test_verb_reports_help_states_the_per_agent_default(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             mock.patch.object(sys, "argv", ["mvn-crucible.py", "test", "--help"]), \
+             self.assertRaises(SystemExit):
+            self.module.main()
+        help_text = out.getvalue()
+        reports_lines = [line for line in help_text.splitlines() if "--reports" in line]
+        self.assertTrue(reports_lines, f"no --reports line found in help text {help_text!r}")
+        self.assertTrue(
+            any("agent" in line.lower() for line in reports_lines),
+            f"the --reports help text must state the per-agent default "
+            f"(test-reports/<agent>); got {reports_lines!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

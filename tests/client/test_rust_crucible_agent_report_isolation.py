@@ -310,3 +310,152 @@ class AgentDirectorySurvivesTest(_BaseRustIsolationTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkspaceRegressionAndSmokeTestMoveOutputsIntoAgentDirectoryTest(_BaseRustIsolationTest):
+    """AC7/§S3 -- `workspace-regression` (the orchestrator's full-workspace
+    coverage gate) and `smoke-test` (its faster no-coverage pass) drive
+    nextest/llvm-cov over the WHOLE workspace, exactly like the crate-scoped
+    `test`/`regression-ingest` verbs already covered above -- their own
+    fixed tool paths (`target/nextest/<profile>/junit.xml`,
+    `target/lcov.info`) must be moved into the agent's own directory before
+    the client reads/ingests them, narrowing (not closing) the same window."""
+
+    def test_workspace_regression_moves_nextests_junit_and_llvm_covs_lcov_into_the_agents_directory(self):
+        fixed_junit = os.path.join(self.tmpdir, "target", "nextest", "ci", "junit.xml")
+        fixed_lcov = os.path.join(self.tmpdir, "target", "lcov.info")
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if len(cmd) >= 2 and cmd[0] == "cargo" and cmd[1] == "llvm-cov":
+                os.makedirs(os.path.dirname(fixed_junit), exist_ok=True)
+                with open(fixed_junit, "w") as f:
+                    f.write(GOOD_JUNIT_XML)
+                with open(fixed_lcov, "w") as f:
+                    f.write(LCOV_FIXTURE)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module, "_disk_guard", return_value=True), \
+             post_patch as post_mock, get_patch:
+            code, out, err = _run_main(self.module, [
+                "workspace-regression", "--project-dir", self.tmpdir,
+                "--agent", "agent-wr", "--keep-target",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        own_dir = os.path.join(self.tmpdir, "test-reports", "agent-wr")
+        moved_junit = glob.glob(os.path.join(own_dir, "**", "junit.xml"), recursive=True)
+        moved_lcov = glob.glob(os.path.join(own_dir, "**", "lcov.info"), recursive=True)
+        self.assertEqual(
+            len(moved_junit), 1,
+            f"workspace-regression's junit.xml must be MOVED into the "
+            f"agent's own directory {own_dir}; found {moved_junit!r}",
+        )
+        self.assertEqual(
+            len(moved_lcov), 1,
+            f"workspace-regression's lcov.info must be MOVED into the "
+            f"agent's own directory {own_dir}; found {moved_lcov!r}",
+        )
+        self.assertFalse(os.path.exists(fixed_junit),
+                         "junit.xml must be MOVED out of nextest's fixed path, not copied")
+        self.assertFalse(os.path.exists(fixed_lcov),
+                         "lcov.info must be MOVED out of llvm-cov's fixed path, not copied")
+
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
+        assert ingest_call is not None
+        payload = ingest_call[0][1]
+        self.assertEqual(payload.get("tier"), "regression")
+        coverage = payload.get("coverage")
+        self.assertIsNotNone(
+            coverage,
+            "the ingested payload must carry coverage parsed from the MOVED "
+            "lcov.info, not an absent/fixed-path read",
+        )
+        assert coverage is not None
+        self.assertEqual((coverage["lines"]["total"], coverage["lines"]["covered"]), (2, 2))
+
+    def test_smoke_test_moves_nextests_fixed_junit_into_the_agents_directory_before_ingesting(self):
+        fixed_junit = os.path.join(self.tmpdir, "target", "nextest", "ci", "junit.xml")
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if len(cmd) >= 3 and cmd[0] == "cargo" and cmd[1] == "nextest" and cmd[2] == "run":
+                os.makedirs(os.path.dirname(fixed_junit), exist_ok=True)
+                with open(fixed_junit, "w") as f:
+                    f.write(GOOD_JUNIT_XML)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        post_patch, get_patch = self._mocked_transport()
+        with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=fake_subprocess_run), \
+             post_patch as post_mock, get_patch:
+            code, out, err = _run_main(self.module, [
+                "smoke-test", "--agent", "agent-st", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+
+        own_dir = os.path.join(self.tmpdir, "test-reports", "agent-st")
+        moved = glob.glob(os.path.join(own_dir, "**", "junit.xml"), recursive=True)
+        self.assertEqual(
+            len(moved), 1,
+            f"smoke-test's junit.xml must be MOVED into the agent's own "
+            f"directory {own_dir}; found {moved!r}",
+        )
+        self.assertFalse(os.path.exists(fixed_junit),
+                         "junit.xml must be MOVED out of nextest's fixed path, not copied")
+
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
+        self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
+        assert ingest_call is not None
+        posted_path = ingest_call[0][1].get("dataPath")
+        self.assertEqual(
+            os.path.normpath(posted_path) if posted_path else posted_path,
+            os.path.normpath(moved[0]),
+            f"smoke-test must ingest the MOVED junit.xml, not the original "
+            f"fixed-path one; got dataPath={posted_path!r}",
+        )
+
+
+class ReportsHelpTextTest(_BaseRustIsolationTest):
+    """AC9 -- the `--reports` help text states the per-agent default, and
+    (uniquely for rust) also states the narrowed-not-closed window: nextest's
+    junit and llvm-cov's lcov are written to fixed tool paths and moved right
+    after the run, so the window between the tool writing and the client
+    moving is narrowed, never fully closed."""
+
+    def test_test_verb_reports_help_states_the_per_agent_default(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             mock.patch.object(sys, "argv", ["rust-crucible.py", "test", "--help"]), \
+             self.assertRaises(SystemExit):
+            self.module.main()
+        help_text = out.getvalue()
+        reports_lines = [line for line in help_text.splitlines() if "--reports" in line]
+        self.assertTrue(reports_lines, f"no --reports line found in help text {help_text!r}")
+        self.assertTrue(
+            any("agent" in line.lower() for line in reports_lines),
+            f"the --reports help text must state the per-agent default "
+            f"(test-reports/<agent>); got {reports_lines!r}",
+        )
+
+    def test_test_verb_reports_help_states_the_narrowed_not_closed_window(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             mock.patch.object(sys, "argv", ["rust-crucible.py", "test", "--help"]), \
+             self.assertRaises(SystemExit):
+            self.module.main()
+        help_text = out.getvalue()
+        normalized = " ".join(help_text.split())
+        self.assertIn(
+            "narrowed, not closed", normalized,
+            f"rust's --reports help must state that the window between the "
+            f"tool writing its fixed-path output and the client moving it is "
+            f"narrowed, not closed (unlike mvn/arduino, which hand the tool "
+            f"the agent's directory directly); got help_text={help_text!r}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
