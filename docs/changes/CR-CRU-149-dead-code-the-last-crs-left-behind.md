@@ -131,25 +131,25 @@ out.
 
 ## Acceptance criteria
 
-- **AC1** — The RED commit carries this census table, re-measured at the branch cut and updated,
+- [x] **AC1** — The RED commit carries this census table, re-measured at the branch cut and updated,
   not re-argued.
-- **AC2** — Items 1, 2, 5, 6, 6b and every item of 7 and 8 have no definition left (item 4 proved
+- [x] **AC2** — Items 1, 2, 5, 6, 6b and every item of 7 and 8 have no definition left (item 4 proved
   live and moved to "Measured and excluded").
-- **AC3** — Item 3, `project_config_path`, stays, with its reason in the census table.
-- **AC4** — Item 9: `crucible.db` is untracked and ignored. The server's store resolution is
+- [x] **AC3** — Item 3, `project_config_path`, stays, with its reason in the census table.
+- [x] **AC4** — Item 9: `crucible.db` is untracked and ignored. The server's store resolution is
   unchanged (its tests are green untouched).
-- **AC5** — Item 10: both devDependencies are removed; `bunx bddgen`, the e2e suite and every
+- [x] **AC5** — Item 10: both devDependencies are removed; `bunx bddgen`, the e2e suite and every
   happy-dom test still pass.
-- **AC6** — Item 11: `playwright` is either declared or no longer imported directly.
-- **AC7** — No behaviour changes. The full bun, python and e2e runs match the branch-cut baseline
+- [x] **AC6** — Item 11: `playwright` is either declared or no longer imported directly.
+- [x] **AC7** — No behaviour changes. The full bun, python and e2e runs match the branch-cut baseline
   (e2e 734/0 measured at `de7f5ef`) except for tests this CR deletes, each named in the RED commit.
-- **AC8** — §S4: no in-scope line citation into a source file remains, in any notation (`path:123`,
+- [x] **AC8** — §S4: no in-scope line citation into a source file remains, in any notation (`path:123`,
   a bare `:123`, `~L123`, `~line 45`, `line 91`); every rewritten
   citation names a construct that exists in the cited file. The census table lists each rewrite:
   citing file, old cite, new cite, construct.
-- **AC9** — Citation pins and `PROSE_CITATIONS` that this CR's own edits shift are re-pinned once,
+- [x] **AC9** — Citation pins and `PROSE_CITATIONS` that this CR's own edits shift are re-pinned once,
   at close-out.
-- **AC10** — §S5: the guard test exists, covers every in-scope tree, and fails on a planted
+- [x] **AC10** — §S5: the guard test exists, covers every in-scope tree, and fails on a planted
   `path:line` citation, on a planted cite of a missing file and on a planted backticked identifier
   absent from its cited file (each proven in the test itself); it passes on the tree this CR
   leaves.
