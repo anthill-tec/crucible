@@ -16,7 +16,7 @@
 //     has `lastClosedCr: null` and `filed` = the aborted count. A project
 //     with no plans has `filed: 0` and `lastClosedCr: null`.
 //
-// RED phase: src/v2.ts's handlePlansList (~L1900) reads only `cr`/`track`
+// RED phase: src/v2.ts's handlePlansList reads only `cr`/`track`
 // off the query string and passes {ok:true, plans} straight through — no
 // `status` param is read, no `filed`/`lastClosedCr` fields exist anywhere on
 // this response. Every filter assertion below fails because the filter is

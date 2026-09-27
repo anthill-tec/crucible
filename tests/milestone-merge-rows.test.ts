@@ -9,7 +9,7 @@
 // pins the server side).
 //
 // Current code facts (verified against public/app.js on this branch):
-//   - runFeed() (app.js ~L749) only knows 4 timelineRows kinds — a milestone
+//   - runFeed() (`runFeed` in app.js) only knows 4 timelineRows kinds — a milestone
 //     event (kind "milestone") falls through `else rows.push(EventCard(...))`
 //     and renders as an ordinary run card, on BOTH home and workspace (no
 //     surface distinction exists anywhere — Implementation Notes: "the

@@ -13,7 +13,7 @@
 //      (regression-guarded).
 //
 // RED phase: expected to fail against CURRENT production, whose
-// public/app.js `runFeed()` (~line 606) calls `L.pairTransitions(events)`
+// public/app.js `runFeed()` calls `L.pairTransitions(events)`
 // unconditionally — it has no awareness of `state.plans` or
 // `context.cycleId` at all, so a cycleId-linked fail→pass pair still
 // produces a heuristic `transition-marker`, and no `cycle-span-open` /

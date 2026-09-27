@@ -495,8 +495,8 @@ describe("§S1 AC1 — context badges", () => {
 // or the meter — the differentiation gates on tier:"regression", not
 // merely on coverage presence.
 //
-// RED phase: expected to fail against the CURRENT public/app.js EventCard
-// (~line 500), which renders the codec badge as `e.codec` verbatim (no
+// RED phase: expected to fail against the CURRENT `EventCard` in
+// public/app.js, which renders the codec badge as `e.codec` verbatim (no
 // tier-gated "+lcov" suffix) and has no card-coverage-meter element at all.
 describe("§S4 F7 card differentiation (user defect 2026-07-16)", () => {
   test("regression-tier event with coverageLines:94.4 renders the regression tier badge, 'parsed+lcov' codec badge, and an inline card-coverage-meter (.app-meter/.app-meter-fill width 94.4%)", async () => {

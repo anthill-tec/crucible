@@ -61,7 +61,7 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (public/app.js ~L223,
+// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js,
 // `setInterval(refetch, 5000)` — `typeof EventSource === "undefined"` under
 // happy-dom so `connectStream()` always falls back to `startPolling()`, per
 // tests/plan-scoping.test.ts's harness note and tests/inpane-liveness.test.ts).

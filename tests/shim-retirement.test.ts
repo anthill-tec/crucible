@@ -8,22 +8,23 @@
 // cleanup can stop riding the shim's `/api/agents/remove`.
 //
 // RED phase: NONE of this exists yet on the branch.
-//   - The v1 shim routes are all still LIVE (server.ts ~L476-531) — every
+//   - The v1 shim routes are all still LIVE (server.ts's v1 `/api/*` route
+//     handlers, since retired) — every
 //     GET/POST in the "shim retirement" describe below currently returns
 //     200/400 from the real handler, never today's expected 404.
-//   - `DELETE /api/v2/events/:id` (v2.ts handleEventDelete, ~L978) reads NO
+//   - `DELETE /api/v2/events/:id` (v2.ts handleEventDelete) reads NO
 //     body at all and has no config/approval gate — it deletes unconditionally
 //     whenever the project+event resolve. Every "guarded deletion" test below
 //     expects a 403/409 it does not yet produce.
 //   - `allowRunDeletion` is not in `PATCHABLE_FIELDS` (src/v2.ts) — a PATCH
 //     carrying it 400s as an unknown field today.
-//   - `POST /api/v2/agents/unregister` (v2.ts handleAgentUnregister, ~L326)
+//   - `POST /api/v2/agents/unregister` (v2.ts handleAgentUnregister)
 //     ignores an extra `silent` key entirely and ALWAYS journals a
 //     lifecycle "unregistered" event — every "silent unregister" test
 //     expecting NO lifecycle entry fails against that today.
 //   - `manager-edit-allow-deletion` does not exist in public/app.js's
-//     ManagerRowEdit (~L1000) — no such testid is rendered yet.
-//   - clients/bun-crucible.py's `_remove_agent_silent` (~L332) still POSTs
+//     ManagerRowEdit — no such testid is rendered yet.
+//   - clients/bun-crucible.py's `_remove_agent_silent` still POSTs
 //     the shim's `/api/agents/remove` — the swap to
 //     `/api/v2/agents/unregister {silent:true}` has not happened yet.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -604,7 +605,7 @@ function managerRow(key: string): HTMLElement {
 }
 
 /** New testid this file DEFINES (does not exist on the branch yet — GREEN
- * must add it inside ManagerRowEdit, public/app.js ~line 1000):
+ * must add it inside `ManagerRowEdit` in public/app.js):
  *   `manager-edit-allow-deletion` — a checkbox, danger-styled (className
  *   containing "danger"), prefilled `.checked` from the project's current
  *   effective `allowRunDeletion` (default false/absent). */

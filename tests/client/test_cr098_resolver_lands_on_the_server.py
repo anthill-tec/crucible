@@ -14,7 +14,7 @@ resolver`'s delegating-`cmd_next` shape is UNCHANGED and re-asserted here with
 AC10's full symbol list.
 
 RED expectation: today `clients/_crucible_axi.py` still defines every one of
-AC10's listed symbols (they are the live resolver, lines 2276-2990) — the
+AC10's listed symbols (they are the live resolver behind `cmd_next`) — the
 absence test below fails by listing every symbol still present. The five
 clients' `cmd_next` delegators are UNCHANGED by this cycle and pass already
 (kept, matching the CR-092 precedent of fixture/structural guards that pass

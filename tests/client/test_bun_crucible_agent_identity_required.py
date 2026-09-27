@@ -1,6 +1,6 @@
 """CR-CRU-044 C4 RED -- §S5 the agent identity hard stop, `clients/bun-crucible.py`.
 
-Found live 2026-07-28: `_agent_id()` (bun-crucible.py, currently near line 1545)
+Found live 2026-07-28: `_agent_id()` (`_agent_id` in bun-crucible.py)
 fabricates an agent identity for the fleet gate/milestone verbs when no
 `--agent` is given:
 

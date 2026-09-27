@@ -732,7 +732,7 @@ describe("§S2.1/§S2.2 history cycle drill-down — toggle linked runs, drill i
 // this pins the run-list-WITHIN-a-cycle ordering only, a distinct axis.
 //
 // RED phase: `linkedRuns` in `public/app-logic.mjs`'s `workflowLens`
-// (~line 328) is built as `new Map(); // cycleId -> runs (input order)` —
+// is built as `new Map(); // cycleId -> runs (input order)` —
 // each run is `.push()`ed onto its cycle's list strictly in the ORDER the
 // `events` array arrives in, with no timestamp sort at all. This fixture
 // deliberately feeds the 3 linked events to `mountApp` OUT of timestamp

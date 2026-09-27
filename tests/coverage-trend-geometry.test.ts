@@ -11,8 +11,8 @@
 // <=26px left-aligned cluster). §S2 additionally caps the rendered series
 // at the MOST RECENT 16 points (chronological, latest last), with the
 // caption's `<first>` value being the first RENDERED (windowed) point, not
-// points[0] of the full series — public/app.js CoverageTrendCard
-// (~L1402-1435) today renders ALL points with no cap and captions from
+// points[0] of the full series — `CoverageTrendCard` in public/app.js
+// today renders ALL points with no cap and captions from
 // points[0].
 //
 // CSS PIN ROUTE (documented per dispatch instruction — verify before
@@ -188,12 +188,12 @@ describe("§S1 — .app-trend-bar / .app-trend-bars geometry (styles.css source-
   // bar in the flat sparkline was the same width. §S1 replaces the flat
   // sparkline with auto-coarsening bucket bars whose width hints the ZOOM
   // LEVEL and must STRICTLY INCREASE month < week < day (CR text, DN §3.1,
-  // F8 mock lines 535-541: month bars 6px, week bars 9px, day bars 12px). A
+  // F8 mock bucket bars: month bars 6px, week bars 9px, day bars 12px). A
   // single bare `.app-trend-bar` rule can no longer carry one fixed width
   // for every bar — the width moves to three level-specific modifier
   // classes. This test replaces (not extends) the old CR-027 uniform-9px
   // pin, which is no longer a valid contract once per-level widths exist.
-  test("§S1 — .app-trend-bar-month / -week / -day each declare a FIXED, STRICTLY INCREASING width (6px < 9px < 12px, F8 mock lines 535-541) — replaces the CR-027 uniform-9px-for-every-bar contract", () => {
+  test("§S1 — .app-trend-bar-month / -week / -day each declare a FIXED, STRICTLY INCREASING width (6px < 9px < 12px, F8 mock bucket bars) — replaces the CR-027 uniform-9px-for-every-bar contract", () => {
     const monthBody = ruleBody(".app-trend-bar-month");
     const weekBody = ruleBody(".app-trend-bar-week");
     const dayBody = ruleBody(".app-trend-bar-day");

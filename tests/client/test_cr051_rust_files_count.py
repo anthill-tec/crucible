@@ -18,7 +18,7 @@ and only two of them are actually client-parsed:
   python/mvn/arduino do).
 
   SITE 3 -- NOT in §S3 at all, and it changes the picture: `_ingest_junit_axi`
-  (~line 771), used by BOTH the `auto-ingest` verb (`cmd_auto_ingest`) and the
+  (in rust-crucible.py), used by BOTH the `auto-ingest` verb (`cmd_auto_ingest`) and the
   `test` verb (`cmd_test`). This POSTs `{"codec": "junit", "dataPath":
   junit_path, ...}` to /api/v2/runs -- the SERVER parses the XML
   (server-side codec=junit). rust-crucible.py never sees a single <testcase>

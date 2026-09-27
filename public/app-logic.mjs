@@ -1103,8 +1103,8 @@ const ALL_DIGITS = /^\d+$/;
 /**
  * CR-CRU-102 §S1/AC1/AC2/AC6 — the BARE form of one dependency id, as read
  * beside the row that declares it. The approved design
- * (`.lavish/crucible-workflow-flowchart.html`, zone 2 lines 195-198) draws
- * `deps 078`, and this is how that is produced WITHOUT the product knowing
+ * (`.lavish/crucible-workflow-flowchart.html`, zone 2's pending `cr pend` rows)
+ * draws `deps 078`, and this is how that is produced WITHOUT the product knowing
  * any project's id prefix:
  *
  *   1. find the two ids' common leading text;

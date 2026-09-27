@@ -24,8 +24,8 @@ successor `test_cr046_official_toon_roundtrip.py` -- which deliberately did NOT
 skip a missing module: the raise itself is the RED signal). `bun-crucible.py`
 also does not
 yet reference `_crucible_axi` anywhere (confirmed by reading the source --
-`_emit_axi`/`_axi_context` are still standalone local functions at
-~L1099/~L1079), so the wiring tests below fail too, and will keep failing
+`_emit_axi`/`_axi_context` are still standalone local functions of
+bun-crucible.py), so the wiring tests below fail too, and will keep failing
 until bun-crucible.py's `_axi_context` is made to DELEGATE to (produce
 identical output to) the shared module's `axi_context`, and its `_emit_axi`
 similarly delegates to `emit_axi`.

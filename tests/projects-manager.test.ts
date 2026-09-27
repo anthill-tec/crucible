@@ -22,7 +22,7 @@
 //
 // Slide-over machinery finding (read public/app.js + public/styles.css
 // before writing this file): `data-testid="manage-chip"` ALREADY EXISTS on
-// the home projects row (public/app.js ProjectsRow, ~line 349) but carries
+// the home projects row (`ProjectsRow` in public/app.js) but carries
 // NO onclick handler yet — "the manager surface lands in CR-CRU-012".
 // `routeParse()` (public/app-logic.mjs) has NO knowledge of `/manage` at
 // all: parsing "/manage" today falls through to `{page:"home"}` (not "p",
@@ -34,7 +34,7 @@
 // and /roadmap overlays, when they land, are a separate contract" — i.e.
 // this cycle's GREEN phase defines its own scrim/slide-over from scratch.
 // There is also no "+ Register a project" form/modal anywhere yet (the home
-// EmptyState is a static text line, public/app.js ~line 705) — so F1's
+// EmptyState is a static text line, `EmptyState` in public/app.js) — so F1's
 // "same surface" cross-reference is aspirational and out of THIS file's
 // scope; only the manager's OWN add-project form is pinned here.
 //

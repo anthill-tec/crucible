@@ -9,8 +9,8 @@ change shipped and pass against it. Gates (g)-(l), added by cycle C3 after VERIF
 measured the shipped discriminator OVER-TIGHTENING, state the other half of the
 same rule -- a failing leaf keeps its own message whatever SYNTAX declared it --
 and FAIL today (see §S1 GAP 3 below). They are the C3 RED gates.
-The rule lives in `clients/bun-crucible.py::_parse_console_failures` (lines
-606-679) and landed in this same change, per CR-CRU-088 §S1. BEFORE it, the
+The rule lives in `clients/bun-crucible.py::_parse_console_failures`
+and landed in this same change, per CR-CRU-088 §S1. BEFORE it, the
 parser married a pending `error:` block to the NEXT `(fail)` line by POSITION,
 so a block that arrived after its own leaf's fail line -- a leaked async
 throw's aftermath -- was handed to a later leaf that never produced it, and

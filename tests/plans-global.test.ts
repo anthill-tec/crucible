@@ -10,7 +10,7 @@
 //   are small)."
 //
 // Current code facts (verified against src/v2.ts on this branch):
-//   - handleV2() (src/v2.ts ~L996) has NO branch matching
+//   - handleV2() (`handleV2` in src/v2.ts) has NO branch matching
 //     `pathname === "/api/v2/plans"` at all — only
 //     `/api/v2/projects/<key>/plans` (project-scoped, `handlePlansList` in
 //     src/v2.ts) exists. Any request to the bare `/api/v2/plans` path

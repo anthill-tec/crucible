@@ -716,8 +716,8 @@ describe("§S3 history lens — group rollups", () => {
   // headers.test.ts). This test's SUBJECT is the rollup figure + a
   // participating agent's runtime surfacing at all, not collapse timing, so
   // it now expands the group via `cr-group-toggle` before reading
-  // `cr-agent-runtime` — same click-before-read pattern already used at
-  // lines 648/650 and 280 in this file. Was: read `cr-agent-runtime`
+  // `cr-agent-runtime` — same click-before-read pattern already used by
+  // this file's hierarchy test and inferred-fallback test. Was: read `cr-agent-runtime`
   // directly off the collapsed header with no toggle click.
   test("a CR group row shows cycles done/total, and participating agents with runtimes (runtime_ms surfaces — pin presence, not exact ms)", async () => {
     const key = "lens-rollup-1";
@@ -962,18 +962,18 @@ describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header supp
 // rides as a key INSIDE the `gate` object the client already builds
 // (`gate.inFlight`), NOT as a top-level field beside `version` and NOT as a
 // fifth outcome-vocabulary member — because `Store.recordGateEvent(gate:
-// unknown, …)` (src/store.ts ~L2049) stores the gate object VERBATIM and
-// `handleGates` (src/v2.ts ~L1179) validates only `intent`, `outcome` and
+// unknown, …)` (src/store.ts) stores the gate object VERBATIM and
+// `handleGates` (src/v2.ts) validates only `intent`, `outcome` and
 // steps-is-an-array, so an in-gate key reaches both readers with zero
 // server change.
 //
 // Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
-//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs ~L794) is
+//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs) is
 //     built from EVERY `kind:"gate"` event whose `gate.outcome` is `passed`
 //     or `checks-passed`, keyed by `context.wave`. It reads nothing else off
 //     the gate — no in-flight mark exists anywhere in the codebase yet — so
 //     an interim `checks-passed` ladder gates its wave about two seconds
-//     into a run, and the Set is never subtracted from (~L977 is its only
+//     into a run, and the Set is never subtracted from (the `wave.state` assignment in `workflowLens` is its only
 //     consumer, turning membership into `{ label: "gated" }`).
 // Every assertion below pinning an in-flight gate as NON-gating is therefore
 // genuine RED. The true-positive bounds beside them hold against current
@@ -993,7 +993,8 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
   // (`hasOwnProperty`), never by inference from step count or `push`.
   const IN_FLIGHT_KEY = "inFlight";
   // The label a wave carries when nothing has sealed it: all lanes closed,
-  // no later wave open, no qualifying gate (public/app-logic.mjs ~L979).
+  // no later wave open, no qualifying gate (`workflowLens`'s `wave.state`
+  // fallback in public/app-logic.mjs).
   const UNGATED_LABEL = "lanes complete · awaiting review";
   // `no-mistakes` v1.70.1's pipeline, in order — the nine rows `axi status`
   // always emits, unrun ones included.
@@ -1225,7 +1226,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
   });
 
   // AC6 — an in-flight gate carries NO `version`. A version-stamped gate is
-  // retention-protected (`LIVE_GATE`, src/store.ts ~L2969, keyed on
+  // retention-protected (`LIVE_GATE` in src/store.ts, keyed on
   // `json_extract(payload,'$.version') IS NOT NULL`), so stamping every
   // interim snapshot would leave a run's worth of unprunable gates behind
   // for one release — and the seal restates the release anyway.
@@ -1249,7 +1250,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
     });
 
     // Key ABSENCE, not null and not empty — `version` is a top-level sibling
-    // of `gate` (src/v2.ts ~L1216), so neither place may carry one.
+    // of `gate` (the gate-event body `handleGates` reads, src/v2.ts), so neither place may carry one.
     expect(Object.prototype.hasOwnProperty.call(interim, "version")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(interim.gate, "version")).toBe(false);
     // The same run's seal DOES state it.

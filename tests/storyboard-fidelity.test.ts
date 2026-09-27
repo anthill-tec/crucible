@@ -6,30 +6,31 @@
 //     horizontal strip rendered directly beneath the top bar, and the
 //     workspace must have NO left rail/pane at all. Today `Workspace()`
 //     wraps `WorkspaceTabs()` inside `div({class: greyed("app-rail")}, ...)`
-//     (public/app.js ~L653-659) — a left-column wrapper, exactly what the
+//     (`Workspace` in public/app.js) — a left-column wrapper, exactly what the
 //     mock forbids.
 //  2. Drill-in presentation — the overlay must be a RIGHT-HAND SLIDE-OVER
 //     sheet, not the current centered box (`run-overlay-scrim` centers its
-//     child via `align-items:center;justify-content:center`, public/app.js
-//     ~L1006-1012; the panel itself carries only `class: "app-rail
+//     child via `align-items:center;justify-content:center`, the then-current
+//     drill-in overlay in public/app.js, since replaced; the panel itself
+//     carries only `class: "app-rail
 //     app-drillin"`, no right-anchoring).
 //  3. Title bar purity (round-7 lock) — home's `app-topbar` renders ONLY
 //     logo + slogan + Health Pill; today it also renders `DensityToggle()`
-//     (public/app.js ~L276). The density toggle instead belongs in the
+//     (`TopBar` in public/app.js). The density toggle instead belongs in the
 //     timeline pane header (next to the filter pulldown), the workspace
 //     Runs pane header, and the drill-in header — none of which render it
 //     today.
 //  4. Pane header labels — home's timeline header today just says
-//     "timeline" (public/app.js ~L527); the workspace Runs header just says
-//     "runs" (~L582). Both need the "Run timeline — <scope>" contract.
+//     "timeline" (`TimelineFeed` in public/app.js); the workspace Runs header just says
+//     "runs" (`WorkspaceRunsFeed`). Both need the "Run timeline — <scope>" contract.
 //  5. Vitals — `VitalsRail()` today is a static stub ("vitals land with the
-//     drill-in cycles", public/app.js ~L592-597); it needs a real Cycle
+//     drill-in cycles", `VitalsRail` in public/app.js); it needs a real Cycle
 //     Health card (from `L.pairTransitions` alone, independent of
 //     coverage) and a coverage-trend card gated on coverage actually being
 //     present.
 //  6. Workspace top bar composition (addendum) — `WorkspaceHeader()` today
 //     is missing the app logo entirely and still carries `DensityToggle()`
-//     (public/app.js ~L541-555); the locked order is logo, ← projects chip,
+//     (`WorkspaceHeader` in public/app.js); the locked order is logo, ← projects chip,
 //     project chip, Health Pill — nothing else.
 //  7. Streak-based transition markers (§S2 re-baseline, second addendum) —
 //     the pairing rule changes from per-fail→pass adjacency to ONE marker

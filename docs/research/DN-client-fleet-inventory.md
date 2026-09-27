@@ -222,8 +222,8 @@ Notable per-name specifics:
   loader label never observed outside the function. Lift with a label derived from `__name__`, not
   a hardcoded per-client string, so this stops being even a cosmetic difference.
 - **Residual un-lifted constants (not in the 42, but load-bearing for several SHARED functions
-  above):** `bun-crucible.py` defines its OWN full-literal `_HELP_STEPS` (line 1530) and
-  `_PREFER_GATE_RUN_WARNING` (line 1682) dicts, byte-identical TODAY to `_crucible_axi.HELP_STEPS`
+  above):** `bun-crucible.py` defines its OWN full-literal `_HELP_STEPS` and
+  `_PREFER_GATE_RUN_WARNING` dicts, byte-identical TODAY to `_crucible_axi.HELP_STEPS`
   / `.PREFER_GATE_RUN_WARNING` but never delegated to them — the other four clients call
   `_axi().HELP_STEPS` / `_axi().PREFER_GATE_RUN_WARNING` directly. This is exactly the kind of
   un-deduplicated constant CR-CRU-054 exists to remove; it is not one of the 42 named functions,

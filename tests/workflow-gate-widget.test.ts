@@ -16,7 +16,8 @@
 //     `() => WorkflowActive()` followed by `GatePane()` — GatePane is an
 //     UNCONDITIONALLY mounted second column
 //     (`data-testid="gate-pane"` static text "gate reporting lands in
-//     CR-013", app.js ~L2042-2047) — it never varies with plan/event state.
+//     CR-013", the then-static `GatePane()` in app.js, since replaced by
+//     `GateWidget`) — it never varies with plan/event state.
 //     Every test below that asserts on `gate-pane` presence/content is
 //     expected to FAIL against this static placeholder.
 //   - `WorkflowActive()` (public/app.js) renders the literal text
@@ -26,10 +27,10 @@
 //     exclusive, never coexist" contract requires this filler text to
 //     disappear once a boundary gate widget is live; current production has
 //     no such branch, so the assertion pinning its absence is genuine RED.
-//   - `public/app-logic.mjs`'s `workflowLens({plans, events})` (~L362) computes
+//   - `public/app-logic.mjs`'s `workflowLens({plans, events})` computes
 //     `wave.state.label` purely from declared-plan status
 //     (running / awaiting review / lanes complete · awaiting review /
-//     superseded, ~L501-538) — it never inspects `events` for a `kind:"gate"`
+//     superseded, its `wave.state` assignment) — it never inspects `events` for a `kind:"gate"`
 //     entry at all, so no wave can ever read "gated" today. Every §S6 pin
 //     below is genuine RED for that reason.
 //
@@ -502,7 +503,7 @@ describe("§S6 History lens — wave state gains `gated` (a passed/checks-passed
 
   // NOTE — each outcome gets its OWN project/mount, not one shared project
   // with 3 waves: workflowLens's PRE-EXISTING superseded-detection
-  // (public/app-logic.mjs ~L529, unrelated to this CR) marks a wave
+  // (its `superseded` check in public/app-logic.mjs, unrelated to this CR) marks a wave
   // superseded the instant ANY higher-numbered wave holds a declared plan —
   // filing waves 6/7/8 together in one project would make waves 6 and 7
   // read "superseded" for that unrelated reason, contaminating the
@@ -582,15 +583,15 @@ describe("§S6 History lens — wave state gains `gated` (a passed/checks-passed
 // (`gate.inFlight`), so it reaches both readers with zero server change.
 //
 // Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
-//   - `boundaryGate` (public/app.js ~L4289) is the SECOND reader that treats
+//   - `boundaryGate` (public/app.js) is the SECOND reader that treats
 //     a gate as a verdict: given a routed project whose scoped plans are all
 //     closed, it reduces the scoped `kind:"gate"` events to the LATEST by
 //     timestamp and hands it to `GateWidget`, which mounts the outcome
 //     banner + step ladder as the Workflow tab's primary zone
-//     (`WorkflowPrimary`, ~L4313). It inspects only `timestamp` — nothing
+//     (`WorkflowPrimary`). It inspects only `timestamp` — nothing
 //     about the gate's body — so an interim ladder posted two seconds into a
 //     run becomes the boundary today.
-//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs ~L794) admits
+//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs) admits
 //     any `passed`/`checks-passed` gate and is never subtracted from, so an
 //     interim gate followed by a FAILED seal leaves the wave header reading
 //     `gated` permanently — the exact sequence this CR exists to stop.

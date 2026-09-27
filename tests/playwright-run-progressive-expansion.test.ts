@@ -2,7 +2,7 @@
 // for BDD (`codec: "playwright"`) runs.
 //
 // MEASURED ON THIS BRANCH (158ec48, before this CR's GREEN): `RunDetailBody`
-// (public/app.js ~L5953) fetches `?depth=suites` and then auto-expands
+// (public/app.js) fetches `?depth=suites` and then auto-expands
 // NOTHING — CR-CRU-038 §S1 retired auto-expand entirely, so every suite
 // (failing or not, whatever the codec) renders collapsed (▸) until an
 // explicit `suite-row` click. There is no feature-grouping concept at all in

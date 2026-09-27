@@ -13,16 +13,18 @@
 //
 // WHY YIELDING WITHOUT THE SLEEP IS SOUND, measured rather than assumed:
 // everything production schedules to RENDER is queued at 0ms — the
-// `setTimeout(remeasure, 0)` behind a measured pane (app.js ~L3459), the
-// `setTimeout(boot, 0)` that mounts the app (app.js ~L5516), and van-x's own
+// `setTimeout(remeasure, 0)` behind a measured pane (`observeRoadmapStrip`
+// in app.js), the `setTimeout(boot, 0)` that mounts the app (`boot` in
+// app.js), and van-x's own
 // scheduler, which passes no delay at all. Every OTHER timer in `app.js` is a
 // clock or a retry, not a render step: the 5000ms recovery/poll channel
-// (`setInterval(refetch, 5000)` ~L413, `setTimeout(connectStream, 5000)`
-// ~L406, `setInterval(watchdogTick, 5000)` ~L5506), the 1s/10s display ticks
-// (~L698, ~L687), the 10s locate-blink cleanup (~L3905), and the 5ms
+// (`setInterval(refetch, 5000)` in `startPolling`, `setTimeout(connectStream,
+// 5000)` in `connectStream`, `setInterval(watchdogTick, 5000)` in the boot
+// block of `main`), the 1s/10s display ticks (the `runTickNow` and `tickNow`
+// intervals), the 10s locate-blink cleanup (`locateBlink`), and the 5ms
 // try-again-after-render chains behind `revealDeclaredMarker` /
 // `revealCycleRow` / `revealDrillTarget` / `scrollFocusedRowIntoView`
-// (~L3949, ~L4082, ~L4098, ~L5147).
+// (each retrying itself).
 //
 // So a 20ms sleep buys no RENDER a 0ms macrotask yield does not already give,
 // and none of the delayed channels is covered here BY DESIGN: a test that

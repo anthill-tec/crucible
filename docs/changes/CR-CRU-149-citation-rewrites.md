@@ -974,3 +974,86 @@ excludes by rule or by named exemption.
 | tests/workflow-tab.test.ts | public/app.js:153 | `startPolling` in public/app.js | startPolling (5000ms interval) |
 | tests/workflow-tab.test.ts | src/v2.ts:638 | `handlePlansList` in src/v2.ts | handlePlansList |
 | tests/workflow-tab.test.ts | src/v2.ts:717 | `eventBrief` in src/v2.ts | eventBrief (context passthrough) |
+
+## C5 — word-form citations
+
+The VERIFY finding of cycle 540 widened AC8 to the word forms (`~L123`, `line 91`, `path L123`).
+FIX cycle 541 rewrote the 114 hits the guard reported in 36 files, plus one `~line` cite in
+`tests/client/test_cr051_rust_files_count.py` that the guard misses. Where one sentence carried
+several cites, they share a row. Historical notes (a RED-phase "today" or a "measured at <sha>")
+keep their tense. When the construct they describe has since been removed, the new cite says so
+instead of naming a successor that does something different.
+
+| citing file | old cite | new cite | construct |
+|---|---|---|---|
+| docs/research/DN-client-fleet-inventory.md | `_HELP_STEPS` (line 1530), `_PREFER_GATE_RUN_WARNING` (line 1682) | `_HELP_STEPS` and `_PREFER_GATE_RUN_WARNING` (the bun-crucible.py copies of that time) | the two constants, named alone |
+| public/app-logic.mjs | `.lavish/crucible-workflow-flowchart.html` zone 2 lines 195-198 | zone 2's pending `cr pend` rows in `.lavish/crucible-workflow-flowchart.html` | the zone-2 `cr pend` rows drawing `deps 078` |
+| tests/bdd-index.test.ts | public/app.js ~L3040-3117 | `BddPanel`/`BddFeed` (public/app.js at 158ec48) | `BddPanel` (live); `BddFeed` since removed |
+| tests/client/test_bun_crucible_agent_identity_required.py | bun-crucible.py, currently near line 1545 | `_agent_id` in bun-crucible.py | `_agent_id` |
+| tests/client/test_bun_crucible_auto_attach.py | bun-crucible.py ~L1129 | `_cycle_id_and_warnings` (then in bun-crucible.py; since removed) | `_cycle_id_and_warnings` (removed, no successor of that name) |
+| tests/client/test_bun_crucible_check_envelope.py | `clients/bun-crucible.py` ~L824 | `cmd_check` (`clients/bun-crucible.py`) | `cmd_check` |
+| tests/client/test_cr051_rust_files_count.py | `_ingest_junit_axi` (~line 771) | `_ingest_junit_axi` (in rust-crucible.py) | `_ingest_junit_axi` (the guard misses this one) |
+| tests/client/test_cr088_failure_detail_names_its_leaf.py | `clients/bun-crucible.py::_parse_console_failures` (lines 606-679) | `clients/bun-crucible.py::_parse_console_failures` | `_parse_console_failures` |
+| tests/client/test_cr098_resolver_lands_on_the_server.py | the live resolver, lines 2276-2990 (`clients/_crucible_axi.py`) | the live resolver behind `cmd_next` | the AC10 resolver symbols behind `cmd_next` |
+| tests/client/test_crucible_axi_shared.py | `_emit_axi`/`_axi_context` at ~L1099/~L1079 | `_emit_axi`/`_axi_context`, standalone local functions of bun-crucible.py | `_emit_axi`, `_axi_context` |
+| tests/coverage-trend-geometry.test.ts | public/app.js CoverageTrendCard (~L1402-1435) | `CoverageTrendCard` in public/app.js | `CoverageTrendCard` |
+| tests/coverage-trend-geometry.test.ts | F8 mock lines 535-541 (comment and test title) | F8 mock bucket bars | the F8 mock's month/week/day bucket bars (the test title changes with it) |
+| tests/events-anchored.test.ts | src/v2.ts ~line 1260 | `handleEventsList` (src/v2.ts) | `handleEventsList` |
+| tests/f13-fidelity.test.ts | public/app.js (~line 2555) | the CR-root row in `WorkflowActive` (public/app.js) | `WorkflowActive` — the `plan.orchestrator` suffix ternary |
+| tests/f13-fidelity.test.ts | `OpenSpan(cycleId)` (~line 1278), `CycleRow` (~line 1348) | `OpenSpan(cycleId)` in `public/app.js`; `CycleRow` in public/app.js | `OpenSpan`, `CycleRow` |
+| tests/gate-milestone-server.test.ts | src/types.ts ~L110, src/store.ts ~L895 | `RunEvent` in src/types.ts; Store.toEvent (src/store.ts) | `RunEvent.kind`, `Store.toEvent` |
+| tests/gate-milestone-server.test.ts | src/store.ts ~L967 | the rollup in src/store.ts, now `ROLLUP_ELIGIBLE_KINDS` | `Store.ROLLUP_ELIGIBLE_KINDS` (the inverted rollup check) |
+| tests/gate-timeline.test.ts | app.js ~L749, app.js ~L2748 | `runFeed` in app.js; `RunDetailBody` in app.js | `runFeed`, `RunDetailBody` |
+| tests/helpers/dom-settle.ts | app.js ~L3459, ~L5516 | `observeRoadmapStrip` in app.js; `boot` in app.js | `observeRoadmapStrip` (`setTimeout(remeasure, 0)`); `boot` (`setTimeout(boot, 0)`) |
+| tests/helpers/dom-settle.ts | ~L413, ~L406, ~L5506 | in `startPolling`; in `connectStream`; the boot block of `main` | `startPolling`, `connectStream`, `main`'s boot block (`setInterval(watchdogTick, 5000)`) |
+| tests/helpers/dom-settle.ts | ~L698, ~L687, ~L3905 | the `runTickNow` and `tickNow` intervals; `locateBlink` | `runTickNow`, `tickNow`, `locateBlink` |
+| tests/helpers/dom-settle.ts | ~L3949, ~L4082, ~L4098, ~L5147 | (each retrying itself), after the four names already in the sentence | `revealDeclaredMarker`, `revealCycleRow`, `revealDrillTarget`, `scrollFocusedRowIntoView` |
+| tests/home-marker-parity.test.ts | app.js ~L164, ~L81, ~L740, ~L1833 | `refetchPlans`, `scopeChanged`, `runFeed`, `scopedPlans` in app.js | same four functions |
+| tests/home-marker-parity.test.ts | app-logic.mjs ~L275 | `planCycleIndex` in app-logic.mjs | `planCycleIndex` |
+| tests/manager-edit-params.test.ts | ~line 835-860 (public/app.js) | public/app.js MANAGER_LIVENESS_DEFAULTS/MANAGER_RETENTION_DEFAULT/livenessLabel | the three names already in the sentence |
+| tests/manager-edit-params.test.ts | tests/projects-manager.test.ts lines 369-424 (twice) | tests/projects-manager.test.ts's liveness and retention-cap tests (under "Projects manager — project list rendering (§S2)") | the four liveness/retention view tests |
+| tests/manager-edit-params.test.ts | ManagerRowEdit, public/app.js ~line 960 | `ManagerRowEdit` in public/app.js | `ManagerRowEdit` |
+| tests/manager-edit-params.test.ts | (public/app.js ~line 1133) | `ProjectsManager` in public/app.js | `ProjectsManager` |
+| tests/milestone-merge-rows.test.ts | app.js ~L749 | `runFeed` in app.js | `runFeed` |
+| tests/plan-scoping.test.ts | ~L49, ~L84-86, ~L134 | `navigate` in app.js; app.js's `popstate` window listener; `refetchPlans` in app.js | `navigate`, the `popstate` listener, `refetchPlans` |
+| tests/plan-scoping.test.ts | ~L1799-1800, ~L2051-2055 | `WorkflowActive` in app.js; `WorkflowHistory` in app.js | `WorkflowActive`, `WorkflowHistory` |
+| tests/plan-scoping.test.ts | public/app.js ~L153-154 | `startPolling` in public/app.js | `startPolling` (5000ms interval) |
+| tests/plans-global.test.ts | src/v2.ts ~L996 | `handleV2` in src/v2.ts | `handleV2` |
+| tests/plans-status-filter.test.ts | handlePlansList (~L1900) | src/v2.ts's handlePlansList | `handlePlansList` |
+| tests/playwright-run-browser-scoping.test.ts | handleEventGet ~L3789, ~L3797-3802 | handleEventGet, its `?suite=<name>` branch; its `?depth=suites` branch | `handleEventGet` |
+| tests/playwright-run-browser-scoping.test.ts | RunDetailBody (~L5953), `suiteLeaves` (~L5956), `suiteLoading` (~L5962), `suiteWindow` (~L5965) | public/app.js RunDetailBody: its `suiteLeaves`, `suiteLoading` and `suiteWindow` maps | `RunDetailBody` and its three maps |
+| tests/playwright-run-browser-scoping.test.ts | `loadSuite` (~L6001-6013), `expandSuite` (~L6024-6027), `HeatStrip` (~L6216-6227), `resolveRaw` (~L6395-6410), `TestBody` (~L6467-6498) | the same five names, line numbers dropped | `loadSuite`, `expandSuite`, `HeatStrip`, `resolveRaw`, `TestBody` |
+| tests/playwright-run-progressive-expansion.test.ts | public/app.js ~L5953 | `RunDetailBody` (public/app.js) | `RunDetailBody` |
+| tests/projects-manager.test.ts | public/app.js ProjectsRow, ~line 349 | `ProjectsRow` in public/app.js | `ProjectsRow` |
+| tests/projects-manager.test.ts | public/app.js ~line 705 | `EmptyState` in public/app.js | `EmptyState` |
+| tests/roadmap-release-proposals.test.ts | `refetchRoadmap` (public/app.js ~L293) | `refetchRoadmap` (public/app.js) | `refetchRoadmap` |
+| tests/roadmap-release-proposals.test.ts | app.js L17 (twice) | the `state` object in app.js; its `state` | the module-level `state = vanX.reactive(...)` |
+| tests/roadmap-visual-grammar.test.ts | `git show 63f07f5:public/app.js` line 2496 | `git show 63f07f5:public/app.js`, its `RoadmapRow` | `RoadmapRow` at the `63f07f5` baseline, where it sets `data-lifecycle` |
+| tests/run-cards.test.ts | public/app.js EventCard (~line 500) | `EventCard` in public/app.js | `EventCard` |
+| tests/run-timeline-accordion.test.ts | public/app.js ~L223 | `startPolling` in public/app.js | `startPolling` (`setInterval(refetch, 5000)`) |
+| tests/runs-retention-window.test.ts | app.js ~L156-173, ~L164, ~L161 | `refetchCore` (app.js); the home branch of `refetchCore` | `refetchCore` |
+| tests/runs-retention-window.test.ts | app.js ~L283-289, ~L1548 | `visibleEvents()` / `WorkspaceRunsFeed`, both in app.js | `visibleEvents`, `WorkspaceRunsFeed` |
+| tests/runs-retention-window.test.ts | app.js ~L184-195 | the `refetchPlans` split, in app.js | `refetchPlans` |
+| tests/runs-retention-window.test.ts | app.js ~L1078 | `MANAGER_RETENTION_DEFAULT = 100`, in app.js | `MANAGER_RETENTION_DEFAULT` |
+| tests/runs-retention-window.test.ts | app.js ~L389-401 | `navigate("/")` in `Logo`, app.js | `Logo` (the app-logo onclick) |
+| tests/runs-retention-window.test.ts | app.js ~L101-111 | `scopeChanged` in app.js | `scopeChanged` |
+| tests/shim-retirement.test.ts | server.ts ~L476-531 | server.ts's v1 `/api/*` route handlers, since retired | the v1 shim routes (removed) |
+| tests/shim-retirement.test.ts | handleEventDelete ~L978, handleAgentUnregister ~L326 | v2.ts handleEventDelete; v2.ts handleAgentUnregister | `handleEventDelete`, `handleAgentUnregister` |
+| tests/shim-retirement.test.ts | ManagerRowEdit (~L1000), ManagerRowEdit ~line 1000 | public/app.js's ManagerRowEdit; `ManagerRowEdit` in public/app.js | `ManagerRowEdit` |
+| tests/shim-retirement.test.ts | `_remove_agent_silent` (~L332) | clients/bun-crucible.py's `_remove_agent_silent` | `_remove_agent_silent` |
+| tests/storyboard-fidelity.test.ts | public/app.js ~L653-659 | `Workspace` in public/app.js | `Workspace` |
+| tests/storyboard-fidelity.test.ts | public/app.js ~L1006-1012 | the then-current drill-in overlay in public/app.js, since replaced | the `run-overlay-scrim` overlay (removed; the drill-in is now a slide-over) |
+| tests/storyboard-fidelity.test.ts | public/app.js ~L276 | `TopBar` in public/app.js | `TopBar` |
+| tests/storyboard-fidelity.test.ts | public/app.js ~L527, ~L582 | `TimelineFeed` in public/app.js; `WorkspaceRunsFeed` | `TimelineFeed`, `WorkspaceRunsFeed` (pane headers) |
+| tests/storyboard-fidelity.test.ts | public/app.js ~L592-597, ~L541-555 | `VitalsRail` in public/app.js; `WorkspaceHeader` in public/app.js | `VitalsRail`, `WorkspaceHeader` |
+| tests/timeline-plan-integration.test.ts | `runFeed()` (~line 606) | public/app.js `runFeed()` | `runFeed` |
+| tests/v2-core.test.ts | src/v2.ts (~line 297) | `handleProjectsList` in src/v2.ts | `handleProjectsList` — its `agentsOnline` count |
+| tests/workflow-gate-widget.test.ts | app.js ~L2042-2047 | the then-static `GatePane()` in app.js, since replaced by `GateWidget` | `GatePane` (removed); successor `GateWidget` |
+| tests/workflow-gate-widget.test.ts | `workflowLens` (~L362), ~L501-538, ~L529 | `workflowLens({plans, events})`; its `wave.state` assignment; its `superseded` check in public/app-logic.mjs | `workflowLens` — its `wave.state` assignment and `superseded` check |
+| tests/workflow-gate-widget.test.ts | `boundaryGate` ~L4289, `WorkflowPrimary` ~L4313, `gatedWaveLabels` ~L794 | the same three names, line numbers dropped | `boundaryGate`, `WorkflowPrimary`, `gatedWaveLabels` |
+| tests/workflow-history-refinements.test.ts | `workflowLens` (~line 328) | `linkedRuns` in `public/app-logic.mjs`'s `workflowLens` | `workflowLens` — its `linkedRuns` map |
+| tests/workflow-lens.test.ts | lines 648/650 and 280 in this file | this file's hierarchy test and inferred-fallback test | the `cr-group-toggle` clicks in the §S3 hierarchy and inferred-fallback tests |
+| tests/workflow-lens.test.ts | src/store.ts ~L2049, src/v2.ts ~L1179 | `Store.recordGateEvent` (src/store.ts); `handleGates` (src/v2.ts) | `Store.recordGateEvent`, `handleGates` |
+| tests/workflow-lens.test.ts | public/app-logic.mjs ~L794, ~L977, ~L979 | `gatedWaveLabels` (public/app-logic.mjs); the `wave.state` assignment in `workflowLens`; `workflowLens`'s `wave.state` fallback | `workflowLens` — `gatedWaveLabels` and the `wave.state` assignment |
+| tests/workflow-lens.test.ts | src/store.ts ~L2969 | `LIVE_GATE` in src/store.ts | `LIVE_GATE` |
+| tests/workflow-lens.test.ts | src/v2.ts ~L1216 | the gate-event body `handleGates` reads, src/v2.ts | `handleGates` — the top-level `version` beside `gate` |

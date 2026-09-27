@@ -4,7 +4,7 @@
 // Wire: docs/changes/CR-CRU-091-roadmap-registration-is-declared.md §S1 + §S8
 //
 // The frontend holds exactly ONE release read today — `state.releases`, filled
-// from `body.releases` in `refetchRoadmap` (public/app.js ~L293), which is
+// from `body.releases` in `refetchRoadmap` (public/app.js), which is
 // `GET …/releases`, deliberately free of proposals (CR-091 §S1: `listReleases`
 // filters `event.type === "release"`). A `LC_ALL=C grep -a` over `public/` for
 // `release-proposals` / `listReleaseProposals` / `proposals` returns ZERO hits
@@ -23,7 +23,7 @@
 // `undefined`.
 //
 // Observability without a production seam: `public/app.js` calls
-// `vanX.reactive` exactly ONCE — the state object at app.js L17. The harness
+// `vanX.reactive` exactly ONCE — the `state` object in app.js. The harness
 // wraps that global between evaluating the VanX bundle and evaluating app.js
 // and keeps the returned proxy, so the assertions read the REAL live state.
 // No debug hook is added to production for a cycle that renders nothing.
@@ -197,7 +197,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
 
-  // Capture the ONE reactive state object app.js builds (app.js L17) before
+  // Capture the ONE reactive state object app.js builds (its `state`) before
   // app.js runs. Identified by `releases` — the slice this cycle's second read
   // sits beside — never by call order.
   vanX = scriptedGlobals.vanX;

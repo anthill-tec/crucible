@@ -4836,7 +4836,7 @@ describe("CR-CRU-096 AC26 — zones 1 and 3 are untouched by this CR", () => {
   //   • every `[data-testid="roadmap-row"][data-lifecycle]` — a dead row.
   //     The `data-lifecycle` ATTRIBUTE on the row predates this CR (CR-CRU-078
   //     AC27, present verbatim in the `63f07f5` baseline — `git show
-  //     63f07f5:public/app.js` line 2496), so the SAME rows are identified and
+  //     63f07f5:public/app.js`, its `RoadmapRow`), so the SAME rows are identified and
   //     removed symmetrically on both the baseline and the current render;
   //   • every `[data-testid="roadmap-status-tooltip"]` — the element this CR
   //     adds beside a dead row. The baseline renders none, so stripping it

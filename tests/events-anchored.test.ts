@@ -6,7 +6,7 @@
 // existing `?limit=N` recent-feed behavior (no cycleId) is byte-unchanged.
 // Unknown cycleId -> empty set (never a 4xx).
 //
-// RED phase: `handleEventsList` (src/v2.ts ~line 1260) has NO cycleId
+// RED phase: `handleEventsList` (src/v2.ts) has NO cycleId
 // awareness at all today — it only reads `project`/`limit`. Every assertion
 // below that expects cycleId-scoped filtering or the boundary payload will
 // fail against current production (either the extra runs/other-cycle noise
