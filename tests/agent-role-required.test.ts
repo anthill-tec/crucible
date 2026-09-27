@@ -3,14 +3,14 @@
 //
 // §S1 gap-analysis notes this pins:
 //   (a) /agents/register and /agents/heartbeat share ONE handler
-//       (handleAgentTouch, src/v2.ts:1471-1473). DECISION TAKEN HERE (see
+//       (`handleAgentTouch` in src/v2.ts). DECISION TAKEN HERE (see
 //       report): the routes SPLIT — role is REQUIRED on register, but
-//       heartbeat stays role-optional (matches src/hints.ts:44's existing
-//       "only needed while idle" contract and does not re-demand a value an
-//       already-registered agent already declared). The heartbeat-side
-//       tests below pin that choice; if GREEN instead requires role on
-//       both, those specific tests must be revisited together with the
-//       hints.ts wording — not silently reinterpreted.
+//       heartbeat stays role-optional (matches the existing "only needed
+//       while idle" contract of `registered` in src/hints.ts, and does not
+//       re-demand a value an already-registered agent already declared). The
+//       heartbeat-side tests below pin that choice; if GREEN instead
+//       requires role on both, those specific tests must be revisited
+//       together with the hints.ts wording — not silently reinterpreted.
 //   (b) the requirement lives at the ROUTE boundary, never inside
 //       Store.touchAgent (which stays role-optional so ingest never
 //       breaks) — the ingest test below is the regression pin for that.
@@ -89,7 +89,7 @@ function freshTmpDir(): string {
 /**
  * Builds a raw sqlite file at `dbPath` using the PRE-CR-044 `projects` +
  * `agents` schema (byte-for-byte the CREATE TABLE statements at
- * src/store.ts:263-284, deliberately hand-copied rather than driven through
+ * `createBaseTables` (src/store.ts), deliberately hand-copied rather than driven through
  * the Store class) with ONE project and ONE legacy agent row that has never
  * heard of a `role` column. Exercises the real production migration path
  * (Store.open / startServer) against a schema this test fully controls, so
@@ -520,7 +520,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
 
       const store = Store.open(dbPath);
       try {
-        // The ALTER TABLE retrofit (src/store.ts:358-431 pattern) must have
+        // The ALTER TABLE retrofit (the `MIGRATION_BODIES` pattern in src/store.ts) must have
         // added the column — checked via the same raw-db escape hatch
         // tests/agent-lifecycle.test.ts already uses.
         const columns = (store as unknown as { db: Database })

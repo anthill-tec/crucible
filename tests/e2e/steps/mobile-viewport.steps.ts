@@ -77,7 +77,8 @@ Step("the workspace renders as a single column on the phone profile", async ({ p
 // `.app-main`, not of the squeezed content column (the column that the AC1
 // "usable width" step below guards). At RED the row already wrapped inside its
 // own container because of the pre-existing `.app-top { flex-wrap: wrap }`
-// (public/styles.css:88), and it measured 388px of the 412px Pixel 7 viewport
+// (the `.app-top` rule in public/styles.css), and it measured 388px of the
+// 412px Pixel 7 viewport
 // (94%) with every tab inside the viewport. It is also vacuous in isolation,
 // because `.app-main { overflow: hidden }` clips descendant overflow before
 // `body.scrollWidth` can see it. So it guards §S3 at phone width as a
@@ -238,7 +239,7 @@ Step(
 
 // ── AC5/DN3 — ephemeral phone-width collapse never writes RAIL_STORAGE_KEY ──
 
-// The REAL production key (public/app.js:2453-2487) — not a RED invention.
+// The REAL production key (`RAIL_STORAGE_KEY` in public/app.js) — not a RED invention.
 const RAIL_STORAGE_KEY = "crucible.rail.collapsed";
 
 Step(

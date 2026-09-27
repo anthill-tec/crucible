@@ -10,7 +10,7 @@
 // re-tested): `PATCH /api/v2/projects/<key>` accepts
 // `{liveness:{t1_ms?,t2_ms?,t3_ms?}}` (partial merge onto existing
 // overrides; validate-all-before-write) and `{retention:<number>}`
-// (src/v2.ts:742-836). The manager row VIEW already renders
+// (`handleProjectPatch` in src/v2.ts). The manager row VIEW already renders
 // `liveness T1 60s / T2 300s / T3 1h (defaults)` (or override values without
 // the defaults label) and `retention N runs` (public/app.js
 // MANAGER_LIVENESS_DEFAULTS/MANAGER_RETENTION_DEFAULT/livenessLabel,
@@ -104,7 +104,8 @@ function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectF
   };
 }
 
-// PATCH wire name -> store-internal name (src/v2.ts:747-749, WIRE_TO_INTERNAL).
+// PATCH wire name -> store-internal name, WIRE_TO_INTERNAL (the server's
+// `LIVENESS_WIRE_KEYS` in src/v2.ts).
 const WIRE_TO_INTERNAL: Record<string, keyof LivenessFixture> = {
   t1_ms: "staleAfterMs",
   t2_ms: "tombstoneAfterMs",
@@ -117,7 +118,8 @@ let patchCalls: CapturedCall[] = [];
 
 /** Same mountApp harness convention as tests/projects-manager.test.ts, with
  * a PATCH mock that performs the SAME wire-to-internal liveness translation
- * + partial merge the real server does (src/v2.ts:799-816) — a naive
+ * + partial merge the real server does (in `handleProjectPatch` in
+ * src/v2.ts) — a naive
  * Object.assign(target, patchBody) would silently corrupt the liveness
  * shape (wire keys t1_ms/t2_ms/t3_ms are not the store's staleAfterMs/
  * tombstoneAfterMs/pruneAfterMs field names), which would make the

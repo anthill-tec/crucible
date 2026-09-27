@@ -503,7 +503,7 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
   // package, so the field the route would happily carry is never sent.
   //
   // RED expectation (measured, 2026-08-23):
-  //   * `emit_release_milestone` (scripts/release.sh:620-644) builds its argv
+  //   * `emit_release_milestone` (scripts/release.sh) builds its argv
   //     from `--released-at`/`--crs`/`--repair-provenance` only — `grep -c
   //     packages scripts/release.sh` is 0 — so the post carries no packages.
   //   * even if it did, no client accepts the flag: the `milestone` subparser
@@ -668,7 +668,7 @@ describe("the ceremony declares the delivered pair WITHOUT consulting CI or a re
     "plan_merge_map",
     "queue_read",
     "report_unplaceable_crs",
-    // `emit_release_milestone`'s own two callees (scripts/release.sh:649-650):
+    // `emit_release_milestone`'s own two callees (in scripts/release.sh):
     // the identity it posts under and the path it resolves the client from are
     // on the reporting path as much as anything that computes provenance.
     "ceremony_agent",

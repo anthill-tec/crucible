@@ -5,16 +5,16 @@
 //
 // The vocabulary is written out, in full, in SEVEN places:
 //
-//   src/v2.ts:1168                     `MILESTONE_TYPES` — the validator
-//   src/hints.ts:104                   the refusal's own `help[]`
-//   clients/arduino-crucible.py:1408   `--type` help
-//   clients/bun-crucible.py:2506       `--type` help
-//   clients/mvn-crucible.py:2374       `--type` help
-//   clients/python-crucible.py:1729    `--type` help
-//   clients/rust-crucible.py:3020      `--type` help
+//   src/v2.ts                          `MILESTONE_TYPES` — the validator
+//   src/hints.ts                       `hints.milestoneTypes`, the refusal's own `help[]`
+//   clients/arduino-crucible.py        `--type` help (the `milestone` verb, in `main`)
+//   clients/bun-crucible.py            `--type` help (the `milestone` verb, in `main`)
+//   clients/mvn-crucible.py            `--type` help (the `milestone` verb, in `main`)
+//   clients/python-crucible.py         `--type` help (the `milestone` verb, in `main`)
+//   clients/rust-crucible.py           `--type` help (the `milestone` verb, in `main`)
 //
 // …and they have DISAGREED since CR-CRU-074 added `release`: the hint at
-// src/hints.ts:104 still says "gap-analysis, design-review, stage-flip,
+// `hints.milestoneTypes` (src/hints.ts) still says "gap-analysis, design-review, stage-flip,
 // custom, cr-merged" and omits it. A caller refused by the validator is handed
 // a `help[]` naming a DIFFERENT set from the one the refusal's own message
 // enumerates, in the same response. That live disagreement is what this file's

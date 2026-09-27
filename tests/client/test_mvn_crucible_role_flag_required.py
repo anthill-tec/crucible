@@ -4,7 +4,8 @@ implying the agentId carries the role.
 
 Contract pinned verbatim from
 docs/changes/CR-CRU-044-phase-as-first-class-data.md §S3/§S4 (as corrected
-2026-07-28). `mvn-crucible.py:1744` has the correct enum already but ALSO
+2026-07-28). The `register` subparser's `--role` in `main` (mvn-crucible.py)
+has the correct enum already but ALSO
 `default="report"`, so `--role` is optional today. §S3's mvn-specific work
 is "drop the default -> required".
 

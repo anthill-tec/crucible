@@ -152,9 +152,9 @@ function titleSpans(text: string): Span[] {
 }
 
 // RULED, NOT CODED — a test's own DIAGNOSTIC failure message.
-// tests/queue-canonical-order.test.ts:138 throws
-// `CR-CRU-095: ${cr} is absent from the published order`, and
-// tests/roadmap-registration-store.test.ts:194 has the same shape. Both are
+// `spanOf` in tests/queue-canonical-order.test.ts throws
+// `CR-CRU-095: ${cr} is absent from the published order`, and `entryOf` in
+// tests/roadmap-registration-store.test.ts has the same shape. Both are
 // EXEMPT, and the argument is: a thrown diagnostic is the test telling a
 // maintainer WHICH CONTRACT IT WAS CHECKING when it broke. It is never
 // compared against a product value, never rendered to a user of any project,

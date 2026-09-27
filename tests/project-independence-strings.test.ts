@@ -13,7 +13,8 @@
 // comment reference (378 of them survive by AC8) cannot fail it and a
 // re-worded string cannot pass it by moving the literal into a variable.
 //
-// RED phase: fails against TODAY's tree, where public/app.js:2353-2354 renders
+// RED phase: fails against TODAY's tree, where the BDD tab (then `BddFeed`,
+// since replaced by `BddPanel` in public/app.js) renders
 // "BDD run results already stream into the Runs timeline — the dedicated BDD
 // surface lands in CR-CRU-015 (0.2.0)" — a CR id AND a release version.
 import { describe, test, expect, afterEach } from "bun:test";

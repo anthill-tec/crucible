@@ -203,7 +203,7 @@ lane = entries if wanted is None else [
     e for e in entries if canonical_track(e.get("track")) == wanted]   # a SCHEDULING filter
 ...
 if not actionable:
-    return (True, 0, _drained_answer("wave-complete", lane), warnings)  # a MEMBERSHIP claim  :1848
+    return (True, 0, _drained_answer("wave-complete", lane), warnings)  # a MEMBERSHIP claim
 ```
 
 `next` accordingly takes `--track` and has no `--wave`. One defect, two faces:
@@ -220,13 +220,15 @@ Both follow from the same category error: the wave answer is computed over a tra
 Correcting it means the wave predicate reads `wave` and nothing else, while `--track` keeps doing
 its own job — choosing which CR is next, and in what order.
 
-The reason vocabulary needs nothing new: `DRAINED_REASONS` at `:1523` is already
+The reason vocabulary needs nothing new: `DRAINED_REASONS` (then beside `resolve_next`, now
+`DRAINED_REASONS` in `src/next.ts`) is already
 `("wave-complete", "awaiting-assignment", "no-roadmap")`, and a lane with nothing scheduled whose
 wave is NOT complete is `awaiting-assignment` — which is what that reason already means.
 
 **The fix needs no server change.** Every queue entry already publishes its `wave` (the `wave`
 field of `QueueEntry` in `src/types.ts`), so the predicate is computable from the SAME single read
-the resolver already performs — `:1498` states the contract as "ONE read (`GET …/queue`) in, ONE
+the resolver already performs — the `next` section header in `clients/_crucible_axi.py` states the
+contract as "ONE read (`GET …/queue`) in, ONE
 decision out". The correction lives in the shared client module, where all five clients inherit
 it at once.
 
@@ -256,7 +258,7 @@ release-identified):
 | | defect | cite |
 |---|---|---|
 | a | interim POSTs guarded by `0 < nsteps < 9`, but `axi status` always emits 9 rows (unrun ones `pending`), so streaming NEVER fires | the `0 < nsteps < 9` guard in `cmd_gate_run` in `clients/_crucible_axi.py` (since replaced by `axi_snapshot_in_flight`), fed the step count `gate_from_axi` returns |
-| b | `axi run`'s 8-minute bounded hold returns with `error:` and no `outcome`; `gate_from_axi(final=True)` falls back to `"failed" if any_failed else "passed"` and seals **`passed`** mid-run | `:1306-1310`, `:4811-4819` |
+| b | `axi run`'s 8-minute bounded hold returns with `error:` and no `outcome`; `gate_from_axi(final=True)` falls back to `"failed" if any_failed else "passed"` and seals **`passed`** mid-run | the final-snapshot fallback in `gate_from_axi` (`clients/_crucible_axi.py`), sealed by the final `post_gate` in `cmd_gate_run` |
 
 (b) put a false `outcome=passed` gate on this project's board during the 0.2.0 review, and because
 of D3 that event can never be retired by the release it belongs to. `pending` and

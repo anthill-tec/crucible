@@ -62,8 +62,8 @@ import { seedProject, teardownSeededProjects } from "../steps/harness.ts";
 
 // RED-FIXUP (cycle 180) — `projectExists` originally queried ONLY
 // `GET /api/v2/projects?archived=true`. Verified by reading
-// `handleProjectsList` (`src/v2.ts:268-275`) → `store.listProjects(archived)`
-// (`src/store.ts:669-676`): the query is
+// `handleProjectsList` (`src/v2.ts`) → `store.listProjects(archived)`
+// (`listProjects` in `src/store.ts`): the query is
 // `WHERE archived_at IS ${archived ? "NOT NULL" : "NULL"}` — `archived=true`
 // is an EXCLUSIVE view of ONLY archived projects, never a superset. A freshly
 // seeded (unarchived) project can therefore never appear in that response,

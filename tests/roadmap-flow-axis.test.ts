@@ -71,11 +71,12 @@
 // RED phase — expected to FAIL against current production, which renders
 // `Start`, a `div.app-flow-waves` (or the delivered summary), the gate and
 // `End` as four siblings of a `flex-direction: column` container
-// (public/styles.css:1253-1258) with NO connector element of any kind
+// (the `.app-roadmap-flow` rule in public/styles.css) with NO connector
+// element of any kind
 // (`roadmap-flow-connector` appears nowhere in public/app.js), enumerates the
-// shipped wave list as `waves 1, 2, 3, 4` (public/app.js:2953 —
+// shipped wave list as `waves 1, 2, 3, 4` (`RoadmapDelivered` in public/app.js —
 // `waves.join(", ")`), and draws only the version inside the shipped gate's
-// diamond (public/app.js:3001).
+// diamond (`RoadmapFlowGate` in public/app.js).
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -107,7 +108,7 @@ interface PackageFixture {
   version: string;
 }
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (src/v2.ts) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -117,7 +118,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (src/v2.ts) — what `GET …/release-proposals`
  *  publishes. */
 interface ProposalFixture {
   label: string;
@@ -134,7 +135,7 @@ interface LifecycleFixture {
   at: number;
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes, in the
+/** `QueueEntry` (src/types.ts) — what `GET …/queue` publishes, in the
  *  canonical order (CR-CRU-095 §S1: release → wave → seq). The ORDER OF THIS
  *  ARRAY is the server's published order and the only order zone 2 may use
  *  (CR-CRU-091 AC18 forbids re-deriving `seq`; CR-CRU-095 deleted the last
@@ -154,8 +155,8 @@ interface QueueFixture {
 
 // ── Fixtures: the IN-FLIGHT board ───────────────────────────────────────────
 //
-// 0.1.0 shipped, 0.4.0 proposed (the DEFAULT FOCUS — `releaseStripFocusIndex`,
-// public/app-logic.mjs:173, focuses the FIRST proposed gate and 0.4.0's
+// 0.1.0 shipped, 0.4.0 proposed (the DEFAULT FOCUS — `releaseStripFocusIndex`
+// in public/app-logic.mjs focuses the FIRST proposed gate and 0.4.0's
 // timestamp precedes 0.5.0's), 0.5.0 proposed but not focused. Each AC19
 // fixture swaps the focused release's membership and the wave set its proposal
 // declares; nothing else varies.
@@ -175,7 +176,8 @@ const SHIPPED_010: ReleaseFixture = {
 /** The focused proposal. Its declared `waves[]` is kept CONSISTENT with the
  *  queue membership in every fixture below, deliberately: the spec is SILENT
  *  on which of the two published answers is zone 2's oracle for "the waves of
- *  the focused release" — the proposal's own `waves[]` (`src/v2.ts:2053`) or
+ *  the focused release" — the proposal's own `waves[]` (from
+ *  `proposalBrief` in src/v2.ts) or
  *  the waves its queue members DECLARE — and no assertion here may rest on
  *  their disagreement. (Reported as a silence; today's implementation groups
  *  the members.) */
@@ -316,7 +318,7 @@ const THREE_WAVES_MARKED = "CR-C-02";
 // ── Fixtures: the SHIPPED board (§S7) ───────────────────────────────────────
 //
 // A shipped focus needs no click: with NOTHING proposed there is no release in
-// flight, so `releaseStripFocusIndex` (public/app-logic.mjs:173) lands on the
+// flight, so `releaseStripFocusIndex` (public/app-logic.mjs) lands on the
 // LAST gate — the newest shipped tag — which is the one ledger row below.
 //
 // The ledger record is authored synthetically end to end (AC29): a synthetic
@@ -570,7 +572,8 @@ function waveEl(wave: string): HTMLElement {
 
 /** The wave's ROWS, read through the node selector AC28 pins and scoped to the
  *  wave box exactly as the e2e step scopes it
- *  (`tests/e2e/steps/roadmap-graph.steps.ts:84`). */
+ *  (the "renders wave {string} holding {int} CR nodes" step in
+ *  `tests/e2e/steps/roadmap-graph.steps.ts`). */
 const rowEls = (wave: string): HTMLElement[] =>
   Array.from(waveEl(wave).querySelectorAll<HTMLElement>('[data-testid="roadmap-node"]'));
 
@@ -658,7 +661,7 @@ function gateEl(): HTMLElement {
 
 // ── The CSS reader: what the SHIPPED stylesheet declares for a real element ──
 //
-// C1's `animatingSelectors` (tests/roadmap-wave-header.test.ts:409) as C2 and
+// C1's `animatingSelectors` (tests/roadmap-wave-header.test.ts) as C2 and
 // C3 generalised it: every rule in public/styles.css that declares `prop` is
 // collected, and the LAST one whose selector the given element MATCHES wins —
 // source order, specificity ignored, which for this stylesheet's flat

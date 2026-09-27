@@ -15,7 +15,7 @@
 //     body at all and has no config/approval gate — it deletes unconditionally
 //     whenever the project+event resolve. Every "guarded deletion" test below
 //     expects a 403/409 it does not yet produce.
-//   - `allowRunDeletion` is not in PATCHABLE_FIELDS (v2.ts:756) — a PATCH
+//   - `allowRunDeletion` is not in `PATCHABLE_FIELDS` (src/v2.ts) — a PATCH
 //     carrying it 400s as an unknown field today.
 //   - `POST /api/v2/agents/unregister` (v2.ts handleAgentUnregister, ~L326)
 //     ignores an extra `silent` key entirely and ALWAYS journals a

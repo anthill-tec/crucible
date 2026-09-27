@@ -7,14 +7,16 @@
 //
 // ── What is broken today ───────────────────────────────────────────────────
 //
-// `queue_entries` has eight columns (src/store.ts:1146-1156) and none of them
+// `queue_entries` has eight columns (its table in `createBaseTables`,
+// src/store.ts) and none of them
 // can hold a declared release, a declared track or a lifecycle disposition, so
 // the containment model release ⊃ wave ⊃ CR is undeclarable. `listQueue`'s
-// projection (src/store.ts:3094-3104) omits the `seq` the column already
+// projection (`listQueue` in src/store.ts) omits the `seq` the column already
 // stores, which is why the renderer re-derives it from the array index
-// (public/app-logic.mjs:859). `replaceQueue` (src/store.ts:3032) DELETEs a
+// (`seq: index` in `buildRoadmapGraph`, public/app-logic.mjs, since removed).
+// `replaceQueue` (src/store.ts) DELETEs a
 // project's rows and re-INSERTs the posted set, so any declaration it was not
-// handed is destroyed. And `recordMilestoneEvent` (src/store.ts:1709) has no
+// handed is destroyed. And `recordMilestoneEvent` (src/store.ts) has no
 // notion of a PROPOSED release: `targetAt` cannot be carried and a shipped
 // release cannot consume the proposal it fulfils.
 //

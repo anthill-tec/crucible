@@ -2,8 +2,7 @@
 //
 // Spec: docs/changes/CR-CRU-022-roadmap-analytics.md §S5 + its AC block.
 // Design: docs/research/DN-crucible-analytics.md §10; storyboard frames F16
-// (.lavish/crucible-v2-design.html:1204-1330) and F14¾ (same file,
-// :966-1013).
+// and F14¾ (both in .lavish/crucible-v2-design.html).
 //
 // Baseline (measured 2026-09-24, re-confirmed): `grep -a` over `public/`
 // for `roadmap-progress` / `analytics-pane` / `burndown-chart` returns ZERO

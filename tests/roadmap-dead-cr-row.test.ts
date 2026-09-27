@@ -42,7 +42,7 @@
 //
 // ESCALATION (documented, not guessed): §S2's own scope text asks the tooltip
 // to read "state · date · who, then the full reason". `QueueLifecycle`
-// (`src/types.ts:416`) carries `state`, `by` (the SUPERSEDED successor only),
+// (`src/types.ts`) carries `state`, `by` (the SUPERSEDED successor only),
 // `reason` and `at` — there is no author/"who voided this" field on the wire
 // at all, for either state. F17's mock names a person ("vidushi") in that
 // slot, but nothing in this CR's own scope (§S1/§S2/§S3) adds an authoring
@@ -122,7 +122,8 @@ const TARGET_AT = 1790500000;
 const WAVE = "9";
 
 /** 2026-09-24T00:00:00Z, epoch MILLISECONDS — `QueueLifecycle.at`'s own unit
- *  (`src/types.ts:411`). Not asserted byte-exact below (see the file-header
+ *  (`QueueLifecycle` in `src/types.ts`). Not asserted byte-exact below
+ *  (see the file-header
  *  ESCALATION on date FORMAT), only that the tooltip carries the state and
  *  the reason. */
 const RETIRED_AT = Date.UTC(2026, 8, 24);
@@ -137,7 +138,7 @@ const AUTHORED_AUTHOR = "orchestrator-9";
 
 /** The one board every test in this file reuses: one LIVE row (AC4's own
  *  regression guard), one VOID row and one SUPERSEDED row, all in the SAME
- *  wave so `roadmapTableColumns` (`public/app-logic.mjs:1269`) computes the
+ *  wave so `roadmapTableColumns` (`public/app-logic.mjs`) computes the
  *  SAME column set for all three — the base four (`cr, title, deps, status`),
  *  with neither `wave` nor `track` (a single wave, no track declared), so the
  *  "same cells, same columns" claim is provable without a column-set filter

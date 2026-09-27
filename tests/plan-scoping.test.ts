@@ -94,7 +94,7 @@ interface CycleFixture {
 }
 
 // NOTE: this is the new-for-C1 contract — every plan carries `projectKey`
-// verbatim (src/types.ts:164, already a real server field). Existing test
+// verbatim (`Plan` in src/types.ts, already a real server field). Existing test
 // files (workflow-tab.test.ts, timeline-plan-integration.test.ts) predate
 // this CR and never scripted a per-key-scoped plans endpoint, so their
 // PlanFixture omits it; this file's mock is the FIRST to actually key the

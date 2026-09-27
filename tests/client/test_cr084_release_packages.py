@@ -12,7 +12,7 @@ Spec: docs/changes/CR-CRU-084-release-records-its-packages.md
 
 WHAT THIS FILE COVERS, and what it deliberately does not. The five clients
 duplicate the `milestone` SUBPARSER but share `cmd_milestone` and
-`post_milestone` (`clients/_crucible_axi.py:1729` and `:2003`). The per-client
+`post_milestone` (both in `clients/_crucible_axi.py`). The per-client
 half -- "--packages exists, identically, on all five" -- is a FLEET PARITY
 question and lives with the fleet's other flag-surface contracts in
 `tests/client/test_cr054_verb_surface_lift.py`
@@ -38,12 +38,12 @@ hands `post_milestone` the structured list -- the identical division of labour
 `release_crs(getattr(args, "crs", None), ...)` already uses.
 
 RED expectation (measured 2026-08-23, against the C1 GREEN tree):
-  * `post_milestone` (clients/_crucible_axi.py:2003-2005) takes no `packages`
+  * `post_milestone` (clients/_crucible_axi.py) takes no `packages`
     parameter at all, so every call below raises TypeError.
-  * `cmd_milestone` (`:1757-1767`) reads `released_at`/`crs`/`repair_provenance`
-    off `args` and nothing else -- `grep -c packages clients/_crucible_axi.py`
-    is 0 -- so a `--packages` value on `args` is silently discarded and never
-    reaches the wire.
+  * `cmd_milestone` (`clients/_crucible_axi.py`) reads
+    `released_at`/`crs`/`repair_provenance` off `args` and nothing else --
+    `grep -c packages clients/_crucible_axi.py` is 0 -- so a `--packages` value
+    on `args` is silently discarded and never reaches the wire.
 Both are the missing contract, not a broken harness. Measured baseline: 8 of
 the 9 tests below fail (5 TypeError on the absent `packages` parameter, 3 on
 `None` where a parsed list, an empty list, or a reached wire was required),
@@ -54,13 +54,14 @@ drives the real `cmd_milestone` code path rather than a stub.
 C3 VERIFY addition (M2, measured 2026-08-23 against the C2 GREEN tree): a TENTH
 test, `test_a_repair_offering_only_an_empty_packages_is_refused_too`, pins the
 other half of "a repair with NOTHING to write". The guard narrowed in C1/C2
-reads `if repair and crs is not None and not crs and not packages`
-(`clients/_crucible_axi.py:1806`), so it can only fire when a `--crs` was
-given. The symmetric shape -- `--repair-provenance --packages ""` with NO
-`--crs` -- offers a set, derives nothing from it, and slips PAST the guard: it
-posts, the server's `offeredNothing` early return (`src/store.ts:1831-1835`)
-declines to write anything, the client exits 0, and
-`cmd_backfill_releases` (`scripts/release.sh:742-744`) tallies it as RECORDED.
+reads `if repair and crs is not None and not crs and not packages` (the refusal
+guard in `cmd_milestone` in `clients/_crucible_axi.py`), so it can only fire
+when a `--crs` was given. The symmetric shape -- `--repair-provenance
+--packages ""` with NO `--crs` -- offers a set, derives nothing from it, and
+slips PAST the guard: it posts, the server's `offeredNothing` early return in
+`repairReleaseProvenance` (`src/store.ts`) declines to write anything, the
+client exits 0, and `cmd_backfill_releases` (`scripts/release.sh`) tallies it
+as RECORDED.
 That is the CR-CRU-086 silence class again, one field over: a reported write
 that never happened. So this test FAILS today (the post reaches the wire and
 the return code is 0, not `EXIT_REPAIR_REFUSED`) and the other nine stay green.
@@ -289,15 +290,16 @@ class CmdMilestoneForwardsPackagesTest(unittest.TestCase):
     def test_a_packages_only_repair_still_reaches_the_wire(self):
         """§S4 + CR-CRU-086, on the CLIENT side of the per-field rule.
 
-        `cmd_milestone` refuses a repair whose `crs` derivation is empty
-        (`clients/_crucible_axi.py:1761-1762`) and posts NOTHING. C1 made the
-        server's guard PER FIELD -- `repairReleaseProvenance(held, releasedAt,
-        crs, packages)` applies a non-empty `packages` while leaving a stored
-        `crs` alone (proven at the wire in tests/release-provenance.test.ts,
-        "arm (b) -- THE PER-FIELD CLAIM"). A whole-post client refusal is
-        therefore now STRICTER than the server it guards, and would make a
-        packages-only correction unreachable through every client: the one
-        write §S4's backfill needs would be dropped before the wire.
+        `cmd_milestone` refuses a repair whose `crs` derivation is empty (the
+        `refuse_repair` call in `clients/_crucible_axi.py`) and posts NOTHING.
+        C1 made the server's guard PER FIELD -- `repairReleaseProvenance(held,
+        releasedAt, crs, packages)` applies a non-empty `packages` while
+        leaving a stored `crs` alone (proven at the wire in
+        tests/release-provenance.test.ts, "arm (b) -- THE PER-FIELD CLAIM"). A
+        whole-post client refusal is therefore now STRICTER than the server it
+        guards, and would make a packages-only correction unreachable through
+        every client: the one write §S4's backfill needs would be dropped
+        before the wire.
 
         So the refusal must narrow to what it was always about: a repair with
         NOTHING to write. A repair carrying real packages has something to
@@ -346,10 +348,11 @@ class CmdMilestoneForwardsPackagesTest(unittest.TestCase):
         WAS offered -- `--packages ""` -- nothing was derivable from it, and no
         `--crs` was given at all, so `crs is not None` is FALSE and the refusal
         never triggers. The post travels, the server's per-record guard
-        (`offeredNothing`, src/store.ts:1831-1835) writes nothing and answers
-        `changed:false`, and the client returns 0 -- which the ceremony's
-        backfill counts as a RECORDED release. A repair that wrote nothing must
-        never be tallied as a write; that conflation is the exact defect
+        (`offeredNothing` inside `repairReleaseProvenance` in src/store.ts)
+        writes nothing and answers `changed:false`, and the client returns 0 --
+        which the ceremony's backfill counts as a RECORDED release. A repair
+        that wrote nothing must never be tallied as a write; that conflation is
+        the exact defect
         CR-CRU-086 exists to forbid, and `--repair-provenance --packages ""` is
         operator-reachable (as is an all-malformed `--packages`, which the route
         filters to `[]`).

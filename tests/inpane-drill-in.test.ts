@@ -7,12 +7,13 @@
 // public/app-logic.mjs, real public/app.js; `fetch` is scripted.
 //
 // RED phase: expected to fail against the CURRENT public/app.js, whose
-// `RunOverlay()` (public/app.js:965) renders as a GLOBAL sibling of
+// `RunOverlay()` renders as a GLOBAL sibling of
 // Home()/Workspace() (a fixed-position scrim + right-hand slide-over sheet,
-// public/app.js:1438-1483) rather than swapping the content of whichever
+// both built inside that `RunOverlay()`) rather than swapping the content of whichever
 // central pane is active; whose scroll-restore mechanism saves/restores
-// `window.scrollY` (public/app.js:28,37,45-50) instead of the pane's own
-// scroller `scrollTop`; and whose `jumpToNextFailure` (public/app.js:1283)
+// `window.scrollY` (`state.savedScrollY`, saved in `navigate()` and read back
+// by `restoreScroll()`) instead of the pane's own
+// scroller `scrollTop`; and whose `jumpToNextFailure` (public/app.js)
 // only calls `row.scrollIntoView()` without focus-opening the target leaf's
 // failure box.
 //
@@ -737,7 +738,7 @@ describe("ONE RULE — a Compile/Coverage-tab card or the Project pane's coverag
 
     // ONE RULE — no forced switch to "Runs": "Coverage" is STILL the active
     // tab (today's public/app.js `navigate()` unconditionally resets
-    // state.workspaceTab to "Runs" on every navigation — public/app.js:41).
+    // state.workspaceTab to "Runs" on every navigation, inside `navigate()`).
     const activeTab = Array.from(
       document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
     ).find((t) => t.classList.contains("on"));
@@ -812,9 +813,10 @@ describe("ONE RULE — a Compile/Coverage-tab card or the Project pane's coverag
 // tab still carrying the "on" class.
 //
 // RED phase: expected to fail against the CURRENT public/app.js, whose
-// `WorkspaceTabs()` (public/app.js:649) is invoked unconditionally as a
-// static child of `Workspace()` (:994-997) — never gated on
-// `state.route.overlay` — and whose detail header (:1538-1540) hardcodes
+// `WorkspaceTabs()` (public/app.js) is invoked unconditionally as a
+// static child of `Workspace()` — never gated on
+// `state.route.overlay` — and whose detail header (the `app-drillin-head`
+// inside `RunDetail()`) hardcodes
 // the back-chip text to the literal string "← timeline" regardless of
 // `state.route.page`/`state.workspaceTab`.
 // ────────────────────────────────────────────────────────────────────────
@@ -1274,12 +1276,12 @@ describe("§S1 tabs-hide + tab-in-header — closing (chip / Escape / browser ba
 // scroller. With a 10 000-leaf fixture scrolled to a large scrollTop, the
 // SAME header node stays mounted, unaffected by the scroller's scrollTop.
 //
-// RED phase: expected to fail against the CURRENT public/app.js RunDetail()
-// (~public/app.js:1531-1560), which returns ONE div — `app-drillin-head`
+// RED phase: expected to fail against the CURRENT public/app.js RunDetail(),
+// which returns ONE div — `app-drillin-head`
 // header then body — mounted directly as the pane's own child
 // (`WorkspaceRuns`/`Timeline` render `paneSwap(...)`'s return value, i.e.
 // the WHOLE run-overlay div incl. its header, straight inside
-// `workspace-runs`/`timeline`, public/app.js:624,703-707). The header is
+// `workspace-runs`/`timeline`, in `Timeline()` and `WorkspaceRuns()`). The header is
 // today a plain descendant of that same scrolling pane element, so it
 // scrolls away with a long tree exactly as the user reported.
 // ────────────────────────────────────────────────────────────────────────
@@ -1540,11 +1542,11 @@ describe("§S2 focus-model contract — failures-footer jump focus-opens each ta
 // (docs/changes/CR-CRU-038-patch-run-detail-controls.md §S2).
 //
 // RED phase: expected to FAIL against the CURRENT public/app.js —
-// `FailuresFooter` (app.js:3436) renders `[data-testid="raw-toggle"]`
+// `FailuresFooter` (public/app.js) renders `[data-testid="raw-toggle"]`
 // whenever `d.summary.failed >= 1`, with NO check that `d.raw` (or any
 // per-leaf raw) actually exists, so "hidden when empty" fails (the button
 // renders anyway, revealing nothing on click). And `TestBody`'s reveal
-// (`showRaw.val && typeof d.raw === "string"`, app.js:3500) only ever
+// (`showRaw.val && typeof d.raw === "string"`, inside `TestBody`) only ever
 // looks at the run-level `d.raw` — there is no per-leaf raw concept at
 // all today — so the preference test fails too (today it would show the
 // RUN-level blob's text, never the leaf's).
@@ -1671,7 +1673,7 @@ describe("§S2 (CR-CRU-038) — raw-output toggle hidden when empty; per-failing
 // (docs/changes/CR-CRU-038-patch-run-detail-controls.md §S3).
 //
 // RED phase: expected to FAIL against the CURRENT public/app.js —
-// `FailuresFooter` (app.js:3436) mounts both controls at the BOTTOM of
+// `FailuresFooter` (public/app.js) mounts both controls at the BOTTOM of
 // `TestBody`, inside `workspace-runs`'s own `pane-scroll` body, and
 // `[data-testid="failures-footer"]` still exists in the DOM (so the
 // footer-absence assertion fails), and neither control is a sibling of

@@ -1241,7 +1241,8 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
 
     // CR-CRU-028 §S1 RE-TARGET — color now conveys LEVEL, not recency (DN
     // §3.2 ramp: orange var(--ember) <65 · yellow #eab308 [65,80) · green
-    // var(--pass) >=80, mock-pinned .lavish/crucible-v2-design.html:541).
+    // var(--pass) >=80, mock-pinned by the COVERAGE TREND card in
+    // .lavish/crucible-v2-design.html).
     // Every fixture percent here (82.1, 84.0, 86.2, 87.3) is
     // >=COVERAGE_LEVEL_YELLOW_MAX(80), so all four bars are GREEN — the
     // latest bar additionally COMPOSES the app-trend-bar-latest outline

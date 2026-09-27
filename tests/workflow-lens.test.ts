@@ -1283,18 +1283,19 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
 //
 // Observed live on the board 2026-09-12: `CR-CRU-122` held plan 129
 // (`aborted`) beside plan 131 (`open`), and `workflowLens`'s History filter
-// (`public/app-logic.mjs:934` — `wave.crs.filter((c) => c.status !== "open")`)
+// (in `public/app-logic.mjs` — `wave.crs.filter((c) => c.status !== "open")`)
 // excludes open plan RECORDS, not a CR that HAS an open plan. So the aborted
 // plan's node survived into History and narrated a mid-flight CR as
 // `0/2 cycles` with a ✗ failed and a ⊘ skipped cycle, while the Active panel
 // showed the very same CR running. §S1 re-keys the filter on the CR, derived
-// GLOBALLY off the raw `plans` input (the `declaredWaveLabels` precedent at
-// `:927`), and applies to INFERRED nodes too — they carry no `status` at all
-// (`:898-918`), so a status-keyed filter can never reach them.
+// GLOBALLY off the raw `plans` input (the `declaredWaveLabels` precedent in
+// the same function), and applies to INFERRED nodes too — they carry no `status` at all
+// (the inferred-fallback loop), so a status-keyed filter can never reach them.
 //
 // Typing note: `Plan.status` has included `"aborted"` since CR-CRU-024 §S6
-// (src/types.ts:346), and CR-CRU-125 widened the lens's published declaration
-// to match it (public/app-logic.d.mts:415, and `LensCrNode.status` at :458),
+// (`Plan` in src/types.ts), and CR-CRU-125 widened the lens's published
+// declaration to match it (`LensPlanLike` in public/app-logic.d.mts, and
+// `LensCrNode.status` there),
 // so the plan fixtures below pass unconverted. The remaining `events` cast is
 // the `LensRunLike` absorption this file already makes in the CR-CRU-117
 // block above.
@@ -1422,7 +1423,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
 
     expect(nodes.filter((n) => n.cr === LIVE_CR).length).toBe(0);
     // Neither wave has any remaining visible material, so neither renders
-    // (the §S2/CR-CRU-021 ghost-header rule, `public/app-logic.mjs:996-998`).
+    // (the §S2/CR-CRU-021 ghost-header rule, `visibleWaves` in `public/app-logic.mjs`).
     expect(waves.find((w) => w.wave === "5")).toBeUndefined();
     expect(waves.find((w) => w.wave === "6")).toBeUndefined();
   });
@@ -1430,7 +1431,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
   // AC3 — the anti-over-reach pin the Risk section relies on, ORDER included
   // (gap analysis DRIFT-5): the `closedAt`-bearing node first (closedAt
   // descending), then the `closedAt`-less ones in filing order via the stable
-  // sort at `public/app-logic.mjs:938`.
+  // `wave.crs.sort` in `workflowLens` (`public/app-logic.mjs`).
   test("CR-CRU-125 AC3 — a CR with an `aborted` plan and a `closed` plan and NO open plan keeps EVERY node (all three attempts here), ordered exactly as today: the `closedAt`-bearing node first, the `closedAt`-less ones in filing order", () => {
     const cr = "CR-CRU-LENS-MULTI";
     const firstAttempt: AbortAwarePlanFixture = {
@@ -1530,7 +1531,8 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
 
   // AC6 — the INFERRED variant (gap analysis DRIFT-4). An inferred node is
   // built from an UNLINKED run's `context.wave` + agent stem
-  // (`public/app-logic.mjs:882-918`) and carries NO `status` key, so today's
+  // (the inferred-fallback loop in `workflowLens`) and carries NO `status`
+  // key, so today's
   // `c.status !== "open"` keeps every one of them.
   test("CR-CRU-125 AC6 — an INFERRED node whose agent stem names a live CR is dropped from History too, while an inferred node for an unrelated CR in the same wave survives", () => {
     const key = "cru125-lens";
@@ -1544,7 +1546,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
     };
     // Unlinked (no `context.cycleId`) → the inferred path. The stem is the
     // agent id minus its `-RED`/`-GREEN`/`-FIX` suffix
-    // (`public/app-logic.mjs:687`), so this run's node names the live CR.
+    // (`agentStemRaw` in `public/app-logic.mjs`), so this run's node names the live CR.
     const liveCrRun = runEvent({
       id: "evt-125-inferred-live",
       projectKey: key,

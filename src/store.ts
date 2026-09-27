@@ -656,8 +656,9 @@ export interface PlanOpError {
 
 /**
  * CR-CRU-116 §S1/§S2 — a WAVE-scope refusal: `PlanOpError`'s shape one
- * container up, narrowed to the two codes `CycleTransitionError` already
- * declares (:589-596). No third code string exists in this scope. `waveRef`
+ * container up, narrowed to the two codes the cycle-scope refusal already
+ * declares (`PlanOpError`'s `code` union). No third code string exists in
+ * this scope. `waveRef`
  * and `crRef` carry what the refusal NAMES — both read off the queue entry,
  * never off `plan.wave` — so the route builds its help[] without re-deriving
  * anything.
@@ -5018,7 +5019,8 @@ export class Store {
 
   /**
    * CR-CRU-116 §S1/§S2 — the WAVE-scope refusals, the same pair
-   * `transitionCycle` answers one container down (:3238-3264) and in the SAME
+   * `transitionCycle` answers one container down (its activation refusals)
+ * and in the SAME
    * order: `already-active` before `out-of-order`. A wave is a container of
    * crs exactly as a plan is a container of cycles, so opening work in one
    * while another holds open work, or ahead of an unfinished earlier wave, is

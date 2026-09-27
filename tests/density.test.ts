@@ -471,10 +471,10 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
 //
 // RED phase: expected to FAIL against the CURRENT public/app.js — a run
 // with ≥1 failure still auto-expands its failing suite(s) on open
-// (`autoExpandFailing`, app.js:3077, called unconditionally from the
-// `?depth=suites` load at app.js:3047), and `jumpToNextFailure`
-// (app.js:3329) computes its candidate leaves from `suiteLeaves.val`
-// (app.js:3312-3322) — which stays empty when nothing auto-fetched, so a
+// (`autoExpandFailing`, since removed, called unconditionally from the
+// `?depth=suites` load in `RunDetailBody` in app.js), and `jumpToNextFailure`
+// computes its candidate leaves from `suiteLeaves.val`
+// (through `failingLeafKeys`) — which stays empty when nothing auto-fetched, so a
 // jump click from a truly collapsed default currently finds ZERO
 // candidates and does nothing (the walk described below does not yet
 // happen). Contract this block defines for GREEN:
@@ -534,7 +534,8 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     expect(suiteBetaRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
     // CR-CRU-038 §S1 — unit-tier (Detail) run: the collapsed all-pass suite
     // shows the FULL `0 ✗ 1 ✓` counts (the `✓N` green-fold is Density-only),
-    // matching SuiteAlpha's full form above and drill-in.test.ts:1540.
+    // matching SuiteAlpha's full form above and drill-in.test.ts's "suite/leaf
+    // rows are tree-line elements" test.
     expect(suiteBetaRow!.textContent ?? "").toContain("0 ✗ 1 ✓");
   });
 
@@ -608,11 +609,11 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
 // failure-jump + raw-toggle relocated to the header...")`) this already
 // passes. On the HOME route (this file's `mountAtRunCold` mounts at
 // `/run/<id>`, no `/p/` prefix) it does NOT: `Home()`'s VISIBLE pinned band
-// (`div.app-drillin-head.app-top`, app.js:1117-1128) calls
+// (`div.app-drillin-head.app-top`, in `Home` in app.js) calls
 // `DetailHeadContent(state.route.overlay)` with NO `controls` argument, so
 // `...(controls ?? [])` is empty there — the controls only ever mount into
-// `RunDetail()`'s `div.app-drillin-inhead` (app.js:3701-3703), which
-// styles.css:211 hides with `display:none`. happy-dom parses no stylesheet
+// `RunDetail()`'s `div.app-drillin-inhead`, which the `.app-drillin-inhead`
+// rule in styles.css hides with `display:none`. happy-dom parses no stylesheet
 // in this harness and computes no layout, so a bare
 // `document.querySelector('[data-testid="failure-jump"]')` is satisfied by
 // the hidden inhead copy alone and would pass even though nothing is

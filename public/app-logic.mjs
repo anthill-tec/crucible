@@ -974,14 +974,16 @@ export function workflowLens({ plans, events }) {
   // Derived GLOBALLY off the raw `plans` like `declaredWaveLabels` above,
   // because a re-filed plan takes its wave from the caller and need not share
   // the abandoned attempt's wave. Keyed on `cr` so it reaches INFERRED nodes
-  // (`:898-918`) too: they carry no `status` at all, so the plan-record filter
-  // below can never exclude them.
-  // The `c.status !== "open"` clause this set stands beside (`:955`) is
+  // (the inferred-fallback loop above) too: they carry no `status` at all,
+  // so the plan-record filter below can never exclude them.
+  // The `c.status !== "open"` clause this set stands beside (the `wave.crs`
+  // filter below) is
   // retained DELIBERATELY, and not because it still decides anything: §S1
   // mandates that the existing condition stay as-is beneath the new one, and
   // the mutation analysis run against this change proved it an EQUIVALENT
   // mutant — a declared node is built `{cr: plan.cr, status: plan.status}`
-  // (`:857-861`) and `liveCrs` below is every open plan's `cr`, so
+  // (the declared-node literal above) and `liveCrs` below is every open
+  // plan's `cr`, so
   // `status === "open"` implies its `cr` is in `liveCrs`; no fixture can
   // separate the two and deleting the clause changes no test. It stays as
   // defence in depth — a later reader should neither treat it as
@@ -1353,7 +1355,7 @@ const roadmapMerged = (entry) =>
  * except that "no integer" answers `null` here rather than lane `0`: the
  * server needs a lane to compute a seq block in, and this needs to know the
  * label has no numeric reading so it can join no run (AC22b). `/\d+/` is the
- * SAME digit this module's `numericLabelCompare` (`:690`) already reads out of
+ * SAME digit this module's `numericLabelCompare` already reads out of
  * a wave or track label — one reading of a wave's number, three questions
  * asked of it, never three spellings.
  */
@@ -1522,8 +1524,8 @@ export function focusedReleaseView(gate, releases, entries) {
     // activeness on any wave". The store says the same thing in one line
     // (`if (row.wave === "") continue;`, the loop in `waveScopeRefusal`
     // (src/store.ts) — cited by line until it was rewritten by symbol; that
-    // line cite was re-pinned 2026-09-10 from :3377 (CR-CRU-118 §S4a added
-    // 11 comment lines above it), and before that 2026-09-09 from :3374, the
+    // line cite was re-pinned 2026-09-10 (CR-CRU-118 §S4a added
+    // 11 comment lines above it), and before that 2026-09-09 off the
     // `let active` declaration three lines above it, miscited on arrival
     // rather than staled later), and a view that
     // flipped the flag anyway would publish `active: true` on a container the

@@ -50,12 +50,12 @@
 //
 // Server-side context (already GREEN on this branch, b077961 + dc67a4c):
 // POST /api/v2/projects replies `{ok:true, changed:true, project}` wired
-// through handleProjectCreate (src/v2.ts:190); PATCH /api/v2/projects/<key>
+// through handleProjectCreate (src/v2.ts); PATCH /api/v2/projects/<key>
 // replies `{ok:true, changed}` WITHOUT echoing the updated project
-// (src/v2.ts:764-836) — so the manager MUST refetch the list to observe its
-// own edit, exactly like the "without reload (SSE)" wording implies. The
-// stored `Project` shape (src/types.ts:15-24) carries `liveness` using the
-// STORE's internal key names (staleAfterMs/tombstoneAfterMs/pruneAfterMs —
+// (`handleProjectPatch` in src/v2.ts) — so the manager MUST refetch the list to
+// observe its own edit, exactly like the "without reload (SSE)" wording
+// implies. The stored `Project` shape (src/types.ts) carries `liveness`
+// using the STORE's internal key names (staleAfterMs/tombstoneAfterMs/pruneAfterMs —
 // NOT the PATCH wire names t1_ms/t2_ms/t3_ms) and OMITS `liveness`/
 // `retention` entirely (not merely null) when unset — DEFAULT_LIVENESS
 // (60s/300s/1h) and DEFAULT_RETENTION (100) are client-render-time facts
@@ -609,9 +609,9 @@ describe("Projects manager — edit-in-place (AC6)", () => {
     expect(patchCalls).toHaveLength(1);
     expect(patchCalls[0]!.url).toContain(`/api/v2/projects/${key}`);
     expect(patchCalls[0]!.body.name).toBe("NAI-2");
-    // bound (§S1 contract, src/v2.ts:771-773): the immutable key is NEVER
-    // part of a PATCH body — a manager that echoed it back would 400 for
-    // real against the live server.
+    // bound (§S1 contract, `handleProjectPatch` in src/v2.ts): the
+    // immutable key is NEVER part of a PATCH body — a manager that
+    // echoed it back would 400 for real against the live server.
     expect(Object.prototype.hasOwnProperty.call(patchCalls[0]!.body, "projectKey")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(patchCalls[0]!.body, "key")).toBe(false);
   });

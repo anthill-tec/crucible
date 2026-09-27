@@ -394,7 +394,7 @@ describe("CR-CRU-094 §S1/AC3 — Store.listEventsForCycle still matches on the 
 // ───────────────────────────────────────────────────────────────────────────
 // CR-CRU-120 §S5 — the anchored route carries NO cycle-status filter, and the
 // client fix that widens the `→ Runs` affordance to ACTIVE cycles depends on
-// that being true. `handleEventsList`'s cycleId branch (src/v2.ts:3407-3419)
+// that being true. The cycleId branch of `handleEventsList` (src/v2.ts)
 // and `Store#listEventsForCycle`/`findCyclePlanEntry` have never had one, so
 // this is a REGRESSION PIN, not a RED signal: it PASSES on arrival and exists
 // so a future narrowing to terminal cycles fails here before it fails a user.

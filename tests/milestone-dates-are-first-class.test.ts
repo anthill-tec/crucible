@@ -13,9 +13,10 @@
 //
 // ── The recorded decision this SUPERSEDES ─────────────────────────────────
 //
-// src/store.ts:2677-2680 today states, as a CR-CRU-091 §S1 decision, that "a
-// declared target belongs to a PROPOSAL and nothing else" and that "a target
-// it was once aimed at is not a fact about it", and ENFORCES it with
+// `recordMilestoneEvent` (src/store.ts) today states, as a CR-CRU-091 §S1
+// decision, that "a declared target belongs to a PROPOSAL and nothing else"
+// and that "a target it was once aimed at is not a fact about it", and
+// ENFORCES it with
 //
 //     const targetAt = type === "release-proposal" ? meta?.targetAt : undefined;
 //
@@ -41,7 +42,8 @@
 //
 // ── Units ─────────────────────────────────────────────────────────────────
 // Epoch SECONDS, deliberately: `releasedAt` and `targetAt` are already
-// seconds (src/types.ts:387-389, "because they are git's, not ours"), and
+// seconds (the doc comment on `QueueLifecycle` in src/types.ts, "because
+// they are git's, not ours"), and
 // `deliveredAt` is `releasedAt` generalised.
 //
 // ── Safety ────────────────────────────────────────────────────────────────
@@ -160,8 +162,9 @@ describe("a milestone carries its dates — every type, both dates, column and p
   /**
    * The accepted milestone vocabulary, READ OFF THE SERVER — the refusal is
    * the only channel that publishes it, and it publishes it verbatim
-   * (tests/milestone-records-survive-retention.test.ts:147 established this
-   * read; this file reuses it rather than holding a second copy of the list).
+   * (`milestoneVocabulary` in tests/milestone-records-survive-retention.test.ts
+   * established this read; this file reuses it rather than holding a second
+   * copy of the list).
    * A test that typed the six types would go stale the day a seventh lands.
    */
   async function milestoneVocabulary(key: string): Promise<string[]> {

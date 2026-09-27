@@ -20,8 +20,8 @@
 //
 // THE TEST IDS THIS FILE MINTS — the contract GREEN implements. They follow
 // the shipped `roadmap-*` naming, and NONE of them is `roadmap-lane-badge`,
-// which is CR-CRU-078's per-row `plan.track` badge (public/app.js:2495) and
-// is a different fact on a different element:
+// which is CR-CRU-078's per-row `plan.track` badge (`RoadmapRow` in public/app.js)
+// and is a different fact on a different element:
 //
 //   roadmap-wave-lanes       the lane container — design §4's `div.lanes`,
 //                            one per laned wave.
@@ -50,11 +50,11 @@
 // are the same assertion with different data.
 //
 // RED phase — expected to FAIL against current production, which renders no
-// lane chrome at all (`RoadmapFlowWave`, public/app.js:2957-3059, draws
-// `box.rows` straight into `div.app-flow-wave-body`) and a header of exactly
-// two segments (`:2993-3003`). Each test below therefore carries a MULTI-TRACK
-// arm: an absence-only assertion would pass vacuously against a production
-// that never draws lanes for anything.
+// lane chrome at all (`RoadmapFlowWave` in public/app.js draws `box.rows`
+// straight into `div.app-flow-wave-body`) and a header of exactly two segments
+// (its `roadmap-wave-header` `h4`). Each test below therefore carries a
+// MULTI-TRACK arm: an absence-only assertion would pass vacuously against a
+// production that never draws lanes for anything.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -85,7 +85,7 @@ interface PackageFixture {
   version: string;
 }
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (`src/v2.ts`) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -95,7 +95,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (`src/v2.ts`) — what `GET …/release-proposals`
  *  publishes. */
 interface ProposalFixture {
   label: string;
@@ -104,7 +104,7 @@ interface ProposalFixture {
   waves: string[];
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes, in the
+/** `QueueEntry` (`src/types.ts`) — what `GET …/queue` publishes, in the
  *  canonical order (CR-CRU-095 §S1: release → wave → seq). `track` is
  *  CR-CRU-091 §S2's wire field, and §S2 of this CR names it as the LANE
  *  source — the queue row's declared track, never the plan's. */
@@ -132,7 +132,7 @@ interface PlanFixture {
 // ── Fixtures ────────────────────────────────────────────────────────────────
 //
 // One shipped tag (so the strip has a settled leg) and ONE live proposal,
-// `0.4.0`, which `releaseStripFocusIndex` (public/app-logic.mjs:173-181)
+// `0.4.0`, which `releaseStripFocusIndex` (public/app-logic.mjs)
 // focuses by default as "the first live proposal". Zone 2 therefore draws
 // exactly the proposal's wave `1`, and zone 3's columns are decided from that
 // release's membership.
@@ -302,7 +302,7 @@ const queueOf = (members: QueueFixture[]): QueueFixture[] => [...SHIPPED_MEMBERS
 
 /** The distinct declared tracks of a membership, in FIRST-APPEARANCE order —
  *  the same rule `roadmapTableColumns` already applies to the table's `track`
- *  column (`distinctLabels`, public/app-logic.mjs:1152-1159), which §S2 names
+ *  column (`distinctLabels` in public/app-logic.mjs), which §S2 names
  *  as the lanes' one derivation. Duplicated here on the FIXTURE side on
  *  purpose: a test that imported production's derivation could not catch
  *  production deriving it wrongly.
@@ -623,7 +623,7 @@ const headerTrackCount = (wave: string): number | null => {
 };
 
 /** AC7 — the table's `track` column, the one this CR must NOT add a second
- *  rule for (`roadmapTableColumns`, public/app-logic.mjs:1176-1182). */
+ *  rule for (`roadmapTableColumns` in public/app-logic.mjs). */
 const tableHasTrackColumn = (): boolean =>
   document.querySelector('[data-testid="roadmap-table-head"] [data-column="track"]') !== null;
 
@@ -1125,10 +1125,11 @@ describe("CR-CRU-085 §S2 — the lane count comes from the wave's WHOLE members
 // counts, and the implicit lane is NOT a track: the header's count (AC8) and
 // the table's `track` column stay the count of DECLARED tracks.
 //
-// RED — production publishes `box.lanes` from the declared tracks and, whenever
-// it has any, draws the lane GRID INSTEAD of `box.rows`
-// (public/app.js:3084-3101), so an untracked member's node is currently drawn
-// NOWHERE: the box's count, its `+N more` and its visible nodes disagree.
+// RED — production publishes `box.lanes` from the declared tracks and,
+// whenever it has any, draws the lane GRID INSTEAD of `box.rows` (the
+// lane-grid branch of `RoadmapFlowWave` in public/app.js), so an untracked
+// member's node is currently drawn NOWHERE: the box's count, its `+N more` and
+// its visible nodes disagree.
 
 /** A MIXED membership: three DECLARED tracks plus three members declaring
  *  none, INTERLEAVED so the untracked members are neither a prefix nor a
@@ -1156,7 +1157,8 @@ const MIXED_UNTRACKED: QueueFixture[] = untracked(MIXED);
 const MIXED_DECLARED_ONLY: QueueFixture[] = MIXED.filter((entry) => entry.track !== undefined);
 
 /** A laned fixture whose FIRST actionable row — the one the view names
- *  (`nextCr`, public/app-logic.mjs:1457-1464) — declares no track. */
+ *  (the `nextCr` that `focusedReleaseView` in public/app-logic.mjs computes)
+ *  — declares no track. */
 const NEXT_UNTRACKED: QueueFixture[] = [
   member("CR-Y-01", "PENDING", undefined, 10),
   member("CR-Y-02", "PENDING", "track-1", 20),
@@ -1205,7 +1207,9 @@ const bodyNodeCrs = (wave: string): string[] =>
     .map((child) => child.getAttribute("data-cr") ?? "");
 
 /** The `next` marker, read the way the sibling suites read it
- *  (`.app-flow-node-next`, tests/roadmap-visual-grammar.test.ts:3688). */
+ *  (`.app-flow-node-next`, as the test "the `next` marker renders in the
+ *  annotation's own faint ink, never the ember" in
+ *  tests/roadmap-visual-grammar.test.ts reads it). */
 const markedCrs = (wave: string): string[] =>
   nodeEls(wave)
     .filter((node) => node.querySelector(".app-flow-node-next") !== null)

@@ -213,7 +213,8 @@ class ResolvePlanOrEmitSiblingsRegressionGuardTest(unittest.TestCase):
     behaviour ... so a fix cannot accidentally regress them"). `cycle-add` /
     `checkpoint` / `abort` go through `ops.resolve_plan`, a thin delegator to
     `_crucible_axi.resolve_plan_or_emit` (confirmed by reading
-    `clients/rust-crucible.py:1563` and its `_axi().resolve_plan_or_emit(...)`
+    `_resolve_plan_or_emit` in clients/rust-crucible.py and its
+    `_axi().resolve_plan_or_emit(...)`
     call, the same shape in all five clients) -- which ALREADY emits an
     ok:false envelope naming the fetch failure on the identical plans-GET
     failure this file drives against. These 15 tests (5 clients x 3 verbs)

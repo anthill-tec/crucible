@@ -24,16 +24,16 @@
 //
 //   TRAP (must currently fail — presents the mirror as the live client
 //   source, not merely named/warned-against):
-//     tests/clients-bun-crucible.test.ts:11
-//     tests/clients-python-arduino-crucible.test.ts:13
+//     tests/clients-bun-crucible.test.ts (header comment)
+//     tests/clients-python-arduino-crucible.test.ts (header comment)
 //     docs/research/DN-crucible-api-reconstruction.md:206
 //
 //   WARNING (do-NOT-use — legal, must NOT be flagged, must NOT be swept up
 //   by GREEN's fix per §S5):
-//     tests/clients-rust-mvn-crucible.test.ts:14   (already fixed, CR-050)
-//     tests/client/test_bun_crucible_lifecycle.py:54
-//     tests/client/test_bun_crucible_lifecycle.py:144
-//     tests/client/test_bun_crucible_gates.py:42
+//     tests/clients-rust-mvn-crucible.test.ts (header comment; already fixed, CR-050)
+//     tests/client/test_bun_crucible_lifecycle.py (module docstring)
+//     tests/client/test_bun_crucible_lifecycle.py (`_load_bun_crucible_module`)
+//     tests/client/test_bun_crucible_gates.py (module docstring)
 //
 //   HISTORY (names the mirror as the v1 evidence source — true history, not
 //   a live claim — legal, must NOT be flagged):
@@ -44,7 +44,8 @@
 // A bare "does this line/paragraph contain the path" check cannot tell a
 // do-not-use warning from a source-of-truth claim, because an UNRELATED
 // negation can sit in the very same sentence as a TRAP mention. Concretely,
-// tests/clients-bun-crucible.test.ts:11 reads (paraphrased): "`clients/
+// the header comment of tests/clients-bun-crucible.test.ts reads
+// (paraphrased): "`clients/
 // bun-crucible.py` does NOT exist yet on this branch (only `~/.claude/
 // scripts/bun-crucible.py`, the LIVE v1 script, exists...)" — the "not"
 // negates `clients/bun-crucible.py` EXISTING, not the mirror claim, yet it
@@ -169,8 +170,8 @@ function scanMirrorMentions(): MirrorHit[] {
 describe("§S4 guard — every surviving ~/.claude/scripts reference is a do-not-use warning, never a source claim", () => {
   test("scanning tests/ and docs/research/ finds zero mentions that present the mirror as the live client source", () => {
     // BORN RED — today this finds exactly 3 "trap" mentions:
-    //   tests/clients-bun-crucible.test.ts:11 ("the LIVE v1 script, ...exists")
-    //   tests/clients-python-arduino-crucible.test.ts:13 ("the LIVE v1 scripts... exist — copied into clients/")
+    //   tests/clients-bun-crucible.test.ts, header comment ("the LIVE v1 script, ...exists")
+    //   tests/clients-python-arduino-crucible.test.ts, header comment ("the LIVE v1 scripts... exist — copied into clients/")
     //   docs/research/DN-crucible-api-reconstruction.md:206 ("the live `~/.claude/scripts/` copies sync via...")
     // GREEN's §S1/§S3 correction (rewriting these three to state the
     // in-repo clients/ are the source of truth and the mirror is retired)
@@ -288,7 +289,7 @@ describe("§S4 guard — every surviving ~/.claude/scripts reference is a do-not
 // does NOT legalize a DIFFERENT file's undisclosed live citation of that
 // SAME dead name. Concretely: tests/agent-role.test.ts explicitly says
 // "tests/phase-role.test.ts is retired (its subject ceases to exist)" —
-// legal, in that file. But tests/f13-fidelity.test.ts:46 cites the exact
+// legal, in that file. But the header comment of tests/f13-fidelity.test.ts cites the exact
 // same dead name in a "Reused, unchanged testids: ... tests/phase-role.
 // test.ts" list, and carries NO retirement narration of its own anywhere
 // in that file — it stays flagged. The previous fixup's report that
@@ -313,15 +314,15 @@ describe("§S4 guard — every surviving ~/.claude/scripts reference is a do-not
 // Net effect: this guard now stays RED on 9 genuinely LIVE citations (11
 // hits — two files cite their dead name twice each), not only the 2 named
 // in the mirror-fixup dispatch:
-//   tests/client/test_bun_crucible_gates.py:48          -> test_toon.py
-//   tests/client/test_crucible_axi_shared.py:22         -> test_toon.py
-//   tests/client/test_cr046_official_toon_roundtrip.py:2 -> test_toon.py
-//   tests/e2e/steps/harness.ts:216 (x2 occurrences)      -> ingest-routes.test.ts
-//   tests/v2-runs-events.test.ts:72 (x2 occurrences)     -> ingest-routes.test.ts
-//   tests/f13-fidelity.test.ts:46                        -> phase-role.test.ts
-//   tests/agent-lifecycle.test.ts:13                     -> shim-projects-agents.test.ts
-//   tests/plans.test.ts:6                                -> shim-ingest-events.test.ts
-//   tests/toon-conformance.test.ts:6                     -> toon.test.ts
+//   tests/client/test_bun_crucible_gates.py (module docstring)            -> test_toon.py
+//   tests/client/test_crucible_axi_shared.py (module docstring)           -> test_toon.py
+//   tests/client/test_cr046_official_toon_roundtrip.py (module docstring) -> test_toon.py
+//   tests/e2e/steps/harness.ts, `JUNIT_3CASE_1FAIL` (x2 occurrences)     -> ingest-routes.test.ts
+//   tests/v2-runs-events.test.ts, `JUNIT_3CASE_1FAIL` (x2 occurrences)   -> ingest-routes.test.ts
+//   tests/f13-fidelity.test.ts (header comment)                           -> phase-role.test.ts
+//   tests/agent-lifecycle.test.ts (header comment)                        -> shim-projects-agents.test.ts
+//   tests/plans.test.ts (header comment)                                  -> shim-ingest-events.test.ts
+//   tests/toon-conformance.test.ts (header comment)                       -> toon.test.ts
 // GREEN's scope for this guard is therefore all 9 sites above, not only the
 // 2 the dispatch anticipated — flagged here as a finding, not silently
 // narrowed to make a smaller number look tidy.
@@ -421,15 +422,15 @@ describe("§S2/§S4b guard — no docstring/comment in tests/ cites a test_*.py 
     // BORN RED today: 11 live hits across 9 files (two files cite their dead
     // name twice each) — re-derived by hand, per the discrimination-rule
     // comment block above:
-    //   tests/agent-lifecycle.test.ts:13                     -> shim-projects-agents.test.ts
-    //   tests/client/test_bun_crucible_gates.py:48           -> test_toon.py
-    //   tests/client/test_cr046_official_toon_roundtrip.py:2 -> test_toon.py
-    //   tests/client/test_crucible_axi_shared.py:22          -> test_toon.py
-    //   tests/e2e/steps/harness.ts:216 (x2 occurrences)      -> ingest-routes.test.ts
-    //   tests/f13-fidelity.test.ts:46                        -> phase-role.test.ts
-    //   tests/plans.test.ts:6                                -> shim-ingest-events.test.ts
-    //   tests/toon-conformance.test.ts:6                     -> toon.test.ts
-    //   tests/v2-runs-events.test.ts:72 (x2 occurrences)     -> ingest-routes.test.ts
+    //   tests/agent-lifecycle.test.ts (header comment)                        -> shim-projects-agents.test.ts
+    //   tests/client/test_bun_crucible_gates.py (module docstring)            -> test_toon.py
+    //   tests/client/test_cr046_official_toon_roundtrip.py (module docstring) -> test_toon.py
+    //   tests/client/test_crucible_axi_shared.py (module docstring)           -> test_toon.py
+    //   tests/e2e/steps/harness.ts, `JUNIT_3CASE_1FAIL` (x2 occurrences)     -> ingest-routes.test.ts
+    //   tests/f13-fidelity.test.ts (header comment)                           -> phase-role.test.ts
+    //   tests/plans.test.ts (header comment)                                  -> shim-ingest-events.test.ts
+    //   tests/toon-conformance.test.ts (header comment)                       -> toon.test.ts
+    //   tests/v2-runs-events.test.ts, `JUNIT_3CASE_1FAIL` (x2 occurrences)   -> ingest-routes.test.ts
     // This test goes GREEN only once GREEN has fixed every one of those 11
     // sites (rewording, deleting, or narrating each as history) — not
     // before, and not partially.
@@ -496,9 +497,9 @@ describe("§S2/§S4b guard — no docstring/comment in tests/ cites a test_*.py 
   });
 
   test("no present-tense claim that the home ~/.claude/scripts mirror is synced survives in test_bun_crucible_gates.py (§S4b)", () => {
-    // Location RE-DERIVED at execution time (2026-08-03): lines 46-47 of
-    // tests/client/test_bun_crucible_gates.py's module docstring today
-    // (NOT the original spec's `:47` alone — do not trust it, re-grep).
+    // Location RE-DERIVED at execution time (2026-08-03): the mirror-sync
+    // sentence in tests/client/test_bun_crucible_gates.py's module docstring
+    // (NOT the original spec's line number alone — do not trust it, re-grep).
     // BORN RED today: the docstring reads "...only the in-repo `clients/`
     // directory has `toon.py` sitting next to `bun-crucible.py` today (the
     // home mirror is not yet re-synced past the C4 GREEN commit)" —

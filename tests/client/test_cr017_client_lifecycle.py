@@ -444,7 +444,7 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     # deliberately. `test` used to stamp `tier="unit"` on a run it could not
     # classify from a file path; it now states only the tier its CALLER named,
     # so an un-tiered `bun test` sends no `tier` key and the server applies its
-    # own documented default (`src/store.ts:1911`). This test's own subject —
+    # own documented default (`recordTestEvent` in `src/store.ts`). This test's own subject —
     # `--no-lifecycle` makes NO run-start call, sends NO runId, and adds NOTHING
     # to the single-shot body — is untouched: the key set is re-recorded against
     # today's single-shot ingest, not loosened.

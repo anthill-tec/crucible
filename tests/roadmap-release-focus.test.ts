@@ -71,7 +71,7 @@ interface PackageFixture {
   version: string;
 }
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (src/v2.ts) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -81,7 +81,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (src/v2.ts) — what `GET …/release-proposals`
  *  publishes. */
 interface ProposalFixture {
   label: string;
@@ -90,7 +90,7 @@ interface ProposalFixture {
   waves: string[];
 }
 
-/** `src/types.ts:365-372` (`QueueLifecycle`) — CR-CRU-091 §S2's SECOND axis. */
+/** `QueueLifecycle` (src/types.ts) — CR-CRU-091 §S2's SECOND axis. */
 interface LifecycleFixture {
   state: "SUPERSEDED" | "VOID";
   by?: string;
@@ -98,7 +98,7 @@ interface LifecycleFixture {
   at: number;
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes,
+/** `QueueEntry` (src/types.ts) — what `GET …/queue` publishes,
  *  `ORDER BY seq`. */
 interface QueueFixture {
   cr: string;
@@ -1229,7 +1229,8 @@ describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and eac
    *  release, so the four marks are observable on one rendered board.
    *
    *  CR-CRU-096 §S5/AC18a — they declare NO wave (`wave: ""`, the wire's own
-   *  way of declaring none, `src/types.ts:392`), because a WAVE box draws only
+   *  way of declaring none, `QueueEntry`'s `wave` in `src/types.ts`), because
+   *  a WAVE box draws only
    *  the scheduled top plus what is running: a merged CR gets no row there any
    *  more. The `wave: null` group takes the row arrangement but NOT the trim,
    *  so it is the surface on which all four marks are still rendered — which

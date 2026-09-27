@@ -129,7 +129,8 @@ afterEach(async () => {
   // test never calls mountApp/register happy-dom, so an unconditional
   // unregister() threw "Happy DOM has not previously been globally
   // registered" and masked that test's real result (same fix as
-  // tests/coverage-click.test.ts:244-247 / tests/storyboard-fidelity.test.ts).
+  // the describe-scoped `afterEach` in tests/coverage-click.test.ts /
+  // tests/storyboard-fidelity.test.ts).
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
 });
 

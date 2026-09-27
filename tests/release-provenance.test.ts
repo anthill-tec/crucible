@@ -56,14 +56,14 @@
 // real remote, no push, no repo mutation.
 //
 // RED expectation (measured against c988de3, C1 GREEN):
-//   * `handleMilestones` (src/v2.ts:1147) passes ONLY label/commit/context
+//   * `handleMilestones` (src/v2.ts) passes ONLY label/commit/context
 //     into `recordMilestoneEvent`, so unknown body fields are silently
-//     dropped; `releaseBrief` (src/v2.ts:1617) emits only {version, commit,
+//     dropped; `releaseBrief` (src/v2.ts) emits only {version, commit,
 //     timestamp}. Every `releasedAt`/`crs` assertion below therefore fails on
 //     `undefined` — the missing contract, not a broken fixture.
-//   * `emit_release_milestone` (scripts/release.sh:391) computes neither the
+//   * `emit_release_milestone` (scripts/release.sh) computes neither the
 //     tag date nor the CR set, so the ceremony has nothing to send.
-//   * `Store.listReleases` (src/store.ts:1994) orders by ingest `timestamp
+//   * `Store.listReleases` (src/store.ts) orders by ingest `timestamp
 //     DESC`, so the AC9 ordering assertion fails with the ship order reversed.
 // Pre-existing coverage that must keep passing: tests/releases.test.ts AC4-a
 // (releases with NO `releasedAt` stay newest-INGEST-first).
@@ -800,7 +800,8 @@ describe("GET …/releases exposes releasedAt + crs and orders releases by ship 
 //        UNPLACEABLE — counted and named — rather than dropped in silence.
 //
 // WHY THIS SECTION EXISTS. CR-080 §S4 computed `crs` by scanning MERGE-COMMIT
-// SUBJECTS (`scripts/release.sh:411` `release_crs`, called at `:457`). Measured
+// SUBJECTS (`release_crs` in `scripts/release.sh`, called from
+// `emit_release_milestone`). Measured
 // on this repo, `CR-CRU-021` and `CR-CRU-023` are COMPLETED and shipped in
 // 0.1.0, yet `git log --merges --grep` finds neither, so both appear in NO
 // release's `crs` — provenance is a strict subset of what shipped, and the
@@ -830,7 +831,7 @@ describe("GET …/releases exposes releasedAt + crs and orders releases by ship 
 // its own handle; every git fixture under `mktemp`, no remote, no push.
 //
 // RED expectation (measured against 169f0d1):
-//   * `release_crs` (scripts/release.sh:411) greps `git log --merges
+//   * `release_crs` (scripts/release.sh) greps `git log --merges
 //     --format=%s` for CR ids. The fast-forward and squash CRs produce no
 //     merge commit, so they are invisible: AC1/AC2/AC3 fail because the
 //     release's `crs` is missing them (and in the AC6 no-subject variant `crs`
@@ -1340,7 +1341,7 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
   // ── AC4b / AC4c — the SECOND unplaceable class: no landing record at all ─
   //
   // RED expectation (measured against 9f09563): `report_unplaceable_crs`
-  // (scripts/release.sh:493) iterates `plan_merge_map` ALONE, which emits one
+  // (scripts/release.sh) iterates `plan_merge_map` ALONE, which emits one
   // line per CLOSED PLAN. A queued CR with NO plan produces no line at all, so
   // it is neither placed nor reported — the exact silence that took 0.1.0 from
   // 58 CRs to 51 with no signal. Each test below asserts its preconditions
@@ -1527,10 +1528,10 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
 //        AND is opt-in: an ordinary `backfill-releases` re-run remains the
 //        idempotent replay CR-CRU-080 §S3 defined.
 //
-// WHY THIS SECTION EXISTS. `Store.recordMilestoneEvent` (src/store.ts:1701)
+// WHY THIS SECTION EXISTS. `Store.recordMilestoneEvent` (src/store.ts)
 // short-circuits a `release` whose (label, commit) it already holds and
 // returns the HELD event with `changed:false`; `handleMilestones`
-// (src/v2.ts:1164) documents that as "a replay re-computes nothing". That is
+// (src/v2.ts) documents that as "a replay re-computes nothing". That is
 // exactly right for idempotency and exactly wrong for correction: provenance
 // recorded under the subject-scan rule can never acquire the ancestry-derived
 // answer, no matter how many times the ceremony runs. On this repo the only
@@ -1568,7 +1569,8 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
 // its own handle; every git fixture under `mktemp`, no remote, no push.
 //
 // RED expectation (measured against 0f922b6): `scripts/release.sh` has NO
-// repair path at all — its argument parser (`:778`) rejects every unrecognised
+// repair path at all — its argument parser (the top-level flag
+// `case` that fills `POSITIONAL`) rejects every unrecognised
 // flag with `ERROR: unknown flag` and exits `$EXIT_USAGE`, and no code
 // anywhere re-derives provenance for a held release (`grep -c repair
 // scripts/release.sh src/store.ts src/v2.ts` is 0). So every repair run below
@@ -1899,7 +1901,7 @@ describe("an already-recorded release can be REPAIRED, and only on purpose (CR-C
   // and evaluated by the time any test body runs.)
   //
   // RED expectation (measured, 2026-08-23): `emit_release_milestone`
-  // (scripts/release.sh:620-644) appends only `--released-at`, `--crs` and
+  // (scripts/release.sh) appends only `--released-at`, `--crs` and
   // `--repair-provenance` — `grep -c packages scripts/release.sh` is 0 — and
   // no client's `milestone` subparser declares `--packages`. So both the
   // first recording and the repair post nothing about packages, and every
@@ -2075,13 +2077,13 @@ describe("an already-recorded release can be REPAIRED, and only on purpose (CR-C
 // provenance it was built to correct: `0.1.0` went from 58 CRs to 0, and the
 // wiped store is kept as data/crucible.db.wiped-by-081-repair for forensics.
 // The mechanism is one operator: `Store.repairReleaseProvenance`
-// (src/store.ts:1777) spreads `...(crs !== undefined ? { crs } : {})`, so
+// (src/store.ts) spreads `...(crs !== undefined ? { crs } : {})`, so
 // `undefined` is guarded and `[]` — a PRESENT, well-formed "nothing" — is
 // persisted over the stored set. The ceremony even said so out loud:
 // `crs=(none registered)`, and then wrote anyway.
 //
 // The empty set's ORIGIN is correct and is deliberately untouched here: the
-// client's `release_crs` (clients/_crucible_axi.py:1638) truthfully returns
+// client's `release_crs` (clients/_crucible_axi.py) truthfully returns
 // the empty intersection when the registered queue knows none of the scanned
 // ids (CR-CRU-080 §S4 — never fall back to the raw scan). That is right at
 // RECORD time and destructive only when persisted over an existing set at
@@ -2834,17 +2836,18 @@ describe("a repair that cannot compute REFUSES loudly and never shrinks in silen
 // RED expectation (measured against the current tree) — `packages` has no
 // notion anywhere on the server side, at FIVE seams, so every assertion about
 // it fails and the field never reaches the wire:
-//   * `src/v2.ts:1160-1186` whitelists `releasedAt`/`crs`/`repairProvenance`
-//     and nothing else, so the field is dropped at the route.
-//   * `Store.recordMilestoneEvent`'s `meta` (src/store.ts:1712-1719) has no
+//   * `handleMilestones` in `src/v2.ts` whitelists
+//     `releasedAt`/`crs`/`repairProvenance` and nothing else, so the field is
+//     dropped at the route.
+//   * `Store.recordMilestoneEvent`'s `meta` (src/store.ts) has no
 //     `packages` member.
-//   * `Store.payloadColumn` (src/store.ts:2187-2207) is a WHITELIST, so even a
+//   * `Store.payloadColumn` (src/store.ts) is a WHITELIST, so even a
 //     carried field would not be persisted…
-//   * …nor read back: `toEvent` (src/store.ts:2286-2287) projects exactly
+//   * …nor read back: `toEvent` (src/store.ts) projects exactly
 //     `releasedAt` and `crs` out of the payload blob.
-//   * `releaseBrief` (src/v2.ts:1664-1672) spreads neither.
+//   * `releaseBrief` (src/v2.ts) spreads neither.
 // And AC7 arm (b) fails for a SIXTH, sharper reason that survives all of the
-// above: `repairReleaseProvenance` (src/store.ts:1800-1805) takes
+// above: `repairReleaseProvenance` (src/store.ts) takes
 // `(held, releasedAt, crs)` and opens with a WHOLE-REPAIR, `crs`-KEYED early
 // return — `if (crs !== undefined && crs.length === 0) return {held, false}` —
 // so a packages-only correction is silently dropped by a guard about a
@@ -3038,7 +3041,7 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
 
   // ── never-coerce validation (CR-CRU-073 §S1, as `crs` does it) ───────────
   //
-  // DROP GRANULARITY, read off `src/v2.ts:1164-1166` — `crs` is
+  // DROP GRANULARITY, read off `handleMilestones` in `src/v2.ts` — `crs` is
   // `Array.isArray(body.crs) ? body.crs.filter(wellFormed) : undefined`, which
   // is TWO rules at TWO granularities:
   //   * a value that is NOT AN ARRAY drops the whole FIELD (→ `undefined`, so
@@ -3431,7 +3434,8 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
       // publish job failed, gap analysis "measured history"), supplied by hand
       // as a historical fact — while the queue intersection comes back EMPTY,
       // which is precisely the input today's whole-repair, `crs`-keyed early
-      // return (src/store.ts:1805) turns into a silent no-op.
+      // return (in `repairReleaseProvenance`, src/store.ts) turns into a
+      // silent no-op.
       const only: PackageRef[] = [{ registry: "pypi", name: "crucible-axi", version: "0.1.0" }];
       const repaired = await postRelease(key, {
         label: "0.1.0",

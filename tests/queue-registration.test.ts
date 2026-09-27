@@ -780,9 +780,9 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // evidence of completion; §S2 names the honest state COMPLETED_UNTRACKED
   // rather than borrowing the fully-tracked COMPLETED presentation.
   //
-  // RED expectation (measured against src/store.ts:3052): `deriveQueueStatus`
+  // RED expectation (measured against src/store.ts): `deriveQueueStatus`
   // reads `listPlans` ALONE — zero plans returns `{ status: "PENDING" }` and no
-  // second source is ever consulted — and `QueueStatus` (src/types.ts:310) has
+  // second source is ever consulted — and `QueueStatus` (src/types.ts) has
   // three members. So every COMPLETED_UNTRACKED assertion below fails with the
   // derivation answering "PENDING": the missing contract, not a fixture bug.
   //
@@ -790,8 +790,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // /api/v2/milestones with {type:"release", label:<version>, commit,
   // releasedAt, crs} — the same route and body shape
   // tests/release-provenance.test.ts drives (CR-CRU-080 §S4/AC9). No route is
-  // invented, `handleMilestones` (src/v2.ts:1164) carries `crs` verbatim and
-  // `listReleases` (src/store.ts:2111) serves it, so membership here is real
+  // invented, `handleMilestones` (src/v2.ts) carries `crs` verbatim and
+  // `listReleases` (src/store.ts) serves it, so membership here is real
   // stored evidence read back off the wire, never a fixture side-channel.
   describe("CR-CRU-083 §S1/§S2 — a shipped CR derives COMPLETED_UNTRACKED, never PENDING", () => {
     /**
@@ -880,7 +880,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     /** Drives the plan to CLOSED-WITHOUT-MERGE — the ABANDONED plan: the
      *  cycle is activated then done (a plan cannot close over a non-terminal
      *  cycle), and the closing PATCH omits `merge` entirely. `merge` is
-     *  OPTIONAL on PATCH …/plans/<id> (src/v2.ts:1480-1491) — the body is
+     *  OPTIONAL on PATCH …/plans/<id> (`handlePlanClose` in src/v2.ts) — the
+     *  body is
      *  `{agentId, status:"closed"}` and nothing else — so this is a reachable
      *  production state, not a contrived one. Mirrors closePlanWithMerge in
      *  every other respect. */
@@ -1182,10 +1183,11 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     // ── AC4 (amended) / AC9 — the ABANDONED-plan backwards path ────────────
     //
     // The gap the VERIFY of cycle 253 measured. `deriveQueueStatus`
-    // (src/store.ts:3095) consults `shipped` ONLY on the zero-plans path; the
+    // (src/store.ts) consults `shipped` ONLY on the zero-plans path; the
     // fallthrough — plans exist, none open, none closed-with-merge — returns
     // PENDING without ever asking whether a release shipped the cr. Because
-    // `merge` is OPTIONAL on PATCH …/plans/<id> (src/v2.ts:1480-1491), closing
+    // `merge` is OPTIONAL on PATCH …/plans/<id> (`handlePlanClose` in
+    // src/v2.ts), closing
     // a plan with no merge body is a plain production route call, so a shipped
     // cr that reads COMPLETED_UNTRACKED can be walked BACKWARDS to PENDING by
     // filing a plan and abandoning it. That is exactly the contradiction AC9
@@ -1317,15 +1319,16 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // per-CR verbs' suite — this route is not one of them.
   //
   // WHAT IS BROKEN TODAY. `handleQueuePost` builds its `QueueEntryInput` from
-  // `cr/title/wave/dependsOn/size/seq` (src/v2.ts:1865-1876) and never reads
+  // `cr/title/wave/dependsOn/size/seq` (its entry loop in src/v2.ts) and
+  // never reads
   // `fields.release`, `fields.track` or `fields.lifecycle` — three keys
-  // `QueueEntryInput` DECLARES (src/store.ts:283-287) and which `replaceQueue`
+  // `QueueEntryInput` (src/store.ts) DECLARES and which `replaceQueue`
   // already accepts, normalises and stores. The route still answers 200, so
   // the loss is indistinguishable from success at the call site.
   //
   // WHY EVERY FIXTURE POSTS A CR THE STORE HAS NEVER SEEN. Carry-forward hides
   // the defect on a live board: `replaceQueue` writes
-  // `entry.release ?? snapshot?.release ?? null` (src/store.ts:3599), so a
+  // `entry.release ?? snapshot?.release ?? null` (src/store.ts), so a
   // re-post preserves the release `cr-plan` set. The loss lands only on rows
   // the bulk post CREATES — which is the e2e scenario's shape
   // (tests/e2e/features/roadmap-graph.feature:38) and a fresh board's.
@@ -1389,7 +1392,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // this test's subject is CR-CRU-099 AC2 MEMBERSHIP, and the marker is
         // asserted in tests/roadmap-wave-active-marker.test.ts.
         // NON-VACUITY — membership is filtered on `entry?.release === version`
-        // (public/app-logic.mjs:1275), so the release-less row today's route
+        // (`focusedReleaseView` in public/app-logic.mjs), so the release-less
+        // row today's route
         // stores is a member of nothing: no wave box, no rows, no warning.
         const releaseless = entries.map((entry) => {
           const copy: Record<string, unknown> = { ...entry };
@@ -1411,7 +1415,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-099-every-declared-key");
         await propose(key, RELEASE);
         // `at` is epoch MILLISECONDS — the unit `QueueLifecycle` declares
-        // (src/types.ts:360-363).
+        // (its doc comment in src/types.ts).
         const lifecycle = { state: "VOID", reason: "folded into CR-Q99-A", at: 1_787_149_125_000 };
         expect([200, 202]).toContain(
           (
@@ -1441,7 +1445,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect(e.release).toBe(RELEASE);
         // `track` is the ONE declared field carrying a normaliser: any
         // accepted spelling is stored in the PRD's locked wire format
-        // (`normalizeTrack`, src/store.ts:345-348), so "Track 2" reads back
+        // (`normalizeTrack` in src/store.ts), so "Track 2" reads back
         // `track-2` — normalised on write, never verbatim and never refused.
         expect(e.track).toBe("track-2");
         expect(e.lifecycle).toEqual(lifecycle);
@@ -1469,7 +1473,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const body = (await res.json()) as ErrResponse;
         expect(body.ok).toBe(false);
         // The route's OWN shape for a malformed field, as `dependsOn` and
-        // `seq` already answer it (src/v2.ts:1851-1864): the field by name and
+        // `seq` already answer it (`handleQueuePost` in src/v2.ts): the field
+        // by name and
         // the INDEX of the offender — 1, never the valid entry at 0.
         expect(body.error).toContain("track");
         expect(body.error).toMatch(/index 1\b/);
@@ -1485,7 +1490,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-lifecycle-shape");
-        // Exactly what `QueueLifecycle` DECLARES (src/types.ts:365-372) and
+        // Exactly what `QueueLifecycle` (src/types.ts) DECLARES and
         // nothing about the disposition itself: a scalar is not a lifecycle, a
         // `state` outside the two declared values is not one, and `at` — epoch
         // MILLISECONDS, required — is not optional. Which disposition is
@@ -1572,7 +1577,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const entries = (await getQueue(key)).entries;
         for (const cr of ["CR-Q99-N1", "CR-Q99-N2"]) {
           // ABSENT, not null: an undeclared release is a fact
-          // (src/store.ts:262-266) and `listQueue` omits the key entirely.
+          // (`QueueEntryRow` in src/store.ts) and `listQueue` omits the key
+          // entirely.
           expect("release" in findEntry(entries, cr)).toBe(false);
         }
         // CR-CRU-095 §S3 unchanged — both still default into wave 5's block.
@@ -2036,9 +2042,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   //
   // WHY HERE: this suite owns the queue WRITE → READ round trip, and the
   // published list is a fact about what the write path stored. Measured
-  // 2026-09-07: `handleQueueGet` (src/v2.ts:1833 ON DEVELOP — §S1 landed 25
-  // lines of `declaredTracks` above it, so the same function reads at :1840 on
-  // this branch; the line cited is the one the measurement was taken at) answers
+  // 2026-09-07: `handleQueueGet` (src/v2.ts) answers
   // `{ok: true, entries: store.listQueue(key)}` and states no track fact at
   // all — so both tests below fail on a MISSING FIELD (`tracks` is
   // undefined), never on a wrong value, a crash or a 404.
@@ -2046,7 +2050,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // THE RULE (CR-CRU-092 §S3, restated by AC1): the sorted distinct `track`
   // values over the entries the read RETURNED, excluding null, absent and
   // blank values, each echoed exactly as stored. `normalizeTrack`
-  // (src/store.ts:349) runs on the WRITE, so a value posted as `3` is STORED
+  // (src/store.ts) runs on the WRITE, so a value posted as `3` is STORED
   // `track-3` and the read echoes THAT: normalising on write and echoing on
   // read are one sentence, not two rules.
   describe("CR-CRU-108 §S1/AC1 — GET /queue publishes the tracks the write stored", () => {

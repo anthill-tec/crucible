@@ -1,7 +1,7 @@
 // CR-CRU-026 C2 — §S3.2 gap-analysis decision: a single additive
 // `GET /api/v2/plans` — ALL non-archived projects' plans, same item shape as
 // the project-scoped list (each item already carries `projectKey`,
-// src/store.ts:1306 `toPlan()`), `?fmt=toon` parity, no pagination.
+// `toPlan` in src/store.ts), `?fmt=toon` parity, no pagination.
 //
 // Spec: docs/changes/CR-CRU-026-patch-workspace-plan-scoping.md §S3.2 —
 //   "a single additive `GET /api/v2/plans`** — all NON-ARCHIVED projects'
@@ -12,11 +12,12 @@
 // Current code facts (verified against src/v2.ts on this branch):
 //   - handleV2() (src/v2.ts ~L996) has NO branch matching
 //     `pathname === "/api/v2/plans"` at all — only
-//     `/api/v2/projects/<key>/plans` (project-scoped, handlePlansList,
-//     src/v2.ts:711) exists. Any request to the bare `/api/v2/plans` path
+//     `/api/v2/projects/<key>/plans` (project-scoped, `handlePlansList` in
+//     src/v2.ts) exists. Any request to the bare `/api/v2/plans` path
 //     falls through handleV2() -> null -> the server's `/api/` catch-all
-//     (src/server.ts:531): `err(404, "unknown route: <method> <path>")`.
-//   - store.listProjects() (src/store.ts:431) already excludes archived
+//     (`startServer` in src/server.ts):
+//     `err(404, "unknown route: <method> <path>")`.
+//   - store.listProjects() (`listProjects` in src/store.ts) already excludes archived
 //     projects by default (`archived = false` param) — the exclusion this
 //     CR needs is a straight consequence of iterating that list, not new
 //     store logic.

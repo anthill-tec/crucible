@@ -64,7 +64,7 @@ describe("TOON conformance — official library decode of a real CLIENT envelope
   // decodes via the official library. This is the direction named by §S4
   // ("client `_emit` output ... → `@toon-format/toon` decode ...
   // across the client envelope shapes"). `clients/bun-crucible.py` writes
-  // its own AXI envelope to stdout via `_crucible_axi.py:84`
+  // its own AXI envelope to stdout via `emit_axi` in `clients/_crucible_axi.py`
   // (`sys.stdout.write(_toon().encode({"axi": axi}) + "\n")`) — a REAL
   // client-side TOON encode, produced by `clients/toon.py`, not the
   // server's `src/toon.ts`. Self-contained: its own spawn helper, its own
@@ -166,11 +166,11 @@ describe("TOON conformance — official library decode of a real CLIENT envelope
     });
 
     // ESCALATION: the dispatch brief asked for this case to be driven via
-    // `--message "42"`, but reading `clients/bun-crucible.py:357-438`
+    // `--message "42"`, but reading `clients/bun-crucible.py`
     // (`_register_agent`/`cmd_register`) shows `message` is POSTed to the
     // server ONLY — the `emit("register", ok, {"agent": agent_id,
     // "help": HELP_STEPS["register"]}, ...)` call `cmd_register` now delegates
-    // to, at `clients/_crucible_axi.py:3242-3248`, never includes it, and
+    // to (`cmd_register` in `clients/_crucible_axi.py`), never includes it, and
     // `_crucible_axi.py`'s documented envelope shape
     // (`axi: {verb, ok, <verb-specific result fields>, context, warnings}`)
     // confirms `register`'s result fields are exactly `{agent, help}` — no

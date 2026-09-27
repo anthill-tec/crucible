@@ -6,9 +6,9 @@
 // C1 made every server limit resolve from a `crucible.toml` read at the point
 // of use, and deliberately left three overrides in front of that file:
 //
-//   src/store.ts:747   Number(process.env.CRUCIBLE_DEFAULT_RETENTION)
-//   src/store.ts:843   Number(process.env.CRUCIBLE_RUN_ABANDON_MS)
-//   src/v2.ts:371      Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "")
+//   `defaultRetention` (src/store.ts)   Number(process.env.CRUCIBLE_DEFAULT_RETENTION)
+//   `runAbandonAfterMs` (src/store.ts)  Number(process.env.CRUCIBLE_RUN_ABANDON_MS)
+//   `projectInactiveMs` (src/v2.ts)     Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "")
 //
 // They are retired here. The reason is the CR's own: a limit read from the
 // environment is a limit with no `description`, no `recommended`, no `min` and
@@ -111,7 +111,8 @@ function stillSet(name: string, raw: string): void {
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // RED, all three. Today each resolver reads its variable FIRST and returns it
-// whenever it is finite and positive (src/store.ts:747, :843, src/v2.ts:371),
+// whenever it is finite and positive (`defaultRetention` and
+// `runAbandonAfterMs` in src/store.ts, `projectInactiveMs` in src/v2.ts),
 // so each test below observes the OVERRIDE's number at the enforcement site
 // where the FILE's is asserted.
 //
@@ -166,7 +167,8 @@ describe("CR-CRU-131 §S1b — $CRUCIBLE_RUN_ABANDON_MS no longer decides when t
     const store = Store.open(":memory:");
     // The horizon is the LONGER of the two, so the agent cannot tombstone at
     // the instant swept — `agent died` is checked before the deadline is
-    // (src/store.ts:3745) and would settle the run for the wrong reason.
+    // (`sweepOpenRuns` in src/store.ts) and would settle the run for the
+    // wrong reason.
     const key = projectOutlivingHorizon(store, ignored, "abandon-override-subject");
     const run = store.startRun(key, "abandon-override-agent");
 
@@ -291,8 +293,8 @@ describe("CR-CRU-131 §S1b — with no variable AND no file, retention is still 
     expect(eventCount(store, key)).toBe(written.length);
 
     // And the SUFFICIENT half, because a fixture smaller than the
-    // recommendation would survive a cap too: `retentionDisclosure` returns
-    // `null` the moment ANY cap resolves (src/server.ts:321), so a line here
+    // recommendation would survive a cap too: `retentionDisclosure`
+    // (src/server.ts) returns `null` the moment ANY cap resolves, so a line here
     // is the observable form of "no cap resolves at all".
     const disclosure = retentionDisclosure(store);
     expect(disclosure).not.toBeNull();
@@ -304,7 +306,7 @@ describe("CR-CRU-131 §S1b — with no variable AND no file, retention is still 
 // §S1b — the advice stops naming a lever that no longer exists
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// RED. `retentionDisclosure()` (src/server.ts:325, :327) currently tells an
+// RED. `retentionDisclosure()` in src/server.ts currently tells an
 // operator to "Set $CRUCIBLE_DEFAULT_RETENTION to bound every project". After
 // this cycle that instruction is unfollowable, and unfollowable advice on the
 // boot banner is worse than none: it sends an operator to a lever, they pull
@@ -345,10 +347,12 @@ describe("CR-CRU-131 §S1b — the uncapped-retention disclosure names the FILE 
 // reader of `crucible-server` meets, so a retired knob presented there as live
 // configuration outranks every document that says otherwise.
 // Prose counts as well as code, and
-// deliberately: `clients/bun-crucible.py:1025` is not a comment, it is text a
-// CLIENT EMITS to a user — it read "older than CRUCIBLE_RUN_ABANDON_MS" — and
-// src/server.ts:303 is a comment that would go on teaching the next author a
-// mechanism that no longer exists. Neither may survive.
+// deliberately: the warning `_run_left_open_warning` (clients/bun-crucible.py)
+// builds is not a comment, it is text a CLIENT EMITS to a user — it read
+// "older than CRUCIBLE_RUN_ABANDON_MS" — and the doc comment on
+// `retentionDisclosure` in src/server.ts is a comment that would go on
+// teaching the next author a mechanism that no longer exists. Neither may
+// survive.
 //
 // `docs/` is NOT scanned, and that is the distinction: a CR, the PRD and the
 // RUNBOOK must be free to RECORD that these variables existed and were
@@ -449,7 +453,8 @@ describe("CR-CRU-131 §S1b — no retired limit variable is named in the shipped
  *
  * Prose that RECORDS the retirement (`$CRUCIBLE_PORT`, `` `CRUCIBLE_HOST` ``)
  * carries none of these shapes, which is the point: the connection retirement
- * is explained where it used to happen (`src/server.ts:158`), and an
+ * is explained where it used to happen (the doc comment on
+ * `resolveListener` in `src/server.ts`), and an
  * explanation must not read as the thing it explains.
  */
 function readsOf(name: string, text: string): string[] {
@@ -459,8 +464,8 @@ function readsOf(name: string, text: string): string[] {
     new RegExp(`(?:process\\.env|Bun\\.env|\\benv)\\s*(?:\\.${name}\\b|\\[\\s*["'\`]${name}["'\`]\\s*\\])`),
     // Python: `os.environ.get("NAME")`, `env["NAME"]`, `env.get("NAME")`.
     new RegExp(`(?:os\\.environ|\\benv)\\s*(?:\\.get\\(\\s*["']${name}["']|\\[\\s*["']${name}["']\\s*\\])`),
-    // Python membership, which is how a client checks its `.env` before
-    // reading it (`clients/bun-crucible.py:157`).
+    // Python membership, the shape `_project_key` in clients/bun-crucible.py
+    // once used to check its `.env` before reading it.
     new RegExp(`["']${name}["']\\s+(?:not\\s+)?in\\s+\\w*env\\w*`),
   ];
   const hits: string[] = [];
@@ -485,9 +490,9 @@ describe("CR-CRU-139 §S4 — a name is bootstrap or retired by what the code RE
 
     // POSITIVE, and the instrument's control: a variable that really is
     // bootstrap is READ, so a green negative below is this scan working rather
-    // than a regex that matches nothing. `CRUCIBLE_DB` is read at
-    // src/server.ts:66; `CRUCIBLE_PROJECT_KEY` at
-    // clients/arduino-crucible.py:117.
+    // than a regex that matches nothing. `CRUCIBLE_DB` is read in
+    // `resolveStore` (src/server.ts); `CRUCIBLE_PROJECT_KEY` in `_load_env`
+    // (clients/arduino-crucible.py).
     const unread = BOOTSTRAP_ENV.filter((name) => readsIn(name).length === 0);
     expect(
       unread,

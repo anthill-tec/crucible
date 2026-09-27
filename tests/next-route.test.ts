@@ -6,11 +6,11 @@
 //
 // Complements tests/next-resolver.test.ts (the PURE function, unit tier): this
 // file is the WIRING — the route reads `store.listQueue`/`declaredTracks` (the
-// same helpers `handleQueueGet` already uses, src/v2.ts:2092-2101) and the
+// same helpers `handleQueueGet` in src/v2.ts already uses) and the
 // project's declared tracks, calls the pure resolver, and publishes its answer
 // verbatim, `help[]`/`warnings[]` included, matching AC7's "validated like
 // every other v2 route" — modelled on `handleQueueGet`'s own UUID/unknown-project
-// refusal shape (src/v2.ts:2093-2097), never invented independently.
+// refusal shape (its opening guard), never invented independently.
 //
 // RED expectation: no `next` route is registered, so every request below hits
 // the router's fallback and every assertion on the (future) NEXT/DRAINED/

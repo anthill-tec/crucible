@@ -22,7 +22,7 @@
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
 // CR-CRU-091 §S8 — proposing a release is ORCHESTRATOR-only (`requireOrchestrator`,
-// src/v2.ts:265), which is a role the shared seeding step deliberately does not
+// in src/v2.ts), which is a role the shared seeding step deliberately does not
 // hand out: it registers `role: "report"` so an e2e fixture can never look like
 // a planning authority by accident. A scenario that needs one asks for it.
 Step(

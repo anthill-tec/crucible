@@ -7,14 +7,14 @@
 // OWN case here, never an aggregate pass, so a report can name which consumer
 // broke rather than that "the §S4b test" is red.
 //
-// | consumer                          | site              | case below |
-// |-----------------------------------|-------------------|------------|
-// | CR-CRU-118's plannable-target gate| src/v2.ts:2837    | 1 (both directions) |
-// | the shipped-is-settled refusal    | src/hints.ts:404  | 2 |
-// | three `release-proposals` lines   | src/hints.ts:382/398/403 | 3 |
-// | proposal convergence              | src/store.ts:2884 | 4 |
-// | `stampProposalRetired`, site 2    | src/store.ts:2905 | 5 |
-// | `listReleaseProposals`/`listReleases` | src/store.ts:3424/3382 | 6 |
+// | consumer                              | site                                       | case below          |
+// |---------------------------------------|--------------------------------------------|---------------------|
+// | CR-CRU-118's plannable-target gate    | `declareMembership` (src/v2.ts)            | 1 (both directions) |
+// | the shipped-is-settled refusal        | `unproposedRelease` (src/hints.ts)         | 2                   |
+// | three `release-proposals` lines       | three `roadmapHints` arrays (src/hints.ts) | 3                   |
+// | proposal convergence                  | `recordReleaseProposal` (src/store.ts)     | 4                   |
+// | `stampProposalRetired`, site 2        | `recordReleaseProposal` (src/store.ts)     | 5                   |
+// | `listReleaseProposals`/`listReleases` | src/store.ts                               | 6                   |
 //
 // (`stampProposalRetired` site 1 — retirement-on-ship — is case 2 of
 // tests/release-before-and-after-delivery.test.ts, where the `deliveredAt` it
@@ -52,7 +52,8 @@ const SHIPPED_AT = 1_790_000_000;
 const DAY = 86_400;
 
 /**
- * THE REFUSAL, BYTE-IDENTICAL (§S4b, src/v2.ts:2837 + src/hints.ts:401-405).
+ * THE REFUSAL, BYTE-IDENTICAL (§S4b, `declareMembership` in src/v2.ts +
+ * `unproposedRelease` in src/hints.ts).
  *
  * Written as LITERALS rather than imported from `src/hints.ts`: importing the
  * subject and comparing it with itself asserts nothing, and "byte-identical"
@@ -68,16 +69,16 @@ const UNPROPOSED_HELP = (label: string): string[] => [
   `a release that has already SHIPPED is settled history and is no longer a plannable target for ${label}`,
 ];
 
-/** src/hints.ts:382 — `missingRelease`'s route line. */
+/** src/hints.ts — `missingRelease`'s route line. */
 const PROPOSALS_LINE_MISSING_RELEASE =
   `GET /api/v2/projects/<key>/release-proposals — the live proposals a CR can be planned into`;
 
-/** src/hints.ts:398 — `missingTarget`'s route line. */
+/** src/hints.ts — `missingTarget`'s route line. */
 const PROPOSALS_LINE_MISSING_TARGET =
   `GET /api/v2/projects/<key>/release-proposals — the live proposals and the targets they already declared`;
 
-/** src/hints.ts:403 — `unproposedRelease`'s route line. Shared VERBATIM with
- *  :382 by design — one question, one route named. */
+/** src/hints.ts — `unproposedRelease`'s route line. Shared VERBATIM with
+ *  `missingRelease`'s by design — one question, one route named. */
 const PROPOSALS_LINE_UNPROPOSED = PROPOSALS_LINE_MISSING_RELEASE;
 
 interface QueueEntryWire {
@@ -175,7 +176,7 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
   // ── 1. CR-CRU-118's plannable-target gate — BOTH directions ─────────────
 
   test(
-    "consumer 1 (src/v2.ts:2837) — `cr-plan` REFUSES a release with no undelivered record, with " +
+    "consumer 1 (`declareMembership` in src/v2.ts) — `cr-plan` REFUSES a release with no undelivered record, with " +
       "its sentence and help[] byte-identical",
     async () => {
       boot();
@@ -204,7 +205,7 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
   );
 
   test(
-    "consumer 1 (src/v2.ts:2837), the other direction — `cr-plan` ACCEPTS a CR planned into a " +
+    "consumer 1 (`declareMembership` in src/v2.ts), the other direction — `cr-plan` ACCEPTS a CR planned into a " +
       "release that is UNDELIVERED, and the row it writes names that release",
     async () => {
       const server = boot();
@@ -237,10 +238,10 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
     },
   );
 
-  // ── 2. the shipped-is-settled refusal (src/hints.ts:404) ────────────────
+  // ── 2. the shipped-is-settled refusal (`unproposedRelease` in src/hints.ts) ───
 
   test(
-    "consumer 2 (src/hints.ts:404) — a DELIVERED release is refused as a plannable target, " +
+    "consumer 2 (`unproposedRelease` in src/hints.ts) — a DELIVERED release is refused as a plannable target, " +
       "carrying the settled-history sentence",
     async () => {
       const server = boot();
@@ -291,14 +292,15 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
   // ── 3. the three `release-proposals` route sentences ────────────────────
 
   test(
-    "consumer 3 (src/hints.ts:382/398/403) — the three `release-proposals` sentences are " +
+    "consumer 3 (the `missingRelease`, `missingTarget` and `unproposedRelease` arrays of " +
+      "`roadmapHints` in src/hints.ts) — the three `release-proposals` sentences are " +
       "unchanged, and the route they name still answers with the UNDELIVERED release",
     async () => {
       const server = boot();
       const key = await seedProject();
       const outstanding = recordOutstandingRelease(server, key, "0.2.0", TARGET_AT);
 
-      // :382 — a declaration carrying NO release at all.
+      // `missingRelease` — a declaration carrying NO release at all.
       const noRelease = await post(planPath(key), {
         agentId: ORCH,
         cr: "CR-AUTH-10",
@@ -308,12 +310,12 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
       expect(noRelease.status).toBe(400);
       expect(noRelease.body.help?.[0]).toBe(PROPOSALS_LINE_MISSING_RELEASE);
 
-      // :398 — a `release-propose` carrying NO `targetAt`.
+      // `missingTarget` — a `release-propose` carrying NO `targetAt`.
       const noTarget = await post(proposalsPath(key), { agentId: ORCH, label: "0.4.0" });
       expect(noTarget.status).toBe(400);
       expect(noTarget.body.help?.[2]).toBe(PROPOSALS_LINE_MISSING_TARGET);
 
-      // :403 — a cr planned into a label with no undelivered record.
+      // `unproposedRelease` — a cr planned into a label with no undelivered record.
       const unproposed = await post(planPath(key), {
         agentId: ORCH,
         cr: "CR-AUTH-11",
@@ -342,10 +344,10 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
     },
   );
 
-  // ── 4. proposal convergence (src/store.ts:2884) ─────────────────────────
+  // ── 4. proposal convergence (`recordReleaseProposal` in src/store.ts) ───
 
   test(
-    "consumer 4 (src/store.ts:2884) — re-proposing one label through the route converges to a " +
+    "consumer 4 (`recordReleaseProposal` in src/store.ts) — re-proposing one label through the route converges to a " +
       "SINGLE undelivered release record rather than adding a row",
     async () => {
       boot();
@@ -381,7 +383,8 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
   // ── 5. `stampProposalRetired`, the REVISION call site ───────────────────
 
   test(
-    "consumer 5 (src/store.ts:2905) — a REVISION leaves exactly one undelivered release carrying " +
+    "consumer 5 (`recordReleaseProposal` in src/store.ts, its `stampProposalRetired` revision " +
+      "branch) — a REVISION leaves exactly one undelivered release carrying " +
       "the new target, and the superseded date stays auditable",
     async () => {
       boot();
@@ -445,7 +448,7 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
   // ── 6. `listReleaseProposals` / `listReleases` ──────────────────────────
 
   test(
-    "consumer 6 (src/store.ts:3424/3382) — one label MOVES from the proposals read to the " +
+    "consumer 6 (`listReleaseProposals` / `listReleases` in src/store.ts) — one label MOVES from the proposals read to the " +
       "releases read when it is delivered, and is never in both or in neither",
     async () => {
       const server = boot();

@@ -12,14 +12,14 @@
 // fixes?, push?, pr?}`, `outcome ∈ checks-passed|passed|failed|cancelled`.
 //
 // Current-code facts verified against public/app.js on this branch (2026-07-18):
-//   - `WorkflowFeed()` (~app.js:2268) renders `.app-workflow-cols` containing
+//   - `WorkflowFeed()` (public/app.js) renders `.app-workflow-cols` containing
 //     `() => WorkflowActive()` followed by `GatePane()` — GatePane is an
 //     UNCONDITIONALLY mounted second column
 //     (`data-testid="gate-pane"` static text "gate reporting lands in
 //     CR-013", app.js ~L2042-2047) — it never varies with plan/event state.
 //     Every test below that asserts on `gate-pane` presence/content is
 //     expected to FAIL against this static placeholder.
-//   - `WorkflowActive()` (~app.js:1999) renders the literal text
+//   - `WorkflowActive()` (public/app.js) renders the literal text
 //     "no open plan — file one via POST /api/v2/projects/<key>/plans" when
 //     `scopedPlans().filter(p => p.status === "open").length === 0` —
 //     unconditionally, regardless of any gate event. §S4's "mutually
@@ -58,9 +58,9 @@
 //     reload".
 //   - AC146's "grep asserts no wave-control route exists" clause is NOT
 //     duplicated here — it is already pinned (and passing, since no such
-//     route exists in production) by tests/workflow-lens.test.ts:566
-//     ("no dedicated wave API route exists in src/ — wave state is inferred
-//     from plans only"). Re-asserting a currently-true invariant here would
+//     route exists in production) by the tests/workflow-lens.test.ts test
+//     "no dedicated wave API route exists in src/ — wave state is inferred
+//     from plans only". Re-asserting a currently-true invariant here would
 //     add a vacuously-passing test, which is out of place in a RED-only file;
 //     that existing test already stands as this AC's evidence.
 import { describe, test, expect, afterEach } from "bun:test";

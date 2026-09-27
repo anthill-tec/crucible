@@ -9,12 +9,13 @@
 // form.test.ts: real VanJS/VanX vendor bundles, real public/app-logic.mjs,
 // real public/app.js; `fetch` is scripted.
 //
-// SSE simulation technique: confirmed (tests/shell-final-form.test.ts:707-
-// 714, re-verified live against this harness) that `typeof EventSource` is
-// `undefined` under happy-dom, so `connectStream()` (public/app.js:125-149)
-// always falls back to `startPolling()` (public/app.js:151-154), a plain
+// SSE simulation technique: confirmed (the "shows exactly 'server
+// unreachable · retrying…'" test in tests/shell-final-form.test.ts,
+// re-verified live against this harness) that `typeof EventSource` is
+// `undefined` under happy-dom, so `connectStream` (public/app.js)
+// always falls back to `startPolling` (public/app.js), a plain
 // `setInterval(refetch, 5000)`. Both the real SSE `onmessage` handler and
-// the poll fallback call the IDENTICAL `refetch()` (public/app.js:96-113),
+// the poll fallback call the IDENTICAL `refetch` (public/app.js),
 // which re-fetches /api/v2/projects, /api/v2/agents, /api/v2/events and
 // replaces state via `vanX.replace`. This file drives that shared refetch
 // path — the only one reachable in this DOM-less-EventSource harness — by
@@ -24,8 +25,8 @@
 // (26s under a 35s test timeout) for its own timer-driven assertion.
 //
 // Honesty note (per dispatch): CR-CRU-016 C1/C2 already landed surface-keyed
-// bindings (public/app.js:1567-1595 `surfaceKeyOf`/chromeKey/surfaceKey
-// memoization + the `paneSwap` closure at :574-598 which only calls
+// bindings (`surfaceKeyOf` (public/app.js)/chromeKey/surfaceKey
+// memoization + the `paneSwap` closure (public/app.js) which only calls
 // `RunDetail(state.route.overlay)` when the reactive scope watching
 // `state.route.overlay` re-runs). Because the agents/projects/events state
 // lives in DIFFERENT reactive scopes than the pane-swap branch that holds
@@ -50,8 +51,9 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (public/app.js:153). Wait
-// comfortably past it before asserting on a poll-driven update.
+// The real poll interval is a hard-coded 5000ms (`startPolling` in
+// public/app.js). Wait comfortably past it before asserting on a
+// poll-driven update.
 const POLL_INTERVAL_MS = 5000;
 const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
 const POLL_TEST_TIMEOUT_MS = 15_000;
@@ -394,8 +396,9 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       expect(location.pathname).toBe(`/p/${projectKey}/run/${eventId}`);
 
       // Marker-attribute technique (same as C1's AC1 no-remount check): the
-      // in-pane detail container `[data-testid="run-overlay"]` (public/
-      // app.js:1531) is the same DOM node that must survive the update.
+      // in-pane detail container `[data-testid="run-overlay"]` (built by
+      // `RunDetail` in public/app.js) is the same DOM node that must survive
+      // the update.
       const overlayBefore = document.querySelector('[data-testid="run-overlay"]') as HTMLElement | null;
       expect(overlayBefore).not.toBeNull();
       overlayBefore!.setAttribute("data-red-marker", "still-open-during-sse");

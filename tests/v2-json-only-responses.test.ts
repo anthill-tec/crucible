@@ -1,8 +1,8 @@
 // CR-CRU-132 §S1 — the response gate answers JSON, always. RED phase.
 //
 // The server still renders every v2 GET as TOON when asked: `reply()`
-// (`src/v2.ts:213`) branches on `wantsToon()` and answers `text/toon`. §S1
-// DELETES that branch, `wantsToon`, `truncatedToon`, `jsonVariantUrl`,
+// (`reply` in `src/v2.ts`) branches on `wantsToon()` and answers `text/toon`.
+// §S1 DELETES that branch, `wantsToon`, `truncatedToon`, `jsonVariantUrl`,
 // `TOON_MAX_BYTES`, the `toToon` import and `src/toon.ts` itself, and MOVES
 // `@toon-format/toon` from `dependencies` to `devDependencies` so the
 // server's runtime dependency set becomes empty while the client-emit
@@ -169,10 +169,11 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   },
   // ── The two BRANCHING handlers, whose extra arms are separate call sites ──
   //
-  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (`src/v2.ts:3619`,
+  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (in `src/v2.ts`,
   // entered when `?cycleId=` is present) is a genuinely DIFFERENT payload
-  // from the unanchored recent-N feed (`src/v2.ts:3640`, the `/api/v2/events`
-  // row above), not the same URL under another query string: it omits
+  // from the unanchored recent-N feed (the same function's other branch, the
+  // `/api/v2/events` row above), not the same URL under another query
+  // string: it omits
   // `openRuns` ENTIRELY and adds `cycle` only when the cycleId resolves. Both
   // of its two shapes are pinned, because "an unknown cycleId answers 200
   // with an empty set and NO `cycle` field" is itself the documented contract
@@ -180,10 +181,10 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   // the resolving case would miss a regression that started emitting
   // `cycle: null`.
   //
-  // `handleEventGet` is a THREE-arm branch, and its arms are three distinct
-  // `reply()` call sites, not one: `?suite=<name>` (`src/v2.ts:3673`),
-  // `?depth=suites` (`src/v2.ts:3681`) and the plain whole-event read
-  // (`src/v2.ts:3683`, the `/api/v2/events/<id>` row above). CR-CRU-004 §S4
+  // `handleEventGet` (`src/v2.ts`) is a THREE-arm branch, and its arms are
+  // three distinct `reply()` call sites, not one: `?suite=<name>`,
+  // `?depth=suites` and the plain whole-event read (the
+  // `/api/v2/events/<id>` row above). CR-CRU-004 §S4
   // added the first two as progressive detail; each is driven here so this
   // table really does cover every `reply()` call site rather than 14 of 16.
   //
@@ -308,7 +309,7 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   describe("by construction — the machinery is gone from src/, not merely unreachable", () => {
     test("no file under src/ still names wantsToon, truncatedToon, jsonVariantUrl, TOON_MAX_BYTES or toToon in live code, and none carries the text/toon media type", () => {
       // FAILS IF THE CODE DOES NOTHING: every one of the five names is live
-      // in src/v2.ts today (`:161`, `:164`, `:170`, `:181`, `:33`) and
+      // in src/v2.ts today and
       // `text/toon; charset=utf-8` is the content-type `reply()` sets, so
       // this scan reports today and reports nothing only once §S1 lands.
       const residue = scanSrc();

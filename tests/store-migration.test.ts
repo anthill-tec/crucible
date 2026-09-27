@@ -6,11 +6,12 @@
 // ── What is broken today ───────────────────────────────────────────────────
 //
 // `PRAGMA user_version` is 0 on EVERY store ever written, including the 9.2 MB
-// live dog-food db. `Store.open` (src/store.ts:326) probes the file with
+// live dog-food db. `Store.open` (src/store.ts) probes the file with
 // `PRAGMA schema_version` for corruption and then calls `createTables()`, which
 // retrofits schema by probing `PRAGMA table_info` and firing ~19 ad-hoc,
-// un-transacted `ALTER TABLE`s (src/store.ts:438-574) plus an in-pass data
-// backfill (`backfillInferredEventRoles`, src/store.ts:488/599). Nothing stamps
+// un-transacted `ALTER TABLE`s (inside `createTables()`) plus an in-pass data
+// backfill (`backfillInferredEventRoles` in src/store.ts, called from
+// `createTables()`). Nothing stamps
 // a version, nothing copies the file first, and an OLDER binary opening a NEWER
 // store passes every "does this column exist" probe and writes to a schema it
 // does not understand.
@@ -51,7 +52,7 @@
 //   store: { path, rule, schemaVersion: number,
 //            migration: null | { from: number; to: number; backupPath: string | null } }
 //   on BOTH GET /api/health and GET /api/v2/health (the shared healthPayload()
-//   closure, src/server.ts:226, so the two routes cannot drift). Startup
+//   closure in src/server.ts, so the two routes cannot drift). Startup
 //   disclosure is asserted from the RETURNED handle (`handle.store`), never by
 //   capturing console — same discipline as tests/store-disclosure.test.ts.
 //

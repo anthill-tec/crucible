@@ -5,7 +5,7 @@
 //
 // Proposing `9.9.0` and then shipping `9.9.0` leaves TWO records of TWO types:
 // a `release-proposal` row stamped `retired_at` by `stampProposalRetired`
-// (src/store.ts:3083) and a separate `release` row inserted beside it. The
+// (src/store.ts) and a separate `release` row inserted beside it. The
 // store's own comment already concedes the model it is missing — the release
 // "consumes" its proposal because "the release it became now carries the fact"
 // — and `retired_at` is standing in for the delivered date the record had no
@@ -273,7 +273,7 @@ describe("CR-CRU-130 §S2 — one record, two points in its life", () => {
     },
   );
 
-  test("re-proposing one label still converges to a SINGLE record (§S4b, src/store.ts:2747)", () => {
+  test("re-proposing one label still converges to a SINGLE record (§S4b, `recordReleaseProposal` in src/store.ts)", () => {
     const store = new Store(":memory:");
     const key = seed(store);
 
@@ -519,10 +519,11 @@ describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this proj
       const key = await seedProject();
 
       // THE HOLE THIS CLOSES, measured 2026-09-13 rather than imagined:
-      // `scripts/release.sh:733` adds `--released-at` only `if [ -n
-      // "$ship_date" ]`, and `release_ship_date` (:405) prints nothing and
-      // exits 0 whenever git cannot resolve the sha — a shallow clone or an
-      // unfetched tag object. All five clients declare the flag optional, and
+      // `emit_release_milestone` in `scripts/release.sh` adds `--released-at`
+      // only `if [ -n "$ship_date" ]`, and `release_ship_date` (the same
+      // script) prints nothing and exits 0 whenever git cannot resolve the sha
+      // — a shallow clone or an unfetched tag object. All five clients declare
+      // the flag optional, and
       // the route carries it only when well-formed, because CR-CRU-080 §S4
       // deliberately left a dateless release legitimate. So this post is not a
       // hypothetical: it is what the ceremony really sends on that branch.

@@ -3517,7 +3517,8 @@
     // CR-CRU-096 AC9b — the node's lifecycle badge STAYS, and renders
     // wherever a node renders. AC9a trims the dispositioned PENDING ROW out
     // of a wave box, but it does NOT make this badge unreachable: the loose
-    // group draws its membership UNTRIMMED (AC18a, `:2854`) and AC9's union is
+    // group draws its membership UNTRIMMED (AC18a, the `app-flow-loose`
+    // branch of `RoadmapFlowWave` below) and AC9's union is
     // on STATUS, so a running CR is drawn whatever its `lifecycle` (AC9c).
     // On both paths dropping the span would leave the disposition published
     // as the `data-lifecycle` ATTRIBUTE alone — colour and CSS with no TEXT,

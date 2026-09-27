@@ -613,7 +613,7 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
         test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
         against the SAME `while proc.poll() is None:` polling loop
         rust-crucible.py's `cmd_gate_run` already wires up (confirmed by
-        reading the function body at rust-crucible.py:1905)."""
+        reading the function body of `cmd_gate_run` in rust-crucible.py)."""
         saved_path = os.environ.get("PATH", "")
         fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-rust-interim-")
         fake_path = os.path.join(fake_bin_dir, "no-mistakes")

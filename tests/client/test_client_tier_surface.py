@@ -363,9 +363,9 @@ class TierRegistrarSingleLocusTest(unittest.TestCase):
 
     The shape asserted is the one the fleet already has (§S1: "registered from
     one place in `clients/_crucible_axi.py` beside the other fleet-wide verb
-    surfaces") -- `add_roadmap_verbs` (:3406) for a multi-verb surface,
-    `add_next_verb` (:3501) / `add_cr_depends_verb` (:3368) /
-    `add_queue_file_verb` (:3545) for single verbs. Six verbs is the multi-verb
+    surfaces") -- `add_roadmap_verbs` for a multi-verb surface,
+    `add_next_verb` / `add_cr_depends_verb` /
+    `add_queue_file_verb` for single verbs. Six verbs is the multi-verb
     case, so this asserts the plural spelling. See ESCALATION 1."""
 
     def test_the_shared_module_exports_the_tier_registrar(self):
@@ -469,7 +469,7 @@ def _tier_mirrors(path):
     six plus a seventh) is exactly what AC10's guard exists to catch, and a
     detector keyed on the complete set would go blind at precisely the moment
     it matters. One tier word alone is not a vocabulary -- `HELP_STEPS`
-    (`clients/_crucible_axi.py:621`) legitimately keys `"regression"` beside
+    (`clients/_crucible_axi.py`) legitimately keys `"regression"` beside
     non-tier verbs -- so the threshold is two."""
     return [(lineno, values) for lineno, values in _string_collection_literals(path)
             if len(values & TIER_VOCABULARY) >= 2]
@@ -480,8 +480,8 @@ class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
     mirror cannot drift from `src/types.ts`.
 
     The pattern is the project's own: `canonical_track`
-    (`clients/_crucible_axi.py:1434`) mirrors `normalizeTrack`
-    (`src/store.ts:362-365`) and is "held to one rule by assertion (AC18), not
+    (`clients/_crucible_axi.py`) mirrors `normalizeTrack`
+    (`src/store.ts`) and is "held to one rule by assertion (AC18), not
     by comment". This is that assertion for the tier vocabulary.
 
     The mirror is DERIVED, never named: any collection literal in the shared

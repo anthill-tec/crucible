@@ -15,8 +15,9 @@ User directive: the agent identity must be DEFINED or the verb FAILS. There
 is no fallback, no default, and no fabricated value -- not even a
 `$WORKFLOW_ROLE`-derived one, because `WORKFLOW_ROLE` carries the TRACK LANE
 (`mainline` | `track-n`), not an agent identity (PRD-crucible-v2.md:362,
-DN-model-b-language.md:53, `clients/_crucible_axi.py:71-73`/`:373-375` both
-read it into `ctx["track"]`, never an id). Registering `mainline` or
+DN-model-b-language.md:53, `axi_context` and `fleet_context` in
+`clients/_crucible_axi.py` both read it into `ctx["track"]`, never an
+id). Registering `mainline` or
 `track-2` as an agent would be the exact same category error as
 `bun-crucible`, merely tidier-looking -- explicitly NOT an acceptable fix.
 

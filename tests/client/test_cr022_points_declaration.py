@@ -17,9 +17,10 @@ re-implemented per client."
 
 The implementation lands ONCE in `clients/_crucible_axi.py` (the
 CR-CRU-054 DRY rule), inside the ALREADY-shared `add_roadmap_verbs`'s
-`cr-plan` subparser (`_crucible_axi.py:4199-4214`) and its delegator
-`cmd_cr_plan` (`_crucible_axi.py:3831-3866`) — so wiring `--points` there
-reaches all five clients "for free"; this file drives all five real
+`cr-plan` subparser (`add_roadmap_verbs` in `clients/_crucible_axi.py`)
+and its delegator `cmd_cr_plan` (`clients/_crucible_axi.py`) — so wiring
+`--points` there reaches all five clients "for free"; this file drives all
+five real
 `main()` entry points through a recording `_post`/`_get` stub (the fleet's
 established harness idiom — `tests/client/test_cr091_roadmap_verbs.py`)
 to prove that is actually true, and never re-implements the flag per
@@ -28,7 +29,8 @@ client.
 Measured baseline (2026-09-24, re-confirmed at this RED pass): `grep -n
 '"--points"' clients/_crucible_axi.py` returns ZERO matches — `cr-plan`'s
 subparser adds only `--cr`, `--title`, `--release`, `--wave` plus the
-shared roadmap-projection/common args (`_crucible_axi.py:4204-4214`).
+shared roadmap-projection/common args (the `cr-plan` block of
+`add_roadmap_verbs` in `clients/_crucible_axi.py`).
 Every client's `cr-plan` argv here is expected to fail with argparse's
 `unrecognized arguments: --points N` (SystemExit(2)), so `_post` never
 fires and every "wire shape" assertion below fails for that reason — the

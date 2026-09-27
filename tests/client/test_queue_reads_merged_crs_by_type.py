@@ -2,13 +2,13 @@
 
 What is broken today, measured by reading `clients/_crucible_axi.py`:
 
-    QUEUE_EVENTS_LIMIT = 5000                              (:1674)
+    QUEUE_EVENTS_LIMIT = 5000                    (module-level constant)
     ...
     events = ops.get(f"/api/v2/events?project={key}"
-                     f"&limit={QUEUE_EVENTS_LIMIT}")       (:1738)
+                     f"&limit={QUEUE_EVENTS_LIMIT}")       (in `cmd_queue`)
     merged = cr_merged_crs(events.get("events"))
 
-    def cr_merged_crs(events):                             (:1692)
+    def cr_merged_crs(events):
         return sorted({e.get("label") for e in events or []
                        if e.get("kind") == "milestone"
                        and e.get("type") == "cr-merged" and e.get("label")})

@@ -1,7 +1,7 @@
 """CR-CRU-051 C2 RED -- propagate the run-envelope `files` (distinct test-FILE)
 count to `rust-crucible.py`. Mode 1 (new tests), preceded by the ASSESSMENT the
 C2 dispatch demanded: §S3 of docs/changes/CR-CRU-051-files-count-fleet-parity.md
-claims "rust has TWO parse sites: rust-crucible.py:762 and :1306". Both line
+claims "rust has TWO parse sites", citing them by line number. Both line
 numbers are stale (CR-054 shrank the file). Located by symbol instead, rust
 today has THREE places that turn a nextest run into a test count, not two --
 and only two of them are actually client-parsed:
@@ -63,7 +63,8 @@ total=`. Every site-1/site-2 test below therefore fails now for the right
 reason (a plain `assertIn("files=", ...)` / regex-search miss, not an
 exception). The site-3 pins are BORN GREEN: `_emit_ingest_axi`'s `run` dict
 is hardcoded to exactly `{passed, failed, pending, total}`
-(clients/rust-crucible.py:321-322) and the server-parsed POST body has no
+(`_emit_ingest_axi` in clients/rust-crucible.py) and the server-parsed POST
+body has no
 client-computed `summary` at all -- there is no `files` key to accidentally
 carry today, so the pin is a forward-looking regression guard, not new
 capability. Stated explicitly per the sub-agent procedure's requirement that
@@ -552,7 +553,8 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
 # `dataPath`). No client-side testcase data exists here to count. These pins
 # guard the honest absence: emitting `files` on this path would be invented,
 # not measured. Born GREEN -- `_emit_ingest_axi`'s `run` dict
-# (clients/rust-crucible.py:321-322) is a hardcoded 4-key literal today; there
+# (`_emit_ingest_axi` in clients/rust-crucible.py) is a hardcoded 4-key
+# literal today; there
 # is no `files` key to accidentally leak. ─────────────────────────────────
 
 

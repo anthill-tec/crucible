@@ -479,7 +479,7 @@ describe("CR-CRU-074 §S2/AC6 — no version is invented", () => {
 // CR-CRU-080 §S1/AC6 — the report DECLARES an identity
 //
 // Spec: docs/changes/CR-CRU-080-release-ceremony-cannot-report.md §S1 + AC1 +
-// AC6. `emit_release_milestone` (scripts/release.sh:342–350) passes no
+// AC6. `emit_release_milestone` (scripts/release.sh) passes no
 // `--agent`, and the real client requires it with no fallback (G1/G2), so every
 // real release report has failed since CR-074 shipped. RED: the argv carries no
 // `--agent`, so `reportFields(...).agent` is null and the stub itself refuses

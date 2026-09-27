@@ -1409,8 +1409,9 @@ body {
    square. So the side and the 2px border are the design's, the box CENTRES
    its word instead of padding out to a size, and `box-sizing: border-box`
    keeps the 52px a box figure the way the strip's own gate cell does
-   (`:1185`). The border COLOUR stays the app's `--line` token: the artifact's
-   `#4a5160` is no token of this app's, and colour is the CR's non-goal. */
+   (`.app-strip-gate`). The border COLOUR stays the app's `--line` token: the
+   artifact's `#4a5160` is no token of this app's, and colour is the CR's
+   non-goal. */
 .app-flow-terminal {
   box-sizing: border-box;
   flex: 0 0 auto;
@@ -1635,7 +1636,7 @@ body {
    never a spacing bug — it was an absent box.
 
    `box-sizing: border-box` for the reason the strip's gate cell declares it
-   (`:1185`): the design's `min-width` is a figure about the BOX. */
+   (`.app-strip-gate`): the design's `min-width` is a figure about the BOX. */
 .app-flow-delivered {
   box-sizing: border-box;
   flex: 0 0 auto;
@@ -1862,12 +1863,13 @@ body {
    no child element and PRD §4.11's locked agent sub-row enumeration ("final
    form — round 6, 2026-07-15") stands (AC7).
 
-   APPENDED at the end of the sheet, not filed beside the animation family at
-   :1007/:1096/:1119: eleven informal `styles.css:<line>` citations live in the
-   test tree, seven of them at >=1096, and an insertion up there would shift
-   every one. Appending shifts none — a free mitigation, so it is taken.
+   APPENDED at the end of the sheet, not filed beside the animation family
+   (`app-locate-blink`, `app-run-pulse`, `app-spin`): eleven informal
+   `styles.css:<line>` citations live in the test tree, seven of them at
+   >=1096, and an insertion up there would shift every one. Appending shifts
+   none — a free mitigation, so it is taken.
 
-   It sits after `.app-card`/`.app-agent-row` (both :343/:359, both 0-1-0), so
+   It sits after `.app-card`/`.app-agent-row` (both 0-1-0), so
    the source-order tie-break is what layers the shimmer over the row's flat
    `var(--bg-2)` fill without either rule needing extra specificity. */
 @keyframes app-stream-flow {

@@ -53,11 +53,11 @@
 //
 // RED phase — expected to FAIL against current production, which:
 //   • answers `data-active` from `box.entries.some(status === "IN_PROGRESS")`
-//     (public/app.js:2797), so a wave of the in-flight release with nothing
-//     running publishes `"false"`;
+//     (`RoadmapFlowWave` in public/app.js), so a wave of the in-flight release
+//     with nothing running publishes `"false"`;
 //   • renders the label `Wave ${box.wave}` and nothing else
-//     (public/app.js:2802) — no `· active` marker and no count, even though
-//     `data-cr-count` is on the element and correct (`:2791`).
+//     (the same function) — no `· active` marker and no count, even though
+//     `data-cr-count` is on the element and correct.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -89,7 +89,7 @@ interface PackageFixture {
   version: string;
 }
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (`src/v2.ts`) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -99,7 +99,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (`src/v2.ts`) — what `GET …/release-proposals`
  *  publishes. */
 interface ProposalFixture {
   label: string;
@@ -108,7 +108,7 @@ interface ProposalFixture {
   waves: string[];
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes,
+/** `QueueEntry` (`src/types.ts`) — what `GET …/queue` publishes,
  *  in the canonical order (CR-CRU-095 §S1: release → wave → seq). */
 interface QueueFixture {
   cr: string;
@@ -130,9 +130,9 @@ interface QueueFixture {
 //   0.4.0  proposed, IN FLIGHT and focused by default — TWO waves,
 //          `1` holding 28 (22 COMPLETED, 6 PENDING) and `2` holding 3.
 //          Release membership is therefore 31, so a header reading the release
-//          view's `crCount` (public/app.js:2892) shows 31 and fails, and a
-//          single-wave fixture — which AC3 rejects explicitly — could not tell
-//          the two apart.
+//          view's `crCount` (as `RoadmapFlowZone` in public/app.js publishes
+//          it) shows 31 and fails, and a single-wave fixture — which AC3
+//          rejects explicitly — could not tell the two apart.
 //          NOTHING in it is IN_PROGRESS: this is exactly §S1's case, the wave
 //          the design draws as `WAVE 5 · ACTIVE` with 18 of 20 merged and
 //          nothing running.

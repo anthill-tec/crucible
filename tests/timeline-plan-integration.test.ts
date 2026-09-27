@@ -26,9 +26,9 @@
 //
 // PlanCycle timestamp fields (`activatedAt`/`doneAt`) are a NEW additive
 // contract this file introduces for GREEN — no such fields exist on the
-// server's PlanCycle today (src/types.ts:131-137 only carries
+// server's PlanCycle today (`PlanCycle` in src/types.ts only carries
 // id/label/kind/status). The precedent is `Plan.closedAt`
-// (src/types.ts:162), which the server already stamps at close time; mirroring
+// (on `Plan` in src/types.ts), which the server already stamps at close time; mirroring
 // that same pattern onto the cycle's active→done transition is the natural
 // implementation choice for computing "closed in <duration>" here.
 import { describe, test, expect, afterEach } from "bun:test";

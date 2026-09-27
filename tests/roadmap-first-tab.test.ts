@@ -28,8 +28,9 @@
 //
 // NOT superseded, and guarded here: CR-CRU-021 §S1 AC2 — entering a workspace
 // still LANDS on the Workflow pane. The landing is hard-coded "Workflow"
-// (public/app.js:119, 2386, 2563), never derived from TAB_NAMES[0] (gap
-// analysis F1), so leading the band with Roadmap must NOT move the landing.
+// (the `state.workspaceTab = "Workflow"` assignment in `navigate`, public/app.js),
+// never derived from TAB_NAMES[0] (gap analysis F1), so leading the band with
+// Roadmap must NOT move the landing.
 // The "leads the band but is not the landing" test below pins both halves in
 // one place so a future re-order cannot silently drag the landing with it.
 //
@@ -38,9 +39,9 @@
 // bundles, real public/app-logic.mjs, real public/app.js; `fetch` is scripted.
 //
 // RED phase (CR-CRU-076): every test below fails against the CURRENT code —
-// public/app-logic.mjs:75 TAB_NAMES is still
+// `TAB_NAMES` in public/app-logic.mjs is still
 // ["Workflow","Runs","Coverage","Compile","Roadmap","BDD"] (Roadmap FIFTH),
-// and public/app-logic.d.mts:65's `WorkspaceTab.name` union omits "Roadmap".
+// and the `WorkspaceTab.name` union (public/app-logic.d.mts) omits "Roadmap".
 // The module-scope `DECLARED_ROADMAP_TAB` below is additionally a TYPECHECK
 // RED: `bunx tsc --noEmit` rejects `name: "Roadmap"` against today's union,
 // which is exactly the AC6 "declaration matches implementation, tsc clean"

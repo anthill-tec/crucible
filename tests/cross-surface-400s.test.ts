@@ -72,7 +72,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
   // src/v2.ts branches) stay in place unchanged.
   // ─────────────────────────────────────────────────────────────────────
   describe("§S3 per-branch 400 assertions", () => {
-    // src/v2.ts:369
+    // `handleRunsCompile` (src/v2.ts)
     test("400: compile ingest without errors (v2 /api/v2/runs/compile)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProjectV2("compile-v2-missing-errors");
@@ -85,7 +85,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
       expect(body.error).toBe("errors must be a non-empty string");
     });
 
-    // src/v2.ts:331
+    // `handleRunsParsed` (src/v2.ts), its `summary` check
     test("400: parsed ingest without summary (v2 /api/v2/runs/parsed)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProjectV2("parsed-v2-missing-summary");
@@ -98,7 +98,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
       expect(body.error).toBe("summary is required");
     });
 
-    // src/v2.ts:334
+    // `handleRunsParsed` (src/v2.ts), its `tree` check
     test("400: parsed ingest without tree (v2 /api/v2/runs/parsed)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProjectV2("parsed-v2-missing-tree");
@@ -115,7 +115,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
       expect(body.error).toBe("tree is required");
     });
 
-    // src/v2.ts:481
+    // `handleStatus` (src/v2.ts)
     test("400: status missing project query param (v2 GET /api/v2/status)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
 
@@ -127,7 +127,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
       expect(body.error).toBe("project query parameter is required");
     });
 
-    // src/v2.ts:223
+    // `handleAgentTouch` (src/v2.ts)
     test("400: agentId missing (v2 POST /api/v2/agents/register)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProjectV2("agents-v2-register-missing-agentid");
@@ -140,7 +140,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
       expect(body.error).toBe("agentId is required");
     });
 
-    // src/v2.ts:248
+    // `handleAgentUnregister` (src/v2.ts)
     test("400: agentId missing (v2 POST /api/v2/agents/unregister)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProjectV2("agents-v2-unregister-missing-agentid");

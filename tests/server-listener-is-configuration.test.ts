@@ -5,7 +5,8 @@
 // The rule this file defends: an operator decides which port this server
 // listens on by EDITING A FILE — the commented `crucible.toml` already laid
 // down beside the server's own database — and by nothing else. Today the two
-// values are only expressible as exports (`src/server.ts:249-252`), so the
+// values are only expressible as exports (read by `startServer` in
+// src/server.ts), so the
 // decision's only record is a shell history and the failure mode of
 // forgetting is silent: a second instance quietly lands on the first one's
 // port, or an agent reports into the wrong board.
@@ -21,9 +22,10 @@
 //
 // None of that is a new mechanism: it is exactly what the STORE already has —
 // a pure exported `resolveStore(opts?)` with injectable `env`/`cwd`
-// (src/server.ts:39-79), its answer kept on the handle as `storeResolution`,
+// (`resolveStore` in src/server.ts), its answer kept on the handle as `storeResolution`,
 // and repeated at the one shared `healthPayload` site so `/api/health` and
-// `/api/v2/health` cannot drift (:94,:218,:226-245,:291, CR-CRU-068 §S1) —
+// `/api/v2/health` cannot drift (`ServerHandle` and `startServer` in
+// src/server.ts, CR-CRU-068 §S1) —
 // applied to the second thing a boot resolves.
 //
 // The rule is PER AXIS. Port and host resolve independently, so ONE field
@@ -33,7 +35,7 @@
 // `resolveStore` already uses for an explicit `dbPath`, and `port: 0` is one),
 // `file` (a `[server]` table) or `shipped`.
 //
-// The file is the one `serverConfigPath()` (src/limits.ts:158) already
+// The file is the one `serverConfigPath` (src/limits.ts) already
 // resolves — `dirname(resolveStore().path)/crucible.toml` — so the listener is
 // discovered AFTER the store is in hand, which is why it never needed the
 // environment. `CRUCIBLE_DB` itself STAYS an environment variable (§S3): it is

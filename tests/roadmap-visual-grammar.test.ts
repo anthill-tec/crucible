@@ -359,7 +359,7 @@ const QUEUE: QueueFixture[] = [
 const DRAWN_CRS = ["CR-V-LIVE", "CR-V-PEND"];
 
 /** The SAME six CRs, declaring NO wave (`wave: ""` — the wire's own way of
- *  declaring none, `src/types.ts:392`).
+ *  declaring none, the `wave` field of `QueueEntry` (src/types.ts)).
  *
  *  CR-CRU-096 AC18a rules that the `wave: null` group takes the row
  *  ARRANGEMENT but NOT the trim: with no header it has nowhere to state whole
@@ -4632,7 +4632,8 @@ describe("CR-CRU-096 AC27 — zone 2 rendered against the live board matches the
     // SUPERSEDED 2026-09-09 by CR-CRU-116 §S4 — two assertions stood here,
     // requiring the `· active` marker on the artifact's label AND on the live
     // one. The artifact's first wave-box panel
-    // (`crucible-workflow-flowchart.html:175-184`) draws a MARKED wave whose
+    // (the zone-2 flow's `.wave.active` box, "Wave 5 · active", in
+    // `crucible-workflow-flowchart.html`) draws a MARKED wave whose
     // five rows are all `cr pend`: a wave marked with nothing running, which is
     // exactly the release-level reading §S4 retires. That state is now
     // unreachable, and a live board that reaches the marker cannot match this
@@ -5816,7 +5817,8 @@ describe("CR-CRU-103 AC9 — the type scale the Correction re-measured is PINNED
 // the design's own `grid-template-columns: 54px 1fr` (§4) and the relative
 // geometry that makes a swimlane a swimlane.
 
-/** The design's label column, `.lavish/crucible-workflow-flowchart.html:88`. */
+/** The design's label column, the `.lanes` rule in
+ *  `.lavish/crucible-workflow-flowchart.html`. */
 const DESIGN_LANE_LABEL_W = 54;
 
 interface LaneCell {

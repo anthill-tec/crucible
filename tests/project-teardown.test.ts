@@ -6,7 +6,7 @@
 // so every test below fails on a genuine status/shape mismatch, never a
 // compile error.
 //
-// Guard mirrored from handleEventDelete (src/v2.ts:1747-1772, CR-CRU-032):
+// Guard mirrored from handleEventDelete (src/v2.ts, CR-CRU-032):
 //   1. the project must be ARCHIVED (archived_at IS NOT NULL) → else 403
 //   2. body.userApproved !== true → else 409
 // Both gates must leave the project and every cascaded row untouched.
@@ -114,8 +114,9 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
 
   /** Raw per-table row counts for `key` — the store exposes no generic count
    * API, so this reaches the private `db` the same way the existing fleet of
-   * tests does (e.g. tests/agent-role-rename.test.ts:628, event-role-backfill
-   * .test.ts:107): `(store as unknown as { db: Database }).db`. */
+   * tests does (e.g. `tableInfoColumns` in tests/agent-role-rename.test.ts,
+   * `rawRoleRow` in tests/event-role-backfill.test.ts):
+   * `(store as unknown as { db: Database }).db`. */
   function countRows(key: string): TableCounts {
     const db = (handle!.store as unknown as { db: Database }).db;
     const one = (table: string): number =>
@@ -141,8 +142,8 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
    *    one insert into each table (mirrors agent-role-rename.test.ts's
    *    fileAndActivate fixture).
    *  - events + rollups: retention is PATCHed to 1, then two junit runs are
-   *    posted. The second ingest's retention enforcement (store.ts:1334
-   *    enforceRetention, called synchronously from insertEvent) genuinely
+   *    posted. The second ingest's retention enforcement (`enforceRetention`
+   *    in src/store.ts, called synchronously from insertEvent) genuinely
    *    folds the FIRST event into a rollups row and deletes it — a real
    *    production code path, not a fabricated row — leaving exactly one live
    *    event (the second) and one rollups row.
@@ -261,8 +262,8 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
 
   // Status choice for a missing key: 404, matching BOTH established
   // precedents — handleProjectArchive's existence check (`unknown project:
-  // ${key}` → 404, src/v2.ts:1457-1458) and handleEventDelete's 404-on-miss
-  // idiom (src/v2.ts:1767-1769). Existence must be checked BEFORE the
+  // ${key}` → 404, src/v2.ts) and handleEventDelete's 404-on-miss
+  // idiom (also src/v2.ts). Existence must be checked BEFORE the
   // archived-gate/approval-gate ordering (mirroring handleProjectArchive,
   // which also can't route an archived-only lookup through requireProject —
   // requireProject 404s archived projects, which would make the guarded
@@ -280,7 +281,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
     // Specific message, not just "some 404" — the generic catch-all 404s
     // EVERY unrouted request with "unknown route: ...", so a bare status
     // check would pass vacuously before the route even exists. This mirrors
-    // handleProjectArchive's exact existence-check wording (src/v2.ts:1458).
+    // handleProjectArchive's exact existence-check wording (src/v2.ts).
     expect(body.error).toContain("unknown project");
   });
 

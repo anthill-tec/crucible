@@ -203,9 +203,9 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
 
     def test_request_transport_call_moves_out_of_every_client_and_still_works(self):
         """RED today: every client's own `_request` contains
-        `urllib.request.urlopen(` directly (bun-crucible.py:162,
-        rust-crucible.py:199, mvn-crucible.py:203, python-crucible.py:170,
-        arduino-crucible.py:143) -- the real logic, not a delegator."""
+        `urllib.request.urlopen(` directly (`_request` in bun-crucible.py,
+        rust-crucible.py, mvn-crucible.py, python-crucible.py and
+        arduino-crucible.py) -- the real logic, not a delegator."""
         offenders = _clients_with_marker_in_function(
             "_request", "urllib.request.urlopen(")
         self.assertEqual(
@@ -351,8 +351,9 @@ class RequestToleratesEmptyResponseBodyDriftCorrectionTest(unittest.TestCase):
     _request's own top-level body but leaves a bypassing verb wrapper behind
     would still be caught.
 
-    RED today: bun/rust/mvn/python (bun-crucible.py:162, rust ~199,
-    mvn ~203, python-crucible.py:170) raise json.JSONDecodeError for this
+    RED today: bun/rust/mvn/python (each one's `_request` in bun-crucible.py,
+    rust-crucible.py, mvn-crucible.py and python-crucible.py) raise
+    json.JSONDecodeError for this
     scenario -- confirmed by reading each `_request` body, and driven here
     through a stubbed HTTP layer (mock.patch on urllib.request.urlopen), not
     a source grep, so this is a REAL behavioural assertion. arduino already

@@ -2,7 +2,7 @@
 column (Ruling 3, gap-analysis box: "queue rows use a null column, not an
 omitted key").
 
-Today `build_queue_rows` (clients/_crucible_axi.py:2168) emits ONLY
+Today `build_queue_rows` (clients/_crucible_axi.py) emits ONLY
 `{cr, wave, status, planId}` per row. §S3's two ACs require every row to gain
 two more keys:
 
@@ -34,8 +34,8 @@ Two test shapes, per the RED-agent brief:
    shared key set), per-row title/lifecycle, and the dead rows' still-DERIVED
    `status` are all asserted.
 
-RED today (measured against `clients/_crucible_axi.py:2168-2176`): every row
-`build_queue_rows` returns carries ONLY `cr`/`wave`/`status`/`planId` —
+RED today (measured against `build_queue_rows` in
+`clients/_crucible_axi.py`): every row `build_queue_rows` returns carries ONLY `cr`/`wave`/`status`/`planId` —
 `row["title"]`/`row["lifecycle"]` raise `KeyError` on every row, in every
 test below, including through the real `queue` verb's own decoded output.
 

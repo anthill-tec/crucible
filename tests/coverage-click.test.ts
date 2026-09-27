@@ -16,10 +16,10 @@
 //  (B) CLIENT — the workspace Project pane's coverage meter
 //      (public/app.js CoverageMeter(), rendered from ProjectPaneCard()) is
 //      today a static, non-interactive div (no onclick, no data-testid —
-//      confirmed by reading public/app.js:600-613). This pins the click
+//      confirmed by reading `CoverageMeter` in public/app.js). This pins the click
 //      wiring: clicking the meter navigates to `/p/<key>/run/<id>` where
 //      <id> is `project.latestCoverageEventId`, and opens the real drill-in
-//      overlay. Home project badges (`ProjectBadge`, public/app.js:282-292)
+//      overlay. Home project badges (`ProjectBadge` in public/app.js)
 //      keep their EXISTING drill-DOWN-to-workspace behaviour — a coverage
 //      meter does not render on home at all, and a badge click must never
 //      produce a `/run/<id>` route.

@@ -8,9 +8,8 @@ the sort key `(wave number, release version with an undeclared release last
 within its wave, seq)`. That fix alone does not fix `next`, and this file is
 the proof-shaped statement of why.
 
-    `resolve_next` does `lane = sorted(lane, key=_lane_order)`
-    (clients/_crucible_axi.py:1510), and `_lane_order` returns `(0, seq)`
-    (:1301-1308).
+    `resolve_next` does `lane = sorted(lane, key=_lane_order)`, and
+    `_lane_order` returns `(0, seq)`.
 
 It RE-SORTS BY THE SEQ VALUE, discarding the position the server published. Run
 unchanged against a canonically ordered payload of the live board's 94 rows, its
@@ -33,18 +32,17 @@ AC6b — the regression list, MEASURED not guessed. Modelling the GREEN (patchin
 order) and running the whole CR-092 suite leaves 75 of 77 tests passing. Exactly
 two assert the seq re-sort itself, and GREEN amends them:
 
-    LaneOrderTest.test_the_lane_is_ordered_by_the_published_seq
-        (tests/client/test_cr092_next_decision_resolver.py:1324) — feeds a
+    LaneOrderTest.test_the_lane_is_ordered_by_the_published_seq — feeds a
         deliberately SCRAMBLED response [seq 30, 10, 20] and asserts the pick is
         the seq-10 row. Its subject becomes "the lane arrives ordered and the
         resolver consumes position 0"; its §S4 intent ("`next` never re-orders
         the lane") is what AC6 finally makes true.
 
     LaneOrderTest.test_an_entry_with_no_seq_is_surfaced_rather_than_positioned
-        (:1336) — publishes the seq-less row FIRST and asserts the pick is the
-        seq-10 row, i.e. that the seq-less row was moved LAST. AC6a inverts the
-        pick half (the row keeps its published position) and keeps the warning
-        half verbatim: `missing-seq` still fires and still names the cr.
+        — publishes the seq-less row FIRST and asserts the pick is the seq-10
+        row, i.e. that the seq-less row was moved LAST. AC6a inverts the pick
+        half (the row keeps its published position) and keeps the warning half
+        verbatim: `missing-seq` still fires and still names the cr.
 
 Neither is modified here — naming them is this cycle's contract (AC6b).
 

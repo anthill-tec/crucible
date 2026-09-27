@@ -17,7 +17,7 @@
 //
 // A PURE function over `(entries, tracks, scope)` — AC1. No HTTP, no store: every
 // fixture below is a plain `QueueEntry[]`, exactly the shape `Store.listQueue`
-// publishes (src/types.ts:437-469), so the SAME fixture shape a route-level test
+// publishes (`QueueEntry` in src/types.ts), so the SAME fixture shape a route-level test
 // would seed via `replaceQueue` is legible here without booting a server.
 //
 // PORTED FROM (per the classification table): CanonicalTrackTest, TrackScopingTest,
@@ -65,7 +65,7 @@ function supersededLc(by: string): QueueLifecycle {
   return { state: "SUPERSEDED", by, at: 0 };
 }
 
-/** The published `tracks` list `declaredTracks` would publish (src/store.ts:430) —
+/** The published `tracks` list `declaredTracks` (src/store.ts) would publish —
  *  sorted distinct non-blank trimmed values. Copied here (never imported) so this
  *  file's fixtures stay self-contained plain data, matching the pure function's
  *  own contract of taking `tracks` as an explicit argument (AC1). */
@@ -988,8 +988,9 @@ describe("CR-CRU-098 \u00a7S1/AC1/AC4/AC6 \u2014 wave/release lane details (port
 // (HOLD_FIXTURES's pythonHelp comparison, line ~670) only exercises the VOID
 // member of HOLD_FIXTURES["dead-dependency"]; no existing test compares the
 // SUPERSEDED case's help[] against the literal src/hints.ts `nextHints.hold`
-// re-point wording (read at src/hints.ts:519-525). This closes that gap for
-// "both states" (dispatch prompt item 2). EXPECTED TO PASS TODAY: hints.ts's
+// re-point wording (read in the `hold` entry of `nextHints` in src/hints.ts).
+// This closes that gap for "both states" (dispatch prompt item 2). EXPECTED TO
+// PASS TODAY: hints.ts's
 // dead-dependency branch already reads `trigger.by` (shipped since CR-092/098)
 // — this is a regression pin, not new RED.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1029,15 +1030,15 @@ describe("CR-CRU-147 §S1 AC2 (ruling 1) — the dead-dependency HOLD's help[] n
 // CR-CRU-147 §S1 AC5 — ONE dead-CR rule, pinned as a regression. The gap
 // analysis measured (2026-09-24) that `next` keyed deadness on whether
 // `entry.lifecycle` was PRESENT (an object, verbatim-ported from the client's
-// `dict` test), while `isDeadCr` (src/types.ts:488) keys on `lifecycle.state`
+// `dict` test), while `isDeadCr` (src/types.ts) keys on `lifecycle.state`
 // being VOID or SUPERSEDED. The two readings diverged on two fixtures: a
 // `lifecycle: null` row, and a row whose lifecycle carries an UNRECOGNISED
 // state (e.g. "PARKED") — both LIVE under `isDeadCr` (neither state is
 // VOID/SUPERSEDED), yet the presence-keyed reading excluded a `lifecycle:
 // null` row from the actionable set and reported a PARKED dependency as a
 // DEAD dependency in `nextTrigger`. GREEN routed both through `isDeadCr`:
-// `isActionable` (src/next.ts:165) is `PENDING && !isDeadCr(entry)` and
-// `deadLifecycleOf` (src/next.ts:170) returns a lifecycle only when
+// `isActionable` (src/next.ts) is `PENDING && !isDeadCr(entry)` and
+// `deadLifecycleOf` (src/next.ts) returns a lifecycle only when
 // `isDeadCr` rules the row dead. The assertions below hold that line: each
 // live fixture is offered as NEXT (never DRAINED), and each live dependency
 // blocks as an ordinary `dependency` (never `dead-dependency`).
@@ -1077,7 +1078,7 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
     const answer = fields(entries);
     // isDeadCr({lifecycle: {state: "PARKED"}}) is false: PARKED is neither VOID nor SUPERSEDED.
     // The presence-keyed reading treated ANY lifecycle object as not-actionable, wrongly draining
-    // the lane as if this row were dead; `isActionable` (src/next.ts:165) now asks `isDeadCr`.
+    // the lane as if this row were dead; `isActionable` (src/next.ts) now asks `isDeadCr`.
     expect(answer.decision).toBe("NEXT");
     expect(answer.cr).toBe("CR-NEXTPTR-PARKEDLIVE");
     expect(answer.decision).not.toBe("DRAINED");
@@ -1093,7 +1094,7 @@ describe("CR-CRU-147 §S1 AC5 — next judges deadness by isDeadCr, not by lifec
     const trigger = answer.trigger as Record<string, unknown>;
     // The presence-keyed `lifecycleOf` once treated ANY object — PARKED included — as dead, and
     // reported dead-dependency with state "PARKED", a state isDeadCr never recognises.
-    // `deadLifecycleOf` (src/next.ts:170) now returns a lifecycle only when `isDeadCr` rules it dead.
+    // `deadLifecycleOf` (src/next.ts) now returns a lifecycle only when `isDeadCr` rules it dead.
     expect(trigger.kind).toBe("dependency");
     expect(trigger.kind).not.toBe("dead-dependency");
     expect(trigger).not.toHaveProperty("state");

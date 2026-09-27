@@ -9,12 +9,13 @@
 // ── What is missing today ──────────────────────────────────────────────────
 //
 // `events` carries 23 columns (id … role_inferred) — there is NO `started_at`,
-// NO `runtime_ms` and NO `status` (src/store.ts:874-898). `MIGRATIONS` ends at
-// the agents step, so `SCHEMA_VERSION = MIGRATIONS.length` is one short of the
-// version this CR must write (src/store.ts:631-638). `handleV2` routes
-// /api/v2/runs, /runs/parsed and /runs/compile (src/v2.ts:1908-1916) and
-// nothing else under /runs — `POST /api/v2/runs/start` 404s, no ingest path
-// reads a `runId`, and an open run cannot exist, let alone be auto-aborted.
+// NO `runtime_ms` and NO `status` (the `events` table in `createBaseTables`,
+// src/store.ts). `MIGRATIONS` ends at the agents step, so
+// `SCHEMA_VERSION = MIGRATIONS.length` is one short of the version this CR
+// must write (both in src/store.ts). `handleV2` (src/v2.ts) routes
+// /api/v2/runs, /runs/parsed and /runs/compile and nothing else under /runs —
+// `POST /api/v2/runs/start` 404s, no ingest path reads a `runId`, and an open
+// run cannot exist, let alone be auto-aborted.
 //
 // ── The seams GREEN must expose (this suite is written against them) ───────
 //
@@ -79,7 +80,8 @@ import type { RunEvent } from "../src/types.ts";
 /** §S0 — the three columns the new chain step must add to `events`. */
 const LIFECYCLE_COLUMNS = ["started_at", "runtime_ms", "status"] as const;
 
-/** The `events` columns as they stand BEFORE this CR (src/store.ts:874-898). */
+/** The `events` columns as they stand BEFORE this CR (the `events` table in
+ *  `createBaseTables`, src/store.ts). */
 const PRE_CR_EVENT_COLUMNS: Record<string, "text" | "int" | "pk" | "notnull-text" | "notnull-int"> = {
   id: "pk",
   project_key: "notnull-text",
@@ -106,7 +108,7 @@ const PRE_CR_EVENT_COLUMNS: Record<string, "text" | "int" | "pk" | "notnull-text
   role_inferred: "int",
 };
 
-/** Every key a served `RunEvent` may carry BEFORE this CR (src/types.ts:146-191). */
+/** Every key a served `RunEvent` (src/types.ts) may carry BEFORE this CR. */
 const PRE_CR_EVENT_KEYS: Record<string, true> = {
   id: true, projectKey: true, agentId: true, kind: true, tier: true, stack: true,
   codec: true, context: true, timestamp: true, action: true, firstSeen: true,
@@ -447,7 +449,7 @@ async function startRun(
   if (res.status !== 202) {
     throw new Error(
       "CR-CRU-017 §S1-1: POST /api/v2/runs/start must answer 202 {runId, startedAt} — got " +
-        `${res.status} ${text}. The run-start route does not exist (src/v2.ts:1908-1916 routes ` +
+        `${res.status} ${text}. The run-start route does not exist (\`handleV2\` in src/v2.ts routes ` +
         "/runs, /runs/parsed and /runs/compile and nothing else), so a run has no START and " +
         "wall-clock runtime can never be computed.",
     );

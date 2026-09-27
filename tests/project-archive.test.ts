@@ -508,10 +508,10 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // Design choice (stated, not invented): this codebase's existing mutating
   // v2 endpoints are idempotent, not 400-on-repeat — duplicate
   // POST /api/v2/projects {key} → 200 {ok:true, changed:false}
-  // (handleProjectCreate, src/v2.ts ~192), a repeat agent register →
+  // (handleProjectCreate, src/v2.ts), a repeat agent register →
   // 200 {ok:true, changed:false} (handleAgentTouch), and a repeat agent
   // unregister → 200 {ok:true, changed:false} (handleAgentUnregister). Every
-  // v2 write response carries `changed:true|false` (file header, src/v2.ts:3).
+  // v2 write response carries `changed:true|false` (the header comment of src/v2.ts).
   // Archive/unarchive are pinned to the SAME convention for consistency:
   // re-archiving an already-archived project, and un-archiving an
   // already-unarchived (never-archived) project, are each a 200 with

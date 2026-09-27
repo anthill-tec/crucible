@@ -2,13 +2,13 @@
 // back) — C1 RED tests.
 //
 // Verified current-code facts this file is RED against:
-//   - MILESTONE_TYPES (src/v2.ts:1044) = {gap-analysis, design-review,
+//   - MILESTONE_TYPES (src/v2.ts) = {gap-analysis, design-review,
 //     stage-flip, custom, cr-merged} — no "release", so POST
 //     /api/v2/milestones {type:"release"} 400s today with
 //     `type must be one of: …` (which likewise does NOT yet name "release").
 //   - GET /api/v2/projects/<key>/releases does not exist in the route table,
 //     so every read below 404s through the catch-all until GREEN wires it.
-//   - No schema change is needed: Store.recordMilestoneEvent (src/store.ts:1580)
+//   - No schema change is needed: Store.recordMilestoneEvent (src/store.ts)
 //     already persists `label` (the version) and `commit` (the tagged sha) as
 //     conditional spreads. SCHEMA_VERSION stays 6.
 //

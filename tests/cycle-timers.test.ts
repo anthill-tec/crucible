@@ -40,7 +40,7 @@
 // `new Date()` process-wide — see node_modules/bun-types/test.d.ts). Since
 // existing production render call sites already compute "now" via a direct
 // `Date.now()` call at the call site (`const rel = (ts) =>
-// L.relativeTime(ts, Date.now());`, public/app.js:204) rather than through
+// L.relativeTime(ts, Date.now());`, `rel` in public/app.js) rather than through
 // any injectable parameter, `setSystemTime()` is the correct injection point
 // regardless of how GREEN wires the new cycle-timer computation — it does
 // not presume an internal poll/ticker mechanism.
@@ -53,10 +53,10 @@
 // tests/f13-fidelity.test.ts / tests/workflow-lens.test.ts.
 //
 // ── FORMAT FINDING ────────────────────────────────────────────────────────
-// The existing `fmtDuration` helper (public/app.js:418 — reused by
+// The existing `fmtDuration` helper (public/app.js — reused by
 // `agent-runtime`, `declared-marker`'s "closed in …", and `cr-agent-
 // runtime`) formats as `${m}m ${s}s` with NO zero-padding on seconds, e.g.
-// 543_000ms -> "9m 3s". The F13 mock (.lavish/crucible-v2-design.html:649)
+// 543_000ms -> "9m 3s". The F13 frame of .lavish/crucible-v2-design.html
 // renders the SAME 543s-class value zero-padded — "⏱ 9m 03s" — so the new
 // cycle-timer badge needs its OWN zero-padded-seconds format; it is NOT a
 // bare reuse of `fmtDuration`. Every exact-text assertion below pins the
@@ -826,7 +826,7 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
 // Per the dispatch brief, bun's fake-timer API was checked FIRST, before
 // falling back to a real wait:
 //   - `bun:test` DOES expose `jest.useFakeTimers()` / `jest.advanceTimersByTime()`
-//     (node_modules/bun-types/test.d.ts:98-104), and a throwaway probe
+//     (node_modules/bun-types/test.d.ts, `jest` namespace), and a throwaway probe
 //     confirmed it correctly advances a plain `setInterval` — including one
 //     registered on `globalThis` AFTER `GlobalRegistrator.register()` — with
 //     zero real wall-clock wait, and that `Date.now()` itself moves under
@@ -1020,8 +1020,9 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
 // The actual blocker: TODAY (pre-GREEN, this RED phase) there is NO
 // cycle-timer interval of any kind — mounting a plan with an active timered
 // cycle and mounting one without create the IDENTICAL set of app-wide
-// intervals (the existing poll timer + watchdog timer, public/app.js:174 /
-// :2295), so a "no NEW interval leaks past teardown" assertion would be
+// intervals (the existing poll timer + watchdog timer, `startPolling` and
+// `watchdogTick` in public/app.js), so a "no NEW interval leaks past
+// teardown" assertion would be
 // vacuously true (0 new intervals created, 0 to leak) against the CURRENT
 // no-op state. Per the RED self-check rule ("would this pass against a
 // no-op stub?") that disqualifies it as a RED assertion. Whether GREEN even

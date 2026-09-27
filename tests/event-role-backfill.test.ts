@@ -14,12 +14,13 @@
 //
 // RED phase: NONE of this exists in production yet (src/store.ts has no
 // backfill/sweep logic at all — grep confirms `role_inferred` is only ever
-// written as 0 or NULL on the ingest path, src/store.ts:1134). Every
+// written as 0 or NULL on the ingest path, `insertEvent` in src/store.ts). Every
 // assertion below that a NULL/parseable-id row gets backfilled fails today
 // because nothing writes role_inferred = 1 anywhere.
 //
 // Harness: raw bun:sqlite fixture matching the CURRENT production `events`
-// schema (src/store.ts:318-342 — role/role_inferred already exist, C1
+// schema (the `events` table in
+// `createBaseTables` (src/store.ts) — role/role_inferred already exist, C1
 // shipped that ALTER TABLE) with rows seeded directly with role/
 // role_inferred values, so the fixture models a server that has been
 // running post-C1 with historical (pre-057, still-NULL) rows sitting
@@ -51,7 +52,8 @@ interface SeedRow {
 
 /**
  * Builds a raw sqlite file at `dbPath` with the CURRENT production `events`
- * schema (byte-for-byte src/store.ts:318-342, hand-copied rather than
+ * schema (byte-for-byte the `events` table in `createBaseTables`
+ * (src/store.ts), hand-copied rather than
  * driven through the Store class so the backfill assertions hold
  * regardless of what src/store.ts currently does) and inserts `rows`
  * directly — bypassing Store.recordTestEvent entirely so `role` /

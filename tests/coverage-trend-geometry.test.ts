@@ -6,7 +6,7 @@
 // `width:9px` bars (`flex: 0 0 9px`), `gap:3px`, cluster `height:26px`,
 // `align-items:flex-end`, no stretching at ANY point count. The shipped
 // `.app-trend-bar` uses `flex: 1 1 0` in a 36px container
-// (public/styles.css:321-334) — bars STRETCH to fill the card (Chrome-
+// (the `.app-trend-bars` rule in public/styles.css) — bars STRETCH to fill the card (Chrome-
 // measured 2026-07-17: 2 bars x 131px wide x 34px tall vs the mock's 9px x
 // <=26px left-aligned cluster). §S2 additionally caps the rendered series
 // at the MOST RECENT 16 points (chronological, latest last), with the
@@ -27,7 +27,8 @@
 // styles, e.g. `style="height:50%"` shows up in computed `height`). The
 // `mountApp()` harness below — identical convention to
 // tests/coverage-trend.test.ts's (B) CLIENT block and confirmed explicitly
-// unavailable at tests/drill-in.test.ts:1575 ("mountApp harness never loads
+// unavailable in tests/drill-in.test.ts (the comment heading its "F4 anatomy"
+// block: "mountApp harness never loads
 // public/styles.css") — never attaches public/styles.css as a real
 // stylesheet. So a `getComputedStyle` assertion on `.app-trend-bar` width
 // would silently read "" in BOTH the broken-today and fixed-future world —
@@ -68,7 +69,7 @@ const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8
  * the FIRST rule in styles.css whose selector is the exact literal text
  * given, returning its declaration body. `.app-trend-bars` /
  * `.app-trend-bar` are unambiguous bare class selectors in the source
- * (public/styles.css:321, :328), so the single-match form suffices. */
+ * (public/styles.css), so the single-match form suffices. */
 function ruleBody(selector: string): string | undefined {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(STYLES_SRC);

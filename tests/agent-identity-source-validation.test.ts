@@ -3,13 +3,13 @@
 // Context (docs/changes/CR-CRU-059-identity-source-validation.md):
 //   Every client documents `--source {claude-md,package-json,git-repo,manual}`
 //   and argparse enforces it, but the server's ENTIRE handling today
-//   (src/v2.ts:485, inside handleAgentTouch) is a bare type ASSERTION:
+//   (`handleAgentTouch` in src/v2.ts) is a bare type ASSERTION:
 //
 //     if (typeof body.identity === "object" && body.identity !== null) {
 //       opts.identity = body.identity as AgentIdentity;
 //     }
 //
-//   `AgentIdentity.source` is typed `string?` (src/types.ts:29-33) — any
+//   `AgentIdentity.source` is typed `string?` (`AgentIdentity` in src/types.ts) — any
 //   string at all stores cleanly. This was not hypothetical: CR-CRU-054's
 //   inventory found rust/mvn/arduino building the register payload directly
 //   with a hardcoded `source: "openclaw"` — a value OUTSIDE their own
@@ -213,7 +213,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
       // The received (empty-string) value is named — JSON.stringify("")
       // renders as the two-character token `""`, mirroring the existing
       // role-required error's `JSON.stringify(role)` convention
-      // (src/v2.ts:453).
+      // (`handleAgentTouch` in src/v2.ts).
       expect(surface).toContain('""');
       for (const value of SOURCE_ENUM) {
         expect(surface).toContain(value);

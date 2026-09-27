@@ -85,7 +85,7 @@
 // a pre-existing key returns 200 {changed:false}, perfect for arduino's
 // idempotent self-registration), `POST /api/v2/runs/parsed` (summary+tree,
 // v2 equivalent of v1 `/api/ingest/parsed`), `POST /api/v2/runs/compile`
-// (rejects an EMPTY `errors` string with 400 — src/v2.ts:473 — this is the
+// (rejects an EMPTY `errors` string with 400 — `handleRunsCompile` in src/v2.ts — this is the
 // exact 400 the CR's bug note is about), `GET /api/v2/events/<id>` returns
 // `event.compile` = the full `CompileReport` {format, errorCount,
 // warningCount, diagnostics, raw} for a compile-kind event (src/store.ts,
@@ -898,7 +898,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
   // CR-CRU-036 C4 contract, re-scoped by CR-CRU-045 (gap-analysis disproved
   // the original C4 FIX-round reading): `_collect_coverage` runs
   // `python -m coverage lcov -o <path>` with `cwd=project_dir`
-  // (clients/python-crucible.py:583). For a `-m` invocation Python prepends
+  // (`_collect_coverage` in clients/python-crucible.py). For a `-m` invocation Python prepends
   // the CURRENT WORKING DIRECTORY to sys.path AHEAD of PYTHONPATH, so a
   // `coverage/` subdirectory sitting directly in project_dir is on the
   // interpreter's path. The REAL hazard (this is bun's own lcov output
@@ -1100,14 +1100,14 @@ describe("clients/python-crucible.py — byte-compatible CLI surface (existing f
   });
 });
 
-// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit_dir` (python-crucible.py:484-520)
+// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit_dir` (python-crucible.py)
 // today checks only `tc.find("failure")`/`tc.find("error")`; a bare
 // `else: passed += 1` folds every `<skipped/>` testcase into `passed`, and
-// the summary hardcodes `"pending": 0`. mvn-crucible.py:641 is the correct
-// precedent this fixes toward. `_emit_ingest_axi` (python-crucible.py:389-
-// 404) also drops `pending` from the printed `run:` TOON block, and
-// `_ingest_parsed`'s plain "ingest parsed: ..." stderr line (python-
-// crucible.py:578-583) drops it too — both are §S2 surfaces.
+// the summary hardcodes `"pending": 0`. `_parse_junit` in mvn-crucible.py is the correct
+// precedent this fixes toward. `_emit_ingest_axi` (python-crucible.py)
+// also drops `pending` from the printed `run:` TOON block, and
+// `_ingest_parsed`'s plain "ingest parsed: ..." stderr line
+// (python-crucible.py) drops it too — both are §S2 surfaces.
 describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake xmlrunner)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
@@ -1724,7 +1724,7 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
   });
 });
 
-// CR-CRU-036 C4 FIX round — VERIFY finding: `auto-ingest` (clients/arduino-crucible.py:571-609)
+// CR-CRU-036 C4 FIX round — VERIFY finding: `auto-ingest` (`cmd_auto_ingest` in clients/arduino-crucible.py)
 // was wired but only `--help`-tested; no real-server behavioral coverage
 // existed for it. This is a CHARACTERIZATION test — it drives the real
 // no-toolchain ingest path end to end and is expected to PASS on today's
@@ -1837,13 +1837,14 @@ describe("clients/arduino-crucible.py — byte-compatible CLI surface (existing 
   });
 });
 
-// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit` (arduino-crucible.py:335-357)
+// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit` (arduino-crucible.py)
 // today checks only `tc.find("failure")`/`tc.find("error")`; a bare
 // `else: passed += 1` folds every `<skipped/>` testcase into `passed`, and
 // the summary hardcodes `"pending": 0`. `_emit_ingest_summary_axi`
-// (arduino-crucible.py:300-314) also drops `pending` from the printed
+// (arduino-crucible.py) also drops `pending` from the printed
 // `run:` TOON block, and the plain "[crucible] <verb> -> '<name>': N/M
-// passed, F failed" stderr lines (arduino-crucible.py:514, 537, 638) drop
+// passed, F failed" stderr lines (two in `_run_native_tests_body`, one in
+// `cmd_auto_ingest`, both in arduino-crucible.py) drop
 // it too — three separate print call sites (the no-`--agent` report path,
 // the `--agent` ingest path, and `auto-ingest`), all §S2 surfaces.
 describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake no-op make)", () => {
@@ -1875,7 +1876,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
     return { dir, path };
   }
 
-  test("§S1/§S1b/§S2: with --agent, 'unit' counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain '[crucible] unit -> ...' stderr line (arduino-crucible.py:537) carry pending=1", async () => {
+  test("§S1/§S1b/§S2: with --agent, 'unit' counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain '[crucible] unit -> ...' stderr line (`_run_native_tests_body` in clients/arduino-crucible.py) carry pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-cr050-pending");
@@ -1923,14 +1924,15 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
     expect(block).toContain("total: 3");
     expect(block).toContain("pending: 1");
 
-    // §S2 (extended) — arduino-crucible.py:537's plain stderr line too. That
+    // §S2 (extended) — the `--agent` ingest path's plain stderr line in
+    // `_run_native_tests_body` (arduino-crucible.py) too. That
     // line's own sentence style is "X/Y passed, Z failed" (not key=value),
     // so the natural parallel extension is "W pending", matching "Z failed".
     expect(res.stderr).toContain("passed,");
     expect(res.stderr).toContain("1 pending");
   });
 
-  test("§S2 (extended): WITHOUT --agent, the no-ingest report line (arduino-crucible.py:514) also carries 1 pending", async () => {
+  test("§S2 (extended): WITHOUT --agent, the no-ingest report line (`_run_native_tests_body` in clients/arduino-crucible.py) also carries 1 pending", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-cr050-no-agent-report");
@@ -1950,7 +1952,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
     expect(res.stderr).toContain("1 pending");
   });
 
-  test("§S2 (extended): 'auto-ingest' (arduino-crucible.py:638) also carries 1 pending in its stderr line, alongside pending=1 in the ingested summary", async () => {
+  test("§S2 (extended): 'auto-ingest' (`cmd_auto_ingest` in clients/arduino-crucible.py) also carries 1 pending in its stderr line, alongside pending=1 in the ingested summary", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-cr050-auto-ingest");

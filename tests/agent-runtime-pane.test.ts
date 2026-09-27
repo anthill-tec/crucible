@@ -26,7 +26,7 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (public/app.js:153).
+// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js).
 const POLL_INTERVAL_MS = 5000;
 const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
 const POLL_TEST_TIMEOUT_MS = 15_000;

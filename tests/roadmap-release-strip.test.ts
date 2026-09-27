@@ -41,7 +41,7 @@
 //
 // RED phase — expected to FAIL against current production, which:
 //   • still renders the `roadmap-view-table`/`roadmap-view-graph` toggle and
-//     one exclusive body (`roadmapViewMode`, public/app.js:2554);
+//     one exclusive body (`roadmapViewMode`, since retired from public/app.js);
 //   • renders no strip at all: `[data-testid="roadmap-strip"]` does not exist,
 //     so every DOM query below is null;
 //   • exports none of `releaseStripGates`/`stripWindowSize`/`releaseStripPage`/
@@ -107,7 +107,7 @@ const Logic = AppLogic as unknown as {
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (src/v2.ts) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -116,7 +116,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (src/v2.ts) — what `GET …/release-proposals`
  *  publishes. `targetAt` is OPTIONAL and epoch SECONDS; there is no `status`
  *  (every returned proposal is live by construction). */
 interface ProposalFixture {
@@ -993,7 +993,7 @@ describe("CR-CRU-078 §S2 — the window size is MEASURED from layout, not hardc
 // cytoscape's `destroy()` on remount; the strip has no canvas, but it still
 // installs two live measurers per mount — a `ResizeObserver` on its own box and
 // a window `resize` listener — and `observeRoadmapStrip` calls the previous
-// mount's teardown before installing its own (public/app.js:2967-2986). Nothing
+// mount's teardown (`roadmapStripTeardown`) before installing its own. Nothing
 // asserted that, and an un-retired listener is a leak that also MISFIRES: it
 // still holds the dead element it measured.
 
