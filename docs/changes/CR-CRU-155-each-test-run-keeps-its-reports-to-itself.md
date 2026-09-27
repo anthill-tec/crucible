@@ -59,7 +59,10 @@ its outputs into the agent's directory the way its tool allows:
   and raw-report paths and `--coverage-dir`; python: the xmlrunner output directory and coverage.py's
   data file).
 - **mvn:** the client passes the locations to Maven (`-Dsurefire.reportsDirectory`,
-  `-Dfailsafe.reportsDirectory`, and JaCoCo's output where the plugin accepts it).
+  `-Dfailsafe.reportsDirectory`, and JaCoCo's output where the plugin accepts it). A POM that pins
+  `reportsDirectory` in its plugin configuration overrides that property, so, as for arduino, when
+  the agent's directory holds no results after the run but `target/surefire-reports` or
+  `target/failsafe-reports` do, the client moves them in and warns (user ruling 2026-09-27).
 - **arduino:** the client passes the locations to `make` (`REPORTS_DIR=`, `COVERAGE_DIR=`), a
   documented contract for the project's Makefile. A Makefile that ignores them still works: the
   client moves what it wrote into the agent's directory right after the run and says so in a
@@ -84,7 +87,8 @@ its outputs into the agent's directory the way its tool allows:
   as today on the same tree.
 - **AC6 (§S2)** — A declared raw report (bun's `test:e2e` `playwright.json`) is written to and sent
   from the agent's directory.
-- **AC7 (§S3)** — mvn passes the agent's directory to surefire and failsafe; arduino passes
+- **AC7 (§S3)** — mvn passes the agent's directory to surefire and failsafe, and when a POM's own
+  `reportsDirectory` overrides it, moves the results into the agent's directory and warns; arduino passes
   `REPORTS_DIR`/`COVERAGE_DIR` to `make` and, when the Makefile ignores them, moves the output and
   warns; rust moves nextest's JUnit and llvm-cov's output before reading them. Each is asserted on
   the command the client builds and on where the ingested files came from.
