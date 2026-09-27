@@ -44,13 +44,13 @@ needs. `unpointed` and `scheduleHealth` are unchanged.
 
 ### §S3 — the window is per project
 
-A project carries its velocity window: **7, 14 or 28 days**, default 14. It is set in the projects
+A project carries its velocity window: **7, 14 or 28 days**, default **7** (user ruling 2026-09-27). It is set in the projects
 manager (`/manage`, F12) beside retention, stored on the project and returned by the project read.
 Any other value is refused by the server.
 
 ### §S4 — the velocity card and the flow line
 
-The Velocity card (F16) shows the rate, the window it covers (`last 14 days`) and daily bars for the
+The Velocity card (F16) shows the rate, the window it covers (`last 7 days`) and daily bars for the
 window in place of weekly bars. The flow line (exec · gate per cycle) is unchanged.
 
 ### §S5 — the design follows
@@ -64,7 +64,7 @@ model. The orchestrator makes the storyboard edit at close-out.
       including today's merges, asserted against fixed merge fixtures for 7, 14 and 28 days.
 - [ ] **AC2** — The forecast samples daily throughput (zero days included) and is dated as soon as
       the pointed history spans one window; below that it refuses naming the days it has and needs.
-- [ ] **AC3** — A project's window is 7, 14 or 28 days (default 14), editable in the projects manager
+- [ ] **AC3** — A project's window is 7, 14 or 28 days (default 7), editable in the projects manager
       in a real browser, and any other value is refused by the server.
 - [ ] **AC4** — Changing a project's window changes its velocity and forecast on the next read.
 - [ ] **AC5** — On the dev board's own history, 0.3.0 gets a dated forecast.
