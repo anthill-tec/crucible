@@ -115,7 +115,9 @@ history notes inside `tests/project-namespace-tripwire.test.ts`. Both are record
 One test scans the in-scope trees and fails when:
 
 - a `path:line` citation into a source file appears (fixture strings are exempted by name, each
-  with its reason, in the test);
+  with its reason, in the test), in any notation: `path:123`, a bare `:123`, or a word form such as
+  `path ~L123`, `~line 45`, `line 91` (VERIFY finding, cycle 540; user ruling 2026-09-27). A line
+  number in a spec record ("AC line 267") and a captured stack trace are not citations of source;
 - a cited source path names no file that exists;
 - a line cites a source file and names a backticked identifier that does not occur in that file.
 
@@ -141,7 +143,8 @@ out.
 - **AC6** — Item 11: `playwright` is either declared or no longer imported directly.
 - **AC7** — No behaviour changes. The full bun, python and e2e runs match the branch-cut baseline
   (e2e 734/0 measured at `de7f5ef`) except for tests this CR deletes, each named in the RED commit.
-- **AC8** — §S4: no in-scope `path:line` citation into a source file remains; every rewritten
+- **AC8** — §S4: no in-scope line citation into a source file remains, in any notation (`path:123`,
+  a bare `:123`, `~L123`, `~line 45`, `line 91`); every rewritten
   citation names a construct that exists in the cited file. The census table lists each rewrite:
   citing file, old cite, new cite, construct.
 - **AC9** — Citation pins and `PROSE_CITATIONS` that this CR's own edits shift are re-pinned once,
