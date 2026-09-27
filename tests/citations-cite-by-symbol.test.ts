@@ -1078,10 +1078,30 @@ describe("the citation checker — word-form line references (defect 4, VERIFY c
 
 describe("word-form line references — real-world cases closed this cycle", () => {
   test("the real dom-settle helper's twelve app.js timer citations are ALL caught, not just the ones textually adjacent to the one `app.js` mention", () => {
+    // A PINNED COPY of the helper's timer-audit paragraph as it stood before
+    // C5 FIX rewrote it by symbol: the live file no longer carries these
+    // citations, and a test must not depend on a commit hash. The tilde is
+    // spliced in at run time (`T`) so this guard's own source never carries
+    // the notation it scans for, the same discipline the planted fixtures
+    // above follow.
     const relPath = "tests/helpers/dom-settle.ts";
     const allRelPaths = listAllRepoFiles();
     const repo = realRepo(allRelPaths);
-    const text = readFileSync(join(REPO_ROOT, relPath), "utf8");
+    const T = ["~", "L"].join("");
+    const text = [
+      "// WHY YIELDING WITHOUT THE SLEEP IS SOUND, measured rather than assumed:",
+      "// everything production schedules to RENDER is queued at 0ms \u2014 the",
+      `// \`setTimeout(remeasure, 0)\` behind a measured pane (app.js ${T}3459), the`,
+      `// \`setTimeout(boot, 0)\` that mounts the app (app.js ${T}5516), and van-x's own`,
+      "// scheduler, which passes no delay at all. Every OTHER timer in `app.js` is a",
+      "// clock or a retry, not a render step: the 5000ms recovery/poll channel",
+      `// (\`setInterval(refetch, 5000)\` ${T}413, \`setTimeout(connectStream, 5000)\``,
+      `// ${T}406, \`setInterval(watchdogTick, 5000)\` ${T}5506), the 1s/10s display ticks`,
+      `// (${T}698, ${T}687), the 10s locate-blink cleanup (${T}3905), and the 5ms`,
+      "// try-again-after-render chains behind `revealDeclaredMarker` /",
+      "// `revealCycleRow` / `revealDrillTarget` / `scrollFocusedRowIntoView`",
+      `// (${T}3949, ${T}4082, ${T}4098, ${T}5147).`,
+    ].join("\n");
     const wordFormHits = findCitationViolations(relPath, text, repo, EXEMPT_FIXTURES).filter((v) =>
       v.reason.includes("word-form line citation"),
     );
