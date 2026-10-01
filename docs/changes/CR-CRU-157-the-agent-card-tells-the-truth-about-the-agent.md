@@ -1,6 +1,6 @@
 # CR-CRU-157 — the agent card tells the truth about the agent
 
-**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27; scope extended 2026-10-01 (python, Sandesh #1412). Points are
+**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27; scope extended 2026-10-01 (live runs for every stack, Sandesh #1412). Points are
 re-set at its gap analysis
 
 ## Problem
@@ -27,13 +27,16 @@ earlier. **At other times the card shows nothing that says what the agent is doi
 
 ## Scope
 
-### §S0 — a python run is visibly alive (Sandesh #1412)
+### §S0 — every stack's run is visibly alive (Sandesh #1412; all stacks by user ruling 2026-10-01)
 
-The python client, like bun's: opens its run with `POST /api/v2/runs/start` before the suite starts (so
-the board shows the running card, CR-CRU-017), streams the runner's output live to stderr and `--log` as
-it is produced (the captured copy the no-XML compile fallback reads stays byte-identical), and narrates
-`running N/M` through the shared narration path, counting completions from the runner's own output.
-Whether rust and arduino narrate, and what they lack, is measured at gap analysis.
+Every stack client (bun, python, mvn, rust, arduino), on every verb that runs a suite: opens its run
+with `POST /api/v2/runs/start` before the suite starts (so the board shows the running card,
+CR-CRU-017), streams the runner's output live to stderr and `--log` as it is produced (any captured
+copy a client parses afterwards stays byte-identical), and narrates `running N/M` through ONE shared
+narration path in `clients/_crucible_axi.py`, each stack supplying only how it recognises a completed
+test in its runner's output. Python is the measured worst case (nothing at all until the end); bun and
+mvn already narrate on some verbs. Which verb of which client lacks which of the three is measured at
+gap analysis, and the shared path replaces the per-client narrators.
 
 ### §S1 — the final count lands
 
@@ -54,11 +57,14 @@ the server (user ruling 2026-09-26).
 
 ## Acceptance criteria
 
-- [ ] A python `test` / `regression` run opens its run with `/runs/start` before the suite starts, and the
-      board's `openRuns` holds it until the ingest closes it, asserted on the requests made.
-- [ ] The python runner's output reaches stderr and `--log` while the suite is still running (a line
-      printed before a blocking test is visible before that test ends), asserted with a real subprocess.
-- [ ] A python run narrates `running N/M` while in flight and ends with `ran M/M`.
+- [ ] For each of the five clients, every suite-running verb opens its run with `/runs/start` before the
+      suite starts, and the board's `openRuns` holds it until the ingest closes it, asserted on the
+      requests made.
+- [ ] For each of the five clients, the runner's output reaches stderr and `--log` while the suite is
+      still running (a line printed before a blocking test is visible before that test ends), asserted
+      with a real subprocess and a fake runner.
+- [ ] For each of the five clients, a run narrates `running N/M` while in flight and ends with
+      `ran M/M`, through the one shared narration path.
 
 - [ ] A narrated bun run whose last completion falls inside the throttle window still ends with the
       board holding `ran M/M`, asserted on the heartbeats posted.
