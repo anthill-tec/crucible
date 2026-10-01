@@ -1,6 +1,7 @@
 # CR-CRU-157 — the agent card tells the truth about the agent
 
-**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27
+**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27; scope extended 2026-10-01 (python, Sandesh #1412). Points are
+re-set at its gap analysis
 
 ## Problem
 
@@ -15,11 +16,24 @@ earlier. **At other times the card shows nothing that says what the agent is doi
   final post**: when the run ends, the last message the board holds is whichever completion last
   passed the throttle. mvn's `_Narrator` (`clients/mvn-crucible.py`) has a `finish()` that bun's
   lacks. Whether python, rust and arduino narrate at all is unmeasured.
+- **The python client shows nothing at all while it runs** (Sandesh request #1412, 2026-10-01, folded in
+  by user ruling the same day; confirmed in code). `_run_logged` (`clients/python-crucible.py`) runs the
+  suite through `subprocess.run` and echoes the captured output only after it exits; the client has no
+  `_Narrator` and never calls `POST /api/v2/runs/start`, so the board draws no running card. Sandesh's
+  1,786-test, ~4-minute suite looked hung for its whole run.
 - Nothing updates the message after the run. The card keeps a stale `running N/M` (or the register
   message, `Starting GREEN phase`) through ingest, idle and the next phase. The row
   (`AgentRow` in `public/app.js`) renders `agent.message` as it stands.
 
 ## Scope
+
+### §S0 — a python run is visibly alive (Sandesh #1412)
+
+The python client, like bun's: opens its run with `POST /api/v2/runs/start` before the suite starts (so
+the board shows the running card, CR-CRU-017), streams the runner's output live to stderr and `--log` as
+it is produced (the captured copy the no-XML compile fallback reads stays byte-identical), and narrates
+`running N/M` through the shared narration path, counting completions from the runner's own output.
+Whether rust and arduino narrate, and what they lack, is measured at gap analysis.
 
 ### §S1 — the final count lands
 
@@ -39,6 +53,12 @@ event) or posted by the client is this CR's gap analysis to settle; state-depend
 the server (user ruling 2026-09-26).
 
 ## Acceptance criteria
+
+- [ ] A python `test` / `regression` run opens its run with `/runs/start` before the suite starts, and the
+      board's `openRuns` holds it until the ingest closes it, asserted on the requests made.
+- [ ] The python runner's output reaches stderr and `--log` while the suite is still running (a line
+      printed before a blocking test is visible before that test ends), asserted with a real subprocess.
+- [ ] A python run narrates `running N/M` while in flight and ends with `ran M/M`.
 
 - [ ] A narrated bun run whose last completion falls inside the throttle window still ends with the
       board holding `ran M/M`, asserted on the heartbeats posted.
