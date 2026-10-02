@@ -158,46 +158,27 @@ settle; a frozen review window is the thing that kills the poll in the first pla
 never lost while the poll is down — it queues until a poll delivers it — so a re-arm always
 recovers it, but the user is left talking to a surface nobody is reading.
 
-## 6. Sandesh notifier
+## 6. Sandesh notifier — the Sandesh-Pi extension (user direction 2026-10-01)
+
+The wake watcher is the **Sandesh-Pi extension**, not a supervised `sandesh notify` process. Do NOT
+`process start sandesh notify …` any more; the extension replaces that loop.
 
 ```
-sandesh addressbook --project Crucible        # who can address me?
-sandesh projects                              # CROSS-PROJECT grant per project
-sandesh register --project Crucible --address 'Mainline - Crucible'   # only if inactive; NOT --as (that's unregister's flag)
-hub start name=sandesh-notify-crucible application=sandesh \
-     args=[notify, --project, Crucible, --to, "Mainline - Crucible", --timeout, 43200]
+sandesh_addressbook(project_id="Crucible")                         # who can address me?
+sandesh_register(address="Mainline - Crucible", kind="mainline", project_id="Crucible")  # only if inactive
+sandesh_fetch(recipient="Mainline - Crucible", project_id="Crucible")  # drain gap mail FIRST
+sandesh_notify_start(address="Mainline - Crucible", project="Crucible")
+sandesh_notify_status(project="Crucible")                          # running: true
 ```
 
-**`--timeout 43200`, raised from 14400 and MEASURED 2026-09-18.** The 4h ceiling fired mid-session:
-`timed out (1441 polls)` — 1441 × 10s = exactly its 14400s — and `sandesh notify` exits **2** on
-timeout, so `hub` reports the process as **failed** when nothing failed. That costs a relaunch every
-four hours and, worse, trains you to read a red "failed" line as routine. 12h covers a working day
-in one process. It is still a CEILING, not a heartbeat: when it fires, RELAUNCH — a timeout exit is
-not a reason to leave the channel dead.
+On a wake: `sandesh_fetch`, act, and check `sandesh_notify_status`. If the watcher is not running
+after the wake, start it again in the same turn (the relaunch-on-exit rule still holds; only the
+mechanism changed). Whether the extension re-arms itself after a wake is to be measured at the first
+bootstrap that uses it, and this line corrected with the answer.
 
-**Read the exit code before reacting:** `0` = mail arrived (fetch it, then relaunch), `2` = the
-ceiling fired (just relaunch, there is no mail), anything else = a real fault worth reading the log
-for.
-
-**CORRECTED 2026-09-16. This section previously read "retired for this project — never launch it",
-and that was wrong on both the fact and the framing.**
-
-- **Wrong on fact.** The 2026-09-03 reasoning was "the addressbook holds only me, cross-project
-  sending needs a CLI-only admin grant, and none exists, so the inbox has no possible sender."
-  Measured 2026-09-16: `sandesh projects` shows **both `Crucible` and `ModelB` with
-  `CROSS-PROJECT ✓`** — the grant exists — and `Mainline - ModelB` is **live**. A notifier started
-  that day woke within *seconds* on real mail (#1370, #1371) carrying a direct request. A
-  single-participant roster does NOT mean a silent inbox once a cross-project peer is granted.
-- **Wrong on framing.** It was written as a standing prohibition and later quoted to the user as
-  *their* rule when declining to start the watcher. It was self-authored. A note written here
-  carries no authority over the user's choices and must never be presented as their decision.
-
-So: **check, then act.** Launch the notifier when anyone can address this project — a Track on the
-roster, or a cross-project peer with `CROSS-PROJECT ✓` (today: ModelB). Skip it and SAY SO only
-when nothing can. The real 2026-09-03 cost was operational, not strategic: the watcher hit its
-`--timeout 3600` ceiling and was relaunched five times in one day, and its log spam burned ~4,000
-characters of context. Both are fixed by `--timeout 14400` and `hub start` (tracked, its output in
-`hub logs`, not the transcript) — not by refusing to run it.
+Launch it when anyone can address this project: a Track on the roster, or a cross-project peer with
+`CROSS-PROJECT ✓` (today: ModelB, Sandesh). Measured 2026-09-16: a single-participant roster does NOT
+mean a silent inbox once a cross-project peer is granted.
 
 ## Then
 
@@ -264,23 +245,25 @@ State is in `data/crucible.db`; a stop is safe. Confirm `hub ps` shows both exit
 nothing, and 9224 has no listener. The relay is stopped AFTER the tabs are closed — closing a tab
 needs the relay alive.
 
-## 6. Sandesh notifier — the FINAL action, and it is NOT relaunched
+## 6. Sandesh notifier — the FINAL action, and it is NOT restarted
 
 ```
-hub stop name=sandesh-notify-crucible                       # only the one THIS session owns
-sandesh unregister --project Crucible --as 'Mainline - Crucible' --addr 'Mainline - Crucible'
+sandesh_notify_stop(address="Mainline - Crucible")    # only the watcher THIS session owns
+sandesh_unregister(address="Mainline - Crucible", requester="Mainline - Crucible", project_id="Crucible")
 ```
 
 This is the single documented override of the relaunch-on-exit prime directive, and it applies
-ONLY here, at a confirmed shutdown's last step. Keep the notifier alive through the whole teardown
-— it is how a late emergency-stop or a peer's last message reaches you.
+ONLY here, at a confirmed shutdown's last step. Keep the watcher alive through the whole teardown
+— it is how a late emergency-stop or a peer's last message reaches you. Stop it by its own address
+only; never a machine-wide kill (ModelB's and Sandesh's watchers share this host). The roster then
+reads `inactive / ○ offline`.
 
-- `unregister` needs **BOTH** `--as` and `--addr`; with `--addr` alone it fails
-  `pass --as '<your address>'`. The roster then reads `inactive / ○ offline`.
-- **Kill only the process you own.** `pgrep -af 'sandesh notify'` on this host also matches
-  **ModelB's** watcher (`--to Mainline - ModelB --project ModelB`) — measured 2026-09-16. A
-  machine-wide `pkill sandesh` takes down another orchestrator's channel. Stop it by its `hub`
-  name, and if you must match by pattern, match your own exact address.
+## Teardown order (corrected 2026-09-27)
+
+Close the tabs (step 3) BEFORE ending the Lavish sessions and stopping its server (step 2): with
+the server already down, `close-tabs.ts` no longer recognised the Lavish tabs and left both open.
+Then confirm on `/json/list` that no :3850, :4387 or file:// project page is left, before stopping
+the relay.
 
 Then the shutdown report names each of the SIX as down/closed/left-open, with the evidence
 (`json/list` count, `hub ps` line, roster state) — and where a step could not complete, says so
