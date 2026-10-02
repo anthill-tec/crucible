@@ -37,10 +37,10 @@ changes: content, reads, and behaviour at every band.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — In the workspace Project pane, `vitals-rail` precedes `project-velocity` in document
+- [x] **AC1** — In the workspace Project pane, `vitals-rail` precedes `project-velocity` in document
       order, and the agent rows precede both, asserted on the rendered DOM.
-- [ ] **AC2** — Every existing Project-pane, velocity and responsive-band test passes unchanged.
-- [ ] **AC3** — The live pane matches storyboard **F18 §1** (Project card, agents, Vitals, Velocity),
+- [x] **AC2** — Every existing Project-pane, velocity and responsive-band test passes unchanged.
+- [x] **AC3** — The live pane matches storyboard **F18 §1** (Project card, agents, Vitals, Velocity),
       checked in a real browser at VERIFY.
 
 ## Cycles
