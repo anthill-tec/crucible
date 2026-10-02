@@ -2759,7 +2759,8 @@
         : "";
 
     // §S5.2 — the workspace's right rail: project card, then the project's
-    // agents (live + tombstoned) as ⌁-marked indented sub-rows, then Vitals.
+    // agents (live + tombstoned) as ⌁-marked indented sub-rows, then Vitals,
+    // then Velocity (Velocity sits below Vitals).
     // This pane exists ONLY inside the workspace.
     const ProjectPane = () =>
       div(
@@ -2809,7 +2810,6 @@
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
         },
-        () => VelocityCard(),
         // CR-CRU-123 §S2 — a 🗺 shortcut stood HERE and is retired (user
         // ruling, 2026-09-12). It shipped under CR-CRU-014 §S3 as a second
         // door onto the /p/<key>/roadmap route; CR-CRU-076 then made Roadmap
@@ -2824,6 +2824,7 @@
             : div(visibleAgents().map(AgentRow)),
         ),
         VitalsRail(),
+        () => VelocityCard(),
       );
 
     // §S5.5 (user defect 2026-07-15) — the Coverage tab renders the real
