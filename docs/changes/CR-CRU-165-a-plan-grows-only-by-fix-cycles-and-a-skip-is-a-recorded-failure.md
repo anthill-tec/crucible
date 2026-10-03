@@ -1,6 +1,6 @@
 # CR-CRU-165 — a plan grows only by FIX cycles, and a skipped cycle is a recorded failure
 
-**Type** feature · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-03
+**Type** feature · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-10-03
 
 ## Problem
 
