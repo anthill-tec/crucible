@@ -33,7 +33,9 @@ census python suites, **130/0** (both filed project-scoped under `vidushi`).
   routes `before: <cycleId>` on `POST …/cycles` (insert-before, §S3.1) and `{label}` on
   `PATCH …/cycles/<id>` (rename, §S3.2). Neither has a client verb or a UI; both are reachable only
   over HTTP (tests `cycle-insert-before`, `cycle-edit-label`). Under the ruling both are plan
-  changes. **R1 (user, 2026-10-03): retire both.**
+  changes. **R1 (user, 2026-10-03, revised the same day): not refused. Insert-before, rename and a
+  non-FIX append behave like `cycle-skip`: allowed only for a spec change the user approved
+  mid-implementation, with reason, cause and spec reference, recorded and warned.**
 - **G2 — an active cycle can be skipped today** (`active → skipped` is legal). §S2 allows only a
   pending cycle; the transition table changes so an active cycle ends `done` or `failed`.
   **R2 (user, 2026-10-03): pending only.**
@@ -55,19 +57,23 @@ census python suites, **130/0** (both filed project-scoped under `vidushi`).
   the reason on the row and the plan's skip count. Analytics has no per-release count of anything
   on cycles today; the skip count by cause is a new analytics read.
 - **Cost.** 13 points, not 8: R3 adds a second recorded path (abort, with its fields on the plan
-  and its verb in five clients) and its count in §S3; R1's retirement is two route branches and
-  their two test files; R2 is one transition.
+  and its verb in five clients) and its count in §S3; R1 puts the same three guarded fields on
+  insert, rename and non-FIX append; R2 is one transition.
 
 ## Scope
 
 ### §S1 — the plan grows only by FIX cycles
 
-`cycle-add` (verb and route) appends only a cycle of kind `fix`, and only to an open plan whose
-VERIFY cycle is done. Any other kind is refused with the rule and the `cycle-add --kind fix` usage.
+Appending a cycle of kind `fix` to an open plan whose VERIFY cycle is done is the one plan change
+that needs nothing more.
 
-The two other ways CR-CRU-024 left to change a filed plan are retired (R1): `before:` on
-`POST …/cycles` (insert-before, §S3.1) and `{label}` on `PATCH …/cycles/<id>` (rename, §S3.2).
-Each is refused with a 400 naming the rule; their store paths and tests go.
+Every other change to a filed plan is the exception for a spec change the user approved
+mid-implementation (R1): appending a cycle of another kind, inserting a cycle (`before:` on
+`POST …/cycles`, CR-CRU-024 §S3.1), renaming one (`{label}` on `PATCH …/cycles/<id>`, §S3.2), and
+skipping one (§S2). Each requires `--reason`, `--cause spec-design|gap-analysis` and `--spec-ref`
+from the orchestrator, is refused without them naming the rule, stores them on the cycle with the
+kind of change, and carries the process-failure warning. The existing guards stay (no insert before
+the active cycle; no rename of an active or done cycle).
 
 ### §S2 — `cycle-skip`, guarded and recorded
 
@@ -109,8 +115,9 @@ carry no reason and are shown as unrecorded, never back-filled.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `cycle-add` with a kind other than `fix`, or before the plan's VERIFY is done, is
-      refused with the rule; a `fix` cycle after a done VERIFY is appended.
+- [ ] **AC1** — a `fix` cycle after a done VERIFY is appended with nothing more; any other append
+      without reason, cause and spec reference is refused with the rule, and with them is appended,
+      recorded and warned.
 - [ ] **AC2** — `cycle-skip` on a pending cycle with reason, cause and spec reference marks it
       skipped and stores all three; the board shows them.
 - [ ] **AC3** — `cycle-skip` is refused for an active, done or failed cycle, a cycle with a run
@@ -123,21 +130,23 @@ carry no reason and are shown as unrecorded, never back-filled.
       aborted plan's reason.
 - [ ] **AC7** — `cycle-add`'s envelope names the plan's CR (N1).
 - [ ] **AC8** — the unscoped plans route honours or refuses `cr=` and `status=` (N2).
-- [ ] **AC9** — `before:` on `POST …/cycles` and `{label}` on `PATCH …/cycles/<id>` are refused with
-      the rule (R1).
+- [ ] **AC9** — insert-before and rename without reason, cause and spec reference are refused with
+      the rule; with them they are made, recorded on the cycle with the kind of change, and warned
+      (R1).
 - [ ] **AC10** — `PATCH` an active cycle to `skipped` is refused; an active cycle ends `done` or
       `failed` (R2).
 - [ ] **AC11** — `abort` without reason, cause or spec reference is refused; with them, the plan
       stores all three, its skipped cycles show the reason, and the envelope carries the warning,
       in all five clients (R3).
-- [ ] **AC12** — analytics counts skips and aborts per release by cause; pre-existing ones are
+- [ ] **AC12** — analytics counts recorded plan changes (insert, rename, non-FIX append, skip) and
+      aborts per release by cause; pre-existing ones are
       counted as unrecorded.
 - [ ] **AC13** — the crucible skill's verb list names `cycle-skip` and the new `abort` flags, and
       states that a plan grows only by FIX cycles.
 
 ## Cycles
 
-C1 server — R1 retirement, R2 transition, `cycle-skip` guards and storage (migration to v14), abort
+C1 server — R1 guarded insert/rename/append, R2 transition, `cycle-skip` guards and storage (migration to v14), abort
 fields, N2 (AC1 server half, AC3, AC4, AC8–AC10, AC11 server half): RED + GREEN.
 C2 clients — `cycle-skip` and the `abort` flags in all five, `cycle-add` fix-only and N1, the skill
 (AC1, AC2, AC5, AC7, AC11, AC13): RED + GREEN.
