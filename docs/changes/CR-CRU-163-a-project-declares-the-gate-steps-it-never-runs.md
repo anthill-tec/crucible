@@ -55,14 +55,14 @@ came from (G6). Step names pass through unvalidated, and a refusal by no-mistake
 
 ## Acceptance criteria
 
-- [ ] **AC1** — With `[gate] skip = ["pr", "ci"]` in the project's file and no `--skip`, `gate-run`
+- [x] **AC1** — With `[gate] skip = ["pr", "ci"]` in the project's file and no `--skip`, `gate-run`
       passes `--skip pr,ci`; with it only in the install's file, the same.
-- [ ] **AC2** — An explicit `--skip` replaces the declared list, and `--skip ""` passes no `--skip`.
-- [ ] **AC3** — With nothing declared and no `--skip`, the argv carries no `--skip` (today's
+- [x] **AC2** — An explicit `--skip` replaces the declared list, and `--skip ""` passes no `--skip`.
+- [x] **AC3** — With nothing declared and no `--skip`, the argv carries no `--skip` (today's
       behaviour).
-- [ ] **AC4** — The envelope carries `skip` and `skipSource` (`flag`, `declared` with its path, or
+- [x] **AC4** — The envelope carries `skip` and `skipSource` (`flag`, `declared` with its path, or
       `none`) on both the sealed and the unsealed exit.
-- [ ] **AC5** — A malformed declaration (not a list of non-empty strings, or an entry containing a
+- [x] **AC5** — A malformed declaration (not a list of non-empty strings, or an entry containing a
       comma) is refused before no-mistakes is launched, naming the file; step names are not
       validated by Crucible.
-- [ ] **AC6** — All five clients' `gate-run` show the same behaviour (parity asserted).
+- [x] **AC6** — All five clients' `gate-run` show the same behaviour (parity asserted).
