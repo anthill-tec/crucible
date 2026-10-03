@@ -273,10 +273,19 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     test("pending -> skipped succeeds — the one legal shortcut (orchestrator cancels an unnecessary cycle without activating it)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
-      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-3");
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-T-3",
+        cycles: [{ label: "solo" }, { label: "keeps the plan unskipped" }],
+      });
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      const planId = filedBody.planId;
+      const cycleId = filedBody.cycles[0]!.id;
 
       const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
         status: "skipped",
+        reason: "the spec no longer needs this cycle",
+        cause: "spec-design",
+        specRef: "CR-CRU-165 \u00a7S2",
       });
       expect(res.status).toBe(200);
       expect(await getCycleStatus(key, "CR-T-3")).toBe("skipped");

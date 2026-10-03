@@ -270,24 +270,29 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
     const res = await send("POST", `/api/v2/projects/${key}/plans/${planId}/abort`, {
       agentId: ORCH,
       userApproved: true,
+      reason: "the spec no longer fits this plan",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2b",
     });
     expect(res.status).toBe(200);
     expect(res.body.plan!.status).toBe("aborted");
   }
 
   /** Drive a cr to `COMPLETED`: file a plan, take every cycle to a terminal
-   *  state (`pending → skipped`, the cheapest legal edge), then close WITH a
+   *  state (`pending → active → done`), then close WITH a
    *  merge — `deriveQueueStatus` reads COMPLETED off exactly that pair. */
   async function land(key: string, cr: string, wave?: string): Promise<void> {
     const plan = await openPlan(key, cr, wave);
     const planId = plan.planId!;
     for (const cycle of plan.cycles!) {
-      const moved = await send(
-        "PATCH",
-        `/api/v2/projects/${key}/plans/${planId}/cycles/${cycle.id}`,
-        { agentId: ORCH, status: "skipped" },
-      );
-      expect(moved.status).toBe(200);
+      for (const status of ["active", "done"]) {
+        const moved = await send(
+          "PATCH",
+          `/api/v2/projects/${key}/plans/${planId}/cycles/${cycle.id}`,
+          { agentId: ORCH, status },
+        );
+        expect(moved.status).toBe(200);
+      }
     }
     const closed = await send("PATCH", `/api/v2/projects/${key}/plans/${planId}`, {
       agentId: ORCH,

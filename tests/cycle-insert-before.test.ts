@@ -150,7 +150,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   ): Promise<{ planId: number | string; a: number; b: number; c: number; d: number }> {
     const { planId, ids } = await fileCycles(key, cr, ["A", "B", "C", "D"]);
     const [a, b, c, d] = ids as [number, number, number, number];
-    expect((await transition(key, planId, a, "skipped")).status).toBe(200);
+    expect((await patchJson(plansPath(key, `/${planId}/cycles/${a}`), { status: "skipped", ...VALID_FIELDS })).status).toBe(200);
     expect((await transition(key, planId, b, "active")).status).toBe(200);
     return { planId, a, b, c, d };
   }

@@ -191,6 +191,9 @@ describe("CR-CRU-116 §S1/§S2 — the guard's edges: outside the constraint, an
     const res = await send("POST", `/api/v2/projects/${key}/plans/${planId}/abort`, {
       agentId: ORCH,
       userApproved: true,
+      reason: "the spec no longer fits this plan",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2b",
     });
     expect(res.status).toBe(200);
     expect(res.body.plan!.status).toBe("aborted");
@@ -203,12 +206,14 @@ describe("CR-CRU-116 §S1/§S2 — the guard's edges: outside the constraint, an
     const plan = await openPlan(key, cr);
     const planId = plan.planId!;
     for (const cycle of plan.cycles!) {
-      const moved = await send(
-        "PATCH",
-        `/api/v2/projects/${key}/plans/${planId}/cycles/${cycle.id}`,
-        { agentId: ORCH, status: "skipped" },
-      );
-      expect(moved.status).toBe(200);
+      for (const status of ["active", "done"]) {
+        const moved = await send(
+          "PATCH",
+          `/api/v2/projects/${key}/plans/${planId}/cycles/${cycle.id}`,
+          { agentId: ORCH, status },
+        );
+        expect(moved.status).toBe(200);
+      }
     }
     const closed = await send("PATCH", `/api/v2/projects/${key}/plans/${planId}`, {
       agentId: ORCH,
