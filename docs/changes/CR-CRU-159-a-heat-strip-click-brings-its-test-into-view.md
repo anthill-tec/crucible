@@ -86,25 +86,25 @@ The run-detail header stays pinned (CR-CRU-016 §S1); only the pane's scroller m
 
 ## Acceptance criteria
 
-- [ ] **AC1** — In a real browser, on a plain Density run large enough that the target is below the
+- [x] **AC1** — In a real browser, on a plain Density run large enough that the target is below the
       fold, clicking a loaded suite's cell (green, and red) leaves that leaf row inside the
       `pane-scroll`'s visible area, and the row carries `app-locate-blink`.
-- [ ] **AC2** — The same for a synthetic cell of a collapsed suite: a green cell reveals the suite's
+- [x] **AC2** — The same for a synthetic cell of a collapsed suite: a green cell reveals the suite's
       row, now expanded; a red cell reveals the suite's first failing leaf with its failure box.
-- [ ] **AC3** — In a spec run, a cell whose scenario sits in a folded feature unfolds that feature and
+- [x] **AC3** — In a spec run, a cell whose scenario sits in a folded feature unfolds that feature and
       reveals the scenario, in a real browser.
-- [ ] **AC4** — In a suite of more than 120 entries with a digest group before the target, the
+- [x] **AC4** — In a suite of more than 120 entries with a digest group before the target, the
       target's row is mounted and revealed (asserted on the rendered DOM and in a real browser).
-- [ ] **AC5** — The blink is still on the target after the scroll has settled and after any lazy
+- [x] **AC5** — The blink is still on the target after the scroll has settled and after any lazy
       loads it caused, and is gone 10 s after the click.
-- [ ] **AC6** — Clicking a cell whose target is already fully visible blinks it and leaves the
+- [x] **AC6** — Clicking a cell whose target is already fully visible blinks it and leaves the
       pane's `scrollTop` unchanged.
-- [ ] **AC7** — Through every reveal, the run-detail header's position and the document's own scroll
+- [x] **AC7** — Through every reveal, the run-detail header's position and the document's own scroll
       are unchanged; only the containing `pane-scroll` moves. Asserted in both mounts (home
       timeline and workspace).
-- [ ] **AC8** — The footer's next-failure jump and every existing heat-strip, drill-in and density
+- [x] **AC8** — The footer's next-failure jump and every existing heat-strip, drill-in and density
       test pass unchanged.
-- [ ] **AC9** — The behaviour matches storyboard **F20** (as amended 2026-10-02: Density only),
+- [x] **AC9** — The behaviour matches storyboard **F20** (as amended 2026-10-02: Density only),
       checked in a real browser at VERIFY.
 
 ## Cycles

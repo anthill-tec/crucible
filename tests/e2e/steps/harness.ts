@@ -508,6 +508,168 @@ export function junit60(failCount = 3): string {
   return [`<testsuite name="Suite60" tests="60">`, ...cases, "</testsuite>"].join("\n");
 }
 
+// CR-CRU-159 C1 — heat-strip reveal e2e fixtures (plain/non-spec runs,
+// Density presentation). Each builds the raw JUnit XML `ingestJunit` posts
+// under `codec: "junit"`; the server-side codec (`src/codecs/junit.ts`)
+// turns it into the suite/leaf tree the heat-strip renders over.
+
+/** §S1 AC1/AC6 — a single suite of `total` leaves with a named passing leaf
+ *  and a named failing leaf (a UNIQUE failure message, so Density never
+ *  digests it) planted at the given 0-based positions; every other leaf
+ *  passes. A large `total` (with both targets well past VIRT_WINDOW/2) makes
+ *  the suite's own virtualized leaf list, once loaded, tall enough that a
+ *  mid-list target sits below the pane's fold without any extra filler
+ *  content — the §S1 "below the fold" shape. */
+export function junitTargetedSuite(
+  suiteName: string,
+  total: number,
+  green: { name: string; position: number },
+  red: { name: string; position: number },
+): string {
+  const cases: string[] = [];
+  for (let i = 0; i < total; i++) {
+    if (i === green.position) {
+      cases.push(`<testcase name="${green.name}" time="0.01"/>`);
+    } else if (i === red.position) {
+      cases.push(
+        `<testcase name="${red.name}" time="0.01"><failure message="${red.name}-failure">trace</failure></testcase>`,
+      );
+    } else {
+      cases.push(`<testcase name="${suiteName}-filler-${i}" time="0.01"/>`);
+    }
+  }
+  return [`<testsuite name="${suiteName}" tests="${total}">`, ...cases, "</testsuite>"].join("\n");
+}
+
+/** §S1 G4/AC4 — a suite whose DENSITY ENTRIES exceed VIRT_WINDOW (120) once a
+ *  `groupSize`-leaf identical-failure group collapses to ONE digest entry:
+ *  `groupSize` identically-failing leaves, then the named target leaf, then
+ *  `trailing` more individually-entried leaves (so the suite's digested
+ *  entry count, not just its raw leaf count, clears 120). */
+export function junitDigestWindowSuite(
+  suiteName: string,
+  groupSize: number,
+  targetName: string,
+  trailing: number,
+): string {
+  const cases: string[] = [];
+  for (let i = 0; i < groupSize; i++) {
+    cases.push(
+      `<testcase name="${suiteName}-dup${i}" time="0.01"><failure message="shared-digest-failure">trace</failure></testcase>`,
+    );
+  }
+  cases.push(`<testcase name="${targetName}" time="0.01"/>`);
+  for (let i = 0; i < trailing; i++) {
+    cases.push(`<testcase name="${suiteName}-trail${i}" time="0.01"/>`);
+  }
+  const total = groupSize + 1 + trailing;
+  return [`<testsuite name="${suiteName}" tests="${total}">`, ...cases, "</testsuite>"].join("\n");
+}
+
+/** §S1 G6/AC2 — two COLLAPSED suites in one run (a `<testsuites>` root,
+ *  `src/codecs/junit.ts`'s `parseJunit` walks every child `<testsuite>`): an
+ *  all-pass suite (exercises a GREEN synthetic cell) and a suite carrying one
+ *  passing + one named failing leaf (exercises a RED synthetic cell). */
+export function junitSynthSuites(greenSuite: string, redSuite: string, redFailingLeaf: string): string {
+  const green = [
+    `<testsuite name="${greenSuite}" tests="2">`,
+    `<testcase name="${greenSuite}-p1" time="0.01"/>`,
+    `<testcase name="${greenSuite}-p2" time="0.01"/>`,
+    `</testsuite>`,
+  ].join("\n");
+  const red = [
+    `<testsuite name="${redSuite}" tests="2">`,
+    `<testcase name="${redSuite}-p1" time="0.01"/>`,
+    `<testcase name="${redFailingLeaf}" time="0.01"><failure message="${redFailingLeaf}-failure">trace</failure></testcase>`,
+    `</testsuite>`,
+  ].join("\n");
+  return [`<testsuites>`, green, red, `</testsuites>`].join("\n");
+}
+
+/** §S1 AC6 — a tiny 2-leaf suite, fully visible with no scrolling once
+ *  loaded (the "already fully visible" fixture — the pane must NOT move). */
+export function junitSmallSuite(suiteName: string, leafName: string): string {
+  return [
+    `<testsuite name="${suiteName}" tests="2">`,
+    `<testcase name="${leafName}" time="0.01"/>`,
+    `<testcase name="${suiteName}-p2" time="0.01"/>`,
+    `</testsuite>`,
+  ].join("\n");
+}
+
+// CR-CRU-159 C2 — heat-strip reveal e2e fixtures (spec/BDD runs, the
+// feature-unfold case, G5/AC3). Each builds the raw Playwright JSON report
+// `ingestPlaywright` posts under `codec: "playwright"`; the server-side codec
+// (`src/codecs/playwright.ts`) turns it into the feature → scenario → step
+// tree `SpecFeatures` groups by feature title (the part of its canonical
+// "<Feature> › <Scenario>" name before the separator, `collectScenarios`'
+// own naming: `${featureTitle} › ${spec.title}`).
+
+export interface PwStepFixture {
+  title: string;
+  error?: { message: string; stack?: string };
+}
+export interface PwScenarioFixture {
+  title: string;
+  status: "passed" | "failed" | "skipped" | "interrupted";
+  steps: PwStepFixture[];
+}
+export interface PwFeatureFixture {
+  title: string;
+  scenarios: PwScenarioFixture[];
+}
+
+/** Raw Playwright JSON reporter shape `src/codecs/playwright.ts` decodes —
+ *  one `suites[]` entry per Gherkin FEATURE, one `specs[]` entry per
+ *  SCENARIO, one `tests[0].results[0].steps[]` entry per STEP. One project
+ *  (`tests` has exactly one entry, no `projectName`) per scenario — multi-
+ *  browser scoping is tests/playwright-run-browser-scoping.test.ts's own
+ *  concern, not this CR's. */
+export function playwrightFeaturesReport(features: PwFeatureFixture[]): string {
+  return JSON.stringify({
+    suites: features.map((f) => ({
+      title: f.title,
+      specs: f.scenarios.map((s) => ({
+        title: s.title,
+        tests: [
+          {
+            results: [
+              {
+                status: s.status,
+                duration: 5,
+                steps: s.steps.map((step) => ({
+                  title: step.title,
+                  duration: 2,
+                  ...(step.error !== undefined ? { error: step.error } : {}),
+                })),
+              },
+            ],
+          },
+        ],
+      })),
+    })),
+  });
+}
+
+/** §S1 AC3/G5 — `count` ALL-PASS, single-scenario features titled
+ *  `${baseName} filler N`. None of them is the report-first feature and none
+ *  is failing, so CR-CRU-145 §S1's progressive-expansion default folds every
+ *  one of them whole (`openProgressively` in public/app.js) — cheap below-
+ *  the-fold filler for a target feature placed after them, without any one
+ *  feature needing dozens of scenarios of its own. */
+export function playwrightFillerFeatures(baseName: string, count: number): PwFeatureFixture[] {
+  return Array.from({ length: count }, (_, i) => ({
+    title: `${baseName} filler ${i + 1}`,
+    scenarios: [
+      {
+        title: `${baseName} filler ${i + 1} › its one calm scenario`,
+        status: "passed" as const,
+        steps: [{ title: "Given a calm precondition" }, { title: "Then nothing of note happens" }],
+      },
+    ],
+  }));
+}
+
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
 // (same fixture shape as tests/v2-runs-events.test.ts; the v1
 // `ingest-routes.test.ts` it also came from was deleted by CR-CRU-008's C7
