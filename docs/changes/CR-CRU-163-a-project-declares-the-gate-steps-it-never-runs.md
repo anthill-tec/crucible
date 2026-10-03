@@ -1,6 +1,6 @@
 # CR-CRU-163 — a project declares which gate steps it never runs
 
-**Type** feature · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-10-01
+**Type** feature · **Points** 2 (planning game 2026-10-03) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-10-01
 
 ## Problem
 

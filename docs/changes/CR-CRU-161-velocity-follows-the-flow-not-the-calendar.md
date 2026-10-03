@@ -1,6 +1,6 @@
 # CR-CRU-161 — velocity follows the flow, not the calendar
 
-**Type** feature · **Points** 8 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — ·
+**Type** feature · **Points** 8 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
 **Status** PENDING — filed 2026-09-27
 
 ## Problem

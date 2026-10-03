@@ -1,6 +1,6 @@
 # CR-CRU-164 — a release's verification runs are filed under the release
 
-**Type** feature · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-10-01
+**Type** feature · **Points** 5 (planning game 2026-10-03) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-157 · **Status** PENDING — filed 2026-10-01
 
 ## Problem
 

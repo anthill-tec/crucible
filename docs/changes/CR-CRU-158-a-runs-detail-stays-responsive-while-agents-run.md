@@ -1,6 +1,6 @@
 # CR-CRU-158 — a run's detail stays responsive while agents are running
 
-**Type** fix · **Points** 8 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27
+**Type** fix · **Points** 8 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-157 · **Status** PENDING — filed 2026-09-27
 
 ## Problem
 
