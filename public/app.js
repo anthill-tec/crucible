@@ -6072,6 +6072,20 @@
         openFeatures.val = next;
       }
 
+      // A heat-cell reveal first opens the feature holding its scenario:
+      // SpecFeatures mounts none of a folded feature's scenarios, so the
+      // target has no row until it opens. Merged into openFeatures, never
+      // replacing it, so every other open feature stays open.
+      function unfoldFeatureOf(suiteName) {
+        const d = detail.val;
+        if (!isSpecRun(d)) return;
+        const feature = specFeaturesOf(d).find((f) =>
+          f.scenarios.some((entry) => suiteKeyOf(entry.node) === suiteName),
+        );
+        if (feature === undefined || openFeatures.val[feature.title] === true) return;
+        openFeatures.val = { ...openFeatures.val, [feature.title]: true };
+      }
+
       // A folded scenario row of an unfolded feature reads its steps once it
       // is in (or has passed through) the pane's viewport.
       function loadScrolledScenarios(pane, d) {
@@ -6376,6 +6390,7 @@
               };
               focusedLeaf.val = `${suiteName}::${leaf.name}`;
             }
+            unfoldFeatureOf(suiteName);
             reveal(`leaf:${suiteName}::${leaf.name}`, paneOf(e));
           },
         });
@@ -6396,6 +6411,7 @@
             // A green or pending cell reveals the suite's own (now expanded)
             // row; a red one reveals that failing leaf.
             const pane = paneOf(e);
+            unfoldFeatureOf(suiteName);
             await loadSuite(suite);
             const leaves = suiteLeaves.val[suiteName] ?? [];
             const failIdx = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
