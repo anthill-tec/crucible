@@ -325,13 +325,35 @@ describe("§S2b — POST .../plans/<planId>/cycles (cycle-add) refuses an unregi
     expect(findPlan(h.store, key, "CR-CYCLEADD-NOAGENT")!.cycles.length).toBe(1);
   });
 
-  test("a LIVE registered ORCHESTRATOR caller appends the cycle exactly as today (201, cycle count becomes 2) — BORN GREEN", async () => {
+  test("a LIVE registered ORCHESTRATOR caller appends a FIX cycle after a done VERIFY exactly as today (201, cycle count becomes 2) — BORN GREEN. CR-CRU-165 \u00a7S1/AC1: appending now requires kind:fix on a plan whose VERIFY is done, so this fixture gains a VERIFY cycle filed-and-sealed before the append it exercises.", async () => {
     const h = boot();
     const key = seedProject(h.store);
-    const { planId } = await fileOnly(key, "CR-CYCLEADD-LIVE");
     await registerOrchestrator(key, "orch-cycleadd-1");
+    const res0 = await postJson(plansPath(key), {
+      cr: "CR-CYCLEADD-LIVE",
+    cycles: [{ label: "verify", kind: "verify" }],
+      agentId: "orch-cycleadd-1",
+    });
+    expect(res0.status).toBe(201);
+    const filed = (await res0.json()) as PlanFileResponse;
+    const planId = filed.planId;
+    const verifyId = filed.cycles[0]!.id;
+    const toActive = await patchJson(plansPath(key, `/${planId}/cycles/${verifyId}`), {
+      status: "active",
+      agentId: "orch-cycleadd-1",
+    });
+    expect(toActive.status).toBe(200);
+    const toDone = await patchJson(plansPath(key, `/${planId}/cycles/${verifyId}`), {
+      status: "done",
+      agentId: "orch-cycleadd-1",
+    });
+    expect(toDone.status).toBe(200);
 
-    const res = await postJson(plansPath(key, `/${planId}/cycles`), { label: "rework", agentId: "orch-cycleadd-1" });
+    const res = await postJson(plansPath(key, `/${planId}/cycles`), {
+      label: "rework",
+      kind: "fix",
+      agentId: "orch-cycleadd-1",
+    });
     expect(res.status).toBe(201);
     expect(findPlan(h.store, key, "CR-CYCLEADD-LIVE")!.cycles.length).toBe(2);
   });
@@ -383,7 +405,7 @@ describe("§S2b — PATCH .../plans/<planId>/cycles/<id> (label rename) refuses 
     expect(findPlan(h.store, key, "CR-LABEL-NOAGENT")!.cycles[0]!.label).toBe("solo");
   });
 
-  test("a LIVE registered ORCHESTRATOR caller renames the cycle exactly as today (200, label:'renamed') — BORN GREEN", async () => {
+  test("a LIVE registered ORCHESTRATOR caller renames the cycle WITH the R1-revised reason/cause/specRef exactly as today (200, label:'renamed') — BORN GREEN. CR-CRU-165 R1 (revised): rename is now gated like cycle-skip, so this fixture supplies the three required fields alongside the label.", async () => {
     const h = boot();
     const key = seedProject(h.store);
     const { planId, cycleId } = await fileOnly(key, "CR-LABEL-LIVE");
@@ -391,6 +413,9 @@ describe("§S2b — PATCH .../plans/<planId>/cycles/<id> (label rename) refuses 
 
     const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
       label: "renamed",
+      reason: "the spec's naming convention changed mid-cycle",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7G1",
       agentId: "orch-label-1",
     });
     expect(res.status).toBe(200);

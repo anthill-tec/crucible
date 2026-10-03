@@ -297,13 +297,18 @@ describe("§S6.1 — POST …/plans/<planId>/abort WITHOUT userApproved:true -> 
 });
 
 describe("§S6.2 — POST …/plans/<planId>/abort WITH {userApproved:true} -> executes the abort", () => {
-  test("active cycle -> failed, pending cycle -> skipped, plan -> aborted (verified via GET); no merge (no merge pill)", async () => {
+  test("userApproved:true + all three R3 fields valid: active cycle -> failed, pending cycle -> skipped, plan -> aborted (verified via GET); no merge (no merge pill)", async () => {
     const handle = boot(":memory:");
     const key = await createProject(handle);
     const { planId, a, b } = await filePlanAB(handle, key, "CR-ABORT-APPROVED-1");
     await activate(handle, key, planId, a);
 
-    const res = await abort(handle, key, planId, { userApproved: true });
+    const res = await abort(handle, key, planId, {
+      userApproved: true,
+      reason: "the spec's gap analysis found this plan obsolete mid-cycle",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 §G3",
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean };
     expect(body.ok).toBe(true);
@@ -329,7 +334,12 @@ describe("§S6.2 — POST …/plans/<planId>/abort WITH {userApproved:true} -> e
     const [c1, c2, c3] = filed.cycles.map((c) => c.id) as [number, number, number];
     await activate(handle, key, filed.planId, c1);
 
-    const abortRes = await abort(handle, key, filed.planId, { userApproved: true });
+    const abortRes = await abort(handle, key, filed.planId, {
+      userApproved: true,
+      reason: "the spec's gap analysis found this plan obsolete mid-cycle",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 §G3",
+    });
     expect(abortRes.status).toBe(200);
 
     const plan = await getPlanByCr(handle, key, "CR-ABORT-APPROVED-MULTI");
@@ -350,7 +360,12 @@ describe("§S6.2 — POST …/plans/<planId>/abort WITH {userApproved:true} -> e
     const { planId, cycleId } = await fileSingleCycle(handle, key, "CR-ABORT-HAZARD");
     await activate(handle, key, planId, cycleId);
 
-    const abortRes = await abort(handle, key, planId, { userApproved: true });
+    const abortRes = await abort(handle, key, planId, {
+      userApproved: true,
+      reason: "the spec's gap analysis found this plan obsolete mid-cycle",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 \u00a7G3",
+    });
     expect(abortRes.status).toBe(200);
 
     const plans = await listAllPlans(handle, key);
@@ -369,7 +384,12 @@ describe("§S6.2 — POST …/plans/<planId>/abort WITH {userApproved:true} -> e
     const { planId, cycleId } = await fileSingleCycle(handle, key, "CR-ABORT-REFILE");
     await activate(handle, key, planId, cycleId);
 
-    const abortRes = await abort(handle, key, planId, { userApproved: true });
+    const abortRes = await abort(handle, key, planId, {
+      userApproved: true,
+      reason: "the spec's gap analysis found this plan obsolete mid-cycle",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 \u00a7G3",
+    });
     expect(abortRes.status).toBe(200);
 
     // Before the fix this cr's plan is (buggy-)reported as "open", so a
@@ -385,11 +405,16 @@ describe("§S6.2 — POST …/plans/<planId>/abort WITH {userApproved:true} -> e
     expect(refiled.planId).not.toBe(planId);
   });
 
-  test("unknown planId with userApproved:true -> 404 + non-empty help[] (approval alone doesn't skip existence checks)", async () => {
+  test("unknown planId with userApproved:true + all three R3 fields -> 404 + non-empty help[] (fields alone don't skip existence checks)", async () => {
     const handle = boot(":memory:");
     const key = await createProject(handle);
 
-    const res = await abort(handle, key, 999999, { userApproved: true });
+    const res = await abort(handle, key, 999999, {
+      userApproved: true,
+      reason: "the spec's gap analysis found this plan obsolete mid-cycle",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 \u00a7G3",
+    });
     expect(res.status).toBe(404);
     const body = (await res.json()) as ErrResponse;
     expect(Array.isArray(body.help)).toBe(true);
@@ -410,7 +435,12 @@ describe("§S6.3 — the abort checkpoints/seals the active cycle's timer (seale
     // 3 minutes later — no intervening reads/checkpoints, so any persisted
     // seal value can only have come from the abort call itself.
     setSystemTime(T0 + THREE_MIN_MS);
-    const abortRes = await abort(server1, key, planId, { userApproved: true });
+    const abortRes = await abort(server1, key, planId, {
+      userApproved: true,
+      reason: "the spec's gap analysis found this plan obsolete mid-cycle",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 \u00a7G3",
+    });
     expect(abortRes.status).toBe(200);
 
     const planNow = await getPlanByCr(server1, key, "CR-ABORT-SEALED");

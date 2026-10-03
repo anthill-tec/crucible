@@ -1,24 +1,26 @@
-// CR-CRU-024 §S3.2 — EDIT a cycle's label: `PATCH …/cycles/<id> {label}` is
-// legal ONLY while the cycle is `pending`. The ACTIVE cycle is LOCKED (400:
-// "the active cycle is locked — confirm or fail it first"); terminal cycles
-// (done/skipped/failed) are HISTORY and immutable (400: "done/skipped/failed
-// cycles are immutable history"). label+status in one body → 400 (one
-// mutation per call, named in help[]).
+// CR-CRU-024 §S3.2 originally gave `PATCH …/plans/<planId>/cycles/<id>` an
+// optional `{label}` body to rename a PENDING cycle, for any live-registered
+// caller. CR-CRU-165's gap analysis (G1) flagged this as a second, ungated
+// way to change a filed plan; the user's FIRST ruling (R1, 2026-10-03) was
+// to retire it outright, then REVISED (same day) to gate it instead: rename
+// now behaves like cycle-skip — allowed only when the body carries `reason`
+// (non-empty), `cause` (`spec-design` | `gap-analysis`) and `specRef`
+// (non-empty) from an ORCHESTRATOR-role caller, stores the three fields on
+// the renamed cycle (with `changeKind: "rename"`), and the response carries
+// the process-failure warning. Missing/invalid → 400 naming the rule. The
+// existing `locked` (active cycle) / `immutable-history` (terminal cycle)
+// refusals are UNCHANGED and fire regardless of the three fields; so is the
+// `{label, status}` one-mutation-per-call refusal.
 //
-// RED phase: every test below is expected to FAIL against CURRENT
-// production. handleCycleTransition (src/v2.ts ~729) only ever reads
-// `body.status` — there is no label-edit branch at all, so:
-//   - a bare {label} PATCH currently 400s on "invalid status: undefined"
-//     (never reaching a 200 label round-trip),
-//   - there is no "locked"/"immutable history" wording anywhere (confirmed
-//     by reading src/hints.ts — no such hint exists in the registry today),
-//   - a combined {label, status} body is currently NOT rejected — status
-//     alone drives the transition and label is silently ignored, so the
-//     "one mutation per call" 400 never fires.
+// This file REPLACES the superseded cycle-edit-label.test.ts, which pinned
+// rename succeeding for ANY registered caller with NO reason/cause/specRef —
+// exactly the ungated shape this CR revises.
 //
-// Same harness pattern as tests/cycle-activation-guards.test.ts — drives
-// the REAL production server via startServer, no guard implementation is
-// stubbed or mocked.
+// RED phase: today src/v2.ts's handleCycleTransition's `hasLabel` branch
+// renames unconditionally for any registered caller — no reason/cause/
+// specRef field exists on the wire, nothing is stored, no orchestrator-role
+// check runs. Every gated-refusal assertion below currently 200s; every
+// stored-field assertion currently reads undefined.
 import { describe, test, expect, afterEach } from "bun:test";
 import { startServer } from "../src/server.ts";
 
@@ -27,6 +29,11 @@ interface CyclePayload {
   label: string;
   kind: string;
   status: string;
+  reason?: string;
+  cause?: string;
+  specRef?: string;
+  changeKind?: string;
+  [key: string]: unknown;
 }
 
 interface PlanFileResponse {
@@ -37,17 +44,9 @@ interface PlanFileResponse {
   [key: string]: unknown;
 }
 
-interface PlanRecord {
-  planId: number | string;
-  cr: string;
-  status: string;
-  cycles: CyclePayload[];
-  [key: string]: unknown;
-}
-
 interface PlansListResponse {
   ok: true;
-  plans: PlanRecord[];
+  plans: PlanFileResponse[];
 }
 
 interface ErrResponse {
@@ -57,7 +56,16 @@ interface ErrResponse {
   [key: string]: unknown;
 }
 
-describe("PATCH …/cycles/<id> label edit (CR-CRU-024 §S3.2)", () => {
+const ORCH = "fixture-orch";
+const OTHER_ROLE = "reporter-1";
+
+const VALID_FIELDS = {
+  reason: "the spec's naming convention changed mid-cycle",
+  cause: "spec-design" as const,
+  specRef: "CR-CRU-165 §G1",
+};
+
+describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CRU-165 R1 revised)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
 
   afterEach(() => {
@@ -65,12 +73,9 @@ describe("PATCH …/cycles/<id> label edit (CR-CRU-024 §S3.2)", () => {
     handle = undefined;
   });
 
-  // CR-CRU-056 §S2b fixture-repair (C3): mutating v2 workflow verbs
-  // (plan-file, cycle transitions) now refuse an unregistered caller (409)
-  // — merge a live-registered agentId into any JSON body lacking one.
   function withFixtureAgent(body: unknown): unknown {
     if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
-      return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+      return { ...(body as Record<string, unknown>), agentId: ORCH };
     }
     return body;
   }
@@ -95,11 +100,11 @@ describe("PATCH …/cycles/<id> label edit (CR-CRU-024 §S3.2)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`);
   }
 
-  async function registerOrchestrator(key: string, agentId: string): Promise<void> {
+  async function registerAgent(key: string, agentId: string, role: string): Promise<void> {
     const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
+      body: JSON.stringify({ projectKey: key, agentId, role }),
     });
     expect(res.status).toBe(200);
   }
@@ -107,7 +112,8 @@ describe("PATCH …/cycles/<id> label edit (CR-CRU-024 §S3.2)", () => {
   async function createProject(): Promise<string> {
     const res = await postJson("/api/v2/projects", { name: `cycle-edit-label-${crypto.randomUUID()}` });
     const body = (await res.json()) as { ok: true; project: { key: string } };
-    await registerOrchestrator(body.project.key, "fixture-orch");
+    await registerAgent(body.project.key, ORCH, "ORCHESTRATOR");
+    await registerAgent(body.project.key, OTHER_ROLE, "report");
     return body.project.key;
   }
 
@@ -116,155 +122,160 @@ describe("PATCH …/cycles/<id> label edit (CR-CRU-024 §S3.2)", () => {
   }
 
   async function fileSolo(key: string, cr: string): Promise<{ planId: number | string; cycleId: number }> {
-    const res = await postJson(plansPath(key), {
-      cr,
-      cycles: [{ label: "solo" }],
-    });
+    const res = await postJson(plansPath(key), { cr, cycles: [{ label: "solo" }] });
     expect(res.status).toBe(201);
     const body = (await res.json()) as PlanFileResponse;
     return { planId: body.planId, cycleId: body.cycles[0]!.id };
   }
 
-  async function editLabel(
-    key: string,
-    planId: number | string,
-    cycleId: number,
-    label: string,
-  ): Promise<Response> {
-    return patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { label });
-  }
-
-  async function transition(
-    key: string,
-    planId: number | string,
-    cycleId: number,
-    status: string,
-  ): Promise<Response> {
+  async function transition(key: string, planId: number | string, cycleId: number, status: string): Promise<Response> {
     return patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status });
   }
 
   async function getCycle(key: string, cr: string, cycleId: number): Promise<CyclePayload> {
     const res = await getJson(plansPath(key, `?cr=${encodeURIComponent(cr)}`));
     const body = (await res.json()) as PlansListResponse;
-    const plan = body.plans.find((p) => p.cr === cr)!;
-    return plan.cycles.find((c) => c.id === cycleId)!;
+    return body.plans.find((p) => p.cr === cr)!.cycles.find((c) => c.id === cycleId)!;
   }
 
-  function helpText(body: ErrResponse): string {
-    expect(Array.isArray(body.help)).toBe(true);
-    const help = body.help as unknown[];
-    expect(help.length).toBeGreaterThan(0);
-    for (const line of help) {
-      expect(typeof line).toBe("string");
-      expect((line as string).length).toBeGreaterThan(0);
-    }
-    return (help as string[]).join(" | ");
+  function helpOrErrorText(body: ErrResponse): string {
+    const help = Array.isArray(body.help) ? (body.help as string[]).join(" | ") : "";
+    return `${body.error} ${help}`.toLowerCase();
   }
 
-  test("PENDING cycle: PATCH {label} -> 200, label round-trips via GET", async () => {
+  test("PENDING cycle, PATCH {label} with NO reason/cause/specRef: refused (400) naming reason; label unchanged", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-1");
 
-    const res = await editLabel(key, planId, cycleId, "renamed pending cycle");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: true; changed: true; cycle: CyclePayload };
-    expect(body.ok).toBe(true);
-    expect(body.cycle.label).toBe("renamed pending cycle");
-    expect(body.cycle.status).toBe("pending");
+    const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { label: "renamed" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrResponse;
+    expect(helpOrErrorText(body)).toMatch(/reason/);
 
     const after = await getCycle(key, "CR-EDIT-1", cycleId);
-    expect(after.label).toBe("renamed pending cycle");
+    expect(after.label).toBe("solo");
   });
 
-  test("ACTIVE cycle: PATCH {label} -> 400 'locked', help[] non-empty, label unchanged", async () => {
+  test("PENDING cycle, PATCH {label} WITH all three fields from an ORCHESTRATOR caller: 200 — label changes, stores reason/cause/specRef/changeKind:'rename', response carries the process-failure warning", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-2");
-    const activated = await transition(key, planId, cycleId, "active");
-    expect(activated.status).toBe(200);
 
-    const res = await editLabel(key, planId, cycleId, "sneaky rename");
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrResponse;
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe("the active cycle is locked — confirm or fail it first");
-    helpText(body);
+    const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+      label: "renamed pending cycle",
+      ...VALID_FIELDS,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: true;
+      changed: true;
+      cycle: CyclePayload;
+      warnings?: Array<{ message: string }>;
+    };
+    expect(body.cycle.label).toBe("renamed pending cycle");
+    expect(Array.isArray(body.warnings)).toBe(true);
+    expect(body.warnings!.length).toBeGreaterThan(0);
+    expect(body.warnings!.map((w) => w.message.toLowerCase()).join(" ")).toMatch(/spec|gap analysis/);
 
     const after = await getCycle(key, "CR-EDIT-2", cycleId);
-    expect(after.label).toBe("solo");
-    expect(after.status).toBe("active");
+    expect(after.label).toBe("renamed pending cycle");
+    expect(after.reason).toBe(VALID_FIELDS.reason);
+    expect(after.cause).toBe(VALID_FIELDS.cause);
+    expect(after.specRef).toBe(VALID_FIELDS.specRef);
+    expect(after.changeKind).toBe("rename");
   });
 
-  test("DONE cycle: PATCH {label} -> 400 'immutable history', label unchanged", async () => {
+  test("PENDING cycle, PATCH {label} with all three fields but an invalid `cause`: refused (400) naming cause; label unchanged", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-3");
-    expect((await transition(key, planId, cycleId, "active")).status).toBe(200);
-    expect((await transition(key, planId, cycleId, "done")).status).toBe(200);
 
-    const res = await editLabel(key, planId, cycleId, "sneaky rename");
+    const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+      label: "renamed",
+      reason: "x",
+      cause: "because",
+      specRef: "ref",
+    });
     expect(res.status).toBe(400);
     const body = (await res.json()) as ErrResponse;
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe("done/skipped/failed cycles are immutable history");
-    helpText(body);
+    expect(helpOrErrorText(body)).toMatch(/cause/);
 
     const after = await getCycle(key, "CR-EDIT-3", cycleId);
     expect(after.label).toBe("solo");
   });
 
-  test("SKIPPED cycle: PATCH {label} -> 400 'immutable history', label unchanged", async () => {
+  test("PENDING cycle, PATCH {label} with all three fields but a NON-orchestrator caller: refused (409) naming ORCHESTRATOR; label unchanged", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-4");
-    expect((await transition(key, planId, cycleId, "skipped")).status).toBe(200);
 
-    const res = await editLabel(key, planId, cycleId, "sneaky rename");
-    expect(res.status).toBe(400);
+    const res = await fetch(`http://localhost:${handle!.server.port}${plansPath(key, `/${planId}/cycles/${cycleId}`)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label: "renamed", ...VALID_FIELDS, agentId: OTHER_ROLE }),
+    });
+    expect(res.status).toBe(409);
     const body = (await res.json()) as ErrResponse;
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe("done/skipped/failed cycles are immutable history");
-    helpText(body);
+    expect(body.error).toContain("ORCHESTRATOR");
 
     const after = await getCycle(key, "CR-EDIT-4", cycleId);
     expect(after.label).toBe("solo");
   });
 
-  test("FAILED cycle: PATCH {label} -> 400 'immutable history', label unchanged", async () => {
+  test("ACTIVE cycle, PATCH {label} even WITH all three fields + orchestrator: still 400 'locked' — the active-cycle guard is unchanged", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-5");
     expect((await transition(key, planId, cycleId, "active")).status).toBe(200);
-    expect((await transition(key, planId, cycleId, "failed")).status).toBe(200);
 
-    const res = await editLabel(key, planId, cycleId, "sneaky rename");
+    const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+      label: "sneaky rename",
+      ...VALID_FIELDS,
+    });
     expect(res.status).toBe(400);
     const body = (await res.json()) as ErrResponse;
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe("done/skipped/failed cycles are immutable history");
-    helpText(body);
+    expect(body.error).toBe("the active cycle is locked — confirm or fail it first");
 
     const after = await getCycle(key, "CR-EDIT-5", cycleId);
     expect(after.label).toBe("solo");
+    expect(after.status).toBe("active");
   });
 
-  test("label+status in one body -> 400, help[] names one-mutation-per-call, nothing changed", async () => {
+  test("DONE cycle, PATCH {label} even WITH all three fields + orchestrator: still 400 'immutable history' — the terminal-cycle guard is unchanged", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-6");
+    expect((await transition(key, planId, cycleId, "active")).status).toBe(200);
+    expect((await transition(key, planId, cycleId, "done")).status).toBe(200);
+
+    const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+      label: "sneaky rename",
+      ...VALID_FIELDS,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrResponse;
+    expect(body.error).toBe("done/skipped/failed cycles are immutable history");
+
+    const after = await getCycle(key, "CR-EDIT-6", cycleId);
+    expect(after.label).toBe("solo");
+  });
+
+  test("label+status in one body, even WITH all three fields + orchestrator: still 400 'one mutation per call'; nothing changed", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const key = await createProject();
+    const { planId, cycleId } = await fileSolo(key, "CR-EDIT-7");
 
     const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
       label: "combined mutation",
       status: "active",
+      ...VALID_FIELDS,
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as ErrResponse;
-    expect(body.ok).toBe(false);
-    const help = helpText(body);
-    expect(help).toMatch(/one mutation per call/i);
+    expect(helpOrErrorText(body)).toMatch(/one mutation per call/);
 
-    const after = await getCycle(key, "CR-EDIT-6", cycleId);
+    const after = await getCycle(key, "CR-EDIT-7", cycleId);
     expect(after.label).toBe("solo");
     expect(after.status).toBe("pending");
   });

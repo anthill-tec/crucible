@@ -164,12 +164,16 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
     expect(closeRes.status).toBe(200);
   }
 
-  /** Files a single-cycle plan and aborts it (userApproved:true) — no
-   * activation needed; abort transitions whatever cycle state it finds. */
+  /** Files a single-cycle plan and aborts it (userApproved:true + the
+   * CR-CRU-165 R3 reason/cause/specRef fields) \u2014 no activation needed; abort
+   * transitions whatever cycle state it finds. */
   async function fileAndAbortPlan(key: string, cr: string): Promise<string> {
     const plan = await filePlan(key, cr);
     const res = await postJson(`${scopedPlansPath(key)}/${plan.planId}/abort`, {
       userApproved: true,
+      reason: "CR-CRU-165 fixture abort \u2014 board no longer matches a filed plan's spec",
+      cause: "gap-analysis",
+      specRef: "CR-CRU-165 \u00a7G3",
     });
     expect(res.status).toBe(200);
     return cr;
