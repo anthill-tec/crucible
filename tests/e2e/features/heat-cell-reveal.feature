@@ -10,8 +10,9 @@ Feature: CR-CRU-159 C1 a heat-strip click brings its test into view — plain ru
   AC7 (only the pane's own scroller moves — the run-detail header's position
   and the document's own scroll are unchanged — asserted in BOTH mounts:
   home's RunDetail and the workspace's WorkspaceRunDetail). C2 (AC3, the
-  spec-run feature unfold) is the NEXT cycle and is deliberately not
-  exercised by anything here.
+  spec-run feature unfold) ADDS its own scenarios at the end of this file,
+  appended rather than exercised inline above — the C1 scenarios above are
+  unchanged and, per CR-CRU-159 C1 (commits f14138f/9fef70d), now pass.
 
   Today (RED, measured against the current `HeatCell`/`SynthHeatCell`
   handlers in `public/app.js`), a heat-cell click moves the suite's
@@ -86,3 +87,52 @@ Feature: CR-CRU-159 C1 a heat-strip click brings its test into view — plain ru
     Then the leaf row for "leaf-green-target" is scrolled within the pane-scroll's visible area
     And the leaf row for "leaf-green-target" carries the locate-blink class
     And the run-detail header's position and the document's scroll are unchanged
+
+  # ── CR-CRU-159 C2 — AC3: the spec-run feature unfold (G5) ──────────────────
+  #
+  # Scope: a spec run (codec: "playwright") whose SpecFeatures groups scenarios
+  # under feature headings (public/app.js). G5's baseline (measured on this
+  # branch before C2's GREEN): `SpecFeatures` mounts NO scenario of a folded
+  # feature at all, and `HeatCell`/`SynthHeatCell`'s `reveal()` call never
+  # touches `openFeatures`/`toggleFeature` — so a cell whose scenario sits in a
+  # folded feature has nothing to scroll to or blink; every scenario below is
+  # expected to fail for exactly that missing unfold, not a harness/import
+  # defect. "Kept Open Feature" in each scenario below is a SEPARATE, already-
+  # auto-open feature (CR-CRU-145 §S1 — a failing feature auto-opens on
+  # mount), carried through to its own "is open" assertion so a GREEN that
+  # naively re-derives `openFeatures` from scratch (dropping every OTHER open
+  # feature) is caught too.
+
+  Scenario: A loaded scenario's heat cell, in a feature folded again by hand after it auto-loaded, unfolds that feature and scrolls + blinks its passing leaf row — the already-open feature stays open
+    Given a project named "Heat Reveal Spec Refold Green Project" is registered
+    And a spec run is ingested for agent "agent-heat-spec-refold-green" with a failing feature "Kept Open Feature" kept open and a feature "Refold Target Feature" refolded after load, holding a passing leaf "spec-refold-green-given" and a failing leaf "spec-refold-green-then"
+    When I open the run overlay directly at its cold URL
+    And I fold the feature "Refold Target Feature"
+    And I click the heat cell titled "Refold Target Feature › mixed outcome scenario › spec-refold-green-given"
+    Then the leaf row for "spec-refold-green-given" is scrolled within the pane-scroll's visible area
+    And the leaf row for "spec-refold-green-given" carries the locate-blink class
+    And the feature "Refold Target Feature" is open
+    And the feature "Kept Open Feature" is open
+
+  Scenario: A loaded scenario's heat cell, in a feature folded again by hand after it auto-loaded, unfolds that feature and reveals the failing leaf with its failure box
+    Given a project named "Heat Reveal Spec Refold Red Project" is registered
+    And a spec run is ingested for agent "agent-heat-spec-refold-red" with a failing feature "Kept Open Feature" kept open and a feature "Refold Target Feature" refolded after load, holding a passing leaf "spec-refold-red-given" and a failing leaf "spec-refold-red-then"
+    When I open the run overlay directly at its cold URL
+    And I fold the feature "Refold Target Feature"
+    And I click the heat cell titled "Refold Target Feature › mixed outcome scenario › spec-refold-red-then"
+    Then the leaf row for "spec-refold-red-then" is scrolled within the pane-scroll's visible area
+    And the leaf row for "spec-refold-red-then" carries the locate-blink class
+    And a failure box is visible and contains "spec-refold-red-then-failure"
+    And the feature "Refold Target Feature" is open
+    And the feature "Kept Open Feature" is open
+
+  Scenario: A green synthetic cell of a not-yet-loaded scenario in an all-green feature below the fold unfolds that feature and reveals the scenario's own row, now expanded
+    Given a project named "Heat Reveal Spec Synth Green Project" is registered
+    And a spec run is ingested for agent "agent-heat-spec-synth-green" with a failing feature "Kept Open Feature" kept open, 24 folded filler features, and an all-green feature "Deep Green Feature" below the fold holding scenario "its calm target scenario"
+    When I open the run overlay directly at its cold URL
+    And I click the passing synthetic heat cell for suite "Deep Green Feature › its calm target scenario"
+    Then the suite row for "Deep Green Feature › its calm target scenario" is expanded and carries the locate-blink class
+    And the suite row for "Deep Green Feature › its calm target scenario" carries a data-suite-key attribute
+    And the feature "Deep Green Feature" is open
+    And the feature "Kept Open Feature" is open
+

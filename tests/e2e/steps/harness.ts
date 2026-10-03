@@ -597,6 +597,79 @@ export function junitSmallSuite(suiteName: string, leafName: string): string {
   ].join("\n");
 }
 
+// CR-CRU-159 C2 — heat-strip reveal e2e fixtures (spec/BDD runs, the
+// feature-unfold case, G5/AC3). Each builds the raw Playwright JSON report
+// `ingestPlaywright` posts under `codec: "playwright"`; the server-side codec
+// (`src/codecs/playwright.ts`) turns it into the feature → scenario → step
+// tree `SpecFeatures` groups by feature title (the part of its canonical
+// "<Feature> › <Scenario>" name before the separator, `collectScenarios`'
+// own naming: `${featureTitle} › ${spec.title}`).
+
+export interface PwStepFixture {
+  title: string;
+  error?: { message: string; stack?: string };
+}
+export interface PwScenarioFixture {
+  title: string;
+  status: "passed" | "failed" | "skipped" | "interrupted";
+  steps: PwStepFixture[];
+}
+export interface PwFeatureFixture {
+  title: string;
+  scenarios: PwScenarioFixture[];
+}
+
+/** Raw Playwright JSON reporter shape `src/codecs/playwright.ts` decodes —
+ *  one `suites[]` entry per Gherkin FEATURE, one `specs[]` entry per
+ *  SCENARIO, one `tests[0].results[0].steps[]` entry per STEP. One project
+ *  (`tests` has exactly one entry, no `projectName`) per scenario — multi-
+ *  browser scoping is tests/playwright-run-browser-scoping.test.ts's own
+ *  concern, not this CR's. */
+export function playwrightFeaturesReport(features: PwFeatureFixture[]): string {
+  return JSON.stringify({
+    suites: features.map((f) => ({
+      title: f.title,
+      specs: f.scenarios.map((s) => ({
+        title: s.title,
+        tests: [
+          {
+            results: [
+              {
+                status: s.status,
+                duration: 5,
+                steps: s.steps.map((step) => ({
+                  title: step.title,
+                  duration: 2,
+                  ...(step.error !== undefined ? { error: step.error } : {}),
+                })),
+              },
+            ],
+          },
+        ],
+      })),
+    })),
+  });
+}
+
+/** §S1 AC3/G5 — `count` ALL-PASS, single-scenario features titled
+ *  `${baseName} filler N`. None of them is the report-first feature and none
+ *  is failing, so CR-CRU-145 §S1's progressive-expansion default folds every
+ *  one of them whole (`openProgressively` in public/app.js) — cheap below-
+ *  the-fold filler for a target feature placed after them, without any one
+ *  feature needing dozens of scenarios of its own. */
+export function playwrightFillerFeatures(baseName: string, count: number): PwFeatureFixture[] {
+  return Array.from({ length: count }, (_, i) => ({
+    title: `${baseName} filler ${i + 1}`,
+    scenarios: [
+      {
+        title: `${baseName} filler ${i + 1} › its one calm scenario`,
+        status: "passed" as const,
+        steps: [{ title: "Given a calm precondition" }, { title: "Then nothing of note happens" }],
+      },
+    ],
+  }));
+}
+
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
 // (same fixture shape as tests/v2-runs-events.test.ts; the v1
 // `ingest-routes.test.ts` it also came from was deleted by CR-CRU-008's C7
