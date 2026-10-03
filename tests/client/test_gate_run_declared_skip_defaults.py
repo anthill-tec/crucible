@@ -381,6 +381,58 @@ class DeclaredGateSkipFromConfigFileTest(_DirectGateRunCase):
             f"the install's declared steps must not leak into a project-"
             f"declared argv, got {argv!r}")
 
+    def test_project_file_declaring_empty_skip_list_skips_nothing(self):
+        """`[gate] skip = []` is a DECLARATION of skipping nothing: no
+        `--skip` token on the `axi run` argv, the envelope's `skip` reads
+        `none`, and `skipSource` still names the file that declared it
+        (`declared:<path>`) -- not `none`, which would claim nothing was
+        declared at all."""
+        path = _write_gate_toml(self.project_dir, '[gate]\nskip = []\n')
+
+        result, ops = self._call(skip=None)
+
+        self.assertEqual(result, 0)
+        argv = self._captured_argv()
+        self.assertNotIn(
+            "--skip", argv,
+            f"a declared empty skip list must carry no --skip token, got {argv}")
+        self.assertEqual(len(ops.emit_calls), 1)
+        fields = ops.emit_calls[0]["fields"]
+        self.assertEqual(
+            fields.get("skip"), "none",
+            f"a declared empty list skips nothing, so 'skip' must read "
+            f"'none', got {fields.get('skip')!r}")
+        self.assertEqual(
+            fields.get("skipSource"), f"declared:{path}",
+            f"the empty list was still DECLARED, so 'skipSource' must name "
+            f"its file, got {fields.get('skipSource')!r}")
+
+    def test_project_file_without_gate_table_shadows_install_declaration(self):
+        """A project `crucible.toml` that EXISTS but has no `[gate]` table
+        wins the one walk all the same: the install's `[gate] skip =
+        ["pr", "ci"]` is not consulted, so no `--skip` token reaches the
+        argv. The same rule `resolve_base_url` applies to `[client] url` --
+        the first file that reads is the answer, whatever it declares."""
+        _write_gate_toml(self.project_dir,
+                         '[limits.roadmap_list_rows]\nvalue = 30\n')
+        _write_gate_toml(self.install_dir, '[gate]\nskip = ["pr", "ci"]\n')
+
+        result, ops = self._call(skip=None)
+
+        self.assertEqual(result, 0)
+        argv = self._captured_argv()
+        self.assertNotIn(
+            "--skip", argv,
+            f"a project file with no [gate] table must shadow the install's "
+            f"declaration, so no --skip token may appear, got {argv}")
+        self.assertEqual(len(ops.emit_calls), 1)
+        fields = ops.emit_calls[0]["fields"]
+        self.assertEqual(fields.get("skip"), "none")
+        self.assertEqual(
+            fields.get("skipSource"), "none",
+            f"nothing was declared in the file that won the walk, got "
+            f"{fields.get('skipSource')!r}")
+
 
 # ---------------------------------------------------------------------------
 # AC2 -- an explicit --skip replaces the declared list; --skip "" skips

@@ -114,6 +114,7 @@ max = 500
 [gate]
 # The shipped install declares NO skip, so a project that declares nothing
 # runs every step, exactly as before this table existed.
+# A project file declaring nothing here still wins; the install's is not read.
 
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #
@@ -135,5 +136,6 @@ max = 500
 # instance beside a production one declares that instance's address in the
 # project's own file — `url = "http://localhost:3850"` — and every client in
 # that project follows, with nothing exported.
+# A project file declaring nothing here still wins; the install's is not read.
 url = "http://localhost:3849"
 
