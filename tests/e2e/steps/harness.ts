@@ -508,6 +508,95 @@ export function junit60(failCount = 3): string {
   return [`<testsuite name="Suite60" tests="60">`, ...cases, "</testsuite>"].join("\n");
 }
 
+// CR-CRU-159 C1 — heat-strip reveal e2e fixtures (plain/non-spec runs,
+// Density presentation). Each builds the raw JUnit XML `ingestJunit` posts
+// under `codec: "junit"`; the server-side codec (`src/codecs/junit.ts`)
+// turns it into the suite/leaf tree the heat-strip renders over.
+
+/** §S1 AC1/AC6 — a single suite of `total` leaves with a named passing leaf
+ *  and a named failing leaf (a UNIQUE failure message, so Density never
+ *  digests it) planted at the given 0-based positions; every other leaf
+ *  passes. A large `total` (with both targets well past VIRT_WINDOW/2) makes
+ *  the suite's own virtualized leaf list, once loaded, tall enough that a
+ *  mid-list target sits below the pane's fold without any extra filler
+ *  content — the §S1 "below the fold" shape. */
+export function junitTargetedSuite(
+  suiteName: string,
+  total: number,
+  green: { name: string; position: number },
+  red: { name: string; position: number },
+): string {
+  const cases: string[] = [];
+  for (let i = 0; i < total; i++) {
+    if (i === green.position) {
+      cases.push(`<testcase name="${green.name}" time="0.01"/>`);
+    } else if (i === red.position) {
+      cases.push(
+        `<testcase name="${red.name}" time="0.01"><failure message="${red.name}-failure">trace</failure></testcase>`,
+      );
+    } else {
+      cases.push(`<testcase name="${suiteName}-filler-${i}" time="0.01"/>`);
+    }
+  }
+  return [`<testsuite name="${suiteName}" tests="${total}">`, ...cases, "</testsuite>"].join("\n");
+}
+
+/** §S1 G4/AC4 — a suite whose DENSITY ENTRIES exceed VIRT_WINDOW (120) once a
+ *  `groupSize`-leaf identical-failure group collapses to ONE digest entry:
+ *  `groupSize` identically-failing leaves, then the named target leaf, then
+ *  `trailing` more individually-entried leaves (so the suite's digested
+ *  entry count, not just its raw leaf count, clears 120). */
+export function junitDigestWindowSuite(
+  suiteName: string,
+  groupSize: number,
+  targetName: string,
+  trailing: number,
+): string {
+  const cases: string[] = [];
+  for (let i = 0; i < groupSize; i++) {
+    cases.push(
+      `<testcase name="${suiteName}-dup${i}" time="0.01"><failure message="shared-digest-failure">trace</failure></testcase>`,
+    );
+  }
+  cases.push(`<testcase name="${targetName}" time="0.01"/>`);
+  for (let i = 0; i < trailing; i++) {
+    cases.push(`<testcase name="${suiteName}-trail${i}" time="0.01"/>`);
+  }
+  const total = groupSize + 1 + trailing;
+  return [`<testsuite name="${suiteName}" tests="${total}">`, ...cases, "</testsuite>"].join("\n");
+}
+
+/** §S1 G6/AC2 — two COLLAPSED suites in one run (a `<testsuites>` root,
+ *  `src/codecs/junit.ts`'s `parseJunit` walks every child `<testsuite>`): an
+ *  all-pass suite (exercises a GREEN synthetic cell) and a suite carrying one
+ *  passing + one named failing leaf (exercises a RED synthetic cell). */
+export function junitSynthSuites(greenSuite: string, redSuite: string, redFailingLeaf: string): string {
+  const green = [
+    `<testsuite name="${greenSuite}" tests="2">`,
+    `<testcase name="${greenSuite}-p1" time="0.01"/>`,
+    `<testcase name="${greenSuite}-p2" time="0.01"/>`,
+    `</testsuite>`,
+  ].join("\n");
+  const red = [
+    `<testsuite name="${redSuite}" tests="2">`,
+    `<testcase name="${redSuite}-p1" time="0.01"/>`,
+    `<testcase name="${redFailingLeaf}" time="0.01"><failure message="${redFailingLeaf}-failure">trace</failure></testcase>`,
+    `</testsuite>`,
+  ].join("\n");
+  return [`<testsuites>`, green, red, `</testsuites>`].join("\n");
+}
+
+/** §S1 AC6 — a tiny 2-leaf suite, fully visible with no scrolling once
+ *  loaded (the "already fully visible" fixture — the pane must NOT move). */
+export function junitSmallSuite(suiteName: string, leafName: string): string {
+  return [
+    `<testsuite name="${suiteName}" tests="2">`,
+    `<testcase name="${leafName}" time="0.01"/>`,
+    `<testcase name="${suiteName}-p2" time="0.01"/>`,
+    `</testsuite>`,
+  ].join("\n");
+}
+
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
 // (same fixture shape as tests/v2-runs-events.test.ts; the v1
 // `ingest-routes.test.ts` it also came from was deleted by CR-CRU-008's C7
