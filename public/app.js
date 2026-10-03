@@ -5931,6 +5931,14 @@
       const openFeatures = van.state({}); // spec runs: feature title -> true while unfolded
       const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
+      // The heat-strip reveal's located row "leaf:<suite>::<leaf>" or
+      // "suite:<suite>", rendered by the row carrying that key as the shared
+      // LOCATE_BLINK_CLASS. Held as STATE, not a classList mark on one node
+      // (locateBlink's way): the scroll that follows moves suiteWindow
+      // (handlePaneScroll), which rebuilds the whole body, and a class on the
+      // replaced node would go with it.
+      const located = van.state(null);
+      let locatedTimer = null;
       let jumpPos = 0; // failures-footer jump cursor
 
       // §S4.0 FINAL — purely tier-contextual presentation.
@@ -6122,7 +6130,7 @@
             {
               "data-testid": "leaf-row",
               "data-leaf-key": key, // §S4.4 — stable identity for the window
-              class: `app-leaf-row app-tree-line app-leaf-${leaf.status} ${leaf.status}${spec ? " app-leaf-step" : ""}`,
+              class: `app-leaf-row app-tree-line app-leaf-${leaf.status} ${leaf.status}${spec ? " app-leaf-step" : ""}${located.val === `leaf:${key}` ? ` ${LOCATE_BLINK_CLASS}` : ""}`,
               onclick: () => {
                 focusedLeaf.val = key;
               },
@@ -6221,11 +6229,16 @@
       // §S4.4 — one suite's (digested) entry list inside its virtualized
       // scroll container: only the VIRT_WINDOW entries at the current scroll
       // position mount; spacer divs keep the scrollbar honest.
+      // The entry list a suite's leaves render as: in Density the failure
+      // digest's (L.digestFailures — its one call site), else one entry per
+      // leaf. SuiteLeafList windows over it; the heat strip windows from it.
+      const leafEntriesOf = (leaves, presentation) =>
+        presentation === "Density"
+          ? L.digestFailures(leaves)
+          : leaves.map((leaf) => ({ kind: "leaf", leaf }));
+
       const SuiteLeafList = (suiteName, leaves, presentation) => {
-        const entries =
-          presentation === "Density"
-            ? L.digestFailures(leaves)
-            : leaves.map((leaf) => ({ kind: "leaf", leaf }));
+        const entries = leafEntriesOf(leaves, presentation);
         const total = entries.length;
         const start = Math.max(
           0,
@@ -6257,15 +6270,104 @@
       // suites contribute identity-bearing cells (click scrolls to + expands
       // that test); folded suites synthesize cells from their counts (click
       // loads the suite).
+      //
+      // A leaf's place in the list SuiteLeafList windows over (leafEntriesOf):
+      // in Density (the only presentation with a heat strip) a whole group of
+      // identical failures is ONE entry, so the entry index is not the leaf's
+      // raw index. Leaf -> entry index.
+      const entryIndexOf = (leaves) => {
+        const index = new Map();
+        leafEntriesOf(leaves, "Density").forEach((entry, i) => {
+          for (const leaf of entry.kind === "group" ? entry.leaves : [entry.leaf]) {
+            index.set(leaf, i);
+          }
+        });
+        return index;
+      };
+
+      const windowAround = (entryIndex) => Math.max(0, entryIndex - Math.floor(VIRT_WINDOW / 2));
+
+      // A row that has no layout box is never judged in view, so it is
+      // scrolled to rather than silently skipped.
+      const fullyInView = (row, pane) => {
+        const r = row.getBoundingClientRect();
+        const top = pane.getBoundingClientRect().top + pane.clientTop;
+        const height = pane.clientHeight;
+        return r.height > 0 && height > 0 && r.top >= top && r.bottom <= top + height;
+      };
+
+      // The settled scroll shared by the footer's next-failure jump
+      // (jumpToNextFailure) and the heat-strip reveal: setting state only
+      // SCHEDULES VanJS's render, so retry on a bounded real-timer loop,
+      // re-querying the fresh row each attempt, and act only once `settled`
+      // says the render has landed; past the cap, act best-effort so neither
+      // can silently stall.
+      function scrollWhenSettled(findRow, settled, act, attempts = 0) {
+        const row = findRow();
+        if (!settled(row) && attempts < 30) {
+          setTimeout(() => scrollWhenSettled(findRow, settled, act, attempts + 1), 5);
+          return;
+        }
+        if (row !== null) act(row);
+      }
+
+      // The heat-strip reveal. Marks `target` located (the blink, cleared after
+      // the same 10s locateBlink uses) and, once the render that mounts it has
+      // landed, brings the row's top to the top of `pane` (the pane-scroll
+      // holding the clicked cell, just below the pinned header) through the
+      // footer jump's settled scroll, scrollWhenSettled. A row already fully in
+      // view is only blinked. scrollIntoView moves every scrollable ancestor,
+      // so every ancestor above the pane is put back: only the pane moves.
+      function reveal(target, pane) {
+        if (locatedTimer !== null) clearTimeout(locatedTimer);
+        located.val = target;
+        locatedTimer = setTimeout(() => {
+          locatedTimer = null;
+          located.val = null;
+        }, 10000);
+        const sep = target.indexOf(":");
+        const kind = target.slice(0, sep);
+        const key = target.slice(sep + 1);
+        const selector = kind === "leaf" ? '[data-testid="leaf-row"]' : '[data-testid="suite-row"]';
+        const attr = kind === "leaf" ? "data-leaf-key" : "data-suite-key";
+        const findRow = () => {
+          for (const row of (pane ?? document).querySelectorAll(selector)) {
+            if (row.getAttribute(attr) === key) return row;
+          }
+          return null;
+        };
+        // The located class is drawn by the same render as every other state
+        // change of the click, so the row wearing it is the settled one.
+        const settled = (row) => row !== null && row.classList.contains(LOCATE_BLINK_CLASS);
+        const scroll = (row) => {
+          if (pane === null || fullyInView(row, pane)) return;
+          const held = [];
+          for (let el = pane.parentElement; el !== null; el = el.parentElement) {
+            held.push([el, el.scrollTop, el.scrollLeft]);
+          }
+          if (typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "start" });
+          for (const [el, top, left] of held) {
+            if (el.scrollTop !== top) el.scrollTop = top;
+            if (el.scrollLeft !== left) el.scrollLeft = left;
+          }
+        };
+        // Queued after the click's own state changes, so after VanJS's render.
+        setTimeout(() => scrollWhenSettled(findRow, settled, scroll), 0);
+      }
+
+      const paneOf = (e) => e.currentTarget?.closest?.('[data-testid="pane-scroll"]') ?? null;
+
+      // "index" is the leaf's entry index (entryIndexOf), never its raw
+      // position in the suite's leaves.
       const HeatCell = (suiteName, leaf, index) =>
         span({
           "data-testid": "heat-cell",
           class: `app-heat-cell app-heat-${leaf.status === "fail" ? "fail" : leaf.status === "pending" ? "pending" : "pass"}`,
           title: `${suiteName} › ${leaf.name}`,
-          onclick: () => {
+          onclick: (e) => {
             suiteWindow.val = {
               ...suiteWindow.val,
-              [suiteName]: Math.max(0, index - Math.floor(VIRT_WINDOW / 2)),
+              [suiteName]: windowAround(index),
             };
             if (leaf.status === "fail" && leaf.failure !== undefined) {
               openGroups.val = {
@@ -6274,6 +6376,7 @@
               };
               focusedLeaf.val = `${suiteName}::${leaf.name}`;
             }
+            reveal(`leaf:${suiteName}::${leaf.name}`, paneOf(e));
           },
         });
 
@@ -6283,23 +6386,28 @@
           "data-testid": "heat-cell",
           class: `app-heat-cell app-heat-${status}`,
           title: suiteName,
-          onclick: async () => {
+          onclick: async (e) => {
             // CR-CRU-038 §S1 — a heat cell on a suite that is still collapsed
             // (the minimized-error-run default) is synthetic. Clicking it
             // EXPANDS the suite (loads its leaves); a red cell additionally
             // focus-opens the suite's first failing leaf's failure box (the
             // CR-016 one-box focus model), so the click takes the user
             // straight to that failure instead of just unfolding the tree.
+            // A green or pending cell reveals the suite's own (now expanded)
+            // row; a red one reveals that failing leaf.
+            const pane = paneOf(e);
             await loadSuite(suite);
-            if (status !== "fail") return;
             const leaves = suiteLeaves.val[suiteName] ?? [];
-            const failIdx = leaves.findIndex((l) => l.status === "fail");
-            if (failIdx < 0) return;
+            const failIdx = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
+            if (failIdx < 0) {
+              reveal(`suite:${suiteName}`, pane);
+              return;
+            }
+            const leaf = leaves[failIdx];
             suiteWindow.val = {
               ...suiteWindow.val,
-              [suiteName]: Math.max(0, failIdx - Math.floor(VIRT_WINDOW / 2)),
+              [suiteName]: windowAround(entryIndexOf(leaves).get(leaf) ?? 0),
             };
-            const leaf = leaves[failIdx];
             if (leaf.failure !== undefined) {
               openGroups.val = {
                 ...openGroups.val,
@@ -6307,6 +6415,7 @@
               };
             }
             focusedLeaf.val = `${suiteName}::${leaf.name}`;
+            reveal(`leaf:${suiteName}::${leaf.name}`, pane);
           },
         });
       };
@@ -6317,7 +6426,10 @@
         for (const suite of d.tree ?? []) {
           const leaves = leavesMap[suiteKeyOf(suite)];
           if (leaves !== undefined) {
-            leaves.forEach((leaf, i) => cells.push(HeatCell(suiteKeyOf(suite), leaf, i)));
+            const entryIndex = entryIndexOf(leaves);
+            leaves.forEach((leaf) =>
+              cells.push(HeatCell(suiteKeyOf(suite), leaf, entryIndex.get(leaf) ?? 0)),
+            );
           } else {
             const c = suite.counts ?? {};
             for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite, "fail"));
@@ -6441,48 +6553,43 @@
         // the jump can never silently stall. scrollIntoView still fires on the
         // target row (block:"start") into the SAME bounded pane-scroll
         // viewport, exactly once.
-        const scrollFocusedRowIntoView = (attempts = 0) => {
-          let row = null;
+        const findTargetRow = () => {
           const rows = document.querySelectorAll('[data-testid="leaf-row"]');
           for (const r of rows) {
-            if (r.getAttribute("data-leaf-key") === target) {
-              row = r;
-              break;
-            }
+            if (r.getAttribute("data-leaf-key") === target) return r;
           }
-          // CR-CRU-034 §S1 — the focus collapse is COMPLETE only when exactly
-          // ONE `[data-testid="failure-box"]` remains in the run-overlay AND it
-          // is the TARGET's own box (its `previousElementSibling` is the target
-          // `[data-leaf-key]` row). The old signal ("the target row has a
-          // failure-box next sibling") is TRUE too early: in tier-"unit" Detail
-          // mode every failing leaf renders its box while nothing is focused, so
-          // the target's own box already sits below its row BEFORE VanJS removes
-          // the OTHER boxes. Scrolling then measures the STALE tall content and
-          // the scrollTop is CLAMPED away once the collapse shrinks the content
-          // to its final height. Waiting for the single-box terminal state
-          // guarantees the content is at its final height, so scrollIntoView
-          // lands (and is not clamped). Holds for the one-box→one-box move
-          // (old box removed, new mounted) and the multi-suite case alike.
+          return null;
+        };
+        // CR-CRU-034 §S1 — the focus collapse is COMPLETE only when exactly
+        // ONE `[data-testid="failure-box"]` remains in the run-overlay AND it
+        // is the TARGET's own box (its `previousElementSibling` is the target
+        // `[data-leaf-key]` row). The old signal ("the target row has a
+        // failure-box next sibling") is TRUE too early: in tier-"unit" Detail
+        // mode every failing leaf renders its box while nothing is focused, so
+        // the target's own box already sits below its row BEFORE VanJS removes
+        // the OTHER boxes. Scrolling then measures the STALE tall content and
+        // the scrollTop is CLAMPED away once the collapse shrinks the content
+        // to its final height. Waiting for the single-box terminal state
+        // guarantees the content is at its final height, so scrollIntoView
+        // lands (and is not clamped). Holds for the one-box→one-box move
+        // (old box removed, new mounted) and the multi-suite case alike.
+        const focusSettled = (row) => {
           const overlay = document.querySelector('[data-testid="run-overlay"]');
           const boxes = (overlay ?? document).querySelectorAll(
             '[data-testid="failure-box"]',
           );
-          const settled =
-            row !== null &&
-            boxes.length === 1 &&
-            boxes[0].previousElementSibling === row;
-          if (!settled && attempts < 30) {
-            setTimeout(() => scrollFocusedRowIntoView(attempts + 1), 5);
-            return;
-          }
-          if (row !== null && typeof row.scrollIntoView === "function") {
-            row.scrollIntoView({ block: "start" });
-          }
+          return row !== null && boxes.length === 1 && boxes[0].previousElementSibling === row;
         };
+        const scrollFocusedRowIntoView = () =>
+          scrollWhenSettled(findTargetRow, focusSettled, (row) => {
+            if (typeof row.scrollIntoView === "function") {
+              row.scrollIntoView({ block: "start" });
+            }
+          });
         if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(() => scrollFocusedRowIntoView(0));
+          requestAnimationFrame(() => scrollFocusedRowIntoView());
         } else {
-          queueMicrotask(() => scrollFocusedRowIntoView(0));
+          queueMicrotask(() => scrollFocusedRowIntoView());
         }
       }
 
@@ -6562,7 +6669,7 @@
       // One suite (a spec run's scenario) row + its leaves. The plain tree and
       // the spec's feature groups both draw their suites through this, so a
       // spec run's scenario is the same collapse/counts/digest/virtualization.
-      const SuiteGroup = (suite, presentation, density, leavesMap, spec) => {
+      const SuiteGroup = (suite, presentation, density, leavesMap) => {
         const key = suiteKeyOf(suite);
         const leaves = leavesMap[key];
         const expanded = leaves !== undefined;
@@ -6570,10 +6677,12 @@
         const foldedAllPass = density && !expanded && (counts.failed ?? 0) === 0;
         const rowProps = {
           "data-testid": "suite-row",
-          class: `app-suite-row app-tree-line ${suite.status}`,
+          // Every suite row carries its key, so the heat-strip reveal has one
+          // handle in a plain run and a spec run alike.
+          "data-suite-key": key,
+          class: `app-suite-row app-tree-line ${suite.status}${located.val === `suite:${key}` ? ` ${LOCATE_BLINK_CLASS}` : ""}`,
           onclick: () => expandSuite(suite),
         };
-        if (spec) rowProps["data-suite-key"] = key;
         return div(
           { class: "app-suite-group" },
           div(
@@ -6643,7 +6752,7 @@
               ? div(
                   { class: "app-feature-scenarios" },
                   feature.scenarios.map((entry) =>
-                    SuiteGroup(entry.node, presentation, density, leavesMap, true),
+                    SuiteGroup(entry.node, presentation, density, leavesMap),
                   ),
                 )
               : null,
@@ -6668,7 +6777,7 @@
           density ? HeatStrip(d) : null,
           spec
             ? SpecFeatures(d, presentation, density, leavesMap)
-            : (d.tree ?? []).map((suite) => SuiteGroup(suite, presentation, density, leavesMap, false)),
+            : (d.tree ?? []).map((suite) => SuiteGroup(suite, presentation, density, leavesMap)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
           // showing the RESOLVED raw (per-leaf preferred over the run blob).
