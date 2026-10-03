@@ -135,6 +135,17 @@ LIMITS_TABLE = "limits"
 CLIENT_TABLE = "client"
 CLIENT_BOARD_FIELD = "url"
 
+#: §S1 -- the gate steps a project NEVER runs, declared once in the same
+#: file (`[gate] skip = ["pr", "ci"]`) instead of remembered on every
+#: `gate-run`. The names are no-mistakes' own vocabulary, so only the
+#: declaration's SHAPE is this client's business; `skipSource` says where the
+#: list `gate-run` used came from -- the command line, a declaration (with its
+#: file), or nowhere.
+GATE_TABLE = "gate"
+GATE_SKIP_FIELD = "skip"
+GATE_SKIP_SOURCE_FLAG = "flag"
+GATE_SKIP_SOURCE_DECLARED = "declared"
+
 #: §S1c -- the SHIPPED declarations are PACKAGE DATA, not a table in this
 #: module. `crucible.toml` travels inside `crucible-axi` beside this file (the
 #: wheel force-includes `clients` as `crucible_axi/clients`), so the file a
@@ -461,6 +472,69 @@ def resolve_base_url():
     if isinstance(url, str) and url.strip():
         return url.strip()
     return shipped_board()
+
+
+class GateSkipDeclarationError(ValueError):
+    """A `[gate] skip` declaration whose SHAPE cannot be passed to no-mistakes:
+    not a list of non-empty strings, or an entry carrying the comma that
+    `--skip` itself separates steps with. The message names the file, and
+    `path` carries it for the envelope's `skipSource`."""
+
+    def __init__(self, path, message):
+        super().__init__(message)
+        self.path = path
+
+
+def gate_skip_declared_source(path):
+    """The `skipSource` of a list read from `path`: `declared:<file>`."""
+    return f"{GATE_SKIP_SOURCE_DECLARED}:{path}"
+
+
+def _declared_gate_skip(path, table):
+    """The declared list as the file states it, or None when the file declares
+    none. Only the SHAPE is checked -- the step names belong to no-mistakes,
+    which refuses an unknown one itself, so a vocabulary copied here would
+    drift with every no-mistakes release."""
+    if not table or GATE_SKIP_FIELD not in table:
+        return None
+    raw = table[GATE_SKIP_FIELD]
+    if not isinstance(raw, list) or not all(
+            isinstance(step, str) and step for step in raw):
+        raise GateSkipDeclarationError(
+            path,
+            f"{path} declares `[{GATE_TABLE}] {GATE_SKIP_FIELD} = {raw!r}`, "
+            f"which is not a list of non-empty step names -- write it as "
+            f"`{GATE_SKIP_FIELD} = [\"pr\", \"ci\"]`")
+    joined = [step for step in raw if "," in step]
+    if joined:
+        raise GateSkipDeclarationError(
+            path,
+            f"{path} declares `[{GATE_TABLE}] {GATE_SKIP_FIELD}` entries "
+            f"containing a comma ({', '.join(repr(s) for s in joined)}) -- name "
+            f"one step per entry, e.g. `[\"pr\", \"ci\"]`")
+    return list(raw)
+
+
+def resolve_gate_skip(flag):
+    """§S1 -- `(steps, source)`: the gate steps `gate-run` skips, and where
+    that list came from.
+
+    An explicit `--skip` REPLACES any declaration for the call (`--skip ""`
+    skips nothing), so the file is not consulted at all then. Otherwise the
+    PROJECT's `[gate] skip`, else the install's, through the ONE walk
+    `resolve_base_url` reads `[client] url` by, at the point of use.
+
+    Raises `GateSkipDeclarationError` for a malformed declaration: unlike a
+    limit, a skip list cannot degrade to a safe value -- running the steps a
+    project declared it never runs is the very mistake the declaration exists
+    to prevent."""
+    if flag is not None:
+        return (flag.split(",") if flag else []), GATE_SKIP_SOURCE_FLAG
+    path, table = _read_project_config(GATE_TABLE)
+    declared = _declared_gate_skip(path, table)
+    if declared is None:
+        return [], ENVELOPE_TIER_NONE
+    return declared, gate_skip_declared_source(path)
 
 
 def limit_disclosures():
@@ -5897,7 +5971,8 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
     return posted_interim
 
 
-def gate_run_result_fields(outcome, resolved, release, posted_interim, held):
+def gate_run_result_fields(outcome, resolved, release, posted_interim, held,
+                           skip, skip_source):
     """§S4 — the envelope's statement of what this exit put on the board, always
     as a value and never as an absent key: a reader cannot tell a missing field
     from a client too old to have one. `unstated` and `none` are the fleet's own
@@ -5909,7 +5984,13 @@ def gate_run_result_fields(outcome, resolved, release, posted_interim, held):
     one and otherwise names what DID reach the board, which is the same word
     `postedGate` uses. `none` beside a gate sitting on the board would be a
     reader's only evidence pointing the wrong way, correctable solely by a
-    second field."""
+    second field.
+
+    §S1 -- `skip` is the list of steps this run told no-mistakes to skip
+    (`none` when it skipped nothing) and `skipSource` where that list came
+    from: `flag`, `declared:<file>`, or `none`. Stated on EVERY exit, so a run
+    that skipped `pr` because a file said so is never mistaken for one that
+    ran it."""
     posted = (GATE_POSTED_FINAL if outcome
               else GATE_POSTED_INTERIM if posted_interim
               else ENVELOPE_TIER_NONE)
@@ -5920,6 +6001,8 @@ def gate_run_result_fields(outcome, resolved, release, posted_interim, held):
                    else ENVELOPE_TIER_UNSTATED,
         "postedGate": posted,
         "inFlight": held,
+        "skip": list(skip) if skip else ENVELOPE_TIER_NONE,
+        "skipSource": skip_source,
     }
 
 
@@ -5966,15 +6049,34 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     intent = args.intent
     agent_id = ops.agent_id(args)
     context = fleet_context()
+    release = getattr(args, "release", None)
 
-    # CR-CRU-061 §S5 — PURE passthrough of `--skip`. WHICH pipeline steps a
-    # project skips is a per-project workflow decision, not a client-fleet
-    # fact, so the value is never validated, split, normalised or rewritten
-    # here; when unset, no `--skip` token reaches the argv at all.
+    # §S1 -- an explicit `--skip` replaces the project's declared `[gate] skip`
+    # for this call (`--skip ""` skips nothing); with no flag, the declaration
+    # applies. A malformed declaration is REFUSED here, before no-mistakes is
+    # launched, because running the steps a project declared it never runs is
+    # the mistake the declaration exists to prevent. A given flag still reaches
+    # the argv VERBATIM -- CR-CRU-061 §S5's passthrough: the step names are
+    # no-mistakes', never validated here, and its own refusal of an unknown one
+    # is relayed unchanged.
+    flag = getattr(args, "skip", None)
+    try:
+        skip, skip_source = resolve_gate_skip(flag)
+    except GateSkipDeclarationError as e:
+        print(f"gate-run: ERROR: {e}", file=sys.stderr)
+        ops.emit("gate-run", False,
+                 gate_run_result_fields(None, None, release, False, False,
+                                        [], gate_skip_declared_source(e.path)),
+                 ops.context(project_dir, agent_id=agent_id), [],
+                 f"gate-run: ok=False sealed=nothing exit=1 — no-mistakes "
+                 f"not launched: {e}")
+        return 1
+
     run_argv = [nm, "axi", "run", "--intent", intent]
-    skip = getattr(args, "skip", None)
-    if skip is not None:
-        run_argv += ["--skip", skip]
+    if flag:
+        run_argv += ["--skip", flag]
+    elif skip:
+        run_argv += ["--skip", ",".join(skip)]
 
     try:
         proc = subprocess.Popen(
@@ -6015,10 +6117,10 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
 
     raw = final_decoded.get("outcome")
     resolved = raw if isinstance(raw, str) and raw else None
-    release = getattr(args, "release", None)
     held = outcome is None and resolved is None
     result_fields = gate_run_result_fields(outcome, resolved, release,
-                                           posted_interim, held)
+                                           posted_interim, held,
+                                           skip, skip_source)
     envelope_context = ops.context(project_dir, agent_id=agent_id)
 
     if outcome is None:

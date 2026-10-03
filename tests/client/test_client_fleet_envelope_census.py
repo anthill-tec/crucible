@@ -512,7 +512,16 @@ BOARD_RESOLVER = "resolve_base_url"
 #: avoided rather than only that it refused.
 SHIPPED_DEFAULT_BOARD = "http://localhost:3849"
 
-_CLIENT_TABLE = re.compile(r"(?ms)^\[client\][^\[]*")
+#: The `[client]` table from its header LINE to the next real TOML table-header
+#: LINE (`[name]`, `[dotted.name]` or `[[name]]` alone on its line, an end-of-line
+#: comment allowed), or to the end of the file. NOT to the first literal `[`:
+#: comments and array values carry brackets (`# [gate]`, `skip = ["pr"]`), and a
+#: strip that stopped at one would leave the table's tail behind -- or, with a
+#: commented table after `[client]`, declare that table a second time.
+_TABLE_HEADER_LINE = r"^[ \t]*\[\[?[ \t]*[A-Za-z0-9_.\-]+[ \t]*\]\]?[ \t]*(?:#[^\n]*)?$"
+_CLIENT_TABLE = re.compile(
+    r"(?ms)^[ \t]*\[[ \t]*client[ \t]*\][ \t]*(?:#[^\n]*)?$"
+    r".*?(?=" + _TABLE_HEADER_LINE + r"|\Z)")
 
 
 def declare_board(config_path, url):

@@ -2521,8 +2521,10 @@ def main():
                           "client never validates or rewrites the value). Exists "
                           "because no-mistakes' `ci` step is PR-based, and a "
                           "git-flow project that merges directly has no PR for it "
-                          "to watch — without --skip the gate blocks until "
-                          "ci_timeout.")
+                          "to watch — skipping nothing, the gate blocks until "
+                          "ci_timeout. Omitted, the project's declared "
+                          "`[gate] skip` (crucible.toml) applies; a value "
+                          "REPLACES it, and --skip \"\" skips nothing.")
     _axi().add_gate_release_arg(gr)
     _add_project_args(gr)
     gr.set_defaults(func=cmd_gate_run)
