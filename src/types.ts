@@ -349,6 +349,30 @@ export interface PlanCycle {
   // active-in-server-up epochs only (restart resumes, downtime excluded).
   // Present on ACTIVE cycles; sealed rows keep `doneAt − activatedAt`.
   activeMs?: number;
+  // CR-CRU-165 (additive) - the record a plan change carries: why the filed
+  // plan changed, what fell short (cause), the spec point (specRef) and the
+  // kind of change. Absent (never null) on a cycle no recorded change touched,
+  // including every skip made before this CR (never back-filled).
+  reason?: string;
+  cause?: ChangeCause;
+  specRef?: string;
+  changeKind?: CycleChangeKind;
+}
+
+/** CR-CRU-165 - what a recorded plan change says fell short. */
+export type ChangeCause = "spec-design" | "gap-analysis";
+
+/**
+ * CR-CRU-165 - the kind of recorded change a cycle carries. `abort` marks a
+ * cycle an abort skipped, so it stays distinguishable from a cycle-skip (G3).
+ */
+export type CycleChangeKind = "insert" | "rename" | "append" | "skip" | "abort";
+
+/** CR-CRU-165 - the three fields every recorded plan change and abort carries. */
+export interface ChangeRecord {
+  reason: string;
+  cause: ChangeCause;
+  specRef: string;
 }
 
 /**
@@ -389,6 +413,11 @@ export interface Plan {
   merge?: { commit: string };
   closedAt?: number;
   commitBoundary?: CommitBoundary;
+  // CR-CRU-165 S2b (additive) - an abort's record; absent on every plan
+  // aborted before this CR (never back-filled).
+  reason?: string;
+  cause?: ChangeCause;
+  specRef?: string;
 }
 
 // ── CR-CRU-014 §S1 — the CR execution queue (project roadmap registration) ──

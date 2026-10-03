@@ -8,8 +8,11 @@ import type {
   Agent,
   AgentIdentity,
   AgentRole,
+  ChangeCause,
+  ChangeRecord,
   CommitBoundary,
   Coverage,
+  CycleChangeKind,
   CycleKind,
   CycleStatus,
   LivenessConfig,
@@ -254,6 +257,10 @@ interface PlanRow {
   status: string;
   merge_commit: string | null;
   closed_at: number | null;
+  // CR-CRU-165 S2b - an abort's record (NULL on every plan aborted before it).
+  abort_reason?: string | null;
+  abort_cause?: string | null;
+  abort_spec_ref?: string | null;
 }
 
 interface PlanCycleRow {
@@ -273,6 +280,26 @@ interface PlanCycleRow {
   // cycle strictly between two siblings via a fractional midpoint). Governs
   // cycles[] order AND the §S1 out-of-order guard — cycle_id no longer orders.
   seq: number;
+  // CR-CRU-165 S1/S2 - a recorded plan change (NULL on every untouched cycle).
+  change_reason: string | null;
+  change_cause: string | null;
+  change_spec_ref: string | null;
+  change_kind: string | null;
+}
+
+/** CR-CRU-165 S1/S2 - the record carried into a cycle write. */
+interface CycleChange extends ChangeRecord {
+  kind: CycleChangeKind;
+}
+
+/** CR-CRU-165 S1/S2 - a cycle's change record as published (absent when unrecorded). */
+function changeFieldsOf(row: PlanCycleRow): Pick<PlanCycle, "reason" | "cause" | "specRef" | "changeKind"> {
+  return {
+    ...(row.change_reason !== null ? { reason: row.change_reason } : {}),
+    ...(row.change_cause !== null ? { cause: row.change_cause as ChangeCause } : {}),
+    ...(row.change_spec_ref !== null ? { specRef: row.change_spec_ref } : {}),
+    ...(row.change_kind !== null ? { changeKind: row.change_kind as CycleChangeKind } : {}),
+  };
 }
 
 /** CR-CRU-014 §S1 — one stored queue_entries row. */
@@ -650,7 +677,14 @@ export interface PlanOpError {
     | "illegal-transition"
     | "locked"
     | "immutable-history"
-    | "insert-before-active";
+    | "insert-before-active"
+    // CR-CRU-165 §S1/§S2 — the plan-change refusals: an unrecorded fix
+    // append before VERIFY is done, a skip of a cycle a run was filed against,
+    // a skip of the plan's last unskipped cycle, and a change carrying no record.
+    | "verify-not-done"
+    | "run-filed"
+    | "last-unskipped"
+    | "change-record-required";
   cycleRef?: number;
 }
 
@@ -1627,6 +1661,22 @@ interface ProposalRow {
 
 type MigrationBody = Omit<MigrationStep, "from" | "to">;
 
+/**
+ * CR-CRU-165 §G6 — the columns a recorded plan change and an abort are stored
+ * in, each with its literal additive DDL (an allowlist: nothing is
+ * interpolated into SQL). The base DDL in `createBaseTables` carries the same
+ * columns for a store created fresh.
+ */
+const CHANGE_RECORD_COLUMNS: ReadonlyArray<{ table: string; column: string; ddl: string }> = [
+  { table: "plan_cycles", column: "change_reason", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_reason TEXT" },
+  { table: "plan_cycles", column: "change_cause", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_cause TEXT" },
+  { table: "plan_cycles", column: "change_spec_ref", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_spec_ref TEXT" },
+  { table: "plan_cycles", column: "change_kind", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_kind TEXT" },
+  { table: "plans", column: "abort_reason", ddl: "ALTER TABLE plans ADD COLUMN abort_reason TEXT" },
+  { table: "plans", column: "abort_cause", ddl: "ALTER TABLE plans ADD COLUMN abort_cause TEXT" },
+  { table: "plans", column: "abort_spec_ref", ddl: "ALTER TABLE plans ADD COLUMN abort_spec_ref TEXT" },
+];
+
 // A step whose table does not exist yet has NOTHING to retrofit: the base
 // `CREATE TABLE IF NOT EXISTS` pass writes every table in its CURRENT shape,
 // which is precisely why the pre-071 retrofits only ever fired for tables an
@@ -2080,6 +2130,25 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return owed === 0;
     },
   },
+  {
+    description:
+      "plan_cycles + plans: CR-165 §S1/§S2/§S2b — a recorded plan change (insert, rename, non-fix append, skip) carries its reason, cause and spec reference and its kind on the cycle; an abort carries its reason, cause and spec reference on the plan. History is never back-filled",
+    apply(db) {
+      // Additive columns only, NULL on every row already stored: the skips and
+      // aborts made before this CR recorded no reason, and §S3 shows them as
+      // unrecorded rather than inventing one. No UPDATE, so every existing
+      // row's original fields are byte-identical afterwards.
+      for (const { table, column, ddl } of CHANGE_RECORD_COLUMNS) {
+        if (tableExists(db, table) && !columnsOf(db, table).has(column)) db.exec(ddl);
+      }
+    },
+    satisfiedBy(db) {
+      // A table the store never had is created later in its CURRENT shape.
+      return CHANGE_RECORD_COLUMNS.every(
+        ({ table, column }) => !tableExists(db, table) || columnsOf(db, table).has(column),
+      );
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -2458,7 +2527,10 @@ export class Store {
         track TEXT,
         status TEXT NOT NULL,
         merge_commit TEXT,
-        closed_at INTEGER
+        closed_at INTEGER,
+        abort_reason TEXT,
+        abort_cause TEXT,
+        abort_spec_ref TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_plans_project_cr
@@ -2475,6 +2547,10 @@ export class Store {
         done_at INTEGER,
         active_ms_accumulated INTEGER,
         seq REAL,
+        change_reason TEXT,
+        change_cause TEXT,
+        change_spec_ref TEXT,
+        change_kind TEXT,
         PRIMARY KEY (project_key, cycle_id)
       );
 
@@ -4690,13 +4766,14 @@ export class Store {
   ]);
 
   /**
-   * §S0 legal transition table: pending→active, active→done|skipped|failed,
-   * plus the ONE shortcut pending→skipped (a never-started cycle can be
-   * cancelled outright). Everything else rejects naming both states.
+   * §S0 legal transition table: pending→active, active→done|failed, plus the
+   * ONE shortcut pending→skipped (a never-started cycle can be cancelled
+   * outright). CR-CRU-165 R2 — `active → skipped` left the table: an active
+   * cycle ends `done` or `failed`. Everything else rejects naming both states.
    */
   private static readonly CYCLE_TRANSITIONS: Readonly<Record<string, ReadonlySet<string>>> = {
     pending: new Set(["active", "skipped"]),
-    active: new Set(["done", "skipped", "failed"]),
+    active: new Set(["done", "failed"]),
   };
 
   /** §S0 — cycle ids are unique per PROJECT, not per plan. */
@@ -4745,15 +4822,36 @@ export class Store {
     label: string,
     kind: CycleKind,
     seq: number,
+    change?: CycleChange,
   ): PlanCycle {
     const id = this.nextCycleId(projectKey);
     this.db
       .query(
-        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status, seq)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status, seq,
+           change_reason, change_cause, change_spec_ref, change_kind)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
       )
-      .run(projectKey, id, planId, label, kind, seq);
-    return { id, label, kind, status: "pending" };
+      .run(
+        projectKey,
+        id,
+        planId,
+        label,
+        kind,
+        seq,
+        change?.reason ?? null,
+        change?.cause ?? null,
+        change?.specRef ?? null,
+        change?.kind ?? null,
+      );
+    return {
+      id,
+      label,
+      kind,
+      status: "pending",
+      ...(change !== undefined
+        ? { reason: change.reason, cause: change.cause, specRef: change.specRef, changeKind: change.kind }
+        : {}),
+    };
   }
 
   /** §S0 — file the orchestrator's cycle plan. ONE open plan per cr. */
@@ -4869,6 +4967,7 @@ export class Store {
     planId: number,
     cycle: { label: string; kind: CycleKind },
     before?: number,
+    change?: ChangeRecord,
   ): PlanCycle | PlanOpError {
     const plan = this.getPlanRow(projectKey, planId);
     if (plan === null) {
@@ -4876,6 +4975,18 @@ export class Store {
     }
     if (plan.status !== "open") {
       return { error: `plan ${planId} is closed — cannot append cycles` };
+    }
+    // CR-CRU-165 §S1 — a filed plan grows unrecorded ONLY by a FIX cycle
+    // appended after a done VERIFY; an insert-before and an append of any
+    // other kind are recorded plan changes and carry their record.
+    if (change === undefined && (before !== undefined || cycle.kind !== "fix")) {
+      return {
+        error:
+          `${before !== undefined ? "inserting a cycle" : `appending a ${cycle.kind} cycle`} changes ` +
+          `filed plan ${planId}: a plan grows only by FIX cycles — any other change needs ` +
+          `reason, cause and specRef`,
+        code: "change-record-required",
+      };
     }
     if (before !== undefined) {
       const siblings = this.listCycleRows(projectKey, planId); // seq-ordered
@@ -4897,9 +5008,26 @@ export class Store {
       const earlier = siblings.filter((c) => c.seq < target.seq);
       const pred = earlier.length > 0 ? earlier[earlier.length - 1] : undefined;
       const newSeq = pred !== undefined ? (pred.seq + target.seq) / 2 : target.seq - 1;
-      const inserted = this.insertCycle(projectKey, planId, cycle.label, cycle.kind, newSeq);
+      const inserted = this.insertCycle(projectKey, planId, cycle.label, cycle.kind, newSeq, {
+        ...change!,
+        kind: "insert",
+      });
       this.emit("events", projectKey);
       return inserted;
+    }
+    if (change === undefined) {
+      // The unrecorded FIX append: only once the plan's VERIFY cycle is done.
+      const verifyDone = this.listCycleRows(projectKey, planId).some(
+        (c) => c.kind === "verify" && c.status === "done",
+      );
+      if (!verifyDone) {
+        return {
+          error:
+            `cannot append a fix cycle to plan ${planId}: its VERIFY cycle is not done — ` +
+            `a FIX cycle follows a done VERIFY whose findings need fixes`,
+          code: "verify-not-done",
+        };
+      }
     }
     const appended = this.insertCycle(
       projectKey,
@@ -4907,6 +5035,7 @@ export class Store {
       cycle.label,
       cycle.kind,
       this.nextSeq(projectKey, planId),
+      change !== undefined ? { ...change, kind: "append" } : undefined,
     );
     this.emit("events", projectKey);
     return appended;
@@ -4932,6 +5061,7 @@ export class Store {
     planId: number,
     cycleId: number,
     to: CycleStatus,
+    change?: ChangeRecord,
   ): PlanCycle | PlanOpError {
     const row = this.db
       .query<PlanCycleRow, [string, number, number]>(
@@ -4946,6 +5076,12 @@ export class Store {
         error: `illegal cycle transition: ${row.status} -> ${to}`,
         code: "illegal-transition",
       };
+    }
+    // CR-CRU-165 §S2 — cycle-skip's guards (the table above already confines
+    // a skip to a PENDING cycle). A skip is a recorded plan change.
+    if (to === "skipped") {
+      const refusal = this.skipRefusal(projectKey, planId, cycleId, change);
+      if (refusal !== undefined) return refusal;
     }
     // CR-CRU-024 §S1+§S2 — cross-cycle activation guards. CYCLE_TRANSITIONS is
     // per-cycle only, so activating a cycle while a sibling blocks it currently
@@ -5006,6 +5142,9 @@ export class Store {
          WHERE project_key = ? AND cycle_id = ?`,
       )
       .run(to, activatedAt, doneAt, activeMsAccumulated, projectKey, cycleId);
+    const skip: CycleChange | undefined =
+      to === "skipped" && change !== undefined ? { ...change, kind: "skip" } : undefined;
+    if (skip !== undefined) this.recordCycleChange(projectKey, cycleId, skip);
     this.emit("events", projectKey);
     return {
       id: row.cycle_id,
@@ -5014,7 +5153,71 @@ export class Store {
       status: to,
       ...(activatedAt !== null ? { activatedAt } : {}),
       ...(doneAt !== null ? { doneAt } : {}),
+      ...changeFieldsOf(
+        skip !== undefined
+          ? {
+              ...row,
+              change_reason: skip.reason,
+              change_cause: skip.cause,
+              change_spec_ref: skip.specRef,
+              change_kind: skip.kind,
+            }
+          : row,
+      ),
     };
+  }
+
+  /**
+   * CR-CRU-165 §S2 — why a PENDING cycle may not be skipped, or undefined when
+   * it may: the skip carries no record, a run was filed against the cycle, or
+   * it is the plan's last cycle that is not skipped. Each refusal names its rule.
+   */
+  private skipRefusal(
+    projectKey: string,
+    planId: number,
+    cycleId: number,
+    change: ChangeRecord | undefined,
+  ): PlanOpError | undefined {
+    if (change === undefined) {
+      return {
+        error: `skipping cycle ${cycleId} changes filed plan ${planId}: a skip needs reason, cause and specRef`,
+        code: "change-record-required",
+      };
+    }
+    const runs = this.db
+      .query<{ n: number }, [string, number]>(
+        `SELECT COUNT(*) AS n FROM events
+          WHERE project_key = ? AND cycle_id = ? AND kind IN ('test', 'compile')`,
+      )
+      .get(projectKey, cycleId)!.n;
+    if (runs > 0) {
+      return {
+        error: `cannot skip cycle ${cycleId}: a run is filed against it — only a cycle no run was filed against can be skipped`,
+        code: "run-filed",
+        cycleRef: cycleId,
+      };
+    }
+    const unskippedOthers = this.listCycleRows(projectKey, planId).filter(
+      (c) => c.cycle_id !== cycleId && c.status !== "skipped",
+    );
+    if (unskippedOthers.length === 0) {
+      return {
+        error: `cannot skip cycle ${cycleId}: it is the last cycle of plan ${planId} that is not skipped — a plan keeps at least one`,
+        code: "last-unskipped",
+        cycleRef: cycleId,
+      };
+    }
+    return undefined;
+  }
+
+  /** CR-CRU-165 §S1/§S2 — write a recorded change onto its cycle. */
+  private recordCycleChange(projectKey: string, cycleId: number, change: CycleChange): void {
+    this.db
+      .query(
+        `UPDATE plan_cycles SET change_reason = ?, change_cause = ?, change_spec_ref = ?, change_kind = ?
+         WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .run(change.reason, change.cause, change.specRef, change.kind, projectKey, cycleId);
   }
 
   /**
@@ -5153,6 +5356,7 @@ export class Store {
     planId: number,
     cycleId: number,
     label: string,
+    change: ChangeRecord,
   ): PlanCycle | PlanOpError {
     const row = this.db
       .query<PlanCycleRow, [string, number, number]>(
@@ -5179,6 +5383,9 @@ export class Store {
         `UPDATE plan_cycles SET label = ? WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
       )
       .run(label, projectKey, planId, cycleId);
+    // CR-CRU-165 §S1 — a rename is a recorded plan change.
+    const rename: CycleChange = { ...change, kind: "rename" };
+    this.recordCycleChange(projectKey, cycleId, rename);
     this.emit("events", projectKey);
     return {
       id: row.cycle_id,
@@ -5187,6 +5394,10 @@ export class Store {
       status: row.status as CycleStatus,
       ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
       ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
+      reason: rename.reason,
+      cause: rename.cause,
+      specRef: rename.specRef,
+      changeKind: rename.kind,
     };
   }
 
@@ -5238,7 +5449,7 @@ export class Store {
    * with downtime); every PENDING cycle → `skipped`; the plan status →
    * `aborted`. Closed/aborted/unknown plans reject (only an open plan aborts).
    */
-  abortPlan(projectKey: string, planId: number): Plan | PlanOpError {
+  abortPlan(projectKey: string, planId: number, record: ChangeRecord): Plan | PlanOpError {
     const row = this.getPlanRow(projectKey, planId);
     if (row === null) {
       return { error: `plan not found: ${planId}`, notFound: true };
@@ -5263,17 +5474,30 @@ export class Store {
           )
           .run(now, activeMsAccumulated, projectKey, cycle.cycle_id);
       } else if (cycle.status === "pending") {
+        // CR-CRU-165 §S2b — every cycle the abort skips shows the abort's record.
         this.db
           .query(
             `UPDATE plan_cycles SET status = 'skipped', done_at = ?
              WHERE project_key = ? AND cycle_id = ?`,
           )
           .run(now, projectKey, cycle.cycle_id);
+        this.recordCycleChange(projectKey, cycle.cycle_id, { ...record, kind: "abort" });
       }
     }
-    this.db.query(`UPDATE plans SET status = 'aborted' WHERE plan_id = ?`).run(planId);
+    this.db
+      .query(
+        `UPDATE plans SET status = 'aborted', abort_reason = ?, abort_cause = ?, abort_spec_ref = ?
+         WHERE plan_id = ?`,
+      )
+      .run(record.reason, record.cause, record.specRef, planId);
     this.emit("events", projectKey);
-    return this.toPlan({ ...row, status: "aborted" });
+    return this.toPlan({
+      ...row,
+      status: "aborted",
+      abort_reason: record.reason,
+      abort_cause: record.cause,
+      abort_spec_ref: record.specRef,
+    });
   }
 
   /**
@@ -5360,6 +5584,7 @@ export class Store {
       status: row.status as CycleStatus,
       ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
       ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
+      ...changeFieldsOf(row),
     };
   }
 
@@ -6295,6 +6520,8 @@ export class Store {
         ...(cycle.status === "active" && cycle.activated_at !== null
           ? { activeMs: this.deriveAndCheckpointActiveMs(cycle, cycle.activated_at) }
           : {}),
+        // CR-CRU-165 §S1/§S2 — a recorded plan change rides its cycle.
+        ...changeFieldsOf(cycle),
       }),
     );
     const plan: Plan = {
@@ -6314,6 +6541,10 @@ export class Store {
       cycles,
       ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
+      // CR-CRU-165 §S2b — an abort's record (absent on unrecorded aborts).
+      ...(typeof row.abort_reason === "string" ? { reason: row.abort_reason } : {}),
+      ...(typeof row.abort_cause === "string" ? { cause: row.abort_cause as ChangeCause } : {}),
+      ...(typeof row.abort_spec_ref === "string" ? { specRef: row.abort_spec_ref } : {}),
     };
     const boundary = this.deriveCommitBoundary(plan);
     return boundary !== undefined ? { ...plan, commitBoundary: boundary } : plan;

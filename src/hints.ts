@@ -110,7 +110,7 @@ export const hints: Record<
   /** CR-CRU-024 §S6 — abort refused: no explicit user approval on the call. */
   abortNeedsApproval: [
     "aborting discards a declared workflow and destroys its running plan — never retry this call on your own initiative",
-    "present the abort to the user first; retry with {userApproved: true} ONLY after the user has explicitly approved this specific abort",
+    "present the abort to the user first; retry with {userApproved: true, reason, cause, specRef} ONLY after the user has explicitly approved this specific abort — cause is spec-design | gap-analysis, specRef the spec commit or §",
   ],
   /** CR-CRU-013 §S1 — a gate POST missing a required field. */
   gateFields: [
@@ -124,7 +124,7 @@ export const hints: Record<
   /** CR-CRU-024 §S4 — an illegal per-cycle transition (e.g. active→pending). */
   illegalCycleTransition: [
     "cycles never retreat — a done/skipped/failed cycle is final and an active cycle cannot return to pending",
-    "append a new cycle for rework: POST …/plans/<planId>/cycles {label}",
+    "for rework, append a FIX cycle once the plan's VERIFY cycle is done: POST …/plans/<planId>/cycles {label, kind: \"fix\"}",
   ],
   /** CR-CRU-024 §S4 — 404 on an unknown plan or cycle in a plan/cycle route. */
   planCycleNotFound: [
@@ -159,7 +159,7 @@ export const hints: Record<
   /** CR-CRU-024 §S4 — a second open plan filed for a cr that already has one. */
   duplicateOpenPlan: [
     "one open plan per cr — close the existing open plan (PATCH …/plans/<planId> {status:\"closed\"}) before filing another",
-    "or append cycles to the existing plan: POST …/plans/<planId>/cycles {label}",
+    "or, once its VERIFY cycle is done, append a FIX cycle to the existing plan: POST …/plans/<planId>/cycles {label, kind: \"fix\"}",
   ],
   /** CR-CRU-024 §S4 — a mutation aimed at an already-closed plan. */
   closedPlan: [
@@ -174,7 +174,7 @@ export const hints: Record<
   nonTerminalCycles: [
     "transition every listed cycle to a terminal state (done | skipped | failed) before closing the plan",
     "GET …/plans?cr=<cr> — inspect the cycles still open",
-    "if the listed cycles will never run, abandon the plan instead: POST …/plans/<planId>/abort {userApproved: true} — present the abort to the user first and send it ONLY after explicit approval",
+    "if the listed cycles will never run, abandon the plan instead: POST …/plans/<planId>/abort {userApproved: true, reason, cause, specRef} — present the abort to the user first and send it ONLY after explicit approval; an abort is a recorded process failure",
   ],
   /** CR-CRU-024 §S4 — an unparseable JSON request body on a plan/cycle route. */
   malformedBody: [
@@ -183,12 +183,12 @@ export const hints: Record<
   /** CR-CRU-024 §S3.2 — a label edit aimed at the LOCKED active cycle. */
   cycleLocked: [
     "the active cycle is locked while it runs — confirm it (done) or fail it first, then edit",
-    "or append a new cycle for the rename: POST …/plans/<planId>/cycles {label}",
+    "a rename is a recorded plan change, legal on a PENDING cycle only: PATCH …/cycles/<id> {label, reason, cause, specRef}",
   ],
   /** CR-CRU-024 §S3.2 — a label edit aimed at a terminal (history) cycle. */
   cycleImmutable: [
     "done/skipped/failed cycles are immutable history — their labels are frozen",
-    "append a new cycle for rework instead: POST …/plans/<planId>/cycles {label}",
+    "for rework, append a FIX cycle once the plan's VERIFY cycle is done: POST …/plans/<planId>/cycles {label, kind: \"fix\"}",
   ],
   /** CR-CRU-024 §S3.2 — a body carrying BOTH label and status. */
   cycleOneMutation: [
@@ -211,7 +211,7 @@ export const cycleHints = {
   /** §S1 — an earlier sibling is still pending; offer activate-first or skip. */
   outOfOrder: (earlier: number): string[] => [
     `activate cycle ${earlier} first — cycles activate in ascending order`,
-    `or transition cycle ${earlier} pending→skipped, then retry this activation`,
+    `or, only if a spec change the user approved made it obsolete, skip cycle ${earlier} (pending→skipped with reason, cause and specRef — a recorded process failure), then retry this activation`,
   ],
   /** §S2 — another cycle is already active; offer the terminal-transition path. */
   alreadyActive: (active: number): string[] => [
@@ -604,5 +604,50 @@ export const nextHints = {
   /** The multi-track refusal — names the live lanes, never picks one. */
   needsTrack: (tracks: readonly string[]): string[] => [
     `next --track <n> — the live lanes are ${tracks.join(", ")}`,
+  ],
+};
+
+/**
+ * CR-CRU-165 §S1/§S2/§S2b — the plan-change refusals. A filed plan grows
+ * unrecorded only by a FIX cycle after a done VERIFY; every other change
+ * (insert-before, rename, non-fix append, skip) and every abort is the
+ * exception for a spec change the user approved mid-implementation, and
+ * carries reason, cause and specRef.
+ */
+export const planChangeHints = {
+  /** A plan change asked for by a caller that is not ORCHESTRATOR. */
+  notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
+    reDeclareRole(agentId, role, required),
+    "a plan change (cycle-skip, insert-before, rename, non-fix append) is orchestrator work and is exceptional: it records a failure of the spec or of its gap analysis",
+    "an agent already exercising a TDD role should hand the change to its orchestrator rather than re-declaring its own role",
+  ],
+  /** A plan change, or an abort, sent without its record. */
+  recordRequired: [
+    "send reason (why the filed plan changes), cause (spec-design | gap-analysis) and specRef (the spec commit or § that changed)",
+    "a plan grows only by FIX cycles: POST …/plans/<planId>/cycles {label, kind: \"fix\"} after a done VERIFY needs nothing more",
+    "any other change is exceptional — use it only for a spec change the user approved mid-implementation; it is recorded as a process failure",
+  ],
+  /** An abort sent without its record. */
+  abortRecordRequired: [
+    "send reason (why the plan no longer fits), cause (spec-design | gap-analysis) and specRef (the spec commit or § that changed) beside {userApproved: true}",
+    "an abort is a re-plan: its pending cycles are skipped and show the abort's reason; re-file the CR's plan afterwards",
+  ],
+  /** A record whose cause is outside the two the rule names. */
+  invalidCause: [
+    "cause must be one of: spec-design | gap-analysis — the part of the process the change shows fell short",
+  ],
+  /** An unrecorded FIX append before the plan's VERIFY cycle is done. */
+  verifyNotDone: [
+    "a FIX cycle follows a done VERIFY whose findings need fixes — finish the plan's VERIFY cycle first",
+    "GET …/plans?cr=<cr> — inspect the plan's VERIFY cycle and its status",
+  ],
+  /** A skip aimed at a cycle a run was filed against. */
+  runFiled: (cycleId: number): string[] => [
+    `a run is filed against cycle ${cycleId}, so it is not a planned cycle that never ran — end it done or failed instead`,
+  ],
+  /** A skip that would leave the plan with no cycle that is not skipped. */
+  lastUnskipped: (planId: number): string[] => [
+    `plan ${planId} must keep at least one cycle that is not skipped`,
+    `if the whole plan no longer fits the spec, abort it: POST …/plans/${planId}/abort {userApproved: true, reason, cause, specRef} — present the abort to the user first`,
   ],
 };
