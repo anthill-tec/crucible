@@ -297,6 +297,58 @@ function interceptBlinkTimer(): {
   };
 }
 
+/** The same 10s-blink-timer interception as `interceptBlinkTimer`, on a
+ *  virtual clock: `setTimeout(fn, 10_000)` is held against a virtual due
+ *  time, `clearTimeout` on a held handle drops it (a restarted blink cancels
+ *  its predecessor), and `advance(ms)` moves the clock and runs whatever is
+ *  due — never a real 10s sleep. Every other delay passes through. */
+function interceptBlinkClock(): {
+  advance: (ms: number) => void;
+  restore: () => void;
+} {
+  const originalSet = globalThis.setTimeout;
+  const originalClear = globalThis.clearTimeout;
+  let now = 0;
+  const held = new Map<object, { due: number; run: () => void }>();
+  (globalThis as unknown as { setTimeout: typeof setTimeout }).setTimeout = ((
+    fn: (...args: unknown[]) => void,
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    if (delay === 10_000) {
+      const handle = { heldBlinkTimer: true };
+      held.set(handle, { due: now + delay, run: () => fn(...args) });
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    }
+    return originalSet(fn as TimerHandler, delay as number | undefined, ...args);
+  }) as typeof setTimeout;
+  (globalThis as unknown as { clearTimeout: typeof clearTimeout }).clearTimeout = ((
+    handle?: unknown,
+  ) => {
+    if (typeof handle === "object" && handle !== null && held.has(handle)) {
+      held.delete(handle);
+      return;
+    }
+    originalClear(handle as Parameters<typeof clearTimeout>[0]);
+  }) as typeof clearTimeout;
+  return {
+    advance: (ms: number) => {
+      now += ms;
+      const due = [...held.entries()]
+        .filter(([, t]) => t.due <= now)
+        .sort(([, a], [, b]) => a.due - b.due);
+      for (const [handle, t] of due) {
+        held.delete(handle);
+        t.run();
+      }
+    },
+    restore: () => {
+      globalThis.setTimeout = originalSet;
+      globalThis.clearTimeout = originalClear;
+    },
+  };
+}
+
 // ── §S1 AC1 — a loaded suite's heat cell (green, and red) ──────────────────
 
 describe("§S1 AC1 — a loaded suite's heat cell scrolls + blinks its leaf row", () => {
@@ -629,6 +681,72 @@ describe("§S1 G2/AC5 — the blink survives a suite-window-changing rebuild, an
     } finally {
       restoreScroll();
       restoreTimer();
+    }
+  });
+
+  test("a second click on the same heat cell restarts the 10s blink: clicked at 0s and again at 5s, the row still blinks at 12s and clears only once 10s have passed since the second click", async () => {
+    const now = Date.now();
+    const eventId = "evt-heat-ac5-restart";
+    const children: LeafFixture[] = [];
+    for (let i = 0; i < 20; i++) {
+      children.push(
+        i === 5
+          ? { name: "restart-target", status: "pass", duration_ms: 5 }
+          : { name: `SuiteRestart-filler-${i}`, status: "pass", duration_ms: 5 },
+      );
+    }
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-heat-ac5-restart",
+      agentId: "heat-ac5-restart-agent",
+      kind: "test",
+      tier: "regression",
+      codec: "junit",
+      timestamp: now,
+      tree: [{ name: "SuiteRestart", status: "pass", children }],
+    };
+    await mountAtRunCold(eventId, detail, briefOf(detail));
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    const suiteRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteRestart");
+    expect(suiteRow).toBeDefined();
+    suiteRow!.click();
+    await settle();
+
+    const blinking = (): boolean => {
+      const row = overlay.querySelector('[data-leaf-key="SuiteRestart::restart-target"]');
+      expect(row).not.toBeNull();
+      return (row as HTMLElement).classList.contains("app-locate-blink");
+    };
+    const clickCell = async (): Promise<void> => {
+      const cell = overlay.querySelector('[title="SuiteRestart › restart-target"]') as HTMLElement | null;
+      expect(cell).not.toBeNull();
+      cell!.click();
+      await settle();
+    };
+
+    const { restore: restoreScroll } = interceptScrollIntoView();
+    const { advance, restore: restoreClock } = interceptBlinkClock();
+    try {
+      await clickCell(); // t = 0s
+      expect(blinking()).toBe(true);
+
+      advance(5_000); // t = 5s
+      await settle();
+      expect(blinking()).toBe(true);
+      await clickCell(); // t = 5s — the second click restarts the 10s blink
+      expect(blinking()).toBe(true);
+
+      advance(7_000); // t = 12s: past the FIRST click's 10s, 7s into the second's
+      await settle();
+      expect(blinking()).toBe(true);
+
+      advance(3_001); // t = 15.001s: past 10s from the second click
+      await settle();
+      expect(blinking()).toBe(false);
+    } finally {
+      restoreScroll();
+      restoreClock();
     }
   });
 });

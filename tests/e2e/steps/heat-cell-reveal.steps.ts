@@ -125,18 +125,25 @@ Step(
     const pane = overlay.getByTestId("pane-scroll");
     const row = overlay.getByTestId("leaf-row").filter({ hasText: leafName });
     await expect(row).toHaveCount(1);
-    const paneBox = await pane.boundingBox();
-    const rowBox = await row.boundingBox();
-    if (paneBox === null || rowBox === null) {
-      throw new Error(
-        `heat-cell-reveal: could not measure the pane-scroll/leaf-row geometry for "${leafName}"`,
-      );
-    }
-    // §S1 — "the target's top sits just below the pinned header": the row's
-    // own box must land INSIDE the pane's visible viewport, not merely
-    // exist somewhere in the (possibly much taller) scrolled content.
-    expect(rowBox.y).toBeGreaterThanOrEqual(paneBox.y - 1);
-    expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(paneBox.y + paneBox.height + 1);
+    // The reveal is async (scrollWhenSettled waits for the pane to settle,
+    // and a window-moving scroll rebuilds the body), so measure+assert under
+    // retry, as the sibling pane-mount / dual-axis-scroll geometry steps do.
+    await expect(async () => {
+      const [paneBox, rowBox] = await Promise.all([pane.boundingBox(), row.boundingBox()]);
+      expect(
+        paneBox,
+        `heat-cell-reveal: could not measure the pane-scroll geometry for "${leafName}"`,
+      ).not.toBeNull();
+      expect(
+        rowBox,
+        `heat-cell-reveal: could not measure the leaf-row geometry for "${leafName}"`,
+      ).not.toBeNull();
+      // §S1 — "the target's top sits just below the pinned header": the row's
+      // own box must land INSIDE the pane's visible viewport, not merely
+      // exist somewhere in the (possibly much taller) scrolled content.
+      expect(rowBox!.y).toBeGreaterThanOrEqual(paneBox!.y - 1);
+      expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(paneBox!.y + paneBox!.height + 1);
+    }).toPass({ timeout: 5_000 });
   },
 );
 
