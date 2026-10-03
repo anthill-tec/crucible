@@ -235,7 +235,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
       kind: "red-green",
       reason: "the spec grew a new slice mid-cycle",
       cause: "gap-analysis",
-      specRef: "CR-CRU-165 §G1",
+      specRef: "the spec's gap analysis, §G1",
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { ok: true; id: number; warnings?: Array<{ message: string }> };
@@ -248,7 +248,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
     expect(added.kind).toBe("red-green");
     expect(added.reason).toBe("the spec grew a new slice mid-cycle");
     expect(added.cause).toBe("gap-analysis");
-    expect(added.specRef).toBe("CR-CRU-165 §G1");
+    expect(added.specRef).toBe("the spec's gap analysis, §G1");
   });
 
   test("non-fix kind with all three fields but an invalid `cause` value: refused (400), naming cause; nothing appended", async () => {

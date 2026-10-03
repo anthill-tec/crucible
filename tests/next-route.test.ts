@@ -20,7 +20,7 @@
 // tests/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES).
 import { describe, test, expect, afterEach } from "bun:test";
 import { startServer, type ServerHandle } from "../src/server.ts";
-import { SCHEMA_VERSION } from "../src/store.ts";
+import { MIGRATIONS, SCHEMA_VERSION } from "../src/store.ts";
 
 interface AnyBody {
   ok: boolean;
@@ -278,8 +278,9 @@ describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
   // AC3 — derived and read-only: no schema change, no cached answer
   // ═══════════════════════════════════════════════════════════════════════
 
-  test("AC3 — SCHEMA_VERSION is unchanged (13) — the route adds no column, no migration", () => {
-    expect(SCHEMA_VERSION).toBe(13);
+  test("AC3 — the route adds no column, no migration: no migration step declares CR-098", () => {
+    expect(MIGRATIONS.length).toBe(SCHEMA_VERSION);
+    expect(MIGRATIONS.filter((step) => /CR-(CRU-)?098/.test(step.description ?? ""))).toEqual([]);
   });
 
   test("AC3 — two reads of an unchanged board are byte-for-byte identical", async () => {

@@ -294,7 +294,7 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
           status: "skipped",
           reason: "the legacy spec no longer applies",
           cause: "spec-design",
-          specRef: "CR-CRU-165 §G1",
+          specRef: "the spec's gap analysis, §G1",
           agentId: "migrated-orch",
         }),
       },
@@ -308,6 +308,6 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
     expect(cycle!.status).toBe("skipped");
     expect(cycle!.reason).toBe("the legacy spec no longer applies");
     expect(cycle!.cause).toBe("spec-design");
-    expect(cycle!.specRef).toBe("CR-CRU-165 §G1");
+    expect(cycle!.specRef).toBe("the spec's gap analysis, §G1");
   });
 });

@@ -499,6 +499,9 @@ describe("§S2b — POST .../plans/<planId>/abort refuses an unregistered caller
 
     const res = await postJson(plansPath(key, `/${planId}/abort`), {
       userApproved: true,
+      reason: "the plan no longer fits the spec",
+      cause: "spec-design",
+      specRef: "the spec's design section",
       agentId: "orch-abort-1",
     });
     expect(res.status).toBe(200);

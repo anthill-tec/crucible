@@ -208,9 +208,12 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       });
       const plan = (await filed.json()) as PlanFileResponse;
       const existingIds = new Set(plan.cycles.map((c) => c.id));
+      const firstId = plan.cycles[0]!.id;
       const verifyId = plan.cycles[1]!.id;
-      await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "active" });
-      await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "done" });
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${firstId}`), { status: "active" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${firstId}`), { status: "done" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "active" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "done" })).status).toBe(200);
 
       const appended = await postJson(plansPath(key, `/${plan.planId}/cycles`), { label: "c", kind: "fix" });
       expect([200, 201]).toContain(appended.status);
