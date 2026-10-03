@@ -170,6 +170,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-162](CR-CRU-162-a-gate-decision-is-recorded.md) | a gate decision is recorded, not lost in the tool's logs | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-163](CR-CRU-163-a-project-declares-the-gate-steps-it-never-runs.md) | a project declares which gate steps it never runs | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-164](CR-CRU-164-a-releases-verification-runs-are-filed-under-it.md) | a release's verification runs are filed under the release | feature | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-165](CR-CRU-165-a-plan-grows-only-by-fix-cycles-and-a-skip-is-a-recorded-failure.md) | a plan grows only by FIX cycles, and a skipped cycle is a recorded failure | feature | PENDING | — | 8 (0.4.0) |
 
 ## Deferred — post-0.2.0
 
