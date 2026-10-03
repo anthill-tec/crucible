@@ -171,10 +171,16 @@ sandesh_notify_start(address="Mainline - Crucible", project="Crucible")
 sandesh_notify_status(project="Crucible")                          # running: true
 ```
 
-On a wake: `sandesh_fetch`, act, and check `sandesh_notify_status`. If the watcher is not running
-after the wake, start it again in the same turn (the relaunch-on-exit rule still holds; only the
-mechanism changed). Whether the extension re-arms itself after a wake is to be measured at the first
-bootstrap that uses it, and this line corrected with the answer.
+On a wake: `sandesh_fetch` and act. The extension re-arms itself after mail, timeouts and dedup
+(sandesh-pi 0.4.0 `WakeSupervisor`). It stops on an error or a signal, and posts a notice when it
+does. On that notice, start it again in the same turn; the relaunch-on-exit rule still holds.
+
+**Known defect, sandesh-pi 0.4.0 (reproduced 2026-10-03, reported to Sandesh as #1416):** launching
+ANY sub-agent silently stops this session's watcher (`running:false, lastExit:null`, roster
+`listening:false`, no notice). Each registration's `resetExtensionState()` stops the module-level
+supervisor. **Workaround:** call `sandesh_notify_start(address="Mainline - Crucible",
+project="Crucible")` right after every sub-agent returns. Drop this paragraph when Sandesh ships the
+fix.
 
 Launch it when anyone can address this project: a Track on the roster, or a cross-project peer with
 `CROSS-PROJECT ✓` (today: ModelB, Sandesh). Measured 2026-09-16: a single-participant roster does NOT
