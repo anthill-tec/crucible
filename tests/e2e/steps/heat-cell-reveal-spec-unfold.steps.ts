@@ -134,3 +134,18 @@ Step("the feature {string} is open", async ({ page }, title: string) => {
 Step("the feature {string} is folded", async ({ page }, title: string) => {
   await expect(featureGroupOf(page, title).getByTestId("feature-toggle")).toHaveText("▸");
 });
+
+// ── Then — the target leaf row's own failure box ────────────────────────────
+// A spec run shows every failing step's message box inside its own row, so
+// another open failing feature's box may come first in the overlay: the
+// assertion is scoped to the target leaf row.
+
+Step(
+  "the leaf row for {string} has a failure box containing {string}",
+  async ({ page }, leafName: string, text: string) => {
+    const row = overlayOf(page).getByTestId("leaf-row").filter({ hasText: leafName });
+    const failureBox = row.getByTestId("failure-box");
+    await expect(failureBox).toBeVisible();
+    await expect(failureBox).toContainText(text);
+  },
+);

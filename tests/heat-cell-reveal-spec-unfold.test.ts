@@ -375,7 +375,7 @@ describe("§S1 AC3/G5 — a loaded scenario's heat cell, inside a feature refold
     expect(row).not.toBeNull();
     expect((row as HTMLElement).classList.contains("app-locate-blink")).toBe(true);
 
-    const failureBox = overlay().querySelector('[data-testid="failure-box"]');
+    const failureBox = (row as HTMLElement).querySelector('[data-testid="failure-box"]');
     expect(failureBox).not.toBeNull();
     expect(failureBox!.textContent ?? "").toContain("refold-then-breaks-failure");
 
@@ -522,7 +522,7 @@ describe("§S1 AC3/G5 — a red synthetic cell of a scenario still loading (suit
     expect(row).not.toBeNull();
     expect((row as HTMLElement).classList.contains("app-locate-blink")).toBe(true);
 
-    const failureBox = overlay().querySelector('[data-testid="failure-box"]');
+    const failureBox = (row as HTMLElement).querySelector('[data-testid="failure-box"]');
     expect(failureBox).not.toBeNull();
     expect(failureBox!.textContent ?? "").toContain("red-locked-then-failure");
 

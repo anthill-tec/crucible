@@ -122,7 +122,7 @@ Feature: CR-CRU-159 C1 a heat-strip click brings its test into view — plain ru
     And I click the heat cell titled "Refold Target Feature › mixed outcome scenario › spec-refold-red-then"
     Then the leaf row for "spec-refold-red-then" is scrolled within the pane-scroll's visible area
     And the leaf row for "spec-refold-red-then" carries the locate-blink class
-    And a failure box is visible and contains "spec-refold-red-then-failure"
+    And the leaf row for "spec-refold-red-then" has a failure box containing "spec-refold-red-then-failure"
     And the feature "Refold Target Feature" is open
     And the feature "Kept Open Feature" is open
 
