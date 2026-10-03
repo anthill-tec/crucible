@@ -162,6 +162,10 @@ function makeLegacyStore(dir: string): string {
        VALUES (?, 1, 9001, 'legacy pending', 'fix', 'pending', 1)`,
     ).run(key);
     db.query(
+      `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status, seq)
+       VALUES (?, 3, 9001, 'legacy pending 2', 'fix', 'pending', 2)`,
+    ).run(key);
+    db.query(
       `INSERT INTO plans (plan_id, project_key, cr, status) VALUES (9002, ?, 'CR-LEGACY-ABORTED', 'aborted')`,
     ).run(key);
     db.query(
