@@ -1054,7 +1054,13 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
             f"{kinds!r}")
 
         refused = self._cycle_add("appended smoke", PLAN_FLAG, str(plan_id),
-                                  KIND_FLAG, "smoke")
+                                  KIND_FLAG, "smoke",
+                                  # carries the change record so it clears
+                                  # the client's local guard and reaches the
+                                  # server's own kind check
+                                  "--reason", "round-trip coverage for smoke",
+                                  "--cause", "gap-analysis",
+                                  "--spec-ref", "design note \u00a7S4")
         self.assertNotEqual(
             refused.returncode, 0,
             f"an unrecognised kind is refused by the server's existing "

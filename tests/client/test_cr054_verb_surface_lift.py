@@ -456,7 +456,9 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_post", side_effect=fake_post), \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module.cmd_abort(_make_args(
-                        project_dir=self.tmpdir, cr=None, user_approved=False))
+                        project_dir=self.tmpdir, cr=None, user_approved=False,
+                        reason="fixture abort", cause="gap-analysis",
+                        spec_ref="fixture S2b"))
                 self.assertEqual(
                     rc, 1,
                     f"{client}-crucible.py's cmd_abort must still surface a "
@@ -464,7 +466,9 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 path, payload = calls[0]
                 self.assertEqual(path, "/api/v2/projects/pk/plans/4/abort")
                 self.assertEqual(
-                    payload, {"userApproved": False, "agentId": "A1"},
+                    payload, {"userApproved": False, "agentId": "A1",
+                              "reason": "fixture abort", "cause": "gap-analysis",
+                              "specRef": "fixture S2b"},
                     f"{client}-crucible.py's cmd_abort must still send "
                     f"userApproved=False by default (never a silent no-op "
                     f"bypass of the server's discouraging 409)")

@@ -548,7 +548,7 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["abort", "--agent", "test-agent", "--project-dir", self.tmpdir],
+            ["abort", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": False, "error": "409 userApproved required"})
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -556,7 +556,7 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
         self.assertIs(axi.get("ok"), False)
 
         code2, out2, _err2, _p2, _g2, _pa2 = self._run(
-            ["abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir],
+            ["abort", "--user-approved", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": True})
         self.assertEqual(code2, 0, f"stdout={out2!r}")
         axi2 = self._decode_axi(out2)
