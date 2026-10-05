@@ -1108,6 +1108,12 @@ body {
 .app-gate-decision-approve { color: var(--pass); }
 .app-gate-decision-skip { color: var(--ink-faint); opacity: 0.55; }
 .app-gate-decision-carried { color: var(--ink); }
+/* F21 panel d — a sealed gate's one-line decision summary, dim meta text
+   beneath the gate card's seal and beneath a History wave's header (indented
+   under it); a click opens the gate's drill-in. */
+.app-decision-summary { cursor: pointer; }
+.app-gate-decision-summary { margin-top: 2px; }
+.app-wave-decision-summary { margin: 2px 0 4px 12px; }
 .app-milestone-entry {
   color: var(--ink-faint);
   font-size: 10px;

@@ -1092,6 +1092,50 @@ export function workflowLens({ plans, events }) {
 }
 
 /**
+ * The one sealed-gate decision-summary line, worded identically wherever it
+ * is shown (the Runs-timeline gate card and the History wave row). Counted by
+ * the server off the run's decision records and carried on the events-list
+ * brief as `decisionSummary`; absent (no recorded decisions) → null, so no
+ * line renders. `1 decision` is singular. `fixed <f>` always appears (even
+ * `fixed 0`, so the line is never a bare count); `+ <a> added`,
+ * `declined <d>` and the approved-with-a-reason clause appear only when
+ * non-zero.
+ */
+export function gateDecisionSummaryText(summary) {
+  if (summary === undefined || summary === null) return null;
+  const decisions = `${summary.decisions} ${summary.decisions === 1 ? "decision" : "decisions"}`;
+  const added = summary.added > 0 ? ` + ${summary.added} added` : "";
+  const declined = summary.declined > 0 ? ` · declined ${summary.declined}` : "";
+  const reasoned =
+    summary.approvedWithReason > 0
+      ? ` · ${summary.approvedWithReason} approved with a reason`
+      : "";
+  return `${decisions} · fixed ${summary.fixed}${added}${declined}${reasoned}`;
+}
+
+/**
+ * The gate a History wave row summarises: the wave's LATEST sealed gate, the
+ * same "latest wins" rule the Workflow gate widget (`boundaryGate`) applies —
+ * a gate marked `gate.inFlight === true` is never a candidate. null when the
+ * wave carries no sealed gate.
+ */
+export function waveLatestSealedGate(events, wave) {
+  return (events ?? [])
+    .filter(
+      (e) =>
+        e.kind === "gate" &&
+        e.gate?.inFlight !== true &&
+        e.context?.wave !== undefined &&
+        e.context?.wave !== null &&
+        String(e.context.wave) === String(wave),
+    )
+    .reduce(
+      (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
+      null,
+    );
+}
+
+/**
  * CR-CRU-078 §S4 (superseding CR-CRU-077 §S4/AC6) — the terse status a CR
  * states on its flowchart NODE, keyed by the four derived `QueueStatus`
  * values. Each is derivable from the status value ALONE.
@@ -1738,6 +1782,8 @@ if (typeof window !== "undefined") {
     planCycleIndex,
     timelineRows,
     workflowLens,
+    gateDecisionSummaryText,
+    waveLatestSealedGate,
     drillinDefaultMode,
     agentRole,
     foldSuites,

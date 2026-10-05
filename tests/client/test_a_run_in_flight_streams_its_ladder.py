@@ -207,15 +207,15 @@ _SHORT_IN_FLIGHT_SNAPSHOT = (
 # The nine rows as the GATE must carry them: every name present, every status
 # mapped, `pending` REPRESENTED rather than dropped or inferred green.
 _EXPECTED_INTERIM_STEPS = [
-    {"name": "intent", "status": "passed"},
-    {"name": "rebase", "status": "passed"},
-    {"name": "review", "status": "running"},
-    {"name": "test", "status": "pending"},
-    {"name": "document", "status": "pending"},
-    {"name": "lint", "status": "pending"},
-    {"name": "push", "status": "pending"},
-    {"name": "pr", "status": "pending"},
-    {"name": "ci", "status": "pending"},
+    {"name": "intent", "status": "passed", "findings": 0},
+    {"name": "rebase", "status": "passed", "findings": 0},
+    {"name": "review", "status": "running", "findings": 0},
+    {"name": "test", "status": "pending", "findings": 0},
+    {"name": "document", "status": "pending", "findings": 0},
+    {"name": "lint", "status": "pending", "findings": 0},
+    {"name": "push", "status": "pending", "findings": 0},
+    {"name": "pr", "status": "pending", "findings": 0},
+    {"name": "ci", "status": "pending", "findings": 0},
 ]
 
 
