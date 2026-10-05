@@ -320,9 +320,14 @@ class CycleAddNamesThePlansCrWhenPlanAloneIsGivenTest(_CycleAddTestBase):
                 def fake_post(path, payload):
                     return {"ok": True, "changed": True, "id": 5521,
                             "label": payload.get("label"), "kind": "fix",
-                            "status": "pending"}
+                            "status": "pending",
+                            "cr": "the-plans-owning-project"}
 
-                with mock.patch.object(module, "_get", return_value=plans), \
+                gets = []
+                with mock.patch.object(
+                        module, "_get",
+                        side_effect=lambda *a, _c=gets, _p=plans, **k:
+                        (_c.append(a), _p)[1]), \
                      mock.patch.object(module, "_post", side_effect=fake_post):
                     code, out, err = _run_main(module, [
                         VERB, "the fix", "--plan", "plan-166", "--kind", "fix",
@@ -330,6 +335,11 @@ class CycleAddNamesThePlansCrWhenPlanAloneIsGivenTest(_CycleAddTestBase):
                     ])
 
                 self.assertEqual(code, 0, f"[{client}] stdout={out!r} stderr={err!r}")
+                self.assertEqual(
+                    gets, [],
+                    f"[{client}] N1 -- the cr comes from the append "
+                    f"response, never a board read (CR-CRU-124's --plan "
+                    f"alone reads no board); got {gets!r}")
                 axi = self._decode(module, out)
                 self.assertEqual(
                     (axi.get("context") or {}).get("cr"),
