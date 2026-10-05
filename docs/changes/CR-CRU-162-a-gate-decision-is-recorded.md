@@ -73,14 +73,14 @@ order, beneath the step rows, as drawn in frame F21 (to be approved before RED).
 
 ## Acceptance criteria
 
-- [ ] `gate-respond` passes its arguments to `axi respond` unchanged, asserted on the argv.
-- [ ] Each call records one gate-decision event carrying the action and the exact finding ids selected.
-- [ ] After a respond, the client re-attaches and the run's later interim and final events are recorded.
-- [ ] The gate drill-in lists the decisions, in a real browser.
-- [ ] A failed `axi respond` is reported, and no decision event is recorded for it.
-- [ ] **AC6** — gate events carry the no-mistakes run id, and the gate read returns that run's
+- [x] `gate-respond` passes its arguments to `axi respond` unchanged, asserted on the argv.
+- [x] Each call records one gate-decision event carrying the action and the exact finding ids selected.
+- [x] After a respond, the client re-attaches and the run's later interim and final events are recorded.
+- [x] The gate drill-in lists the decisions, in a real browser.
+- [x] A failed `axi respond` is reported, and no decision event is recorded for it.
+- [x] **AC6** — gate events carry the no-mistakes run id, and the gate read returns that run's
       decisions; the store migration (v15) adds the decision table and back-fills nothing.
-- [ ] **AC7** — `gate-respond` behaves the same in all five clients, offers no `--yes`, and shares
+- [x] **AC7** — `gate-respond` behaves the same in all five clients, offers no `--yes`, and shares
       one runner with `gate-run` (no copied loop).
 
 ## Cycles
@@ -88,5 +88,6 @@ order, beneath the step rows, as drawn in frame F21 (to be approved before RED).
 C1 server: the decision record (table, v15 migration, route, read), `runId` on gate events (AC2
 server half, AC6). RED + GREEN.
 C2 clients: the shared runner, `gate-respond` in five clients (AC1, AC2, AC3, AC5, AC7). RED + GREEN.
-C3 board: the decision rows in the drill-in and widget, per F21 (AC4). RED + GREEN.
+C3 board: the decision rows in the drill-in and widget, per F21 (AC4). F21 panel d (the history
+summary line) is CR-CRU-166, by the user's ruling 2026-10-05. RED + GREEN.
 C4 VERIFY.

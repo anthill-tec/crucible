@@ -2582,7 +2582,7 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // with it: tests/help-surface-order-independence.test.ts collects THIS file in
 // its child `bun test`, fired for the right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 810 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
   clients: { exts: [".py"], develop: 601, head: 884 },
 };

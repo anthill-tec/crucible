@@ -5460,8 +5460,10 @@
     // CR-CRU-013 §S4 — shared no-mistakes gate rendering body (ONE form,
     // reused by both the §S3 timeline drill-in GateBody AND the Workflow-tab
     // contextual widget below): outcome banner → one step-row per submitted
-    // step → one fix-row per submitted fix → the push/PR line.
-    const gateBodyContent = (g) => {
+    // step → one fix-row per submitted fix → the push/PR line → (§S2, frame
+    // F21) the run's recorded decisions, beneath the step rows, in posting
+    // order — absent when the run recorded none.
+    const gateBodyContent = (g, decisions) => {
       const steps = g.steps ?? [];
       const fixes = g.fixes ?? [];
       const push = g.push ?? {};
@@ -5504,7 +5506,69 @@
             g.pr ? ` · ${g.pr}` : ""
           }`,
         ),
+        GateDecisions(decisions),
       ];
+    };
+
+    // §S2 (F21 b) — what one decision carried: the finding ids it selected,
+    // an added finding, the instructions or the reason. Only the parts the
+    // decision actually carries are shown.
+    const gateDecisionCarried = (d) => {
+      const parts = [];
+      if (Array.isArray(d.findings) && d.findings.length > 0) {
+        parts.push(`findings ${d.findings.join(", ")}`);
+      }
+      if (d.addedFinding !== undefined && d.addedFinding !== null) {
+        const added = d.addedFinding.description ?? d.addedFinding.id ?? "";
+        parts.push(`added 1 finding: “${added}”`);
+      }
+      if (d.instructions !== undefined && d.instructions !== "") {
+        parts.push(`“${d.instructions}”`);
+      }
+      if (d.reason !== undefined && d.reason !== "") {
+        parts.push(`reason: “${d.reason}”`);
+      }
+      return parts.join(" · ");
+    };
+
+    // §S2 (F21 a–c) — the DECISIONS section: one row per decision, kept in
+    // the order the server answered (posting order, never re-sorted): time ·
+    // agent · step · action · what it carried. The time is the clock time
+    // then the relative age (`14:02 · 3m ago`), the clock dated when the
+    // decision is not from today. The action's class carries
+    // the fix (heat) / approve (green) / skip (dim) distinction.
+    const GateDecisions = (decisions) => {
+      if (!Array.isArray(decisions) || decisions.length === 0) return null;
+      const now = Date.now();
+      return div(
+        { "data-testid": "gate-decisions-section", class: "app-gate-decisions" },
+        div({ class: "app-pane-section-title" }, "Decisions"),
+        decisions.map((d) =>
+          div(
+            { "data-testid": "gate-decision-row", class: "app-gate-decision-row app-tree-line" },
+            span(
+              { class: "app-gate-decision-time" },
+              `${L.clockTime(d.timestamp, now)} · ${L.relativeTime(d.timestamp, now)}`,
+            ),
+            " · ",
+            span({ class: "app-agent-id" }, d.agentId ?? "an unknown agent"),
+            d.step !== undefined ? " · " : null,
+            d.step !== undefined ? span({ class: "app-gate-decision-step" }, d.step) : null,
+            " · ",
+            span(
+              {
+                "data-testid": "gate-decision-action",
+                class: `app-gate-decision-action app-gate-decision-${d.action}`,
+              },
+              d.action,
+            ),
+            gateDecisionCarried(d) !== "" ? " · " : null,
+            gateDecisionCarried(d) !== ""
+              ? span({ class: "app-gate-decision-carried" }, gateDecisionCarried(d))
+              : null,
+          ),
+        ),
+      );
     };
 
     // §S4 — scoped gate events for the routed project (kind:"gate" only).
@@ -5540,12 +5604,41 @@
     // testid the removed CR-011 placeholder used (in place, not a new name),
     // reusing the shared gate body so its outcome banner + step ladder carry
     // the identical `gate-outcome-banner` / `gate-step-row` testids.
-    const GateWidget = (event) =>
-      div(
+    // §S2 — the brief events list the boundary gate comes from carries no
+    // `decisions`, so the widget reads them off the gate's single-event
+    // detail read. WorkflowPrimary re-renders on every poll, so that read is
+    // held per gate id and issued once per mount, never once per render.
+    const GateWidget = (event) => {
+      const decisions = gateWidgetDecisions(event.id);
+      return div(
         { "data-testid": "gate-pane", class: "app-gate-pane" },
         div({ class: "app-pane-section-title" }, "Gate"),
-        div({ class: "app-drillin-gate" }, gateBodyContent(event.gate ?? {})),
+        () =>
+          div(
+            { class: "app-drillin-gate" },
+            gateBodyContent(event.gate ?? {}, decisions.val),
+          ),
       );
+    };
+
+    const gateWidgetDecisionsById = new Map();
+    const gateWidgetDecisions = (eventId) => {
+      const held = gateWidgetDecisionsById.get(eventId);
+      if (held !== undefined) return held;
+      const decisions = van.state(undefined);
+      gateWidgetDecisionsById.set(eventId, decisions);
+      (async () => {
+        try {
+          const body = await getJson(`/api/v2/events/${encodeURIComponent(eventId)}`);
+          const ev = body !== null && typeof body === "object" ? body.event : undefined;
+          decisions.val = Array.isArray(ev?.decisions) ? ev.decisions : [];
+        } catch {
+          // Unreachable: the widget keeps its step ladder and shows no
+          // decisions — the drill-in's own detail read still lists them.
+        }
+      })();
+      return decisions;
+    };
 
     // §S4 — exactly one of the live plan or the gate widget, never both.
     const WorkflowPrimary = () => {
@@ -6927,7 +7020,7 @@
       // push/PR line. A gate event never falls through to TestBody's
       // suite/leaf anatomy.
       const GateBody = (d) =>
-        div({ class: "app-drillin-gate" }, gateBodyContent(d.gate ?? {}));
+        div({ class: "app-drillin-gate" }, gateBodyContent(d.gate ?? {}, d.decisions));
 
       // CR-CRU-034 §S1 — virtualization re-sourced off the bounded pane
       // scroller. The retired per-suite `.app-tree-scroll` no longer owns a

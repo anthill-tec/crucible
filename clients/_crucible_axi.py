@@ -6024,6 +6024,52 @@ def add_gate_release_arg(p):
     p.add_argument("--release", help=GATE_RELEASE_HELP)
 
 
+def add_gate_respond_verb(sub, func, *, parents=(), add_args=()):
+    """§S1 — register the ONE `gate-respond` subparser on `sub`.
+
+    The subparser BODY lives here, once, so five clients cannot fork the flag
+    surface of one verb — the `add_next_verb` / `add_cr_depends_verb` seam:
+    `parents`/`add_args` carry each client's own `--agent` and project-dir
+    conventions, and nothing else is per-client.
+
+    The surface is no-mistakes' own `axi respond` flags, forwarded VERBATIM,
+    with ONE deliberate absence (G3): the flag that lets no-mistakes resolve
+    LATER gates by itself is not offered, because a decision taken that way
+    would never reach the board, which is the loss this verb exists to close.
+    `--action` is the only required flag; its value is passed through, never
+    validated here, so the tool's own refusal is what a caller sees."""
+    rp = sub.add_parser(
+        "gate-respond", parents=list(parents),
+        help="axi PROXY: send a gate decision via `no-mistakes axi respond`, "
+             "record it on the board keyed by the run it acted on, and keep "
+             "posting the run's interim + final gates as gate-run does.")
+    rp.add_argument("--action", required=True, metavar="approve|fix|skip",
+                    help="The decision: approve, fix or skip. REQUIRED; "
+                         "forwarded verbatim to `axi respond --action`.")
+    rp.add_argument("--findings", metavar="ID,...",
+                    help="Comma-separated finding ids the decision selects "
+                         "(forwarded verbatim; recorded as the id list).")
+    rp.add_argument("--add-finding", metavar="JSON",
+                    help="ONE finding to add, as one JSON object (forwarded "
+                         "verbatim; recorded as the parsed object). Not "
+                         "repeatable.")
+    rp.add_argument("--instructions",
+                    help="Instructions for the fix (forwarded verbatim).")
+    rp.add_argument("--reason",
+                    help="The reason kept with the decision, e.g. an exception "
+                         "reason for a Test approval (forwarded verbatim).")
+    rp.add_argument("--step",
+                    help="The step the decision answers (default: the step "
+                         "awaiting approval; forwarded verbatim).")
+    rp.add_argument("--wait", metavar="DURATION",
+                    help="How long `axi respond` waits for the next gate, "
+                         "CI-ready point or outcome (no-mistakes' default when "
+                         "omitted; forwarded verbatim). A decision the tool "
+                         "accepted is recorded even when the wait elapses.")
+    for adder in add_args:
+        adder(rp)
+    rp.set_defaults(func=func)
+
 def cmd_gate_report(args, project_dir, ops):
     """§S8 — report a single already-run gate (flags path). Emits the §S1
     envelope plus the interactive line on stderr, and ALWAYS raises the
@@ -6225,7 +6271,8 @@ def gate_run_result_fields(outcome, resolved, release, posted_interim, held,
     }
 
 
-def unsealed_run_report(exit_code, resolved, detail, held, posted_interim):
+def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
+                        verb="gate-run", axi_verb="axi run"):
     """§S3/CR-CRU-117 §S2 — the caller-facing report for an exit that SEALED
     nothing: the stderr lines and the legacy one-liner, built from ONE list of
     facts so the two channels cannot drift apart.
@@ -6233,8 +6280,12 @@ def unsealed_run_report(exit_code, resolved, detail, held, posted_interim):
     The facts, in order: what was not sealed and why; that an in-flight gate is
     already on the board, when the poll loop put one there; the run's OWN error,
     which is what answers "did this run terminate?" and is already in hand; and
-    the move that resumes a held run."""
-    said = ("the run is still in flight — `axi run` resolved no outcome"
+    the move that resumes a held run.
+
+    `verb` and `axi_verb` name the proxy verb and the no-mistakes call it drove
+    (`gate-run` over `axi run`, `gate-respond` over `axi respond`), so the one
+    report serves every verb `drive_axi_run` runs."""
+    said = (f"the run is still in flight — `{axi_verb}` resolved no outcome"
             if held else
             f"the run resolved {resolved!r}, which is in no pass family "
             f"this client knows, so it is not sealed")
@@ -6245,8 +6296,8 @@ def unsealed_run_report(exit_code, resolved, detail, held, posted_interim):
         rest.append(f"the run said: {detail}")
     if held:
         rest.append(AXI_REATTACH_HELP)
-    lines = [f"gate-run: NOT SEALED: {said}"] + [f"gate-run: {r}" for r in rest]
-    legacy = (f"gate-run: ok=False sealed=nothing exit={exit_code} — "
+    lines = [f"{verb}: NOT SEALED: {said}"] + [f"{verb}: {r}" for r in rest]
+    legacy = (f"{verb}: ok=False sealed=nothing exit={exit_code} — "
               + "; ".join([said] + rest))
     return lines, legacy
 
@@ -6267,7 +6318,6 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
 
     intent = args.intent
     agent_id = ops.agent_id(args)
-    context = fleet_context()
     release = getattr(args, "release", None)
 
     # §S1 -- an explicit `--skip` replaces the project's declared `[gate] skip`
@@ -6297,13 +6347,42 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     elif skip:
         run_argv += ["--skip", ",".join(skip)]
 
+    return drive_axi_run("gate-run", run_argv, intent, project_dir, agent_id,
+                         ops, release=release, skip=skip,
+                         skip_source=skip_source)
+
+
+def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
+                  release=None, skip=(), skip_source=ENVELOPE_TIER_NONE,
+                  on_final=None):
+    """G1 — the ONE launch/stream/seal body every axi PROXY verb runs.
+
+    `gate-run` drives `no-mistakes axi run` and `gate-respond` drives
+    `no-mistakes axi respond`; both then block until the run's next gate, a
+    CI-ready point or its outcome, so both are run drivers that differ only in
+    the argv they launch. Each verb builds its own `run_argv` (the tool path
+    first, then `axi <subcommand>` and its flags) and hands it here, where the
+    ladder is streamed (`stream_axi_ladder`), the axi detail relayed, the final
+    snapshot sealed or reported held (`gate_from_axi`, `unsealed_run_report`)
+    and the envelope emitted (`gate_run_result_fields`) — once, for both.
+
+    `on_final(decoded)` is the verb's own say over the final snapshot, asked
+    before anything is sealed — and asked with `None` when the tool produced no
+    parseable snapshot at all, which it must answer with a refusal. It answers
+    `(refusal, fields, ok)`: a non-None
+    `refusal` means the tool turned the call down, so this exit seals nothing
+    and reports that instead; `fields` are added to the envelope (and to the
+    legacy line, in order); `ok` False fails an exit that would otherwise
+    pass. With no `on_final`, the exit is exactly the seal-or-held one."""
+    axi_verb = " ".join(run_argv[1:3])
+    context = fleet_context()
     try:
         proc = subprocess.Popen(
             run_argv,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
     except OSError as e:
-        print(f"gate-run: ERROR: could not launch `no-mistakes axi run`: {e}",
+        print(f"{verb}: ERROR: could not launch `no-mistakes {axi_verb}`: {e}",
               file=sys.stderr)
         return 1
 
@@ -6312,8 +6391,8 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     # actually POSTED is remembered here, because the envelope below states
     # which gate this exit put on the board and the sealing decision cannot see
     # the loop.
-    posted_interim = stream_axi_ladder(proc, nm, intent, project_dir, agent_id,
-                                       context, ops)
+    posted_interim = stream_axi_ladder(proc, run_argv[0], intent, project_dir,
+                                       agent_id, context, ops)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout.
@@ -6323,8 +6402,33 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     final_snap = (out or "").strip()
     final_decoded = _decode_axi_snapshot(final_snap) if final_snap else None
     if not isinstance(final_decoded, dict):
-        print("gate-run: ERROR: `axi run` produced no parseable final snapshot",
+        print(f"{verb}: ERROR: `{axi_verb}` produced no parseable final snapshot",
               file=sys.stderr)
+        if on_final is None:
+            return 1
+        # A verb that judges the final answer judges an ABSENT one too, so its
+        # refusal reaches the envelope rather than stderr alone.
+        final_decoded = None
+
+    envelope_context = ops.context(project_dir, agent_id=agent_id)
+    refusal, extra_fields, extra_ok = (on_final(final_decoded)
+                                       if on_final is not None
+                                       else (None, {}, True))
+    if final_decoded is None and refusal is None:
+        # The contract above, held here rather than trusted: an absent
+        # snapshot is never sealed, whatever the hook answered.
+        refusal = f"`{axi_verb}` produced no parseable final snapshot"
+    extra_legacy = "".join(f" {k}={v}" for k, v in extra_fields.items())
+    if refusal is not None or final_decoded is None:
+        # The tool turned the call down: there is no run to seal, and the
+        # report says so rather than calling a refusal a held run.
+        print(f"{verb}: REFUSED: {refusal}", file=sys.stderr)
+        result_fields = gate_run_result_fields(None, None, release, posted_interim,
+                                               False, skip, skip_source)
+        result_fields.update(extra_fields)
+        ops.emit(verb, False, result_fields, envelope_context, [],
+                 f"{verb}: ok=False sealed=nothing exit={proc.returncode} — "
+                 f"{refusal}{extra_legacy}")
         return 1
 
     # Only the SEAL carries the release: a version-stamped gate is retention-
@@ -6340,7 +6444,7 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     result_fields = gate_run_result_fields(outcome, resolved, release,
                                            posted_interim, held,
                                            skip, skip_source)
-    envelope_context = ops.context(project_dir, agent_id=agent_id)
+    result_fields.update(extra_fields)
 
     if outcome is None:
         # §S3 — the run reached no terminus, so this exit SEALS nothing. Not
@@ -6355,21 +6459,162 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
         # this run terminate?", already in hand — and the move that resumes it.
         lines, legacy = unsealed_run_report(proc.returncode, resolved,
                                             final_decoded.get("error"),
-                                            held, posted_interim)
+                                            held, posted_interim,
+                                            verb=verb, axi_verb=axi_verb)
         for line in lines:
             print(line, file=sys.stderr)
-        ops.emit("gate-run", False, result_fields, envelope_context, [], legacy)
+        ops.emit(verb, False, result_fields, envelope_context, [],
+                 legacy + extra_legacy)
         return 1
 
     resp = ops.post_gate(project_dir, agent_id, final_gate, context or None,
                          release)
     ok = resp.get("ok", False)
-    overall = bool(ok and proc.returncode == 0)
-    legacy = (f"gate-run: ok={ok} outcome={outcome} "
+    overall = bool(ok and proc.returncode == 0 and extra_ok)
+    legacy = (f"{verb}: ok={ok} outcome={outcome} "
               f"exit={proc.returncode}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    ops.emit("gate-run", overall, result_fields, envelope_context, [], legacy)
+              + (f" error={resp.get('error')}" if resp.get("error") else "")
+              + extra_legacy)
+    ops.emit(verb, overall, result_fields, envelope_context, [], legacy)
     return 0 if overall else 1
+
+
+def gate_respond_argv(args):
+    """§S1 — the flags `gate-respond` hands `no-mistakes axi respond`: each
+    one the caller GAVE, VERBATIM and in the declared order, and nothing else.
+    No value is validated, split or re-encoded on its way to the tool (the
+    finding ids and the added finding are no-mistakes' own, and its refusal of
+    a bad one is relayed unchanged), no default is invented for an omitted
+    flag, and there is no auto-resolve flag at all (G3)."""
+    argv = ["--action", args.action]
+    for flag, value in (("--findings", args.findings),
+                        ("--add-finding", args.add_finding),
+                        ("--instructions", args.instructions),
+                        ("--reason", args.reason),
+                        ("--step", args.step),
+                        ("--wait", args.wait)):
+        if value is not None:
+            argv += [flag, value]
+    return argv
+
+
+def gate_decision_body(args):
+    """G4 — the `decision` object a respond records, minus the `runId` only
+    the run's own snapshot can supply.
+
+    The two values the tool takes as raw strings reach the board as data:
+    `--findings` as the LIST of finding ids it selected, `--add-finding` as the
+    ONE JSON object it names. Raises `ValueError` when `--add-finding` is not
+    one JSON object — before no-mistakes is launched, so a decision the board
+    could not record is never taken."""
+    decision = {"action": args.action}
+    if args.step:
+        decision["step"] = args.step
+    findings = [f.strip() for f in (args.findings or "").split(",") if f.strip()]
+    if findings:
+        decision["findings"] = findings
+    if args.add_finding is not None:
+        try:
+            added = json.loads(args.add_finding)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"--add-finding must be ONE JSON finding object: {e}") from e
+        if not isinstance(added, dict):
+            raise ValueError(
+                f"--add-finding must be ONE JSON finding object, not "
+                f"{type(added).__name__}")
+        decision["addedFinding"] = added
+    if args.instructions:
+        decision["instructions"] = args.instructions
+    if args.reason:
+        decision["reason"] = args.reason
+    return decision
+
+
+def post_gate_decision(project_key, agent_id, decision, post_fn, context=None):
+    """POST one gate decision (G4) beside `/gates`. `context` is OMITTED when
+    falsy, by `post_gate`'s rule — never a fabricated empty dict."""
+    payload = {"projectKey": project_key, "agentId": agent_id,
+               "decision": decision}
+    if context:
+        payload["context"] = context
+    return post_fn("/api/v2/gate-decisions", payload)
+
+
+def axi_run_id(decoded):
+    """The no-mistakes run id a snapshot names, or None. A snapshot naming no
+    run is the tool's REFUSAL of a respond (G6): no run was touched, so there
+    is nothing a decision could be keyed by."""
+    run = decoded.get("run")
+    run_id = run.get("id") if isinstance(run, dict) else None
+    return run_id if isinstance(run_id, str) and run_id else None
+
+
+def gate_decision_recorder(decision, project_dir, agent_id, ops):
+    """G6 — `drive_axi_run`'s `on_final` for `gate-respond`: record the
+    decision once the tool has ACCEPTED it, which is when its snapshot names
+    the run it acted on. Whether that run then resolved or its wait elapsed
+    does not matter — an elapsed wait is not a failed run. A snapshot naming
+    no run is a refusal (AC5): reported, and nothing is recorded."""
+    def record(decoded):
+        if decoded is None:
+            return ("no-mistakes answered with no snapshot, so it took no "
+                    "decision", {"decision": ENVELOPE_TIER_NONE}, False)
+        run_id = axi_run_id(decoded)
+        if run_id is None:
+            said = decoded.get("error")
+            return (("no-mistakes recorded no decision — its answer names no "
+                     "run" + (f": {said}" if said else "")),
+                    {"decision": ENVELOPE_TIER_NONE}, False)
+        resp = post_gate_decision(ops.project_key(project_dir), agent_id,
+                                  dict(decision, runId=run_id), ops.post,
+                                  fleet_context() or None)
+        if resp.get("ok"):
+            decision_id = resp.get("decision") or ENVELOPE_TIER_UNSTATED
+            print(f"gate-respond: decision recorded: {decision_id} "
+                  f"run={run_id}", file=sys.stderr)
+            return None, {"decision": decision_id}, True
+        err = resp.get("error") or "the board did not accept it"
+        print(f"gate-respond: decision NOT recorded for run={run_id}: {err}",
+              file=sys.stderr)
+        return None, {"decision": ENVELOPE_TIER_NONE,
+                      "decisionError": truncate_field(err)}, False
+    return record
+
+
+def cmd_gate_respond(args, project_dir, no_mistakes_path, ops):
+    """§S1 — axi PROXY wrapper: send a gate decision through `no-mistakes axi
+    respond`, record it on the board keyed by the run it acted on, and drive
+    the run on through the SAME runner `gate-run` uses (G1), so its interim and
+    final gates keep flowing.
+
+    `no_mistakes_path` is resolved by the client wrapper (its own `shutil`), so
+    the tool-discovery seam stays where each client's test harness patches it."""
+    nm = no_mistakes_path
+    if not nm:
+        print("gate-respond: ERROR: `no-mistakes` not found on PATH — cannot "
+              "proxy axi respond", file=sys.stderr)
+        return 1
+
+    agent_id = ops.agent_id(args)
+    try:
+        decision = gate_decision_body(args)
+    except ValueError as e:
+        print(f"gate-respond: ERROR: {e}", file=sys.stderr)
+        result_fields = gate_run_result_fields(None, None, None, False, False,
+                                               [], ENVELOPE_TIER_NONE)
+        result_fields["decision"] = ENVELOPE_TIER_NONE
+        ops.emit("gate-respond", False, result_fields,
+                 ops.context(project_dir, agent_id=agent_id), [],
+                 f"gate-respond: ok=False sealed=nothing exit=1 — no-mistakes "
+                 f"not launched: {e}")
+        return 1
+
+    run_argv = [nm, "axi", "respond"] + gate_respond_argv(args)
+    return drive_axi_run(
+        "gate-respond", run_argv, f"respond: {args.action}", project_dir,
+        agent_id, ops,
+        on_final=gate_decision_recorder(decision, project_dir, agent_id, ops))
 
 
 def _decode_axi_snapshot(snapshot):

@@ -15,6 +15,8 @@ import type {
   CycleChangeKind,
   CycleKind,
   CycleStatus,
+  GateDecision,
+  GateDecisionAction,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -1188,6 +1190,70 @@ function createRecordTables(db: Database): void {
 }
 
 /**
+ * CR-CRU-162 §G4 — the gate-decision record table, in its CURRENT shape. One DDL,
+ * shared by the base pass and the v15 migration step, so a fresh store and a
+ * migrated one hold the same table. A decision joins its gate through
+ * `run_id` (the no-mistakes run id); `rowid` is its posting order.
+ */
+function createGateDecisionsTable(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gate_decisions (
+      id TEXT PRIMARY KEY,
+      project_key TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      step TEXT,
+      action TEXT NOT NULL,
+      -- JSON array of the selected finding ids; NULL when none were sent.
+      findings TEXT,
+      -- The ONE added finding, a JSON object; NULL when none was sent.
+      added_finding TEXT,
+      instructions TEXT,
+      reason TEXT,
+      timestamp INTEGER NOT NULL,
+      context TEXT,
+      role TEXT,
+      cycle_id INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gate_decisions_project_run
+      ON gate_decisions (project_key, run_id);
+  `);
+}
+
+/**
+ * CR-CRU-162 §G5 — the no-mistakes run id a posted gate object carries at
+ * `run.id` (the shape of no-mistakes' own axi snapshot), or nothing. Only a
+ * non-empty string counts: a gate with no run, or a run with no id, has no
+ * run id, and none is invented for it.
+ */
+function gateRunId(gate: unknown): string | undefined {
+  if (typeof gate !== "object" || gate === null) return undefined;
+  const run = (gate as { run?: unknown }).run;
+  if (typeof run !== "object" || run === null) return undefined;
+  const id = (run as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+/** CR-CRU-162 §G4 — a `gate_decisions` row as SQLite returns it. */
+interface GateDecisionRow {
+  id: string;
+  project_key: string;
+  agent_id: string;
+  run_id: string;
+  step: string | null;
+  action: string;
+  findings: string | null;
+  added_finding: string | null;
+  instructions: string | null;
+  reason: string | null;
+  timestamp: number;
+  context: string | null;
+  role: string | null;
+  cycle_id: number | null;
+}
+
+/**
  * CR-CRU-130 §S1 — WHEN a milestone was met, from whichever spelling the
  * record carries.
  *
@@ -2149,6 +2215,19 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       );
     },
   },
+  {
+    description:
+      "gate_decisions: CR-162 §G4 — a gate decision is its own record, keyed by the no-mistakes run id. A new table only: no gate decided before this CR is back-filled",
+    apply(db) {
+      // A CREATE and nothing else: the decisions taken before this CR were
+      // never seen by the board, so there is nothing to derive and every
+      // existing row is byte-identical afterwards.
+      createGateDecisionsTable(db);
+    },
+    satisfiedBy(db) {
+      return tableExists(db, "gate_decisions");
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -2634,6 +2713,9 @@ export class Store {
     // for every store, old or new, so a brand-new store and the end of the
     // chain agree and the chain step only ever has rows to MOVE.
     createRecordTables(this.db);
+    // CR-CRU-162 §G4 — the decision record, by the same base pass for the
+    // same reason: a brand-new store and the end of the chain agree.
+    createGateDecisionsTable(this.db);
   }
 
   /**
@@ -2924,6 +3006,8 @@ export class Store {
       // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
       // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
       this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
+      // CR-CRU-162 §G4 — and so do its gate decisions: not a reported count.
+      this.db.query(`DELETE FROM gate_decisions WHERE project_key = ?`).run(key);
       // CR-CRU-130 §S4 — and so does the vocabulary it declared, for the same
       // reason and on the same terms: not a reported count.
       this.db.query(`DELETE FROM project_milestone_types WHERE project_key = ?`).run(key);
@@ -3264,6 +3348,7 @@ export class Store {
     const version = meta?.version;
     const alreadyReleased =
       version !== undefined && this.listReleases(projectKey).some((r) => r.label === version);
+    const runId = gateRunId(gate);
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -3274,6 +3359,8 @@ export class Store {
       timestamp: Date.now(),
       gate,
       ...(version !== undefined ? { version } : {}),
+      // CR-CRU-162 §G5 — the run id, lifted from the gate's own `run.id`.
+      ...(runId !== undefined ? { runId } : {}),
       ...(alreadyReleased ? { retiredAt: Date.now() } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
@@ -3281,6 +3368,101 @@ export class Store {
     };
     this.insertEvent(event);
     return event;
+  }
+
+  /**
+   * CR-CRU-162 §G4 — record one gate DECISION as its own row (never riding a
+   * gate snapshot, which retention may drop). The caller has validated the
+   * fields; the cycle binding arrives in `meta.context`, stamped by the route
+   * through the same seam a gate snapshot uses, and `cycle_id` is derived from
+   * it here exactly as the record tables derive theirs.
+   */
+  recordGateDecision(
+    projectKey: string,
+    agentId: string,
+    decision: {
+      runId: string;
+      action: GateDecisionAction;
+      step?: string;
+      findings?: string[];
+      addedFinding?: Record<string, unknown>;
+      instructions?: string;
+      reason?: string;
+    },
+    meta?: { context?: RunContext; role?: AgentRole },
+  ): GateDecision {
+    this.touchAgent(projectKey, agentId);
+    const cycleId = meta?.context?.cycleId;
+    const recorded: GateDecision = {
+      id: `dec-${Date.now()}-${++this.seq}`,
+      projectKey,
+      agentId,
+      runId: decision.runId,
+      ...(decision.step !== undefined ? { step: decision.step } : {}),
+      action: decision.action,
+      ...(decision.findings !== undefined ? { findings: decision.findings } : {}),
+      ...(decision.addedFinding !== undefined ? { addedFinding: decision.addedFinding } : {}),
+      ...(decision.instructions !== undefined ? { instructions: decision.instructions } : {}),
+      ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+      timestamp: Date.now(),
+      ...(meta?.context !== undefined ? { context: meta.context } : {}),
+      ...(meta?.role !== undefined ? { role: meta.role } : {}),
+      ...(typeof cycleId === "number" ? { cycleId } : {}),
+    };
+    this.db
+      .query(
+        `INSERT INTO gate_decisions (id, project_key, agent_id, run_id, step, action, findings,
+           added_finding, instructions, reason, timestamp, context, role, cycle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        recorded.id,
+        projectKey,
+        agentId,
+        recorded.runId,
+        recorded.step ?? null,
+        recorded.action,
+        recorded.findings !== undefined ? JSON.stringify(recorded.findings) : null,
+        recorded.addedFinding !== undefined ? JSON.stringify(recorded.addedFinding) : null,
+        recorded.instructions ?? null,
+        recorded.reason ?? null,
+        recorded.timestamp,
+        recorded.context !== undefined ? JSON.stringify(recorded.context) : null,
+        recorded.role ?? null,
+        recorded.cycleId ?? null,
+      );
+    this.emit("events", projectKey);
+    return recorded;
+  }
+
+  /**
+   * CR-CRU-162 §G5 — one run's decisions, in the order they were POSTED
+   * (`rowid`, never re-sorted by action or timestamp, which can tie).
+   */
+  listGateDecisions(projectKey: string, runId: string): GateDecision[] {
+    return this.db
+      .query<GateDecisionRow, [string, string]>(
+        `SELECT * FROM gate_decisions WHERE project_key = ? AND run_id = ? ORDER BY rowid ASC`,
+      )
+      .all(projectKey, runId)
+      .map((row) => ({
+        id: row.id,
+        projectKey: row.project_key,
+        agentId: row.agent_id,
+        runId: row.run_id,
+        ...(row.step !== null ? { step: row.step } : {}),
+        action: row.action as GateDecisionAction,
+        ...(row.findings !== null ? { findings: JSON.parse(row.findings) as string[] } : {}),
+        ...(row.added_finding !== null
+          ? { addedFinding: JSON.parse(row.added_finding) as Record<string, unknown> }
+          : {}),
+        ...(row.instructions !== null ? { instructions: row.instructions } : {}),
+        ...(row.reason !== null ? { reason: row.reason } : {}),
+        timestamp: row.timestamp,
+        ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
+        ...(row.role !== null ? { role: row.role as AgentRole } : {}),
+        ...(row.cycle_id !== null ? { cycleId: row.cycle_id } : {}),
+      }));
   }
 
   /**
@@ -4398,6 +4580,8 @@ export class Store {
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
       // blob (first-class on the event, never inside the gate object).
       ...(event.version !== undefined ? { version: event.version } : {}),
+      // CR-CRU-162 §G5 — a gate's no-mistakes run id rides the same blob.
+      ...(event.runId !== undefined ? { runId: event.runId } : {}),
       // CR-CRU-080 §S4 — release provenance (the tag's ship date and the CR
       // ids the release shipped) rides the SAME generic payload blob, which is
       // why §S4 needs no column and no migration (SCHEMA_VERSION stays 7).
@@ -4639,6 +4823,8 @@ export class Store {
       // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),
+      // CR-CRU-162 §G5 — the gate's run id; ABSENT when it named none.
+      ...(typeof payload.runId === "string" ? { runId: payload.runId } : {}),
       ...((row.retired_at ?? null) !== null ? { retiredAt: row.retired_at! } : {}),
       // CR-CRU-094 §S1 — the cycle binding, served from its own COLUMN (not
       // re-derived from the blob, so the projection proves the stored fact).

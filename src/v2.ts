@@ -54,6 +54,7 @@ import type {
   Coverage,
   CycleKind,
   CycleStatus,
+  GateDecisionAction,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -117,6 +118,8 @@ interface V2Body {
   merge?: unknown;
   // CR-CRU-013 §S1 (gate object) + §S4b/§S4c (milestone commit)
   gate?: unknown;
+  // CR-CRU-162 §G4 — the gate decision a POST /api/v2/gate-decisions records.
+  decision?: unknown;
   // CR-CRU-073 §S1 — optional top-level release version the gate gated.
   version?: unknown;
   commit?: unknown;
@@ -978,7 +981,9 @@ function runVerdict(summary: RunSummary): string {
  * Agent shape (where role is a sibling of the run context, not part of it);
  * a role-less event yields no `role` key, same absence rule as above.
  */
-function attachEcho(event: RunEvent): { context?: { cycleId: number }; role?: AgentRole } {
+function attachEcho(
+  event: Pick<RunEvent, "context" | "role">,
+): { context?: { cycleId: number }; role?: AgentRole } {
   const cycleId = event.context?.cycleId;
   return {
     ...(typeof cycleId === "number" ? { context: { cycleId } } : {}),
@@ -1354,6 +1359,117 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   return evidenceResponse(
     { ok: true, changed: true, event: event.id, ...attachEcho(event) },
     { status: 201 },
+  );
+}
+
+/** CR-CRU-162 §G2 — the answers `no-mistakes axi respond --action` accepts. */
+const GATE_DECISION_ACTIONS: ReadonlySet<string> = new Set(["approve", "fix", "skip"]);
+
+/** An optional decision field: absent (or null), or a string. */
+function optionalString(value: unknown): { ok: true; value?: string } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true };
+  return typeof value === "string" ? { ok: true, value } : { ok: false };
+}
+
+/**
+ * CR-CRU-162 §G4 — POST /api/v2/gate-decisions: one `axi respond` decision → its
+ * own record, keyed by the no-mistakes run id. Refused with a 400 naming the
+ * field before anything is stored; the caller and cycle-stamping rules are
+ * `handleGates`' own (a registered caller, then the one attach seam).
+ */
+async function handleGateDecisions(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  const raw = body.decision;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return fail(400, "decision is required", { help: hints.gateDecisionFields });
+  }
+  const d = raw as Record<string, unknown>;
+  if (typeof d.runId !== "string" || d.runId.length === 0) {
+    return fail(400, "decision.runId is required — the no-mistakes run id", {
+      help: hints.gateDecisionFields,
+    });
+  }
+  if (typeof d.action !== "string" || !GATE_DECISION_ACTIONS.has(d.action)) {
+    return fail(
+      400,
+      `decision.action is required, one of: ${[...GATE_DECISION_ACTIONS].join(", ")}`,
+      { help: hints.gateDecisionFields },
+    );
+  }
+  const findings = d.findings;
+  if (
+    findings !== undefined &&
+    findings !== null &&
+    !(Array.isArray(findings) && findings.every((id) => typeof id === "string"))
+  ) {
+    return fail(400, "decision.findings must be an array of finding ids", {
+      help: hints.gateDecisionFields,
+    });
+  }
+  const addedFinding = d.addedFinding;
+  if (
+    addedFinding !== undefined &&
+    addedFinding !== null &&
+    (typeof addedFinding !== "object" || Array.isArray(addedFinding))
+  ) {
+    return fail(400, "decision.addedFinding must be ONE JSON finding object", {
+      help: hints.gateDecisionFields,
+    });
+  }
+  const text: Record<"step" | "instructions" | "reason", string | undefined> = {
+    step: undefined,
+    instructions: undefined,
+    reason: undefined,
+  };
+  for (const field of ["step", "instructions", "reason"] as const) {
+    const parsed = optionalString(d[field]);
+    if (!parsed.ok) {
+      return fail(400, `decision.${field} must be a string`, { help: hints.gateDecisionFields });
+    }
+    text[field] = parsed.value;
+  }
+  // The same caller seam as /gates: refused BEFORE any touchAgent/record.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
+  // ...and the same attach seam: a BOUND agent's decision is stamped from its
+  // binding (validateUnbound stays false, exactly as a gate snapshot's).
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
+  if (attach.fail !== undefined) return attach.fail;
+  const decision = store.recordGateDecision(
+    pk.key,
+    agentId,
+    {
+      runId: d.runId,
+      action: d.action as GateDecisionAction,
+      ...(text.step !== undefined ? { step: text.step } : {}),
+      ...(Array.isArray(findings) ? { findings: findings as string[] } : {}),
+      ...(typeof addedFinding === "object" && addedFinding !== null
+        ? { addedFinding: addedFinding as Record<string, unknown> }
+        : {}),
+      ...(text.instructions !== undefined ? { instructions: text.instructions } : {}),
+      ...(text.reason !== undefined ? { reason: text.reason } : {}),
+    },
+    {
+      ...(attach.context !== undefined ? { context: attach.context } : eventContext(body)),
+      ...(attach.role !== undefined ? { role: attach.role } : {}),
+    },
+  );
+  // A decision is not an event: its id is answered as `decision`, and the
+  // reply names the one read that shows it (the gate's), never the cycle's.
+  return json(
+    {
+      ok: true,
+      changed: true,
+      decision: decision.id,
+      ...attachEcho(decision),
+      help: hints.afterGateDecision,
+    },
+    201,
   );
 }
 
@@ -4089,7 +4205,19 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
     }));
     return reply(req, url, { ok: true, event: { ...event, tree } });
   }
-  return reply(req, url, { ok: true, event });
+  return reply(req, url, { ok: true, event: withGateDecisions(store, event) });
+}
+
+/**
+ * CR-CRU-162 §G5 — the gate read carries its run's decisions, in posting order,
+ * on this single-event detail read only (the brief list does no per-event
+ * join). The key is ABSENT when there is nothing to show: a gate that named no
+ * run has nothing to join, and a run with no recorded decision has none.
+ */
+function withGateDecisions(store: Store, event: RunEvent): RunEvent & { decisions?: unknown[] } {
+  if (event.kind !== "gate" || event.runId === undefined) return event;
+  const decisions = store.listGateDecisions(event.projectKey, event.runId);
+  return decisions.length > 0 ? { ...event, decisions } : event;
 }
 
 /**
@@ -4311,6 +4439,10 @@ export function handleV2(
   // /runs, NOT under /projects/).
   if (req.method === "POST" && pathname === "/api/v2/gates") {
     return handleGates(store, req);
+  }
+  // CR-CRU-162 §G4 — a gate decision, flat beside the gate route it answers.
+  if (req.method === "POST" && pathname === "/api/v2/gate-decisions") {
+    return handleGateDecisions(store, req);
   }
   if (req.method === "POST" && pathname === "/api/v2/milestones") {
     return handleMilestones(store, req);

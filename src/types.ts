@@ -234,6 +234,13 @@ export interface RunEvent {
    */
   version?: string;
   /**
+   * CR-CRU-162 §G5 — the no-mistakes run id this gate snapshot belongs to,
+   * lifted from the posted gate's own `run.id` when it carries one. It is what
+   * ties a gate to its recorded decisions. ABSENT when the gate names no run
+   * (never fabricated) and on every non-gate kind.
+   */
+  runId?: string;
+  /**
    * CR-CRU-073 §S1 — the release-retirement marker (epoch ms). Stamped when
    * the gate's release ships (or on insert for an already-released version);
    * a live gate has NO marker. ABSENT until retired.
@@ -325,6 +332,35 @@ export interface RunEvent {
   status?: "aborted";
   /** CR-CRU-017 §S1 — why the RUN was aborted; present exactly when `status` is. */
   abortReason?: string;
+}
+
+/** CR-CRU-162 §G2 — the three answers `no-mistakes axi respond` accepts. */
+export type GateDecisionAction = "approve" | "fix" | "skip";
+
+/**
+ * CR-CRU-162 §G4 — a gate DECISION, its own record rather than a gate
+ * snapshot: what was answered at a gate of one no-mistakes run, by whom, under
+ * which cycle binding and when. Every optional field is ABSENT when the
+ * decision did not carry it (never an empty value fabricated in its place).
+ */
+export interface GateDecision {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  /** The no-mistakes run id — the key a gate event's `runId` joins on. */
+  runId: string;
+  step?: string;
+  action: GateDecisionAction;
+  /** The finding ids the decision selected, verbatim and in order. */
+  findings?: string[];
+  /** The ONE finding the decision added, a JSON object, verbatim. */
+  addedFinding?: Record<string, unknown>;
+  instructions?: string;
+  reason?: string;
+  timestamp: number;
+  context?: RunContext;
+  role?: AgentRole;
+  cycleId?: number;
 }
 
 // ── CR-CRU-011 §S0 — cycle plans (the orchestrator's declared todo list) ─────

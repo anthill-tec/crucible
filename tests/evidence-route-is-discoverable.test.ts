@@ -404,6 +404,13 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
       "/api/v2/agents/register": { projectKey, agentId: "other-post", role: "ORCHESTRATOR" },
       "/api/v2/agents/heartbeat": { projectKey, agentId: "other-post" },
       "/api/v2/runs/start": { projectKey, agentId: "other-post" },
+      // CR-CRU-162 §G4 — a gate decision answers with `decision:<id>`, never an
+      // event id: a decision is not an event (orchestrator ruling, C1 GREEN).
+      "/api/v2/gate-decisions": {
+        projectKey,
+        agentId: "other-post",
+        decision: { runId: "cr162-other-post-run", action: "approve" },
+      },
       "/api/v2/agents/unregister": { projectKey, agentId: "other-post" },
     };
     // Every unhinted POST route must be exercised here, or a new one could

@@ -31,6 +31,8 @@ export const hints: Record<
   | "abortNeedsApproval"
   | "gateFields"
   | "gateOutcomes"
+  | "gateDecisionFields"
+  | "afterGateDecision"
   | "illegalCycleTransition"
   | "planCycleNotFound"
   | "planFileInput"
@@ -120,6 +122,15 @@ export const hints: Record<
   /** CR-CRU-013 §S1 — a gate POST with an out-of-set outcome. */
   gateOutcomes: [
     "gate.outcome must be one of: checks-passed, passed, failed, cancelled",
+  ],
+  /** CR-CRU-162 §G4 — a gate-decision POST with a missing or ill-typed field. */
+  gateDecisionFields: [
+    "POST /api/v2/gate-decisions {projectKey, agentId, context?, decision:{runId, action, step?, findings?, addedFinding?, instructions?, reason?}}",
+    "decision.runId (the no-mistakes run id) and decision.action (approve | fix | skip) are required; findings is an array of finding ids; addedFinding is ONE JSON finding object",
+  ],
+  /** CR-CRU-162 §G5 — after a decision is recorded: where it is read back. */
+  afterGateDecision: [
+    "GET /api/v2/events/<gate event id> — a gate whose run carries this runId lists its decisions[], in posting order",
   ],
   /** CR-CRU-024 §S4 — an illegal per-cycle transition (e.g. active→pending). */
   illegalCycleTransition: [
