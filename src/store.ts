@@ -1253,6 +1253,33 @@ interface GateDecisionRow {
   cycle_id: number | null;
 }
 
+/** A `gate_decisions` row as the `GateDecision` the API serves. */
+function toGateDecision(row: GateDecisionRow): GateDecision {
+  return {
+    id: row.id,
+    projectKey: row.project_key,
+    agentId: row.agent_id,
+    runId: row.run_id,
+    ...(row.step !== null ? { step: row.step } : {}),
+    action: row.action as GateDecisionAction,
+    ...(row.findings !== null ? { findings: JSON.parse(row.findings) as string[] } : {}),
+    ...(row.added_finding !== null
+      ? { addedFinding: JSON.parse(row.added_finding) as Record<string, unknown> }
+      : {}),
+    ...(row.instructions !== null ? { instructions: row.instructions } : {}),
+    ...(row.reason !== null ? { reason: row.reason } : {}),
+    timestamp: row.timestamp,
+    ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
+    ...(row.role !== null ? { role: row.role as AgentRole } : {}),
+    ...(row.cycle_id !== null ? { cycleId: row.cycle_id } : {}),
+  };
+}
+
+/** The key `Store.listGateDecisionsForRuns` groups one project's run under. */
+export function gateDecisionRunKey(projectKey: string, runId: string): string {
+  return JSON.stringify([projectKey, runId]);
+}
+
 /**
  * CR-CRU-130 §S1 — WHEN a milestone was met, from whichever spelling the
  * record carries.
@@ -3445,24 +3472,37 @@ export class Store {
         `SELECT * FROM gate_decisions WHERE project_key = ? AND run_id = ? ORDER BY rowid ASC`,
       )
       .all(projectKey, runId)
-      .map((row) => ({
-        id: row.id,
-        projectKey: row.project_key,
-        agentId: row.agent_id,
-        runId: row.run_id,
-        ...(row.step !== null ? { step: row.step } : {}),
-        action: row.action as GateDecisionAction,
-        ...(row.findings !== null ? { findings: JSON.parse(row.findings) as string[] } : {}),
-        ...(row.added_finding !== null
-          ? { addedFinding: JSON.parse(row.added_finding) as Record<string, unknown> }
-          : {}),
-        ...(row.instructions !== null ? { instructions: row.instructions } : {}),
-        ...(row.reason !== null ? { reason: row.reason } : {}),
-        timestamp: row.timestamp,
-        ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
-        ...(row.role !== null ? { role: row.role as AgentRole } : {}),
-        ...(row.cycle_id !== null ? { cycleId: row.cycle_id } : {}),
-      }));
+      .map(toGateDecision);
+  }
+
+  /**
+   * The decisions of SEVERAL runs of one project, in ONE grouped read: the run
+   * ids travel as a single JSON array parameter, so the statement is the same
+   * whatever the number of runs on the page. Grouped by run id, each group in
+   * posting order (`rowid`); a run with no decision has no entry.
+   */
+  listGateDecisionsForRuns(
+    runs: { projectKey: string; runId: string }[],
+  ): Map<string, GateDecision[]> {
+    const grouped = new Map<string, GateDecision[]>();
+    if (runs.length === 0) return grouped;
+    const pairs = JSON.stringify(runs.map((r) => [r.projectKey, r.runId]));
+    const rows = this.db
+      .query<GateDecisionRow, [string]>(
+        `SELECT * FROM gate_decisions
+          WHERE (project_key, run_id) IN (
+            SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
+          )
+          ORDER BY rowid ASC`,
+      )
+      .all(pairs);
+    for (const row of rows) {
+      const key = gateDecisionRunKey(row.project_key, row.run_id);
+      const group = grouped.get(key);
+      if (group === undefined) grouped.set(key, [toGateDecision(row)]);
+      else group.push(toGateDecision(row));
+    }
+    return grouped;
   }
 
   /**

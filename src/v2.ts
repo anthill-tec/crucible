@@ -23,6 +23,7 @@ import {
 import {
   compareContainers,
   declaredTracks,
+  gateDecisionRunKey,
   normalizeTrack,
   QueueWaveOverflowError,
   reservedMilestoneTypeConflict,
@@ -54,6 +55,7 @@ import type {
   Coverage,
   CycleKind,
   CycleStatus,
+  GateDecision,
   GateDecisionAction,
   LivenessConfig,
   PackageRef,
@@ -4132,7 +4134,7 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   if (rawCycleId !== null && project !== undefined) {
     const cycleId = Number(rawCycleId);
     if (Number.isFinite(cycleId)) {
-      const events = store.listEventsForCycle(project, cycleId).map(eventBrief);
+      const events = withDecisionSummaries(store, store.listEventsForCycle(project, cycleId));
       const cycle = store.findCyclePlanEntry(project, cycleId);
       // Unknown cycleId → 200 with an empty set and NO `cycle` field.
       return reply(req, url, {
@@ -4158,9 +4160,98 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   // own", a settled-history question.
   return reply(req, url, {
     ok: true,
-    events: store.listEvents(project, limit).map(eventBrief),
+    events: withDecisionSummaries(store, store.listEvents(project, limit)),
     openRuns: store.listOpenRuns(project).map(openRunBrief),
   });
+}
+
+/** The counts a sealed gate's decisions reduce to on the events list. */
+interface DecisionSummary {
+  decisions: number;
+  fixed: number;
+  added: number;
+  declined: number;
+  approvedWithReason: number;
+}
+
+/**
+ * Event briefs for a list page. Each SEALED gate naming a run with at least
+ * one recorded decision also carries `decisionSummary`; the decisions of
+ * every such run on the page come from ONE grouped read
+ * (`Store.listGateDecisionsForRuns`), never one read per gate. The key is
+ * ABSENT on an in-flight gate, a gate naming no run, a run with no decision,
+ * and every other kind.
+ */
+function withDecisionSummaries(store: Store, events: RunEvent[]) {
+  const sealed = events.filter(
+    (e): e is RunEvent & { runId: string } => e.runId !== undefined && isSealedGate(e),
+  );
+  const grouped = store.listGateDecisionsForRuns(
+    sealed.map((e) => ({ projectKey: e.projectKey, runId: e.runId })),
+  );
+  return events.map((event) => {
+    const brief = eventBrief(event);
+    if (event.runId === undefined || !isSealedGate(event)) return brief;
+    const decisions = grouped.get(gateDecisionRunKey(event.projectKey, event.runId));
+    if (decisions === undefined || decisions.length === 0) return brief;
+    return { ...brief, decisionSummary: decisionSummary(event.gate, decisions) };
+  });
+}
+
+/** A gate event whose gate object is not marked `inFlight: true`. */
+function isSealedGate(event: RunEvent): boolean {
+  if (event.kind !== "gate") return false;
+  const gate = event.gate;
+  return !(typeof gate === "object" && gate !== null && (gate as { inFlight?: unknown }).inFlight === true);
+}
+
+/**
+ * The Counting rules: `fixed` = the distinct finding ids selected by `fix`
+ * decisions; `added` = the decisions carrying an added finding; `declined` =
+ * each APPROVED step's own `findings` count minus the distinct ids fixed at
+ * that step, summed over approved steps; `approvedWithReason` = the `approve`
+ * decisions carrying a reason.
+ */
+function decisionSummary(gate: unknown, decisions: GateDecision[]): DecisionSummary {
+  const fixed = new Set<string>();
+  const fixedAtStep = new Map<string, Set<string>>();
+  const approvedSteps = new Set<string>();
+  let added = 0;
+  let approvedWithReason = 0;
+  for (const d of decisions) {
+    if (d.addedFinding !== undefined) added += 1;
+    if (d.action === "fix") {
+      for (const id of d.findings ?? []) {
+        fixed.add(id);
+        if (d.step !== undefined) {
+          const atStep = fixedAtStep.get(d.step) ?? new Set<string>();
+          atStep.add(id);
+          fixedAtStep.set(d.step, atStep);
+        }
+      }
+    }
+    if (d.action === "approve") {
+      if (d.reason !== undefined) approvedWithReason += 1;
+      if (d.step !== undefined) approvedSteps.add(d.step);
+    }
+  }
+  let declined = 0;
+  for (const step of gateSteps(gate)) {
+    if (!approvedSteps.has(step.name) || typeof step.findings !== "number") continue;
+    declined += Math.max(0, step.findings - (fixedAtStep.get(step.name)?.size ?? 0));
+  }
+  return { decisions: decisions.length, fixed: fixed.size, added, declined, approvedWithReason };
+}
+
+/** A gate object's steps, each with its name and its own findings count. */
+function gateSteps(gate: unknown): { name: string; findings?: unknown }[] {
+  if (typeof gate !== "object" || gate === null) return [];
+  const steps = (gate as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter(
+    (s): s is { name: string; findings?: unknown } =>
+      typeof s === "object" && s !== null && typeof (s as { name?: unknown }).name === "string",
+  );
 }
 
 /** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */

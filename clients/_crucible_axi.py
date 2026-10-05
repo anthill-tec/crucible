@@ -2292,7 +2292,13 @@ def gate_from_axi(decoded, intent, final):
         st = s.get("status")
         if st == "failed":
             any_failed = True
-        steps.append({"name": s.get("step"), "status": map_axi_step_status(st)})
+        step = {"name": s.get("step"), "status": map_axi_step_status(st)}
+        # The snapshot's own per-step findings count rides on the posted
+        # step: an explicit 0 is a reported fact and is kept; a header that
+        # never named the column leaves the key absent, never a made-up 0.
+        if "findings" in s:
+            step["findings"] = s["findings"]
+        steps.append(step)
     if final:
         outcome = sealed_outcome(decoded.get("outcome"), any_failed)
     else:

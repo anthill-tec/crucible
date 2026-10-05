@@ -5486,7 +5486,12 @@
             span({ class: "app-gate-step-status" }, s.status),
             s.findings !== undefined && s.findings !== null ? " · " : null,
             s.findings !== undefined && s.findings !== null
-              ? span({ class: "app-gate-step-findings" }, `${s.findings.total} findings`)
+              ? span(
+                  { class: "app-gate-step-findings" },
+                  // A client-posted step carries the count as a number; an
+                  // older event carries the `{total}` object.
+                  `${typeof s.findings === "number" ? s.findings : s.findings.total} findings`,
+                )
               : null,
           ),
         ),
