@@ -943,8 +943,15 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
     def test_a_verify_cycle_reads_as_verify_when_the_plan_is_read_back(self):
         plan_id = self._file_plan(self.CR, first_cycle="the red-green cycle")
 
+        # CR-CRU-165 §S1 -- appending a VERIFY cycle to a filed plan is now
+        # a recorded plan change (only a FIX append needs nothing more); this
+        # fixture's SUBJECT is the stored kind, not the guard, so it supplies
+        # the three fields to keep reaching the assertions below.
         run = self._cycle_add("the verify cycle", "--cr", self.CR,
-                              KIND_FLAG, "verify")
+                              KIND_FLAG, "verify",
+                              "--reason", "round-trip coverage for this kind",
+                              "--cause", "gap-analysis",
+                              "--spec-ref", "design note §S4")
         self.assertEqual(
             run.returncode, 0,
             f"`{VERB} {KIND_FLAG} verify` must succeed; "
@@ -969,13 +976,53 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
                                   first_cycle="the filed cycle")
 
         for kind in CYCLE_KINDS:
+            extra = ()
+            if kind != "fix":
+                # CR-CRU-165 §S1 -- every kind but `fix` is now a recorded
+                # plan change (the FIX exception is the ONLY unrecorded
+                # append); this round trip's subject is the stored KIND, so
+                # it supplies the three fields to keep reaching the server.
+                extra = ("--reason", f"round-trip coverage for {kind}",
+                         "--cause", "gap-analysis",
+                         "--spec-ref", "design note §S4")
             run = self._cycle_add(f"appended {kind}", PLAN_FLAG, str(plan_id),
-                                  KIND_FLAG, kind)
+                                  KIND_FLAG, kind, *extra)
             self.assertEqual(
                 run.returncode, 0,
                 f"`{KIND_FLAG} {kind}` is one of the route's own kinds and "
                 f"must be accepted; stdout={run.stdout.strip()[:600]!r} "
                 f"stderr={run.stderr.strip()[:600]!r}")
+            if kind == "verify":
+                # CR-CRU-165 §S1/AC1 -- a FIX append needs its plan's
+                # VERIFY cycle DONE (store.appendCycle's unrecorded-fix
+                # branch); complete the one just appended before the loop
+                # reaches `fix`, or that append would be refused on an
+                # unrelated ground (verify-not-done) this test does not mean
+                # to exercise.
+                decoded = self.toon.decode(run.stdout)
+                verify_cycle_id = decoded["axi"].get("id")
+                self.assertIsNotNone(
+                    verify_cycle_id,
+                    f"fixture sanity: the appended verify cycle's id must "
+                    f"ride the envelope; got {decoded!r}")
+                activated = self._client(
+                    "cycle-activate", str(verify_cycle_id),
+                    "--agent", self.ORCHESTRATOR,
+                    "--project-dir", self.project_dir)
+                self.assertEqual(
+                    activated.returncode, 0,
+                    f"fixture: activating the verify cycle must succeed; "
+                    f"stdout={activated.stdout.strip()[:600]!r} "
+                    f"stderr={activated.stderr.strip()[:600]!r}")
+                done = self._client(
+                    "cycle-done", str(verify_cycle_id),
+                    "--agent", self.ORCHESTRATOR,
+                    "--project-dir", self.project_dir)
+                self.assertEqual(
+                    done.returncode, 0,
+                    f"fixture: completing the verify cycle must succeed; "
+                    f"stdout={done.stdout.strip()[:600]!r} "
+                    f"stderr={done.stderr.strip()[:600]!r}")
 
         kinds = self._kinds_by_label(self._plan_by_id(plan_id))
         self.assertEqual(
@@ -1025,8 +1072,14 @@ class PlanFlagAddsACycleToARecoveredCrTest(_ScratchBoardTestBase):
 
     def test_the_named_plan_receives_the_cycle_despite_the_aborted_sibling(self):
         aborted_id = self._file_plan(self.CR, first_cycle="the abandoned cycle")
+        # CR-CRU-165 §S2b -- an abort now requires a recorded reason,
+        # cause and spec reference too; this fixture's abort is not the
+        # subject under test (the subject is the later --plan escape), so it
+        # simply supplies them to keep succeeding under the new contract.
         aborted = self._client(
             "abort", "--cr", self.CR, "--user-approved",
+            "--reason", "a spec change invalidated the aborted sibling",
+            "--cause", "gap-analysis", "--spec-ref", "design note §S2b",
             "--agent", self.ORCHESTRATOR, "--project-dir", self.project_dir)
         self.assertEqual(
             aborted.returncode, 0,
@@ -1041,8 +1094,15 @@ class PlanFlagAddsACycleToARecoveredCrTest(_ScratchBoardTestBase):
         live_id = self._file_plan(self.CR, first_cycle="the recovered cycle")
         self.assertNotEqual(live_id, aborted_id, "fixture: a NEW plan")
 
+        # CR-CRU-165 §S1 -- a VERIFY append is a recorded plan change too
+        # now; this test's subject is the --plan escape from the ambiguity,
+        # not the guard, so it supplies the three fields to keep reaching the
+        # assertions below.
         run = self._cycle_add("the cycle the client could not add",
-                              PLAN_FLAG, str(live_id), KIND_FLAG, "verify")
+                              PLAN_FLAG, str(live_id), KIND_FLAG, "verify",
+                              "--reason", "a spec change added a verify pass here",
+                              "--cause", "gap-analysis",
+                              "--spec-ref", "design note §S1")
         self.assertEqual(
             run.returncode, 0,
             f"naming the plan directly is the escape from an ambiguity the "
