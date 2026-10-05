@@ -895,6 +895,12 @@ export function workflowLens({ plans, events }) {
       // CR-011 C4) so history rows can render sealed cycle timers.
       ...(cycle.activatedAt !== undefined ? { activatedAt: cycle.activatedAt } : {}),
       ...(cycle.doneAt !== undefined ? { doneAt: cycle.doneAt } : {}),
+      // §S3 — a recorded plan change's fields pass through so history
+      // rows can show why the cycle changed (absent on an untouched cycle).
+      ...(cycle.reason !== undefined ? { reason: cycle.reason } : {}),
+      ...(cycle.cause !== undefined ? { cause: cycle.cause } : {}),
+      ...(cycle.specRef !== undefined ? { specRef: cycle.specRef } : {}),
+      ...(cycle.changeKind !== undefined ? { changeKind: cycle.changeKind } : {}),
       runs: linkedRuns.get(planCycleIndexKey(plan, cycle.id)) ?? [],
     }));
     const node = {
@@ -906,6 +912,10 @@ export function workflowLens({ plans, events }) {
       // CR-CRU-020 §S1.1 — closedAt passthrough (real server field,
       // Plan.closedAt) so the lens can order CR groups newest-first.
       ...(plan.closedAt !== undefined ? { closedAt: plan.closedAt } : {}),
+      // §S2b — an aborted plan's record (absent before it was recorded).
+      ...(plan.reason !== undefined ? { reason: plan.reason } : {}),
+      ...(plan.cause !== undefined ? { cause: plan.cause } : {}),
+      ...(plan.specRef !== undefined ? { specRef: plan.specRef } : {}),
       cycles,
       rollup: {
         done: cycles.filter((c) => c.status === "done").length,

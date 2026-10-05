@@ -6,7 +6,7 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
-import { burndown, forecast, seededRandom, velocity } from "./analytics.ts";
+import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
 import { resolveNext } from "./next.ts";
 import {
   authHints,
@@ -4272,6 +4272,7 @@ export function handleV2(
       if (segments[2] === "velocity") return handleAnalyticsVelocity(store, segments[0]!, req, url);
       if (segments[2] === "burndown") return handleAnalyticsBurndown(store, segments[0]!, req, url);
       if (segments[2] === "forecast") return handleAnalyticsForecast(store, segments[0]!, req, url);
+      if (segments[2] === "changes") return handleAnalyticsChanges(store, segments[0]!, req, url);
     }
     // CR-CRU-098 §S2 — the plan pointer: GET-only, derived, stores nothing.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "next") {
@@ -4433,5 +4434,22 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
     ...(target !== undefined ? { targetAt: target } : {}),
     random: seed !== undefined ? seededRandom(seed) : Math.random,
   });
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/**
+ * §S3/AC12 — GET …/analytics/changes?release=: the release's recorded plan
+ * changes and plan aborts, each counted by cause (`unrecorded` for the ones
+ * that predate the record).
+ */
+function handleAnalyticsChanges(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const payload = planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) });
+  if (payload === null) {
+    return fail(404, `no CR is planned into release ${release}`);
+  }
   return reply(req, url, { ok: true, ...payload });
 }

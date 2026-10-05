@@ -417,6 +417,11 @@ export interface LensPlanCycleLike {
   status: string;
   activatedAt?: number;
   doneAt?: number;
+  // §S3 — a recorded plan change's fields (absent on an untouched cycle).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
+  changeKind?: string;
 }
 
 export interface LensPlanLike {
@@ -434,6 +439,10 @@ export interface LensPlanLike {
   // CR-CRU-020 §S1.1 — real server field (Plan.closedAt), consumed by the
   // lens to order CR groups within a wave newest-first.
   closedAt?: number;
+  // §S2b — an aborted plan's record (absent before it was recorded).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
 }
 
 // CR-CRU-026 §S3.3 — keys are compound `<projectKey> <cycleId>` strings
@@ -463,6 +472,11 @@ export interface LensCycleNode<E extends LensRunLike> {
   id?: number;
   label: string;
   status: string;
+  // §S3 — a recorded plan change's fields (absent on an untouched cycle).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
+  changeKind?: string;
   runs: E[];
 }
 
@@ -474,6 +488,10 @@ export interface LensCrNode<E extends LensRunLike> {
   merge?: { commit: string };
   // CR-CRU-020 §S1.1 — passthrough of Plan.closedAt (declared nodes only).
   closedAt?: number;
+  // §S2b — passthrough of an aborted plan's record (declared nodes only).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
   cycles: Array<LensCycleNode<E>>;
   rollup: { done: number; total: number };
   agents: string[];
