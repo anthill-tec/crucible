@@ -423,4 +423,63 @@ describe("sealed gate events carry a decisionSummary in the events list", () => 
     // asserted via the positive tests above; this test is purely structural.
     expect(gateDecisionsQueryCalls).toBe(1);
   });
+
+  test("an events LIST page with NO sealed gate naming a run issues ZERO gate_decisions statements — an in-flight gate with recorded decisions, a gate naming no run, and a milestone never trigger the grouped read", async () => {
+    boot();
+    const key = await createProject("decision-summary-no-query-page");
+    await registerAgent(key, "orchestrator-1");
+
+    const inFlightRunId = "run-no-query-inflight-1";
+    const inFlightId = await postGate(key, "orchestrator-1", {
+      intent: "still running",
+      outcome: "checks-passed",
+      inFlight: true,
+      steps: [{ name: "solo", status: "running", findings: 2 }],
+      run: { id: inFlightRunId },
+    });
+    await postDecision(key, "orchestrator-1", { runId: inFlightRunId, action: "approve", step: "solo" });
+    const runlessId = await postGate(
+      key,
+      "orchestrator-1",
+      gatePayload("names no run at all", [{ name: "solo", status: "passed", findings: 3 }]),
+    );
+    const milestoneRes = await postJson("/api/v2/milestones", {
+      projectKey: key,
+      agentId: "orchestrator-1",
+      type: "custom",
+      label: "a non-gate marker",
+    });
+    expect(milestoneRes.status).toBe(201);
+    const milestoneId = ((await milestoneRes.json()) as OkResponse).event as string;
+
+    const rawDb = (handle!.store as unknown as { db: Database }).db;
+    const originalQuery = rawDb.query.bind(rawDb) as (
+      sql: string,
+      ...rest: unknown[]
+    ) => ReturnType<Database["query"]>;
+    let gateDecisionsQueryCalls = 0;
+    const querySpy = spyOn(rawDb, "query").mockImplementation(
+      ((sql: string, ...rest: unknown[]) => {
+        if (typeof sql === "string" && /gate_decisions/i.test(sql)) {
+          gateDecisionsQueryCalls++;
+        }
+        return originalQuery(sql, ...rest);
+      }) as typeof rawDb.query,
+    );
+
+    let res: Response;
+    try {
+      res = await getJson(`/api/v2/events?project=${key}`);
+    } finally {
+      querySpy.mockRestore();
+    }
+
+    expect(res.status).toBe(200);
+    const events = ((await res.json()) as EventsListResponse).events;
+    // The page really holds the three events, none carrying a summary.
+    for (const id of [inFlightId, runlessId, milestoneId]) {
+      expect("decisionSummary" in eventById(events, id)).toBe(false);
+    }
+    expect(gateDecisionsQueryCalls).toBe(0);
+  });
 });

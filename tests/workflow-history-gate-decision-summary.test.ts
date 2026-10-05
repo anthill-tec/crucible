@@ -348,6 +348,46 @@ describe("CR-CRU-166 §S1 AC2 — the History row carries no summary line when t
     expect(textOf(waveHeaderOf(wave))).toContain("gated");
     expect(summaryLineOf(wave)).toBeNull();
   });
+
+  test("a wave that was NEVER gated renders its History row (header + CR group) with no summary line, beside a gated wave whose line still renders", async () => {
+    const key = "wave-decision-summary-never-gated";
+    const now = Date.now();
+    const events = [
+      gateEvent({
+        id: "evt-wave-decision-summary-gated-neighbour",
+        projectKey: key,
+        timestamp: now,
+        decisionSummary: { decisions: 4, fixed: 3, added: 1, declined: 16, approvedWithReason: 1 },
+      }),
+    ];
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project(key)],
+      plans: [
+        plan({ planId: 6, cr: "CR-GATED", projectKey: key, wave: "7" }),
+        plan({ planId: 7, cr: "CR-NOGATE", projectKey: key, wave: "8" }),
+      ],
+      events,
+    });
+    await openWorkflowTab();
+
+    // `waveLatestSealedGate` has nothing to pick for the never-gated wave.
+    const logic = (await import(`${APP_LOGIC_PATH}?workflowHistoryDecisionSummary=${cacheBust}`)) as {
+      waveLatestSealedGate: (events: unknown[], wave: string) => unknown;
+    };
+    expect(logic.waveLatestSealedGate(events, "8")).toBeNull();
+
+    const neverGated = waveGroup("8");
+    expect(textOf(waveHeaderOf(neverGated))).toContain("Wave 8");
+    expect(textOf(neverGated)).toContain("CR-NOGATE");
+    expect(summaryLineOf(neverGated)).toBeNull();
+    expect(neverGated.querySelector('[data-testid="gate-decision-summary"]')).toBeNull();
+
+    expect(textOf(summaryLineOf(waveGroup("7")))).toBe(
+      "4 decisions · fixed 3 + 1 added · declined 16 · 1 approved with a reason",
+    );
+  });
 });
 
 // ── G4 — the wave's LATEST sealed gate, in-flight never a candidate ───────
@@ -384,7 +424,7 @@ describe("CR-CRU-166 G4 — the History row summarises the wave's latest SEALED 
     expect(textOf(summaryLineOf(wave))).toBe(
       "4 decisions · fixed 3 + 1 added · declined 16 · 1 approved with a reason",
     );
-    expect(textOf(summaryLineOf(wave))).not.toBe("2 decisions · fixed 1 · declined 0");
+    expect(textOf(summaryLineOf(wave))).not.toBe("2 decisions · fixed 1");
   });
 
   test("a LATER in-flight gate (a re-run still going) is never a candidate — the row keeps showing the earlier SEALED gate's line, not blank and not the in-flight one", async () => {

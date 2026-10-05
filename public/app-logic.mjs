@@ -1096,17 +1096,21 @@ export function workflowLens({ plans, events }) {
  * is shown (the Runs-timeline gate card and the History wave row). Counted by
  * the server off the run's decision records and carried on the events-list
  * brief as `decisionSummary`; absent (no recorded decisions) → null, so no
- * line renders. `+ <a> added` and the approved-with-a-reason clause appear
- * only when non-zero; `declined <d>` always does.
+ * line renders. `1 decision` is singular. `fixed <f>` always appears (even
+ * `fixed 0`, so the line is never a bare count); `+ <a> added`,
+ * `declined <d>` and the approved-with-a-reason clause appear only when
+ * non-zero.
  */
 export function gateDecisionSummaryText(summary) {
   if (summary === undefined || summary === null) return null;
+  const decisions = `${summary.decisions} ${summary.decisions === 1 ? "decision" : "decisions"}`;
   const added = summary.added > 0 ? ` + ${summary.added} added` : "";
+  const declined = summary.declined > 0 ? ` · declined ${summary.declined}` : "";
   const reasoned =
     summary.approvedWithReason > 0
       ? ` · ${summary.approvedWithReason} approved with a reason`
       : "";
-  return `${summary.decisions} decisions · fixed ${summary.fixed}${added} · declined ${summary.declined}${reasoned}`;
+  return `${decisions} · fixed ${summary.fixed}${added}${declined}${reasoned}`;
 }
 
 /**

@@ -46,15 +46,14 @@
 //     approved with a reason` is OMITTED wholesale when
 //     `approvedWithReason === 0` (mirrors `gateDecisionCarried`'s own rule,
 //     "Only the parts the decision actually carries are shown"). `declined
-//     <n>` is the one clause that ALWAYS renders, including `declined 0` —
-//     it is a core computed quantity (R1/R2), not an optional carried extra
-//     like `added`/`approvedWithReason`. Full template:
-//     `<n> decisions · fixed <f>[ + <a> added] · declined <d>[ · <r> approved
-//     with a reason]`.
-//   - no singular/plural grammar anywhere (`"1 decisions"`, not `"1
-//     decision"`) — matches the codebase's existing convention of bare
-//     pluralization with no singular branch (`${steps.length} steps` in
-//     `gateCardText` never special-cases 1).
+//     <n>` follows the same rule (user ruling, 2026-10-05): OMITTED when
+//     `declined === 0`. `fixed <f>` is the one count that ALWAYS renders,
+//     `fixed 0` included, so the line never reads as a bare decision count.
+//     Full template: `<n> decision(s) · fixed <f>[ + <a> added][ · declined
+//     <d>][ · <r> approved with a reason]`.
+//   - singular/plural (same ruling): `1 decision`, never `1 decisions`;
+//     `<r> approved with a reason` reads as a count of approvals and stays
+//     as is for every `<r>`.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -287,7 +286,7 @@ describe("CR-CRU-166 §S1 AC1/AC7 — the gate card's decision-summary line and 
     );
   });
 
-  test("zero-count wording — added:0 drops the '+ N added' clause, approvedWithReason:0 drops the 'approved with a reason' clause, but declined:0 still renders as a bare count", async () => {
+  test("zero-count wording — added:0 drops the '+ N added' clause, approvedWithReason:0 drops the 'approved with a reason' clause, and declined:0 drops the 'declined' clause", async () => {
     const key = "gate-decision-summary-zero-counts";
     const eventId = "evt-gate-decision-summary-zero";
     const now = Date.now();
@@ -307,9 +306,55 @@ describe("CR-CRU-166 §S1 AC1/AC7 — the gate card's decision-summary line and 
     await openRunsTab();
 
     const card = document.querySelector<HTMLElement>('[data-testid="gate-card"]')!;
-    expect(textOf(summaryLineOf(card))).toBe("2 decisions · fixed 1 · declined 0");
+    expect(textOf(summaryLineOf(card))).toBe("2 decisions · fixed 1");
+    expect(textOf(summaryLineOf(card))).not.toContain("declined");
     expect(textOf(summaryLineOf(card))).not.toContain("added");
     expect(textOf(summaryLineOf(card))).not.toContain("approved with a reason");
+  });
+
+  test("singular wording — one decision reads '1 decision', never '1 decisions'", async () => {
+    const key = "gate-decision-summary-singular";
+    const now = Date.now();
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project(key)],
+      events: [
+        gateEvent({
+          id: "evt-gate-decision-summary-singular",
+          projectKey: key,
+          timestamp: now,
+          decisionSummary: { decisions: 1, fixed: 1, added: 0, declined: 0, approvedWithReason: 0 },
+        }),
+      ],
+    });
+    await openRunsTab();
+
+    const card = document.querySelector<HTMLElement>('[data-testid="gate-card"]')!;
+    expect(textOf(summaryLineOf(card))).toBe("1 decision · fixed 1");
+    expect(textOf(summaryLineOf(card))).not.toContain("decisions");
+  });
+
+  test("fixed:0 still renders as 'fixed 0' — the line is never a bare decision count — and one reasoned approval stays '1 approved with a reason'", async () => {
+    const key = "gate-decision-summary-fixed-zero";
+    const now = Date.now();
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project(key)],
+      events: [
+        gateEvent({
+          id: "evt-gate-decision-summary-fixed-zero",
+          projectKey: key,
+          timestamp: now,
+          decisionSummary: { decisions: 1, fixed: 0, added: 0, declined: 0, approvedWithReason: 1 },
+        }),
+      ],
+    });
+    await openRunsTab();
+
+    const card = document.querySelector<HTMLElement>('[data-testid="gate-card"]')!;
+    expect(textOf(summaryLineOf(card))).toBe("1 decision · fixed 0 · 1 approved with a reason");
   });
 
   test("AC7 anti-ambiguity — a LARGE decisionSummary.fixed figure (12) renders verbatim, never the always-0 step-level sum", async () => {
