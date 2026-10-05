@@ -1115,7 +1115,7 @@ describe("CR-CRU-049 — mvn narration hardening", () => {
       // report side).
       const agents = await getAgents(baseUrl, key);
       const finalAgent = agents.find((a) => a.agentId === agentId);
-      expect(finalAgent?.message).toBe("ingesting\u2026");
+      expect(finalAgent?.message).toBe("6 ✓ 0 ✗ · ingested");
     },
     20000,
   );
