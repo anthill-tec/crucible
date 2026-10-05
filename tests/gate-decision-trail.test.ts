@@ -273,6 +273,19 @@ function expectActionDistinctClass(el: Element, action: "fix" | "approve" | "ski
   }
 }
 
+// A decision row's time: the clock time, then the relative age
+// (`14:02 · 3m ago`). The clock is the board's UTC clock, the same one its
+// dated values use; a decision from another UTC day than now carries that
+// day ahead of the clock (`2026-10-04 23:58 · 2h ago`). Built here from the
+// raw ISO string, independently of the render's own formatter.
+function decisionTime(ts: number, now: number): string {
+  const iso = new Date(ts).toISOString();
+  const clock = iso.slice(11, 16);
+  const day = iso.slice(0, 10);
+  const shown = day === new Date(now).toISOString().slice(0, 10) ? clock : `${day} ${clock}`;
+  return `${shown} · ${relativeTime(ts, now)}`;
+}
+
 // Deliberately NOT chronological — see the module comment on row-ORDER
 // pinning: 3m ago, then 2h ago, then 45m ago, then 10m ago. A render that
 // re-sorts by timestamp instead of keeping posting order fails every
@@ -388,7 +401,7 @@ describe("gate drill-in — the DECISIONS section beneath the step rows", () => 
     expect(textOf(action0)).toBe("skip");
     expectActionDistinctClass(action0!, "skip");
     expect(textOf(row0)).toContain("ci-bot");
-    expect(textOf(row0)).toContain(relativeTime(decisions[0]!.timestamp, nowAtAssert));
+    expect(textOf(row0)).toContain(decisionTime(decisions[0]!.timestamp, nowAtAssert));
 
     // Row 1 — fix, "review", finding ids + instructions.
     const row1 = rows[1]!;
@@ -401,7 +414,7 @@ describe("gate drill-in — the DECISIONS section beneath the step rows", () => 
     expect(textOf(row1)).toContain("f-11");
     expect(textOf(row1)).toContain("keep the public API unchanged");
     expect(textOf(row1)).toContain("vidushi");
-    expect(textOf(row1)).toContain(relativeTime(decisions[1]!.timestamp, nowAtAssert));
+    expect(textOf(row1)).toContain(decisionTime(decisions[1]!.timestamp, nowAtAssert));
 
     // Row 2 — fix, "review", an ADDED finding (never a finding id).
     const row2 = rows[2]!;
@@ -410,7 +423,7 @@ describe("gate drill-in — the DECISIONS section beneath the step rows", () => 
     expect(textOf(action2)).toBe("fix");
     expectActionDistinctClass(action2!, "fix");
     expect(textOf(row2)).toContain("the release notes omit a change");
-    expect(textOf(row2)).toContain(relativeTime(decisions[2]!.timestamp, nowAtAssert));
+    expect(textOf(row2)).toContain(decisionTime(decisions[2]!.timestamp, nowAtAssert));
 
     // Row 3 — approve, "test", a reason (a Test-step exception).
     const row3 = rows[3]!;
@@ -419,7 +432,7 @@ describe("gate drill-in — the DECISIONS section beneath the step rows", () => 
     expect(textOf(action3)).toBe("approve");
     expectActionDistinctClass(action3!, "approve");
     expect(textOf(row3)).toContain("flaky e2e retried green twice");
-    expect(textOf(row3)).toContain(relativeTime(decisions[3]!.timestamp, nowAtAssert));
+    expect(textOf(row3)).toContain(decisionTime(decisions[3]!.timestamp, nowAtAssert));
 
     // Bound — no row leaks another row's distinguishing content.
     expect(textOf(row0)).not.toContain("f-03");
@@ -523,7 +536,7 @@ describe("Workflow-tab gate widget — the DECISIONS section, sourced off a per-
     expect(textOf(action0)).toBe("skip");
     expectActionDistinctClass(action0!, "skip");
     expect(textOf(rows[0])).toContain("ci-bot");
-    expect(textOf(rows[0])).toContain(relativeTime(decisions[0]!.timestamp, nowAtAssert));
+    expect(textOf(rows[0])).toContain(decisionTime(decisions[0]!.timestamp, nowAtAssert));
 
     const action1 = rows[1]!.querySelector<HTMLElement>('[data-testid="gate-decision-action"]');
     expect(textOf(action1)).toBe("fix");
@@ -543,5 +556,145 @@ describe("Workflow-tab gate widget — the DECISIONS section, sourced off a per-
     expect(
       !!(lastStepRow.compareDocumentPosition(section!) & Node.DOCUMENT_POSITION_FOLLOWING),
     ).toBe(true);
+  });
+});
+
+// The widget's detail read is held per gate id: the Workflow primary zone
+// re-renders on every poll, and each re-render must reuse the one read
+// rather than issue another. The poll fallback is the app's real
+// `setInterval(refetch, 5000)` (happy-dom has no EventSource), so each tick is
+// awaited in real time, the same way the sibling widget suites do it.
+const POLL_WAIT_MS = 5000 + 700;
+const POLL_TEST_TIMEOUT_MS = 30_000;
+
+async function waitForPollTick(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, POLL_WAIT_MS);
+  await promise;
+  await settle();
+}
+
+function closedWavePlan(key: string, planId: number): PlanFixture {
+  return {
+    planId,
+    cr: "wave 3 release work",
+    projectKey: key,
+    status: "closed",
+    wave: "3",
+    merge: { commit: "cafe003" },
+    cycles: [{ id: planId, label: "C1", status: "done" }],
+  };
+}
+
+describe("Workflow-tab gate widget — one detail read per gate, and a failed read degrades to the bare step ladder", () => {
+  test(
+    "across repeated poll re-renders of the SAME boundary gate (each visibly re-rendering the widget), the gate's single-event detail read is issued exactly once, and its DECISIONS rows stay on screen",
+    async () => {
+      const key = "gate-decisions-widget-fetch-once";
+      const eventId = "evt-decisions-widget-fetch-once";
+      const now = Date.now();
+      const decisions = decisionTrailFixture(now);
+      const listGate = (outcome: GatePayloadFixture["outcome"]): GateEventFixture =>
+        gateEvent({
+          id: eventId,
+          projectKey: key,
+          timestamp: now,
+          gate: {
+            intent: "wave 3 no-mistakes gate",
+            outcome,
+            steps: defaultGateSteps(),
+            run: { id: "run-decision-trail-1" },
+          },
+        });
+      const events: GateEventFixture[] = [listGate("checks-passed")];
+      const fetchLog: string[] = [];
+
+      await mountApp({
+        pathname: `/p/${key}`,
+        projects: [project({ key, name: "Gate Decisions Fetch Once" })],
+        events,
+        plans: [closedWavePlan(key, 711)],
+        eventDetails: {
+          [eventId]: gateEvent({
+            id: eventId,
+            projectKey: key,
+            timestamp: now,
+            runId: "run-decision-trail-1",
+            decisions,
+          }),
+        },
+        fetchLog,
+      });
+      await openWorkflowTab();
+      await settle();
+
+      const banner = (): string =>
+        textOf(document.querySelector('[data-testid="gate-pane"] [data-testid="gate-outcome-banner"]'));
+      const decisionRows = (): number =>
+        document.querySelectorAll(
+          '[data-testid="gate-pane"] [data-testid="gate-decisions-section"] [data-testid="gate-decision-row"]',
+        ).length;
+      const detailReads = (): number => fetchLog.filter((id) => id === eventId).length;
+
+      expect(banner()).toContain("checks-passed");
+      expect(decisionRows()).toBe(4);
+      expect(detailReads()).toBe(1);
+
+      // Poll 1 — the brief list answers the same gate id with a new outcome,
+      // so the widget re-renders (the banner proves it did).
+      events.splice(0, events.length, listGate("passed"));
+      await waitForPollTick();
+      expect(banner()).toContain("passed");
+      expect(banner()).not.toContain("checks-passed");
+      expect(decisionRows()).toBe(4);
+      expect(detailReads()).toBe(1);
+
+      // Poll 2 — and again.
+      events.splice(0, events.length, listGate("failed"));
+      await waitForPollTick();
+      expect(banner()).toContain("failed");
+      expect(decisionRows()).toBe(4);
+      expect(detailReads()).toBe(1);
+    },
+    POLL_TEST_TIMEOUT_MS,
+  );
+
+  test("a detail read that fails leaves the widget's step ladder in place with NO DECISIONS section, and raises no unhandled error", async () => {
+    const key = "gate-decisions-widget-fetch-fails";
+    const eventId = "evt-decisions-widget-fetch-fails";
+    const fetchLog: string[] = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      // No `eventDetails` entry for the gate: the mock fetch REJECTS that read.
+      await mountApp({
+        pathname: `/p/${key}`,
+        projects: [project({ key, name: "Gate Decisions Fetch Fails" })],
+        events: [gateEvent({ id: eventId, projectKey: key, timestamp: Date.now() })],
+        plans: [closedWavePlan(key, 712)],
+        eventDetails: {},
+        fetchLog,
+      });
+      const windowErrors: unknown[] = [];
+      window.addEventListener("error", (e) => windowErrors.push(e));
+      window.addEventListener("unhandledrejection", (e) => windowErrors.push(e));
+      await openWorkflowTab();
+      await settle();
+
+      // The read WAS attempted (and failed) — not merely never issued.
+      expect(fetchLog).toContain(eventId);
+
+      const pane = document.querySelector<HTMLElement>('[data-testid="gate-pane"]');
+      expect(pane).not.toBeNull();
+      expect(pane!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(2);
+      expect(pane!.querySelector('[data-testid="gate-decisions-section"]')).toBeNull();
+      expect(windowErrors).toEqual([]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

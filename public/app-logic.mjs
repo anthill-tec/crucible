@@ -51,6 +51,21 @@ export function formatReleaseDate(epochSeconds) {
 }
 
 /**
+ * A recorded moment's clock time, `HH:MM` on the same UTC clock the board's
+ * dated values use (`formatReleaseDate`), so one record never reads
+ * differently per viewer. A moment from another UTC day than `now` carries
+ * its day ahead of the clock (`YYYY-MM-DD HH:MM`), that day being
+ * `formatReleaseDate`'s own answer. Epoch MILLISECONDS in (a record's
+ * `timestamp`); an unusable value renders the empty string.
+ */
+export function clockTime(ts, now) {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return "";
+  const clock = new Date(ts).toISOString().slice(11, 16);
+  const day = formatReleaseDate(ts / 1000);
+  return day === formatReleaseDate(now / 1000) ? clock : `${day} ${clock}`;
+}
+
+/**
  * CR-CRU-078 §S3/AC6/AC7 — what date ONE release gate carries, resolved once
  * so the render draws an answer instead of re-deciding per call site.
  *
@@ -1697,6 +1712,7 @@ if (typeof window !== "undefined") {
     filterEvents,
     relativeTime,
     formatReleaseDate,
+    clockTime,
     resolveGateDate,
     releaseStripGates,
     releaseStripFocusIndex,

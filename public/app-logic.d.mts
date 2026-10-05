@@ -140,6 +140,10 @@ export declare function relativeTime(ts: number, now: number): string;
  * `YYYY-MM-DD` out, empty string for an absent or unusable value. */
 export declare function formatReleaseDate(epochSeconds: number | null | undefined): string;
 
+/** A record's clock time on the board's UTC clock — `HH:MM`, prefixed with
+ * its `YYYY-MM-DD` day when not from `now`'s day; epoch MILLISECONDS in. */
+export declare function clockTime(ts: number, now: number): string;
+
 /** CR-CRU-078 §S3 — the kind of gate the strip is resolving a date for. The
  *  caller declares it from the slice it iterated; it is never sniffed. */
 export type ReleaseGateKind = "shipped" | "proposed";

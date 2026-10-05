@@ -5533,7 +5533,9 @@
 
     // §S2 (F21 a–c) — the DECISIONS section: one row per decision, kept in
     // the order the server answered (posting order, never re-sorted): time ·
-    // agent · step · action · what it carried. The action's class carries
+    // agent · step · action · what it carried. The time is the clock time
+    // then the relative age (`14:02 · 3m ago`), the clock dated when the
+    // decision is not from today. The action's class carries
     // the fix (heat) / approve (green) / skip (dim) distinction.
     const GateDecisions = (decisions) => {
       if (!Array.isArray(decisions) || decisions.length === 0) return null;
@@ -5544,7 +5546,10 @@
         decisions.map((d) =>
           div(
             { "data-testid": "gate-decision-row", class: "app-gate-decision-row app-tree-line" },
-            span({ class: "app-gate-decision-time" }, L.relativeTime(d.timestamp, now)),
+            span(
+              { class: "app-gate-decision-time" },
+              `${L.clockTime(d.timestamp, now)} · ${L.relativeTime(d.timestamp, now)}`,
+            ),
             " · ",
             span({ class: "app-agent-id" }, d.agentId ?? "an unknown agent"),
             d.step !== undefined ? " · " : null,

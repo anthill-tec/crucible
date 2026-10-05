@@ -460,5 +460,160 @@ class GateRespondWaitElapsedStillPostsDecisionTest(GateRespondBaseHarness):
             f"gate-run itself follows) -- got {gate_calls}")
 
 
+# ---------------------------------------------------------------------------
+# A malformed `--add-finding` is refused BEFORE no-mistakes is launched: the
+# board could not record the decision, so the tool is never asked to take it.
+# `cmd_gate_respond` is called directly with a recording ops stand-in, and
+# `subprocess.Popen` is patched so a launch of any kind is observed, not run.
+# ---------------------------------------------------------------------------
+
+class _RecordingOps:
+    """The subset of `ClientOps` `cmd_gate_respond` reaches before a launch:
+    the agent id, the envelope context, the envelope itself -- and the POSTs,
+    recorded so a refusal that still reached the board is caught."""
+
+    def __init__(self):
+        self.emit_calls = []
+        self.post_calls = []
+
+    def agent_id(self, _args):
+        return "add-finding-refusal-agent"
+
+    def context(self, project_dir, agent_id=None):
+        return {"projectDir": project_dir, "agentId": agent_id}
+
+    def emit(self, verb, ok, fields, context, warnings, legacy):
+        self.emit_calls.append({"verb": verb, "ok": ok,
+                                "fields": copy.deepcopy(fields),
+                                "legacy": legacy})
+
+    def post(self, path, payload):
+        self.post_calls.append((path, copy.deepcopy(payload)))
+        return {"ok": True}
+
+    def post_gate(self, *args, **kwargs):
+        self.post_calls.append((GATES_PATH, (args, kwargs)))
+        return {"ok": True}
+
+    def project_key(self, _project_dir):
+        return "add-finding-refusal-project"
+
+
+class _RespondArgs:
+    """Exactly the attributes `gate_respond_argv`/`gate_decision_body` read."""
+
+    def __init__(self, add_finding, action="fix"):
+        self.action = action
+        self.findings = None
+        self.add_finding = add_finding
+        self.instructions = None
+        self.reason = None
+        self.step = None
+        self.wait = None
+        self.agent = "add-finding-refusal-agent"
+
+
+class GateRespondMalformedAddFindingRefusedBeforeLaunchTest(unittest.TestCase):
+
+    def setUp(self):
+        bun = _load_bun_module(
+            f"gate_respond_add_finding_{self._testMethodName}_under_test")
+        self.axi = bun._axi()
+        self.project_dir = tempfile.mkdtemp(prefix="gate-respond-add-finding-")
+
+    def tearDown(self):
+        shutil.rmtree(self.project_dir, ignore_errors=True)
+
+    def _assert_refused_before_launch(self, add_finding):
+        ops = _RecordingOps()
+        with mock.patch.object(self.axi.subprocess, "Popen") as popen, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = self.axi.cmd_gate_respond(
+                _RespondArgs(add_finding), self.project_dir,
+                "/nonexistent/no-mistakes", ops)
+
+        self.assertEqual(
+            code, 1,
+            f"a malformed --add-finding {add_finding!r} must exit 1, got "
+            f"{code} (stderr={err.getvalue()!r})")
+        self.assertEqual(
+            popen.call_count, 0,
+            f"no-mistakes must never be launched for a malformed "
+            f"--add-finding {add_finding!r}; Popen was called with "
+            f"{popen.call_args_list}")
+        self.assertEqual(
+            len(ops.emit_calls), 1,
+            f"the refusal must emit exactly one envelope, got {ops.emit_calls}")
+        emitted = ops.emit_calls[0]
+        self.assertEqual(emitted["verb"], "gate-respond")
+        self.assertIs(
+            emitted["ok"], False,
+            f"the refusal's envelope must be ok=False, got {emitted!r}")
+        self.assertIn("--add-finding", emitted["legacy"],
+                      f"the refusal must name the flag it refused, got {emitted!r}")
+        self.assertEqual(
+            ops.post_calls, [],
+            f"a refused respond must reach the board with nothing, got "
+            f"{ops.post_calls}")
+
+    def test_an_add_finding_that_is_not_json_is_refused_before_no_mistakes_launches(self):
+        self._assert_refused_before_launch("{not json")
+
+    def test_an_add_finding_whose_json_is_not_an_object_is_refused_before_no_mistakes_launches(self):
+        for value in ('["a", "b"]', '"a bare string"', "42", "null"):
+            with self.subTest(add_finding=value):
+                self._assert_refused_before_launch(value)
+
+
+# ---------------------------------------------------------------------------
+# A respond's gate events carry the intent `respond: <action>` -- the intent
+# `cmd_gate_respond` hands the shared runner, which both streams the interim
+# ladder under it and seals the final gate with it.
+# ---------------------------------------------------------------------------
+
+class GateRespondGateEventsCarryRespondIntentTest(GateRespondBaseHarness):
+
+    def test_a_respond_streams_and_seals_its_gate_events_under_the_respond_action_intent(self):
+        axi_mod = self.module._axi()
+        for action in ("fix", "approve"):
+            with self.subTest(action=action):
+                self._set_snapshot(_ACCEPTED_RESOLVED_SNAPSHOT, 0)
+                calls = []
+                with mock.patch.object(axi_mod, "drive_axi_run",
+                                       wraps=axi_mod.drive_axi_run) as runner_spy, \
+                     mock.patch.object(axi_mod, "stream_axi_ladder",
+                                       wraps=axi_mod.stream_axi_ladder) as ladder_spy, \
+                     mock.patch.object(self.module, "_post",
+                                       side_effect=_fake_post(calls)):
+                    code, out, err = _run_main(self.module,
+                                               self._base_argv(action=action))
+
+                _assert_verb_recognized(self, err)
+                expected = f"respond: {action}"
+                self.assertEqual(runner_spy.call_count, 1,
+                                 f"gate-respond must drive the shared runner "
+                                 f"once (stderr={err!r})")
+                self.assertEqual(
+                    runner_spy.call_args.args[2], expected,
+                    f"the runner's intent must be {expected!r}, got "
+                    f"{runner_spy.call_args!r}")
+                self.assertEqual(ladder_spy.call_count, 1)
+                self.assertEqual(
+                    ladder_spy.call_args.args[2], expected,
+                    f"interim ladder gates must stream under {expected!r}, got "
+                    f"{ladder_spy.call_args!r}")
+                gate_calls = self._gate_calls(calls)
+                self.assertGreaterEqual(
+                    len(gate_calls), 1,
+                    f"a resolved respond must seal a gate (code={code} "
+                    f"stdout={out!r} stderr={err!r})")
+                for _path, payload in gate_calls:
+                    self.assertEqual(
+                        (payload.get("gate") or {}).get("intent"), expected,
+                        f"every gate event a respond posts must carry intent "
+                        f"{expected!r}, got {payload!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -526,4 +526,54 @@ describe("POST /api/v2/gate-decisions — a gate decision is its own record (CR-
       expect("decisions" in gateBrief!).toBe(false);
     });
   });
+
+  // A deleted project takes its gate decisions with it.
+
+  describe("DELETE /api/v2/projects/<key> - deleteProjectCascade removes the project's gate decisions", () => {
+    test("deleting an archived project removes every gate_decisions row it recorded, and leaves another project's decisions (even under the SAME run id) intact and still on that project's gate read", async () => {
+      boot();
+      const doomed = await createProject("decision-cascade-doomed");
+      const kept = await createProject("decision-cascade-kept");
+      await postGate(doomed, "orchestrator-1", { run: { id: "run-cascade-shared" } });
+      const keptGateId = await postGate(kept, "orchestrator-1", { run: { id: "run-cascade-shared" } });
+
+      for (const instructions of ["doomed first", "doomed second"]) {
+        const res = await postJson(
+          "/api/v2/gate-decisions",
+          decisionBody(doomed, "orchestrator-1", { runId: "run-cascade-shared", instructions }),
+        );
+        expect(res.status).toBe(201);
+      }
+      const keptRes = await postJson(
+        "/api/v2/gate-decisions",
+        decisionBody(kept, "orchestrator-1", { runId: "run-cascade-shared", instructions: "kept" }),
+      );
+      expect(keptRes.status).toBe(201);
+
+      // The store exposes no count API; reach the private `db` the way the
+      // project-teardown suite's own `countRows` does.
+      const db = (handle!.store as unknown as {
+        db: { query: (sql: string) => { get: (key: string) => { n: number } | null } };
+      }).db;
+      const decisionRows = (key: string): number =>
+        db.query("SELECT COUNT(*) AS n FROM gate_decisions WHERE project_key = ?").get(key)!.n;
+      expect(decisionRows(doomed)).toBe(2);
+      expect(decisionRows(kept)).toBe(1);
+
+      const archiveRes = await postJson(`/api/v2/projects/${doomed}/archive`, {});
+      expect(archiveRes.status).toBe(200);
+      const deleteRes = await fetch(`http://localhost:${handle!.server.port}/api/v2/projects/${doomed}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userApproved: true }),
+      });
+      expect(deleteRes.status).toBe(200);
+      expect(((await deleteRes.json()) as OkResponse).ok).toBe(true);
+
+      expect(decisionRows(doomed)).toBe(0);
+      expect(decisionRows(kept)).toBe(1);
+      const keptEvent = await getEventDetail(keptGateId);
+      expect(keptEvent.decisions!.map((d) => d.instructions)).toEqual(["kept"]);
+    });
+  });
 });
