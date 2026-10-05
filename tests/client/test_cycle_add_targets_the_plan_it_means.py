@@ -1005,6 +1005,27 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
                     verify_cycle_id,
                     f"fixture sanity: the appended verify cycle's id must "
                     f"ride the envelope; got {decoded!r}")
+                # Cycles activate in ascending order: complete every earlier
+                # pending cycle (activate, then done) before the verify one,
+                # checking each transition so the setup cannot fail silently.
+                earlier = []
+                for cycle in self._plan_by_id(plan_id).get("cycles") or []:
+                    if cycle.get("id") == verify_cycle_id:
+                        break
+                    if cycle.get("status") == "pending":
+                        earlier.append(cycle.get("id"))
+                for earlier_id in earlier:
+                    for step in ("cycle-activate", "cycle-done"):
+                        moved = self._client(
+                            step, str(earlier_id),
+                            "--agent", self.ORCHESTRATOR,
+                            "--project-dir", self.project_dir)
+                        self.assertEqual(
+                            moved.returncode, 0,
+                            f"fixture: {step} {earlier_id} (an earlier "
+                            f"pending cycle) must succeed; "
+                            f"stdout={moved.stdout.strip()[:600]!r} "
+                            f"stderr={moved.stderr.strip()[:600]!r}")
                 activated = self._client(
                     "cycle-activate", str(verify_cycle_id),
                     "--agent", self.ORCHESTRATOR,
