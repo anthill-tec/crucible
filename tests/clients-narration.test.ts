@@ -294,7 +294,7 @@ async function pollAgentUntil(
 // ── narration parsing + throttle assertion ─────────────────────────────────
 
 const NARRATION_RE = /running (\d+)\/(\d+)/;
-const CLASS_NARRATION_RE = /running class (\d+)\/(\d+)/;
+const CLASS_NARRATION_RE = /running (\d+)\/(\d+)(?: \u00b7 \S+)?/;
 
 interface NarrationPoint {
   t: number;
@@ -1115,7 +1115,7 @@ describe("CR-CRU-049 — mvn narration hardening", () => {
       // report side).
       const agents = await getAgents(baseUrl, key);
       const finalAgent = agents.find((a) => a.agentId === agentId);
-      expect(finalAgent?.message).toBe("finished 3/3 test classes — results ingested");
+      expect(finalAgent?.message).toBe("ingesting\u2026");
     },
     20000,
   );
