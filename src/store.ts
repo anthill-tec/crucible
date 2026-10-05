@@ -4794,6 +4794,14 @@ export class Store {
       .get(projectKey, planId);
   }
 
+  /**
+   * §S4 (N1) — the CR a plan belongs to, so a write against a
+   * named plan can echo it without the caller reading the plan board.
+   */
+  planCr(projectKey: string, planId: number): string | null {
+    return this.getPlanRow(projectKey, planId)?.cr ?? null;
+  }
+
   private listCycleRows(projectKey: string, planId: number): PlanCycleRow[] {
     // CR-CRU-024 §S3.1 — display order is `seq`, not `cycle_id`; the cycle_id
     // tiebreaker keeps a stable order for any legacy rows sharing a seq.

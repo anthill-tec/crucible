@@ -1783,6 +1783,9 @@ async function handleCycleAppend(
       ok: true,
       changed: true,
       ...cycle,
+      // §S4 (N1) — the plan's own CR, so a client that named the
+      // plan directly can label its envelope without reading the board.
+      cr: store.planCr(pk.key, planId),
       ...(change !== undefined ? { warnings: [PROCESS_FAILURE_WARNING] } : {}),
     },
     201,
