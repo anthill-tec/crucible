@@ -338,8 +338,8 @@ class CycleAddNamesThePlansCrWhenPlanAloneIsGivenTest(_CycleAddTestBase):
                 self.assertEqual(
                     gets, [],
                     f"[{client}] N1 -- the cr comes from the append "
-                    f"response, never a board read (CR-CRU-124's --plan "
-                    f"alone reads no board); got {gets!r}")
+                    f"response, never a board read (`--plan` alone "
+                    f"reads no board); got {gets!r}")
                 axi = self._decode(module, out)
                 self.assertEqual(
                     (axi.get("context") or {}).get("cr"),
