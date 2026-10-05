@@ -5819,6 +5819,227 @@ def unit_run_wall_vs_cpu_warnings(tier, client, timing,
     }]
 
 
+# \u2500\u2500 THE SHARED RUN PATH \u2014 open, stream live, narrate, finalize \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+#
+# Every suite-running verb of every stack client walks the same four steps,
+# and they live HERE so a stack contributes only the two facts that are its
+# own: how a completed test reads in its runner's output (the `recognise`
+# callable) and its best-known total.
+#
+#   1. `open_run` \u2014 `POST /api/v2/runs/start` BEFORE the suite is spawned, so
+#      the board draws the running card for the whole span.
+#   2. `run_streamed` \u2014 the runner's combined output reaches stderr and the
+#      `--log` file AS IT IS PRODUCED, while the returned capture stays
+#      byte-identical to what a capture-after-exit would have held (the
+#      parsers that read it afterwards see no difference).
+#   3. `RunNarrator` \u2014 throttled `running N/M` heartbeats while in flight.
+#   4. `close_narration` \u2014 the final `ran M/M`, whatever the throttle last
+#      allowed, then `ingesting\u2026` ahead of the ingest POST itself.
+
+RUN_START_PATH = "/api/v2/runs/start"
+RUN_LIFECYCLE_UNAVAILABLE_CODE = "run-lifecycle-unavailable"
+INGESTING_MESSAGE = "ingesting\u2026"
+NARRATION_LABEL_JOINER = " \u00b7 "
+
+
+class RunNarrator:
+    """Throttled in-run `running N[/M]` narration, shared by every stack.
+
+    `post(message)` delivers one heartbeat message; it is best-effort, so any
+    failure it raises is reported once on stderr and never reaches the wrapped
+    run. `recognise(line)` is the stack's own reading of one output line: a
+    bool (is it one completed test/class?) or a `(completed, label)` pair,
+    where a non-None `label` replaces the current file/class shown after the
+    count (`running 1843/2936 \u00b7 roadmap.test.ts`) whether or not that line
+    completed anything.
+
+    `total` is an int or a zero-arg callable re-read at every post; at or below
+    zero it is unknown and the denominator is dropped (`running N`). A known
+    total is clamped to at least the completed count, so M never reads below N.
+
+    Throttle: the first update fires once `min_seconds` have passed since the
+    first completion OR `min_completions` have accumulated; each later one
+    needs the same distance past the last POSTED update. `finish()` posts the
+    final `ran M/M` unconditionally and without the label."""
+
+    def __init__(self, post, recognise, total=0, min_seconds=2.0,
+                 min_completions=10):
+        self._post = post
+        self._recognise = recognise
+        self._total = total
+        self._min_seconds = min_seconds
+        self._min_completions = min_completions
+        self._count = 0
+        self._label = None
+        self._first_seen = None   # monotonic ts of the first completion
+        self._posted_at = None    # monotonic ts of the last posted update
+        self._posted_count = 0
+        self._post_failed = False
+
+    @property
+    def count(self):
+        """Completions observed so far."""
+        return self._count
+
+    def observe(self, line):
+        """Feed one line of the runner's output."""
+        verdict = self._recognise(line)
+        if isinstance(verdict, tuple):
+            completed, label = verdict
+            if label is not None:
+                self._label = label
+        else:
+            completed = verdict
+        if completed:
+            self._completed()
+
+    def finish(self):
+        """Post the final `ran M/M` \u2014 always, with no label."""
+        total = self._resolved_total()
+        final = total if total > 0 else self._count
+        self._deliver(f"ran {final}/{final}")
+
+    def say(self, message):
+        """Post one message outside the throttle, as best-effort as the rest."""
+        self._deliver(message)
+
+    def _resolved_total(self):
+        total = self._total() if callable(self._total) else self._total
+        total = total or 0
+        return max(total, self._count) if total > 0 else 0
+
+    def _completed(self):
+        now = time.monotonic()
+        self._count += 1
+        if self._first_seen is None:
+            self._first_seen = now
+        since = now - (self._posted_at if self._posted_at is not None
+                       else self._first_seen)
+        if (since < self._min_seconds
+                and self._count - self._posted_count < self._min_completions):
+            return
+        total = self._resolved_total()
+        message = (f"running {self._count}/{total}" if total > 0
+                   else f"running {self._count}")
+        if self._label:
+            message += NARRATION_LABEL_JOINER + self._label
+        if self._deliver(message):
+            self._posted_at, self._posted_count = now, self._count
+
+    def _deliver(self, message):
+        """Post `message`; True when it was delivered. Narration must never
+        fail the run it reports on, so a failing post is caught \u2014 and said
+        once on stderr, never silently \u2014 and the next completion retries."""
+        try:
+            self._post(message)
+        except (Exception, SystemExit) as exc:  # the poster may sys.exit on a refused POST
+            if not self._post_failed:
+                self._post_failed = True
+                print(f"[crucible] WARN: narration heartbeat not delivered "
+                      f"({exc!r}) \u2014 the run continues", file=sys.stderr)
+            return False
+        return True
+
+
+def close_narration(narrator):
+    """The run has ended: land the final count, then say the result is being
+    ingested \u2014 in that order, and both BEFORE the ingest POST, so the message
+    follows the run to its end instead of keeping a stale count. Inert without
+    a narrator (a run with no agent narrates nothing)."""
+    if narrator is None:
+        return
+    narrator.finish()
+    narrator.say(INGESTING_MESSAGE)
+
+
+def run_lifecycle_unavailable_warning(error):
+    """The structured warning for a run start the SERVER refused. Degradation
+    is not failure (the evidence still lands), but it is never SILENT: the
+    caller asked for a measured span and got a single-shot event instead."""
+    return {
+        "code": RUN_LIFECYCLE_UNAVAILABLE_CODE,
+        "detail": (f"could not open a run lifecycle: {error} \u2014 fell back to a "
+                   f"single-shot ingest, so this run is stored with the "
+                   f"tool-reported duration_ms only (no startedAt, no "
+                   f"server-computed runtime_ms)"),
+    }
+
+
+def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None):
+    """Open the run BEFORE the suite is spawned. Returns `(run_id, warnings)`.
+
+    A refusal degrades to single-shot with a warning naming the fallback. An
+    `ok` answer that carries no runId is a server that simply did not open one
+    (nothing failed, so there is nothing to report): the ingest is then the
+    unchanged single-shot POST."""
+    payload = {"projectKey": project_key, "agentId": agent_id, "stack": stack}
+    if tier:
+        payload["tier"] = tier
+    if context:
+        payload["context"] = context
+    resp = post_fn(RUN_START_PATH, payload) or {}
+    run_id = resp.get("runId")
+    if run_id:
+        print(f"[crucible] run started: {run_id}", file=sys.stderr)
+        return run_id, []
+    if resp.get("ok"):
+        return None, []
+    error = resp.get("error") or "the server opened no run"
+    print(f"[crucible] WARN: run lifecycle unavailable ({error}) \u2014 "
+          f"single-shot ingest", file=sys.stderr)
+    return None, [run_lifecycle_unavailable_warning(error)]
+
+
+def run_streamed(cmd, cwd, env, log_path, narrator=None):
+    """Run `cmd`, streaming its combined stdout+stderr LIVE: every line goes to
+    stderr and to `log_path` as the runner produces it, and to `narrator` for
+    progress. Returns a `CompletedProcess` whose `stdout` is the whole capture,
+    byte-identical to a capture-after-exit (the parsers read it unchanged).
+
+    stdout stays the client's envelope channel, so the echo is on stderr. With
+    neither a log nor a narrator there is nothing to tee, and the runner
+    inherits stdio. An interruption of the read (a signal trap raising through
+    it) reaps the runner before it propagates, so no orphan is left behind."""
+    if not log_path and narrator is None:
+        return subprocess.run(cmd, cwd=cwd, env=env)
+    lines = []
+    with contextlib.ExitStack() as stack:
+        log = None
+        if log_path:
+            try:
+                log = stack.enter_context(open(log_path, "w"))
+            except OSError as e:
+                print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
+                      file=sys.stderr)
+        proc = stack.enter_context(subprocess.Popen(
+            cmd, cwd=cwd, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            bufsize=1,
+        ))
+        stream = proc.stdout
+        assert stream is not None  # stdout=PIPE always yields a stream
+        try:
+            for line in stream:
+                lines.append(line)
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                if log is not None:
+                    log.write(line)
+                    log.flush()
+                if narrator is not None:
+                    narrator.observe(line)
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        returncode = proc.wait()
+    out = "".join(lines)
+    if log is not None:
+        print(f"[crucible] run log \u2192 {log_path} ({len(out)} bytes)",
+              file=sys.stderr)
+    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+
+
 def remove_agent_silent(project_dir, agent_id, ops):
     """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
     WITHOUT journaling a lifecycle event (a plain unregister would journal an
