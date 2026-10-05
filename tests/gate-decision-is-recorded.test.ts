@@ -12,9 +12,9 @@
 //     that ties a decision back to its gate). `findings` is an array of
 //     finding ids; `addedFinding` is ONE JSON object (G2: "not free text,
 //     not repeatable"), never an array/string/number.
-//   - Response: the same shape every other evidence-posting route answers
-//     (CR-CRU-140 §S1's "five routes hand a filer an id", now six):
-//     {ok:true, changed:true, event:<decision id>, ...attachEcho}, 201.
+//   - Response: {ok:true, changed:true, decision:<decision id>, ...attachEcho},
+//     201 — a decision is not an event, so its id is never called one
+//     (orchestrator ruling at C1 GREEN; not a CR-CRU-140 evidence route).
 //   - Same caller/attach seam as /gates: requireRegisteredCaller (409 on an
 //     unregistered poster) then resolveIngestAttach(..., validateUnbound:
 //     false) — a bound agent's decision is cycle-stamped from its binding,
@@ -43,6 +43,7 @@ interface OkResponse {
   ok: true;
   changed?: boolean;
   event?: string;
+  decision?: string;
   context?: { cycleId?: number };
   [key: string]: unknown;
 }
@@ -260,13 +261,13 @@ describe("POST /api/v2/gate-decisions — a gate decision is its own record (CR-
       const body = (await res.json()) as OkResponse;
       expect(body.ok).toBe(true);
       expect(body.changed).toBe(true);
-      expect(typeof body.event).toBe("string");
+      expect(typeof body.decision).toBe("string");
 
       const event = await getEventDetail(gateEventId);
       expect(event.decisions).toBeDefined();
       expect(event.decisions).toHaveLength(1);
       const decision = event.decisions![0]!;
-      expect(decision.id).toBe(body.event);
+      expect(decision.id).toBe(body.decision);
       expect(decision.agentId).toBe("orchestrator-1");
       expect(decision.runId).toBe("run-162-full");
       expect(decision.step).toBe("review");
