@@ -2271,6 +2271,15 @@ def cmd_gate_run(args):
         args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
 
 
+def cmd_gate_respond(args):
+    """§S1 — axi PROXY wrapper around `no-mistakes axi respond`: delegates to
+    the shared implementation, which records the decision and drives the run
+    through the runner `gate-run` uses; tool discovery stays HERE (this
+    module's own `shutil`) so each client's harness keeps its patch seam."""
+    return _axi().cmd_gate_respond(
+        args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
+
+
 def cmd_milestone(args):
     """POST a workflow milestone. §S4b — CR-CRU-054 §S2b delegator to the shared
     implementation, which writes the legacy line to STDERR so it can never
@@ -3119,6 +3128,12 @@ def main():
     _axi().add_gate_release_arg(gr)
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
+
+    # §S1 — the gate DECISION verb, through the shared registrar so five
+    # clients cannot fork its flag surface; it drives the run through the
+    # same runner as gate-run.
+    _axi().add_gate_respond_verb(sub, cmd_gate_respond,
+                                 add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
 
     grp = sub.add_parser("gate-report",
                          help="Report a single already-run gate → POST /api/v2/gates.")
