@@ -205,7 +205,7 @@ describe("AC6 — a plan's recorded changes and skips read as a defect signal in
       wave: "3",
       reason: "spec redesigned mid-flight — the planned verify sweep no longer fits",
       cause: "spec-design",
-      specRef: "docs/changes/CR-CRU-999-x.md §S2",
+      specRef: "docs/changes/spec-x.md §S2",
       cycles: [
         { id: 5011, label: "c1 red-green", status: "failed" },
         {
@@ -214,7 +214,7 @@ describe("AC6 — a plan's recorded changes and skips read as a defect signal in
           status: "skipped",
           reason: "spec redesigned mid-flight — the planned verify sweep no longer fits",
           cause: "spec-design",
-          specRef: "docs/changes/CR-CRU-999-x.md §S2",
+          specRef: "docs/changes/spec-x.md §S2",
           changeKind: "abort",
         },
       ],
@@ -242,7 +242,7 @@ describe("AC6 — a plan's recorded changes and skips read as a defect signal in
       recordText(
         "spec redesigned mid-flight — the planned verify sweep no longer fits",
         "spec-design",
-        "docs/changes/CR-CRU-999-x.md §S2",
+        "docs/changes/spec-x.md §S2",
       ),
     );
 
@@ -261,7 +261,7 @@ describe("AC6 — a plan's recorded changes and skips read as a defect signal in
       recordText(
         "spec redesigned mid-flight — the planned verify sweep no longer fits",
         "spec-design",
-        "docs/changes/CR-CRU-999-x.md §S2",
+        "docs/changes/spec-x.md §S2",
       ),
     );
 
@@ -343,7 +343,7 @@ describe("AC6 — a plan's recorded changes and skips read as a defect signal in
           status: "skipped",
           reason: "the planned c2 no longer applied",
           cause: "gap-analysis",
-          specRef: "docs/changes/CR-CRU-999-y.md §G3",
+          specRef: "docs/changes/spec-y.md §G3",
           changeKind: "skip",
         },
       ],
@@ -394,7 +394,7 @@ describe("AC6 — the Active (open-plan) panel shows the same recorded-change si
           status: "skipped",
           reason: "gap analysis found cycle 1 obsolete",
           cause: "gap-analysis",
-          specRef: "docs/changes/CR-CRU-999-z.md §G2",
+          specRef: "docs/changes/spec-z.md §G2",
           changeKind: "skip",
         },
         { id: 6012, label: "c2 verify", status: "pending" },
@@ -423,7 +423,7 @@ describe("AC6 — the Active (open-plan) panel shows the same recorded-change si
     const recordedBlock = recordedRow!.querySelector<HTMLElement>('[data-testid="cycle-change-record"]');
     expect(recordedBlock).not.toBeNull();
     expect((recordedBlock!.textContent ?? "").trim()).toBe(
-      recordText("gap analysis found cycle 1 obsolete", "gap-analysis", "docs/changes/CR-CRU-999-z.md §G2"),
+      recordText("gap analysis found cycle 1 obsolete", "gap-analysis", "docs/changes/spec-z.md §G2"),
     );
 
     const unrecordedRow = active().querySelector<HTMLElement>('[data-testid="cycle-row"][data-cycle-id="6014"]');
@@ -455,7 +455,7 @@ describe("AC6 — the Active (open-plan) panel shows the same recorded-change si
           status: "pending",
           reason: "orchestrator renamed c1 after the spec clarified its scope",
           cause: "spec-design",
-          specRef: "docs/changes/CR-CRU-999-w.md §S1",
+          specRef: "docs/changes/spec-w.md §S1",
           changeKind: "rename",
         },
         { id: 6022, label: "c2", status: "active" },
@@ -484,7 +484,7 @@ describe("AC6 — the Active (open-plan) panel shows the same recorded-change si
       recordText(
         "orchestrator renamed c1 after the spec clarified its scope",
         "spec-design",
-        "docs/changes/CR-CRU-999-w.md §S1",
+        "docs/changes/spec-w.md §S1",
       ),
     );
   });
