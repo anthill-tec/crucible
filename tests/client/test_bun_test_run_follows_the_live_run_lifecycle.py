@@ -20,7 +20,7 @@ so the proof that the test fails for the real defect still holds end to end.
 
 AC3/AC5 ("narration through the ONE shared path -- test behaviour, not
 source text") -- F19 state 1 (storyboard, `.lavish/crucible-v2-design.html`)
-is the approved visual contract: `running 1843/2936 · roadmap.test.ts` --
+is the approved visual contract: `running 1843/2936 · <current file>` --
 a stack that KNOWS its current file/class KEEPS that suffix; only the
 FINAL `ran M/M` (F19 state 2) drops it. bun's private `_Narrator.observe`
 already posts `f"running {count}/{total} · {current_file}"`
@@ -341,7 +341,7 @@ class NarratedBunTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
             "bun process (the suite) is even spawned")
 
         # -- AC3/AC5: narration is the shared wire shape -- F19 state 1 is
-        # `running 1843/2936 \u00b7 roadmap.test.ts`: the base `running N/M` is
+        # `running 1843/2936 \u00b7 <current file>`: the base `running N/M` is
         # the SAME bare shape every stack posts, but a stack that KNOWS its
         # current file/class (bun does) keeps that " \u00b7 <label>" suffix --
         # it is part of the approved visual contract, not a per-stack

@@ -49,7 +49,7 @@ this class at all, per AC3/AC5's "test behaviour, not source text"):
     .observe(line)   — feed one line of the runner's output. Every
                        'running N[/M]' heartbeat APPENDS " · <label>" when a
                        label is currently known (F19 state 1: `running
-                       1843/2936 · roadmap.test.ts`, the approved visual
+                       1843/2936 · <current file>`, the approved visual
                        contract, storyboard F19 .lavish/crucible-v2-design.html).
     .finish()        — UNCONDITIONALLY posts the final count `ran M/M`,
                        with NO label suffix even when one is known (F19
@@ -244,9 +244,9 @@ class SharedRunNarratorFinalPostTest(unittest.TestCase):
             f"from a value captured at construction; posted={self.posted!r}")
 
     def test_a_label_set_on_a_non_completion_line_persists_onto_later_running_updates(self):
-        """F19 state 1 -- `running 1843/2936 \u00b7 roadmap.test.ts`: the label
+        """F19 state 1 -- `running 1843/2936 \u00b7 <current file>`: the label
         comes from a line that does NOT itself count as a completion (bun's
-        own file-header line, e.g. `roadmap.test.ts:`), and must still be
+        own file-header line, e.g. `<current file>:`), and must still be
         attached to the completion lines that follow it."""
         def _recognise(line):
             text = line.strip()
