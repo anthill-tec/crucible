@@ -38,6 +38,7 @@ import {
 } from "./store.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type {
+  LiveAgent,
   MilestoneDateFilter,
   PlanOpError,
   ProjectPatch,
@@ -808,15 +809,62 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
   // (or which has outlived the `run_abandon_ms` limit) is aborted here, before the
   // dashboard reads a dead agent with a run still "running".
   store.sweepOpenRuns(now);
-  const agents = store.listAgents(project, now).map((agent) => ({
-    ...agent,
-    runtime_ms:
-      agent.liveness === "tombstoned"
-        ? (store.lastRunTimestamp(agent.projectKey, agent.agentId) ?? agent.lastSeen) -
-          agent.firstSeen
-        : now - agent.firstSeen,
-  }));
+  // §S3/R1 — computed once per read (after the sweep, so a run it just aborted
+  // no longer counts as open): which agents still have a run in flight.
+  const running = new Set(
+    store.listOpenRuns(project).map((run) => `${run.projectKey}\u0000${run.agentId}`),
+  );
+  const agents = store.listAgents(project, now).map((agent) => {
+    const lastRunAt = store.lastRunTimestamp(agent.projectKey, agent.agentId);
+    const idle =
+      agent.liveness !== "tombstoned" && !running.has(`${agent.projectKey}\u0000${agent.agentId}`);
+    return {
+      ...agent,
+      runtime_ms:
+        agent.liveness === "tombstoned"
+          ? (lastRunAt ?? agent.lastSeen) - agent.firstSeen
+          : now - agent.firstSeen,
+      ...(idle ? { idleLine: idleLine(agent, lastRunAt, now) } : {}),
+    };
+  });
   return reply(req, url, { ok: true, agents });
+}
+
+/**
+ * §S3/R1 — idle is the board's word: an agent with no open run reads
+ * `idle · <role> · cycle <id> · last run <message>, <age>` (`no cycle bound` in
+ * place of the cycle when it holds no binding), composed here at read time
+ * from its binding and its last run event; the message carries the outcome or
+ * refusal the ingest routes wrote (§S2). An agent that never ran says when it
+ * was last seen instead. Served as an ADDITIVE `idleLine` — absent while a
+ * run is open or the agent is tombstoned — so the raw `message` is untouched.
+ */
+function idleLine(agent: LiveAgent, lastRunAt: number | null, now: number): string {
+  const segments = ["idle"];
+  if (agent.role !== undefined) segments.push(agent.role);
+  segments.push(
+    agent.boundCycleId !== undefined ? `cycle ${agent.boundCycleId}` : "no cycle bound",
+  );
+  segments.push(
+    lastRunAt !== null
+      ? `last run ${agent.message}, ${relativeAge(lastRunAt, now)}`
+      : `seen ${relativeAge(agent.lastSeen, now)}`,
+  );
+  return segments.join(" · ");
+}
+
+/**
+ * The board's one relative-age convention, mirrored server-side so a
+ * server-composed line reads exactly like the card's own ages (`relativeTime`
+ * in the SPA's app logic): "just now" under 10s, else `Ns/Nm/Nh/Nd ago`.
+ */
+function relativeAge(ts: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - ts) / 1000));
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
@@ -908,7 +956,13 @@ function resolveIngestAttach(
   agentId: string,
   body: V2Body,
   validateUnbound: boolean,
-): { fail?: Response; staleHelp?: string[]; context?: RunContext; role?: AgentRole } {
+): {
+  fail?: Response;
+  staleHelp?: string[];
+  context?: RunContext;
+  role?: AgentRole;
+  refusal?: string;
+} {
   const agent = store.getAgent(projectKey, agentId);
   const roleAttach: { role?: AgentRole } =
     agent?.role !== undefined ? { role: agent.role } : {};
@@ -948,9 +1002,30 @@ function resolveIngestAttach(
       fail: fail(409, `bound cycle ${bound} is ${state} — ingest refused, run NOT stored`, {
         help: cycleHints.staleBinding(bound, state),
       }),
+      // §S2/G4 — the refusal in the card's words; a run-ingest route writes
+      // it onto the agent (`refuseIngest`) so a refused ingest never leaves a
+      // stale count behind.
+      refusal: `ingest refused — cycle ${bound} is ${state}`,
     };
   }
   return { ...roleAttach, context: { ...context, cycleId: bound } };
+}
+
+/**
+ * §S2/G4 — a run ingest the attach seam refused: the server, which refused
+ * it, writes the refusal onto the agent's `message` (when the seam composed
+ * one) before answering with the refusal itself.
+ */
+function refuseIngest(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  attach: { fail: Response; refusal?: string },
+): Response {
+  if (attach.refusal !== undefined) {
+    store.touchAgent(projectKey, agentId, { message: attach.refusal });
+  }
+  return attach.fail;
 }
 
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
@@ -1139,7 +1214,9 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
-  if (attach.fail !== undefined) return attach.fail;
+  if (attach.fail !== undefined) {
+    return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
+  }
   // CR-CRU-017 §S1 — the optional run this ingest CLOSES, resolved before any
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);
@@ -1199,7 +1276,9 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
-  if (attach.fail !== undefined) return attach.fail;
+  if (attach.fail !== undefined) {
+    return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
+  }
   // CR-CRU-017 §S1 — the optional run this ingest CLOSES, resolved before any
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);

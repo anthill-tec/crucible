@@ -2312,6 +2312,15 @@ class PlanRegistrationRefused extends Error {
   }
 }
 
+/**
+ * §S2/G4 — the outcome of an ACCEPTED test ingest, composed by the server at
+ * ingest and written onto the agent's `message` (`recordTestEvent`), in the
+ * board's tally form: `2936 ✓ 0 ✗ · ingested`.
+ */
+function ingestOutcome(summary: RunSchema["summary"]): string {
+  return `${summary.passed} ✓ ${summary.failed} ✗ · ingested`;
+}
+
 export class Store {
   private readonly db: Database;
   /**
@@ -3252,7 +3261,10 @@ export class Store {
     meta?: RecordEventMeta,
   ): RunEvent {
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
-    this.touchAgent(projectKey, agentId);
+    // §S2/G4 — and the SERVER, which recorded the ingest, writes its outcome
+    // onto the agent: the client's last heartbeat (`ingesting…`) never
+    // outlives the run it narrated.
+    this.touchAgent(projectKey, agentId, { message: ingestOutcome(run.summary) });
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
