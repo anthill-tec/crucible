@@ -1,7 +1,6 @@
 # CR-CRU-157 — the agent card tells the truth about the agent
 
-**Type** fix · **Points** 8 (planning game 2026-09-27: 5; re-estimated 2026-10-03 for the all-stack §S0) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27; scope extended 2026-10-01 (live runs for every stack, Sandesh #1412). Points are
-re-set at its gap analysis
+**Type** fix · **Points** 13 (planning game 2026-09-27: 5; 8 on 2026-10-03; re-set at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27; scope extended 2026-10-01 (live runs for every stack, Sandesh #1412)
 
 ## Problem
 
@@ -25,6 +24,50 @@ earlier. **At other times the card shows nothing that says what the agent is doi
   message, `Starting GREEN phase`) through ingest, idle and the next phase. The row
   (`AgentRow` in `public/app.js`) renders `agent.message` as it stands.
 
+## Gap analysis (2026-10-05)
+
+**Baseline, measured 2026-10-05 20:34–20:35 on develop `54ac978`:** the agent lifecycle, runtime
+pane, role, narration, run lifecycle and bun client bun suites, **107/0**; the bun lifecycle,
+run-lifecycle and five per-client AXI python suites, **243/0** (both filed project-scoped under
+`vidushi`).
+
+**G1 — what each client does today (census of the suite-running verbs, by code reading):**
+
+| Client | START (`/runs/start`) | LIVE (stream while running) | NARRATE (`running N/M`) | FINAL |
+|---|---|---|---|---|
+| bun | yes (`_start_run`) | yes (`_run_logged`, Popen) | yes (`_Narrator`, per test, 2 s / 10) | **no** |
+| python | **no** | **no** (`subprocess.run`, echo after exit) | **no** | **no** |
+| mvn | **no** | yes (Popen) | yes (`_Narrator`, per test CLASS) | yes, `finish()`, **after** ingest |
+| rust | **no** | **no** (`subprocess.run`) | **no** | **no** |
+| arduino | **no** | **no** (`subprocess.run`) | **no** | **no** |
+
+No narration code is shared; the two `_Narrator` classes differ (per test vs per class; mvn's
+final message is posted after the ingest, so it overwrites the outcome rather than preceding it).
+
+- **G2 — "a suite-running verb".** The test-tier verbs (test, unit, module, integration,
+  regression, e2e, bdd, workspace-regression and the declared-tier verbs) — not `check`/`compile`
+  (no tests run) and not the gates (they invoke the tier verbs, which narrate).
+- **G3 — how each stack sees a completed test, and its total.** bun: its ✓/✗ lines, total from
+  `_prescan_test_total` (a hint). mvn: `[INFO] Running <class>` lines (class-scoped). python:
+  unittest prints one line per test only in verbose mode (`-v`); the total is unknown until the
+  end. rust: nextest prints its total at the start and one line per test. arduino: Unity prints
+  one line per test; the total is unknown until the end. **Where the total is unknown, the
+  narration reads `running N` and the final `ran N/N`.**
+- **G4 — the message after the run is the server's to write.** The agent's message is only ever
+  the client's (`touchAgent` keeps the old message on every ingest and heartbeat), which is why it
+  goes stale. The client posts `ingesting…`; the server, which records the ingest or refuses it,
+  writes the outcome (`2936 ✓ 0 ✗ · ingested`) or the refusal onto the agent.
+- **G5 — idle is derived on the server (F19 card c). Ruling needed (R1).** With no open run, the
+  card reads `idle · <role> · <cycle or plan> · last run <outcome>, <age>`, composed by the server
+  at read time from the agent's open runs, binding and last event. That folds F19's state 4
+  (`2936 ✓ 0 ✗ · ingested`) into state 5′ the moment the run closes.
+  **R1 (user, 2026-10-05): the server derives idle and composes the line.**
+- **G6 — cost. Ruling needed (R2).** One shared narrator and run-opening path in
+  `_crucible_axi.py`, streaming in three clients that capture today (python, rust, arduino, keeping
+  their parsed copy byte-identical), a completion recogniser per stack, the start call in four
+  clients, the server writing outcome and idle, and the card. That is 13 points, not 8.
+  **R2 (user, 2026-10-05): one CR, 13 points.**
+
 ## Scope
 
 ### §S0 — every stack's run is visibly alive (Sandesh #1412; all stacks by user ruling 2026-10-01)
@@ -45,15 +88,17 @@ allowed. Every client that narrates does it through one shared path in `clients/
 
 ### §S2 — the message follows the run to its end
 
-After the tests finish, the message follows the run: `ingesting…` while the result is posted, then
-the outcome (e.g. `2936 ✓ 0 ✗ · ingested`, or the refusal if the ingest failed).
+After the tests finish, the message follows the run: the client posts `ingesting…` while the result
+is posted; the server, which records or refuses the ingest, writes the outcome (`2936 ✓ 0 ✗ ·
+ingested`) or the refusal onto the agent (G4), which the idle line then carries (§S3).
 
 ### §S3 — an idle agent says so (user ruling 2026-09-27)
 
-Between runs, the card says the agent is idle, with its role and bound cycle, instead of repeating
-the last run's message. Whether "idle" is decided by the server (from the agent's open runs and last
-event) or posted by the client is this CR's gap analysis to settle; state-dependent logic belongs on
-the server (user ruling 2026-09-26).
+Between runs, the card says the agent is idle, with its role, its bound cycle or plan, and the last
+run's result, instead of repeating the last run's message. The server decides it (R1): an agent with
+no open run reads `idle · <role> · <cycle or plan> · last run <outcome or refusal>, <age>`, composed
+at read time from its open runs, binding and last event; with an open run, it reads the client's
+running message.
 
 ## Acceptance criteria
 
@@ -75,3 +120,13 @@ the server (user ruling 2026-09-26).
 - [ ] A run that fails to ingest leaves the refusal on the card, not a stale count.
 - [ ] The card's states match storyboard **F19** (drawn 2026-09-27, the visual contract), checked in a
       real browser at VERIFY.
+
+## Cycles
+
+C1 shared run path: the narrator, run opening, live streaming and the final count in
+`_crucible_axi.py`, with bun and mvn moved onto it (AC1–AC5 for bun and mvn). RED + GREEN.
+C2 the three capturing clients: python, rust, arduino on the shared path, each with its completion
+recogniser (AC1–AC3, AC5 for those three). RED + GREEN.
+C3 server and card: the outcome and refusal written on ingest, idle derived at read time, the card
+(AC6–AC8). RED + GREEN.
+C4 VERIFY, including F19 in a real browser (AC9).
