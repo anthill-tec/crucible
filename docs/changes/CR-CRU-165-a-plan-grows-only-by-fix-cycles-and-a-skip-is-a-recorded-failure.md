@@ -115,34 +115,36 @@ carry no reason and are shown as unrecorded, never back-filled.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — a `fix` cycle after a done VERIFY is appended with nothing more; any other append
+- [x] **AC1** — a `fix` cycle after a done VERIFY is appended with nothing more; any other append
       without reason, cause and spec reference is refused with the rule, and with them is appended,
       recorded and warned.
-- [ ] **AC2** — `cycle-skip` on a pending cycle with reason, cause and spec reference marks it
+- [x] **AC2** — `cycle-skip` on a pending cycle with reason, cause and spec reference marks it
       skipped and stores all three; the board shows them.
-- [ ] **AC3** — `cycle-skip` is refused for an active, done or failed cycle, a cycle with a run
+- [x] **AC3** — `cycle-skip` is refused for an active, done or failed cycle, a cycle with a run
       filed, the plan's last unskipped cycle, a missing reason, cause or spec reference, and a
       non-orchestrator caller. Each refusal names its rule.
-- [ ] **AC4** — the PATCH route enforces the same guards.
-- [ ] **AC5** — the envelope carries the process-failure warning, and `help[]` marks the verb as
+- [x] **AC4** — the PATCH route enforces the same guards.
+- [x] **AC5** — the envelope carries the process-failure warning, and `help[]` marks the verb as
       exceptional, in all five clients.
-- [ ] **AC6** — the Workflow tab shows a plan's skip count and each skipped cycle's reason, and an
+- [x] **AC6** — the Workflow tab shows a plan's skip count and each skipped cycle's reason, and an
       aborted plan's reason.
-- [ ] **AC7** — `cycle-add`'s envelope names the plan's CR (N1).
-- [ ] **AC8** — the unscoped plans route honours or refuses `cr=` and `status=` (N2).
-- [ ] **AC9** — insert-before and rename without reason, cause and spec reference are refused with
+- [x] **AC7** — `cycle-add`'s envelope names the plan's CR (N1).
+- [x] **AC8** — the unscoped plans route honours or refuses `cr=` and `status=` (N2).
+- [x] **AC9** — insert-before and rename without reason, cause and spec reference are refused with
       the rule; with them they are made, recorded on the cycle with the kind of change, and warned
       (R1).
-- [ ] **AC10** — `PATCH` an active cycle to `skipped` is refused; an active cycle ends `done` or
+- [x] **AC10** — `PATCH` an active cycle to `skipped` is refused; an active cycle ends `done` or
       `failed` (R2).
-- [ ] **AC11** — `abort` without reason, cause or spec reference is refused; with them, the plan
+- [x] **AC11** — `abort` without reason, cause or spec reference is refused; with them, the plan
       stores all three, its skipped cycles show the reason, and the envelope carries the warning,
       in all five clients (R3).
-- [ ] **AC12** — analytics counts recorded plan changes (insert, rename, non-FIX append, skip) and
+- [x] **AC12** — analytics counts recorded plan changes (insert, rename, non-FIX append, skip) and
       aborts per release by cause; pre-existing ones are
       counted as unrecorded.
-- [ ] **AC13** — the crucible skill's verb list names `cycle-skip` and the new `abort` flags, and
-      states that a plan grows only by FIX cycles.
+- [ ] **AC13** — the 0.3.0 release notes to Model B (who own the crucible skill and the agent
+      definitions) name `cycle-skip`, the new `abort` and `cycle-add` flags, and the rule that a
+      plan grows only by FIX cycles, so Model B can update its skills. **Met at the 0.3.0 release, not before merge.** (Reworded 2026-10-05 by
+      the user's ruling: skills are Model B's territory; Crucible never edits them.)
 
 ## Cycles
 
