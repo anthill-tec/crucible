@@ -21,11 +21,23 @@ this class at all, per AC3/AC5's "test behaviour, not source text"):
                                              swallows any exception it raises
                                              (best-effort, CR-CRU-008's
                                              original throttle contract).
-        recognise(line: str) -> bool       — True exactly when `line` is one
-                                             completed test/class (each
-                                             stack's OWN recogniser, per the
-                                             CR: bun's ✓/✗ family, mvn's
-                                             "[INFO] Running <class>").
+        recognise(line: str) -> bool | tuple[bool, str | None]
+                                           — True/False (plain) when `line`
+                                             is/isn't one completed
+                                             test/class, with NO label
+                                             change; OR a `(completed,
+                                             label)` pair when the stack
+                                             also knows its current
+                                             file/class (bun does) —
+                                             `label` (when not None)
+                                             REPLACES the narrator's stored
+                                             current label, whether or not
+                                             THIS line counted as a
+                                             completion (bun's real
+                                             file-header line sets the
+                                             label on a NON-completion
+                                             line, ahead of the completion
+                                             lines that follow it).
         total                              — a static int, OR a zero-arg
                                              callable returning the current
                                              best-known total (mirrors mvn's
@@ -34,10 +46,16 @@ this class at all, per AC3/AC5's "test behaviour, not source text"):
                                              "unknown" (G3): the wire message
                                              drops the denominator.
 
-    .observe(line)   — feed one line of the runner's output.
-    .finish()        — UNCONDITIONALLY posts the final count `ran M/M`
-                       (M = the resolved total, or the completed count when
-                       the total was never known) — this is the exact
+    .observe(line)   — feed one line of the runner's output. Every
+                       'running N[/M]' heartbeat APPENDS " · <label>" when a
+                       label is currently known (F19 state 1: `running
+                       1843/2936 · roadmap.test.ts`, the approved visual
+                       contract, storyboard F19 .lavish/crucible-v2-design.html).
+    .finish()        — UNCONDITIONALLY posts the final count `ran M/M`,
+                       with NO label suffix even when one is known (F19
+                       state 2: `ran 2936/2936`, no trailing file/class) —
+                       M = the resolved total, or the completed count when
+                       the total was never known. This is the exact
                        guarantee AC4/§S1 need: "whatever the throttle last
                        allowed" must still include "nothing at all".
 
@@ -46,9 +64,10 @@ the stated reason (the symbol does not exist — a real missing-SUT-symbol
 RED, not a typo); (2) a `RunNarrator` implementing the contract above, as
 specified, passes every assertion here — the throttle test's exact tick
 count (the 10th `observe()`, never earlier/later), the known/unknown total
-formatting split pinned verbatim from the CR's own G3 prose, and the
-unconditional `finish()` (tested BOTH with and without any prior post
-ever having crossed the throttle).
+formatting split pinned verbatim from the CR's own G3 prose, the F19-exact
+label suffix on `running` updates and its absence on the final `ran M/M`,
+and the unconditional `finish()` (tested BOTH with and without any prior
+post ever having crossed the throttle).
 """
 
 import importlib.util
@@ -223,6 +242,55 @@ class SharedRunNarratorFinalPostTest(unittest.TestCase):
             self.posted, ["ran 9/9"],
             f"finish() must resolve a CALLABLE total at call time, not "
             f"from a value captured at construction; posted={self.posted!r}")
+
+    def test_a_label_set_on_a_non_completion_line_persists_onto_later_running_updates(self):
+        """F19 state 1 -- `running 1843/2936 \u00b7 roadmap.test.ts`: the label
+        comes from a line that does NOT itself count as a completion (bun's
+        own file-header line, e.g. `roadmap.test.ts:`), and must still be
+        attached to the completion lines that follow it."""
+        def _recognise(line):
+            text = line.strip()
+            if text == "HEADER":
+                return (False, "roadmap.test.ts")
+            return True  # plain bool style: a real completion, no label change
+
+        narrator = self.axi.RunNarrator(self.posted.append, _recognise,
+                                        total=2936, min_seconds=999.0,
+                                        min_completions=1)
+        narrator.observe("HEADER\n")
+        self.assertEqual(
+            self.posted, [],
+            f"a header line carries no completion of its own; "
+            f"posted={self.posted!r}")
+        narrator.observe("x\n")
+        self.assertEqual(
+            self.posted, ["running 1/2936 \u00b7 roadmap.test.ts"],
+            f"F19 state 1's exact shape: the label set by the (non-"
+            f"completion) header line must be appended to the very next "
+            f"'running N/M' heartbeat; posted={self.posted!r}")
+
+    def test_the_final_post_never_carries_the_current_file_label(self):
+        """F19 state 2 -- `ran 2936/2936`: NO trailing file/class, even
+        though a label was known throughout the run."""
+        def _recognise(_line):
+            return (True, "roadmap.test.ts")
+
+        narrator = self.axi.RunNarrator(self.posted.append, _recognise,
+                                        total=2, min_seconds=999.0,
+                                        min_completions=1)
+        narrator.observe("x\n")
+        narrator.observe("x\n")
+        self.assertEqual(
+            self.posted,
+            ["running 1/2 \u00b7 roadmap.test.ts", "running 2/2 \u00b7 roadmap.test.ts"],
+            f"both running updates must carry the known label; "
+            f"posted={self.posted!r}")
+        narrator.finish()
+        self.assertEqual(
+            self.posted[-1], "ran 2/2",
+            f"F19 state 2's exact shape has NO ' \u00b7 <label>' suffix, "
+            f"unlike every 'running' update before it; got "
+            f"{self.posted[-1]!r}")
 
     def test_a_failing_post_during_observe_never_raises_out_of_the_wrapped_run(self):
         """Narration is best-effort (CR-CRU-008's original contract, carried

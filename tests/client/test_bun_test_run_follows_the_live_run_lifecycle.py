@@ -19,14 +19,17 @@ comprehensive test below together with AC4/ingesting, which DO fail today,
 so the proof that the test fails for the real defect still holds end to end.
 
 AC3/AC5 ("narration through the ONE shared path -- test behaviour, not
-source text") -- bun's private `_Narrator.observe` posts
-`f"running {count}/{total} · {current_file}"` (a per-stack-decorated wire
-message, `_Narrator._completed` in clients/bun-crucible.py). A client
-"narrating through the ONE shared narration path" with mvn means the SAME
-wire shape leaves both clients -- so this file asserts the message is
-EXACTLY `running <N>/<M>` with no stack-specific suffix (bun's `· <file>`
-decoration fails that regex today; the sibling mvn test pins the matching
-`mvn` failure, `· <class>` plus the literal word "class").
+source text") -- F19 state 1 (storyboard, `.lavish/crucible-v2-design.html`)
+is the approved visual contract: `running 1843/2936 · roadmap.test.ts` --
+a stack that KNOWS its current file/class KEEPS that suffix; only the
+FINAL `ran M/M` (F19 state 2) drops it. bun's private `_Narrator.observe`
+already posts `f"running {count}/{total} · {current_file}"`
+(`_Narrator._completed` in clients/bun-crucible.py) -- the SAME shape, so
+this sub-assertion can already hold for bun today (like AC1's half above);
+the sibling mvn test pins mvn's actual mismatch (`running class N/M ·
+<class>` -- the wrong WORD, "class", not merely a suffix question).
+Folded into the one comprehensive test below together with AC4/ingesting,
+which DO fail today, so the test fails for the real defect end to end.
 
 AC4 ("a last completion inside the throttle window still ends with `ran
 M/M`") -- bun's `_Narrator` class has NO `finish`/final-post method at all
@@ -337,7 +340,12 @@ class NarratedBunTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
             "AC1: /api/v2/runs/start must reach the board BEFORE the fake "
             "bun process (the suite) is even spawned")
 
-        # -- AC3/AC5: narration is EXACTLY the shared wire shape -------------
+        # -- AC3/AC5: narration is the shared wire shape -- F19 state 1 is
+        # `running 1843/2936 \u00b7 roadmap.test.ts`: the base `running N/M` is
+        # the SAME bare shape every stack posts, but a stack that KNOWS its
+        # current file/class (bun does) keeps that " \u00b7 <label>" suffix --
+        # it is part of the approved visual contract, not a per-stack
+        # decoration to strip. Only the FINAL `ran M/M` (F19 state 2) drops it.
         running_msgs = []
         for _path, b in posts:
             msg = b.get("message") if isinstance(b, dict) else None
@@ -350,13 +358,13 @@ class NarratedBunTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
             f"posted messages={all_messages!r}")
         for m in running_msgs:
             self.assertRegex(
-                m, rf"^running \d+/{self.TOTAL}$",
+                m, rf"^running \d+/{self.TOTAL} \u00b7 narration\.test\.ts$",
                 f"AC3/AC5: narration goes through the ONE shared path in "
                 f"_crucible_axi.py, so bun's wire message must be the SAME "
-                f"bare shape every stack posts -- 'running N/{self.TOTAL}', "
-                f"no stack-specific suffix. bun's own private _Narrator "
-                f"instead appends ' \u00b7 <filename>' (_Narrator._completed "
-                f"in clients/bun-crucible.py); got {m!r}")
+                f"shape F19 state 1 draws -- 'running N/{self.TOTAL} \u00b7 "
+                f"<current file>' (bun KNOWS its current file, so the "
+                f"storyboard keeps the suffix; only the FINAL 'ran M/M' "
+                f"drops it); got {m!r}")
             n = int(m.split()[1].split("/")[0])
             self.assertTrue(
                 1 <= n <= self.TOTAL,
