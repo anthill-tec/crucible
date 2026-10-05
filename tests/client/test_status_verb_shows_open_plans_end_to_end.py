@@ -95,7 +95,7 @@ def _http(base, path, payload=None, method=None):
         base + path, data=data, method=method or ("POST" if data is not None else "GET"),
         headers={"content-type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as exc:
         return json.loads(exc.read().decode())
@@ -108,7 +108,7 @@ def _await_server(base, proc, timeout=60):
             raise RuntimeError(f"scratch server exited early with "
                                f"{proc.returncode}")
         try:
-            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):
+            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):  # noqa: S310
                 return
         except Exception:
             time.sleep(0.2)
@@ -220,7 +220,13 @@ class StatusVerbShowsOpenPlansEndToEndTest(unittest.TestCase):
         aborted = _http(
             cls.base,
             f"/api/v2/projects/{cls.key}/plans/{aborted_plan_id}/abort",
-            {"userApproved": True, "agentId": cls.ORCHESTRATOR})
+            {"userApproved": True, "agentId": cls.ORCHESTRATOR,
+             # CR-CRU-165 S2b -- an abort now requires a recorded reason,
+             # cause and spec reference; this fixture's abort is not the
+             # subject under test, so it simply supplies them to keep
+             # succeeding under the new server contract.
+             "reason": "fixture: retiring this plan to exercise the aborted/closed/open split",
+             "cause": "gap-analysis", "specRef": "fixture §1"})
         assert aborted.get("ok"), f"aborting the plan failed: {aborted!r}"
 
         # The server's OWN facts, read back over HTTP — this is what the

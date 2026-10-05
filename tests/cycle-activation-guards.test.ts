@@ -187,7 +187,12 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
     const key = await createProject();
     const { planId, a, b } = await filePlanAB(key, "CR-GUARD-2");
 
-    const skipA = await transition(key, planId, a, "skipped");
+    const skipA = await patchJson(plansPath(key, `/${planId}/cycles/${a}`), {
+      status: "skipped",
+      reason: "the spec reordered the work",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2",
+    });
     expect(skipA.status).toBe(200);
 
     const activateB = await activate(key, planId, b);

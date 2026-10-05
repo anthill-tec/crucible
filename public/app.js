@@ -5288,6 +5288,49 @@
         ...children,
       );
 
+    // §S3 — a filed plan's recorded changes are a defect signal. A record
+    // reads `reason: <r> · cause: <c> · spec: <ref>` (the board's " · "
+    // idiom); a skip or abort that predates the record carries none of the
+    // three and reads `reason unrecorded` (the AbortedCard wording) — never
+    // blank, never guessed.
+    const changeRecordText = (rec) =>
+      rec.reason !== undefined && rec.cause !== undefined && rec.specRef !== undefined
+        ? `reason: ${rec.reason} · cause: ${rec.cause} · spec: ${rec.specRef}`
+        : "reason unrecorded";
+
+    // §S2/§S1 — every skipped cycle, and every cycle a recorded change
+    // touched, carries its record on its row; an ordinary cycle carries none.
+    const cycleChangeRecord = (cycle) =>
+      cycle.status === "skipped" || cycle.changeKind !== undefined
+        ? [
+            " · ",
+            span(
+              { "data-testid": "cycle-change-record", class: "app-card-meta app-cycle-change-record" },
+              changeRecordText(cycle),
+            ),
+          ]
+        : [];
+
+    // §S3 — the plan's summary line: `<n> skipped` when any cycle is (no
+    // element at all at zero), and an aborted plan's own record.
+    const planChangeSummary = (plan) => {
+      const skipped = (plan.cycles ?? []).filter((c) => c.status === "skipped").length;
+      return [
+        ...(skipped > 0
+          ? [" · ", span({ "data-testid": "plan-skip-count", class: "app-plan-skip-count" }, `${skipped} skipped`)]
+          : []),
+        ...(plan.status === "aborted"
+          ? [
+              " · ",
+              span(
+                { "data-testid": "plan-abort-reason", class: "app-plan-abort-reason" },
+                changeRecordText(plan),
+              ),
+            ]
+          : []),
+      ];
+    };
+
     // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
     // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
     // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
@@ -5338,6 +5381,7 @@
           // affordance, AFTER the timer, on every row whose cycle could have
           // runs (a separate node — never rebinding). ONE shared predicate.
           ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          ...cycleChangeRecord(cycle),
         ),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
@@ -5402,6 +5446,7 @@
                   plan.title !== undefined && plan.orchestrator !== undefined
                     ? ` — ${plan.orchestrator}`
                     : null,
+                  ...planChangeSummary(plan),
                 ),
                 div(
                   { class: "app-cr-root-cycles" },
@@ -5564,6 +5609,7 @@
           // on every row whose cycle could have runs. The SAME shared
           // predicate as `CycleRow`, called identically.
           ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          ...cycleChangeRecord(cycle),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
@@ -5641,6 +5687,7 @@
                 ),
               ]
             : null,
+          ...(node.source === "declared" ? planChangeSummary(node) : []),
         ),
         () =>
           lensOpen(key)

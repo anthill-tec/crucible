@@ -668,7 +668,10 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
                                              "plan": {"planId": "plan-help",
                                                        "status": "aborted"}}):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir,
+                "abort", "--user-approved",
+                "--reason", "fixture abort", "--cause", "gap-analysis",
+                "--spec-ref", "fixture S2b",
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

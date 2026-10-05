@@ -6,7 +6,7 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
-import { burndown, forecast, seededRandom, velocity } from "./analytics.ts";
+import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
 import { resolveNext } from "./next.ts";
 import {
   authHints,
@@ -14,6 +14,7 @@ import {
   cycleHints,
   identityHints,
   milestoneHints,
+  planChangeHints,
   projectDeleteHints,
   projectMetadataHints,
   roadmapHints,
@@ -49,6 +50,7 @@ import type {
 import type {
   AgentIdentity,
   AgentRole,
+  ChangeRecord,
   Coverage,
   CycleKind,
   CycleStatus,
@@ -291,6 +293,99 @@ const PROJECT_METADATA_REFUSAL: OrchestratorRefusal = {
   work: "a project metadata write",
   help: projectMetadataHints.notOrchestrator,
 };
+
+/** CR-CRU-165 §S1/§S2 — a plan change is orchestrator work. */
+const PLAN_CHANGE_REFUSAL: OrchestratorRefusal = {
+  work: "a plan change (cycle-skip, insert-before, rename, non-fix append)",
+  help: planChangeHints.notOrchestrator,
+};
+
+/** CR-CRU-165 §S1 — the two causes a recorded plan change can name. */
+const CHANGE_CAUSES: ReadonlySet<string> = new Set(["spec-design", "gap-analysis"]);
+
+/**
+ * CR-CRU-165 §S1/§S2/§S2b — the warning every recorded plan change and
+ * every abort carries. Structured like `QueueWarning`: `message` is the line
+ * the clients print.
+ */
+const PROCESS_FAILURE_WARNING = {
+  code: "process-failure",
+  message:
+    "this change to a filed plan records a process failure: a spec that changes mid-implementation " +
+    "shows that the spec's design or its gap analysis fell short — it is counted for the retrospective",
+} as const;
+
+/**
+ * CR-CRU-165 §S1/§S2/§S2b — read `reason`, `cause` and `specRef` off a
+ * body. Every refusal names the rule and the field, and is a 400 with the
+ * record's help[]; nothing is read for the write before it passes.
+ */
+function parseChangeRecord(
+  body: V2Body,
+  change: string,
+  rule: string = "a plan grows only by FIX cycles; any other change needs reason, cause and specRef",
+  help: string[] = planChangeHints.recordRequired,
+): ChangeRecord | { fail: Response } {
+  const { reason, cause, specRef } = body as { reason?: unknown; cause?: unknown; specRef?: unknown };
+  const missing = [
+    ...(typeof reason === "string" && reason.trim().length > 0 ? [] : ["reason"]),
+    ...(cause === undefined ? ["cause"] : []),
+    ...(typeof specRef === "string" && specRef.trim().length > 0 ? [] : ["specRef"]),
+  ];
+  if (missing.length > 0) {
+    return {
+      fail: fail(
+        400,
+        `${change} must be recorded: missing ${missing.join(", ")} — ${rule}`,
+        { help },
+      ),
+    };
+  }
+  if (typeof cause !== "string" || !CHANGE_CAUSES.has(cause)) {
+    return {
+      fail: fail(400, `invalid cause: ${JSON.stringify(cause)} (expected spec-design | gap-analysis)`, {
+        help: planChangeHints.invalidCause,
+      }),
+    };
+  }
+  return {
+    reason: reason as string,
+    cause: cause as ChangeRecord["cause"],
+    specRef: specRef as string,
+  };
+}
+
+/**
+ * CR-CRU-165 §S1/§S2 — the gate every plan change passes: an ORCHESTRATOR
+ * caller (409 otherwise, before anything is read for the write), then a
+ * complete record (400 naming the rule).
+ */
+function requirePlanChange(
+  store: Store,
+  projectKey: string,
+  body: V2Body,
+  change: string,
+): ChangeRecord | { fail: Response } {
+  const caller = requireOrchestrator(store, projectKey, body, PLAN_CHANGE_REFUSAL);
+  if ("fail" in caller) return caller;
+  return parseChangeRecord(body, change);
+}
+
+/** CR-CRU-165 §S2 — the help[] matching a store's plan-change refusal. */
+function planChangeHelp(planId: number, cycle: PlanOpError): string[] | undefined {
+  switch (cycle.code) {
+    case "change-record-required":
+      return planChangeHints.recordRequired;
+    case "verify-not-done":
+      return planChangeHints.verifyNotDone;
+    case "run-filed":
+      return planChangeHints.runFiled(cycle.cycleRef!);
+    case "last-unskipped":
+      return planChangeHints.lastUnskipped(planId);
+    default:
+      return undefined;
+  }
+}
 
 /**
  * CR-CRU-091 §S3 — the caller-auth seam, plus the role the five roadmap verbs
@@ -1659,17 +1754,42 @@ async function handleCycleAppend(
     }
     before = beforeRaw;
   }
-  const cycle = store.appendCycle(pk.key, planId, parsed, before);
+  // CR-CRU-165 §S1 — a FIX append after a done VERIFY needs nothing more (the
+  // store holds the VERIFY rule); an insert-before or an append of any other
+  // kind is a recorded plan change: orchestrator-only, with its record.
+  let change: ChangeRecord | undefined;
+  if (before !== undefined || parsed.kind !== "fix") {
+    const record = requirePlanChange(
+      store,
+      pk.key,
+      body,
+      before !== undefined ? "inserting a cycle" : `appending a ${parsed.kind} cycle`,
+    );
+    if ("fail" in record) return record.fail;
+    change = record;
+  }
+  const cycle = store.appendCycle(pk.key, planId, parsed, before, change);
   if ("error" in cycle) {
     const help =
       cycle.code === "insert-before-active"
         ? cycleHints.insertBeforeActive(cycle.cycleRef!)
         : cycle.notFound === true
           ? hints.planCycleNotFound
-          : hints.closedPlan;
+          : (planChangeHelp(planId, cycle) ?? hints.closedPlan);
     return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
   }
-  return json({ ok: true, changed: true, ...cycle }, 201);
+  return json(
+    {
+      ok: true,
+      changed: true,
+      ...cycle,
+      // §S4 (N1) — the plan's own CR, so a client that named the
+      // plan directly can label its envelope without reading the board.
+      cr: store.planCr(pk.key, planId),
+      ...(change !== undefined ? { warnings: [PROCESS_FAILURE_WARNING] } : {}),
+    },
+    201,
+  );
 }
 
 /** PATCH …/plans/<planId>/cycles/<id> — §S0 transitions (legal table in the store). */
@@ -1708,7 +1828,10 @@ async function handleCycleTransition(
     if (typeof body.label !== "string" || body.label.length === 0) {
       return fail(400, "label must be a non-empty string", { help: hints.cycleInput });
     }
-    const edited = store.editCycleLabel(pk.key, planId, cycleId, body.label);
+    // CR-CRU-165 §S1 — a rename is a recorded plan change.
+    const record = requirePlanChange(store, pk.key, body, `renaming cycle ${cycleId}`);
+    if ("fail" in record) return record.fail;
+    const edited = store.editCycleLabel(pk.key, planId, cycleId, body.label, record);
     if ("error" in edited) {
       const help =
         edited.code === "locked"
@@ -1718,7 +1841,7 @@ async function handleCycleTransition(
             : hints.planCycleNotFound;
       return fail(edited.notFound === true ? 404 : 400, edited.error, { help });
     }
-    return json({ ok: true, changed: true, cycle: edited });
+    return json({ ok: true, changed: true, cycle: edited, warnings: [PROCESS_FAILURE_WARNING] });
   }
   if (typeof body.status !== "string" || !CYCLE_STATUSES.has(body.status)) {
     return fail(
@@ -1727,7 +1850,15 @@ async function handleCycleTransition(
       { help: hints.cycleStatus },
     );
   }
-  const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus);
+  // CR-CRU-165 §S2 — the route half of cycle-skip: the same guards as the
+  // verb, so the route cannot be used to get round it.
+  let change: ChangeRecord | undefined;
+  if (body.status === "skipped") {
+    const record = requirePlanChange(store, pk.key, body, `skipping cycle ${cycleId}`);
+    if ("fail" in record) return record.fail;
+    change = record;
+  }
+  const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus, change);
   if ("error" in cycle) {
     // CR-CRU-024 §S4 — attach the help[] matching the store's refusal code.
     const help =
@@ -1737,10 +1868,15 @@ async function handleCycleTransition(
           ? cycleHints.alreadyActive(cycle.cycleRef!)
           : cycle.code === "illegal-transition"
             ? hints.illegalCycleTransition
-            : hints.planCycleNotFound;
+            : (planChangeHelp(planId, cycle) ?? hints.planCycleNotFound);
     return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
   }
-  return json({ ok: true, changed: true, cycle });
+  return json({
+    ok: true,
+    changed: true,
+    cycle,
+    ...(change !== undefined ? { warnings: [PROCESS_FAILURE_WARNING] } : {}),
+  });
 }
 
 /** PATCH …/plans/<planId> — the CR close (feature merge). */
@@ -1891,17 +2027,26 @@ async function handlePlanAbort(
       { help: hints.abortNeedsApproval },
     );
   }
+  // CR-CRU-165 §S2b — an abort is a recorded failure too: its reason, cause
+  // and spec reference are required, after approval and before existence.
+  const record = parseChangeRecord(
+    body,
+    "aborting a plan",
+    "an abort is a recorded failure of the spec or of its gap analysis and needs reason, cause and specRef",
+    planChangeHints.abortRecordRequired,
+  );
+  if ("fail" in record) return record.fail;
   const planId = numericId(planIdRaw);
   if (planId === null) {
     return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
   }
-  const plan = store.abortPlan(pk.key, planId);
+  const plan = store.abortPlan(pk.key, planId, record);
   if ("error" in plan) {
     return fail(plan.notFound === true ? 404 : 400, plan.error, {
       help: plan.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
     });
   }
-  return json({ ok: true, changed: true, plan });
+  return json({ ok: true, changed: true, plan, warnings: [PROCESS_FAILURE_WARNING] });
 }
 
 /**
@@ -1959,7 +2104,20 @@ function handlePlansList(store: Store, key: string, req: Request, url: URL): Res
  * archived projects by default, which IS the exclusion rule here.
  */
 function handlePlansGlobalList(store: Store, req: Request, url: URL): Response {
-  const plans = store.listProjects().flatMap((project) => store.listPlans(project.key));
+  // CR-CRU-165 N2 — `cr` and `status` are HONOURED with the project route's
+  // own validation; a filtered query never answers with the unfiltered list.
+  const cr = url.searchParams.get("cr") ?? undefined;
+  const status = url.searchParams.get("status") ?? undefined;
+  if (status !== undefined && !PLAN_LIST_STATUSES.has(status)) {
+    return fail(400, `invalid status: ${JSON.stringify(status)} (expected open | closed | aborted)`, {
+      help: hints.plansStatusFilter,
+    });
+  }
+  const filter = {
+    ...(cr !== undefined ? { cr } : {}),
+    ...(status !== undefined ? { status } : {}),
+  };
+  const plans = store.listProjects().flatMap((project) => store.listPlans(project.key, filter));
   return reply(req, url, { ok: true, plans });
 }
 
@@ -4114,6 +4272,7 @@ export function handleV2(
       if (segments[2] === "velocity") return handleAnalyticsVelocity(store, segments[0]!, req, url);
       if (segments[2] === "burndown") return handleAnalyticsBurndown(store, segments[0]!, req, url);
       if (segments[2] === "forecast") return handleAnalyticsForecast(store, segments[0]!, req, url);
+      if (segments[2] === "changes") return handleAnalyticsChanges(store, segments[0]!, req, url);
     }
     // CR-CRU-098 §S2 — the plan pointer: GET-only, derived, stores nothing.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "next") {
@@ -4275,5 +4434,22 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
     ...(target !== undefined ? { targetAt: target } : {}),
     random: seed !== undefined ? seededRandom(seed) : Math.random,
   });
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/**
+ * §S3/AC12 — GET …/analytics/changes?release=: the release's recorded plan
+ * changes and plan aborts, each counted by cause (`unrecorded` for the ones
+ * that predate the record).
+ */
+function handleAnalyticsChanges(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const payload = planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) });
+  if (payload === null) {
+    return fail(404, `no CR is planned into release ${release}`);
+  }
   return reply(req, url, { ok: true, ...payload });
 }

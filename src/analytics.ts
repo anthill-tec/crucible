@@ -528,3 +528,57 @@ export function forecast(input: ForecastInput): ForecastPayload {
     status: "ok",
   };
 }
+
+// ── §S3/AC12 — recorded plan changes and aborts, per release, by cause ──
+
+/** One count per cause, plus the records that predate the fields. */
+export interface ChangeCounts {
+  "spec-design": number;
+  "gap-analysis": number;
+  unrecorded: number;
+}
+
+export interface PlanChangesInput {
+  release: string;
+  entries: QueueEntry[];
+  plans: Plan[];
+}
+
+export interface PlanChangesPayload {
+  release: string;
+  changes: ChangeCounts;
+  aborts: ChangeCounts;
+}
+
+const emptyCounts = (): ChangeCounts => ({ "spec-design": 0, "gap-analysis": 0, unrecorded: 0 });
+
+/**
+ * §S3 — the defect signal for a release's retrospective: every recorded plan
+ * change (insert, rename, non-FIX append, skip) its CURRENT members' plans
+ * carry, and every abort of one of those plans, each counted by cause.
+ * Membership is the queue's present `release` field — a count has no time
+ * dimension to replay. A skipped cycle with no record (every skip made before
+ * the fields existed) and an aborted plan with no cause count as
+ * `unrecorded`, never guessed. A cycle an abort skipped (`changeKind:
+ * "abort"`) is counted once, as the plan's abort, never again as a change.
+ * Null when the release has no members.
+ */
+export function planChanges(input: PlanChangesInput): PlanChangesPayload | null {
+  const members = new Set(
+    input.entries.filter((entry) => entry.release === input.release).map((entry) => entry.cr),
+  );
+  if (members.size === 0) return null;
+  const changes = emptyCounts();
+  const aborts = emptyCounts();
+  for (const plan of input.plans) {
+    if (!members.has(plan.cr)) continue;
+    if (plan.status === "aborted") aborts[plan.cause ?? "unrecorded"] += 1;
+    for (const cycle of plan.cycles) {
+      if (cycle.changeKind === "abort") continue;
+      if (cycle.changeKind !== undefined || cycle.status === "skipped") {
+        changes[cycle.cause ?? "unrecorded"] += 1;
+      }
+    }
+  }
+  return { release: input.release, changes, aborts };
+}

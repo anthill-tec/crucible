@@ -1838,6 +1838,13 @@ def cmd_cycle_done(args):
     return _cycle_transition(args, "done")
 
 
+def cmd_cycle_skip(args):
+    """S2 -- mark a PENDING cycle skipped (exceptional; recorded
+    with reason, cause and spec reference). Delegates to the shared
+    implementation."""
+    return _axi().cmd_cycle_skip(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
@@ -2581,6 +2588,10 @@ def main():
     _add_project_dir_arg(cdn)
     cdn.set_defaults(func=cmd_cycle_done)
 
+    # S2 -- the shared registrar builds the subparser once.
+    _axi().add_cycle_skip_verb(sub, cmd_cycle_skip,
+                               add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
+
     cc = sub.add_parser("cr-close",
                         help="Close the single OPEN plan (PATCH status=closed + merge.commit). "
                              "Requires --agent <registered id> (§S2b).")
@@ -2626,6 +2637,7 @@ def main():
     ab.add_argument("--user-approved", action="store_true",
                     help="Map to body userApproved:true (the server refuses without it).")
     ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_change_record_args(ab)  # S2b: abort is recorded
     _add_workflow_agent_arg(ab)
     _add_project_dir_arg(ab)
     ab.set_defaults(func=cmd_abort)

@@ -164,8 +164,9 @@ async function transition(
   planId: number | string,
   cycleId: number,
   status: string,
+  extra: Record<string, unknown> = {},
 ): Promise<void> {
-  const res = await patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), { status });
+  const res = await patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), { status, ...extra });
   expect(res.status).toBe(200);
 }
 
@@ -334,7 +335,11 @@ describe("§S7.2 — run ingest with a TERMINAL cycle's id is accepted (late ing
     const key = await createProject(handle);
     const { planId, a } = await filePlanAB(handle, key, "CR-INGEST-CYCLE-SKIPPED");
     // pending -> skipped is the one sanctioned shortcut transition.
-    await transition(handle, key, planId, a, "skipped");
+    await transition(handle, key, planId, a, "skipped", {
+      reason: "the spec no longer needs this cycle",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2",
+    });
 
     const res = await postParsedRun(handle, key, { cycleId: a });
 

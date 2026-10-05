@@ -1306,7 +1306,111 @@ CYCLE_ADD_PLAN_HELP = (
 CYCLE_ADD_KIND_HELP = (
     "Kind of cycle being appended: red-green, verify or fix (the route's own "
     "vocabulary). Omitted, no kind rides the body at all and the server's own "
-    "default (red-green) applies — the client never invents one.")
+    "default (red-green) applies — the client never invents one. Only a "
+    "`fix` append needs nothing more; any other kind is a "
+    "recorded plan change and needs --reason, --cause and --spec-ref.")
+
+
+# S1/S2/S2b (plan-change record) -- a plan grows only by FIX cycles. Every other
+# change to a filed plan (a non-fix append, an insert, a skip, an abort) is the
+# exception for a spec change the user approved mid-implementation, and carries
+# a record: reason, cause and spec reference. The two causes are the server's
+# own (`CHANGE_CAUSES`, src/v2.ts); the client checks them LOCALLY so an
+# incomplete or mis-caused record is refused before any request is made.
+CHANGE_CAUSES = ("spec-design", "gap-analysis")
+CHANGE_RECORD_REQUIRED_CODE = "change-record-required"
+CHANGE_CAUSE_INVALID_CODE = "change-cause-invalid"
+CHANGE_RECORD_RULE = (
+    "a plan grows only by FIX cycles; any other change is the exception for a "
+    "spec change the user approved mid-implementation and needs --reason, "
+    "--cause spec-design|gap-analysis and --spec-ref")
+
+# (argparse dest, flag, body key) -- the ONE mapping from the three flags to
+# the three body fields `parseChangeRecord` (src/v2.ts) reads.
+CHANGE_RECORD_FIELDS = (
+    ("reason", "--reason", "reason"),
+    ("cause", "--cause", "cause"),
+    ("spec_ref", "--spec-ref", "specRef"),
+)
+
+CHANGE_REASON_HELP = (
+    "Why the filed plan changes: the spec change the user approved "
+    "mid-implementation. Recorded on the board.")
+CHANGE_CAUSE_HELP = (
+    "What fell short: spec-design or gap-analysis. Any other value is "
+    "refused before anything is sent.")
+CHANGE_SPEC_REF_HELP = (
+    "Where the spec changed: a commit or a spec section.")
+
+CYCLE_ADD_BEFORE_HELP = (
+    "Insert the new cycle immediately before this cycle id instead of "
+    "appending it. An insert is a recorded plan change: it needs --reason, "
+    "--cause and --spec-ref.")
+
+CYCLE_SKIP_VERB = "cycle-skip"
+
+# S2 -- the verb's help[] says it is exceptional, then names the
+# next move.
+CYCLE_SKIP_HELP_STEPS = [
+    "cycle-skip is exceptional: only for a spec change the user approved "
+    "mid-implementation; it records a failure of the spec's design or its "
+    "gap analysis",
+    "status",
+]
+
+
+def change_record_refusal(args, change):
+    """S1/S2/S2b -- the LOCAL check of a change record.
+
+    Returns None when `--reason`, `--cause` and `--spec-ref` are all given and
+    the cause is one of `CHANGE_CAUSES`; otherwise `(code, detail)` naming the
+    rule, the missing flags or the legal causes. `change` names the change
+    being refused ("skipping cycle 9", "aborting the plan")."""
+    missing = [flag for dest, flag, _key in CHANGE_RECORD_FIELDS
+               if not str(getattr(args, dest, None) or "").strip()]
+    if missing:
+        return (CHANGE_RECORD_REQUIRED_CODE,
+                f"{change} must be recorded: missing {', '.join(missing)}; "
+                f"{CHANGE_RECORD_RULE}")
+    cause = getattr(args, "cause", None)
+    if cause not in CHANGE_CAUSES:
+        return (CHANGE_CAUSE_INVALID_CODE,
+                f"invalid --cause {cause!r} (expected "
+                f"{' | '.join(CHANGE_CAUSES)})")
+    return None
+
+
+def change_record_given(args):
+    """True when the caller passed any of the three record flags."""
+    return any(getattr(args, dest, None) is not None
+               for dest, _flag, _key in CHANGE_RECORD_FIELDS)
+
+
+def change_record_body(args):
+    """The record's body fields (`reason`, `cause`, `specRef`) as given."""
+    return {key: getattr(args, dest) for dest, _flag, key in CHANGE_RECORD_FIELDS
+            if getattr(args, dest, None) is not None}
+
+
+def emit_change_record_refusal(verb, refusal, result_fields, context, ops):
+    """Emit the `ok:false` envelope for a refused change record and return
+    the non-zero exit. Nothing has been sent when this runs."""
+    code, detail = refusal
+    ops.emit(verb, False, {**result_fields, "error": detail}, context,
+             [{"code": code, "detail": detail}],
+             f"[crucible] ERROR: {code}: {detail}")
+    return 1
+
+
+def add_change_record_args(p):
+    """S1/S2/S2b -- declare `--reason`, `--cause` and `--spec-ref`: the ONE
+    declaration site for every verb that changes a filed plan (`cycle-add`,
+    `cycle-skip`, `abort`). No `required=` and no `choices=`: a missing flag or
+    an unknown cause is refused by `change_record_refusal` inside an ok:false
+    envelope, never by an argparse exit with nothing on stdout."""
+    p.add_argument("--reason", help=CHANGE_REASON_HELP)
+    p.add_argument("--cause", help=CHANGE_CAUSE_HELP)
+    p.add_argument("--spec-ref", dest="spec_ref", help=CHANGE_SPEC_REF_HELP)
 
 
 # CR-CRU-127 §S1/§S6 — the ONE `--cycle-kind` help text for `plan-file`. The
@@ -1375,6 +1479,7 @@ HELP_STEPS = {
     "auto-ingest": ["cycle-done <id>", "status"],
     "check": ["test --agent <agentId>"],
     "cycle-add": ["cycle-activate <id>"],
+    "cycle-skip": CYCLE_SKIP_HELP_STEPS,
     "checkpoint": ["status"],
     "stop": ["status"],
     "abort": ["status"],
@@ -2854,21 +2959,33 @@ def cmd_abort(args, project_dir, ops):
     non-zero, never a silent no-op).
 
     CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
+    FIRST so the hard stop precedes any request.
+
+    S2b -- an abort is a recorded failure of the spec or its gap
+    analysis: `--reason`, `--cause` and `--spec-ref` are checked LOCALLY
+    before any request, ride the body, and the server's process-failure
+    warning is relayed on the envelope."""
     agent_id = ops.agent_id(args)
+    refusal = change_record_refusal(args, "aborting the plan")
+    if refusal is not None:
+        return emit_change_record_refusal(
+            "abort", refusal, {"help": HELP_STEPS["abort"]},
+            ops.context(project_dir, cr=args.cr), ops)
     plan, rc = ops.resolve_plan("abort", project_dir, args.cr,
                                 {"help": HELP_STEPS["abort"]}, open_only=True)
     if plan is None:
         return rc
     resp = ops.post(f"{ops.plans_path(project_dir)}/{plan['planId']}/abort",
-                    {"userApproved": bool(args.user_approved), "agentId": agent_id})
+                    {"userApproved": bool(args.user_approved), "agentId": agent_id,
+                     **change_record_body(args)})
     ok = resp.get("ok", False)
     legacy = (f"abort: ok={ok} plan={plan['planId']} "
               f"userApproved={bool(args.user_approved)}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     ops.emit("abort", bool(ok),
              {"plan": plan["planId"], "help": HELP_STEPS["abort"]},
-             ops.context(project_dir, cr=plan.get("cr")), [], legacy)
+             ops.context(project_dir, cr=plan.get("cr")),
+             resp.get("warnings") or [], legacy)
     return 0 if ok else 1
 
 
@@ -2929,13 +3046,32 @@ def cmd_cycle_add(args, project_dir, ops):
     CR-CRU-124 §S4 — `--kind` rides the body when given. Omitted, the field is
     left OUT of the body entirely so the server's own default (`red-green`,
     `parseCycleInput`) applies: the client never invents a kind, and the body
-    an existing caller sends is unchanged."""
+    an existing caller sends is unchanged.
+
+    S1 -- a `fix` append needs nothing more; `--before` (an
+    insert) and an explicit non-fix `--kind` are recorded plan changes whose
+    `--reason`/`--cause`/`--spec-ref` are checked LOCALLY before any request
+    and ride the body. An omitted kind is the server's to judge (its default,
+    red-green, is refused there and relayed). N1 -- with `--plan` the envelope
+    names the cr the append response carries, never a board read."""
     agent_id = ops.agent_id(args)
     named_plan = getattr(args, "plan", None)
     kind = getattr(args, "kind", None)
+    before = getattr(args, "before", None)
     # §S15 — the next step after appending a cycle is to activate it; help[]
     # rides both the resolve-failure envelope and the success envelope.
     result_fields = {"label": args.label, "help": HELP_STEPS["cycle-add"]}
+    # Every explicit kind but `fix` needs the record (the vocabulary itself is
+    # the server's: a kind it does not know is refused there, after this).
+    guarded = before is not None or (kind is not None and kind != "fix")
+    if guarded or change_record_given(args):
+        change = ("inserting a cycle" if before is not None
+                  else f"appending a {kind or 'red-green'} cycle")
+        refusal = change_record_refusal(args, change)
+        if refusal is not None:
+            return emit_change_record_refusal(
+                "cycle-add", refusal, result_fields,
+                ops.context(project_dir, cr=args.cr), ops)
     if named_plan:
         target = resolve_named_plan_or_emit(named_plan, args.cr, result_fields,
                                             project_dir, ops)
@@ -2951,15 +3087,20 @@ def cmd_cycle_add(args, project_dir, ops):
     body = {"label": args.label, "agentId": agent_id}
     if kind:
         body["kind"] = kind
+    if before is not None:
+        body["before"] = before
+    body.update(change_record_body(args))
     resp = ops.post(f"{ops.plans_path(project_dir)}/{plan_id}/cycles", body)
     ok = resp.get("ok", False)
+    cr_label = resp.get("cr") or cr_label
     legacy = (f"cycle-add: ok={ok} plan={plan_id} cr={cr_label} "
               f"label={args.label} id={resp.get('id')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     ops.emit("cycle-add", bool(ok),
              {"plan": plan_id, "id": resp.get("id"), "label": args.label,
               "help": HELP_STEPS["cycle-add"]},
-             ops.context(project_dir, cr=cr_label), [], legacy)
+             ops.context(project_dir, cr=cr_label),
+             resp.get("warnings") or [], legacy)
     return 0 if ok else 1
 
 
@@ -3070,6 +3211,59 @@ def cycle_transition(args, project_dir, ops, status):
     ops.emit(verb, bool(ok),
              {"cycle": cycle_id, "plan": target["planId"], "help": help_steps},
              ops.context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_cycle_skip(args, project_dir, ops):
+    """S2 -- mark a PENDING cycle skipped: the exceptional plan
+    change for a spec change the user approved mid-implementation.
+
+    The record (`--reason`, `--cause`, `--spec-ref`) is checked LOCALLY first,
+    so an incomplete or mis-caused skip is refused before any request. Then,
+    like `cycle_transition`, the owning OPEN plan is found by scanning the
+    plans and the cycle is PATCHed `skipped` with the record in the body; the
+    server's guards (pending only, a run filed, the last unskipped cycle, an
+    orchestrator caller) answer for themselves and their refusal is relayed
+    verbatim. help[] marks the verb exceptional; the server's process-failure
+    warning rides the envelope."""
+    verb = CYCLE_SKIP_VERB
+    agent_id = ops.agent_id(args)
+    cycle_id = args.cycle_id
+    refusal = change_record_refusal(args, f"skipping cycle {cycle_id}")
+    if refusal is not None:
+        return emit_change_record_refusal(
+            verb, refusal, {"cycle": cycle_id, "help": CYCLE_SKIP_HELP_STEPS},
+            ops.context(project_dir), ops)
+    try:
+        open_plans = ops.open_plans(project_dir)
+    except PlansFetchFailed as exc:
+        return emit_plans_fetch_failure(verb, exc, project_dir, ops,
+                                        {"cycle": cycle_id})
+    target = next(
+        (p for p in open_plans
+         if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
+        None,
+    )
+    if target is None:
+        legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan")
+        ops.emit(verb, False,
+                 {"cycle": cycle_id, "error": legacy,
+                  "help": CYCLE_SKIP_HELP_STEPS},
+                 ops.context(project_dir), [], legacy)
+        return 1
+    resp = ops.patch(
+        f"{ops.plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
+        {"status": "skipped", "agentId": agent_id, **change_record_body(args)})
+    ok = resp.get("ok", False)
+    legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    fields = {"cycle": cycle_id, "plan": target["planId"],
+              "help": CYCLE_SKIP_HELP_STEPS}
+    if resp.get("error"):
+        fields["error"] = resp.get("error")
+    ops.emit(verb, bool(ok), fields,
+             ops.context(project_dir, cr=target.get("cr")),
+             resp.get("warnings") or [], legacy)
     return 0 if ok else 1
 
 
@@ -5789,6 +5983,31 @@ def add_cycle_add_target_args(p):
     independent declarations would word themselves five ways and drift."""
     p.add_argument("--plan", help=CYCLE_ADD_PLAN_HELP)
     p.add_argument("--kind", help=CYCLE_ADD_KIND_HELP)
+    # S1 -- the insert-before route had no client verb; it and every
+    # non-fix append are recorded plan changes, so the record flags live on
+    # the same one declaration site.
+    p.add_argument("--before", type=int, help=CYCLE_ADD_BEFORE_HELP)
+    add_change_record_args(p)
+
+
+def add_cycle_skip_verb(sub, func, *, parents=(), add_args=()):
+    """S2 -- register the ONE `cycle-skip` subparser on `sub`, so
+    the five clients cannot fork the verb's flag surface. What stays
+    per-client is the delegator and the client's own agent/project-dir
+    flags, passed through `parents`/`add_args` (the `add_next_verb` seam)."""
+    sk = sub.add_parser(
+        CYCLE_SKIP_VERB, parents=list(parents),
+        help="EXCEPTIONAL: mark a PENDING plan cycle skipped, for a spec "
+             "change the user approved mid-implementation. Records a failure "
+             "of the spec's design or its gap analysis; needs --reason, "
+             "--cause spec-design|gap-analysis and --spec-ref, and --agent "
+             "<orchestrator id>.")
+    sk.add_argument("cycle_id", type=int,
+                    help="Numeric cycle id (unique per project).")
+    add_change_record_args(sk)
+    for adder in add_args:
+        adder(sk)
+    sk.set_defaults(func=func)
 
 
 def add_gate_cycle_arg(p):

@@ -198,18 +198,24 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       expect(text).toMatch(/\bcr\b/i);
     });
 
-    test("appending a cycle to an open plan returns a new unique id", async () => {
+    test("appending a FIX cycle to an open plan whose VERIFY cycle is done returns a new unique id (CR-CRU-165 \u00a7S1/AC1 \u2014 appending requires kind:fix after a done VERIFY)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
         cr: "CR-X-2",
-        cycles: [{ label: "a" }, { label: "b" }],
+        cycles: [{ label: "a" }, { label: "b", kind: "verify" }],
       });
       const plan = (await filed.json()) as PlanFileResponse;
       const existingIds = new Set(plan.cycles.map((c) => c.id));
+      const firstId = plan.cycles[0]!.id;
+      const verifyId = plan.cycles[1]!.id;
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${firstId}`), { status: "active" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${firstId}`), { status: "done" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "active" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "done" })).status).toBe(200);
 
-      const appended = await postJson(plansPath(key, `/${plan.planId}/cycles`), { label: "c" });
+      const appended = await postJson(plansPath(key, `/${plan.planId}/cycles`), { label: "c", kind: "fix" });
       expect([200, 201]).toContain(appended.status);
       const appendedBody = (await appended.json()) as { id: number; [key: string]: unknown };
       expect(typeof appendedBody.id).toBe("number");
@@ -270,10 +276,19 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     test("pending -> skipped succeeds — the one legal shortcut (orchestrator cancels an unnecessary cycle without activating it)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
-      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-3");
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-T-3",
+        cycles: [{ label: "solo" }, { label: "keeps the plan unskipped" }],
+      });
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      const planId = filedBody.planId;
+      const cycleId = filedBody.cycles[0]!.id;
 
       const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
         status: "skipped",
+        reason: "the spec no longer needs this cycle",
+        cause: "spec-design",
+        specRef: "CR-CRU-165 \u00a7S2",
       });
       expect(res.status).toBe(200);
       expect(await getCycleStatus(key, "CR-T-3")).toBe("skipped");
@@ -293,7 +308,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       expect(text).toMatch(/failed/i);
     });
 
-    test("active -> skipped succeeds", async () => {
+    test("active -> skipped is now REFUSED (400) — CR-CRU-165 R2 drops this transition; an active cycle ends only done|failed", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-4");
@@ -302,8 +317,8 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
         status: "skipped",
       });
-      expect(res.status).toBe(200);
-      expect(await getCycleStatus(key, "CR-T-4")).toBe("skipped");
+      expect(res.status).toBe(400);
+      expect(await getCycleStatus(key, "CR-T-4")).toBe("active");
     });
 
     test("active -> failed succeeds", async () => {

@@ -314,13 +314,16 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
                                    error="HTTP 409: aborting discards a declared workflow — "
                                          "explicit user approval is required; refused")):
             code, out, err = _run_main(self.module, [
-                "abort", "--agent", "test-agent", "--project-dir", self.tmpdir,
+                "abort", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b",
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(len(calls), 1, "abort must still POST (the 409 is a SERVER refusal)")
         path, payload = calls[0]
         self.assertTrue(path.endswith("/plans/plan-7/abort"))
-        self.assertEqual(payload, {"userApproved": False, "agentId": "test-agent"},
+        self.assertEqual(payload, {"userApproved": False, "agentId": "test-agent",
+                                   "reason": "fixture abort", "cause": "gap-analysis",
+                                    "specRef": "fixture S2b"},
                           "without --user-approved the body must NOT claim approval")
 
         self.assertNotEqual(code, 0, "the discouraging 409 must surface as non-zero")
@@ -337,13 +340,16 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
                                    extra={"changed": True,
                                           "plan": {"planId": "plan-7", "status": "aborted"}})):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir,
+                "abort", "--user-approved", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b",
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(len(calls), 1)
         path, payload = calls[0]
         self.assertTrue(path.endswith("/plans/plan-7/abort"))
-        self.assertEqual(payload, {"userApproved": True, "agentId": "test-agent"},
+        self.assertEqual(payload, {"userApproved": True, "agentId": "test-agent",
+                                   "reason": "fixture abort", "cause": "gap-analysis",
+                                    "specRef": "fixture S2b"},
                           "--user-approved must map to body userApproved:true")
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -357,7 +363,8 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
         with mock.patch.object(self.module, "_get", return_value=_open_plans_response([])), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir,
+                "abort", "--user-approved", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b",
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "no open plan to abort must be non-zero")
@@ -376,7 +383,8 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
                                side_effect=self._post_recorder(calls, ok=True,
                                                                 extra={"changed": True})):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--cr", "CR-R", "--agent", "test-agent",
+                "abort", "--user-approved", "--cr", "CR-R", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b",
+                "--agent", "test-agent",
                 "--project-dir", self.tmpdir,
             ])
 
