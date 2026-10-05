@@ -5023,8 +5023,10 @@ export class Store {
       this.emit("events", projectKey);
       return inserted;
     }
-    if (change === undefined) {
+    if (cycle.kind === "fix") {
       // The unrecorded FIX append: only once the plan's VERIFY cycle is done.
+      // A plain fix append carries no change record (the route builds one only
+      // for an insert or a non-fix kind), so there is no recorded fix append.
       const verifyDone = this.listCycleRows(projectKey, planId).some(
         (c) => c.kind === "verify" && c.status === "done",
       );
@@ -5043,7 +5045,7 @@ export class Store {
       cycle.label,
       cycle.kind,
       this.nextSeq(projectKey, planId),
-      change !== undefined ? { ...change, kind: "append" } : undefined,
+      cycle.kind === "fix" ? undefined : { ...change!, kind: "append" },
     );
     this.emit("events", projectKey);
     return appended;

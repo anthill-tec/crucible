@@ -182,6 +182,36 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
     expect(res.status).toBe(400);
   });
 
+  test("VERIFY cycle not done: a fix append carrying reason, cause AND specRef from the orchestrator is STILL refused (400) by the verify-not-done rule — the change record is no bypass for the timing gate; nothing appended", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const key = await createProject();
+    const cr = "fix before verify, record supplied";
+    const filed = await postJson(plansPath(key), {
+      cr,
+      cycles: [{ label: "RG", kind: "red-green" }, { label: "the verify", kind: "verify" }],
+    });
+    expect(filed.status).toBe(201);
+    const plan = (await filed.json()) as PlanFileResponse;
+
+    const res = await postJson(plansPath(key, `/${plan.planId}/cycles`), {
+      label: "the fix",
+      kind: "fix",
+      reason: "the findings cannot wait for VERIFY",
+      cause: "spec-design",
+      specRef: "the spec's scope, §S1",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrResponse;
+    // The wire carries no refusal code; the verify-not-done rule is identified
+    // by its own words (a change-record refusal would name reason/cause instead).
+    expect(body.error.toLowerCase()).toMatch(/verify cycle is not done/);
+    expect(helpOrErrorText(body)).toMatch(/verify/);
+
+    const after = await getPlan(key, cr);
+    expect(after.cycles.length).toBe(2);
+    expect(after.cycles.some((c) => c.kind === "fix")).toBe(false);
+  });
+
   test("VERIFY cycle DONE: appending a fix cycle succeeds (201), lands with kind:fix, no reason/cause/specRef needed", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject();

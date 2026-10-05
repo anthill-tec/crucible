@@ -247,6 +247,35 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
     raw.close();
   });
 
+  test("a freshly created v14 store and a v13 store migrated to v14 hold IDENTICAL column sets on plan_cycles and plans: the base DDL and the migration step add the same columns, with the same type, nullability and key role", () => {
+    // Shape of each column, order-free: the step ALTERs columns onto the end
+    // of the table, while the base DDL declares them inline.
+    function shapeOf(db: Database, table: string): string[] {
+      return db
+        .query<{ name: string; type: string; notnull: number; pk: number }, []>(`PRAGMA table_info(${table})`)
+        .all()
+        .map((c) => `${c.name}:${c.type}:${String(c.notnull)}:${String(c.pk)}`)
+        .sort();
+    }
+
+    const migrated = Store.open(makeLegacyStore(scratch()));
+    const migratedDb = (migrated as unknown as { db: Database }).db;
+    const fresh = Store.open(join(scratch(), "fresh.db"));
+    const freshDb = (fresh as unknown as { db: Database }).db;
+    try {
+      expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(fresh.schemaVersion).toBe(SCHEMA_VERSION);
+      for (const table of ["plan_cycles", "plans"]) {
+        const freshShape = shapeOf(freshDb, table);
+        expect(freshShape.length).toBeGreaterThan(0);
+        expect(shapeOf(migratedDb, table)).toEqual(freshShape);
+      }
+    } finally {
+      migratedDb.close();
+      freshDb.close();
+    }
+  });
+
   test("§S3 — the historical skip/abort predating this CR is NEVER back-filled: after migration, its cycle and its plan carry NO reason/cause/specRef", async () => {
     const dir = scratch();
     const dbPath = makeLegacyStore(dir);
