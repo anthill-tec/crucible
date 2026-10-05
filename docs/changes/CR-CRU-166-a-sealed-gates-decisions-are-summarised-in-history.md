@@ -69,16 +69,16 @@ project-scoped under `vidushi`).
 
 ## Acceptance criteria
 
-- [ ] A sealed gate with recorded decisions shows the summary line on its timeline card and on its
+- [x] A sealed gate with recorded decisions shows the summary line on its timeline card and on its
       History wave row, with the same text, counted from its decision records.
-- [ ] A gate with no recorded decisions, and an in-flight gate, show no summary line.
-- [ ] A click on the line opens that gate's drill-in.
-- [ ] The behaviour matches storyboard F21 panel d.
-- [ ] Each gate step posted by `gate-run` and `gate-respond` carries its findings count from the
+- [x] A gate with no recorded decisions, and an in-flight gate, show no summary line.
+- [x] A click on the line opens that gate's drill-in.
+- [x] The behaviour matches storyboard F21 panel d.
+- [x] Each gate step posted by `gate-run` and `gate-respond` carries its findings count from the
       no-mistakes snapshot, in all five clients (R1).
-- [ ] The events list's sealed gate events carry `decisionSummary` with fixed, added, declined
+- [x] The events list's sealed gate events carry `decisionSummary` with fixed, added, declined
       and approved-with-reason counts, computed in one query per list read (G1).
-- [ ] The timeline card's `findings fixed` clause shows the decision-derived figure (R2).
+- [x] The timeline card's `findings fixed` clause shows the decision-derived figure (R2).
 
 ## Cycles
 
