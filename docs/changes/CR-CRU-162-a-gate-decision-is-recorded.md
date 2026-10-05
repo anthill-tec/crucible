@@ -88,5 +88,6 @@ order, beneath the step rows, as drawn in frame F21 (to be approved before RED).
 C1 server: the decision record (table, v15 migration, route, read), `runId` on gate events (AC2
 server half, AC6). RED + GREEN.
 C2 clients: the shared runner, `gate-respond` in five clients (AC1, AC2, AC3, AC5, AC7). RED + GREEN.
-C3 board: the decision rows in the drill-in and widget, per F21 (AC4). RED + GREEN.
+C3 board: the decision rows in the drill-in and widget, per F21 (AC4). F21 panel d (the history
+summary line) is CR-CRU-166, by the user's ruling 2026-10-05. RED + GREEN.
 C4 VERIFY.
