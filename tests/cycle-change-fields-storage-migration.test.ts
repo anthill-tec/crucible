@@ -194,15 +194,19 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
     return dir;
   }
 
-  test("exactly ONE migration step declares CR-165's storage, and SCHEMA_VERSION/MIGRATIONS agree the chain now ends at 14", () => {
+  test("exactly ONE migration step declares CR-165's storage, at its OWN rung (v14) in the chain", () => {
     const step = recordedReasonStep();
+    // The step's OWN position \u2014 stable even once a later CR (CR-CRU-162)
+    // appends a step after it: "later steps may follow it, so the pin is its
+    // own rung, not the end" (tests/release-unification-migration.test.ts's
+    // precedent).
+    expect(step.to).toBe(14);
     expect(step.to).toBe(step.from + 1);
     expect(migrationChain()[step.from]).toBe(step);
-    expect(SCHEMA_VERSION).toBe(14);
     expect(SCHEMA_VERSION).toBe(migrationChain().length);
   });
 
-  test("opening a pre-CR-165 (user_version 13) board stamps it to 14 and ADDS columns to both plan_cycles and plans — the pre-existing rows' original fields are byte-identical afterwards", () => {
+  test("opening a pre-CR-165 (user_version 13) board stamps it forward and ADDS columns to both plan_cycles and plans \u2014 the pre-existing rows' original fields are byte-identical afterwards", () => {
     const dir = scratch();
     const dbPath = makeLegacyStore(dir);
 
@@ -243,11 +247,14 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
     expect(abortedPlanAfter).toEqual(abortedPlanBefore);
 
     const version = raw.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version;
-    expect(version).toBe(14);
+    // DERIVED, never a literal: the version a pre-CR-165 board lands on is
+    // the CURRENT build's whole chain, not just this CR's own rung \u2014 a
+    // later CR (CR-CRU-162) appends a v15 step after this one.
+    expect(version).toBe(SCHEMA_VERSION);
     raw.close();
   });
 
-  test("a freshly created v14 store and a v13 store migrated to v14 hold IDENTICAL column sets on plan_cycles and plans: the base DDL and the migration step add the same columns, with the same type, nullability and key role", () => {
+  test("a freshly created store and a v13 store migrated forward hold IDENTICAL column sets on plan_cycles and plans: the base DDL and the migration step add the same columns, with the same type, nullability and key role", () => {
     // Shape of each column, order-free: the step ALTERs columns onto the end
     // of the table, while the base DDL declares them inline.
     function shapeOf(db: Database, table: string): string[] {
