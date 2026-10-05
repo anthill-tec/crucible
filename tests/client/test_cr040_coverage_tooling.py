@@ -195,13 +195,18 @@ class CoverageRunEnvTest(unittest.TestCase):
         module = _load_client_module()
         captured = {}
 
-        def _capture_env(_cmd, _cwd, env, _log_path):
+        def _capture_env(_cmd, _cwd, env, _log_path, _narrator=None):
             captured["env"] = env
             # Abort before any real subprocess/network work -- we only need the
             # env that _regression_run built for the coverage `run` subprocess.
             raise CoverageRunEnvTest._AbortAfterCapture()
 
         with tempfile.TemporaryDirectory() as tmp:
+            # The run now opens on the board (and builds its narrator) before
+            # the runner is reached: the project needs its key, and the board
+            # is mocked so nothing posts anywhere real.
+            with open(os.path.join(tmp, ".env"), "w") as f:
+                f.write("CRUCIBLE_PROJECT_KEY=cr040-env-probe-key\n")
             args = argparse.Namespace(
                 project_dir=tmp,
                 python=sys.executable,
@@ -214,7 +219,8 @@ class CoverageRunEnvTest(unittest.TestCase):
                 log=None,
             )
             with mock.patch.object(module, "_run_logged",
-                                    side_effect=_capture_env):
+                                    side_effect=_capture_env), \
+                    mock.patch.object(module, "_post", return_value={"ok": True}):
                 with self.assertRaises(CoverageRunEnvTest._AbortAfterCapture):
                     module._regression_run(args)
 

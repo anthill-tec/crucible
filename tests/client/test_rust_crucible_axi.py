@@ -1180,6 +1180,8 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
 
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=fake_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                 return_value={"ok": True,
                                                "run": {"passed": 1, "failed": 0, "total": 1}},
@@ -1225,6 +1227,8 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=fake_subprocess_run), \
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
