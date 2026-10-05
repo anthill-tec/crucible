@@ -1319,12 +1319,15 @@
 
     // §S2 exact seal text: 🛡 Wave <n> gate · no-mistakes <outcome> · <N>
     // steps · <fixed> findings fixed · pushed <shortcommit>. `<fixed>` is the
-    // SUM of every submitted step's findings.fixed (the only "fixed" figure
-    // the §S1 payload carries).
+    // gate's decision-derived fixed figure (`decisionSummary.fixed`, counted by
+    // the server off the run's decision records) when the brief carries one,
+    // so the clause agrees with the decision-summary line beneath it;
+    // otherwise the SUM of every submitted step's findings.fixed.
     const gateCardText = (e) => {
       const g = e.gate ?? {};
       const steps = g.steps ?? [];
-      const fixed = steps.reduce((n, s) => n + (s.findings?.fixed ?? 0), 0);
+      const fixed =
+        e.decisionSummary?.fixed ?? steps.reduce((n, s) => n + (s.findings?.fixed ?? 0), 0);
       // CR-CRU-117 §S1 — the `pushed` clause is dropped when there is no
       // commit to name (every in-flight gate): `pushed ` with nothing after it
       // claims a push that has not happened. A seal always carries one, so its
@@ -1333,8 +1336,9 @@
       return `🛡 Wave ${e.context?.wave ?? ""} gate · no-mistakes ${g.outcome}${gateInFlightClause(g)} · ${steps.length} steps · ${fixed} findings fixed${commit ? ` · pushed ${commit}` : ""}`;
     };
 
-    // §S2 — full-width gate seal (workspace). The trailing ⊙ Detail badge is
-    // the ONLY drill affordance; the card body itself is a bound no-op.
+    // §S2 — full-width gate seal (workspace). The trailing ⊙ Detail badge and,
+    // on a sealed gate with recorded decisions, the decision-summary line are
+    // the drill affordances; the card body itself is a bound no-op.
     const GateCardRow = (e) =>
       div(
         {
@@ -1356,7 +1360,28 @@
           },
           "⊙ Detail",
         ),
+        GateDecisionSummaryLine(e, "gate-decision-summary", "app-gate-decision-summary"),
       );
+
+    // The sealed gate's decision-summary line — ONE renderer for both places it
+    // shows (the gate card above and the History wave row), so the words are
+    // identical (`gateDecisionSummaryText`). No line for an in-flight gate or
+    // one without recorded decisions. A click opens the gate's drill-in.
+    function GateDecisionSummaryLine(e, testid, cls) {
+      const text = L.gateDecisionSummaryText(e?.decisionSummary);
+      if (text === null || gateInFlight(e.gate)) return null;
+      return div(
+        {
+          "data-testid": testid,
+          class: `app-card-meta app-decision-summary ${cls}`,
+          onclick: (ev) => {
+            ev.stopPropagation();
+            openDrillin(e.id);
+          },
+        },
+        text,
+      );
+    }
 
     // §S4b/§S4c — home compact gate one-liner (distinct testid). CR-CRU-117
     // §S1 — same mark, same suppression as the full card: home shows the row,
@@ -5843,7 +5868,10 @@
       );
     };
 
-    const WaveGroup = (wave) =>
+    // The wave's latest sealed gate (`waveLatestSealedGate`) carries its
+    // decision-summary line beneath the header — the header's own wording
+    // is unchanged.
+    const WaveGroup = (wave, events) =>
       div(
         {
           "data-testid": "wave-group",
@@ -5852,6 +5880,11 @@
           class: "app-wave-group",
         },
         WaveHeader(wave),
+        GateDecisionSummaryLine(
+          L.waveLatestSealedGate(events, wave.wave),
+          "wave-decision-summary",
+          "app-wave-decision-summary",
+        ),
         wave.tracks !== null
           ? wave.tracks.map((t) =>
               div(
@@ -5868,9 +5901,10 @@
     // listing of any form. Unlinked runs remain fully visible on the Runs
     // timeline (the never-hidden rule lives there).
     const WorkflowHistory = () => {
+      const events = state.events.filter((e) => e.projectKey === state.route.projectKey);
       const lens = L.workflowLens({
         plans: scopedPlans(), // CR-CRU-026 §S2 — same guard as Active
-        events: state.events.filter((e) => e.projectKey === state.route.projectKey),
+        events,
       });
       return div(
         // §S6 #5 — no standalone "History" title row; each wave's combined
@@ -5878,7 +5912,7 @@
         { "data-testid": "workflow-history", class: "app-workflow-history" },
         lens.waves.length === 0
           ? div({ class: "app-empty" }, "no workflow history yet")
-          : lens.waves.map(WaveGroup),
+          : lens.waves.map((wave) => WaveGroup(wave, events)),
       );
     };
 
