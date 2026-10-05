@@ -5941,6 +5941,24 @@ class RunNarrator:
         return True
 
 
+def narration_poster(post_fn, project_key, agent_id, identity=None):
+    """The `post(message)` a client hands its `RunNarrator`: one role-OPTIONAL
+    heartbeat per message (`GatedRunIdentity.PATH`, the body its `open_payload`
+    builds, with no cycle \u2014 a tick never re-declares a binding), so a tick
+    never re-declares nor blanks the role the agent registered with. Under a
+    gated `identity`, every tick's response is observed: a tick that RE-CREATES
+    a pruned row makes that row this run's to clean up (CR-CRU-056)."""
+    body = GatedRunIdentity(agent_id)
+
+    def _post(message):
+        resp = post_fn(GatedRunIdentity.PATH,
+                       body.open_payload(project_key, message=message))
+        if identity is not None:
+            identity.observe(resp)
+        return resp
+    return _post
+
+
 def close_narration(narrator):
     """The run has ended: land the final count, then say the result is being
     ingested \u2014 in that order, and both BEFORE the ingest POST, so the message
@@ -5990,7 +6008,7 @@ def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None):
     return None, [run_lifecycle_unavailable_warning(error)]
 
 
-def run_streamed(cmd, cwd, env, log_path, narrator=None):
+def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
     """Run `cmd`, streaming its combined stdout+stderr LIVE: every line goes to
     stderr and to `log_path` as the runner produces it, and to `narrator` for
     progress. Returns a `CompletedProcess` whose `stdout` is the whole capture,
@@ -5998,9 +6016,12 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None):
 
     stdout stays the client's envelope channel, so the echo is on stderr. With
     neither a log nor a narrator there is nothing to tee, and the runner
-    inherits stdio. An interruption of the read (a signal trap raising through
-    it) reaps the runner before it propagates, so no orphan is left behind."""
-    if not log_path and narrator is None:
+    inherits stdio \u2014 unless the caller reads the capture anyway (`capture`: a
+    no-report fallback that ingests the runner's own words), in which case the
+    run is teed exactly as above. An interruption of the read (a signal trap
+    raising through it) reaps the runner before it propagates, so no orphan is
+    left behind."""
+    if not log_path and narrator is None and not capture:
         return subprocess.run(cmd, cwd=cwd, env=env)
     lines = []
     with contextlib.ExitStack() as stack:
