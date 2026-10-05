@@ -1095,6 +1095,19 @@ body {
 .app-gate-fix-id { color: var(--heat); }
 .app-gate-fix-file { color: var(--ink-faint); }
 .app-gate-fix-desc { color: var(--ink); }
+/* The decisions beneath the step ladder (frame F21): one ` · `-joined row
+   per decision, the action inked fix = heat, approve = green, skip = dim. */
+.app-gate-decisions { margin-top: 10px; }
+.app-gate-decision-row {
+  font-size: 10.5px;
+  line-height: 1.9;
+  padding: 1px 0;
+}
+.app-gate-decision-time { color: var(--ink-faint); }
+.app-gate-decision-fix { color: var(--heat); }
+.app-gate-decision-approve { color: var(--pass); }
+.app-gate-decision-skip { color: var(--ink-faint); opacity: 0.55; }
+.app-gate-decision-carried { color: var(--ink); }
 .app-milestone-entry {
   color: var(--ink-faint);
   font-size: 10px;
