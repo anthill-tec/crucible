@@ -102,23 +102,23 @@ running message.
 
 ## Acceptance criteria
 
-- [ ] For each of the five clients, every suite-running verb opens its run with `/runs/start` before the
+- [x] For each of the five clients, every suite-running verb opens its run with `/runs/start` before the
       suite starts, and the board's `openRuns` holds it until the ingest closes it, asserted on the
       requests made.
-- [ ] For each of the five clients, the runner's output reaches stderr and `--log` while the suite is
+- [x] For each of the five clients, the runner's output reaches stderr and `--log` while the suite is
       still running (a line printed before a blocking test is visible before that test ends), asserted
       with a real subprocess and a fake runner.
-- [ ] For each of the five clients, a run narrates `running N/M` while in flight and ends with
+- [x] For each of the five clients, a run narrates `running N/M` while in flight and ends with
       `ran M/M`, through the one shared narration path.
 
-- [ ] A narrated bun run whose last completion falls inside the throttle window still ends with the
+- [x] A narrated bun run whose last completion falls inside the throttle window still ends with the
       board holding `ran M/M`, asserted on the heartbeats posted.
-- [ ] Every client that narrates posts the final count through the shared path.
-- [ ] After the tests finish, the agent's message reads `ingesting…`, then the run's outcome, asserted
+- [x] Every client that narrates posts the final count through the shared path.
+- [x] After the tests finish, the agent's message reads `ingesting…`, then the run's outcome, asserted
       on the board's agent read.
-- [ ] Between runs, the agent's card shows idle with its role and cycle, in a real browser.
-- [ ] A run that fails to ingest leaves the refusal on the card, not a stale count.
-- [ ] The card's states match storyboard **F19** (drawn 2026-09-27, the visual contract), checked in a
+- [x] Between runs, the agent's card shows idle with its role and cycle, in a real browser.
+- [x] A run that fails to ingest leaves the refusal on the card, not a stale count.
+- [x] The card's states match storyboard **F19** (drawn 2026-09-27, the visual contract), checked in a
       real browser at VERIFY.
 
 ## Cycles
