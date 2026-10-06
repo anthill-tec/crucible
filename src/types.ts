@@ -114,7 +114,8 @@ export interface TestLeaf {
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: {
-    message: string;
+    // Each part is optional: a runner may record a failure by its type alone.
+    message?: string;
     type?: string;
     trace?: string;
   };

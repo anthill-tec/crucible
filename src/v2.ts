@@ -25,6 +25,7 @@ import {
   compareContainers,
   declaredTracks,
   gateDecisionRunKey,
+  invalidSuiteTreeNode,
   normalizeTrack,
   QueueWaveOverflowError,
   reservedMilestoneTypeConflict,
@@ -1253,6 +1254,10 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   if (!Array.isArray(body.tree)) {
     return fail(400, "tree is required");
   }
+  // Every node must be a SuiteNode and every leaf a TestLeaf — the shapes the
+  // store keeps as rows — or the run is refused naming the first that is not.
+  const treeRefusal = invalidSuiteTreeNode(body.tree);
+  if (treeRefusal !== null) return fail(400, `${treeRefusal} — run NOT stored`);
 
   const summary = body.summary as RunSummary;
   const hasCoverage = typeof body.coverage === "object" && body.coverage !== null;
