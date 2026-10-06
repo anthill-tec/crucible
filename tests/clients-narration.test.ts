@@ -294,7 +294,9 @@ async function pollAgentUntil(
 // ── narration parsing + throttle assertion ─────────────────────────────────
 
 const NARRATION_RE = /running (\d+)\/(\d+)/;
-const CLASS_NARRATION_RE = /running (\d+)\/(\d+)(?: \u00b7 \S+)?/;
+// mvn counts test classes and names that unit after the count (user ruling
+// 2026-10-05): `running N/M classes`.
+const CLASS_NARRATION_RE = /running (\d+)\/(\d+) classes(?: \u00b7 \S+)?/;
 
 interface NarrationPoint {
   t: number;

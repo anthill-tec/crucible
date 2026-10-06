@@ -305,20 +305,20 @@ class NarratedMvnUnitRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
             f"posted messages={all_messages!r}")
         for m in running_msgs:
             self.assertRegex(
-                m, rf"^running \d+/{self.TOTAL}$",
+                m, rf"^running \d+/{self.TOTAL} classes$",
                 f"AC3/AC5: narration goes through the ONE shared path in "
-                f"_crucible_axi.py, so mvn's wire message must be the SAME "
-                f"bare shape bun posts too -- 'running N/{self.TOTAL}', "
+                f"_crucible_axi.py; mvn counts test CLASSES, so its wire "
+                f"message names that unit after the count (user ruling "
+                f"2026-10-05) -- 'running N/{self.TOTAL} classes', "
                 f"never mvn's own private _Narrator wording ('running "
-                f"class N/M · <classname>', _Narrator._class_started in "
-                f"clients/mvn-crucible.py); got {m!r}")
+                f"class N/M · <classname>'); got {m!r}")
             n = int(m.split()[1].split("/")[0])
             self.assertTrue(
                 1 <= n <= self.TOTAL,
                 f"narrated count must be within the run's real range; got {m!r}")
 
         # -- AC4 + §S1: the final count lands, whatever the throttle allowed -
-        final_message = f"ran {self.TOTAL}/{self.TOTAL}"
+        final_message = f"ran {self.TOTAL}/{self.TOTAL} classes"
         final_idx = _first_matching_index(
             posts, lambda p, b: _is_heartbeat_message(p, b, final_message))
         self.assertIsNotNone(
