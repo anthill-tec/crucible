@@ -59,7 +59,7 @@
       // CR-CRU-025 §S2b — the Run Timeline accordion's per-cycleId collapse
       // set (cycleIds whose declared-marker is currently collapsed). Pure UI
       // session state: default EMPTY (everything expanded), no URL/persistence,
-      // and untouched by refetchCore/refetchPlans — so a poll/SSE re-render
+      // and untouched by refetchEvents/refetchPlans — so a poll/SSE re-render
       // naturally preserves it. A vanX reactive array so a toggle re-runs the
       // Runs feed binding (mutated via vanX.replace, like state.events).
       collapsedCycles: [],
@@ -222,14 +222,14 @@
       // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
       // route, workspace → the scoped one), so EVERY scope change refetches
       // the landing surface's plan slice. CR-CRU-032 §S4 made state.events
-      // surface-scoped (refetchCore REPLACES the shared feed with a
+      // surface-scoped (refetchEvents REPLACES the shared feed with a
       // surface-scoped set), so the core slice must ALSO refetch on EVERY
       // scope change, symmetric with refetchPlans: a home landing re-fetches
       // the global ?limit=50 feed to restore the collective marker
       // vocabulary (CR-026 §S0 equivalence), not just a workspace landing.
-      void refetchPlans();
-      void refetchCore();
-      void refetchRoadmap();
+      // Through the single-flight gate: a refresh already in flight finishes
+      // first, then exactly one reads the landing surface's slices.
+      refetch();
     }
 
     // CR-CRU-016 AC2 — close the detail back to the underlying surface path
@@ -286,33 +286,65 @@
     }
 
     // Single-flight refresh: at most one refresh is in flight per page. A
-    // trigger arriving while one runs only marks the page stale (remembering
-    // whether any of those triggers asked for the full set of slices), and
-    // exactly one trailing refresh runs when the in-flight one finishes — a
-    // burst of stream frames costs at most two refreshes, never a pile-up of
-    // overlapping ones that keeps the server pinned.
-    // `scope` is "core" for the core slice only (projects/agents/events/
-    // health); anything else (including the poll timer's bare call) is the
-    // full refresh: core, then plans, then the roadmap + analytics reads.
+    // trigger arriving while one runs only marks the page stale, remembering
+    // the union of the slices those triggers asked for, and exactly one
+    // trailing refresh of that union runs when the in-flight one finishes —
+    // a burst of stream frames costs at most two refreshes, never a pile-up
+    // of overlapping ones that keeps the server pinned.
+    //
+    // A refresh reads only the slices it names: "projects", "agents",
+    // "health", and "events" — the events list plus plans, the roadmap and
+    // the analytics. The events list is a workspace's whole retention window,
+    // the one read too heavy to repeat on every frame, so only the triggers
+    // that can have changed it ask for it. A bare `refetch()` (boot, the poll
+    // timer, watchdog recovery, a reconnect, a mutation, a scope change)
+    // reads every slice.
+    const ALL_SLICES = ["projects", "agents", "health", "events"];
+    // What each stream frame kind can have changed. An "agents" frame (a
+    // heartbeat or registration) moves the agents, the projects' online
+    // counts and the server's health; only an "events" frame can announce a
+    // run, merge, plan or queue change (the store emits all of those as
+    // "events"). "hello", and a frame with no parseable type, read nothing.
+    const FRAME_SLICES = {
+      agents: ["projects", "agents", "health"],
+      projects: ["projects"],
+      events: ["projects", "events"],
+    };
     let refreshInFlight = false;
-    let refreshStale = null; // null | "core" | "full"
+    let refreshStale = null; // null | Set of slice names
 
-    function refetch(scope) {
-      const want = scope === "core" ? "core" : "full";
+    function refetch(slices = ALL_SLICES) {
       if (refreshInFlight) {
-        if (refreshStale !== "full") refreshStale = want;
+        if (refreshStale === null) refreshStale = new Set();
+        for (const slice of slices) refreshStale.add(slice);
         return;
       }
-      void runRefresh(want);
+      void runRefresh(new Set(slices));
     }
 
-    async function runRefresh(scope) {
+    async function runRefresh(slices) {
       refreshInFlight = true;
+      // The surface this refresh reads for. A scope change while it runs
+      // queues a full refresh of the new surface (scopeChanged), so this one
+      // stops at its next step rather than read the new surface's slices
+      // ahead of that refresh, which would read each of them twice.
+      const page = state.route.page;
+      const projectKey = state.route.projectKey;
+      const scopeMoved = () =>
+        state.route.page !== page || state.route.projectKey !== projectKey;
       try {
-        await refetchCore();
-        if (scope === "full") {
+        // CR-CRU-032 §S4 — projects FIRST: the workspace events window is
+        // sized from the routed project's `retention`.
+        if (slices.has("projects")) await refetchProjects();
+        if (scopeMoved()) return;
+        await Promise.all([
+          slices.has("agents") ? refetchAgents() : null,
+          slices.has("events") ? refetchEvents() : null,
+          slices.has("health") ? refetchHealth() : null,
+        ]);
+        if (slices.has("events") && !scopeMoved()) {
           await refetchPlans();
-          await refetchRoadmap();
+          if (!scopeMoved()) await refetchRoadmap();
         }
       } finally {
         refreshInFlight = false;
@@ -324,18 +356,47 @@
       }
     }
 
-    // CR-CRU-026 §S1 — the core slice (projects/agents/events/health) split
-    // out of refetch() so a scope-changing navigation can fire it alongside
-    // refetchPlans() without double-fetching the plans route.
-    async function refetchCore() {
+    // A slice read landed: the server answered.
+    function markSynced() {
+      state.backendUp = true;
+      state.lastSynced = Date.now();
+    }
+
+    // CR-CRU-026 §S1 — the core slices (projects/agents/events/health), each
+    // read on its own so a frame refreshes only the ones it can have changed.
+    // Each keeps its last-known data visible when its read fails:
+    // reachability is owned by the watchdog below.
+    async function refetchProjects() {
       try {
-        // CR-CRU-032 §S4 — the workspace Runs window is governed by the routed
-        // project's own `retention`. Load projects FIRST so state.projects is
-        // populated before we size the events window from it (on a cold
-        // workspace mount the boot refetch runs before any project is known).
         const projects = await getJson("/api/v2/projects");
         vanX.replace(state.projects, () => projects.projects ?? []);
+        markSynced();
+      } catch {
+        // Keep the last-known projects visible.
+      }
+    }
 
+    async function refetchAgents() {
+      try {
+        const agents = await getJson("/api/v2/agents");
+        vanX.replace(state.agents, () => agents.agents ?? []);
+        markSynced();
+      } catch {
+        // Keep the last-known agents visible.
+      }
+    }
+
+    async function refetchHealth() {
+      try {
+        state.health = await getJson("/api/v2/health");
+        markSynced();
+      } catch {
+        // Keep the last-known health visible.
+      }
+    }
+
+    async function refetchEvents() {
+      try {
         // Surface-aware events fetch (mirrors refetchPlans' §S3.2 split): a
         // WORKSPACE scopes the call to its project and caps it at that
         // project's `retention` (falling back to MANAGER_RETENTION_DEFAULT
@@ -348,24 +409,16 @@
           const retention = routed?.retention ?? MANAGER_RETENTION_DEFAULT;
           eventsUrl = `/api/v2/events?project=${encodeURIComponent(key)}&limit=${retention}`;
         }
-
-        const [agents, events, health] = await Promise.all([
-          getJson("/api/v2/agents"),
-          getJson(eventsUrl),
-          getJson("/api/v2/health"),
-        ]);
-        vanX.replace(state.agents, () => agents.agents ?? []);
+        const events = await getJson(eventsUrl);
         vanX.replace(state.events, () => events.events ?? []);
         // CR-CRU-017 §S3 — same feed, same tick: the running cards and the
         // settled cards can never disagree about a run, because one response
         // carries both. A server without the field degrades to no running
         // cards, never to a stale one.
         vanX.replace(state.openRuns, () => events.openRuns ?? []);
-        state.health = health;
-        state.backendUp = true;
-        state.lastSynced = Date.now();
+        markSynced();
       } catch {
-        // Reachability is owned by the watchdog below; keep stale data visible.
+        // Keep the last-known feed visible.
       }
     }
 
@@ -512,6 +565,7 @@
     let lastFrameAt = Date.now();
     let sse = null;
     let pollTimer = null;
+    let streamErrored = false; // the stream has failed at least once
 
     function connectStream() {
       if (sse !== null) return; // one live EventSource, however many callers race
@@ -523,17 +577,19 @@
       sse.onopen = () => {
         lastFrameAt = Date.now();
         stopPolling();
-        refetch();
+        // The stream's first open follows the boot refresh, which already
+        // read every slice: reading them again would read each resource
+        // twice per load. An open after an error is a reconnect — frames may
+        // have been missed while the stream was down — so it reads them all.
+        if (streamErrored) refetch();
       };
       sse.onmessage = (event) => {
         lastFrameAt = Date.now();
-        // Only an "events" frame can announce a merge, plan or queue change
-        // (the store emits those changes as "events"), so only it re-reads
-        // plans, the roadmap and the analytics. "agents" (heartbeats),
-        // "projects" and "hello" refresh just the core slice they own.
-        refetch(streamFrameType(event) === "events" ? "full" : "core");
+        const slices = FRAME_SLICES[streamFrameType(event)];
+        if (slices !== undefined) refetch(slices);
       };
       sse.onerror = () => {
+        streamErrored = true;
         startPolling(); // §S5 poll fallback while SSE is down
         if (sse !== null && sse.readyState === EventSource.CLOSED) {
           sse.close();
@@ -550,7 +606,7 @@
         const frame = JSON.parse(event.data);
         return frame !== null && typeof frame === "object" ? frame.type : undefined;
       } catch {
-        return undefined; // Not a typed frame: refresh the core slice only.
+        return undefined; // Not a typed frame: it names nothing to refresh.
       }
     }
 
