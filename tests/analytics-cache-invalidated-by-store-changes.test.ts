@@ -98,8 +98,10 @@ function routesFor(key: string, release: string): Array<{ name: string; path: st
       path: `/api/v2/projects/${key}/analytics/burndown?release=${encodeURIComponent(release)}`,
     },
     {
+      // The UNSEEDED forecast — the only forecast answer the cache holds (a
+      // seeded read is the test-only deterministic draw, computed per read).
       name: "forecast",
-      path: `/api/v2/projects/${key}/analytics/forecast?release=${encodeURIComponent(release)}&seed=7`,
+      path: `/api/v2/projects/${key}/analytics/forecast?release=${encodeURIComponent(release)}`,
     },
     {
       name: "changes",
@@ -341,5 +343,44 @@ describe("the server's analytics cache (§S2) — velocity, burndown, forecast, 
     await getJson(burndownPath(P2, release1));
     expect(callsFor(spy, P1)).toBe(2);
     expect(callsFor(spy, P2)).toBe(1);
+  });
+
+  test("a seeded forecast read is computed on every read and never held, so the cache cannot grow by seed; the unseeded answer is still held", async () => {
+    boot();
+    const release = "9.9.0";
+    seedProject(P1, "CR-ALPHA", release, 3);
+    const forecastPath = (seed?: number): string =>
+      `/api/v2/projects/${P1}/analytics/forecast?release=${encodeURIComponent(release)}` +
+      (seed === undefined ? "" : `&seed=${seed}`);
+
+    const spy = spyOn(handle!.store, "listQueue");
+
+    // The same seed twice: computed twice (the same deterministic answer).
+    const first = await getJson(forecastPath(7));
+    const again = await getJson(forecastPath(7));
+    expect(first.status).toBe(200);
+    expect(again.status).toBe(200);
+    expect(callsFor(spy, P1)).toBe(2);
+    expect(JSON.stringify(again.body)).toBe(JSON.stringify(first.body));
+
+    // Many distinct seeds: each one computed, none held.
+    for (let seed = 100; seed < 110; seed++) {
+      expect((await getJson(forecastPath(seed))).status).toBe(200);
+    }
+    expect(callsFor(spy, P1)).toBe(12);
+
+    // No seeded read populated the unseeded slot: the first unseeded read
+    // computes, the second is served from the cache.
+    const unseeded = await getJson(forecastPath());
+    expect(unseeded.status).toBe(200);
+    expect(callsFor(spy, P1)).toBe(13);
+    const unseededAgain = await getJson(forecastPath());
+    expect(callsFor(spy, P1)).toBe(13);
+    expect(JSON.stringify(unseededAgain.body)).toBe(JSON.stringify(unseeded.body));
+
+    // A seeded read after the unseeded answer is held is still computed, and
+    // never answered with the held unseeded figures.
+    await getJson(forecastPath(7));
+    expect(callsFor(spy, P1)).toBe(14);
   });
 });
