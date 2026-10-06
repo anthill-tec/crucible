@@ -12,11 +12,13 @@
 // a pre-upgrade fixture (see its `makePreCycleIdStore`): open a REAL Store to
 // get the current production schema, then walk it back across exactly what
 // the step under test adds — here, drop the five run-detail tables and their
-// indexes and re-stamp user_version at 15. The "before" copy is then reopened
-// with the chain SLICED to stop at 16 (the AC7 injection seam), so it stays
-// pinned at "schema C1 shipped" even once a later body is appended; the
-// "after" copy is opened with the real default chain, the one production
-// code always uses.
+// indexes and re-stamp user_version at 15. The "after" copy is opened with the
+// real default chain, the one production code always uses. The "before"
+// answers are the fixture's OWN data (`preMigrationAnswer`): each run's full
+// event as it was written into the legacy columns, and the ?depth=suites /
+// ?suite= shapes computed from that definition the way the handler shapes
+// them — never read back through this build, which no longer reads the
+// legacy columns at all.
 //
 // Route-level, through the real dispatcher (`handleV2`) — never a bespoke
 // reimplementation of the reshaping it does.
@@ -25,23 +27,11 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MIGRATIONS, Store } from "../src/store.ts";
+import { Store } from "../src/store.ts";
 import { handleV2 } from "../src/v2.ts";
 import type { V2Deps } from "../src/v2.ts";
 import type { SuiteNode, Tier } from "../src/types.ts";
 import type { CompileReport } from "../src/codecs/compile.ts";
-
-// The schema version C1 ("run detail as native rows") left behind: the five
-// detail tables exist, empty, and every existing row still answers through
-// its legacy columns. Hardcoded (not `MIGRATIONS.length`) so this fixture's
-// "before" snapshot stays pinned to THAT schema even once this cycle's own
-// data-moving body is appended after it — the same PRE_CYCLE_ID_VERSION idiom
-// tests/store-migration.test.ts already uses.
-const PRE_DATA_MOVE_VERSION = 16;
-
-function preDataMoveChain(): readonly (typeof MIGRATIONS)[number][] {
-  return MIGRATIONS.slice(0, PRE_DATA_MOVE_VERSION);
-}
 
 interface LegacyRunDef {
   id: string;
@@ -307,34 +297,80 @@ const LEGACY_RUNS: readonly LegacyRunDef[] = [
   },
 ];
 
+/** The project, agent and timestamps `buildLegacyStore` writes every run under. */
+const LEGACY_PROJECT_KEY = "legacy-proj";
+const LEGACY_AGENT_ID = "legacy-agent";
+
+/** The pre-migration answer to a read of run `id`, from the fixture's own
+ *  definition: the full event as `buildLegacyStore` wrote it (tree, raw and
+ *  compile included), `?depth=suites` as its suites with leaf counts, and
+ *  `?suite=` as its first suite of that name (and browser), fully expanded. */
+function preMigrationAnswer(
+  id: string,
+  query: { depth?: "suites"; suite?: string; browser?: string } = {},
+): { event: Record<string, unknown> } {
+  const index = LEGACY_RUNS.findIndex((r) => r.id === id);
+  const run = LEGACY_RUNS[index];
+  if (run === undefined) throw new Error(`no legacy run ${id}`);
+  const event: Record<string, unknown> = {
+    id: run.id,
+    projectKey: LEGACY_PROJECT_KEY,
+    agentId: LEGACY_AGENT_ID,
+    kind: run.kind,
+    tier: run.tier,
+    timestamp: 1_000_000 + index,
+    ...(run.summary !== undefined ? { summary: run.summary } : {}),
+    ...(run.raw !== undefined ? { raw: run.raw } : {}),
+    ...(run.tree !== undefined ? { tree: run.tree } : {}),
+    ...(run.compile !== undefined ? { compile: run.compile } : {}),
+  };
+  const tree = run.tree ?? [];
+  if (query.suite !== undefined) {
+    const match = tree.find(
+      (node) => node.name === query.suite && (query.browser === undefined || node.browser === query.browser),
+    );
+    if (match === undefined) throw new Error(`no suite ${query.suite} in legacy run ${id}`);
+    return { event: { ...event, tree: [match] } };
+  }
+  if (query.depth === "suites" && run.tree !== undefined) {
+    const count = (node: SuiteNode, status: string): number =>
+      node.children.filter((leaf) => leaf.status === status).length;
+    return {
+      event: {
+        ...event,
+        tree: run.tree.map((node) => ({
+          name: node.name,
+          status: node.status,
+          counts: { passed: count(node, "pass"), failed: count(node, "fail"), pending: count(node, "pending") },
+          ...(node.browser !== undefined ? { browser: node.browser } : {}),
+        })),
+      },
+    };
+  }
+  return { event };
+}
+
 describe("migrating a schema-v15 store into native run-detail rows", () => {
   const dirs: string[] = [];
   let baseDbPath: string;
-  let beforeDbPath: string;
   let afterDir: string;
   let afterDbPath: string;
-  let beforeStore: Store;
   let afterStore: Store;
 
   beforeAll(() => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-detail-migration-"));
     dirs.push(root);
     const baseDir = path.join(root, "base");
-    const beforeDir = path.join(root, "before");
     afterDir = path.join(root, "after");
     fs.mkdirSync(baseDir);
-    fs.mkdirSync(beforeDir);
     fs.mkdirSync(afterDir);
 
     baseDbPath = path.join(baseDir, "crucible.db");
     buildLegacyStore(baseDbPath, LEGACY_RUNS);
 
-    beforeDbPath = path.join(beforeDir, "crucible.db");
     afterDbPath = path.join(afterDir, "crucible.db");
-    fs.copyFileSync(baseDbPath, beforeDbPath);
     fs.copyFileSync(baseDbPath, afterDbPath);
 
-    beforeStore = Store.open(beforeDbPath, { migrations: preDataMoveChain() });
     afterStore = Store.open(afterDbPath);
   });
 
@@ -358,13 +394,13 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
   test("a junit-shaped run's full, depth=suites and every suite read match the pre-migration answers (minus raw on the progressive reads), and its legacy columns are emptied", async () => {
     const id = "legacy-junit";
 
-    const beforeFull = await getV2(beforeStore, `/api/v2/events/${id}`);
+    const beforeFull = preMigrationAnswer(id);
     const afterFull = await getV2(afterStore, `/api/v2/events/${id}`);
     expect(afterFull.event).toEqual(beforeFull.event);
     expect(afterFull.event.tree).toEqual(JUNIT_TREE);
     expect(afterFull.event.raw).toBe("junit run stdout\nOK (4 tests)");
 
-    const beforeSuites = await getV2(beforeStore, `/api/v2/events/${id}?depth=suites`);
+    const beforeSuites = preMigrationAnswer(id, { depth: "suites" });
     const afterSuites = await getV2(afterStore, `/api/v2/events/${id}?depth=suites`);
     expect("raw" in afterSuites.event).toBe(false);
     expect(afterSuites.event).toEqual(withoutRaw(beforeSuites.event));
@@ -374,7 +410,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     ]);
 
     for (const name of ["SuiteA", "SuiteB"]) {
-      const beforeSuite = await getV2(beforeStore, `/api/v2/events/${id}?suite=${name}`);
+      const beforeSuite = preMigrationAnswer(id, { suite: name });
       const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=${name}`);
       expect("raw" in afterSuite.event).toBe(false);
       expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
@@ -395,7 +431,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     const id = "legacy-playwright";
     const encoded = encodeURIComponent(SCENARIO_NAME);
 
-    const beforeSuites = await getV2(beforeStore, `/api/v2/events/${id}?depth=suites`);
+    const beforeSuites = preMigrationAnswer(id, { depth: "suites" });
     const afterSuites = await getV2(afterStore, `/api/v2/events/${id}?depth=suites`);
     expect("raw" in afterSuites.event).toBe(false);
     expect(afterSuites.event).toEqual(withoutRaw(beforeSuites.event));
@@ -406,7 +442,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     expect(byBrowser.firefox?.status).toBe("fail");
 
     for (const browser of ["chromium", "firefox"]) {
-      const beforeSuite = await getV2(beforeStore, `/api/v2/events/${id}?suite=${encoded}&browser=${browser}`);
+      const beforeSuite = preMigrationAnswer(id, { suite: SCENARIO_NAME, browser });
       const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=${encoded}&browser=${browser}`);
       expect("raw" in afterSuite.event).toBe(false);
       expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
@@ -422,7 +458,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
   test("a compile report's full read matches the pre-migration answer, and its legacy JSON compile column is emptied", async () => {
     const id = "legacy-compile";
 
-    const beforeFull = await getV2(beforeStore, `/api/v2/events/${id}`);
+    const beforeFull = preMigrationAnswer(id);
     const afterFull = await getV2(afterStore, `/api/v2/events/${id}`);
     expect(afterFull.event).toEqual(beforeFull.event);
     expect(afterFull.event.compile).toEqual(COMPILE_REPORT);
@@ -435,9 +471,6 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
 
     const afterFull = await getV2(afterStore, `/api/v2/events/${id}`);
     expect(afterFull.event.raw).toBe(RAW_BEARING_OUTPUT);
-
-    const beforeSuites = await getV2(beforeStore, `/api/v2/events/${id}?depth=suites`);
-    expect(beforeSuites.event.raw).toBe(RAW_BEARING_OUTPUT); // the C1-era bug this migration's route fix must close
 
     const afterSuites = await getV2(afterStore, `/api/v2/events/${id}?depth=suites`);
     expect("raw" in afterSuites.event).toBe(false);
@@ -454,7 +487,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
   test("a failure stored with only its type (no message, no trace) migrates and reads back unchanged, and its legacy tree column is emptied", async () => {
     const id = "legacy-type-only-failure";
 
-    const beforeSuite = await getV2(beforeStore, `/api/v2/events/${id}?suite=SuiteX`);
+    const beforeSuite = preMigrationAnswer(id, { suite: "SuiteX" });
     const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=SuiteX`);
     expect("raw" in afterSuite.event).toBe(false);
     expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
@@ -470,7 +503,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
   test("two suites sharing the same name keep their posted order after migration, and suite= still answers the first — unchanged from the pre-migration answer", async () => {
     const id = "legacy-duplicate-suite";
 
-    const beforeSuite = await getV2(beforeStore, `/api/v2/events/${id}?suite=Login`);
+    const beforeSuite = preMigrationAnswer(id, { suite: "Login" });
     const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=Login`);
     expect("raw" in afterSuite.event).toBe(false);
     expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
