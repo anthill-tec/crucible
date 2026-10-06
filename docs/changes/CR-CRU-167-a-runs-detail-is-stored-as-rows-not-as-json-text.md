@@ -10,21 +10,20 @@ list itself is still the board's most expensive read, and every page load, recon
 `events` frame still pays for it in full.
 
 **Profiled 2026-10-06** (in process, on a file copy of the dev store; this project's retention
-5000):
+5000). The list's answer is a set of briefs, about 1.6 MB, but `Store.listEvents` builds every event
+in full first:
 
-| `GET /api/v2/events?project=…&limit=<retention>` | |
+| `Store.listEvents(project, 5000)` | |
 |---|---|
-| Rows returned | 4209 |
-| Response size | **439 MB** |
+| Rows | 4209 |
+| Events built in memory | **439 MB** |
 | of which each test run's `tree` | 263 MB |
 | of which each test run's `raw` output | 175 MB (one run alone: 100 MB) |
 | SQL (`.all()` over the three tables) | 251 ms |
 | Rows decoded into events (`Store.toEvent`) | 722 ms |
-| Serialising the response | 1325 ms |
 
-So the cost is not SQLite and not the row count: 99.6 % of the payload is per-test detail that the
-list's readers do not draw. The run view already reads that detail per run, through
-`GET /api/v2/events/<id>?depth=suites` and `?suite=`.
+(*Corrected 2026-10-06:* this table first called the 439 MB the response size; it is the size of the
+events the store builds, which the brief then discards.)
 
 **Why the detail rides along.** The codecs decode every report into a typed run (suites, cases,
 statuses, durations), but the store then writes that structure back out as JSON text: the whole
@@ -36,8 +35,8 @@ for every row, and a single suite of a run can only be answered by parsing that 
 The analytics recompute is **not** in scope: each of velocity, burndown and forecast computes in
 under 1 ms; their read cost is `listPlans` (71 ms), which CR-CRU-169 makes cheap.
 
-This CR changes how a run's detail is stored; CR-CRU-168 then stops the events list from carrying
-it and lets a page read only what is new.
+This CR changes how a run's detail is stored; CR-CRU-168 then stops the reads that answer with
+briefs from loading it.
 
 ## Steps
 
