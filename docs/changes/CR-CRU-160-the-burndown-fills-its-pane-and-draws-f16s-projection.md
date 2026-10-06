@@ -59,15 +59,15 @@ pointer rests on it.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — At a 1280 × 800 desktop viewport, the chart's canvas is at least 90% of the pane's
+- [x] **AC1** — At a 1280 × 800 desktop viewport, the chart's canvas is at least 90% of the pane's
       content width and at least 50% of its height; it redraws to the new width on resize.
-- [ ] **AC2** — With a dated forecast (fixture), the chart draws the today marker, the P50 and P80
+- [x] **AC2** — With a dated forecast (fixture), the chart draws the today marker, the P50 and P80
       traces with their date labels and the target label, asserted in a real browser.
-- [ ] **AC3** — With a refused forecast, the plot area states the reason, and no traces are drawn.
-- [ ] **AC4** — With a 63-step history (fixture), no label is drawn outside the plot area,
+- [x] **AC3** — With a refused forecast, the plot area states the reason, and no traces are drawn.
+- [x] **AC4** — With a 63-step history (fixture), no label is drawn outside the plot area,
       overlapping another or crossing the actual line; at most K step labels are drawn (8 at the
       1280 × 800 desktop band); the today, P50, P80 and target labels are all drawn; the number of
       unlabelled steps equals the `+ N more` note's N; resting the pointer on an unlabelled step shows
       its full label, asserted in a real browser.
-- [ ] **AC5** — The live chart matches storyboard **F18 §3** (drawn 2026-09-27, the visual contract),
+- [x] **AC5** — The live chart matches storyboard **F18 §3** (drawn 2026-09-27, the visual contract),
       including the refusal stated inside the plot, checked in a real browser at VERIFY.
