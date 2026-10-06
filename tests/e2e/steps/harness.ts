@@ -597,6 +597,28 @@ export function junitSmallSuite(suiteName: string, leafName: string): string {
   ].join("\n");
 }
 
+/** The run-view suite-load isolation fixture: `suiteCount` all-passing
+ *  suites of `leavesPerSuite` leaves each, wrapped in a `<testsuites>` root
+ *  (`junitSynthSuites`'s multi-suite shape) so a run this large (734+ tests
+ *  across many suites, the gap analysis's own measured shape) seeds in one
+ *  ingest. Suite names are zero-padded (`Suite-01` …) so a mid-run target
+ *  reads predictably in a feature file. */
+export function junitManySuites(suiteCount: number, leavesPerSuite: number): string {
+  const pad = String(suiteCount).length;
+  const suites: string[] = [];
+  for (let s = 1; s <= suiteCount; s++) {
+    const suiteName = `Suite-${String(s).padStart(pad, "0")}`;
+    const cases: string[] = [];
+    for (let l = 1; l <= leavesPerSuite; l++) {
+      cases.push(`<testcase name="${suiteName}-leaf-${l}" time="0.01"/>`);
+    }
+    suites.push(
+      [`<testsuite name="${suiteName}" tests="${leavesPerSuite}">`, ...cases, `</testsuite>`].join("\n"),
+    );
+  }
+  return [`<testsuites>`, ...suites, `</testsuites>`].join("\n");
+}
+
 // CR-CRU-159 C2 — heat-strip reveal e2e fixtures (spec/BDD runs, the
 // feature-unfold case, G5/AC3). Each builds the raw Playwright JSON report
 // `ingestPlaywright` posts under `codec: "playwright"`; the server-side codec
