@@ -1,6 +1,6 @@
 # CR-CRU-160 — the burndown fills its pane and draws F16's projection
 
-**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-161 ·
+**Type** fix · **Points** 5 (planning game 2026-09-27) · **Wave** 7 (0.3.0) · **Depends on** none (CR-CRU-161 dependency dropped 2026-10-07: 0.3.0's forecast is dated without it) ·
 **Status** PENDING — filed 2026-09-27
 
 ## Problem
