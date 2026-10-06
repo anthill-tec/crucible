@@ -458,8 +458,8 @@ def _narrator(project_dir, agent_id, xml_total, identity=None):
     RE-CREATES a pruned row makes that row this run's to clean up.
 
     M never reads below the classes already seen (they are a floor on the
-    total before a single report is on disk), so an mvn run narrates
-    `running N/M`, as it did before the shared path."""
+    total before a single report is on disk). The count is of test CLASSES,
+    and the narration says so: `running N/M classes`, then `ran N/M classes`."""
     def _tick(message):
         resp = _narrate_heartbeat(project_dir, agent_id, message)
         if identity is not None:
@@ -468,7 +468,8 @@ def _narrator(project_dir, agent_id, xml_total, identity=None):
     def _total():
         return max(xml_total(), narrator.count)
 
-    narrator = _axi().RunNarrator(_tick, _recognise_class_start, total=_total)
+    narrator = _axi().RunNarrator(_tick, _recognise_class_start, total=_total,
+                                  unit="classes")
     return narrator
 
 
@@ -933,9 +934,15 @@ def _run_surefire_tier(args, goal_extra, label):
     # run that spends its wall clock waiting is measured here and says so in its
     # own envelope. `module` runs this same body and is left alone, because the
     # shared check is scoped to `unit` by the tier it is handed.
-    with _axi().ChildRunTiming() as timing:
-        result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                             narrator)
+    # A signal while the run is open is trapped and the open run disclosed.
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(label, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         run_warnings)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
@@ -1119,7 +1126,14 @@ def _run_failsafe_tier(args, goals, label):
                                             ("failsafe", "surefire"), reports_dir))
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
                                           context=_run_context())
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(label, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         run_warnings)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
@@ -1332,7 +1346,14 @@ def _regression_run(args, identity=None, verb="regression",
         run_id, run_warnings = _start_run(project_dir, args.agent,
                                           tier="regression", context=_run_context())
         preflight_warnings += run_warnings
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         preflight_warnings)
     print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
     _axi().close_narration(narrator)
 
@@ -1419,7 +1440,14 @@ def cmd_test(args, tier=None):
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context())
         preflight_warnings = list(preflight_warnings) + run_warnings
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned("test", _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         preflight_warnings)
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode

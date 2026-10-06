@@ -36,6 +36,7 @@ import os
 import re
 import resource
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -5838,6 +5839,7 @@ def unit_run_wall_vs_cpu_warnings(tier, client, timing,
 
 RUN_START_PATH = "/api/v2/runs/start"
 RUN_LIFECYCLE_UNAVAILABLE_CODE = "run-lifecycle-unavailable"
+RUN_LEFT_OPEN_CODE = "run-left-open"
 INGESTING_MESSAGE = "ingesting\u2026"
 NARRATION_LABEL_JOINER = " \u00b7 "
 
@@ -5856,17 +5858,23 @@ class RunNarrator:
     `total` is an int or a zero-arg callable re-read at every post; at or below
     zero it is unknown and the denominator is dropped (`running N`). A known
     total is clamped to at least the completed count, so M never reads below N.
+    `unit` names what the count counts when it is not tests (mvn's `classes`)
+    and follows the count: `running N/M classes`.
 
     Throttle: the first update fires once `min_seconds` have passed since the
     first completion OR `min_completions` have accumulated; each later one
     needs the same distance past the last POSTED update. `finish()` posts the
-    final `ran M/M` unconditionally and without the label."""
+    final count unconditionally and without the label: `ran <counted>/<M>`,
+    what was actually observed over the best-known total, so a run that
+    stopped short never claims the whole suite ran (`ran N/N` when no total
+    was ever known)."""
 
     def __init__(self, post, recognise, total=0, min_seconds=2.0,
-                 min_completions=10):
+                 min_completions=10, unit=None):
         self._post = post
         self._recognise = recognise
         self._total = total
+        self._unit_suffix = f" {unit}" if unit else ""
         self._min_seconds = min_seconds
         self._min_completions = min_completions
         self._count = 0
@@ -5894,10 +5902,12 @@ class RunNarrator:
             self._completed()
 
     def finish(self):
-        """Post the final `ran M/M` \u2014 always, with no label."""
+        """Post the final count \u2014 always, with no label: the completions
+        observed over the best-known total (`ran N/M`), or over themselves when
+        no total was ever known (`ran N/N`)."""
         total = self._resolved_total()
         final = total if total > 0 else self._count
-        self._deliver(f"ran {final}/{final}")
+        self._deliver(f"ran {self._count}/{final}{self._unit_suffix}")
 
     def say(self, message):
         """Post one message outside the throttle, as best-effort as the rest."""
@@ -5920,7 +5930,7 @@ class RunNarrator:
             return
         total = self._resolved_total()
         message = (f"running {self._count}/{total}" if total > 0
-                   else f"running {self._count}")
+                   else f"running {self._count}") + self._unit_suffix
         if self._label:
             message += NARRATION_LABEL_JOINER + self._label
         if self._deliver(message):
@@ -5981,6 +5991,118 @@ def run_lifecycle_unavailable_warning(error):
                    f"tool-reported duration_ms only (no startedAt, no "
                    f"server-computed runtime_ms)"),
     }
+
+
+def run_left_open_warning(run_id, cause):
+    """The structured warning for a run this client OPENED and then could not
+    close. It names the settlement path precisely, because the alternative
+    reading \u2014 "the run was lost" \u2014 is wrong and would send an operator hunting
+    for a missing event. ONE wording for the fleet: every stack client that
+    opens a run and cannot close it (no report to ingest, or a signal mid-run)
+    discloses it through this builder."""
+    # THE DETAIL NAMES NO CR AND NO UNBUILT ROUTE (CR-CRU-097 AC3a). This
+    # string is emitted to the user in the AXI envelope on ANY project's
+    # board, so it states what the client DOES \u2014 posts no abort, the server
+    # settles the run \u2014 and nothing about our backlog. The lineage lives
+    # here: a client-side abort endpoint is CR-CRU-017 \u00a7S2 and is not built,
+    # which is WHY there is no post to make; when it ships, this warning
+    # changes behaviour, not just wording.
+    return {
+        "code": RUN_LEFT_OPEN_CODE,
+        "detail": (f"{cause} \u2014 run {run_id} was never closed by an ingest. "
+                   f"The client posts no abort: the server settles it with "
+                   f"its own auto-abort \u2014 reason `agent died` as soon as "
+                   f"this agent tombstones, else `abandoned` once the run is "
+                   f"older than the `run_abandon_ms` limit the server resolves "
+                   f"from the crucible.toml beside its database. The run is "
+                   f"abandoned, not lost"),
+    }
+
+
+def run_left_open_help():
+    """CR-CRU-048's rule \u2014 the state actually reached is "an open run is being
+    settled by the server", so the next action is to WATCH that settlement and
+    then re-run, never the verb's normal successor."""
+    return ["status", "re-run the verb to record a fresh run"]
+
+
+def no_report_left_open_warnings(run_id, artifact):
+    """The disclosure a suite verb adds when its runner produced no `artifact`
+    and the run it opened therefore has nothing to close it: `[]` when no run
+    was opened (a single-shot run leaves nothing on the board to settle)."""
+    if not run_id:
+        return []
+    return [run_left_open_warning(
+        run_id, f"the runner produced no {artifact}, so there was nothing "
+                f"to ingest")]
+
+
+class RunAbandoned(Exception):
+    """SIGINT/SIGTERM arrived while a WRAPPED run was in flight. Carries the
+    signal number so the verb exits on the conventional 128+signum."""
+
+    def __init__(self, signum):
+        super().__init__(f"run abandoned on {signal.Signals(signum).name}")
+        self.signum = signum
+
+
+@contextlib.contextmanager
+def abandon_trap(run_id):
+    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run, turning
+    the signal into a `RunAbandoned` the verb can report on. Outside a wrapped
+    run (`run_id` None) this is inert and the default disposition stands \u2014
+    there is nothing open to disclose.
+
+    The previous handlers are always restored, so the trap can never outlive
+    the run it guards. A non-main thread cannot install handlers at all
+    (`ValueError`); that is not a reason to fail a test run, so the wrap simply
+    proceeds untrapped. The runner itself is reaped by `run_streamed`, which
+    kills it before the exception propagates."""
+    if run_id is None:
+        yield
+        return
+
+    def _handler(signum, _frame):
+        raise RunAbandoned(signum)
+
+    previous = {}
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous[sig] = signal.signal(sig, _handler)
+    except ValueError:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        yield
+        return
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
+                       warnings=None):
+    """The signal path's ONLY output: one ok:false envelope naming the signal
+    and the open run the server will settle. No POST of any kind is made here \u2014
+    a gated run's closing identity tombstone in the caller's `finally` is what
+    ARMS the server's `agent died` auto-abort. Returns the exit code, 128+signum.
+
+    CR-CRU-094 \u00a7S3 \u2014 `warnings` are the findings this run had ALREADY
+    accumulated when the signal landed (the pre-flight `no-cycle` among them).
+    The envelope here is built from a literal, so without them this one exit
+    would print a warning on stderr and omit it from `warnings[]`; the
+    two-channel guarantee holds on EVERY exit or on none."""
+    signame = signal.Signals(abandoned.signum).name
+    emit_axi(
+        verb, False,
+        {"runId": run_id, "signal": signame, "help": run_left_open_help()},
+        axi_context(project_key, agent_id=agent_id),
+        list(warnings or [])
+        + [run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
+        f"{verb}: ok=False \u2014 {signame} interrupted the run; run {run_id} left "
+        f"open for the server's auto-abort")
+    return 128 + abandoned.signum
 
 
 def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None):

@@ -1330,7 +1330,9 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   // this route never ran §S7 explicit-context validation either, so
   // validateUnbound stays false).
   const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
-  if (attach.fail !== undefined) return attach.fail;
+  if (attach.fail !== undefined) {
+    return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
+  }
   // CR-CRU-017 §S1 — the optional run this compile ingest CLOSES.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;

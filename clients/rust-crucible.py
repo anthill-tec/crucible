@@ -721,19 +721,22 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None, capture=False):
 
 
 # cargo-nextest's own human-reporter lines: the run states its total up front
-# (`Starting N tests across ...`), then one `PASS [ <time>]` / `FAIL [ <time>]`
-# line per finished test, then a `Summary [ <time>]` block that RE-LISTS the
-# failures (not new completions).
+# (`Starting N tests across ...`), then one verdict line per finished test —
+# `PASS [ <time>]`, `FAIL [ <time>]`, or the verdict of a test that ran and
+# died: `SIGSEGV`/`SIGABRT`/… (a signal), `TIMEOUT`, `ABORT` — then a
+# `Summary [ <time>]` block that RE-LISTS the failures (not new completions).
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 _NEXTEST_START_LINE = re.compile(r"^\s*Starting (\d+) tests?\b")
-_NEXTEST_VERDICT_LINE = re.compile(r"^\s*(?:PASS|FAIL)\s+\[")
+_NEXTEST_VERDICT_LINE = re.compile(
+    r"^\s*(?:PASS|FAIL|SIG[A-Z0-9]+|TIMEOUT|ABORT)\s+\[")
 _NEXTEST_SUMMARY_LINE = re.compile(r"^\s*Summary\s+\[")
 
 
 class _NextestProgress:
     """rust's half of the shared narration: reads nextest's start line for the
-    run's total and counts one completion per PASS/FAIL verdict line, until
-    the closing summary (whose FAIL lines repeat ones already counted)."""
+    run's total and counts one completion per verdict line (a test that
+    crashed, timed out or aborted RAN, so it counts like a PASS or a FAIL),
+    until the closing summary (whose lines repeat ones already counted)."""
 
     def __init__(self):
         self.total = 0
@@ -1017,7 +1020,14 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
                                       context=_run_context())
     preflight_warnings += run_warnings
-    result = _run_logged(cmd, project_dir, env, None, narrator, capture=True)
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, project_dir, env, None, narrator,
+                                 capture=True)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned("regression-ingest",
+                                         _project_key(project_dir), args.agent,
+                                         run_id, abandoned, preflight_warnings)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/ci/junit.xml",
@@ -1032,7 +1042,8 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
                   preflight_warnings
                   + [_axi().no_report_warning(
                       "regression-ingest", "junit.xml", result.returncode,
-                      result.stdout or "")],
+                      result.stdout or "")]
+                  + _axi().no_report_left_open_warnings(run_id, "junit.xml"),
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
         return 1
 
@@ -1240,9 +1251,15 @@ def cmd_test(args, tier=None, select=(), profile=None):
     # run that spends its wall clock waiting says so in its own envelope. The
     # other tiers run this same body and are left alone, because the shared
     # check is scoped to `unit` by the tier it is handed.
-    with _axi().ChildRunTiming() as timing:
-        result = _run_logged(cmd, project_dir, env, getattr(args, "log", None),
-                             narrator)
+    # A signal while the run is open is trapped and the open run disclosed.
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, project_dir, env,
+                                 getattr(args, "log", None), narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         preflight_warnings)
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
         # The final count, then `ingesting…`, both ahead of either ingest below.
@@ -1631,7 +1648,14 @@ def _smoke_test(args, verb):
             narrator = _narrator(project_dir, args.agent)
             run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                               context=_run_context())
-        result = _run_logged(cmd, project_dir, env, None, narrator, capture=True)
+        try:
+            with _axi().abandon_trap(run_id):
+                result = _run_logged(cmd, project_dir, env, None, narrator,
+                                     capture=True)
+        except _axi().RunAbandoned as abandoned:
+            return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                             args.agent, run_id, abandoned,
+                                             run_warnings)
         print(f"[smoke-test] cargo nextest exit={result.returncode}", file=sys.stderr)
 
         # Ingest JUnit regardless of exit code (failed tests still report).
@@ -1647,7 +1671,8 @@ def _smoke_test(args, verb):
                       _axi_context(project_dir, agent_id=args.agent),
                       run_warnings
                       + [_axi().no_report_warning(verb, "junit.xml",
-                                                  result.returncode, "")],
+                                                  result.returncode, "")]
+                      + _axi().no_report_left_open_warnings(run_id, "junit.xml"),
                       "[smoke-test] no junit.xml found — nothing to ingest")
             return 1
 
@@ -1785,7 +1810,14 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
         narrator = _narrator(project_dir, args.agent)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
                                           context=_run_context())
-    result = _run_logged(cmd, project_dir, env, None, narrator, capture=True)
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, project_dir, env, None, narrator,
+                                 capture=True)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         run_warnings)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/{args.profile}/junit.xml",
@@ -1798,7 +1830,8 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
                   _axi_context(project_dir, agent_id=args.agent),
                   run_warnings
                   + [_axi().no_report_warning(verb, "junit.xml",
-                                              result.returncode, "")],
+                                              result.returncode, "")]
+                  + _axi().no_report_left_open_warnings(run_id, "junit.xml"),
                   f"[crucible] ERROR: no junit.xml at {junit_path}")
         return 1
 

@@ -484,13 +484,15 @@ def _close_gate_identity(project_dir, identity):
 
 
 # Unity's own verdict line for one finished test: `<file>:<line>:<name>:PASS`,
-# or `...:FAIL[: <message>]`.
-_UNITY_VERDICT_LINE = re.compile(r"^[^:\s]+:\d+:[^:]+:(?:PASS|FAIL)(?::|\s*$)")
+# `...:FAIL[: <message>]`, or `...:IGNORE[: <message>]` (an ignored test was
+# reached and reported, so it is a completion too).
+_UNITY_VERDICT_LINE = re.compile(
+    r"^[^:\s]+:\d+:[^:]+:(?:PASS|FAIL|IGNORE)(?::|\s*$)")
 
 
 def _recognise_completion(line):
-    """arduino's half of the shared narration: one Unity PASS/FAIL verdict line
-    is one completed test. Unity states its total only in its closing summary,
+    """arduino's half of the shared narration: one Unity PASS/FAIL/IGNORE
+    verdict line is one completed test. Unity states its total only in its closing summary,
     so the narration carries no denominator."""
     return _UNITY_VERDICT_LINE.match(line.rstrip("\r\n")) is not None
 
@@ -670,10 +672,15 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # alone, because the shared check is scoped to `unit` by the tier it is
     # handed. The output is always captured: the no-report envelope and the
     # ingest's `raw` read it.
-    with _axi().ChildRunTiming() as timing:
-        run = _axi().run_streamed(["make", target], native_dir, make_env,
-                                  getattr(args, "log", None), narrator,
-                                  capture=True)
+    # A signal while the run is open is trapped and the open run disclosed.
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            run = _axi().run_streamed(["make", target], native_dir, make_env,
+                                      getattr(args, "log", None), narrator,
+                                      capture=True)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(pd), agent_id, run_id,
+                                         abandoned, preflight_warnings)
     # A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
     # dirs: its output is moved into the run's own directory, and said so.
     preflight_warnings += _move_ignored_outputs(native_dir, own_dir, want_coverage)
@@ -692,7 +699,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                   _axi_context(pd, agent_id=agent_id),
                   preflight_warnings
                   + [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
-                                              run.stdout or "")],
+                                              run.stdout or "")]
+                  + _axi().no_report_left_open_warnings(run_id, "TEST-*.xml"),
                   message)
         return 1
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
