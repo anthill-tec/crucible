@@ -285,10 +285,43 @@
       return res.json();
     }
 
-    async function refetch() {
-      await refetchCore();
-      await refetchPlans();
-      await refetchRoadmap();
+    // Single-flight refresh: at most one refresh is in flight per page. A
+    // trigger arriving while one runs only marks the page stale (remembering
+    // whether any of those triggers asked for the full set of slices), and
+    // exactly one trailing refresh runs when the in-flight one finishes — a
+    // burst of stream frames costs at most two refreshes, never a pile-up of
+    // overlapping ones that keeps the server pinned.
+    // `scope` is "core" for the core slice only (projects/agents/events/
+    // health); anything else (including the poll timer's bare call) is the
+    // full refresh: core, then plans, then the roadmap + analytics reads.
+    let refreshInFlight = false;
+    let refreshStale = null; // null | "core" | "full"
+
+    function refetch(scope) {
+      const want = scope === "core" ? "core" : "full";
+      if (refreshInFlight) {
+        if (refreshStale !== "full") refreshStale = want;
+        return;
+      }
+      void runRefresh(want);
+    }
+
+    async function runRefresh(scope) {
+      refreshInFlight = true;
+      try {
+        await refetchCore();
+        if (scope === "full") {
+          await refetchPlans();
+          await refetchRoadmap();
+        }
+      } finally {
+        refreshInFlight = false;
+      }
+      if (refreshStale !== null) {
+        const next = refreshStale;
+        refreshStale = null;
+        refetch(next);
+      }
     }
 
     // CR-CRU-026 §S1 — the core slice (projects/agents/events/health) split
@@ -492,9 +525,13 @@
         stopPolling();
         refetch();
       };
-      sse.onmessage = () => {
+      sse.onmessage = (event) => {
         lastFrameAt = Date.now();
-        refetch(); // change frames trigger slice refetch
+        // Only an "events" frame can announce a merge, plan or queue change
+        // (the store emits those changes as "events"), so only it re-reads
+        // plans, the roadmap and the analytics. "agents" (heartbeats),
+        // "projects" and "hello" refresh just the core slice they own.
+        refetch(streamFrameType(event) === "events" ? "full" : "core");
       };
       sse.onerror = () => {
         startPolling(); // §S5 poll fallback while SSE is down
@@ -504,6 +541,17 @@
           setTimeout(connectStream, 5000); // auto-recover on reconnect
         }
       };
+    }
+
+    // The `type` of a stream frame's `data: {"type":…}` line, or undefined when
+    // the frame carries no parseable type.
+    function streamFrameType(event) {
+      try {
+        const frame = JSON.parse(event.data);
+        return frame !== null && typeof frame === "object" ? frame.type : undefined;
+      } catch {
+        return undefined; // Not a typed frame: refresh the core slice only.
+      }
     }
 
     function startPolling() {
