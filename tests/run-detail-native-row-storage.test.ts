@@ -121,7 +121,7 @@ function tableWithColumn(db: Database, columnName: string): string {
     if (tableColumns(db, table).some((c) => c.name === columnName)) return table;
   }
   throw new Error(
-    `CR-CRU-167 §S1: no table in the store carries a "${columnName}" column — the native ` +
+    `no table in the store carries a "${columnName}" column — the native ` +
       `per-test-detail storage this step describes does not exist yet`,
   );
 }
