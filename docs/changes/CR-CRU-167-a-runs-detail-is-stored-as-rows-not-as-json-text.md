@@ -1,6 +1,6 @@
 # CR-CRU-167 — a run's detail is stored as rows, not as JSON text
 
-**Type** fix · **Points** 8 (provisional, 2026-10-06; set at gap analysis) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
+**Type** fix · **Points** 8 (gap analysis 2026-10-06) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
 **Status** PENDING — filed 2026-10-06
 
 ## Problem
@@ -46,17 +46,20 @@ it and lets a page read only what is new.
 A schema migration (the next version) stores each test run's per-test detail natively, decoded once
 at ingest:
 
-- the tree's suites in a suites table and its leaves (scenarios, cases, steps, with status,
-  duration, failure message and per-leaf raw output) in a cases table, keyed by run and suite and
-  indexed for "the suites of run R" and "the leaves of suite S of run R" (and the browser axis where
-  a run has one);
-- the run-level raw output in its own column or table, outside `payload`.
+- the tree's suites in a suites table — position, name, status, browser (where the run has one), and
+  the suite's counts (total, passed, failed, pending) — and its leaves (scenarios, cases, steps) in a
+  cases table — position, name, status, duration, and a failure's message, type and trace — keyed by
+  run and suite and indexed for "the suites of run R" and "the leaves of suite S of run R" (with the
+  browser axis);
+- the run-level raw output in its own storage, outside `payload`.
 
 No test result is stored as JSON: every suite and every test is a row with native columns, and a
-failure's trace and the raw output are plain text. Each row keeps its position, so a run's suites
-and each suite's tests read back in the order the codec decoded them. The store maps each row type
-to the codecs' own types (`SuiteNode`, `TestLeaf`) on read and back on ingest; the codecs and the
-wire are unchanged.
+failure's trace and the raw output are plain text. A failure's message, type and trace are each
+optional (a stored failure may carry only its type). Each row keeps its position, so a run's suites
+and each suite's tests read back in the order the codec decoded them; where a run holds two suites
+with the same name and browser, `?suite=` answers the first, as today. The store maps each row type
+to the codecs' own types (`SuiteNode`, `TestLeaf`) on read and back on ingest; the codecs are
+unchanged.
 
 A BDD scenario's suites row also stores its feature, split once at ingest from the codec's
 `<Feature> › <Scenario>` name, so a feature's scenarios are a query. The name on the wire is
@@ -64,24 +67,48 @@ unchanged.
 
 A compile report is stored natively too: its `format`, `errorCount` and `warningCount` as columns,
 each diagnostic (file, line, column, code, message, level, position) as a row of a diagnostics table,
-and its raw output as plain text, in place of the `events.compile` JSON column. Every compile read
-answers byte-identically to today's.
+and its raw output as plain text, in place of the `events.compile` JSON column.
 
-The migration moves every existing run's `tree` and `raw` into the new storage in place, behind the
-store's existing pre-upgrade backup, and leaves `events.tree` and `payload.raw` empty for migrated
-rows. Ingest writes only the new storage. `GET /api/v2/events/<id>` (full), `?depth=suites` and
-`?suite=` answer byte-identically to today's from the new storage: `?depth=suites` from a SQL
-aggregate over the suites, `?suite=` from an indexed read of one suite's leaves.
+`POST /api/v2/runs/parsed` validates the tree it is given against `SuiteNode` and `TestLeaf`, as the
+PRD's parsed path requires, and refuses with a 400 naming the first offending node a tree it cannot
+store; it no longer accepts any array.
+
+A run's detail rows go with the run on every path that removes it: retention eviction, a single
+event's deletion, clearing a project's events and deleting a project.
+
+### §S2 — a run's raw output is read only when asked for
+
+`GET /api/v2/events/<id>` (the full read) still carries the run's raw output. `?depth=suites` and
+`?suite=` no longer do; every other field of their answer is unchanged. The run view's raw panel
+reads the raw output with the full read (or a raw-only read of the run) when it is first opened,
+and draws it as today.
+
+### §S3 — the migration
+
+The migration moves every existing run's tree, raw output and compile report into the new storage
+in place, behind the store's existing pre-upgrade backup, and leaves `events.tree`, `payload.raw` and
+`events.compile` empty for migrated rows; it then compacts the store file (`VACUUM`), so the store does
+not keep the freed space. Ingest writes only the new storage. `GET /api/v2/events/<id>`,
+`?depth=suites` and `?suite=` answer from the new storage: `?depth=suites` from the suites rows
+alone, `?suite=` from an indexed read of one suite's leaves.
 
 ## Acceptance criteria
 
-- [ ] After the migration, every run's full read, `?depth=suites` read and `?suite=` read of every
-      suite answer byte-identically to before it, on a copy of the dev store, asserted on the server.
+- [ ] After the migration, on a copy of the dev store, every run's full read, `?depth=suites` read
+      and `?suite=` read of every suite answers with the same JSON value as before it (key order
+      aside), except that `?depth=suites` and `?suite=` carry no `raw`, asserted on the server.
 - [ ] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
       row, asserted on the rows read (not timing).
-- [ ] After the migration, every compile event reads back byte-identically, and no compile report,
-      suite or test is held in a JSON column, asserted on the server.
+- [ ] After the migration, every compile event reads back with the same JSON value, and no compile
+      report, suite or test is held in a JSON column, asserted on the server.
 - [ ] The scenarios of one BDD feature of a run are read by a query on the feature column, asserted
       on the rows read.
-- [ ] A run filed after the migration is stored in the new tables only, and reads back identically to
-      the report it was decoded from, asserted on the server.
+- [ ] A run filed after the migration is stored in the new tables only, and reads back with the same
+      JSON value as the report it was decoded from; a parsed tree with a node that is not a
+      `SuiteNode`/`TestLeaf` is refused with a 400 and nothing is stored, asserted on the server.
+- [ ] Evicting, deleting or clearing a run, or deleting its project, leaves none of its detail rows,
+      asserted on the server.
+- [ ] The run view of a run with raw output draws its raw panel when opened, and loading its suites
+      fetches no raw output, asserted in a real browser on the requests made.
+- [ ] The migration of a copy of the dev store completes, and the store file afterwards is no larger
+      than 1.25 × its size before, asserted on the copy.
