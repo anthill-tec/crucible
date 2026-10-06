@@ -2,6 +2,7 @@
 import { describe, test, expect } from "bun:test";
 import type { Coverage, Project, RunContext, RunSummary, SuiteNode } from "../src/types.ts";
 import { Store } from "../src/store.ts";
+import { parseCompile } from "../src/codecs/compile.ts";
 
 function seedProject(store: Store, extra?: Partial<Project>): string {
   const key = crypto.randomUUID();
@@ -129,10 +130,10 @@ describe("Store#recordTestEvent — context", () => {
 });
 
 describe("Store#recordCompileEvent", () => {
-  test("stores an opaque compile payload under kind 'compile' and round-trips via getEvent", () => {
+  test("stores a compile report under kind 'compile' and round-trips via getEvent", () => {
     const store = new Store(":memory:");
     const pk = seedProject(store);
-    const compilePayload = { exitCode: 1, diagnostics: ["error TS2304: Cannot find name 'foo'."] };
+    const compilePayload = parseCompile("src/a.ts(1,5): error TS2304: Cannot find name 'foo'.", "tsc");
 
     const event = store.recordCompileEvent(pk, "a1", compilePayload, { tier: "module", stack: "ts" });
 

@@ -6243,6 +6243,11 @@
       };
       const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
+      // The run's raw output text: the suite reads carry only its byte length
+      // (`rawBytes`), so the text is read with the full read the first time
+      // the raw panel opens, and kept from then on. Null until it arrives.
+      const rawText = van.state(null);
+      let rawRequested = false; // the one full read has been started
       // The heat-strip reveal's located row "leaf:<suite>::<leaf>" or
       // "suite:<suite>", rendered by the row carrying that key as the shared
       // LOCATE_BLINK_CLASS. Held as STATE, not a classList mark on one node
@@ -6923,34 +6928,34 @@
         }
       }
 
-      // CR-CRU-038 §S2 — resolve the raw blob to surface: the focused/failing
-      // leaf's own `raw` capture (a forward-compat per-leaf field) is PREFERRED
-      // over the run-level `d.raw` blob; when neither exists the raw content is
-      // absent (and the raw-toggle control is withheld entirely — no more
-      // "toggle that reveals nothing"). Reads each suite's leaves / focusedLeaf.val
-      // so it re-resolves reactively as suites load.
-      function resolveRaw(d) {
-        const focused = focusedLeaf.val;
-        const leafRawOf = (predicate) => {
-          for (const suite of d.tree ?? []) {
-            const leaves = leavesOf(suiteKeyOf(suite));
-            if (leaves === undefined) continue;
-            for (const leaf of leaves) {
-              const key = `${suiteKeyOf(suite)}::${leaf.name}`;
-              if (!predicate(leaf, key)) continue;
-              if (typeof leaf.raw === "string" && leaf.raw.length > 0) return leaf.raw;
-            }
+      // CR-CRU-038 §S2 — the raw output to surface is the run's own, once its
+      // full read has answered (null until then, or when it is empty). The
+      // raw-toggle control is withheld entirely when the run has none (no
+      // `rawBytes`) — no "toggle that reveals nothing".
+      function resolveRaw() {
+        const raw = rawText.val;
+        return typeof raw === "string" && raw.length > 0 ? raw : null;
+      }
+
+      // A run has raw output when its suites read says so (`rawBytes`).
+      const hasRaw = (d) => typeof d.rawBytes === "number" && d.rawBytes > 0;
+
+      // Read the run's raw output with the full read — once: a later toggle or
+      // suite load never reads it again. A failed read may be retried.
+      function readRaw() {
+        if (rawRequested) return;
+        rawRequested = true;
+        (async () => {
+          try {
+            const res = await fetch(`/api/v2/events/${encodeURIComponent(eventId)}`);
+            const body = await res.json();
+            const raw = body?.event?.raw;
+            rawText.val = typeof raw === "string" ? raw : "";
+          } catch (err) {
+            rawRequested = false;
+            loadError.val = `raw output failed to load — ${String(err)}`;
           }
-          return null;
-        };
-        // 1) the focused leaf's raw, 2) any failing leaf's raw, 3) the run blob.
-        const focusedRaw =
-          focused !== null ? leafRawOf((_leaf, key) => key === focused) : null;
-        if (focusedRaw !== null) return focusedRaw;
-        const failingRaw = leafRawOf((leaf) => leaf.status === "fail");
-        if (failingRaw !== null) return failingRaw;
-        if (typeof d.raw === "string" && d.raw.length > 0) return d.raw;
-        return null;
+        })();
       }
 
       // CR-CRU-038 §S3 — the failure-jump + raw-toggle relocate to the drill-in
@@ -6981,13 +6986,14 @@
         () => {
           const d = detail.val;
           if (d === null || d.kind !== "test") return "";
-          if (resolveRaw(d) === null) return "";
+          if (!hasRaw(d)) return "";
           return button(
             {
               "data-testid": "raw-toggle",
               class: "app-chip app-drillin-headchip",
               onclick: () => {
                 showRaw.val = !showRaw.val;
+                if (showRaw.val) readRaw();
               },
             },
             "toggle raw output",
@@ -7117,13 +7123,13 @@
             : (d.tree ?? []).map((suite) => SuiteBinding(suite, presentation, density)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
-          // showing the RESOLVED raw (per-leaf preferred over the run blob).
-          // Its own binding: resolveRaw reads every suite's leaves, and read
-          // here in the body it would redraw every suite on any one's load.
+          // showing the run's raw output once its full read has answered.
+          // Its own binding, reading only the raw state: read here in the
+          // body it would redraw every suite whenever the raw arrived.
           // "" (not null) when withheld, so the binding stays live.
           () =>
-            showRaw.val && resolveRaw(d) !== null
-              ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw(d))
+            showRaw.val && resolveRaw() !== null
+              ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw())
               : "",
         );
       };

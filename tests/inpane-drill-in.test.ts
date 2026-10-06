@@ -67,11 +67,6 @@ interface LeafFixture {
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: FailureFixture;
-  /** CR-CRU-038 §S2 forward-compat — a per-leaf captured raw blob; when
-   * present it is preferred over the run-level `EventDetailFixture.raw`
-   * (no real reporter sets this yet — see Implementation notes in
-   * docs/changes/CR-CRU-038-patch-run-detail-controls.md). */
-  raw?: string;
 }
 interface SuiteFixture {
   name: string;
@@ -193,16 +188,20 @@ async function mountApp(opts: MountOpts): Promise<void> {
       const parsed = new URL(url, "http://localhost");
       const suiteParam = parsed.searchParams.get("suite");
       const depthParam = parsed.searchParams.get("depth");
+      // The real wire: the suite reads carry the raw output's byte length
+      // (`rawBytes`), never `raw`; only the full read carries `raw`.
+      const { raw, ...head } = detail;
+      const rawBytes = raw !== undefined ? { rawBytes: Buffer.byteLength(raw, "utf8") } : {};
       if (suiteParam !== null) {
         const match = (detail.tree ?? []).find((n) => n.name === suiteParam);
-        body = { ok: true, event: { ...detail, tree: match !== undefined ? [match] : [] } };
+        body = { ok: true, event: { ...head, ...rawBytes, tree: match !== undefined ? [match] : [] } };
       } else if (depthParam === "suites") {
         const tree = (detail.tree ?? []).map((n) => ({
           name: n.name,
           status: n.status,
           counts: suiteCounts(n.children),
         }));
-        body = { ok: true, event: { ...detail, tree } };
+        body = { ok: true, event: { ...head, ...rawBytes, tree } };
       } else {
         body = { ok: true, event: detail };
       }
@@ -1537,26 +1536,16 @@ describe("§S2 focus-model contract — failures-footer jump focus-opens each ta
 
 // ────────────────────────────────────────────────────────────────────────
 // CR-CRU-038 C2 §S2 — raw-output toggle: hidden entirely when the run has
-// NO raw (neither per-leaf nor run-level), and per-failing-test raw
-// preferred over the run-level blob when both exist
+// NO raw output, and the run-level raw revealed inside the body scroller
+// by the toggle and hidden again by a second click
 // (docs/changes/CR-CRU-038-patch-run-detail-controls.md §S2).
-//
-// RED phase: expected to FAIL against the CURRENT public/app.js —
-// `FailuresFooter` (public/app.js) renders `[data-testid="raw-toggle"]`
-// whenever `d.summary.failed >= 1`, with NO check that `d.raw` (or any
-// per-leaf raw) actually exists, so "hidden when empty" fails (the button
-// renders anyway, revealing nothing on click). And `TestBody`'s reveal
-// (`showRaw.val && typeof d.raw === "string"`, inside `TestBody`) only ever
-// looks at the run-level `d.raw` — there is no per-leaf raw concept at
-// all today — so the preference test fails too (today it would show the
-// RUN-level blob's text, never the leaf's).
 // ────────────────────────────────────────────────────────────────────────
 
 function rawPreferenceFixture(
   eventId: string,
   projectKey: string,
   now: number,
-  opts: { runRaw?: string; leafRaw?: string },
+  opts: { runRaw?: string },
 ) {
   const failLeaf: LeafFixture = {
     name: "rawFail",
@@ -1564,7 +1553,6 @@ function rawPreferenceFixture(
     duration_ms: 6,
     failure: { message: "raw fixture failed" },
   };
-  if (opts.leafRaw !== undefined) failLeaf.raw = opts.leafRaw;
   const detail: EventDetailFixture = {
     id: eventId,
     projectKey,
@@ -1601,8 +1589,8 @@ function rawPreferenceFixture(
   return { detail, brief };
 }
 
-describe("§S2 (CR-CRU-038) — raw-output toggle hidden when empty; per-failing-test raw preferred over the run-level blob", () => {
-  test("an error run with NEITHER a per-leaf raw NOR a run-level raw blob renders NO raw-toggle control at all, though the failure-jump still renders", async () => {
+describe("§S2 (CR-CRU-038) — raw-output toggle hidden when empty; the run-level raw revealed and hidden by the toggle", () => {
+  test("an error run with NO run-level raw renders NO raw-toggle control at all, though the failure-jump still renders", async () => {
     const now = Date.now();
     const eventId = "evt-s2-raw-empty-1";
     const projectKey = "proj-s2-raw-empty-1";
@@ -1622,28 +1610,19 @@ describe("§S2 (CR-CRU-038) — raw-output toggle hidden when empty; per-failing
     expect(document.querySelector('[data-testid="raw-output"]')).toBeNull();
   });
 
-  test("a per-leaf raw is preferred over the run-level raw blob when both are present; the raw-toggle reveals it inside the body scroller and a second click hides it again", async () => {
+  test("the run-level raw output: the raw-toggle reveals it inside the body scroller and a second click hides it again", async () => {
     const now = Date.now();
-    const eventId = "evt-s2-raw-pref-1";
-    const projectKey = "proj-s2-raw-pref-1";
+    const eventId = "evt-s2-raw-run-1";
+    const projectKey = "proj-s2-raw-run-1";
     const fx = rawPreferenceFixture(eventId, projectKey, now, {
-      runRaw: "RUN-LEVEL BLOB — must NOT surface once a per-leaf raw exists",
-      leafRaw: "LEAF-LEVEL RAW — the preferred capture for the failing test",
+      runRaw: "RUN-LEVEL RAW — the run's captured output",
     });
     await mountApp({
       pathname: `/p/${projectKey}/run/${eventId}`,
-      projects: [project({ key: projectKey, name: "Raw Preference Project" })],
+      projects: [project({ key: projectKey, name: "Raw Run Project" })],
       events: [fx.brief],
       eventDetails: { [eventId]: fx.detail },
     });
-
-    // Load the failing suite's leaves (§S1 minimized default) so the
-    // per-leaf raw is actually reachable before resolving preference.
-    const suiteRow = findByText(document, '[data-testid="suite-row"]', "SuiteRaw");
-    expect(suiteRow).toBeDefined();
-    suiteRow!.click();
-    await settle();
-    expect(document.querySelector('[data-testid="leaf-row"]')).not.toBeNull();
 
     const rawToggle = document.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
     expect(rawToggle).not.toBeNull();
@@ -1655,10 +1634,7 @@ describe("§S2 (CR-CRU-038) — raw-output toggle hidden when empty; per-failing
     expect(runsPane).not.toBeNull();
     const rawOutputEl = runsPane!.querySelector('[data-testid="raw-output"]');
     expect(rawOutputEl).not.toBeNull();
-    expect((rawOutputEl!.textContent ?? "")).toContain(
-      "LEAF-LEVEL RAW — the preferred capture for the failing test",
-    );
-    expect((rawOutputEl!.textContent ?? "")).not.toContain("RUN-LEVEL BLOB");
+    expect((rawOutputEl!.textContent ?? "")).toContain("RUN-LEVEL RAW — the run's captured output");
 
     rawToggle!.click();
     await settle();

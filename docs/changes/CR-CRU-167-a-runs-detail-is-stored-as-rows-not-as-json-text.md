@@ -79,9 +79,11 @@ event's deletion, clearing a project's events and deleting a project.
 ### §S2 — a run's raw output is read only when asked for
 
 `GET /api/v2/events/<id>` (the full read) still carries the run's raw output. `?depth=suites` and
-`?suite=` no longer do; every other field of their answer is unchanged. The run view's raw panel
-reads the raw output with the full read (or a raw-only read of the run) when it is first opened,
-and draws it as today.
+`?suite=` no longer do; instead they carry `rawBytes`, the raw output's length in bytes, when the run
+has raw output (the key is absent when it has none). Every other field of their answer is unchanged.
+The run view shows the raw toggle when `rawBytes` is present (a run without raw output still shows
+none), reads the raw output with the full read when the panel is first opened, and draws it as
+today.
 
 ### §S3 — the migration
 
@@ -94,21 +96,24 @@ alone, `?suite=` from an indexed read of one suite's leaves.
 
 ## Acceptance criteria
 
-- [ ] After the migration, on a copy of the dev store, every run's full read, `?depth=suites` read
+- [x] After the migration, on a copy of the dev store, every run's full read, `?depth=suites` read
       and `?suite=` read of every suite answers with the same JSON value as before it (key order
       aside), except that `?depth=suites` and `?suite=` carry no `raw`, asserted on the server.
-- [ ] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
+- [x] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
       row, asserted on the rows read (not timing).
-- [ ] After the migration, every compile event reads back with the same JSON value, and no compile
+- [x] After the migration, every compile event reads back with the same JSON value, and no compile
       report, suite or test is held in a JSON column, asserted on the server.
-- [ ] The scenarios of one BDD feature of a run are read by a query on the feature column, asserted
+- [x] The scenarios of one BDD feature of a run are read by a query on the feature column, asserted
       on the rows read.
-- [ ] A run filed after the migration is stored in the new tables only, and reads back with the same
+- [x] A run filed after the migration is stored in the new tables only, and reads back with the same
       JSON value as the report it was decoded from; a parsed tree with a node that is not a
       `SuiteNode`/`TestLeaf` is refused with a 400 and nothing is stored, asserted on the server.
-- [ ] Evicting, deleting or clearing a run, or deleting its project, leaves none of its detail rows,
+- [x] Evicting, deleting or clearing a run, or deleting its project, leaves none of its detail rows,
       asserted on the server.
-- [ ] The run view of a run with raw output draws its raw panel when opened, and loading its suites
-      fetches no raw output, asserted in a real browser on the requests made.
-- [ ] The migration of a copy of the dev store completes, and the store file afterwards is no larger
+- [x] `?depth=suites` and `?suite=` carry `rawBytes` equal to the raw output's length for a run with
+      raw output, and no `rawBytes` for a run without, asserted on the server.
+- [x] The run view of a run with raw output shows the raw toggle and draws its raw panel when opened,
+      and loading its suites fetches no raw output; a run without raw output shows no toggle,
+      asserted in a real browser on the requests made.
+- [x] The migration of a copy of the dev store completes, and the store file afterwards is no larger
       than 1.25 × its size before, asserted on the copy.
