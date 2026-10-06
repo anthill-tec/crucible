@@ -2224,6 +2224,37 @@ body {
   font: 400 10px var(--mono);
   color: var(--ink-faint);
 }
+/* The chart's DOM description (app.js `burndownDescriber`): a list over the
+   canvas, invisible but for one reused tooltip. Each step is a small,
+   transparent, focusable target centred on its point. */
+.app-burndown-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.app-burndown-label { display: none; }
+.app-burndown-target {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: auto;
+  outline: none;
+}
+.app-burndown-tooltip {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 10px var(--mono);
+}
+.app-burndown-tooltip[hidden] { display: none; }
 .app-analytics-health.ahead { color: var(--pass); }
 .app-analytics-health.at-risk { color: var(--heat); }
 .app-analytics-health.behind { color: var(--fail); }
