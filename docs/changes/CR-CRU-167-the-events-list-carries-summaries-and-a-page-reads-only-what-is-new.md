@@ -51,6 +51,10 @@ at ingest:
   a run has one);
 - the run-level raw output in its own column or table, outside `payload`.
 
+No test result is stored as JSON: every suite and every test is a row with native columns, and a
+failure's trace and the raw output are plain text. Each row keeps its position, so a run's suites
+and each suite's tests read back in the order the codec decoded them.
+
 The migration moves every existing run's `tree` and `raw` into the new storage in place, behind the
 store's existing pre-upgrade backup, and leaves `events.tree` and `payload.raw` empty for migrated
 rows. Ingest writes only the new storage. `GET /api/v2/events/<id>` (full), `?depth=suites` and
