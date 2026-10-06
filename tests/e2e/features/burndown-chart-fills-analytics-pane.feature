@@ -34,6 +34,6 @@ Feature: the Roadmap's burndown chart fills its analytics pane and redraws when 
     And I tap the roadmap release band
     Then the burndown chart canvas is at least 90% of the analytics pane's content width
     And the burndown chart canvas width is noted
-    When the viewport is 1000x800
+    When the viewport is 1100x800
     Then the burndown chart canvas is at least 90% of the analytics pane's content width
     And the burndown chart canvas is narrower than the noted width
