@@ -42,6 +42,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Store, defaultRetention } from "../src/store.ts";
+import { parseCompile } from "../src/codecs/compile.ts";
 import * as storeModule from "../src/store.ts";
 import { retentionDisclosure } from "../src/server.ts";
 import { serverConfigPath, shippedLimits } from "../src/limits.ts";
@@ -124,7 +125,7 @@ function recordOfKind(store: Store, key: string, kind: string): string {
     case "test":
       return ingestTelemetry(store, key, 1)[0]!;
     case "compile":
-      return store.recordCompileEvent(key, "agent-1", { errorCount: 0, warningCount: 0 }).id;
+      return store.recordCompileEvent(key, "agent-1", parseCompile("", "raw")).id;
     case "lifecycle":
       return store.recordLifecycleEvent(key, "agent-1", "registered").id;
     case "gate":
