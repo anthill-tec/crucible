@@ -108,18 +108,18 @@ per poll.
 
 ## Acceptance criteria
 
-- [ ] During a full run of this project's bun suite, filed through the client, with the board's
+- [x] During a full run of this project's bun suite, filed through the client, with the board's
       roadmap page open, a run view's `?depth=suites` and `?suite=` reads stay under **50 ms at
       p95**, measured by sampling every 250 ms (the gap analysis's method).
-- [ ] However many stream frames arrive while a refresh is in flight, a page runs at most one more
+- [x] However many stream frames arrive while a refresh is in flight, a page runs at most one more
       refresh after it, asserted on the requests made.
-- [ ] A heartbeat-only stream frame triggers no analytics read; a frame announcing a merge, plan or
+- [x] A heartbeat-only stream frame triggers no analytics read; a frame announcing a merge, plan or
       queue change does, asserted on the requests made.
-- [ ] A second analytics read with no intervening store change is answered from the server's
+- [x] A second analytics read with no intervening store change is answered from the server's
       cache, and a change that can move the figures invalidates it, asserted on the server.
-- [ ] Loading one suite of a 734-test run does not rebuild the other suites' DOM, asserted in a real
+- [x] Loading one suite of a 734-test run does not rebuild the other suites' DOM, asserted in a real
       browser.
-- [ ] One workspace load issues each of `velocity`, `burndown`, `forecast`, `releases`, `queue` and
+- [x] One workspace load issues each of `velocity`, `burndown`, `forecast`, `releases`, `queue` and
       `release-proposals` once, asserted on the requests made.
 
 
