@@ -93,7 +93,13 @@ suite load. The fix is decided from what that shows and locked with the user bef
 - **A loaded suite renders without rebuilding the others** (G4).
 - **The server caches the analytics answers** (velocity, burndown, forecast, and the plan-change
   counts) until the store changes in a way that can move them, so even a misbehaving page cannot
-  pin the server with repeated analytics reads.
+  pin the server with repeated analytics reads. The unseeded forecast is therefore fixed for the
+  UTC day (until such a change); a seeded (test-only) forecast is computed per read, never held.
+- **The projects list reads no whole event history** (C5 FIX, user ruling 2026-10-06). The page
+  re-reads the projects list on every heartbeat (each card's agents-online count moves with it),
+  and `handleProjectsList` loaded every event of every project to draw each card (~1.3 s on this
+  store). Each card's newest event, newest coverage-bearing run and per-day coverage trend come
+  from bounded queries instead, with a byte-identical payload.
 
 ### §S3 — a page load reads each resource once
 
@@ -102,18 +108,18 @@ per poll.
 
 ## Acceptance criteria
 
-- [ ] During a full run of this project's bun suite, filed through the client, with the board's
+- [x] During a full run of this project's bun suite, filed through the client, with the board's
       roadmap page open, a run view's `?depth=suites` and `?suite=` reads stay under **50 ms at
       p95**, measured by sampling every 250 ms (the gap analysis's method).
-- [ ] However many stream frames arrive while a refresh is in flight, a page runs at most one more
+- [x] However many stream frames arrive while a refresh is in flight, a page runs at most one more
       refresh after it, asserted on the requests made.
-- [ ] A heartbeat-only stream frame triggers no analytics read; a frame announcing a merge, plan or
+- [x] A heartbeat-only stream frame triggers no analytics read; a frame announcing a merge, plan or
       queue change does, asserted on the requests made.
-- [ ] A second analytics read with no intervening store change is answered from the server's
+- [x] A second analytics read with no intervening store change is answered from the server's
       cache, and a change that can move the figures invalidates it, asserted on the server.
-- [ ] Loading one suite of a 734-test run does not rebuild the other suites' DOM, asserted in a real
+- [x] Loading one suite of a 734-test run does not rebuild the other suites' DOM, asserted in a real
       browser.
-- [ ] One workspace load issues each of `velocity`, `burndown`, `forecast`, `releases`, `queue` and
+- [x] One workspace load issues each of `velocity`, `burndown`, `forecast`, `releases`, `queue` and
       `release-proposals` once, asserted on the requests made.
 
 

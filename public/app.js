@@ -59,7 +59,7 @@
       // CR-CRU-025 §S2b — the Run Timeline accordion's per-cycleId collapse
       // set (cycleIds whose declared-marker is currently collapsed). Pure UI
       // session state: default EMPTY (everything expanded), no URL/persistence,
-      // and untouched by refetchCore/refetchPlans — so a poll/SSE re-render
+      // and untouched by refetchEvents/refetchPlans — so a poll/SSE re-render
       // naturally preserves it. A vanX reactive array so a toggle re-runs the
       // Runs feed binding (mutated via vanX.replace, like state.events).
       collapsedCycles: [],
@@ -222,14 +222,14 @@
       // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
       // route, workspace → the scoped one), so EVERY scope change refetches
       // the landing surface's plan slice. CR-CRU-032 §S4 made state.events
-      // surface-scoped (refetchCore REPLACES the shared feed with a
+      // surface-scoped (refetchEvents REPLACES the shared feed with a
       // surface-scoped set), so the core slice must ALSO refetch on EVERY
       // scope change, symmetric with refetchPlans: a home landing re-fetches
       // the global ?limit=50 feed to restore the collective marker
       // vocabulary (CR-026 §S0 equivalence), not just a workspace landing.
-      void refetchPlans();
-      void refetchCore();
-      void refetchRoadmap();
+      // Through the single-flight gate: a refresh already in flight finishes
+      // first, then exactly one reads the landing surface's slices.
+      refetch();
     }
 
     // CR-CRU-016 AC2 — close the detail back to the underlying surface path
@@ -285,24 +285,118 @@
       return res.json();
     }
 
-    async function refetch() {
-      await refetchCore();
-      await refetchPlans();
-      await refetchRoadmap();
+    // Single-flight refresh: at most one refresh is in flight per page. A
+    // trigger arriving while one runs only marks the page stale, remembering
+    // the union of the slices those triggers asked for, and exactly one
+    // trailing refresh of that union runs when the in-flight one finishes —
+    // a burst of stream frames costs at most two refreshes, never a pile-up
+    // of overlapping ones that keeps the server pinned.
+    //
+    // A refresh reads only the slices it names: "projects", "agents",
+    // "health", and "events" — the events list plus plans, the roadmap and
+    // the analytics. The events list is a workspace's whole retention window,
+    // the one read too heavy to repeat on every frame, so only the triggers
+    // that can have changed it ask for it. A bare `refetch()` (boot, the poll
+    // timer, watchdog recovery, a reconnect, a mutation, a scope change)
+    // reads every slice.
+    const ALL_SLICES = ["projects", "agents", "health", "events"];
+    // What each stream frame kind can have changed. An "agents" frame (a
+    // heartbeat or registration) moves the agents, the projects' online
+    // counts and the server's health; only an "events" frame can announce a
+    // run, merge, plan or queue change (the store emits all of those as
+    // "events"). "hello", and a frame with no parseable type, read nothing.
+    const FRAME_SLICES = {
+      agents: ["projects", "agents", "health"],
+      projects: ["projects"],
+      events: ["projects", "events"],
+    };
+    let refreshInFlight = false;
+    let refreshStale = null; // null | Set of slice names
+
+    function refetch(slices = ALL_SLICES) {
+      if (refreshInFlight) {
+        if (refreshStale === null) refreshStale = new Set();
+        for (const slice of slices) refreshStale.add(slice);
+        return;
+      }
+      void runRefresh(new Set(slices));
     }
 
-    // CR-CRU-026 §S1 — the core slice (projects/agents/events/health) split
-    // out of refetch() so a scope-changing navigation can fire it alongside
-    // refetchPlans() without double-fetching the plans route.
-    async function refetchCore() {
+    async function runRefresh(slices) {
+      refreshInFlight = true;
+      // The surface this refresh reads for. A scope change while it runs
+      // queues a full refresh of the new surface (scopeChanged), so this one
+      // stops at its next step rather than read the new surface's slices
+      // ahead of that refresh, which would read each of them twice.
+      const page = state.route.page;
+      const projectKey = state.route.projectKey;
+      const scopeMoved = () =>
+        state.route.page !== page || state.route.projectKey !== projectKey;
       try {
-        // CR-CRU-032 §S4 — the workspace Runs window is governed by the routed
-        // project's own `retention`. Load projects FIRST so state.projects is
-        // populated before we size the events window from it (on a cold
-        // workspace mount the boot refetch runs before any project is known).
+        // CR-CRU-032 §S4 — projects FIRST: the workspace events window is
+        // sized from the routed project's `retention`.
+        if (slices.has("projects")) await refetchProjects();
+        if (scopeMoved()) return;
+        await Promise.all([
+          slices.has("agents") ? refetchAgents() : null,
+          slices.has("events") ? refetchEvents() : null,
+          slices.has("health") ? refetchHealth() : null,
+        ]);
+        if (slices.has("events") && !scopeMoved()) {
+          await refetchPlans();
+          if (!scopeMoved()) await refetchRoadmap();
+        }
+      } finally {
+        refreshInFlight = false;
+      }
+      if (refreshStale !== null) {
+        const next = refreshStale;
+        refreshStale = null;
+        refetch(next);
+      }
+    }
+
+    // A slice read landed: the server answered.
+    function markSynced() {
+      state.backendUp = true;
+      state.lastSynced = Date.now();
+    }
+
+    // CR-CRU-026 §S1 — the core slices (projects/agents/events/health), each
+    // read on its own so a frame refreshes only the ones it can have changed.
+    // Each keeps its last-known data visible when its read fails:
+    // reachability is owned by the watchdog below.
+    async function refetchProjects() {
+      try {
         const projects = await getJson("/api/v2/projects");
         vanX.replace(state.projects, () => projects.projects ?? []);
+        markSynced();
+      } catch {
+        // Keep the last-known projects visible.
+      }
+    }
 
+    async function refetchAgents() {
+      try {
+        const agents = await getJson("/api/v2/agents");
+        vanX.replace(state.agents, () => agents.agents ?? []);
+        markSynced();
+      } catch {
+        // Keep the last-known agents visible.
+      }
+    }
+
+    async function refetchHealth() {
+      try {
+        state.health = await getJson("/api/v2/health");
+        markSynced();
+      } catch {
+        // Keep the last-known health visible.
+      }
+    }
+
+    async function refetchEvents() {
+      try {
         // Surface-aware events fetch (mirrors refetchPlans' §S3.2 split): a
         // WORKSPACE scopes the call to its project and caps it at that
         // project's `retention` (falling back to MANAGER_RETENTION_DEFAULT
@@ -315,24 +409,16 @@
           const retention = routed?.retention ?? MANAGER_RETENTION_DEFAULT;
           eventsUrl = `/api/v2/events?project=${encodeURIComponent(key)}&limit=${retention}`;
         }
-
-        const [agents, events, health] = await Promise.all([
-          getJson("/api/v2/agents"),
-          getJson(eventsUrl),
-          getJson("/api/v2/health"),
-        ]);
-        vanX.replace(state.agents, () => agents.agents ?? []);
+        const events = await getJson(eventsUrl);
         vanX.replace(state.events, () => events.events ?? []);
         // CR-CRU-017 §S3 — same feed, same tick: the running cards and the
         // settled cards can never disagree about a run, because one response
         // carries both. A server without the field degrades to no running
         // cards, never to a stale one.
         vanX.replace(state.openRuns, () => events.openRuns ?? []);
-        state.health = health;
-        state.backendUp = true;
-        state.lastSynced = Date.now();
+        markSynced();
       } catch {
-        // Reachability is owned by the watchdog below; keep stale data visible.
+        // Keep the last-known feed visible.
       }
     }
 
@@ -479,6 +565,7 @@
     let lastFrameAt = Date.now();
     let sse = null;
     let pollTimer = null;
+    let streamErrored = false; // the stream has failed at least once
 
     function connectStream() {
       if (sse !== null) return; // one live EventSource, however many callers race
@@ -490,13 +577,19 @@
       sse.onopen = () => {
         lastFrameAt = Date.now();
         stopPolling();
-        refetch();
+        // The stream's first open follows the boot refresh, which already
+        // read every slice: reading them again would read each resource
+        // twice per load. An open after an error is a reconnect — frames may
+        // have been missed while the stream was down — so it reads them all.
+        if (streamErrored) refetch();
       };
-      sse.onmessage = () => {
+      sse.onmessage = (event) => {
         lastFrameAt = Date.now();
-        refetch(); // change frames trigger slice refetch
+        const slices = FRAME_SLICES[streamFrameType(event)];
+        if (slices !== undefined) refetch(slices);
       };
       sse.onerror = () => {
+        streamErrored = true;
         startPolling(); // §S5 poll fallback while SSE is down
         if (sse !== null && sse.readyState === EventSource.CLOSED) {
           sse.close();
@@ -504,6 +597,17 @@
           setTimeout(connectStream, 5000); // auto-recover on reconnect
         }
       };
+    }
+
+    // The `type` of a stream frame's `data: {"type":…}` line, or undefined when
+    // the frame carries no parseable type.
+    function streamFrameType(event) {
+      try {
+        const frame = JSON.parse(event.data);
+        return frame !== null && typeof frame === "object" ? frame.type : undefined;
+      } catch {
+        return undefined; // Not a typed frame: it names nothing to refresh.
+      }
     }
 
     function startPolling() {
@@ -6100,7 +6204,21 @@
     const RunDetailBody = (eventId) => {
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
-      const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
+      // suiteName -> a state holding that suite's leaves (undefined until its
+      // ?suite= read lands). One state PER SUITE, never one map: everything
+      // drawn from a suite's leaves (its rows, its heat cells) is a binding
+      // that reads that suite's state alone, so a suite's load replaces only
+      // its own nodes and every other suite's rows and cells stay put.
+      const suiteLeaves = new Map();
+      const leavesState = (key) => {
+        let state = suiteLeaves.get(key);
+        if (state === undefined) {
+          state = van.state(undefined);
+          suiteLeaves.set(key, state);
+        }
+        return state;
+      };
+      const leavesOf = (key) => leavesState(key).val;
       // CR-CRU-122 §S3 — suiteName -> true while THAT suite's ?suite= fetch is
       // in flight. It mirrors suiteLeaves' shape on purpose: one flag covers
       // BOTH trigger paths (the suite row's own toggle and SynthHeatCell's
@@ -6110,14 +6228,26 @@
       const focusedLeaf = van.state(null); // "suite::leaf" — failure focus
       const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
       const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
-      const openFeatures = van.state({}); // spec runs: feature title -> true while unfolded
+      // Spec runs: feature title -> a state holding whether that feature is
+      // unfolded. One state PER FEATURE (suiteLeaves' shape): each feature is
+      // its own binding reading its own state, so folding or unfolding one
+      // replaces only that feature's nodes, never the body's.
+      const featureOpen = new Map();
+      const featureOpenState = (title) => {
+        let open = featureOpen.get(title);
+        if (open === undefined) {
+          open = van.state(false);
+          featureOpen.set(title, open);
+        }
+        return open;
+      };
       const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
       // The heat-strip reveal's located row "leaf:<suite>::<leaf>" or
       // "suite:<suite>", rendered by the row carrying that key as the shared
       // LOCATE_BLINK_CLASS. Held as STATE, not a classList mark on one node
       // (locateBlink's way): the scroll that follows moves suiteWindow
-      // (handlePaneScroll), which rebuilds the whole body, and a class on the
+      // (handlePaneScroll), which redraws that suite's rows, and a class on the
       // replaced node would go with it.
       const located = van.state(null);
       let locatedTimer = null;
@@ -6159,7 +6289,7 @@
       async function loadSuite(suite) {
         const name = suite.name;
         const key = suiteKeyOf(suite);
-        if (suiteLeaves.val[key] !== undefined) return;
+        if (leavesOf(key) !== undefined) return;
         // CR-CRU-122 §S3 — raised before the fetch, lowered in the `finally`
         // below: a flag cleared only on the success path would leave a
         // permanently spinning row behind every failed load.
@@ -6174,7 +6304,7 @@
           );
           const body = await res.json();
           const match = (body?.event?.tree ?? []).find((s) => suiteKeyOf(s) === key);
-          suiteLeaves.val = { ...suiteLeaves.val, [key]: match?.children ?? [] };
+          leavesState(key).val = match?.children ?? [];
         } catch (err) {
           loadError.val = `suite "${name}" failed to load — ${String(err)}`;
         } finally {
@@ -6186,7 +6316,7 @@
       // an already-expanded suite keeps it expanded (auto-expanded failing
       // suites stay open — status lives in the ▾/▸ affordance).
       async function expandSuite(suite) {
-        if (suiteLeaves.val[suiteKeyOf(suite)] !== undefined) return;
+        if (leavesOf(suiteKeyOf(suite)) !== undefined) return;
         await loadSuite(suite);
       }
 
@@ -6235,37 +6365,33 @@
       // other all-green feature stays folded. Nothing else is read until it
       // scrolls into view (loadScrolledScenarios) or is clicked.
       function openProgressively(d) {
-        const open = {};
         const initial = [];
         specFeaturesOf(d).forEach((feature, i) => {
-          if (i === 0 || feature.failed > 0) open[feature.title] = true;
+          featureOpenState(feature.title).val = i === 0 || feature.failed > 0;
           feature.scenarios.forEach((entry, j) => {
             if (entry.failing || (i === 0 && j < SPEC_FIRST_OPEN)) initial.push(entry.node);
           });
         });
-        openFeatures.val = open;
         for (const node of initial) void loadSuite(node);
       }
 
       function toggleFeature(title) {
-        const next = { ...openFeatures.val };
-        if (next[title] === true) delete next[title];
-        else next[title] = true;
-        openFeatures.val = next;
+        const open = featureOpenState(title);
+        open.val = !open.val;
       }
 
       // A heat-cell reveal first opens the feature holding its scenario:
       // SpecFeatures mounts none of a folded feature's scenarios, so the
-      // target has no row until it opens. Merged into openFeatures, never
-      // replacing it, so every other open feature stays open.
+      // target has no row until it opens. Only that feature's state is set,
+      // so every other open feature stays open.
       function unfoldFeatureOf(suiteName) {
         const d = detail.val;
         if (!isSpecRun(d)) return;
         const feature = specFeaturesOf(d).find((f) =>
           f.scenarios.some((entry) => suiteKeyOf(entry.node) === suiteName),
         );
-        if (feature === undefined || openFeatures.val[feature.title] === true) return;
-        openFeatures.val = { ...openFeatures.val, [feature.title]: true };
+        if (feature === undefined) return;
+        featureOpenState(feature.title).val = true;
       }
 
       // A folded scenario row of an unfolded feature reads its steps once it
@@ -6276,7 +6402,7 @@
         const byKey = new Map((d.tree ?? []).map((s) => [suiteKeyOf(s), s]));
         for (const row of pane.querySelectorAll('[data-testid="suite-row"][data-suite-key]')) {
           const key = row.getAttribute("data-suite-key");
-          if (suiteLeaves.val[key] !== undefined || suiteLoading.val[key] === true) continue;
+          if (leavesOf(key) !== undefined || suiteLoading.val[key] === true) continue;
           if (row.getBoundingClientRect().top - paneTop > view) continue;
           const node = byKey.get(key);
           if (node !== undefined) void loadSuite(node);
@@ -6595,7 +6721,7 @@
             const pane = paneOf(e);
             unfoldFeatureOf(suiteName);
             await loadSuite(suite);
-            const leaves = suiteLeaves.val[suiteName] ?? [];
+            const leaves = leavesOf(suiteName) ?? [];
             const failIdx = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
             if (failIdx < 0) {
               reveal(`suite:${suiteName}`, pane);
@@ -6618,25 +6744,31 @@
         });
       };
 
-      const HeatStrip = (d) => {
-        const leavesMap = suiteLeaves.val;
+      // One suite's cells: real per-leaf cells once its leaves are loaded,
+      // else synthesized from its counts. A binding per suite, reading only
+      // that suite's leaves, so a load swaps that suite's cells alone. The
+      // wrapper is `display: contents`: the cells stay the strip's flex items.
+      const SuiteHeatCells = (suite) => {
+        const key = suiteKeyOf(suite);
+        const leaves = leavesOf(key);
         const cells = [];
-        for (const suite of d.tree ?? []) {
-          const leaves = leavesMap[suiteKeyOf(suite)];
-          if (leaves !== undefined) {
-            const entryIndex = entryIndexOf(leaves);
-            leaves.forEach((leaf) =>
-              cells.push(HeatCell(suiteKeyOf(suite), leaf, entryIndex.get(leaf) ?? 0)),
-            );
-          } else {
-            const c = suite.counts ?? {};
-            for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite, "fail"));
-            for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite, "pending"));
-            for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite, "pass"));
-          }
+        if (leaves !== undefined) {
+          const entryIndex = entryIndexOf(leaves);
+          leaves.forEach((leaf) => cells.push(HeatCell(key, leaf, entryIndex.get(leaf) ?? 0)));
+        } else {
+          const c = suite.counts ?? {};
+          for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite, "fail"));
+          for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite, "pending"));
+          for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite, "pass"));
         }
-        return div({ "data-testid": "heat-strip", class: "app-heat-strip" }, cells);
+        return span({ class: "app-heat-suite" }, cells);
       };
+
+      const HeatStrip = (d) =>
+        div(
+          { "data-testid": "heat-strip", class: "app-heat-strip" },
+          (d.tree ?? []).map((suite) => () => SuiteHeatCells(suite)),
+        );
 
       // F4½ — Density status chips row, above the heat-strip.
       const StatusChips = (d) => {
@@ -6691,7 +6823,7 @@
       function failingLeafKeys(d) {
         const keys = [];
         for (const suite of d.tree ?? []) {
-          const leaves = suiteLeaves.val[suiteKeyOf(suite)];
+          const leaves = leavesOf(suiteKeyOf(suite));
           if (leaves === undefined) continue;
           for (const leaf of leaves) {
             if (leaf.status === "fail") keys.push(`${suiteKeyOf(suite)}::${leaf.name}`);
@@ -6720,7 +6852,7 @@
         const sep = target.indexOf("::");
         const suiteName = target.slice(0, sep);
         const leafName = target.slice(sep + 2);
-        const leaf = (suiteLeaves.val[suiteName] ?? []).find((l) => l.name === leafName);
+        const leaf = (leavesOf(suiteName) ?? []).find((l) => l.name === leafName);
         if (typeof leaf?.failure?.message === "string") {
           // A digest-grouped target expands its group so the row is visible.
           openGroups.val = {
@@ -6795,14 +6927,13 @@
       // leaf's own `raw` capture (a forward-compat per-leaf field) is PREFERRED
       // over the run-level `d.raw` blob; when neither exists the raw content is
       // absent (and the raw-toggle control is withheld entirely — no more
-      // "toggle that reveals nothing"). Reads suiteLeaves.val / focusedLeaf.val
+      // "toggle that reveals nothing"). Reads each suite's leaves / focusedLeaf.val
       // so it re-resolves reactively as suites load.
       function resolveRaw(d) {
         const focused = focusedLeaf.val;
-        const leavesMap = suiteLeaves.val;
         const leafRawOf = (predicate) => {
           for (const suite of d.tree ?? []) {
-            const leaves = leavesMap[suiteKeyOf(suite)];
+            const leaves = leavesOf(suiteKeyOf(suite));
             if (leaves === undefined) continue;
             for (const leaf of leaves) {
               const key = `${suiteKeyOf(suite)}::${leaf.name}`;
@@ -6867,9 +6998,11 @@
       // One suite (a spec run's scenario) row + its leaves. The plain tree and
       // the spec's feature groups both draw their suites through this, so a
       // spec run's scenario is the same collapse/counts/digest/virtualization.
-      const SuiteGroup = (suite, presentation, density, leavesMap) => {
+      // Mounted as its own binding (SuiteBinding): it reads only this suite's
+      // leaves, so another suite's load never redraws it.
+      const SuiteGroup = (suite, presentation, density) => {
         const key = suiteKeyOf(suite);
-        const leaves = leavesMap[key];
+        const leaves = leavesOf(key);
         const expanded = leaves !== undefined;
         const counts = suite.counts ?? countsOfLeaves(leaves ?? suite.children);
         const foldedAllPass = density && !expanded && (counts.failed ?? 0) === 0;
@@ -6902,6 +7035,9 @@
         );
       };
 
+      const SuiteBinding = (suite, presentation, density) => () =>
+        SuiteGroup(suite, presentation, density);
+
       // A spec run's byline: who filed it, when (the board's relative-time
       // idiom), and its cycle — or that it is unbound.
       const RunByline = (d) => {
@@ -6916,46 +7052,50 @@
 
       // A spec run's features: each its own heading (its own counts, its own
       // ▾/▸), failures first; a folded feature mounts none of its scenarios.
-      const SpecFeatures = (d, presentation, density, leavesMap) =>
-        specFeaturesOf(d).map((feature) => {
-          const open = openFeatures.val[feature.title] === true;
-          const status = feature.failed > 0 ? "fail" : "pass";
-          return div(
+      // Each feature is its own binding on its own open state, so a fold
+      // replaces that feature's nodes alone.
+      const SpecFeatures = (d, presentation, density) =>
+        specFeaturesOf(d).map((feature) => () => FeatureGroup(feature, presentation, density));
+
+      const FeatureGroup = (feature, presentation, density) => {
+        const open = featureOpenState(feature.title).val;
+        const status = feature.failed > 0 ? "fail" : "pass";
+        return div(
+          {
+            "data-testid": "feature-group",
+            class: `app-feature-group ${status}`,
+            "data-feature-name": feature.title,
+            "data-feature-status": status,
+            "data-feature-passed": String(feature.passed),
+            "data-feature-failed": String(feature.failed),
+          },
+          div(
             {
-              "data-testid": "feature-group",
-              class: `app-feature-group ${status}`,
-              "data-feature-name": feature.title,
-              "data-feature-status": status,
-              "data-feature-passed": String(feature.passed),
-              "data-feature-failed": String(feature.failed),
+              "data-testid": "feature-heading",
+              class: `app-feature-heading app-tree-line ${status}`,
+              onclick: () => toggleFeature(feature.title),
             },
-            div(
-              {
-                "data-testid": "feature-heading",
-                class: `app-feature-heading app-tree-line ${status}`,
-                onclick: () => toggleFeature(feature.title),
-              },
-              span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
-              span(
-                { class: "app-feature-name" },
-                feature.title === "" ? "Scenarios" : `Feature: ${feature.title}`,
-              ),
-              span(
-                { class: "app-suite-counts" },
-                span({ class: "app-count-pass" }, `${feature.passed} ✓`),
-                feature.failed > 0 ? [" ", span({ class: "app-count-fail" }, `${feature.failed} ✗`)] : null,
-              ),
+            span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
+            span(
+              { class: "app-feature-name" },
+              feature.title === "" ? "Scenarios" : `Feature: ${feature.title}`,
             ),
-            open
-              ? div(
-                  { class: "app-feature-scenarios" },
-                  feature.scenarios.map((entry) =>
-                    SuiteGroup(entry.node, presentation, density, leavesMap),
-                  ),
-                )
-              : null,
-          );
-        });
+            span(
+              { class: "app-suite-counts" },
+              span({ class: "app-count-pass" }, `${feature.passed} ✓`),
+              feature.failed > 0 ? [" ", span({ class: "app-count-fail" }, `${feature.failed} ✗`)] : null,
+            ),
+          ),
+          open
+            ? div(
+                { class: "app-feature-scenarios" },
+                feature.scenarios.map((entry) =>
+                  SuiteBinding(entry.node, presentation, density),
+                ),
+              )
+            : null,
+        );
+      };
 
       // Suite tree — §S4.0 FINAL: the tier decides everything. Detail (unit/
       // module/integration) renders the plain tree; Density (regression/e2e)
@@ -6966,7 +7106,6 @@
       const TestBody = (d) => {
         const presentation = presentationOf(d);
         const density = presentation === "Density";
-        const leavesMap = suiteLeaves.val;
         const spec = isSpecRun(d);
         return div(
           { class: "app-drillin-tree" },
@@ -6974,16 +7113,18 @@
           density ? StatusChips(d) : null,
           density ? HeatStrip(d) : null,
           spec
-            ? SpecFeatures(d, presentation, density, leavesMap)
-            : (d.tree ?? []).map((suite) => SuiteGroup(suite, presentation, density, leavesMap)),
+            ? SpecFeatures(d, presentation, density)
+            : (d.tree ?? []).map((suite) => SuiteBinding(suite, presentation, density)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
           // showing the RESOLVED raw (per-leaf preferred over the run blob).
-          // Read synchronously so the enclosing body derivation tracks showRaw
-          // and rebuilds TestBody on toggle.
-          showRaw.val && resolveRaw(d) !== null
-            ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw(d))
-            : null,
+          // Its own binding: resolveRaw reads every suite's leaves, and read
+          // here in the body it would redraw every suite on any one's load.
+          // "" (not null) when withheld, so the binding stays live.
+          () =>
+            showRaw.val && resolveRaw(d) !== null
+              ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw(d))
+              : "",
         );
       };
 

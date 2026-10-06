@@ -7,6 +7,7 @@ import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
 import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
+import { analyticsCacheFor } from "./analytics-cache.ts";
 import { resolveNext } from "./next.ts";
 import {
   authHints,
@@ -486,11 +487,13 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
   const now = Date.now();
   const projects = store.listProjects(archived).map((project) => {
     const agents = store.listAgents(project.key);
-    const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
-    const last = events[0];
+    // Bounded reads, never the project's whole event history: the newest
+    // feed row, and each UTC day's newest coverage-bearing run.
+    const last = store.newestEvent(project.key);
+    const coverageDays = store.listCoverageDays(project.key);
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
-    const greenCovered = events.find((e) => e.coverage !== undefined);
+    const greenCovered = coverageDays[0];
     // CR-CRU-033 §S2 (DN-crucible-coverage-trend.md §6) — date-keyed
     // coverage-trend series: a MERGE, per UTC day, of the DURABLE rollup
     // buckets (old days that survived retention pruning) PLUS the
@@ -508,16 +511,11 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
         byDay.set(r.bucket, r.lastCoverage.lines.percent);
       }
     }
-    // Live day-points (within retention): group coverage-bearing events by
-    // UTC day, last-of-day wins. `events` is newest-first, so the FIRST
-    // event seen for a day is its last-of-day; live overwrites any rollup.
-    const liveSeen = new Set<string>();
-    for (const e of events) {
-      if (e.coverage === undefined) continue;
-      const day = new Date(e.timestamp).toISOString().slice(0, 10);
-      if (liveSeen.has(day)) continue;
-      liveSeen.add(day);
-      byDay.set(day, e.coverage.lines.percent);
+    // Live day-points (within retention): each UTC day's last-of-day
+    // coverage-bearing run (`coverageDays` holds exactly one per day); live
+    // overwrites any rollup.
+    for (const e of coverageDays) {
+      byDay.set(new Date(e.timestamp).toISOString().slice(0, 10), e.coverage.lines.percent);
     }
     const coverageTrend = Array.from(byDay.entries())
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -4681,12 +4679,14 @@ function declaredTarget(store: Store, key: string, release: string): number | un
 function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
   const missing = requireHeldProject(store, key);
   if (missing !== null) return missing;
-  const payload = velocity({
-    plans: store.listPlans(key),
-    entries: store.listQueue(key),
-    execByCycle: store.cycleExecMs(key),
-    now: Date.now(),
-  });
+  const payload = analyticsCacheFor(store).answer(key, ["velocity"], () =>
+    velocity({
+      plans: store.listPlans(key),
+      entries: store.listQueue(key),
+      execByCycle: store.cycleExecMs(key),
+      now: Date.now(),
+    }),
+  );
   return reply(req, url, { ok: true, ...payload });
 }
 
@@ -4696,14 +4696,16 @@ function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: U
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const target = declaredTarget(store, key, release);
-  const payload = burndown({
-    release,
-    entries: store.listQueue(key),
-    filedAt: store.queueFiledAt(key),
-    journal: store.listQueueDeclarations(key),
-    plans: store.listPlans(key),
-    ...(target !== undefined ? { targetAt: target } : {}),
+  const payload = analyticsCacheFor(store).answer(key, ["burndown", release], () => {
+    const target = declaredTarget(store, key, release);
+    return burndown({
+      release,
+      entries: store.listQueue(key),
+      filedAt: store.queueFiledAt(key),
+      journal: store.listQueueDeclarations(key),
+      plans: store.listPlans(key),
+      ...(target !== undefined ? { targetAt: target } : {}),
+    });
   });
   if (payload === null) {
     return fail(404, `no CR was ever planned into release ${release}`);
@@ -4725,19 +4727,26 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
   if (seed !== undefined && !Number.isInteger(seed)) {
     return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
   }
-  const entries = store.listQueue(key);
-  if (!entries.some((entry) => entry.release === release)) {
+  // Only the unseeded answer is held: a seeded read is the test-only
+  // deterministic draw, computed per read, so the cache never grows by seed.
+  const compute = () => {
+    const entries = store.listQueue(key);
+    if (!entries.some((entry) => entry.release === release)) return null;
+    const target = declaredTarget(store, key, release);
+    return forecast({
+      release,
+      entries,
+      plans: store.listPlans(key),
+      now: Date.now(),
+      ...(target !== undefined ? { targetAt: target } : {}),
+      random: seed !== undefined ? seededRandom(seed) : Math.random,
+    });
+  };
+  const payload =
+    seed !== undefined ? compute() : analyticsCacheFor(store).answer(key, ["forecast", release], compute);
+  if (payload === null) {
     return fail(404, `no CR is planned into release ${release}`);
   }
-  const target = declaredTarget(store, key, release);
-  const payload = forecast({
-    release,
-    entries,
-    plans: store.listPlans(key),
-    now: Date.now(),
-    ...(target !== undefined ? { targetAt: target } : {}),
-    random: seed !== undefined ? seededRandom(seed) : Math.random,
-  });
   return reply(req, url, { ok: true, ...payload });
 }
 
@@ -4751,7 +4760,9 @@ function handleAnalyticsChanges(store: Store, key: string, req: Request, url: UR
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const payload = planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) });
+  const payload = analyticsCacheFor(store).answer(key, ["changes", release], () =>
+    planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) }),
+  );
   if (payload === null) {
     return fail(404, `no CR is planned into release ${release}`);
   }

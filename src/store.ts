@@ -4306,7 +4306,10 @@ export class Store {
     return Number.isFinite(tail) ? tail : 0;
   }
 
-  private static newestFirst(a: EventRow, b: EventRow): number {
+  private static newestFirst(
+    a: Pick<EventRow, "id" | "timestamp">,
+    b: Pick<EventRow, "id" | "timestamp">,
+  ): number {
     return b.timestamp - a.timestamp || Store.insertOrdinal(b.id) - Store.insertOrdinal(a.id);
   }
 
@@ -4334,6 +4337,65 @@ export class Store {
       .sort(Store.newestFirst)
       .slice(0, limit)
       .map(Store.toEvent);
+  }
+
+  /**
+   * A project's newest feed row — the first of `listEvents(projectKey, ∞)` —
+   * read without the history behind it: from each of the three tables only
+   * the rows at that table's newest instant, merged the way `listEvents`
+   * merges them, so a same-instant tie resolves exactly as it does there.
+   */
+  newestEvent(projectKey: string): RunEvent | undefined {
+    const atNewest = (source: string, table: string): EventRow[] =>
+      this.db
+        .query<EventRow, [string, string]>(
+          `${source} WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL
+             AND timestamp = (SELECT MAX(timestamp) FROM ${table}
+                              WHERE project_key = ? AND retired_at IS NULL)
+           ORDER BY timestamp DESC, rowid DESC`,
+        )
+        .all(projectKey, projectKey);
+    const row = [
+      ...atNewest(`SELECT * FROM events`, "events"),
+      ...atNewest(MILESTONE_ROWS, "milestones"),
+      ...atNewest(GATE_ROWS, "gates"),
+    ].sort(Store.newestFirst)[0];
+    return row === undefined ? undefined : Store.toEvent(row);
+  }
+
+  /**
+   * A project's per-UTC-day coverage: for each day a coverage-bearing run
+   * of the feed fell on, that day's newest such run (in `listEvents`' order),
+   * newest day first. Only runs carry coverage — a record's projection never
+   * does — and only each day's newest instant is read, never the runs
+   * between.
+   */
+  listCoverageDays(projectKey: string): Array<{ id: string; timestamp: number; coverage: Coverage }> {
+    const rows = this.db
+      .query<{ id: string; timestamp: number; coverage: string }, [string]>(
+        `SELECT id, timestamp, coverage FROM (
+           SELECT id, timestamp, coverage, rowid AS seq,
+                  RANK() OVER (
+                    PARTITION BY strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch')
+                    ORDER BY timestamp DESC
+                  ) AS place
+           FROM events
+           WHERE project_key = ? AND coverage IS NOT NULL
+             AND ${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL)
+         WHERE place = 1
+         ORDER BY timestamp DESC, seq DESC`,
+      )
+      .all(projectKey)
+      .sort(Store.newestFirst);
+    const days = new Set<string>();
+    const newest: Array<{ id: string; timestamp: number; coverage: Coverage }> = [];
+    for (const row of rows) {
+      const day = new Date(row.timestamp).toISOString().slice(0, 10);
+      if (days.has(day)) continue;
+      days.add(day);
+      newest.push({ id: row.id, timestamp: row.timestamp, coverage: JSON.parse(row.coverage) as Coverage });
+    }
+    return newest;
   }
 
   /**

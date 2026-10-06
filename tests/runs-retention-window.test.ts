@@ -4,7 +4,7 @@
 // Spec: docs/changes/CR-CRU-032-runs-boundary-anchor-fetch.md §S4
 //
 // Current code fact (verified against public/app.js on this branch):
-//   `refetchCore` (app.js) fetches ONE all-projects
+//   `refetchEvents` (app.js) fetches ONE all-projects
 //   `/api/v2/events?limit=50` into `state.events`, unconditionally — the
 //   SAME call regardless of `state.route.page`. The workspace Runs pane
 //   (`visibleEvents()` / `WorkspaceRunsFeed`, both in app.js)
@@ -16,7 +16,7 @@
 // Fix under test (not yet implemented — every test below is RED against
 // current production): mirror the existing `refetchPlans` surface-aware
 // split (in app.js, CR-CRU-026 §S3.2) — on a WORKSPACE route,
-// `refetchCore`'s events call must become
+// `refetchEvents`'s events call must become
 //   `/api/v2/events?project=<key>&limit=<project.retention ?? MANAGER_RETENTION_DEFAULT>`
 // (`MANAGER_RETENTION_DEFAULT = 100`, in app.js) so the Runs tab shows
 // THAT project's own runs up to ITS retention. HOME must keep the
@@ -357,7 +357,7 @@ describe("§S4 AC4 — HOME still fetches the recent-N collective ?limit=50 (unc
     });
 
     // Byte-identical to today's hardcoded literal (the home branch of
-    // `refetchCore`, app.js) — no
+    // `refetchEvents`, app.js) — no
     // `project` param sneaks in on home, and the query string is untouched.
     expect(eventsCalls).toContain("/api/v2/events?limit=50");
 
@@ -372,10 +372,10 @@ describe("§S4 AC4 — HOME still fetches the recent-N collective ?limit=50 (unc
 
 // ── §S4 regression (gate-caught) — CR-026 §S0 equivalence breaks ────────
 //
-// Root cause (confirmed in code, public/app.js): §S4 made `refetchCore`
+// Root cause (confirmed in code, public/app.js): §S4 made `refetchEvents`
 // (app.js) surface-aware — a WORKSPACE landing replaces the SHARED
 // `state.events` with that project's own scoped set. But `scopeChanged()`
-// (`scopeChanged` in app.js) only calls `refetchCore()` `if (state.route.page ===
+// (`scopeChanged` in app.js) only calls `refetchEvents()` `if (state.route.page ===
 // "workspace")` — NOT on a home landing. So a workspace->home navigation
 // restores global PLANS (refetchPlans is unconditional) but leaves
 // `state.events` scoped to the last-visited workspace's project. Home's
@@ -446,7 +446,7 @@ describe("§S4 regression — navigating workspace→home restores the GLOBAL ev
     // §S4 regression pin — the home timeline must render the SAME
     // declared-marker count as the cold-load baseline (CR-026 §S0
     // equivalence). Against current production this FAILS: scopeChanged()
-    // never re-fires refetchCore() for a home landing, so state.events
+    // never re-fires refetchEvents() for a home landing, so state.events
     // stays scoped to project A from the workspace visit and project B's
     // declared-marker vanishes (count drops to 1, not 2).
     expect(declaredMarkerCount()).toBe(coldCount);
