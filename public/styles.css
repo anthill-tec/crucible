@@ -861,6 +861,9 @@ body {
   border-radius: 2px;
   cursor: pointer;
 }
+/* One suite's cells, its own binding; laid out as if the cells were the
+   strip's direct children. */
+.app-heat-suite { display: contents; }
 .app-heat-fail { background: var(--fail); }
 .app-heat-pending { background: var(--heat); }
 .app-heat-pass { background: var(--pass); opacity: 0.35; }

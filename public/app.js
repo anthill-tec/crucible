@@ -6148,7 +6148,21 @@
     const RunDetailBody = (eventId) => {
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
-      const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
+      // suiteName -> a state holding that suite's leaves (undefined until its
+      // ?suite= read lands). One state PER SUITE, never one map: everything
+      // drawn from a suite's leaves (its rows, its heat cells) is a binding
+      // that reads that suite's state alone, so a suite's load replaces only
+      // its own nodes and every other suite's rows and cells stay put.
+      const suiteLeaves = new Map();
+      const leavesState = (key) => {
+        let state = suiteLeaves.get(key);
+        if (state === undefined) {
+          state = van.state(undefined);
+          suiteLeaves.set(key, state);
+        }
+        return state;
+      };
+      const leavesOf = (key) => leavesState(key).val;
       // CR-CRU-122 §S3 — suiteName -> true while THAT suite's ?suite= fetch is
       // in flight. It mirrors suiteLeaves' shape on purpose: one flag covers
       // BOTH trigger paths (the suite row's own toggle and SynthHeatCell's
@@ -6165,7 +6179,7 @@
       // "suite:<suite>", rendered by the row carrying that key as the shared
       // LOCATE_BLINK_CLASS. Held as STATE, not a classList mark on one node
       // (locateBlink's way): the scroll that follows moves suiteWindow
-      // (handlePaneScroll), which rebuilds the whole body, and a class on the
+      // (handlePaneScroll), which redraws that suite's rows, and a class on the
       // replaced node would go with it.
       const located = van.state(null);
       let locatedTimer = null;
@@ -6207,7 +6221,7 @@
       async function loadSuite(suite) {
         const name = suite.name;
         const key = suiteKeyOf(suite);
-        if (suiteLeaves.val[key] !== undefined) return;
+        if (leavesOf(key) !== undefined) return;
         // CR-CRU-122 §S3 — raised before the fetch, lowered in the `finally`
         // below: a flag cleared only on the success path would leave a
         // permanently spinning row behind every failed load.
@@ -6222,7 +6236,7 @@
           );
           const body = await res.json();
           const match = (body?.event?.tree ?? []).find((s) => suiteKeyOf(s) === key);
-          suiteLeaves.val = { ...suiteLeaves.val, [key]: match?.children ?? [] };
+          leavesState(key).val = match?.children ?? [];
         } catch (err) {
           loadError.val = `suite "${name}" failed to load — ${String(err)}`;
         } finally {
@@ -6234,7 +6248,7 @@
       // an already-expanded suite keeps it expanded (auto-expanded failing
       // suites stay open — status lives in the ▾/▸ affordance).
       async function expandSuite(suite) {
-        if (suiteLeaves.val[suiteKeyOf(suite)] !== undefined) return;
+        if (leavesOf(suiteKeyOf(suite)) !== undefined) return;
         await loadSuite(suite);
       }
 
@@ -6324,7 +6338,7 @@
         const byKey = new Map((d.tree ?? []).map((s) => [suiteKeyOf(s), s]));
         for (const row of pane.querySelectorAll('[data-testid="suite-row"][data-suite-key]')) {
           const key = row.getAttribute("data-suite-key");
-          if (suiteLeaves.val[key] !== undefined || suiteLoading.val[key] === true) continue;
+          if (leavesOf(key) !== undefined || suiteLoading.val[key] === true) continue;
           if (row.getBoundingClientRect().top - paneTop > view) continue;
           const node = byKey.get(key);
           if (node !== undefined) void loadSuite(node);
@@ -6643,7 +6657,7 @@
             const pane = paneOf(e);
             unfoldFeatureOf(suiteName);
             await loadSuite(suite);
-            const leaves = suiteLeaves.val[suiteName] ?? [];
+            const leaves = leavesOf(suiteName) ?? [];
             const failIdx = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
             if (failIdx < 0) {
               reveal(`suite:${suiteName}`, pane);
@@ -6666,25 +6680,31 @@
         });
       };
 
-      const HeatStrip = (d) => {
-        const leavesMap = suiteLeaves.val;
+      // One suite's cells: real per-leaf cells once its leaves are loaded,
+      // else synthesized from its counts. A binding per suite, reading only
+      // that suite's leaves, so a load swaps that suite's cells alone. The
+      // wrapper is `display: contents`: the cells stay the strip's flex items.
+      const SuiteHeatCells = (suite) => {
+        const key = suiteKeyOf(suite);
+        const leaves = leavesOf(key);
         const cells = [];
-        for (const suite of d.tree ?? []) {
-          const leaves = leavesMap[suiteKeyOf(suite)];
-          if (leaves !== undefined) {
-            const entryIndex = entryIndexOf(leaves);
-            leaves.forEach((leaf) =>
-              cells.push(HeatCell(suiteKeyOf(suite), leaf, entryIndex.get(leaf) ?? 0)),
-            );
-          } else {
-            const c = suite.counts ?? {};
-            for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite, "fail"));
-            for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite, "pending"));
-            for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite, "pass"));
-          }
+        if (leaves !== undefined) {
+          const entryIndex = entryIndexOf(leaves);
+          leaves.forEach((leaf) => cells.push(HeatCell(key, leaf, entryIndex.get(leaf) ?? 0)));
+        } else {
+          const c = suite.counts ?? {};
+          for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite, "fail"));
+          for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite, "pending"));
+          for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite, "pass"));
         }
-        return div({ "data-testid": "heat-strip", class: "app-heat-strip" }, cells);
+        return span({ class: "app-heat-suite" }, cells);
       };
+
+      const HeatStrip = (d) =>
+        div(
+          { "data-testid": "heat-strip", class: "app-heat-strip" },
+          (d.tree ?? []).map((suite) => () => SuiteHeatCells(suite)),
+        );
 
       // F4½ — Density status chips row, above the heat-strip.
       const StatusChips = (d) => {
@@ -6739,7 +6759,7 @@
       function failingLeafKeys(d) {
         const keys = [];
         for (const suite of d.tree ?? []) {
-          const leaves = suiteLeaves.val[suiteKeyOf(suite)];
+          const leaves = leavesOf(suiteKeyOf(suite));
           if (leaves === undefined) continue;
           for (const leaf of leaves) {
             if (leaf.status === "fail") keys.push(`${suiteKeyOf(suite)}::${leaf.name}`);
@@ -6768,7 +6788,7 @@
         const sep = target.indexOf("::");
         const suiteName = target.slice(0, sep);
         const leafName = target.slice(sep + 2);
-        const leaf = (suiteLeaves.val[suiteName] ?? []).find((l) => l.name === leafName);
+        const leaf = (leavesOf(suiteName) ?? []).find((l) => l.name === leafName);
         if (typeof leaf?.failure?.message === "string") {
           // A digest-grouped target expands its group so the row is visible.
           openGroups.val = {
@@ -6843,14 +6863,13 @@
       // leaf's own `raw` capture (a forward-compat per-leaf field) is PREFERRED
       // over the run-level `d.raw` blob; when neither exists the raw content is
       // absent (and the raw-toggle control is withheld entirely — no more
-      // "toggle that reveals nothing"). Reads suiteLeaves.val / focusedLeaf.val
+      // "toggle that reveals nothing"). Reads each suite's leaves / focusedLeaf.val
       // so it re-resolves reactively as suites load.
       function resolveRaw(d) {
         const focused = focusedLeaf.val;
-        const leavesMap = suiteLeaves.val;
         const leafRawOf = (predicate) => {
           for (const suite of d.tree ?? []) {
-            const leaves = leavesMap[suiteKeyOf(suite)];
+            const leaves = leavesOf(suiteKeyOf(suite));
             if (leaves === undefined) continue;
             for (const leaf of leaves) {
               const key = `${suiteKeyOf(suite)}::${leaf.name}`;
@@ -6915,9 +6934,11 @@
       // One suite (a spec run's scenario) row + its leaves. The plain tree and
       // the spec's feature groups both draw their suites through this, so a
       // spec run's scenario is the same collapse/counts/digest/virtualization.
-      const SuiteGroup = (suite, presentation, density, leavesMap) => {
+      // Mounted as its own binding (SuiteBinding): it reads only this suite's
+      // leaves, so another suite's load never redraws it.
+      const SuiteGroup = (suite, presentation, density) => {
         const key = suiteKeyOf(suite);
-        const leaves = leavesMap[key];
+        const leaves = leavesOf(key);
         const expanded = leaves !== undefined;
         const counts = suite.counts ?? countsOfLeaves(leaves ?? suite.children);
         const foldedAllPass = density && !expanded && (counts.failed ?? 0) === 0;
@@ -6950,6 +6971,9 @@
         );
       };
 
+      const SuiteBinding = (suite, presentation, density) => () =>
+        SuiteGroup(suite, presentation, density);
+
       // A spec run's byline: who filed it, when (the board's relative-time
       // idiom), and its cycle — or that it is unbound.
       const RunByline = (d) => {
@@ -6964,7 +6988,7 @@
 
       // A spec run's features: each its own heading (its own counts, its own
       // ▾/▸), failures first; a folded feature mounts none of its scenarios.
-      const SpecFeatures = (d, presentation, density, leavesMap) =>
+      const SpecFeatures = (d, presentation, density) =>
         specFeaturesOf(d).map((feature) => {
           const open = openFeatures.val[feature.title] === true;
           const status = feature.failed > 0 ? "fail" : "pass";
@@ -6998,7 +7022,7 @@
               ? div(
                   { class: "app-feature-scenarios" },
                   feature.scenarios.map((entry) =>
-                    SuiteGroup(entry.node, presentation, density, leavesMap),
+                    SuiteBinding(entry.node, presentation, density),
                   ),
                 )
               : null,
@@ -7014,7 +7038,6 @@
       const TestBody = (d) => {
         const presentation = presentationOf(d);
         const density = presentation === "Density";
-        const leavesMap = suiteLeaves.val;
         const spec = isSpecRun(d);
         return div(
           { class: "app-drillin-tree" },
@@ -7022,16 +7045,18 @@
           density ? StatusChips(d) : null,
           density ? HeatStrip(d) : null,
           spec
-            ? SpecFeatures(d, presentation, density, leavesMap)
-            : (d.tree ?? []).map((suite) => SuiteGroup(suite, presentation, density, leavesMap)),
+            ? SpecFeatures(d, presentation, density)
+            : (d.tree ?? []).map((suite) => SuiteBinding(suite, presentation, density)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
           // showing the RESOLVED raw (per-leaf preferred over the run blob).
-          // Read synchronously so the enclosing body derivation tracks showRaw
-          // and rebuilds TestBody on toggle.
-          showRaw.val && resolveRaw(d) !== null
-            ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw(d))
-            : null,
+          // Its own binding: resolveRaw reads every suite's leaves, and read
+          // here in the body it would redraw every suite on any one's load.
+          // "" (not null) when withheld, so the binding stays live.
+          () =>
+            showRaw.val && resolveRaw(d) !== null
+              ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw(d))
+              : "",
         );
       };
 
