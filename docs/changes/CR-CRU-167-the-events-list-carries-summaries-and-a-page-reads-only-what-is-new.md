@@ -53,7 +53,18 @@ at ingest:
 
 No test result is stored as JSON: every suite and every test is a row with native columns, and a
 failure's trace and the raw output are plain text. Each row keeps its position, so a run's suites
-and each suite's tests read back in the order the codec decoded them.
+and each suite's tests read back in the order the codec decoded them. The store maps each row type
+to the codecs' own types (`SuiteNode`, `TestLeaf`) on read and back on ingest; the codecs and the
+wire are unchanged.
+
+A BDD scenario's suites row also stores its feature, split once at ingest from the codec's
+`<Feature> › <Scenario>` name, so a feature's scenarios are a query. The name on the wire is
+unchanged.
+
+A compile report is stored natively too: its `format`, `errorCount` and `warningCount` as columns,
+each diagnostic (file, line, column, code, message, level, position) as a row of a diagnostics table,
+and its raw output as plain text, in place of the `events.compile` JSON column. Every compile read
+answers byte-identically to today's.
 
 The migration moves every existing run's `tree` and `raw` into the new storage in place, behind the
 store's existing pre-upgrade backup, and leaves `events.tree` and `payload.raw` empty for migrated
@@ -92,6 +103,10 @@ the full list and says so, so the caller can replace rather than merge. The page
       suite answer byte-identically to before it, on a copy of the dev store, asserted on the server.
 - [ ] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
       row, asserted on the rows read (not timing).
+- [ ] After the migration, every compile event reads back byte-identically, and no compile report,
+      suite or test is held in a JSON column, asserted on the server.
+- [ ] The scenarios of one BDD feature of a run are read by a query on the feature column, asserted
+      on the rows read.
 - [ ] A run filed after the migration is stored in the new tables only, and reads back identically to
       the report it was decoded from, asserted on the server.
 - [ ] On a store holding a run whose `raw` is at least 10 MB, the project's events list answers in
