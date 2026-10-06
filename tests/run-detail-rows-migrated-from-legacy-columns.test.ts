@@ -166,9 +166,12 @@ async function getV2(store: Store, pathAndQuery: string): Promise<GetV2Result> {
   return { status: res.status, event: body.event };
 }
 
-function withoutRaw(event: Record<string, unknown>): Record<string, unknown> {
-  const { raw: _raw, ...rest } = event;
-  return rest;
+/** A pre-migration answer as a progressive read (?depth=suites / ?suite=)
+ *  answers it after the migration: no `raw`, and `rawBytes` — the raw
+ *  output's UTF-8 byte length — when the run has raw output. */
+function asProgressiveRead(event: Record<string, unknown>): Record<string, unknown> {
+  const { raw, ...rest } = event;
+  return typeof raw === "string" ? { ...rest, rawBytes: Buffer.byteLength(raw, "utf8") } : rest;
 }
 
 // ── the six required shapes ─────────────────────────────────────────────
@@ -403,7 +406,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     const beforeSuites = preMigrationAnswer(id, { depth: "suites" });
     const afterSuites = await getV2(afterStore, `/api/v2/events/${id}?depth=suites`);
     expect("raw" in afterSuites.event).toBe(false);
-    expect(afterSuites.event).toEqual(withoutRaw(beforeSuites.event));
+    expect(afterSuites.event).toEqual(asProgressiveRead(beforeSuites.event));
     expect(afterSuites.event.tree).toEqual([
       { name: "SuiteA", status: "pass", counts: { passed: 2, failed: 0, pending: 0 } },
       { name: "SuiteB", status: "fail", counts: { passed: 1, failed: 1, pending: 0 } },
@@ -413,7 +416,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
       const beforeSuite = preMigrationAnswer(id, { suite: name });
       const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=${name}`);
       expect("raw" in afterSuite.event).toBe(false);
-      expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
+      expect(afterSuite.event).toEqual(asProgressiveRead(beforeSuite.event));
     }
     const suiteBAfter = await getV2(afterStore, `/api/v2/events/${id}?suite=SuiteB`);
     const b2 = (suiteBAfter.event.tree as Array<{ children: Array<{ name: string; failure?: unknown }> }>)[0]!
@@ -434,7 +437,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     const beforeSuites = preMigrationAnswer(id, { depth: "suites" });
     const afterSuites = await getV2(afterStore, `/api/v2/events/${id}?depth=suites`);
     expect("raw" in afterSuites.event).toBe(false);
-    expect(afterSuites.event).toEqual(withoutRaw(beforeSuites.event));
+    expect(afterSuites.event).toEqual(asProgressiveRead(beforeSuites.event));
     const tree = afterSuites.event.tree as Array<{ name: string; browser?: string; status: string }>;
     const byBrowser = Object.fromEntries(tree.map((n) => [n.browser, n]));
     expect(byBrowser.chromium?.name).toBe(SCENARIO_NAME);
@@ -445,7 +448,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
       const beforeSuite = preMigrationAnswer(id, { suite: SCENARIO_NAME, browser });
       const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=${encoded}&browser=${browser}`);
       expect("raw" in afterSuite.event).toBe(false);
-      expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
+      expect(afterSuite.event).toEqual(asProgressiveRead(beforeSuite.event));
     }
     const firefoxSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=${encoded}&browser=firefox`);
     const firefoxTree = firefoxSuite.event.tree as Array<{ browser?: string; children: Array<{ failure?: { message: string } }> }>;
@@ -490,7 +493,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     const beforeSuite = preMigrationAnswer(id, { suite: "SuiteX" });
     const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=SuiteX`);
     expect("raw" in afterSuite.event).toBe(false);
-    expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
+    expect(afterSuite.event).toEqual(asProgressiveRead(beforeSuite.event));
     const caseX = (afterSuite.event.tree as Array<{ children: Array<{ name: string; failure?: unknown }> }>)[0]!
       .children.find((c) => c.name === "caseX")!;
     expect(caseX.failure).toEqual({ type: "TimeoutError" });
@@ -506,7 +509,7 @@ describe("migrating a schema-v15 store into native run-detail rows", () => {
     const beforeSuite = preMigrationAnswer(id, { suite: "Login" });
     const afterSuite = await getV2(afterStore, `/api/v2/events/${id}?suite=Login`);
     expect("raw" in afterSuite.event).toBe(false);
-    expect(afterSuite.event).toEqual(withoutRaw(beforeSuite.event));
+    expect(afterSuite.event).toEqual(asProgressiveRead(beforeSuite.event));
     const tree = afterSuite.event.tree as Array<{ status: string; children: Array<{ name: string }> }>;
     expect(tree.length).toBe(1);
     expect(tree[0]?.status).toBe("pass");
