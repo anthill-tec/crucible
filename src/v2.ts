@@ -4338,48 +4338,38 @@ function gateSteps(gate: unknown): { name: string; findings?: unknown }[] {
   );
 }
 
-/** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */
-function suiteCounts(node: SuiteNode): { passed: number; failed: number; pending: number } {
-  const counts = { passed: 0, failed: 0, pending: 0 };
-  for (const leaf of node.children) {
-    if (leaf.status === "pass") counts.passed += 1;
-    else if (leaf.status === "fail") counts.failed += 1;
-    else counts.pending += 1;
-  }
-  return counts;
-}
-
 /** §S1 — event-specific 404 (distinct from the server's route catch-all). */
 /** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>[&browser=<b>].
  *  A scenario run under two browsers is two same-named nodes; `browser` picks
- *  that browser's own node. Omitted, the first same-named node answers. */
+ *  that browser's own node. Omitted, the first same-named node answers.
+ *  Each progressive read asks the store for only what it serves — the suites
+ *  rows alone, or one suite's leaves — and neither carries the run's raw
+ *  output, which only the full read does. */
 function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
-  const event = store.getEvent(id);
-  if (event === null) {
-    return fail(404, `event not found: ${id}`);
-  }
+  const notFound = (): Response => fail(404, `event not found: ${id}`);
   const suite = url.searchParams.get("suite");
   if (suite !== null) {
-    const browser = url.searchParams.get("browser");
-    const match = (event.tree ?? []).find(
-      (node) => node.name === suite && (browser === null || node.browser === browser),
-    );
-    if (match === undefined) {
+    const read = store.getEventSuite(id, suite, url.searchParams.get("browser"));
+    if (read === null) return notFound();
+    if (read.suite === undefined) {
       return fail(404, `suite not found in event ${id}: ${suite}`);
     }
     // Approved contract: tree becomes a single-element array — just the
     // requested suite, fully expanded (leaves incl. failure detail).
-    return reply(req, url, { ok: true, event: { ...event, tree: [match] } });
+    return reply(req, url, { ok: true, event: { ...read.event, tree: [read.suite] } });
   }
-  if (url.searchParams.get("depth") === "suites" && event.tree !== undefined) {
-    const tree = event.tree.map((node) => ({
-      name: node.name,
-      status: node.status,
-      counts: suiteCounts(node),
-      ...(node.browser !== undefined ? { browser: node.browser } : {}),
-    }));
-    return reply(req, url, { ok: true, event: { ...event, tree } });
+  if (url.searchParams.get("depth") === "suites") {
+    const read = store.getEventSuites(id);
+    if (read === null) return notFound();
+    if (read.suites !== undefined) {
+      return reply(req, url, { ok: true, event: { ...read.event, tree: read.suites } });
+    }
+    // A run with no tree has no suites to summarise: the full read's answer,
+    // still without the raw output.
+    return reply(req, url, { ok: true, event: withGateDecisions(store, read.event) });
   }
+  const event = store.getEvent(id);
+  if (event === null) return notFound();
   return reply(req, url, { ok: true, event: withGateDecisions(store, event) });
 }
 

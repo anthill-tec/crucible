@@ -990,6 +990,12 @@ export interface MigrationStep {
    * always runs from the beginning.
    */
   satisfiedBy?(db: Database): boolean;
+  /**
+   * The step frees much of the file (it moves data out of a column), so the
+   * store is compacted with ONE `VACUUM` once the whole chain has committed:
+   * VACUUM cannot run inside the step's transaction.
+   */
+  readonly compactsAfter?: boolean;
 }
 
 /** CR-CRU-071 §S1 — what one boot actually migrated. */
@@ -1248,6 +1254,11 @@ const RUN_DETAIL_TABLES = [
  *   `suite_position`; a failure's message, type and trace are each optional.
  * - `run_compiles` / `run_diagnostics`: a `CompileReport`'s header and its
  *   diagnostics, each diagnostic at its `position`.
+ *
+ * `run_suites` and `run_cases` are WITHOUT ROWID: a store holds hundreds of
+ * thousands of them, and a rowid table would store each composite key a
+ * second time in its own index (measured on the dev store: 66 MB of the
+ * migrated file).
  */
 function createRunDetailTables(db: Database): void {
   db.exec(`
@@ -1269,7 +1280,7 @@ function createRunDetailTables(db: Database): void {
       failed INTEGER NOT NULL,
       pending INTEGER NOT NULL,
       PRIMARY KEY (event_id, position)
-    );
+    ) WITHOUT ROWID;
 
     -- One suite of a run by name (and browser); the first in position order.
     CREATE INDEX IF NOT EXISTS idx_run_suites_name
@@ -1291,7 +1302,7 @@ function createRunDetailTables(db: Database): void {
       failure_type TEXT,
       failure_trace TEXT,
       PRIMARY KEY (event_id, suite_position, position)
-    );
+    ) WITHOUT ROWID;
 
     CREATE TABLE IF NOT EXISTS run_compiles (
       event_id TEXT PRIMARY KEY,
@@ -1416,6 +1427,198 @@ function invalidCompileReport(report: unknown): string | null {
   return null;
 }
 
+/** A run's detail in the shape `writeRunDetailRows` files it from. */
+interface RunDetailSource {
+  id: string;
+  kind: string;
+  tree?: SuiteNode[];
+  raw?: string;
+  compile?: unknown;
+}
+
+/**
+ * Write a run's detail as native rows: its tree as suites and cases in
+ * decoded order (each suite's counts from its own leaves, a BDD scenario's
+ * feature split from its name), its raw output as plain text, and a compile
+ * report as its header and diagnostics. The ONE mapping, used by ingest and by
+ * the migration that moves a legacy row, so the two store a run identically.
+ * Its callers have already refused a tree or report that does not fit the
+ * codecs' types.
+ */
+function writeRunDetailRows(db: Database, run: RunDetailSource): void {
+  const tree = run.tree;
+  if (tree !== undefined || run.raw !== undefined) {
+    db.query(`INSERT INTO run_details (event_id, has_tree, raw) VALUES (?, ?, ?)`).run(
+      run.id,
+      tree !== undefined ? 1 : 0,
+      run.raw ?? null,
+    );
+  }
+  if (tree !== undefined) {
+    const insertSuite = db.query(
+      `INSERT INTO run_suites (event_id, position, name, status, browser, feature,
+         total, passed, failed, pending)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertCase = db.query(
+      `INSERT INTO run_cases (event_id, suite_position, position, name, status, duration_ms,
+         has_failure, failure_message, failure_type, failure_trace)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    tree.forEach((suite, suitePosition) => {
+      const count = (status: string): number =>
+        suite.children.filter((leaf) => leaf.status === status).length;
+      insertSuite.run(
+        run.id,
+        suitePosition,
+        suite.name,
+        suite.status,
+        suite.browser ?? null,
+        featureOf(suite.name),
+        suite.children.length,
+        count("pass"),
+        count("fail"),
+        count("pending"),
+      );
+      suite.children.forEach((leaf, position) => {
+        insertCase.run(
+          run.id,
+          suitePosition,
+          position,
+          leaf.name,
+          leaf.status,
+          leaf.duration_ms,
+          leaf.failure !== undefined ? 1 : 0,
+          leaf.failure?.message ?? null,
+          leaf.failure?.type ?? null,
+          leaf.failure?.trace ?? null,
+        );
+      });
+    });
+  }
+  if (run.kind === "compile" && run.compile !== undefined) {
+    const report = run.compile as CompileReport;
+    db.query(
+      `INSERT INTO run_compiles (event_id, format, error_count, warning_count, raw)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(run.id, report.format, report.errorCount, report.warningCount, report.raw);
+    const insertDiagnostic = db.query(
+      `INSERT INTO run_diagnostics (event_id, position, file, line, col, code, message, level)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    report.diagnostics.forEach((d, position) => {
+      insertDiagnostic.run(
+        run.id,
+        position,
+        d.file ?? null,
+        d.line ?? null,
+        d.col ?? null,
+        d.code ?? null,
+        d.message,
+        d.level,
+      );
+    });
+  }
+}
+
+/** An `events` row that still holds a run's detail in a legacy column. */
+const HOLDS_LEGACY_RUN_DETAIL =
+  `tree IS NOT NULL OR compile IS NOT NULL OR json_type(payload, '$.raw') IS NOT NULL`;
+
+interface LegacyRunDetailRow {
+  id: string;
+  kind: string;
+  tree: string | null;
+  compile: string | null;
+  /** `json_type` of the payload's `raw` key; null when it has none. */
+  raw_type: string | null;
+}
+
+/**
+ * The data half of the run-detail move. Every `events` row still holding its
+ * tree (`events.tree`), compile report (`events.compile`) or raw output
+ * (`payload.raw`) gets them as detail rows, and those legacy columns are
+ * emptied: `tree` and `compile` to NULL, `raw` removed from the payload, and a
+ * payload left as `{}` stored as NULL, which every payload reader already
+ * reads alike.
+ *
+ * The tree and compile report go through `writeRunDetailRows`, the mapping
+ * ingest uses, so a migrated run and a newly filed one are stored alike; they
+ * are streamed one row at a time (`iterate`), so memory is bounded by the
+ * largest single run, never by the store. The raw output is moved by SQL
+ * alone (`json_extract` into its detail row, `json_remove` out of the
+ * payload), so it never becomes a JS string at all.
+ *
+ * A legacy value the detail tables cannot hold is REFUSED (the step throws,
+ * its transaction rolls back and the boot names the backup), never dropped.
+ */
+function moveLegacyRunDetail(db: Database): void {
+  const legacyRows = db.query<LegacyRunDetailRow, []>(
+    `SELECT id, kind, tree, compile, json_type(payload, '$.raw') AS raw_type
+       FROM events WHERE ${HOLDS_LEGACY_RUN_DETAIL}`,
+  );
+  for (const row of legacyRows.iterate()) {
+    const refuse = (reason: string): never => {
+      throw new Error(`run ${row.id} (${row.kind}): its legacy detail cannot be stored as rows: ${reason}`);
+    };
+    if (row.kind !== "test" && row.kind !== "compile") refuse("only a test or compile run carries detail");
+    if (row.raw_type !== null && row.raw_type !== "text") refuse("payload.raw is not text");
+    const tree: unknown = row.tree !== null ? JSON.parse(row.tree) : undefined;
+    if (tree !== undefined) {
+      const refusal = invalidSuiteTreeNode(tree);
+      if (refusal !== null) refuse(refusal);
+    }
+    const compile: unknown = row.compile !== null ? JSON.parse(row.compile) : undefined;
+    if (compile !== undefined) {
+      if (row.kind !== "compile") refuse("only a compile run carries a compile report");
+      const refusal = invalidCompileReport(compile);
+      if (refusal !== null) refuse(refusal);
+    }
+    writeRunDetailRows(db, {
+      id: row.id,
+      kind: row.kind,
+      ...(tree !== undefined ? { tree: tree as SuiteNode[] } : {}),
+      ...(compile !== undefined ? { compile } : {}),
+    });
+  }
+  // The raw output, onto the run's detail row (which a run with a tree
+  // already has) or a new one, exactly as `writeRunDetailRows` would file it.
+  db.exec(
+    `INSERT INTO run_details (event_id, has_tree, raw)
+       SELECT id, 0, json_extract(payload, '$.raw') FROM events
+        WHERE json_type(payload, '$.raw') = 'text'
+     ON CONFLICT (event_id) DO UPDATE SET raw = excluded.raw`,
+  );
+  db.exec(
+    `UPDATE events
+        SET payload = CASE WHEN json_remove(payload, '$.raw') = '{}' THEN NULL
+                           ELSE json_remove(payload, '$.raw') END
+      WHERE json_type(payload, '$.raw') IS NOT NULL`,
+  );
+  db.exec(`UPDATE events SET tree = NULL, compile = NULL WHERE tree IS NOT NULL OR compile IS NOT NULL`);
+}
+
+/**
+ * Compact the store once a migration that freed much of it has committed, so
+ * the file does not keep the space. In WAL mode VACUUM's rewrite lands in the
+ * log, so the log is checkpointed and truncated to shrink the file itself.
+ *
+ * The migration is already committed and the store is consistent, so a
+ * failure here must not fail the boot (an `open` that throws would quarantine
+ * the live file as corrupt): it is reported, and the store stays uncompacted.
+ */
+function compactStore(db: Database, path: string): void {
+  try {
+    db.exec("VACUUM");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch (error) {
+    console.error(
+      `[crucible] the migrated store at ${path} could not be compacted (VACUUM failed); it is ` +
+        `intact but keeps its freed space until the next successful VACUUM. Cause: ${String(error)}`,
+    );
+  }
+}
+
 /** A run's detail as the rows hold it, rebuilt into the codecs' own shapes. */
 interface RunDetail {
   tree?: SuiteNode[];
@@ -1469,6 +1672,51 @@ interface RunDiagnosticRow {
 
 /** Ids per bulk read: well under SQLite's bound-parameter limit. */
 const RUN_DETAIL_CHUNK = 500;
+
+/** A `run_suites` row as the `SuiteNode` it was filed from, its leaves still to come. */
+function suiteNodeOf(row: RunSuiteRow): SuiteNode {
+  return {
+    name: row.name,
+    status: row.status as SuiteNode["status"],
+    children: [],
+    ...(row.browser !== null ? { browser: row.browser } : {}),
+  };
+}
+
+/** A `run_cases` row as the `TestLeaf` it was filed from; each failure field only when stored. */
+function testLeafOf(row: RunCaseRow): TestLeaf {
+  return {
+    name: row.name,
+    status: row.status as TestLeaf["status"],
+    duration_ms: row.duration_ms,
+    ...(row.has_failure === 1
+      ? {
+          failure: {
+            ...(row.failure_message !== null ? { message: row.failure_message } : {}),
+            ...(row.failure_type !== null ? { type: row.failure_type } : {}),
+            ...(row.failure_trace !== null ? { trace: row.failure_trace } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** One suite of a run as `?depth=suites` serves it: its stored counts, no leaves. */
+export interface SuiteSummary {
+  name: string;
+  status: SuiteNode["status"];
+  counts: { passed: number; failed: number; pending: number };
+  browser?: string;
+}
+
+interface RunSuiteCountsRow {
+  name: string;
+  status: string;
+  browser: string | null;
+  passed: number;
+  failed: number;
+  pending: number;
+}
 
 /**
  * CR-CRU-162 §G5 — the no-mistakes run id a posted gate object carries at
@@ -2523,6 +2771,24 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return RUN_DETAIL_TABLES.every((table) => tableExists(db, table));
     },
   },
+  {
+    description:
+      "run detail as native rows: every run's tree, raw output and compile report moves out of the legacy events.tree / payload.raw / events.compile columns into the detail tables, and those columns are emptied. The store is compacted afterwards",
+    apply(db) {
+      // A store with no events table has no run to move; the table is created
+      // later in its CURRENT shape.
+      if (!tableExists(db, "events")) return;
+      moveLegacyRunDetail(db);
+    },
+    satisfiedBy(db) {
+      return (
+        !tableExists(db, "events") ||
+        db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM events WHERE ${HOLDS_LEGACY_RUN_DETAIL}`).get()!
+          .n === 0
+      );
+    },
+    compactsAfter: true,
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -2738,6 +3004,7 @@ export class Store {
     // applied retrofit re-runs (AC2).
     const resume = found === 0 ? baselineVersion(this.db, chain, found) : found;
     const backupPath = path === ":memory:" ? null : writePreUpgradeBackup(this.db, path);
+    let compact = false;
     for (const step of chain) {
       if (step.from < resume) continue;
       const run = this.db.transaction(() => {
@@ -2758,6 +3025,7 @@ export class Store {
             `Cause: ${String(error)}`,
         );
       }
+      compact ||= step.compactsAfter === true;
     }
     if (readUserVersion(this.db) !== target) {
       // A baseline with nothing left to apply still has to be STAMPED (AC2).
@@ -2766,6 +3034,7 @@ export class Store {
       });
       stamp();
     }
+    if (compact) compactStore(this.db, path);
     // `from` is the version the store REPORTED before this open, not where the
     // chain resumed. A baseline moved user_version 0 -> target, so reporting
     // `resume` here printed the nonsense "migrated store schema v5 -> v5";
@@ -4934,11 +5203,95 @@ export class Store {
    * and the store's own contract already promises they stay auditable here.
    */
   getEvent(id: string): RunEvent | null {
+    const row = this.eventRowById(id);
+    return row === null ? null : this.toEvents([row])[0]!;
+  }
+
+  /** The row behind `getEvent`: the events table first, then each record table. */
+  private eventRowById(id: string): EventRow | null {
     for (const source of [`SELECT * FROM events`, MILESTONE_ROWS, GATE_ROWS]) {
       const row = this.db.query<EventRow, [string]>(`${source} WHERE id = ?`).get(id);
-      if (row !== null) return this.toEvents([row])[0]!;
+      if (row !== null) return row;
     }
     return null;
+  }
+
+  /**
+   * `getEvent` without a run's tree or raw output: every other field it
+   * serves, a compile report included. Reads no suite, case or raw row.
+   */
+  private getEventHead(id: string): RunEvent | null {
+    const row = this.eventRowById(id);
+    if (row === null) return null;
+    const ids = row.kind === "test" || row.kind === "compile" ? [row.id] : [];
+    return Store.toEvent(row, this.loadRunDetails(ids, false).get(row.id));
+  }
+
+  /**
+   * The `?depth=suites` read: run `id` without its tree or raw output, and its
+   * suites in tree order with their STORED counts (never recounted from leaves).
+   * Reads no case row. `suites` is absent when the run has no tree; null when
+   * no event has the id.
+   */
+  getEventSuites(id: string): { event: RunEvent; suites?: SuiteSummary[] } | null {
+    const event = this.getEventHead(id);
+    if (event === null) return null;
+    const hasTree = this.db
+      .query<{ has_tree: number }, [string]>(`SELECT has_tree FROM run_details WHERE event_id = ?`)
+      .get(id)?.has_tree === 1;
+    if (!hasTree) return { event };
+    const suites = this.db
+      .query<RunSuiteCountsRow, [string]>(
+        `SELECT name, status, browser, passed, failed, pending FROM run_suites
+          WHERE event_id = ? ORDER BY position`,
+      )
+      .all(id)
+      .map((row) => ({
+        name: row.name,
+        status: row.status as SuiteNode["status"],
+        counts: { passed: row.passed, failed: row.failed, pending: row.pending },
+        ...(row.browser !== null ? { browser: row.browser } : {}),
+      }));
+    return { event, suites };
+  }
+
+  /**
+   * The `?suite=` read: run `id` without its tree or raw output, and the FIRST
+   * of its suites named `name` (under `browser`, when one is given), fully
+   * expanded. Reads that one suite's case rows and no other's. `suite` is
+   * absent when none matches; null when no event has the id.
+   */
+  getEventSuite(
+    id: string,
+    name: string,
+    browser: string | null,
+  ): { event: RunEvent; suite?: SuiteNode } | null {
+    const event = this.getEventHead(id);
+    if (event === null) return null;
+    const columns = `SELECT event_id, position, name, status, browser FROM run_suites`;
+    const row =
+      browser === null
+        ? this.db
+            .query<RunSuiteRow, [string, string]>(
+              `${columns} WHERE event_id = ? AND name = ? ORDER BY position LIMIT 1`,
+            )
+            .get(id, name)
+        : this.db
+            .query<RunSuiteRow, [string, string, string]>(
+              `${columns} WHERE event_id = ? AND name = ? AND browser = ? ORDER BY position LIMIT 1`,
+            )
+            .get(id, name, browser);
+    if (row === null) return { event };
+    const suite = suiteNodeOf(row);
+    const caseRows = this.db
+      .query<RunCaseRow, [string, number]>(
+        `SELECT event_id, suite_position, name, status, duration_ms, has_failure,
+                failure_message, failure_type, failure_trace
+           FROM run_cases WHERE event_id = ? AND suite_position = ? ORDER BY position`,
+      )
+      .all(id, row.position);
+    for (const caseRow of caseRows) suite.children.push(testLeafOf(caseRow));
+    return { event, suite };
   }
 
   deleteEvent(id: string, projectKey: string): boolean {
@@ -5144,7 +5497,7 @@ export class Store {
           event.summary?.pending ?? null,
           event.summary?.duration_ms ?? null,
           // The tree, compile report and raw output are detail rows
-          // (`writeRunDetail`); these legacy columns are only ever read.
+          // (`writeRunDetailRows`); these legacy columns stay NULL.
           null,
           event.coverage !== undefined ? JSON.stringify(event.coverage) : null,
           null,
@@ -5180,93 +5533,10 @@ export class Store {
           // representations remain incapable of disagreeing.
           event.context?.cycleId ?? event.cycleId ?? null,
         );
-      this.writeRunDetail(event);
+      writeRunDetailRows(this.db, event);
     })();
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
-  }
-
-  /**
-   * Write a run's detail as native rows: its tree as suites and cases in
-   * decoded order (each suite's counts from its own leaves, a BDD scenario's
-   * feature split from its name), its raw output as plain text, and a compile
-   * report as its header and diagnostics. The record methods have already
-   * refused a tree or report that does not fit the codecs' types.
-   */
-  private writeRunDetail(event: RunEvent): void {
-    const tree = event.tree;
-    if (tree !== undefined || event.raw !== undefined) {
-      this.db
-        .query(`INSERT INTO run_details (event_id, has_tree, raw) VALUES (?, ?, ?)`)
-        .run(event.id, tree !== undefined ? 1 : 0, event.raw ?? null);
-    }
-    if (tree !== undefined) {
-      const insertSuite = this.db.query(
-        `INSERT INTO run_suites (event_id, position, name, status, browser, feature,
-           total, passed, failed, pending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      const insertCase = this.db.query(
-        `INSERT INTO run_cases (event_id, suite_position, position, name, status, duration_ms,
-           has_failure, failure_message, failure_type, failure_trace)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      tree.forEach((suite, suitePosition) => {
-        const count = (status: string): number =>
-          suite.children.filter((leaf) => leaf.status === status).length;
-        insertSuite.run(
-          event.id,
-          suitePosition,
-          suite.name,
-          suite.status,
-          suite.browser ?? null,
-          featureOf(suite.name),
-          suite.children.length,
-          count("pass"),
-          count("fail"),
-          count("pending"),
-        );
-        suite.children.forEach((leaf, position) => {
-          insertCase.run(
-            event.id,
-            suitePosition,
-            position,
-            leaf.name,
-            leaf.status,
-            leaf.duration_ms,
-            leaf.failure !== undefined ? 1 : 0,
-            leaf.failure?.message ?? null,
-            leaf.failure?.type ?? null,
-            leaf.failure?.trace ?? null,
-          );
-        });
-      });
-    }
-    if (event.kind === "compile" && event.compile !== undefined) {
-      const report = event.compile as CompileReport;
-      this.db
-        .query(
-          `INSERT INTO run_compiles (event_id, format, error_count, warning_count, raw)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(event.id, report.format, report.errorCount, report.warningCount, report.raw);
-      const insertDiagnostic = this.db.query(
-        `INSERT INTO run_diagnostics (event_id, position, file, line, col, code, message, level)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      report.diagnostics.forEach((d, position) => {
-        insertDiagnostic.run(
-          event.id,
-          position,
-          d.file ?? null,
-          d.line ?? null,
-          d.col ?? null,
-          d.code ?? null,
-          d.message,
-          d.level,
-        );
-      });
-    }
   }
 
   /**
@@ -5282,7 +5552,7 @@ export class Store {
     return rows.map((row) => Store.toEvent(row, details.get(row.id)));
   }
 
-  private loadRunDetails(ids: string[]): Map<string, RunDetail> {
+  private loadRunDetails(ids: string[], treeAndRaw = true): Map<string, RunDetail> {
     const details = new Map<string, RunDetail>();
     for (let start = 0; start < ids.length; start += RUN_DETAIL_CHUNK) {
       const chunk = ids.slice(start, start + RUN_DETAIL_CHUNK);
@@ -5296,9 +5566,11 @@ export class Store {
         return detail;
       };
 
-      const runRows = this.db
-        .query<RunDetailsRow, string[]>(`SELECT event_id, has_tree, raw FROM run_details WHERE ${among}`)
-        .all(...chunk);
+      const runRows = treeAndRaw
+        ? this.db
+            .query<RunDetailsRow, string[]>(`SELECT event_id, has_tree, raw FROM run_details WHERE ${among}`)
+            .all(...chunk)
+        : [];
       const treeIds = new Set<string>();
       for (const row of runRows) {
         const detail = detailOf(row.event_id);
@@ -5317,12 +5589,7 @@ export class Store {
           )
           .all(...chunk);
         for (const row of suiteRows) {
-          const suite: SuiteNode = {
-            name: row.name,
-            status: row.status as SuiteNode["status"],
-            children: [],
-            ...(row.browser !== null ? { browser: row.browser } : {}),
-          };
+          const suite = suiteNodeOf(row);
           detailOf(row.event_id).tree!.push(suite);
           let byPosition = suites.get(row.event_id);
           if (byPosition === undefined) {
@@ -5341,20 +5608,7 @@ export class Store {
         for (const row of caseRows) {
           const suite = suites.get(row.event_id)?.get(row.suite_position);
           if (suite === undefined) continue;
-          suite.children.push({
-            name: row.name,
-            status: row.status as TestLeaf["status"],
-            duration_ms: row.duration_ms,
-            ...(row.has_failure === 1
-              ? {
-                  failure: {
-                    ...(row.failure_message !== null ? { message: row.failure_message } : {}),
-                    ...(row.failure_type !== null ? { type: row.failure_type } : {}),
-                    ...(row.failure_trace !== null ? { trace: row.failure_trace } : {}),
-                  },
-                }
-              : {}),
-          });
+          suite.children.push(testLeafOf(row));
         }
       }
 
@@ -5437,13 +5691,8 @@ export class Store {
       // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
       // a release recorded before this CR simply has no key (AC4).
       ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),
-      // CR-CRU-038 §S2b — run-level raw output: its detail row, or (a row
-      // stored before the detail tables) the legacy payload key.
-      ...(detail?.raw !== undefined
-        ? { raw: detail.raw }
-        : typeof payload.raw === "string"
-          ? { raw: payload.raw }
-          : {}),
+      // CR-CRU-038 §S2b — run-level raw output, from its detail row.
+      ...(detail?.raw !== undefined ? { raw: detail.raw } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
       ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
@@ -5460,19 +5709,10 @@ export class Store {
             },
           }
         : {}),
-      // The tree and compile report: rebuilt from their detail rows, or read
-      // from the legacy JSON column of a row stored before the detail tables.
-      ...(detail?.tree !== undefined
-        ? { tree: detail.tree }
-        : row.tree !== null
-          ? { tree: JSON.parse(row.tree) as SuiteNode[] }
-          : {}),
+      // The tree and compile report, rebuilt from their detail rows.
+      ...(detail?.tree !== undefined ? { tree: detail.tree } : {}),
       ...(row.coverage !== null ? { coverage: JSON.parse(row.coverage) as Coverage } : {}),
-      ...(detail?.compile !== undefined
-        ? { compile: detail.compile }
-        : row.compile !== null
-          ? { compile: JSON.parse(row.compile) as unknown }
-          : {}),
+      ...(detail?.compile !== undefined ? { compile: detail.compile } : {}),
       ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
       // CR-CRU-057 §S1 — the stamped role and its provenance; BOTH keys are
       // absent on a role-less row (never fabricated into a null or a guess).
