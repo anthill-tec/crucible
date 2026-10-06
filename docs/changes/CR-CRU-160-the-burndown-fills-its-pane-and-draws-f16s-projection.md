@@ -51,8 +51,10 @@ pane resizes. The phone band keeps CR-CRU-018's full-viewport detail-column shap
 Every label is drawn inside the plot area, never below or outside it. The today marker's label, the
 P50 and P80 labels and the target label are placed first and always shown. Step labels are then
 placed largest move first, each only where it fits inside the plot without overlapping a label
-already placed; the steps left unlabelled are counted in one `+ N more` note inside the plot (as in
-F18 §3). Every step, labelled or not, shows its full label (`−8 · CR-CRU-015 merged`) when the
+already placed or crossing the plotted actual line; at most the K largest moves compete for a label
+(K = 8 at the desktop band, fewer when the plot is narrower), so the chart reads like F18 §3's
+few-labels drawing; the steps left unlabelled are counted in one `+ N more` note inside the plot (as
+in F18 §3). Every step, labelled or not, shows its full label (`−8 · CR-CRU-015 merged`) when the
 pointer rests on it.
 
 ## Acceptance criteria
@@ -62,8 +64,9 @@ pointer rests on it.
 - [ ] **AC2** — With a dated forecast (fixture), the chart draws the today marker, the P50 and P80
       traces with their date labels and the target label, asserted in a real browser.
 - [ ] **AC3** — With a refused forecast, the plot area states the reason, and no traces are drawn.
-- [ ] **AC4** — With a 63-step history (fixture), no label is drawn outside the plot area or
-      overlapping another; the today, P50, P80 and target labels are all drawn; the number of
+- [ ] **AC4** — With a 63-step history (fixture), no label is drawn outside the plot area,
+      overlapping another or crossing the actual line; at most K step labels are drawn (8 at the
+      1280 × 800 desktop band); the today, P50, P80 and target labels are all drawn; the number of
       unlabelled steps equals the `+ N more` note's N; resting the pointer on an unlabelled step shows
       its full label, asserted in a real browser.
 - [ ] **AC5** — The live chart matches storyboard **F18 §3** (drawn 2026-09-27, the visual contract),
