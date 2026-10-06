@@ -93,7 +93,8 @@ suite load. The fix is decided from what that shows and locked with the user bef
 - **A loaded suite renders without rebuilding the others** (G4).
 - **The server caches the analytics answers** (velocity, burndown, forecast, and the plan-change
   counts) until the store changes in a way that can move them, so even a misbehaving page cannot
-  pin the server with repeated analytics reads.
+  pin the server with repeated analytics reads. The unseeded forecast is therefore fixed for the
+  UTC day (until such a change); a seeded (test-only) forecast is computed per read, never held.
 
 ### §S3 — a page load reads each resource once
 

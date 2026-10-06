@@ -4730,7 +4730,9 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
   if (seed !== undefined && !Number.isInteger(seed)) {
     return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
   }
-  const payload = analyticsCacheFor(store).answer(key, ["forecast", release, seed], () => {
+  // Only the unseeded answer is held: a seeded read is the test-only
+  // deterministic draw, computed per read, so the cache never grows by seed.
+  const compute = () => {
     const entries = store.listQueue(key);
     if (!entries.some((entry) => entry.release === release)) return null;
     const target = declaredTarget(store, key, release);
@@ -4742,7 +4744,9 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
       ...(target !== undefined ? { targetAt: target } : {}),
       random: seed !== undefined ? seededRandom(seed) : Math.random,
     });
-  });
+  };
+  const payload =
+    seed !== undefined ? compute() : analyticsCacheFor(store).answer(key, ["forecast", release], compute);
   if (payload === null) {
     return fail(404, `no CR is planned into release ${release}`);
   }
