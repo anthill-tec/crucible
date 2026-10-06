@@ -4886,6 +4886,7 @@ export class Store {
       [...newest(`SELECT * FROM events`), ...newest(MILESTONE_ROWS), ...newest(GATE_ROWS)]
         .sort(Store.newestFirst)
         .slice(0, limit),
+      false,
     );
   }
 
@@ -4910,7 +4911,7 @@ export class Store {
       ...atNewest(MILESTONE_ROWS, "milestones"),
       ...atNewest(GATE_ROWS, "gates"),
     ].sort(Store.newestFirst)[0];
-    return row === undefined ? undefined : this.toEvents([row])[0];
+    return row === undefined ? undefined : this.toEvents([row], false)[0];
   }
 
   /**
@@ -4976,6 +4977,7 @@ export class Store {
           return context.cycleId === cycleId;
         })
         .sort(Store.newestFirst),
+      false,
     );
   }
 
@@ -5565,12 +5567,14 @@ export class Store {
    * Rows of `events` (or of the record tables) as events, each run's detail
    * rebuilt from its rows. The detail of every run among `rows` is read in
    * bulk — a fixed handful of queries per chunk of ids, never one per row.
+   * Without `treeAndRaw` no run's tree or raw output is read (a compile
+   * report still is): the reads answered with briefs only.
    */
-  private toEvents(rows: EventRow[]): RunEvent[] {
+  private toEvents(rows: EventRow[], treeAndRaw = true): RunEvent[] {
     const ids = rows
       .filter((row) => row.kind === "test" || row.kind === "compile")
       .map((row) => row.id);
-    const details = this.loadRunDetails(ids);
+    const details = this.loadRunDetails(ids, treeAndRaw);
     return rows.map((row) => Store.toEvent(row, details.get(row.id)));
   }
 
