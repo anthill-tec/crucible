@@ -4598,7 +4598,7 @@
       return [xs, column(actual), column(ideal), column(p50), column(p80)];
     };
 
-    const burndownOptions = (UPlot, bd, fc, now) => {
+    const burndownOptions = (UPlot, bd, fc, now, size) => {
       const dated = forecastDated(fc);
       const remaining = burndownRemaining(bd, fc);
       const px = window.devicePixelRatio || 1;
@@ -4624,8 +4624,8 @@
         ctx.fillText(text, x, at);
       };
       return {
-        width: 560,
-        height: 230,
+        width: size.width,
+        height: size.height,
         legend: { show: false },
         cursor: { show: false },
         select: { show: false },
@@ -4758,9 +4758,24 @@
     };
 
     // One live chart: a redraw retires the previous instance (its listeners
-    // with it) before drawing the next. The draw waits for its host to be in
-    // the DOM; a host that never lands is dropped.
+    // and its resize observer with it) before drawing the next. The draw waits
+    // for its host to be in the DOM; a host that never lands is dropped. The
+    // chart takes its host's content box, and follows it: one ResizeObserver,
+    // tied to the live chart, resizes the plot in place (uPlot's `setSize`)
+    // when the host resizes, and retires the chart once the host leaves the
+    // DOM (the pane closed or the route changed).
     let burndownPlot = null;
+    let burndownObserver = null;
+    const retireBurndown = () => {
+      if (burndownObserver !== null) burndownObserver.disconnect();
+      burndownObserver = null;
+      if (burndownPlot !== null) burndownPlot.destroy();
+      burndownPlot = null;
+    };
+    const burndownHostSize = (host) => ({
+      width: Math.max(1, Math.floor(host.clientWidth)),
+      height: Math.max(1, Math.floor(host.clientHeight)),
+    });
     const drawBurndown = (host, bd, fc) => {
       const attempt = (tries) => {
         loadUplot()
@@ -4769,9 +4784,26 @@
               if (tries < 20) setTimeout(() => attempt(tries + 1), 16);
               return;
             }
-            if (burndownPlot !== null) burndownPlot.destroy();
+            retireBurndown();
             const now = Date.now();
-            burndownPlot = new UPlot(burndownOptions(UPlot, bd, fc, now), burndownData(bd, fc, now), host);
+            const plot = new UPlot(
+              burndownOptions(UPlot, bd, fc, now, burndownHostSize(host)),
+              burndownData(bd, fc, now),
+              host,
+            );
+            burndownPlot = plot;
+            if (typeof ResizeObserver === "function") {
+              burndownObserver = new ResizeObserver(() => {
+                if (burndownPlot !== plot) return;
+                if (!host.isConnected) {
+                  retireBurndown();
+                  return;
+                }
+                const size = burndownHostSize(host);
+                if (size.width !== plot.width || size.height !== plot.height) plot.setSize(size);
+              });
+              burndownObserver.observe(host);
+            }
           })
           .catch((err) => {
             if (host.isConnected) {
