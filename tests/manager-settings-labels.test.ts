@@ -35,7 +35,7 @@
 //
 // Wording pinned (this file asserts these substrings, case-insensitively):
 //   - retention label mentions the Runs-timeline WINDOW it governs (§S4,
-//     `refetchCore` in public/app.js: "the workspace Runs window is governed by the
+//     `refetchEvents` in public/app.js: "the workspace Runs window is governed by the
 //     routed project's own `retention`") — e.g. "Retention (runs shown in
 //     the timeline window)". Test regex: /window|timeline|runs shown/i.
 //   - allow-deletion label names the destructive action AND reads as
@@ -275,7 +275,7 @@ describe("Projects manager — edit-in-place field labels (§S5.1)", () => {
 
 // ─────────────────────────────────────────────────────────────────────────
 // §S5.1 (AC2) — the retention field's label states it governs the
-// Runs-timeline window (per §S4, public/app.js's `refetchCore`).
+// Runs-timeline window (per §S4, public/app.js's `refetchEvents`).
 // ─────────────────────────────────────────────────────────────────────────
 describe("Projects manager — retention label wording (§S5.1 AC2)", () => {
   test("retention label mentions the runs/timeline window it governs", async () => {

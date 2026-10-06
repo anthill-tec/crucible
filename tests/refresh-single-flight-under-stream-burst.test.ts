@@ -12,8 +12,8 @@
 // EVERY message (it never even reads `event.data`), and `refetch()` is not
 // guarded against re-entry — nothing stops a second, third, … `refetch()`
 // from starting while an earlier one is still awaiting its own `fetch`
-// calls. `refetchCore` — the first slice `refetch` awaits — begins with
-// `const projects = await getJson("/api/v2/projects")`, so every refresh
+// calls. `refetchProjects` — the first slice `runRefresh` awaits for an
+// "events" frame — is `getJson("/api/v2/projects")`, so every such refresh
 // cycle issues exactly one GET to that literal URL; this file gates that
 // one call to hold a refresh "in flight" and counts attempts against it as
 // the proxy for "how many refreshes ran".
@@ -173,7 +173,7 @@ describe("single-flight refresh under a stream-frame burst", () => {
     await mountApp(key);
     expect(liveSource).not.toBeNull(); // sanity — connectStream took the SSE branch, not startPolling
 
-    // Gates the ONE request `refetchCore` (public/app.js) always makes
+    // Gates the ONE request `refetchProjects` (public/app.js) makes
     // first — a hit here is a refresh cycle STARTING.
     const gate = gateFetch((url) => url === "/api/v2/projects");
     try {
