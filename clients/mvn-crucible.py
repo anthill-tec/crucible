@@ -97,7 +97,7 @@ STALE_THRESHOLD_S = 120
 # (CR-CRU-112 §S1).
 _STACK = "mvn"
 
-# §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
+# §S2b cadence (CR-CRU-008; the shared RunNarrator's default) reused by gate-run's interim poll.
 
 
 # --------------------------------------------------------------------------- #
@@ -443,98 +443,60 @@ def _narrate_heartbeat(project_dir, agent_id, message):
         return None
 
 
-class _Narrator:
-    """§S2b — throttled 'running class N/M' narration for Maven tiers.
+def _recognise_class_start(line):
+    """mvn's half of the shared narration: one surefire/failsafe `Running
+    <class>` line is one completion (class granularity is surefire's contract).
+    It returns a plain bool, so no class name is carried after the count."""
+    return _MVN_RUNNING_LINE.search(line.rstrip("\r\n")) is not None
 
-    Fed the streamed mvn output line-by-line; counts surefire/failsafe
-    `Running <class>` lines. M is the best-known class total: the larger of
-    classes seen in the stream and TEST-*.xml reports on disk (surefire writes
-    each class's XML as it finishes, so M ratchets toward the true total and
-    can never read below N). Throttle, read literally from the spec: FIRST
-    update only after ≥2s from the first class start OR ≥10 class starts (a
-    sub-window run narrates nothing); later updates ≥2s or ≥10 classes past
-    the last posted one. `finish()` posts one replacement heartbeat AFTER the
-    final ingest so the narration never outlives the run (mvn tiers keep the
-    agent row — there is no bun-style silent removal bracket).
-    """
 
-    def __init__(self, post, xml_total, min_seconds=2.0, min_completions=10):
-        self._post = post
-        self._xml_total = xml_total
-        self._min_seconds = min_seconds
-        self._min_completions = min_completions
-        self._count = 0
-        self._first_seen = None   # monotonic ts of the first class start
-        self._posted_at = None    # monotonic ts of the last posted update
-        self._posted_count = 0
-        self.posted = False
+def _narrator(project_dir, agent_id, xml_total, identity=None):
+    """This client's `RunNarrator`: mvn's recogniser, M as the larger of the
+    classes seen and the TEST-*.xml reports on disk (`xml_total`, re-read at
+    every post, so M ratchets toward the true total), and a tick through
+    `_narrate_heartbeat`. CR-CRU-056 — under a gated identity a tick that
+    RE-CREATES a pruned row makes that row this run's to clean up.
 
-    def observe(self, line):
-        m = _MVN_RUNNING_LINE.search(line.rstrip("\r\n"))
-        if m:
-            self._class_started(m.group(1))
+    M never reads below the classes already seen (they are a floor on the
+    total before a single report is on disk). The count is of test CLASSES,
+    and the narration says so: `running N/M classes`, then `ran N/M classes`."""
+    def _tick(message):
+        resp = _narrate_heartbeat(project_dir, agent_id, message)
+        if identity is not None:
+            identity.observe(resp)
 
-    def _class_started(self, class_name):
-        now = time.monotonic()
-        self._count += 1
-        if self._first_seen is None:
-            self._first_seen = now
-        since = now - (self._posted_at if self._posted_at is not None
-                       else self._first_seen)
-        if (since < self._min_seconds
-                and self._count - self._posted_count < self._min_completions):
-            return
-        total = max(self._xml_total(), self._count)
-        self._post(f"running class {self._count}/{total} · {class_name}")
-        self.posted = True
-        self._posted_at, self._posted_count = now, self._count
+    def _total():
+        return max(xml_total(), narrator.count)
 
-    def finish(self):
-        """Replace the narration once the final ingest has landed (ordering:
-        call strictly after the ingest POST)."""
-        if not self.posted:
-            return
-        total = max(self._xml_total(), self._count)
-        self._post(f"finished {self._count}/{total} test classes — results ingested")
+    narrator = _axi().RunNarrator(_tick, _recognise_class_start, total=_total,
+                                  unit="classes")
+    return narrator
+
+
+def _start_run(project_dir, agent_id, tier=None, context=None):
+    """Open the run BEFORE maven is spawned, through the shared `open_run`.
+    Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
+    with a warning naming the fallback."""
+    return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
+                           tier=tier, context=context)
+
+
+def _xml_total_for(maven_dir, module, kinds, reports_dir):
+    """A zero-arg count of the TEST-*.xml reports this run's dirs hold — the
+    narration's best-known total."""
+    def _xml_total():
+        return sum(len(glob.glob(os.path.join(d, "TEST-*.xml")))
+                   for d in _run_read_dirs(maven_dir, module, kinds, reports_dir))
+    return _xml_total
 
 
 def _run_logged(cmd, cwd, env, log_path, narrator=None):
-    """Run `cmd`. If `log_path` set, capture COMBINED stdout+stderr (in order),
-    write it to `log_path`, and echo it to stdout so the run stays visible — lets
-    an agent read a long mvn run back from a file instead of re-running it
-    (per the global rule: grep surefire/failsafe reports, don't re-run).
-
-    §S2b: capture is a STREAMING tail (Popen, line-buffered) — the optional
-    `narrator` observes every line live for throttled progress heartbeats —
-    while the captured output, log file and echo stay byte-identical to the
-    old capture-after-exit behavior. A narrator WITHOUT a log path still
-    streams (tailing requires the pipe); the combined output is then echoed on
-    completion instead of inheriting stdio.
-    """
-    if not log_path and narrator is None:
-        return subprocess.run(cmd, cwd=cwd, env=env)
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-    )
-    lines = []
-    for line in proc.stdout:
-        lines.append(line)
-        if narrator is not None:
-            narrator.observe(line)
-    proc.stdout.close()
-    returncode = proc.wait()
-    out = "".join(lines)
-    if log_path:
-        try:
-            with open(log_path, "w") as f:
-                f.write(out)
-            print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
-        except OSError as e:
-            print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
-                  file=sys.stderr)
-    sys.stderr.write(out)
-    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+    """Run `cmd` on the shared run path (`run_streamed`): the combined output
+    streams live to stderr and `log_path` while maven works, the optional
+    `narrator` observes every line, and the returned capture stays
+    byte-identical to a capture-after-exit (lets an agent read a long mvn run
+    back from a file instead of re-running it)."""
+    return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
 
 
 # --------------------------------------------------------------------------- #
@@ -803,7 +765,8 @@ def _collect_jacoco(maven_dir):
 # --------------------------------------------------------------------------- #
 # Ingest helpers
 # --------------------------------------------------------------------------- #
-def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
+def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None,
+                      run_id=None):
     """Fast path: hand a single reports DIR to Crucible's built-in JUnit parser
     (the v2 junit codec reads a file OR a directory of TEST-*.xml). Returns the
     parsed response dict (the caller emits the §S1 envelope)."""
@@ -818,6 +781,9 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
+    # The runId of the OPEN run this ingest closes; absent, the single-shot body.
+    if run_id:
+        payload["runId"] = run_id
     resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
     s = resp.get("run", {})
     print(f"ingest junit: ok={resp.get('ok')} dir={report_dir} "
@@ -828,7 +794,7 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
 
 
 def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, files=None):
+                   context=None, raw=None, files=None, run_id=None):
     """POST a client-parsed run to /api/v2/runs/parsed. Returns the response dict.
 
     CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
@@ -851,6 +817,8 @@ def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
     # server-stored run carries real output for the run-detail raw-toggle.
     if raw:
         payload["raw"] = raw
+    if run_id:
+        payload["runId"] = run_id
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     cov = ""
     if coverage:
@@ -865,7 +833,7 @@ def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
     return resp
 
 
-def _ingest_compile(project_dir, agent, output, context=None):
+def _ingest_compile(project_dir, agent, output, context=None, run_id=None):
     """Ingest Maven/javac build output. Crucible parses `[ERROR] /path/File.java:
     [line,col] message` into structured per-file errors; raw output kept as fallback.
     """
@@ -878,13 +846,15 @@ def _ingest_compile(project_dir, agent, output, context=None):
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
+    if run_id:
+        payload["runId"] = run_id
     resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     print(f"ingest compile: ok={resp.get('ok')} error_lines={err_count}", file=sys.stderr)
     return 0 if resp.get("ok") else 1
 
 
 def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
-                  pooled=False):
+                  pooled=False, run_id=None):
     """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
     None → return None so the caller can run the compile fallback.
 
@@ -906,7 +876,7 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
         glob.glob(os.path.join(existing[0], "TEST-*.xml"))) > 1
     if len(existing) == 1 and not many_sources:
         resp = _ingest_junit_dir(project_dir, agent, existing[0], tier=tier,
-                                 context=context)
+                                 context=context, run_id=run_id)
         # The junit-dir path ingests the DIR (the server parses it), so the
         # envelope's own counts come from a client-side parse of the same
         # reports — for the envelope only, never on the wire (CR-CRU-051 §S2).
@@ -914,11 +884,11 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
     else:
         summary, tree, files = _parse_junit(existing)
         resp = _ingest_parsed(project_dir, agent, summary, tree, tier=tier,
-                              context=context, files=files)
+                              context=context, files=files, run_id=run_id)
     return {"resp": resp, "summary": summary, "files": files}
 
 
-def _compile_fallback(maven_dir, project_dir, agent, common_flags):
+def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None):
     """No test reports → tests didn't compile. Run `mvn clean test-compile` and
     ingest the build output as a compile failure (the RED-as-compile path).
 
@@ -932,7 +902,7 @@ def _compile_fallback(maven_dir, project_dir, agent, common_flags):
           file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
-    return _ingest_compile(project_dir, agent, output), output
+    return _ingest_compile(project_dir, agent, output, run_id=run_id), output
 
 
 # --------------------------------------------------------------------------- #
@@ -951,34 +921,35 @@ def _run_surefire_tier(args, goal_extra, label):
     env = os.environ.copy()
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    narrator = None
+    narrator, run_id, run_warnings = None, None, []
     if args.agent:
-        # §S2b — tail the run and narrate class-level progress heartbeats.
-        module = getattr(args, "module", None)
-
-        def _xml_total():
-            return sum(
-                len(glob.glob(os.path.join(d, "TEST-*.xml")))
-                for d in _run_read_dirs(maven_dir, module, ("surefire",),
-                                        reports_dir)
-            )
-
-        narrator = _Narrator(
-            lambda message: _narrate_heartbeat(project_dir, args.agent, message),
-            _xml_total,
-        )
+        # The shared run path: narrate class-level progress, and open the run
+        # BEFORE maven is spawned so the board shows it running.
+        narrator = _narrator(project_dir, args.agent,
+                             _xml_total_for(maven_dir, getattr(args, "module", None),
+                                            ("surefire",), reports_dir))
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                          context=_run_context())
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
     # run that spends its wall clock waiting is measured here and says so in its
     # own envelope. `module` runs this same body and is left alone, because the
     # shared check is scoped to `unit` by the tier it is handed.
-    with _axi().ChildRunTiming() as timing:
-        result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                             narrator)
+    # A signal while the run is open is trapped and the open run disclosed.
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(label, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         run_warnings)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
-    pinned_warnings = _claim_pinned_reports(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir)
+    # The final count, then `ingesting…`, both ahead of the ingest below.
+    _axi().close_narration(narrator)
+    pinned_warnings = run_warnings + _claim_pinned_reports(
+        maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
     dirs = _run_read_dirs(maven_dir, getattr(args, "module", None), ("surefire",),
                           reports_dir)
     # CR-CRU-056 §S3 — no client-side cycle resolution: a bound agent's run is
@@ -988,7 +959,8 @@ def _run_surefire_tier(args, goal_extra, label):
     # A `module` run over a reactor pools every module's reports in the run's
     # own directory, so it keeps the many-source parsed ingest it always had.
     ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx,
-                             pooled=label == "module" and reports_dir is not None)
+                             pooled=label == "module" and reports_dir is not None,
+                             run_id=run_id)
     if ingested:
         rc = 0
         # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
@@ -1000,12 +972,9 @@ def _run_surefire_tier(args, goal_extra, label):
                                label, "mvn", timing))
     else:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
-                                             args.agent, common)
+                                             args.agent, common, run_id=run_id)
         _emit_compile_fallback_axi(label, rc, build_output, project_dir,
-                                   args.agent)
-    # §S2b — the final ingest replaces the narration (strictly after it).
-    if narrator is not None:
-        narrator.finish()
+                                   args.agent, run_warnings)
     return rc
 
 
@@ -1148,27 +1117,43 @@ def _run_failsafe_tier(args, goals, label):
     env = os.environ.copy()
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
+    module = getattr(args, "module", None)
+    narrator, run_id, run_warnings = None, None, []
+    if args.agent:
+        # The shared run path, as `_run_surefire_tier` walks it.
+        narrator = _narrator(project_dir, args.agent,
+                             _xml_total_for(maven_dir, module,
+                                            ("failsafe", "surefire"), reports_dir))
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                          context=_run_context())
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(label, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         run_warnings)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
-    module = getattr(args, "module", None)
-    pinned_warnings = _claim_pinned_reports(maven_dir, module, ("failsafe", "surefire"),
-                                            reports_dir)
+    _axi().close_narration(narrator)
+    pinned_warnings = run_warnings + _claim_pinned_reports(
+        maven_dir, module, ("failsafe", "surefire"), reports_dir)
     dirs = _dirs_with_xml(_run_read_dirs(maven_dir, module, ("failsafe", "surefire"),
                                          reports_dir))
     if not dirs:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
-                                             args.agent, common)
+                                             args.agent, common, run_id=run_id)
         _emit_compile_fallback_axi(label, rc, build_output, project_dir,
-                                   args.agent)
+                                   args.agent, run_warnings)
         return rc
     _warn_if_stale(dirs)
     summary, tree, files = _parse_junit(dirs)
     # The subcommand name IS the tier, as it is for `unit`/`module`: a tier
     # PARAMETER, never a literal this body asserts about a run it did not name.
     resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                          tier=label, files=files)
+                          tier=label, files=files, run_id=run_id)
     # CR-CRU-058 §S1 — the run this body measured rides a real envelope.
     _emit_tier_run_axi(label, {"resp": resp, "summary": summary, "files": files},
                        project_dir, args.agent, warnings=pinned_warnings)
@@ -1348,29 +1333,29 @@ def _regression_run(args, identity=None, verb="regression",
     # of the envelope, leaving the stream prose-then-envelope, never a clean
     # single document. Interactive-only now, like `test`/`check`'s equivalents.
     print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    narrator = None
+    narrator, run_id = None, None
     if args.agent:
-        # §S2b — tail the run and narrate class-level progress heartbeats. This
-        # also forces _run_logged's streaming-capture branch so result.stdout is
-        # populated for a bare `regression --agent X` (no --log) — the captured
-        # runner output rides along as `raw` uniformly, matching _run_surefire_tier.
-        def _xml_total():
-            return sum(
-                len(glob.glob(os.path.join(d, "TEST-*.xml")))
-                for d in _run_read_dirs(maven_dir, None, ("surefire", "failsafe"),
-                                        reports_dir)
-            )
-
-        def _tick(message):
-            # CR-CRU-056 — a tick that RE-CREATES a pruned row makes that row
-            # this run's to clean up; `observe` reads the server's `changed`.
-            resp = _narrate_heartbeat(project_dir, args.agent, message)
-            if identity is not None:
-                identity.observe(resp)
-
-        narrator = _Narrator(_tick, _xml_total)
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
+        # The shared run path: narrate class-level progress (which also forces
+        # the streaming capture, so result.stdout is populated for a bare
+        # `regression --agent X` and rides along as `raw`), and open the run
+        # BEFORE maven is spawned.
+        narrator = _narrator(project_dir, args.agent,
+                             _xml_total_for(maven_dir, None, ("surefire", "failsafe"),
+                                            reports_dir),
+                             identity)
+        run_id, run_warnings = _start_run(project_dir, args.agent,
+                                          tier="regression", context=_run_context())
+        preflight_warnings += run_warnings
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         preflight_warnings)
     print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
+    _axi().close_narration(narrator)
 
     preflight_warnings += _claim_pinned_reports(maven_dir, None, ("surefire", "failsafe"),
                                                 reports_dir)
@@ -1380,7 +1365,7 @@ def _regression_run(args, identity=None, verb="regression",
         print("[regression] no surefire/failsafe reports — capturing compile output",
               file=sys.stderr)
         rc, build_output = _compile_fallback(maven_dir, project_dir,
-                                             args.agent, common)
+                                             args.agent, common, run_id=run_id)
         _emit_compile_fallback_axi(verb, rc, build_output, project_dir,
                                    args.agent, preflight_warnings)
         return rc
@@ -1400,7 +1385,8 @@ def _regression_run(args, identity=None, verb="regression",
 
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(),
-                          raw=getattr(result, "stdout", None), files=files)
+                          raw=getattr(result, "stdout", None), files=files,
+                          run_id=run_id)
     ok = bool(resp.get("ok")) and summary["failed"] == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
@@ -1445,21 +1431,40 @@ def cmd_test(args, tier=None):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
     print(f"[test] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
+    narrator, run_id = None, None
+    if args.agent:
+        # The shared run path, as `_run_surefire_tier` walks it.
+        narrator = _narrator(project_dir, args.agent,
+                             _xml_total_for(maven_dir, getattr(args, "module", None),
+                                            ("surefire",), reports_dir))
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
+                                          context=_run_context())
+        preflight_warnings = list(preflight_warnings) + run_warnings
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+                                 narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned("test", _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         preflight_warnings)
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    _axi().close_narration(narrator)
     preflight_warnings = list(preflight_warnings) + _claim_pinned_reports(
         maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
     dirs = _dirs_with_xml(_run_read_dirs(maven_dir, getattr(args, "module", None),
                                          ("surefire",), reports_dir))
     if not dirs:
         # No reports → tests didn't compile. Ingest the build output as compile.
-        rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common)
+        rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common,
+                                  run_id=run_id)
         return rc
     _warn_if_stale(dirs)
     ctx = _run_context()
-    resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx)
+    resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx,
+                             run_id=run_id)
     _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
                           preflight_warnings)
     failed = (resp.get("run") or {}).get("failed") or 0

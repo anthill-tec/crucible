@@ -315,7 +315,14 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
                           "the opening identity heartbeat must be the FIRST "
                           "call — CR-CRU-056 §S3b refuses an ingest from an "
                           "id with no live registered row")
-        self.assertEqual(ingest_idx[0], 1, "the ingest follows the opening heartbeat")
+        self.assertGreater(ingest_idx[0], 0, "the ingest follows the opening heartbeat")
+        between = calls[1:ingest_idx[0]]
+        self.assertEqual([c[0] for c in between],
+                         ["/api/v2/agents/heartbeat"] * len(between),
+                         "only heartbeats sit between the opening heartbeat and the ingest")
+        self.assertEqual([c[1].get("message") for c in between],
+                         ["ran 0/0", "ingesting\u2026"],
+                         "the final count, then 'ingesting\u2026', precede the ingest")
         self.assertEqual(unregister_idx[0], len(calls) - 1,
                           "unregister must be the LAST call made")
 
@@ -352,7 +359,14 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         self.assertEqual(paths[0], "/api/v2/agents/heartbeat",
                           "the opening identity heartbeat must be the FIRST call")
-        self.assertEqual(ingest_idx[0], 1, "the ingest follows the opening heartbeat")
+        self.assertGreater(ingest_idx[0], 0, "the ingest follows the opening heartbeat")
+        between = calls[1:ingest_idx[0]]
+        self.assertEqual([c[0] for c in between],
+                         ["/api/v2/agents/heartbeat"] * len(between),
+                         "only heartbeats sit between the opening heartbeat and the ingest")
+        self.assertEqual([c[1].get("message") for c in between],
+                         ["ran 0/0", "ingesting\u2026"],
+                         "the final count, then 'ingesting\u2026', precede the ingest")
         self.assertEqual(unregister_idx[0], len(calls) - 1,
                           "unregister must be the LAST call made")
 

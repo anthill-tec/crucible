@@ -753,7 +753,10 @@
             : span({ class: `app-dot ${busy ? "r" : glyph.cls}` }),
           agent.identity?.displayName ?? agent.agentId,
         ),
-        span({ class: "app-agent-msg" }, agent.message || "—"),
+        // Between runs the server serves the agent's composed idle line (role,
+        // binding, last run and its age); while a run is open it serves none,
+        // and the row reads the agent's own message.
+        span({ class: "app-agent-msg" }, agent.idleLine ?? (agent.message || "—")),
         // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
         // refetched runtime_ms; tombstoned rows render the sealed value.
         typeof agent.runtime_ms === "number"

@@ -83,10 +83,8 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
-import time
 import xml.etree.ElementTree as ET
 
 DEFAULT_JUNIT = "junit.xml"
@@ -262,110 +260,37 @@ def _prescan_test_total(package_dir, targets):
     return total
 
 
-class _Narrator:
-    """§S2b (CR-CRU-008) — throttled in-run 'running N/M' narration.
+def _recognise_completion(line):
+    """§S2b (CR-CRU-008) — bun's half of the shared narration:
+    `(completed, label)` for one line of its piped output. A `<file>:` section
+    header names the current file (the label shown after the count) and
+    completes nothing; a ✓/✗ (or plain `(pass)`/`(fail)`) result line is one
+    completed test."""
+    text = line.rstrip("\r\n")
+    header = _FILE_HEADER_LINE.match(text)
+    if header:
+        return False, header.group(1)
+    return bool(_COMPLETION_LINE.match(text)), None
 
-    Fed the runner's streamed combined output line-by-line; counts bun's
-    per-test completion lines (the ANSI-colourised ✓/✗ family) and posts progress
-    as a heartbeat `message` through the v2 register/heartbeat verb — no new
-    API, and it prints NOTHING (the stdout data pipe stays pure; heartbeats on
-    an already-existing agent journal no lifecycle event server-side).
 
-    Throttle, read literally from the spec ('update at most every 2s or every
-    10 completions'): the FIRST update fires only once ≥2s have elapsed since
-    the first completion OR ≥10 completions accumulated — a run that finishes
-    inside that first window narrates nothing — and each later update must be
-    ≥2s or ≥10 completions past the last POSTED one. Posting is deliberately
-    best-effort: narration must never fail or slow the wrapped run.
-    """
-
-    def __init__(self, post, total_hint=0, min_seconds=2.0, min_completions=10):
-        self._post = post
-        self._total_hint = total_hint
-        self._min_seconds = min_seconds
-        self._min_completions = min_completions
-        self._count = 0
-        self._current_file = None
-        self._first_seen = None   # monotonic ts of the first completion
-        self._posted_at = None    # monotonic ts of the last posted update
-        self._posted_count = 0
-        self.posted = False
-
-    def observe(self, line):
-        text = line.rstrip("\r\n")
-        header = _FILE_HEADER_LINE.match(text)
-        if header:
-            self._current_file = header.group(1)
-            return
-        if _COMPLETION_LINE.match(text):
-            self._completed()
-
-    def _completed(self):
-        now = time.monotonic()
-        self._count += 1
-        if self._first_seen is None:
-            self._first_seen = now
-        since = now - (self._posted_at if self._posted_at is not None
-                       else self._first_seen)
-        if (since < self._min_seconds
-                and self._count - self._posted_count < self._min_completions):
-            return
-        message = f"running {self._count}/{max(self._total_hint, self._count)}"
-        if self._current_file:
-            message += f" · {self._current_file}"
-        try:
-            self._post(message)
-        except (Exception, SystemExit):
-            return  # best-effort — a failed heartbeat retries next completion
-        self.posted = True
-        self._posted_at, self._posted_count = now, self._count
+def _narrator(project_dir, agent_id, identity, total):
+    """This client's `RunNarrator`: bun's recogniser, the prescanned total, and
+    a tick that reports through the gated identity — if the row is pruned
+    mid-run and a tick re-creates it, this run owns that ghost."""
+    def _tick(message):
+        resp = _register_agent(project_dir, agent_id, message)
+        if identity is not None:
+            identity.observe(resp)
+    return _axi().RunNarrator(_tick, _recognise_completion, total=total)
 
 
 def _run_logged(cmd, cwd, env, log_path, narrator=None):
-    """Run `cmd`. If `log_path` set, capture combined stdout+stderr, write it, and
-    echo. §S2b: the capture is a STREAMING tail (Popen, line-buffered) — the
-    optional `narrator` observes every line live for throttled progress
-    heartbeats — while the captured output, run.log and echo stay byte-identical
-    to the old capture-after-exit behavior (the §S2c failure-marrying parser
-    consumes `result.stdout` unchanged).
-
-    CR-CRU-017 §S4: an interruption of the streaming read (the SIGINT/SIGTERM
-    trap a wrapped run installs raises THROUGH this loop) reaps the runner
-    before it propagates, so a signalled run leaves no orphaned bun behind —
-    the same guarantee `subprocess.run` already gives the un-captured branch
-    above."""
-    if not log_path and narrator is None:
-        return subprocess.run(cmd, cwd=cwd, env=env)
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-    )
-    lines = []
-    try:
-        for line in proc.stdout:
-            lines.append(line)
-            if narrator is not None:
-                narrator.observe(line)
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
-    proc.stdout.close()
-    returncode = proc.wait()
-    out = "".join(lines)
-    if log_path:
-        try:
-            with open(log_path, "w") as f:
-                f.write(out)
-            print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
-        except OSError as e:
-            print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
-                  file=sys.stderr)
-    # §S1 — stdout is the TOON AXI channel; the captured run echo is interactive
-    # (stderr). The §S2c parser consumes the returned CompletedProcess.stdout,
-    # not the stream, so failure-marrying stays byte-identical.
-    sys.stderr.write(out)
-    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+    """Run `cmd` on the shared run path (`run_streamed`): the combined output
+    streams live to stderr and `log_path` while the runner works, the optional
+    `narrator` observes every line, and the returned capture stays
+    byte-identical for the §S2c failure-marrying parser. CR-CRU-017 §S4: a
+    signal trap raising through the read reaps the runner before it propagates."""
+    return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
@@ -1112,40 +1037,16 @@ def _lifecycle_enabled(args):
 
 def _run_lifecycle_unavailable_warning(error):
     """The structured warning for a start the SERVER refused — an older build
-    with no /runs/start route (404) being the case the CR names. Degradation is
-    not failure (the evidence still lands), but it is never SILENT: the caller
-    asked for a measured span and got a single-shot event instead."""
-    return {
-        "code": "run-lifecycle-unavailable",
-        "detail": (f"could not open a run lifecycle: {error} — fell back to a "
-                   f"single-shot ingest, so this run is stored with the "
-                   f"tool-reported duration_ms only (no startedAt, no "
-                   f"server-computed runtime_ms)"),
-    }
+    with no /runs/start route (404) being the case the CR names. One wording
+    for the fleet: built by the shared `run_lifecycle_unavailable_warning`."""
+    return _axi().run_lifecycle_unavailable_warning(error)
 
 
 def _run_left_open_warning(run_id, cause):
     """The structured warning for a run this client OPENED and then could not
-    close. It names the settlement path precisely, because the alternative
-    reading — "the run was lost" — is wrong and would send an operator hunting
-    for a missing event."""
-    # THE DETAIL NAMES NO CR AND NO UNBUILT ROUTE (CR-CRU-097 AC3a). This
-    # string is emitted to the user in the AXI envelope on ANY project's
-    # board, so it states what the client DOES — posts no abort, the server
-    # settles the run — and nothing about our backlog. The lineage lives
-    # here: a client-side abort endpoint is CR-CRU-017 §S2 and is not built,
-    # which is WHY there is no post to make; when it ships, this warning
-    # changes behaviour, not just wording.
-    return {
-        "code": "run-left-open",
-        "detail": (f"{cause} — run {run_id} was never closed by an ingest. "
-                   f"The client posts no abort: the server settles it with "
-                   f"its own auto-abort — reason `agent died` as soon as "
-                   f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than the `run_abandon_ms` limit the server resolves "
-                   f"from the crucible.toml beside its database. The run is "
-                   f"abandoned, not lost"),
-    }
+    close — one wording for the fleet, built by the shared
+    `run_left_open_warning`."""
+    return _axi().run_left_open_warning(run_id, cause)
 
 
 def _raw_route_coverage_warning(codec, script):
@@ -1169,106 +1070,33 @@ def _raw_route_coverage_warning(codec, script):
 
 
 def _run_left_open_help():
-    """CR-CRU-048's rule — the state actually reached is "an open run is being
-    settled by the server", so the next action is to WATCH that settlement and
-    then re-run, never the verb's normal successor."""
-    return ["status", "re-run the verb to record a fresh run"]
+    """The next step for a run being settled by the server — the shared
+    `run_left_open_help`."""
+    return _axi().run_left_open_help()
 
 
 def _start_run(project_dir, agent_id, tier=None, context=None):
-    """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`.
-
-    A refusal degrades to single-shot with a warning naming the fallback. An
-    `ok` answer that carries no runId is a server that simply did not open one
-    (nothing failed, so there is nothing to report): the ingest is then the
-    unchanged single-shot POST."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": agent_id,
-        "stack": _STACK,
-    }
-    if tier:
-        payload["tier"] = tier
-    if context:
-        payload["context"] = context
-    resp = _post("/api/v2/runs/start", payload) or {}
-    run_id = resp.get("runId")
-    if run_id:
-        print(f"[crucible] run started: {run_id}", file=sys.stderr)
-        return run_id, []
-    if resp.get("ok"):
-        return None, []
-    error = resp.get("error") or "the server opened no run"
-    print(f"[crucible] WARN: run lifecycle unavailable ({error}) — "
-          f"single-shot ingest", file=sys.stderr)
-    return None, [_run_lifecycle_unavailable_warning(error)]
+    """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`,
+    through the shared `open_run`: a refusal degrades to single-shot with a
+    warning naming the fallback; an `ok` answer with no runId is a server that
+    simply did not open one, and the ingest is the unchanged single-shot POST."""
+    return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
+                           tier=tier, context=context)
 
 
-class _RunAbandoned(Exception):
-    """SIGINT/SIGTERM arrived while a WRAPPED run was in flight. Carries the
-    signal number so the verb exits on the conventional 128+signum."""
-
-    def __init__(self, signum):
-        super().__init__(f"run abandoned on {signal.Signals(signum).name}")
-        self.signum = signum
-
-
-@contextlib.contextmanager
 def _abandon_trap(run_id):
-    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run, turning
-    the signal into a `_RunAbandoned` the verb can report on. Outside a wrapped
-    run (`run_id` None) this is inert and the default disposition stands —
-    there is nothing open to disclose.
-
-    The previous handlers are always restored, so the trap can never outlive
-    the run it guards. A non-main thread cannot install handlers at all
-    (`ValueError`); that is not a reason to fail a test run, so the wrap simply
-    proceeds untrapped."""
-    if run_id is None:
-        yield
-        return
-
-    def _handler(signum, _frame):
-        raise _RunAbandoned(signum)
-
-    previous = {}
-    try:
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, _handler)
-    except ValueError:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-        yield
-        return
-    try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run — the
+    shared `abandon_trap`, which every stack client wraps its run in."""
+    return _axi().abandon_trap(run_id)
 
 
 def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                         warnings=None):
-    """The signal path's ONLY output: one ok:false envelope naming the signal
-    and the open run the server will settle. No POST of any kind is made here —
-    the closing `_close_gate_identity` tombstone in the caller's `finally` is
-    what ARMS the server's `agent died` auto-abort.
-
-    CR-CRU-094 §S3 — `warnings` are the findings this run had ALREADY
-    accumulated when the signal landed (the pre-flight `no-cycle` among them).
-    The envelope here is built from a literal, so without them this one exit
-    would print a warning on stderr and omit it from `warnings[]`; the
-    two-channel guarantee holds on EVERY exit or on none."""
-    signame = signal.Signals(abandoned.signum).name
-    _emit_axi(
-        verb, False,
-        {"runId": run_id, "signal": signame, "help": _run_left_open_help()},
-        _axi_context(project_dir, agent_id=agent_id),
-        list(warnings or [])
-        + [_run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
-        f"{verb}: ok=False — {signame} interrupted the run; run {run_id} left "
-        f"open for the server's auto-abort")
-    return 128 + abandoned.signum
+    """The signal path's ONLY output — the shared `emit_run_abandoned`, which
+    names the signal and the open run the server will settle and returns the
+    exit code (128+signum). No POST of any kind is made."""
+    return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent_id,
+                                     run_id, abandoned, warnings)
 
 
 def cmd_test(args, tier=None):
@@ -1331,13 +1159,8 @@ def cmd_test(args, tier=None):
             # live and the §S2c run.log keeps its result-line block boundaries.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
-            narrator = _Narrator(
-                # Every narration tick is observed too: if the row is pruned
-                # mid-run and a tick re-creates it, this run owns that ghost.
-                lambda message: identity.observe(
-                    _register_agent(project_dir, args.agent, message)),
-                total_hint=_prescan_test_total(package_dir, args.tests),
-            )
+            narrator = _narrator(project_dir, args.agent, identity,
+                                 _prescan_test_total(package_dir, args.tests))
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
@@ -1356,13 +1179,15 @@ def cmd_test(args, tier=None):
         try:
             with _axi().ChildRunTiming() as timing, _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
-        except _RunAbandoned as abandoned:
+        except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not args.agent:
             return result.returncode
+        # The final count, then `ingesting…`, both ahead of the ingest below.
+        _axi().close_narration(narrator)
 
         if os.path.exists(junit_path):
             summary, tree, files = _parse_junit_file(junit_path)
@@ -1485,11 +1310,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
-            narrator = _Narrator(
-                lambda message: identity.observe(
-                    _register_agent(project_dir, args.agent, message)),
-                total_hint=_prescan_test_total(package_dir, None),
-            )
+            narrator = _narrator(project_dir, args.agent, identity,
+                                 _prescan_test_total(package_dir, None))
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
@@ -1498,7 +1320,7 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
         try:
             with _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
-        except _RunAbandoned as abandoned:
+        except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
@@ -1548,6 +1370,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
                       f"{verb}: ok=False — no {ingest_name}, nothing to ingest")
             return 1
 
+        # Something WILL be ingested: the final count, then `ingesting…`.
+        _axi().close_narration(narrator)
         if raw_report:
             # CR-CRU-015 §S2 — the board decodes. The client reads the JUnit
             # XML the same run wrote for its distinct-FILE count ONLY (the

@@ -78,8 +78,6 @@ FQBN = os.environ.get("ARDUINO_FQBN", "arduino:renesas_uno:minima")
 # over (CR-CRU-112 §S1).
 _STACK = "arduino"
 
-# §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
-
 
 # ── project dir / .env / agent resolution ────────────────────────────────────
 
@@ -485,6 +483,37 @@ def _close_gate_identity(project_dir, identity):
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
+# Unity's own verdict line for one finished test: `<file>:<line>:<name>:PASS`,
+# `...:FAIL[: <message>]`, or `...:IGNORE[: <message>]` (an ignored test was
+# reached and reported, so it is a completion too).
+_UNITY_VERDICT_LINE = re.compile(
+    r"^[^:\s]+:\d+:[^:]+:(?:PASS|FAIL|IGNORE)(?::|\s*$)")
+
+
+def _recognise_completion(line):
+    """arduino's half of the shared narration: one Unity PASS/FAIL/IGNORE
+    verdict line is one completed test. Unity states its total only in its closing summary,
+    so the narration carries no denominator."""
+    return _UNITY_VERDICT_LINE.match(line.rstrip("\r\n")) is not None
+
+
+def _narrator(pd, agent_id, identity=None):
+    """This client's `RunNarrator`: Unity's recogniser, an unknown total
+    (`running N`, then `ran N/N`), and the shared role-optional heartbeat
+    tick (`narration_poster`), observed by a gated `identity` when there is one."""
+    return _axi().RunNarrator(
+        _axi().narration_poster(_post, _project_key(pd), agent_id, identity),
+        _recognise_completion)
+
+
+def _start_run(pd, agent_id, tier=None, context=None):
+    """Open the run BEFORE `make` is spawned, through the shared `open_run`.
+    Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
+    with a warning naming the fallback."""
+    return _axi().open_run(_post, _project_key(pd), agent_id, _STACK,
+                           tier=tier, context=context)
+
+
 def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
     """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
     (`make <target>`) → parse → /api/v2/runs/parsed under the given `tier`; a
@@ -523,7 +552,7 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context())
         return _run_native_tests_body(args, verb, tier, want_coverage, pd,
-                                      preflight_warnings, target)
+                                      preflight_warnings, target, identity)
     finally:
         _close_gate_identity(pd, identity)
 
@@ -606,7 +635,7 @@ def _ignored_contract_warning(variable, native_dir, fixed, moved_to):
 
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
-                           preflight_warnings=(), target="junit"):
+                           preflight_warnings=(), target="junit", identity=None):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
     finding, decided BEFORE the runner spawned; it rides every envelope this
     body can emit, ahead of whatever the run itself discovers.
@@ -614,7 +643,12 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     §S6 — `target` is the native-host make target to run: `junit`, the one this
     stack's own split already has, or the one a DECLARED cell detected in the
     Makefile under `--dir`. Which target a tier means is the project's
-    decision; this body only runs the one it is handed."""
+    decision; this body only runs the one it is handed.
+
+    The shared run path: with an agent, the run is opened BEFORE `make` is
+    spawned and narrated per Unity verdict line; `make`'s output streams live
+    to stderr and `--log` either way. `identity` is the gated run's identity,
+    so a narration tick that re-creates a pruned row is this run's to clean."""
     preflight_warnings = list(preflight_warnings)
     key, name = _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
@@ -626,18 +660,27 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     _ensure_project(key, name, pd)
     own_dir = _run_reports_dir(args, pd)
     make_env = _make_reports_env(own_dir, want_coverage)
+    narrator, run_id = None, None
+    if agent_id:
+        narrator = _narrator(pd, agent_id, identity)
+        run_id, run_warnings = _start_run(pd, agent_id, tier=tier,
+                                          context=_run_context())
+        preflight_warnings += run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
     # run that spends its wall clock waiting says so in its own envelope. The
     # untiered `test` verb and `regression` run this same body and are left
     # alone, because the shared check is scoped to `unit` by the tier it is
-    # handed.
-    with _axi().ChildRunTiming() as timing:
-        if make_env is None:
-            run = subprocess.run(["make", target], cwd=native_dir,
-                                 capture_output=True, text=True)
-        else:
-            run = subprocess.run(["make", target], cwd=native_dir,
-                                 capture_output=True, text=True, env=make_env)
+    # handed. The output is always captured: the no-report envelope and the
+    # ingest's `raw` read it.
+    # A signal while the run is open is trapped and the open run disclosed.
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            run = _axi().run_streamed(["make", target], native_dir, make_env,
+                                      getattr(args, "log", None), narrator,
+                                      capture=True)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(pd), agent_id, run_id,
+                                         abandoned, preflight_warnings)
     # A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
     # dirs: its output is moved into the run's own directory, and said so.
     preflight_warnings += _move_ignored_outputs(native_dir, own_dir, want_coverage)
@@ -645,10 +688,10 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
     if not reports:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
-        # stderr and exited 1 with EMPTY stdout. The stderr text and the exit
-        # code are preserved verbatim (AC5); the envelope is what is added, and
-        # it carries the CALLER's `verb` (this body backs test AND regression).
-        sys.stderr.write(run.stdout + run.stderr)
+        # stderr and exited 1 with EMPTY stdout. The runner's own output already
+        # reached stderr live, and the message and exit code are preserved
+        # (AC5); the envelope is what is added, and it carries the CALLER's
+        # `verb` (this body backs test AND regression).
         message = f"[crucible] no JUnit (TEST-*.xml) under {reports_dir}"
         sys.stderr.write(message + "\n")
         _emit_axi(verb, False,
@@ -656,7 +699,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                   _axi_context(pd, agent_id=agent_id),
                   preflight_warnings
                   + [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
-                                              (run.stdout or "") + (run.stderr or ""))],
+                                              run.stdout or "")]
+                  + _axi().no_report_left_open_warnings(run_id, "TEST-*.xml"),
                   message)
         return 1
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
@@ -713,9 +757,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         payload["context"] = context
     # CR-CRU-038 §S2b — the captured make-junit output rides along as `raw` so
     # the server-stored run carries real output for the run-detail raw-toggle.
-    raw = (run.stdout or "") + (run.stderr or "")
+    raw = run.stdout or ""
     if raw:
         payload["raw"] = raw
+    # The runId of the OPEN run this ingest closes; absent, the single-shot body.
+    if run_id:
+        payload["runId"] = run_id
+    # The final count, then `ingesting…`, both ahead of the ingest below.
+    _axi().close_narration(narrator)
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
@@ -1273,6 +1322,7 @@ def _add_declared_tier_args(p):
     _add_native_dir_arg(p)
     _add_gate_cycle_arg(p)
     _add_reports_arg(p)
+    _add_log_arg(p)
 
 
 _REPORTS_HELP = _axi().REPORTS_HELP
@@ -1282,6 +1332,16 @@ def _add_reports_arg(p):
     """The run's reports dir, handed to `make` as REPORTS_DIR (COVERAGE_DIR
     beneath it) and read back from there (the shared rule)."""
     p.add_argument("--reports", help=_REPORTS_HELP)
+
+
+def _add_log_arg(p):
+    """CR-CRU-157 §S0 — a suite-running verb streams its runner's output to
+    `--log` as it is produced, as it does to stderr."""
+    p.add_argument(
+        "--log",
+        help="Write the FULL run output (combined stdout+stderr) to this path in addition "
+             "to streaming it, so an agent can read the run back for debugging.",
+    )
 
 
 def _read_declared_make_target(args, target):
@@ -1344,6 +1404,7 @@ def main():
     t.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     _add_gate_cycle_arg(t)
     _add_reports_arg(t)
+    _add_log_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -1362,13 +1423,14 @@ def main():
                  cmd_unit,
                  "Runs the native host tests (`make junit`) under --dir -> "
                  "/api/v2/runs/parsed.",
-                 (_add_native_dir_arg, _add_gate_cycle_arg, _add_reports_arg)),
+                 (_add_native_dir_arg, _add_gate_cycle_arg, _add_reports_arg,
+                  _add_log_arg)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "
                  "/api/v2/runs/parsed; --coverage attaches lcov.",
                  (_add_native_dir_arg, _add_native_coverage_arg,
-                  _add_gate_cycle_arg, _add_reports_arg))),
+                  _add_gate_cycle_arg, _add_reports_arg, _add_log_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         parents=[common])
 

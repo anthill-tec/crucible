@@ -286,6 +286,8 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         below rather than a crash."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True), \
              mock.patch.object(self.module, "_get", return_value=_active_cycle_plans(),
                                 create=True):
@@ -324,6 +326,8 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         `run.files` -- a future change cannot drop the guarantee on one
         surface while leaving the other looking healthy."""
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=self._fake_subprocess_run(NEXTEST_BARE)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=self._fake_subprocess_run(NEXTEST_BARE)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True), \
              mock.patch.object(self.module, "_get", return_value=_active_cycle_plans(),
@@ -390,6 +394,8 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         edit, not new capability."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=_active_cycle_plans(),
@@ -448,6 +454,8 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
 
     def _run_workspace_regression(self, xml_content):
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=self._fake_subprocess_run(xml_content)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=self._fake_subprocess_run(xml_content)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True):
             return _run_main(self.module, [
@@ -530,6 +538,8 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
         `summary` at the pre-merge-gate site."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock:
             code, out, _err = _run_main(self.module, [
@@ -600,6 +610,8 @@ class RustServerParsedSitesNeverFabricateFilesTest(unittest.TestCase):
 
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=_passthrough_or_noop_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=_passthrough_or_noop_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True,
                                               "run": {"passed": 1, "failed": 0,
@@ -630,6 +642,8 @@ class RustServerParsedSitesNeverFabricateFilesTest(unittest.TestCase):
 
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=_passthrough_or_noop_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=_passthrough_or_noop_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True,
                                               "run": {"passed": 1, "failed": 0,
@@ -659,6 +673,8 @@ class RustServerParsedSitesNeverFabricateFilesTest(unittest.TestCase):
         _write(os.path.join(nextest_dir, "junit.xml"), PASS_JUNIT_XML)
 
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=_passthrough_or_noop_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=_passthrough_or_noop_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True,

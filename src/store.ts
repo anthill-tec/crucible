@@ -2312,6 +2312,30 @@ class PlanRegistrationRefused extends Error {
   }
 }
 
+/**
+ * §S2/G4 — the outcome of an ACCEPTED test ingest, composed by the server at
+ * ingest and written onto the agent's `message` (`recordTestEvent`), in the
+ * board's tally form: `2936 ✓ 0 ✗ · ingested`.
+ */
+function ingestOutcome(summary: RunSchema["summary"]): string {
+  return `${summary.passed} ✓ ${summary.failed} ✗ · ingested`;
+}
+
+/**
+ * The outcome of an ACCEPTED compile ingest, in `ingestOutcome`'s style and
+ * written onto the agent's `message` the same way (`recordCompileEvent`):
+ * `compile · 2 errors · ingested` (`1 error` singular). A payload carrying no
+ * error count reads as none counted.
+ */
+function compileOutcome(compile: unknown): string {
+  const errorCount =
+    typeof compile === "object" && compile !== null
+      ? (compile as { errorCount?: unknown }).errorCount
+      : undefined;
+  const count = typeof errorCount === "number" ? errorCount : 0;
+  return `compile · ${count} ${count === 1 ? "error" : "errors"} · ingested`;
+}
+
 export class Store {
   private readonly db: Database;
   /**
@@ -3252,7 +3276,10 @@ export class Store {
     meta?: RecordEventMeta,
   ): RunEvent {
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
-    this.touchAgent(projectKey, agentId);
+    // §S2/G4 — and the SERVER, which recorded the ingest, writes its outcome
+    // onto the agent: the client's last heartbeat (`ingesting…`) never
+    // outlives the run it narrated.
+    this.touchAgent(projectKey, agentId, { message: ingestOutcome(run.summary) });
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -3290,8 +3317,11 @@ export class Store {
     compile: unknown,
     meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "role" | "lifecycle">,
   ): RunEvent {
-    // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
-    this.touchAgent(projectKey, agentId);
+    // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen;
+    // and, as a test ingest does, the server writes the compile outcome onto
+    // the agent, so a run that ended in a compile ingest never reads
+    // `ingesting…`.
+    this.touchAgent(projectKey, agentId, { message: compileOutcome(compile) });
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,

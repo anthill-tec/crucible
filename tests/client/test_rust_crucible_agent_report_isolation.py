@@ -176,6 +176,8 @@ class AgentDirectoryJunitMoveAndReadTest(_BaseRustIsolationTest):
         post_patch, get_patch = self._mocked_transport()
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=fake_subprocess_run), \
              post_patch as post_mock, get_patch:
             code, out, err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--crate", "fixture-crate",
@@ -237,6 +239,8 @@ class AgentDirectoryCoverageMoveAndReadTest(_BaseRustIsolationTest):
         post_patch, get_patch = self._mocked_transport()
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=fake_subprocess_run), \
              post_patch as post_mock, get_patch:
             code, out, err = _run_main(self.module, [
                 "regression-ingest", "--project-dir", self.tmpdir,
@@ -287,6 +291,8 @@ class AgentDirectorySurvivesTest(_BaseRustIsolationTest):
         post_patch, get_patch = self._mocked_transport()
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=fake_subprocess_run), \
              post_patch, get_patch:
             code, out, err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--crate", "fixture-crate",
@@ -336,6 +342,8 @@ class WorkspaceRegressionAndSmokeTestMoveOutputsIntoAgentDirectoryTest(_BaseRust
 
         post_patch, get_patch = self._mocked_transport()
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=fake_subprocess_run), \
              mock.patch.object(self.module, "_disk_guard", return_value=True), \
              post_patch as post_mock, get_patch:
@@ -389,6 +397,8 @@ class WorkspaceRegressionAndSmokeTestMoveOutputsIntoAgentDirectoryTest(_BaseRust
 
         post_patch, get_patch = self._mocked_transport()
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=fake_subprocess_run), \
              post_patch as post_mock, get_patch:
             code, out, err = _run_main(self.module, [
