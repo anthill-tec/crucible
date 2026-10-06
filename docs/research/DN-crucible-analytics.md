@@ -44,6 +44,20 @@ bursty; the throughput limit is the human approvals, not the agents. The user ru
 | Forecast samples completed weeks; refuses under 3 | **Forecast samples days in the window; refuses until the history spans one window** | user, 2026-09-27 |
 | One fixed iteration | **The window is per project: 3, 7 or 14 days, default 7**, set in the projects manager | user, 2026-09-27 |
 
+## What changed on 2026-10-07, and why
+
+The trailing window of 2026-09-27 (CR-CRU-161 as first filed) was never built; the calendar-week
+model still ran. Reviewing the burndown, the user ruled that the forecast's horizon is **the release
+itself, so far**, working against its declared target, rather than a fixed window of the project's
+history. Measured the same day: 0.3.0's live forecast put P50 and P80 on the same day (10-20),
+because whole-week samples give the Monte Carlo only a few distinct outcomes.
+
+| Was (2026-09-27, unbuilt) | Now | Ruling |
+| --- | --- | --- |
+| Velocity over a trailing 3/7/14-day window of the project's merges | **The focused release's pace so far**: its points merged since the release started ÷ the days since, per day | user, 2026-10-07 |
+| Forecast samples the window's days; refuses until the history spans one window | **Forecast samples every day since the release started** (idle days are zeros); **dated as soon as one pointed CR of the release has merged** | user, 2026-10-07 |
+| The window is per project, set in the projects manager | **No window setting**: the release's start bounds the history | user, 2026-10-07 |
+
 ## 1 Why
 
 Model-B execution already stamps every unit of work: runs carry timestamps and durations, cycles carry
@@ -107,24 +121,20 @@ cycle-linked) and orchestrator gate runs bound to a cycle — resolving former o
 - **Unpointed CRs are never counted as 1.** A release containing unpointed CRs lists them as
   *unpointed* on its band, excludes them from its point totals, and its forecast refuses (§7).
 
-## 5 Velocity (project-level)
+## 5 Velocity (the focused release's pace)
 
-- **Definition (amended 2026-09-27):** story points of CRs whose plans **closed with a merge** inside
-  the project's trailing **velocity window** of N days, ending now, divided by N: **points per day**.
-  Today's merges count. It changes on every merge. Crucible has no sprints and agentic work does not
-  arrive in them, so the iteration is a rolling window, not a calendar period. (Calendar weeks, the
-  2026-09-24 rule, were retired: they discard the current period and forecast nothing until three have
-  closed.)
-- **The window:** **3, 7 or 14 days**, per project, default **7**, set in the projects manager (F12)
-  and stored on the project. Measured 2026-09-27: 3 days tracks the current pace; 7 keeps the forecast
-  on seven day-samples; 14 suits a slower project. A day with no merge is a real zero (the approvals
-  are the bottleneck), so a short window swings with idle days.
-- **Displayed value:** the per-day rate (`22 pts / day`) with the window it covers (`last 7 days`) and
-  the window's daily bars.
-- **Scope:** project-level — all releases — because it measures the team's throughput, not a release's.
-  It lives in the **Project band**, the same on every tab (F16).
-- **Payload:** carries the window, the daily series and how many days of pointed history exist, so a
-  consumer can judge it. Days before the first pointed merge are not zeros; they are absent.
+- **Definition (amended 2026-10-07):** story points of the focused release's CRs whose plans **closed
+  with a merge** since the release started (§6, the earliest `filed_at` among its CRs), divided by the
+  days since that start, today included: **points per day**. It changes on every merge and every day.
+  Crucible has no sprints; the release is the iteration that matters, and its target is what the pace
+  is judged against.
+- **Displayed value:** the per-day rate (`2.4 pts / day`) with what it covers (`0.3.0 so far · 27
+  days`) and the release's daily bars.
+- **Scope:** the focused release (the one the Roadmap's release band and burndown show). It lives in
+  the **Project band**, the same on every tab (F16). The flow line (exec · gate per cycle) stays
+  project-level.
+- **Payload:** carries the release, its start, the daily series since then and how many days it
+  covers, so a consumer can judge it.
 
 ## 6 Burndown (release-level)
 
@@ -148,14 +158,15 @@ A SCRUM burndown for the **focused release**:
 
 ## 7 Forecast (Monte Carlo, release-level)
 
-1. From the project's **daily** pointed throughput inside its velocity window (§5), build the empirical
+1. From the focused release's **daily** pointed throughput since it started (§5), build the empirical
    distribution of points per day; days with no merge are zeros.
 2. For each of `N = 1000` draws: sample days until the release's **remaining points** reach 0; record the
    completion date. Waves order the work inside the release but do not change the total.
 3. **P50/P80** completion dates across the draws.
 
-- **Confidence gate (amended 2026-09-27):** until the project's pointed history spans **one full
-  window** → `status: "insufficient_history"`, stating the days it has and needs, with no band values.
+- **Confidence gate (amended 2026-10-07):** until one pointed CR of the release has merged →
+  `status: "insufficient_history"`, with no band values. Once dated, the answer says how many days it
+  rests on.
 - **Unpointed gate:** any remaining CR in the release unpointed → `status: "unpointed"`, naming them,
   with no band values.
 - **Determinism for tests:** a seed parameter (test-only) so fixtures assert exact values.
@@ -171,9 +182,9 @@ Against the **release's declared target** (CR-CRU-091): `P80 ≤ target` → `ah
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/v2/projects/<key>/analytics/velocity` | `{pointsPerWeek, weeks:[{week, points}], sampleWeeks, flow:{execMsPerCycle, gateMsPerCycle, sampleCycles}}` |
+| `GET /api/v2/projects/<key>/analytics/velocity?release=<label>` | `{release, startTs, pointsPerDay?, days:[{day, points}], sampleDays, flow:{execMsPerCycle, gateMsPerCycle, sampleCycles}}` (amended 2026-10-07; the flow is project-level) |
 | `GET …/analytics/burndown?release=<label>` | `{release, committedPoints, target?, ideal?:[…], points:[{ts, remaining, event, cr, verb, delta}], unpointed:[cr]}` |
-| `GET …/analytics/forecast?release=<label>` | `{release, remainingPoints, p50Ts?, p80Ts?, scheduleHealth?, sampleWeeks, status}` |
+| `GET …/analytics/forecast?release=<label>` | `{release, remainingPoints, p50Ts?, p80Ts?, scheduleHealth?, sampleDays, status}` (amended 2026-10-07) |
 
 Plus: `points` on queue entries (set via `cr-plan --points`); the declaration journal. JSON only, like
 every v2 GET (CR-CRU-132 retired TOON rendering). No new SSE event kinds — the UI recomputes on the
