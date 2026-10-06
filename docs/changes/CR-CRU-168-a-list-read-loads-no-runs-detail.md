@@ -32,10 +32,10 @@ The per-run reads (`GET /api/v2/events/<id>`, `?depth=suites`, `?suite=`) are un
 
 ## Acceptance criteria
 
-- [ ] The events list, a cycle's runs, `/status` and the projects list read no suites, cases or run
+- [x] The events list, a cycle's runs, `/status` and the projects list read no suites, cases or run
       raw-output row, asserted on the rows read (not timing).
-- [ ] Each of those answers is byte-identical to today's on a seeded store holding test runs with
+- [x] Each of those answers is byte-identical to today's on a seeded store holding test runs with
       trees, raw output and coverage, compile reports with diagnostics, gates and milestones,
       asserted on the server.
-- [ ] On a copy of the dev store, a full events-list read (limit = the project's retention) answers
+- [x] On a copy of the dev store, a full events-list read (limit = the project's retention) answers
       in under 100 ms, measured the way CR-CRU-158's gap analysis measured its reads.
