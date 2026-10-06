@@ -6228,7 +6228,19 @@
       const focusedLeaf = van.state(null); // "suite::leaf" — failure focus
       const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
       const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
-      const openFeatures = van.state({}); // spec runs: feature title -> true while unfolded
+      // Spec runs: feature title -> a state holding whether that feature is
+      // unfolded. One state PER FEATURE (suiteLeaves' shape): each feature is
+      // its own binding reading its own state, so folding or unfolding one
+      // replaces only that feature's nodes, never the body's.
+      const featureOpen = new Map();
+      const featureOpenState = (title) => {
+        let open = featureOpen.get(title);
+        if (open === undefined) {
+          open = van.state(false);
+          featureOpen.set(title, open);
+        }
+        return open;
+      };
       const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
       // The heat-strip reveal's located row "leaf:<suite>::<leaf>" or
@@ -6353,37 +6365,33 @@
       // other all-green feature stays folded. Nothing else is read until it
       // scrolls into view (loadScrolledScenarios) or is clicked.
       function openProgressively(d) {
-        const open = {};
         const initial = [];
         specFeaturesOf(d).forEach((feature, i) => {
-          if (i === 0 || feature.failed > 0) open[feature.title] = true;
+          featureOpenState(feature.title).val = i === 0 || feature.failed > 0;
           feature.scenarios.forEach((entry, j) => {
             if (entry.failing || (i === 0 && j < SPEC_FIRST_OPEN)) initial.push(entry.node);
           });
         });
-        openFeatures.val = open;
         for (const node of initial) void loadSuite(node);
       }
 
       function toggleFeature(title) {
-        const next = { ...openFeatures.val };
-        if (next[title] === true) delete next[title];
-        else next[title] = true;
-        openFeatures.val = next;
+        const open = featureOpenState(title);
+        open.val = !open.val;
       }
 
       // A heat-cell reveal first opens the feature holding its scenario:
       // SpecFeatures mounts none of a folded feature's scenarios, so the
-      // target has no row until it opens. Merged into openFeatures, never
-      // replacing it, so every other open feature stays open.
+      // target has no row until it opens. Only that feature's state is set,
+      // so every other open feature stays open.
       function unfoldFeatureOf(suiteName) {
         const d = detail.val;
         if (!isSpecRun(d)) return;
         const feature = specFeaturesOf(d).find((f) =>
           f.scenarios.some((entry) => suiteKeyOf(entry.node) === suiteName),
         );
-        if (feature === undefined || openFeatures.val[feature.title] === true) return;
-        openFeatures.val = { ...openFeatures.val, [feature.title]: true };
+        if (feature === undefined) return;
+        featureOpenState(feature.title).val = true;
       }
 
       // A folded scenario row of an unfolded feature reads its steps once it
@@ -7044,46 +7052,50 @@
 
       // A spec run's features: each its own heading (its own counts, its own
       // ▾/▸), failures first; a folded feature mounts none of its scenarios.
+      // Each feature is its own binding on its own open state, so a fold
+      // replaces that feature's nodes alone.
       const SpecFeatures = (d, presentation, density) =>
-        specFeaturesOf(d).map((feature) => {
-          const open = openFeatures.val[feature.title] === true;
-          const status = feature.failed > 0 ? "fail" : "pass";
-          return div(
+        specFeaturesOf(d).map((feature) => () => FeatureGroup(feature, presentation, density));
+
+      const FeatureGroup = (feature, presentation, density) => {
+        const open = featureOpenState(feature.title).val;
+        const status = feature.failed > 0 ? "fail" : "pass";
+        return div(
+          {
+            "data-testid": "feature-group",
+            class: `app-feature-group ${status}`,
+            "data-feature-name": feature.title,
+            "data-feature-status": status,
+            "data-feature-passed": String(feature.passed),
+            "data-feature-failed": String(feature.failed),
+          },
+          div(
             {
-              "data-testid": "feature-group",
-              class: `app-feature-group ${status}`,
-              "data-feature-name": feature.title,
-              "data-feature-status": status,
-              "data-feature-passed": String(feature.passed),
-              "data-feature-failed": String(feature.failed),
+              "data-testid": "feature-heading",
+              class: `app-feature-heading app-tree-line ${status}`,
+              onclick: () => toggleFeature(feature.title),
             },
-            div(
-              {
-                "data-testid": "feature-heading",
-                class: `app-feature-heading app-tree-line ${status}`,
-                onclick: () => toggleFeature(feature.title),
-              },
-              span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
-              span(
-                { class: "app-feature-name" },
-                feature.title === "" ? "Scenarios" : `Feature: ${feature.title}`,
-              ),
-              span(
-                { class: "app-suite-counts" },
-                span({ class: "app-count-pass" }, `${feature.passed} ✓`),
-                feature.failed > 0 ? [" ", span({ class: "app-count-fail" }, `${feature.failed} ✗`)] : null,
-              ),
+            span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
+            span(
+              { class: "app-feature-name" },
+              feature.title === "" ? "Scenarios" : `Feature: ${feature.title}`,
             ),
-            open
-              ? div(
-                  { class: "app-feature-scenarios" },
-                  feature.scenarios.map((entry) =>
-                    SuiteBinding(entry.node, presentation, density),
-                  ),
-                )
-              : null,
-          );
-        });
+            span(
+              { class: "app-suite-counts" },
+              span({ class: "app-count-pass" }, `${feature.passed} ✓`),
+              feature.failed > 0 ? [" ", span({ class: "app-count-fail" }, `${feature.failed} ✗`)] : null,
+            ),
+          ),
+          open
+            ? div(
+                { class: "app-feature-scenarios" },
+                feature.scenarios.map((entry) =>
+                  SuiteBinding(entry.node, presentation, density),
+                ),
+              )
+            : null,
+        );
+      };
 
       // Suite tree — §S4.0 FINAL: the tier decides everything. Detail (unit/
       // module/integration) renders the plain tree; Density (regression/e2e)
