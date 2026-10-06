@@ -96,24 +96,24 @@ alone, `?suite=` from an indexed read of one suite's leaves.
 
 ## Acceptance criteria
 
-- [ ] After the migration, on a copy of the dev store, every run's full read, `?depth=suites` read
+- [x] After the migration, on a copy of the dev store, every run's full read, `?depth=suites` read
       and `?suite=` read of every suite answers with the same JSON value as before it (key order
       aside), except that `?depth=suites` and `?suite=` carry no `raw`, asserted on the server.
-- [ ] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
+- [x] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
       row, asserted on the rows read (not timing).
-- [ ] After the migration, every compile event reads back with the same JSON value, and no compile
+- [x] After the migration, every compile event reads back with the same JSON value, and no compile
       report, suite or test is held in a JSON column, asserted on the server.
-- [ ] The scenarios of one BDD feature of a run are read by a query on the feature column, asserted
+- [x] The scenarios of one BDD feature of a run are read by a query on the feature column, asserted
       on the rows read.
-- [ ] A run filed after the migration is stored in the new tables only, and reads back with the same
+- [x] A run filed after the migration is stored in the new tables only, and reads back with the same
       JSON value as the report it was decoded from; a parsed tree with a node that is not a
       `SuiteNode`/`TestLeaf` is refused with a 400 and nothing is stored, asserted on the server.
-- [ ] Evicting, deleting or clearing a run, or deleting its project, leaves none of its detail rows,
+- [x] Evicting, deleting or clearing a run, or deleting its project, leaves none of its detail rows,
       asserted on the server.
-- [ ] `?depth=suites` and `?suite=` carry `rawBytes` equal to the raw output's length for a run with
+- [x] `?depth=suites` and `?suite=` carry `rawBytes` equal to the raw output's length for a run with
       raw output, and no `rawBytes` for a run without, asserted on the server.
-- [ ] The run view of a run with raw output shows the raw toggle and draws its raw panel when opened,
+- [x] The run view of a run with raw output shows the raw toggle and draws its raw panel when opened,
       and loading its suites fetches no raw output; a run without raw output shows no toggle,
       asserted in a real browser on the requests made.
-- [ ] The migration of a copy of the dev store completes, and the store file afterwards is no larger
+- [x] The migration of a copy of the dev store completes, and the store file afterwards is no larger
       than 1.25 × its size before, asserted on the copy.
