@@ -95,6 +95,11 @@ suite load. The fix is decided from what that shows and locked with the user bef
   counts) until the store changes in a way that can move them, so even a misbehaving page cannot
   pin the server with repeated analytics reads. The unseeded forecast is therefore fixed for the
   UTC day (until such a change); a seeded (test-only) forecast is computed per read, never held.
+- **The projects list reads no whole event history** (C5 FIX, user ruling 2026-10-06). The page
+  re-reads the projects list on every heartbeat (each card's agents-online count moves with it),
+  and `handleProjectsList` loaded every event of every project to draw each card (~1.3 s on this
+  store). Each card's newest event, newest coverage-bearing run and per-day coverage trend come
+  from bounded queries instead, with a byte-identical payload.
 
 ### §S3 — a page load reads each resource once
 
