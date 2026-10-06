@@ -4614,10 +4614,10 @@
     });
     // The first preferred spot that lies wholly inside the plot and clear of
     // every box already placed; null when none does (the label is not drawn).
-    const placeIfFree = (placed, plot, w, h, prefs) =>
+    const placeIfFree = (placed, plot, w, h, prefs, clear = () => true) =>
       prefs
         .map((at) => labelBox(at, w, h))
-        .find((b) => boxInside(b, plot) && !placed.some((r) => boxesOverlap(b, r))) ?? null;
+        .find((b) => boxInside(b, plot) && !placed.some((r) => boxesOverlap(b, r)) && clear(b)) ?? null;
     // A label that is always drawn: a free preferred spot, else each preferred
     // spot held inside the plot and lifted a line at a time toward its top until
     // clear — never pushed below it — else the first spot, held inside the plot.
@@ -4633,6 +4633,41 @@
       }
       return clampBox(labelBox(prefs[0], w, h), plot);
     };
+    // The actual line as uPlot draws it (`stepped({ align: 1 })`): level until
+    // the next point, then straight to it. Vertices in CSS px local to the
+    // canvas, read from the chart's own series data at draw time.
+    const steppedVertices = (u, series, px) => {
+      const xs = u.data[0];
+      const ys = u.data[series];
+      const vertices = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (ys[i] === null || ys[i] === undefined) continue;
+        const x = u.valToPos(xs[i], "x", true) / px;
+        const y = u.valToPos(ys[i], "y", true) / px;
+        if (vertices.length > 0) vertices.push({ x, y: vertices[vertices.length - 1].y });
+        vertices.push({ x, y });
+      }
+      return vertices;
+    };
+    // A box crosses a line when any of its segments comes within `gap` px of
+    // it (the stroke's half-width, its pixel snapping, and a little air).
+    const BURNDOWN_LINE_GAP = 2;
+    const boxCrossesLine = (b, line) =>
+      line.some(
+        (v, i) =>
+          i > 0 &&
+          Math.min(v.x, line[i - 1].x) <= b.x + b.w + BURNDOWN_LINE_GAP &&
+          Math.max(v.x, line[i - 1].x) >= b.x - BURNDOWN_LINE_GAP &&
+          Math.min(v.y, line[i - 1].y) <= b.y + b.h + BURNDOWN_LINE_GAP &&
+          Math.max(v.y, line[i - 1].y) >= b.y - BURNDOWN_LINE_GAP,
+      );
+    // At most the K largest moves compete for a step label, so the chart reads
+    // like F18 §3's few-labels drawing: one per 60 CSS px of plot width, never
+    // more than 8 (the 1280 × 800 desktop band), never fewer than 1.
+    const BURNDOWN_STEP_LABEL_MAX = 8;
+    const BURNDOWN_STEP_LABEL_SPAN = 60;
+    const stepLabelBudget = (plotWidth) =>
+      Math.max(1, Math.min(BURNDOWN_STEP_LABEL_MAX, Math.floor(plotWidth / BURNDOWN_STEP_LABEL_SPAN)));
     // Greedy word wrap to a CSS-px width, measured on the drawing context.
     const wrapWords = (text, maxW, measure) => {
       const lines = [];
@@ -4838,20 +4873,36 @@
                 placed.push(moreSlot);
               }
               // Steps, largest move first, each only where its box fits inside the
-              // plot clear of every box already placed: right of its point, else left.
+              // plot clear of every box already placed and of the actual line:
+              // right of its point, else below-left (under the falling line),
+              // else left. Only the K largest moves compete; the rest are counted.
+              const actualLine = steppedVertices(u, 1, px);
+              const budget = stepLabelBudget(plot.r - plot.l);
+              const offLine = (b) => !boxCrossesLine(b, actualLine);
               const boxes = new Map();
               const points = new Map(steps.map((s) => [s, at(s.p.ts, s.p.remaining)]));
               const largestFirst = steps.slice().sort((a, b) => Math.abs(b.p.delta) - Math.abs(a.p.delta));
-              for (const s of largestFirst) {
+              largestFirst.forEach((s, rank) => {
                 const point = points.get(s);
                 const w = measure(s.text);
-                const box = placeIfFree(placed, plot, w, h, [
-                  { x: point.x + 3, y: point.y - 4 - h },
-                  { x: point.x - 3 - w, y: point.y - 4 - h },
-                ]);
+                const box =
+                  rank < budget
+                    ? placeIfFree(
+                        placed,
+                        plot,
+                        w,
+                        h,
+                        [
+                          { x: point.x + 3, y: point.y - 4 - h },
+                          { x: point.x - 3 - w, y: point.y + 4 },
+                          { x: point.x - 3 - w, y: point.y - 4 - h },
+                        ],
+                        offLine,
+                      )
+                    : null;
                 if (box !== null) placed.push(box);
                 boxes.set(s, box);
-              }
+              });
               let unlabelled = 0;
               for (const s of steps) {
                 const box = boxes.get(s);
@@ -4889,7 +4940,7 @@
                 ctx.fillText(item.text, box.x * px, (box.y + 1) * px);
               }
               ctx.restore();
-              if (typeof describe === "function") describe(u, plotCss, items);
+              if (typeof describe === "function") describe(u, plotCss, items, actualLine);
             },
           ],
         },
@@ -4916,7 +4967,7 @@
       height: Math.max(1, Math.floor(host.clientHeight)),
     });
     // The chart's DOM description, rebuilt on every draw: the host carries the
-    // forecast's state and the plot box; one list beside the canvas names every
+    // forecast's state, the plot box and the actual line's drawn vertices; one list beside the canvas names every
     // label the draw decided about (kind, full text, drawn or not, its box).
     // Each step is also an invisible, focusable target over its point; resting
     // the pointer on one, or focusing it, shows its full label in ONE reused
@@ -4940,11 +4991,15 @@
       const leave = (e) => {
         if (stepOf(e) !== null) tip.hidden = true;
       };
-      return (u, plot, items) => {
+      return (u, plot, items, actualLine) => {
         chart.setAttribute("data-plot-left", String(plot.left));
         chart.setAttribute("data-plot-top", String(plot.top));
         chart.setAttribute("data-plot-right", String(plot.right));
         chart.setAttribute("data-plot-bottom", String(plot.bottom));
+        chart.setAttribute(
+          "data-actual-line",
+          actualLine.map((v) => `${Math.round(v.x * 100) / 100},${Math.round(v.y * 100) / 100}`).join(" "),
+        );
         if (layer === null) {
           layer = div({ "data-testid": "burndown-chart-labels", class: "app-burndown-labels" });
           tip = div({ "data-testid": "burndown-chart-tooltip", class: "app-burndown-tooltip", hidden: true });
