@@ -78,16 +78,22 @@ async function mountAtRun(detail: Detail): Promise<void> {
     if (eventMatch !== null) {
       const parsed = new URL(url, "http://localhost");
       const suite = parsed.searchParams.get("suite");
+      // The real wire: the suite reads carry the raw output's byte length
+      // (`rawBytes`), never `raw`; only the full read carries `raw`.
+      const { raw, ...head } = detail;
+      const rawBytes = raw !== undefined ? { rawBytes: Buffer.byteLength(raw, "utf8") } : {};
       if (suite !== null) {
         const match = detail.tree.find((n) => n.name === suite);
-        body = { ok: true, event: { ...detail, tree: match !== undefined ? [match] : [] } };
-      } else {
+        body = { ok: true, event: { ...head, ...rawBytes, tree: match !== undefined ? [match] : [] } };
+      } else if (parsed.searchParams.get("depth") === "suites") {
         const tree = detail.tree.map((n) => ({
           name: n.name,
           status: n.status,
           counts: { passed: passedOf(n.children), failed: n.children.length - passedOf(n.children), pending: 0 },
         }));
-        body = { ok: true, event: { ...detail, tree } };
+        body = { ok: true, event: { ...head, ...rawBytes, tree } };
+      } else {
+        body = { ok: true, event: detail };
       }
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: [] };

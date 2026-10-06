@@ -193,16 +193,20 @@ async function mountApp(opts: MountOpts): Promise<void> {
       const parsed = new URL(url, "http://localhost");
       const suiteParam = parsed.searchParams.get("suite");
       const depthParam = parsed.searchParams.get("depth");
+      // The real wire: the suite reads carry the raw output's byte length
+      // (`rawBytes`), never `raw`; only the full read carries `raw`.
+      const { raw, ...head } = detail;
+      const rawBytes = raw !== undefined ? { rawBytes: Buffer.byteLength(raw, "utf8") } : {};
       if (suiteParam !== null) {
         const match = (detail.tree ?? []).find((n) => n.name === suiteParam);
-        body = { ok: true, event: { ...detail, tree: match !== undefined ? [match] : [] } };
+        body = { ok: true, event: { ...head, ...rawBytes, tree: match !== undefined ? [match] : [] } };
       } else if (depthParam === "suites") {
         const tree = (detail.tree ?? []).map((n) => ({
           name: n.name,
           status: n.status,
           counts: suiteCounts(n.children),
         }));
-        body = { ok: true, event: { ...detail, tree } };
+        body = { ok: true, event: { ...head, ...rawBytes, tree } };
       } else {
         body = { ok: true, event: detail };
       }
