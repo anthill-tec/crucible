@@ -16,7 +16,7 @@ Feature: The run view's raw toggle shows only when raw output exists, and reads 
     And no full read of the run has been requested
     When I expand the "RawNet-Suite1" suite row in the overlay
     Then no full read of the run has been requested
-    When I click the raw-toggle chip
+    When I click the visible raw-toggle chip
     Then exactly one full read of the run has been requested
     And the raw toggle reveals the captured raw output text
     When I expand the "RawNet-Suite2" suite row in the overlay

@@ -7,7 +7,7 @@
 // (`page.on("request", ...)`) from before the cold-URL navigation, so every
 // assertion below is made on the REAL requests the browser issued — never on
 // a mocked fetch.
-import { expect } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { Step } from "./world.ts";
 import { ingestJunit, JUNIT_3CASE_1FAIL } from "./harness.ts";
 
@@ -88,13 +88,24 @@ Step("exactly one full read of the run has been requested", async ({ world }) =>
   expect(fullReadCount(world), `requests so far: ${JSON.stringify(log)}`).toBe(1);
 });
 
+/** The run view's VISIBLE raw toggle. On the cold `/run/<id>` route the
+ *  visible header is the pinned band above the pane (outside `run-overlay`);
+ *  the copy inside `run-overlay` is the hidden compat head. */
+function visibleRawToggle(page: Page): Locator {
+  return page.getByTestId("raw-toggle").filter({ visible: true });
+}
+
 Step("the run overlay shows a raw toggle", async ({ page }) => {
-  await expect(page.getByTestId("run-overlay").getByTestId("raw-toggle")).toBeVisible();
+  await expect(visibleRawToggle(page)).toBeVisible();
 });
 
 Step("the run overlay shows no raw toggle", async ({ page }) => {
   await expect(page.getByTestId("run-overlay")).toBeVisible();
-  await expect(page.getByTestId("run-overlay").getByTestId("raw-toggle")).toHaveCount(0);
+  await expect(visibleRawToggle(page)).toHaveCount(0);
+});
+
+Step("I click the visible raw-toggle chip", async ({ page }) => {
+  await visibleRawToggle(page).click();
 });
 
 Step("the raw toggle reveals the captured raw output text", async ({ page }) => {
