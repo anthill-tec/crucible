@@ -4344,7 +4344,8 @@ function gateSteps(gate: unknown): { name: string; findings?: unknown }[] {
  *  that browser's own node. Omitted, the first same-named node answers.
  *  Each progressive read asks the store for only what it serves — the suites
  *  rows alone, or one suite's leaves — and neither carries the run's raw
- *  output, which only the full read does. */
+ *  output, which only the full read does; each carries `rawBytes`, its byte
+ *  length, when the run has raw output. */
 function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
   const notFound = (): Response => fail(404, `event not found: ${id}`);
   const suite = url.searchParams.get("suite");
@@ -4356,21 +4357,26 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
     }
     // Approved contract: tree becomes a single-element array — just the
     // requested suite, fully expanded (leaves incl. failure detail).
-    return reply(req, url, { ok: true, event: { ...read.event, tree: [read.suite] } });
+    return reply(req, url, { ok: true, event: { ...read.event, tree: [read.suite], ...rawBytesOf(read) } });
   }
   if (url.searchParams.get("depth") === "suites") {
     const read = store.getEventSuites(id);
     if (read === null) return notFound();
     if (read.suites !== undefined) {
-      return reply(req, url, { ok: true, event: { ...read.event, tree: read.suites } });
+      return reply(req, url, { ok: true, event: { ...read.event, tree: read.suites, ...rawBytesOf(read) } });
     }
     // A run with no tree has no suites to summarise: the full read's answer,
     // still without the raw output.
-    return reply(req, url, { ok: true, event: withGateDecisions(store, read.event) });
+    return reply(req, url, { ok: true, event: { ...withGateDecisions(store, read.event), ...rawBytesOf(read) } });
   }
   const event = store.getEvent(id);
   if (event === null) return notFound();
   return reply(req, url, { ok: true, event: withGateDecisions(store, event) });
+}
+
+/** The `rawBytes` key of a progressive read's answer — absent when the run has no raw output. */
+function rawBytesOf(read: { rawBytes?: number }): { rawBytes?: number } {
+  return read.rawBytes !== undefined ? { rawBytes: read.rawBytes } : {};
 }
 
 /**

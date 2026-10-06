@@ -5231,15 +5231,22 @@ export class Store {
    * The `?depth=suites` read: run `id` without its tree or raw output, and its
    * suites in tree order with their STORED counts (never recounted from leaves).
    * Reads no case row. `suites` is absent when the run has no tree; null when
-   * no event has the id.
+   * no event has the id. `rawBytes` is the raw output's UTF-8 byte length,
+   * counted in SQL so the raw text is never read; absent when the run has none.
    */
-  getEventSuites(id: string): { event: RunEvent; suites?: SuiteSummary[] } | null {
+  getEventSuites(
+    id: string,
+  ): { event: RunEvent; suites?: SuiteSummary[]; rawBytes?: number } | null {
     const event = this.getEventHead(id);
     if (event === null) return null;
-    const hasTree = this.db
-      .query<{ has_tree: number }, [string]>(`SELECT has_tree FROM run_details WHERE event_id = ?`)
-      .get(id)?.has_tree === 1;
-    if (!hasTree) return { event };
+    const run = this.db
+      .query<{ has_tree: number; raw_bytes: number | null }, [string]>(
+        `SELECT has_tree, LENGTH(CAST(raw AS BLOB)) AS raw_bytes FROM run_details WHERE event_id = ?`,
+      )
+      .get(id);
+    const rawBytes = run?.raw_bytes ?? null;
+    const raw = rawBytes !== null ? { rawBytes } : {};
+    if (run?.has_tree !== 1) return { event, ...raw };
     const suites = this.db
       .query<RunSuiteCountsRow, [string]>(
         `SELECT name, status, browser, passed, failed, pending FROM run_suites
@@ -5252,22 +5259,25 @@ export class Store {
         counts: { passed: row.passed, failed: row.failed, pending: row.pending },
         ...(row.browser !== null ? { browser: row.browser } : {}),
       }));
-    return { event, suites };
+    return { event, suites, ...raw };
   }
 
   /**
    * The `?suite=` read: run `id` without its tree or raw output, and the FIRST
    * of its suites named `name` (under `browser`, when one is given), fully
    * expanded. Reads that one suite's case rows and no other's. `suite` is
-   * absent when none matches; null when no event has the id.
+   * absent when none matches; null when no event has the id. `rawBytes` as
+   * for `getEventSuites`.
    */
   getEventSuite(
     id: string,
     name: string,
     browser: string | null,
-  ): { event: RunEvent; suite?: SuiteNode } | null {
+  ): { event: RunEvent; suite?: SuiteNode; rawBytes?: number } | null {
     const event = this.getEventHead(id);
     if (event === null) return null;
+    const rawBytes = this.rawBytesOf(id);
+    const raw = rawBytes !== null ? { rawBytes } : {};
     const columns = `SELECT event_id, position, name, status, browser FROM run_suites`;
     const row =
       browser === null
@@ -5281,7 +5291,7 @@ export class Store {
               `${columns} WHERE event_id = ? AND name = ? AND browser = ? ORDER BY position LIMIT 1`,
             )
             .get(id, name, browser);
-    if (row === null) return { event };
+    if (row === null) return { event, ...raw };
     const suite = suiteNodeOf(row);
     const caseRows = this.db
       .query<RunCaseRow, [string, number]>(
@@ -5291,7 +5301,19 @@ export class Store {
       )
       .all(id, row.position);
     for (const caseRow of caseRows) suite.children.push(testLeafOf(caseRow));
-    return { event, suite };
+    return { event, suite, ...raw };
+  }
+
+  /** Run `id`'s raw output's UTF-8 byte length, counted without reading the
+   *  text; null when the run has no raw output. */
+  private rawBytesOf(id: string): number | null {
+    return (
+      this.db
+        .query<{ raw_bytes: number | null }, [string]>(
+          `SELECT LENGTH(CAST(raw AS BLOB)) AS raw_bytes FROM run_details WHERE event_id = ?`,
+        )
+        .get(id)?.raw_bytes ?? null
+    );
   }
 
   deleteEvent(id: string, projectKey: string): boolean {
