@@ -4,9 +4,11 @@ Feature: the Roadmap's burndown chart keeps every drawn label inside the plot an
   drawn inside the plot area, never below or outside it. The today marker's
   label, the P50 and P80 labels and the target label are placed first and
   always shown. Step labels are then placed largest move first, each only
-  where it fits without overlapping a label already placed; the steps left
-  unlabelled are counted in one `+ N more` note inside the plot. Every step,
-  labelled or not, shows its full label when the pointer rests on it (AC4).
+  where it fits without overlapping a label already placed or crossing the
+  plotted actual line; at most the K largest moves compete for a label (K = 8
+  at the 1280 x 800 desktop band); the steps left unlabelled are counted in
+  one `+ N more` note inside the plot. Every step, labelled or not, shows its
+  full label when the pointer rests on it (AC4).
 
   Builds on burndown-chart-draws-projection-and-states-refusal.feature's
   `data-burndown-forecast` / `[data-testid="burndown-chart-labels"]`
@@ -17,7 +19,10 @@ Feature: the Roadmap's burndown chart keeps every drawn label inside the plot an
   `data-label-x/y/w/h` in that SAME local space; every `kind="step"` item,
   drawn or not, is a real, hoverable element positioned over its step's
   point, and hovering or focusing it shows `[data-testid="burndown-chart-tooltip"]`
-  carrying that step's full `data-label-text`.
+  carrying that step's full `data-label-text`. The chart host also carries
+  `data-actual-line`: the vertices of the stepped actual line as drawn, in
+  that same local space (`x,y` pairs, space-separated, in drawing order), so
+  consecutive vertices are the line's horizontal and vertical segments.
 
   A 63-step history needs 63 real pointed merges spread across real
   calendar time — unreachable through the real routes inside one e2e
@@ -26,7 +31,7 @@ Feature: the Roadmap's burndown chart keeps every drawn label inside the plot an
   reads with a 63-step fixture; everything downstream is the real client
   code under test.
 
-  Scenario: with a 63-step history every drawn label stays inside the plot and none overlap, the projection labels always draw, the unlabelled count matches the "+ N more" note, and hovering an unlabelled step shows its full label
+  Scenario: with a 63-step history every drawn label stays inside the plot and none overlap, at most 8 step labels draw and none crosses the actual line, the projection labels always draw, the unlabelled count matches the "+ N more" note, and hovering an unlabelled step shows its full label
     Given a project named "Burndown Label Crowding Project" is registered
     And an online agent "burndown-label-crowding-agent" with message "building" is registered on that project
     And a CR queue registering cr "CR-FIX-004" titled "burndown label crowding fixture" in wave "1" is posted for that project
@@ -37,6 +42,8 @@ Feature: the Roadmap's burndown chart keeps every drawn label inside the plot an
     And I tap the roadmap release band
     Then every label the burndown chart drew sits inside the plot area
     And no two labels the burndown chart drew overlap
+    And the burndown chart draws at most 8 step labels
+    And no step label the burndown chart drew crosses the actual line
     And the burndown chart draws the expected today, P50, P80 and target labels despite 63 competing step candidates
     And the number of unlabelled steps equals the burndown chart's "+ N more" note
     And resting the pointer on an unlabelled step shows its full label

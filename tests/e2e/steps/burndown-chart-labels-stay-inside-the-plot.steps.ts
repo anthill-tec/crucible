@@ -33,6 +33,11 @@
 //   (one reused tooltip element) with its text content set to that SAME
 //   item's `data-label-text` — the step's FULL label, regardless of whether
 //   the canvas painted its own copy this render.
+//
+//   `[data-testid="burndown-chart"]` also carries `data-actual-line`: the
+//   stepped actual line's vertices AS DRAWN (`x,y` pairs, space-separated,
+//   drawing order), in that same local space; consecutive vertices are its
+//   horizontal and vertical segments, which no drawn step label may cross.
 import { expect, type Locator, type Page } from "@playwright/test";
 import { Step } from "./world.ts";
 import {
@@ -153,6 +158,72 @@ Step("no two labels the burndown chart drew overlap", async ({ page }) => {
     }
   }
   expect(offenders, `overlapping drawn labels:\n${offenders.join("\n")}`).toEqual([]);
+});
+
+Step("the burndown chart draws at most {int} step labels", async ({ page }, most: number) => {
+  const steps = (await drawnLabelBoxes(page)).filter((b) => b.kind === "step");
+  expect(
+    steps.length,
+    `${steps.length} step labels were drawn at this viewport, more than the ${most} largest moves §S3 lets compete:\n` +
+      steps.map((b) => b.text).join("\n"),
+  ).toBeLessThanOrEqual(most);
+  expect(steps.length, "no step label was drawn at all — nothing exercises the line-crossing check").toBeGreaterThan(0);
+});
+
+interface Vertex {
+  x: number;
+  y: number;
+}
+
+/** The drawn actual line's vertices, from the chart host's `data-actual-line`. */
+async function actualLine(page: Page): Promise<Vertex[]> {
+  const raw = await page.getByTestId("burndown-chart").getAttribute("data-actual-line");
+  expect(raw, "the chart host carries no data-actual-line attribute").not.toBeNull();
+  const vertices = (raw as string)
+    .trim()
+    .split(/\s+/)
+    .map((pair) => {
+      const [x, y] = pair.split(",").map(Number);
+      return { x: x as number, y: y as number };
+    });
+  for (const v of vertices) {
+    expect(Number.isFinite(v.x) && Number.isFinite(v.y), `data-actual-line holds a non-numeric vertex ("${raw}")`).toBe(true);
+  }
+  expect(vertices.length, "the drawn actual line has fewer than two vertices").toBeGreaterThan(1);
+  return vertices;
+}
+
+/** A segment crosses a box when its own extent meets the box's (edges included). */
+function crosses(a: Vertex, b: Vertex, box: LabelBox): boolean {
+  return (
+    Math.min(a.x, b.x) <= box.x + box.w &&
+    Math.max(a.x, b.x) >= box.x &&
+    Math.min(a.y, b.y) <= box.y + box.h &&
+    Math.max(a.y, b.y) >= box.y
+  );
+}
+
+Step("no step label the burndown chart drew crosses the actual line", async ({ page }) => {
+  const line = await actualLine(page);
+  // A stepped line: every segment is horizontal or vertical.
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1] as Vertex;
+    const b = line[i] as Vertex;
+    expect(a.x === b.x || a.y === b.y, `actual-line segment ${i} is neither horizontal nor vertical`).toBe(true);
+  }
+  const steps = (await drawnLabelBoxes(page)).filter((b) => b.kind === "step");
+  expect(steps.length, "no step label was drawn at all — nothing to check the line against").toBeGreaterThan(0);
+  const offenders: string[] = [];
+  for (const box of steps) {
+    for (let i = 1; i < line.length; i++) {
+      const a = line[i - 1] as Vertex;
+      const b = line[i] as Vertex;
+      if (crosses(a, b, box)) {
+        offenders.push(`"${box.text}" crosses the actual line's segment (${a.x},${a.y})-(${b.x},${b.y})`);
+      }
+    }
+  }
+  expect(offenders, `step labels drawn across the actual line:\n${offenders.join("\n")}`).toEqual([]);
 });
 
 Step("the number of unlabelled steps equals the burndown chart's \"+ N more\" note", async ({ page, world }) => {
