@@ -7,6 +7,7 @@ import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
 import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
+import { analyticsCacheFor } from "./analytics-cache.ts";
 import { resolveNext } from "./next.ts";
 import {
   authHints,
@@ -4681,12 +4682,14 @@ function declaredTarget(store: Store, key: string, release: string): number | un
 function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
   const missing = requireHeldProject(store, key);
   if (missing !== null) return missing;
-  const payload = velocity({
-    plans: store.listPlans(key),
-    entries: store.listQueue(key),
-    execByCycle: store.cycleExecMs(key),
-    now: Date.now(),
-  });
+  const payload = analyticsCacheFor(store).answer(key, ["velocity"], () =>
+    velocity({
+      plans: store.listPlans(key),
+      entries: store.listQueue(key),
+      execByCycle: store.cycleExecMs(key),
+      now: Date.now(),
+    }),
+  );
   return reply(req, url, { ok: true, ...payload });
 }
 
@@ -4696,14 +4699,16 @@ function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: U
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const target = declaredTarget(store, key, release);
-  const payload = burndown({
-    release,
-    entries: store.listQueue(key),
-    filedAt: store.queueFiledAt(key),
-    journal: store.listQueueDeclarations(key),
-    plans: store.listPlans(key),
-    ...(target !== undefined ? { targetAt: target } : {}),
+  const payload = analyticsCacheFor(store).answer(key, ["burndown", release], () => {
+    const target = declaredTarget(store, key, release);
+    return burndown({
+      release,
+      entries: store.listQueue(key),
+      filedAt: store.queueFiledAt(key),
+      journal: store.listQueueDeclarations(key),
+      plans: store.listPlans(key),
+      ...(target !== undefined ? { targetAt: target } : {}),
+    });
   });
   if (payload === null) {
     return fail(404, `no CR was ever planned into release ${release}`);
@@ -4725,19 +4730,22 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
   if (seed !== undefined && !Number.isInteger(seed)) {
     return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
   }
-  const entries = store.listQueue(key);
-  if (!entries.some((entry) => entry.release === release)) {
+  const payload = analyticsCacheFor(store).answer(key, ["forecast", release, seed], () => {
+    const entries = store.listQueue(key);
+    if (!entries.some((entry) => entry.release === release)) return null;
+    const target = declaredTarget(store, key, release);
+    return forecast({
+      release,
+      entries,
+      plans: store.listPlans(key),
+      now: Date.now(),
+      ...(target !== undefined ? { targetAt: target } : {}),
+      random: seed !== undefined ? seededRandom(seed) : Math.random,
+    });
+  });
+  if (payload === null) {
     return fail(404, `no CR is planned into release ${release}`);
   }
-  const target = declaredTarget(store, key, release);
-  const payload = forecast({
-    release,
-    entries,
-    plans: store.listPlans(key),
-    now: Date.now(),
-    ...(target !== undefined ? { targetAt: target } : {}),
-    random: seed !== undefined ? seededRandom(seed) : Math.random,
-  });
   return reply(req, url, { ok: true, ...payload });
 }
 
@@ -4751,7 +4759,9 @@ function handleAnalyticsChanges(store: Store, key: string, req: Request, url: UR
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const payload = planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) });
+  const payload = analyticsCacheFor(store).answer(key, ["changes", release], () =>
+    planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) }),
+  );
   if (payload === null) {
     return fail(404, `no CR is planned into release ${release}`);
   }
