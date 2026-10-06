@@ -1,4 +1,4 @@
-# CR-CRU-167 — the events list carries summaries, and a page reads only what is new
+# CR-CRU-167 — a run's detail is stored as rows, the events list carries summaries, and a page reads only what is new
 
 **Type** fix · **Points** set at gap analysis · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
 **Status** PENDING — filed 2026-10-06
@@ -26,12 +26,36 @@ So the cost is not SQLite and not the row count: 99.6 % of the payload is per-te
 list's readers do not draw. The run view already reads that detail per run, through
 `GET /api/v2/events/<id>?depth=suites` and `?suite=`.
 
+**Why the detail rides along.** The codecs decode every report into a typed run (suites, cases,
+statuses, durations), but the store then writes that structure back out as JSON text: the whole
+per-test tree in the `events.tree` column, and the run's raw output inside the `events.payload`
+blob beside a milestone's `commit`/`crs`/dates. Only the counts are native columns. So any read of
+a run's row carries its whole tree and raw output, `Store.toEvent` parses `payload` (raw with it)
+for every row, and a single suite of a run can only be answered by parsing that run's whole tree.
+
 `GET /api/v2/status` (`handleStatus`) reads the project's whole event history, `store.listEvents(project, Number.MAX_SAFE_INTEGER)`, to find two rows.
 
 The analytics recompute is **not** in scope: each of velocity, burndown and forecast computes in
 under 1 ms; their read cost is `listPlans` (71 ms), which CR-CRU-158's analytics cache already holds.
 
 ## Steps
+
+### §S0 — a run's detail is stored as rows, not as JSON text
+
+A schema migration (the next version) stores each test run's per-test detail natively, decoded once
+at ingest:
+
+- the tree's suites in a suites table and its leaves (scenarios, cases, steps, with status,
+  duration, failure message and per-leaf raw output) in a cases table, keyed by run and suite and
+  indexed for "the suites of run R" and "the leaves of suite S of run R" (and the browser axis where
+  a run has one);
+- the run-level raw output in its own column or table, outside `payload`.
+
+The migration moves every existing run's `tree` and `raw` into the new storage in place, behind the
+store's existing pre-upgrade backup, and leaves `events.tree` and `payload.raw` empty for migrated
+rows. Ingest writes only the new storage. `GET /api/v2/events/<id>` (full), `?depth=suites` and
+`?suite=` answer byte-identically to today's from the new storage: `?depth=suites` from a SQL
+aggregate over the suites, `?suite=` from an indexed read of one suite's leaves.
 
 ### §S1 — the list carries summaries
 
@@ -60,6 +84,12 @@ the full list and says so, so the caller can replace rather than merge. The page
 
 ## Acceptance criteria
 
+- [ ] After the migration, every run's full read, `?depth=suites` read and `?suite=` read of every
+      suite answer byte-identically to before it, on a copy of the dev store, asserted on the server.
+- [ ] `?suite=` on a 3000-test run reads only that suite's rows, and `?depth=suites` reads no leaf
+      row, asserted on the rows read (not timing).
+- [ ] A run filed after the migration is stored in the new tables only, and reads back identically to
+      the report it was decoded from, asserted on the server.
 - [ ] On a store holding a run whose `raw` is at least 10 MB, the project's events list answers in
       under 100 KB per 100 events, carries no `tree` or `raw`, and every other field of every event
       equals today's, asserted on the server.
