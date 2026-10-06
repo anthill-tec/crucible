@@ -52,6 +52,7 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
     const port = boot();
     const key = await createProject(port, "tree-leaf-no-status");
     await registerAgent(port, key, "a1");
+    const before = handle!.store.listEvents(key).length;
 
     const res = await postJson(port, "/api/v2/runs/parsed", {
       projectKey: key,
@@ -70,13 +71,14 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
     const body = (await res.json()) as { ok: boolean; error: string };
     expect(body.ok).toBe(false);
     expect(body.error).toContain("leaf-missing-status");
-    expect(handle!.store.listEvents(key).length).toBe(0);
+    expect(handle!.store.listEvents(key).length).toBe(before);
   });
 
   test("a suite whose `children` is not an array → 400 naming the offending suite, and nothing is stored", async () => {
     const port = boot();
     const key = await createProject(port, "tree-non-array-children");
     await registerAgent(port, key, "a1");
+    const before = handle!.store.listEvents(key).length;
 
     const res = await postJson(port, "/api/v2/runs/parsed", {
       projectKey: key,
@@ -89,13 +91,14 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
     const body = (await res.json()) as { ok: boolean; error: string };
     expect(body.ok).toBe(false);
     expect(body.error).toContain("suite-bad-children");
-    expect(handle!.store.listEvents(key).length).toBe(0);
+    expect(handle!.store.listEvents(key).length).toBe(before);
   });
 
   test("a suite whose `name` is not a string → 400, and nothing is stored", async () => {
     const port = boot();
     const key = await createProject(port, "tree-non-string-name");
     await registerAgent(port, key, "a1");
+    const before = handle!.store.listEvents(key).length;
 
     const res = await postJson(port, "/api/v2/runs/parsed", {
       projectKey: key,
@@ -109,13 +112,14 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
     expect(body.ok).toBe(false);
     expect(typeof body.error).toBe("string");
     expect(body.error.length).toBeGreaterThan(0);
-    expect(handle!.store.listEvents(key).length).toBe(0);
+    expect(handle!.store.listEvents(key).length).toBe(before);
   });
 
   test("a `tree` that IS an array but holds no SuiteNode-shaped elements is refused, not merely Array.isArray-checked", async () => {
     const port = boot();
     const key = await createProject(port, "tree-any-array-no-longer-accepted");
     await registerAgent(port, key, "a1");
+    const before = handle!.store.listEvents(key).length;
 
     const res = await postJson(port, "/api/v2/runs/parsed", {
       projectKey: key,
@@ -129,6 +133,6 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
     expect(body.ok).toBe(false);
     expect(typeof body.error).toBe("string");
     expect(body.error.length).toBeGreaterThan(0);
-    expect(handle!.store.listEvents(key).length).toBe(0);
+    expect(handle!.store.listEvents(key).length).toBe(before);
   });
 });
