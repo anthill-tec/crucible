@@ -4598,7 +4598,88 @@
       return [xs, column(actual), column(ideal), column(p50), column(p80)];
     };
 
-    const burndownOptions = (UPlot, bd, fc, now) => {
+    // Every label the chart prints stays inside the plot and overprints no
+    // other. Boxes are CSS px local to the canvas's top-left corner, in whole
+    // pixels (so containment and overlap are exact integer sums); the plot box
+    // they are held to is uPlot's own, rounded inward.
+    const BURNDOWN_LABEL_H = 11;
+    const boxInside = (b, plot) =>
+      b.x >= plot.l && b.y >= plot.t && b.x + b.w <= plot.r && b.y + b.h <= plot.b;
+    const boxesOverlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    const labelBox = (at, w, h) => ({ x: Math.round(at.x), y: Math.round(at.y), w, h });
+    const clampBox = (b, plot) => ({
+      ...b,
+      x: Math.max(plot.l, Math.min(b.x, plot.r - b.w)),
+      y: Math.max(plot.t, Math.min(b.y, plot.b - b.h)),
+    });
+    // The first preferred spot that lies wholly inside the plot and clear of
+    // every box already placed; null when none does (the label is not drawn).
+    const placeIfFree = (placed, plot, w, h, prefs, clear = () => true) =>
+      prefs
+        .map((at) => labelBox(at, w, h))
+        .find((b) => boxInside(b, plot) && !placed.some((r) => boxesOverlap(b, r)) && clear(b)) ?? null;
+    // A label that is always drawn: a free preferred spot, else each preferred
+    // spot held inside the plot and lifted a line at a time toward its top until
+    // clear — never pushed below it — else the first spot, held inside the plot.
+    const placeAlways = (placed, plot, w, h, prefs) => {
+      const free = placeIfFree(placed, plot, w, h, prefs);
+      if (free !== null) return free;
+      for (const at of prefs) {
+        const held = clampBox(labelBox(at, w, h), plot);
+        for (let y = held.y; y >= plot.t; y -= h) {
+          const b = { ...held, y };
+          if (!placed.some((r) => boxesOverlap(b, r))) return b;
+        }
+      }
+      return clampBox(labelBox(prefs[0], w, h), plot);
+    };
+    // The actual line as uPlot draws it (`stepped({ align: 1 })`): level until
+    // the next point, then straight to it. Vertices in CSS px local to the
+    // canvas, read from the chart's own series data at draw time.
+    const steppedVertices = (u, series, px) => {
+      const xs = u.data[0];
+      const ys = u.data[series];
+      const vertices = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (ys[i] === null || ys[i] === undefined) continue;
+        const x = u.valToPos(xs[i], "x", true) / px;
+        const y = u.valToPos(ys[i], "y", true) / px;
+        if (vertices.length > 0) vertices.push({ x, y: vertices[vertices.length - 1].y });
+        vertices.push({ x, y });
+      }
+      return vertices;
+    };
+    // A box crosses a line when any of its segments comes within `gap` px of
+    // it (the stroke's half-width, its pixel snapping, and a little air).
+    const BURNDOWN_LINE_GAP = 2;
+    const boxCrossesLine = (b, line) =>
+      line.some(
+        (v, i) =>
+          i > 0 &&
+          Math.min(v.x, line[i - 1].x) <= b.x + b.w + BURNDOWN_LINE_GAP &&
+          Math.max(v.x, line[i - 1].x) >= b.x - BURNDOWN_LINE_GAP &&
+          Math.min(v.y, line[i - 1].y) <= b.y + b.h + BURNDOWN_LINE_GAP &&
+          Math.max(v.y, line[i - 1].y) >= b.y - BURNDOWN_LINE_GAP,
+      );
+    // At most the K largest moves compete for a step label, so the chart reads
+    // like F18 §3's few-labels drawing: one per 60 CSS px of plot width, never
+    // more than 8 (the 1280 × 800 desktop band), never fewer than 1.
+    const BURNDOWN_STEP_LABEL_MAX = 8;
+    const BURNDOWN_STEP_LABEL_SPAN = 60;
+    const stepLabelBudget = (plotWidth) =>
+      Math.max(1, Math.min(BURNDOWN_STEP_LABEL_MAX, Math.floor(plotWidth / BURNDOWN_STEP_LABEL_SPAN)));
+    // Greedy word wrap to a CSS-px width, measured on the drawing context.
+    const wrapWords = (text, maxW, measure) => {
+      const lines = [];
+      for (const word of text.split(" ")) {
+        const last = lines.length > 0 ? lines[lines.length - 1] : null;
+        if (last !== null && measure(`${last} ${word}`) <= maxW) lines[lines.length - 1] = `${last} ${word}`;
+        else lines.push(word);
+      }
+      return lines;
+    };
+
+    const burndownOptions = (UPlot, bd, fc, now, size, describe) => {
       const dated = forecastDated(fc);
       const remaining = burndownRemaining(bd, fc);
       const px = window.devicePixelRatio || 1;
@@ -4609,23 +4690,16 @@
         ticks: { stroke: () => cssToken("--line"), width: 1 },
         font: `9px ${mono}`,
       };
-      // Labels never overprint each other: one placed on top of an earlier
-      // one (steps on the same day) moves down a line until it is clear.
-      let placed = [];
-      const drawLabel = (ctx, text, x, y, color) => {
-        const w = ctx.measureText(text).width;
-        const h = 11 * px;
-        let at = y;
-        const hits = (top) =>
-          placed.some((r) => x < r.x + r.w && r.x < x + w && top - h < r.y && r.y - h < top);
-        for (let guard = 0; hits(at) && guard < 40; guard++) at += h;
-        placed.push({ x, y: at, w });
-        ctx.fillStyle = color;
-        ctx.fillText(text, x, at);
-      };
+      // Every step that moved the line, named by its CR and what moved it.
+      const steps = bd.points
+        .filter((p) => p.event !== "start" && p.delta !== 0)
+        .map((p) => ({
+          p,
+          text: `${p.delta > 0 ? "+" : "−"}${fmtPoints(Math.abs(p.delta))} · ${p.cr} ${p.event}`,
+        }));
       return {
-        width: 560,
-        height: 230,
+        width: size.width,
+        height: size.height,
         legend: { show: false },
         cursor: { show: false },
         select: { show: false },
@@ -4686,71 +4760,187 @@
               const ctx = u.ctx;
               const top = u.bbox.top;
               const bottom = u.bbox.top + u.bbox.height;
+              // The plot box in CSS px local to the canvas, and the whole-pixel
+              // box every label is held inside.
+              const plotCss = {
+                left: u.bbox.left / px,
+                top: top / px,
+                right: (u.bbox.left + u.bbox.width) / px,
+                bottom: bottom / px,
+              };
+              const plot = {
+                l: Math.ceil(plotCss.left),
+                t: Math.ceil(plotCss.top),
+                r: Math.floor(plotCss.right),
+                b: Math.floor(plotCss.bottom),
+              };
+              const at = (ms, value) => ({
+                x: u.valToPos(ms / 1000, "x", true) / px,
+                y: u.valToPos(value, "y", true) / px,
+              });
+              const h = BURNDOWN_LABEL_H;
               ctx.save();
-              placed = [];
               ctx.font = `${Math.round(9 * px)}px ${mono}`;
-              // uPlot leaves the axes' alignment on the context; labels read left.
+              // uPlot leaves the axes' alignment on the context; labels read
+              // left, from the top of their box.
               ctx.textAlign = "left";
-              ctx.textBaseline = "alphabetic";
+              ctx.textBaseline = "top";
+              const measure = (text) => Math.ceil(ctx.measureText(text).width / px);
+              const placed = [];
+              const items = [];
+              // Today, the projection and the target are placed first and always
+              // drawn; `prefs` gives their preferred spots for a box `w` wide.
+              const always = (kind, text, color, prefs, w = measure(text), boxH = h) => {
+                const box = placeAlways(placed, plot, w, boxH, prefs(w));
+                placed.push(box);
+                const item = { kind, text, color, box };
+                items.push(item);
+                return item;
+              };
               // The declared target (CR-CRU-091), a vertical rule. Its date is
               // printed only beside a dated forecast.
-              if (typeof bd.target === "number") {
-                const x = u.valToPos(bd.target, "x", true);
+              const targetX = typeof bd.target === "number" ? u.valToPos(bd.target, "x", true) : null;
+              if (targetX !== null) {
                 ctx.strokeStyle = cssToken("--heat");
                 ctx.lineWidth = px;
                 ctx.setLineDash([2 * px, 3 * px]);
                 ctx.beginPath();
-                ctx.moveTo(x, top);
-                ctx.lineTo(x, bottom);
+                ctx.moveTo(targetX, top);
+                ctx.lineTo(targetX, bottom);
                 ctx.stroke();
                 ctx.setLineDash([]);
-                drawLabel(
-                  ctx,
-                  dated ? `target ${shortDay(bd.target * 1000)}` : "target",
-                  x + 4 * px,
-                  top + 10 * px,
-                  cssToken("--heat"),
-                );
-              }
-              // Every step names its CR and what moved it.
-              for (const p of bd.points) {
-                if (p.event === "start" || p.delta === 0) continue;
-                const x = u.valToPos(p.ts / 1000, "x", true);
-                const y = u.valToPos(p.remaining, "y", true);
-                const sign = p.delta > 0 ? "+" : "−";
-                drawLabel(
-                  ctx,
-                  `${sign}${fmtPoints(Math.abs(p.delta))} · ${p.cr} ${p.event}`,
-                  x + 3 * px,
-                  y - 4 * px,
-                  p.delta < 0 ? cssToken("--pass") : cssToken("--heat"),
-                );
               }
               // Today, on the actual line.
-              const tx = u.valToPos(now / 1000, "x", true);
-              const ty = u.valToPos(remaining, "y", true);
+              const today = at(now, remaining);
               ctx.fillStyle = cssToken("--ember");
               ctx.beginPath();
-              ctx.arc(tx, ty, 3 * px, 0, 2 * Math.PI);
+              ctx.arc(today.x * px, today.y * px, 3 * px, 0, 2 * Math.PI);
               ctx.fill();
-              drawLabel(ctx, `← today · ${fmtPoints(remaining)} pts`, tx + 5 * px, ty - 6 * px, cssToken("--ink"));
+              always("today", `\u2190 today \u00b7 ${fmtPoints(remaining)} pts`, cssToken("--ink"), (w) => [
+                { x: today.x + 5, y: today.y - 6 - h },
+                { x: today.x - 5 - w, y: today.y - 6 - h },
+              ]);
               if (dated) {
-                drawLabel(
-                  ctx,
-                  `P50 ${shortDay(fc.p50Ts)}`,
-                  u.valToPos(fc.p50Ts / 1000, "x", true) - 30 * px,
-                  bottom - 6 * px,
-                  cssToken("--pass"),
+                const p50 = at(fc.p50Ts, 0);
+                const p80 = at(fc.p80Ts, 0);
+                always("p50", `P50 ${shortDay(fc.p50Ts)}`, cssToken("--pass"), (w) => [
+                  { x: p50.x - 3 - w, y: plot.b - 4 - h },
+                ]);
+                always("p80", `P80 ${shortDay(fc.p80Ts)}`, cssToken("--heat"), (w) => [
+                  { x: p80.x + 3, y: plot.b - 4 - 2 * h },
+                ]);
+              } else {
+                // A refused forecast draws no traces: the plot states why, in
+                // the forecast card's own words, boxed where the traces would be.
+                const pad = 6;
+                const lineH = 13;
+                const text = forecastRefusalLong(fc, bd);
+                const lines = wrapWords(text, Math.max(40, Math.min(300, plot.r - plot.l - 2 * pad - 8)), measure);
+                const w = Math.max(...lines.map(measure)) + 2 * pad;
+                const boxH = lines.length * lineH + 2 * pad - (lineH - h);
+                const note = always(
+                  "refusal",
+                  text,
+                  cssToken("--ink-faint"),
+                  () => [
+                    { x: today.x + 12, y: today.y - boxH / 2 },
+                    { x: today.x - 12 - w, y: today.y - boxH / 2 },
+                  ],
+                  w,
+                  boxH,
                 );
-                drawLabel(
-                  ctx,
-                  `P80 ${shortDay(fc.p80Ts)}`,
-                  u.valToPos(fc.p80Ts / 1000, "x", true) + 2 * px,
-                  bottom - 14 * px,
-                  cssToken("--heat"),
-                );
+                note.lines = lines;
+                note.pad = pad;
+                note.lineH = lineH;
+              }
+              if (targetX !== null) {
+                const x = targetX / px;
+                always("target", dated ? `target ${shortDay(bd.target * 1000)}` : "target", cssToken("--heat"), (w) => [
+                  { x: x + 4, y: plot.t + 2 },
+                  { x: x - 4 - w, y: plot.t + 2 },
+                ]);
+              }
+              // The `+ N more` note's spot is held before any step is placed, so
+              // the steps left unlabelled are always counted inside the plot.
+              let moreSlot = null;
+              if (steps.length > 0) {
+                const w = measure(`+ ${steps.length} more`);
+                const spots = [];
+                for (let y = plot.t + 4; y + h <= plot.b; y += h) spots.push({ x: plot.l + 4, y });
+                for (let y = plot.t + 4; y + h <= plot.b; y += h) spots.push({ x: plot.r - 4 - w, y });
+                moreSlot =
+                  placeIfFree(placed, plot, w, h, spots) ?? placeAlways(placed, plot, w, h, [{ x: plot.l + 4, y: plot.t + 4 }]);
+                placed.push(moreSlot);
+              }
+              // Steps, largest move first, each only where its box fits inside the
+              // plot clear of every box already placed and of the actual line:
+              // right of its point, else below-left (under the falling line),
+              // else left. Only the K largest moves compete; the rest are counted.
+              const actualLine = steppedVertices(u, 1, px);
+              const budget = stepLabelBudget(plot.r - plot.l);
+              const offLine = (b) => !boxCrossesLine(b, actualLine);
+              const boxes = new Map();
+              const points = new Map(steps.map((s) => [s, at(s.p.ts, s.p.remaining)]));
+              const largestFirst = steps.slice().sort((a, b) => Math.abs(b.p.delta) - Math.abs(a.p.delta));
+              largestFirst.forEach((s, rank) => {
+                const point = points.get(s);
+                const w = measure(s.text);
+                const box =
+                  rank < budget
+                    ? placeIfFree(
+                        placed,
+                        plot,
+                        w,
+                        h,
+                        [
+                          { x: point.x + 3, y: point.y - 4 - h },
+                          { x: point.x - 3 - w, y: point.y + 4 },
+                          { x: point.x - 3 - w, y: point.y - 4 - h },
+                        ],
+                        offLine,
+                      )
+                    : null;
+                if (box !== null) placed.push(box);
+                boxes.set(s, box);
+              });
+              let unlabelled = 0;
+              for (const s of steps) {
+                const box = boxes.get(s);
+                if (box === null) unlabelled += 1;
+                items.push({
+                  kind: "step",
+                  text: s.text,
+                  color: s.p.delta < 0 ? cssToken("--pass") : cssToken("--heat"),
+                  box,
+                  point: points.get(s),
+                });
+              }
+              if (moreSlot !== null && unlabelled > 0) {
+                const text = `+ ${unlabelled} more`;
+                items.push({ kind: "more", text, color: cssToken("--ink-faint"), box: { ...moreSlot, w: measure(text) } });
+              }
+              for (const item of items) {
+                const box = item.box;
+                if (box === null) continue;
+                if (item.kind === "refusal") {
+                  ctx.fillStyle = "rgba(148, 163, 184, 0.08)";
+                  ctx.strokeStyle = cssToken("--line");
+                  ctx.lineWidth = px;
+                  ctx.beginPath();
+                  ctx.rect(box.x * px, box.y * px, box.w * px, box.h * px);
+                  ctx.fill();
+                  ctx.stroke();
+                  ctx.fillStyle = item.color;
+                  item.lines.forEach((line, i) => {
+                    ctx.fillText(line, (box.x + item.pad) * px, (box.y + item.pad + i * item.lineH + 1) * px);
+                  });
+                  continue;
+                }
+                ctx.fillStyle = item.color;
+                ctx.fillText(item.text, box.x * px, (box.y + 1) * px);
               }
               ctx.restore();
+              if (typeof describe === "function") describe(u, plotCss, items, actualLine);
             },
           ],
         },
@@ -4758,10 +4948,97 @@
     };
 
     // One live chart: a redraw retires the previous instance (its listeners
-    // with it) before drawing the next. The draw waits for its host to be in
-    // the DOM; a host that never lands is dropped.
+    // and its resize observer with it) before drawing the next. The draw waits
+    // for its host to be in the DOM; a host that never lands is dropped. The
+    // chart takes its host's content box, and follows it: one ResizeObserver,
+    // tied to the live chart, resizes the plot in place (uPlot's `setSize`)
+    // when the host resizes, and retires the chart once the host leaves the
+    // DOM (the pane closed or the route changed).
     let burndownPlot = null;
-    const drawBurndown = (host, bd, fc) => {
+    let burndownObserver = null;
+    const retireBurndown = () => {
+      if (burndownObserver !== null) burndownObserver.disconnect();
+      burndownObserver = null;
+      if (burndownPlot !== null) burndownPlot.destroy();
+      burndownPlot = null;
+    };
+    const burndownHostSize = (host) => ({
+      width: Math.max(1, Math.floor(host.clientWidth)),
+      height: Math.max(1, Math.floor(host.clientHeight)),
+    });
+    // The chart's DOM description, rebuilt on every draw: the host carries the
+    // forecast's state, the plot box and the actual line's drawn vertices; one list beside the canvas names every
+    // label the draw decided about (kind, full text, drawn or not, its box).
+    // Each step is also an invisible, focusable target over its point; resting
+    // the pointer on one, or focusing it, shows its full label in ONE reused
+    // tooltip. Listeners sit on the list, never on its items.
+    const burndownDescriber = (chart) => {
+      let layer = null;
+      let tip = null;
+      const showTip = (target) => {
+        tip.textContent = target.getAttribute("data-label-text");
+        tip.hidden = false;
+        const room = layer.clientWidth - tip.offsetWidth - 2;
+        const above = target.offsetTop - tip.offsetHeight - 2;
+        tip.style.left = `${Math.max(0, Math.min(target.offsetLeft + 14, room))}px`;
+        tip.style.top = `${above >= 0 ? above : target.offsetTop + 14}px`;
+      };
+      const stepOf = (e) => (e.target instanceof Element ? e.target.closest('[data-label-kind="step"]') : null);
+      const enter = (e) => {
+        const target = stepOf(e);
+        if (target !== null) showTip(target);
+      };
+      const leave = (e) => {
+        if (stepOf(e) !== null) tip.hidden = true;
+      };
+      return (u, plot, items, actualLine) => {
+        chart.setAttribute("data-plot-left", String(plot.left));
+        chart.setAttribute("data-plot-top", String(plot.top));
+        chart.setAttribute("data-plot-right", String(plot.right));
+        chart.setAttribute("data-plot-bottom", String(plot.bottom));
+        chart.setAttribute(
+          "data-actual-line",
+          actualLine.map((v) => `${Math.round(v.x * 100) / 100},${Math.round(v.y * 100) / 100}`).join(" "),
+        );
+        if (layer === null) {
+          layer = div({ "data-testid": "burndown-chart-labels", class: "app-burndown-labels" });
+          tip = div({ "data-testid": "burndown-chart-tooltip", class: "app-burndown-tooltip", hidden: true });
+          layer.addEventListener("mouseover", enter);
+          layer.addEventListener("mouseout", leave);
+          layer.addEventListener("focusin", enter);
+          layer.addEventListener("focusout", leave);
+          // A sibling of the canvas, so its boxes share the canvas's corner.
+          u.over.parentNode.append(layer, tip);
+        }
+        tip.hidden = true;
+        layer.replaceChildren(
+          ...items.map((item) => {
+            const drawn = item.box !== null;
+            const step = item.kind === "step";
+            const el = span({
+              class: step ? "app-burndown-target" : "app-burndown-label",
+              "data-label-kind": item.kind,
+              "data-label-text": item.text,
+              "data-label-drawn": String(drawn),
+            });
+            if (drawn) {
+              el.setAttribute("data-label-x", String(item.box.x));
+              el.setAttribute("data-label-y", String(item.box.y));
+              el.setAttribute("data-label-w", String(item.box.w));
+              el.setAttribute("data-label-h", String(item.box.h));
+            }
+            if (step) {
+              el.tabIndex = 0;
+              el.setAttribute("aria-label", item.text);
+              el.style.left = `${item.point.x}px`;
+              el.style.top = `${item.point.y}px`;
+            }
+            return el;
+          }),
+        );
+      };
+    };
+    const drawBurndown = (chart, host, bd, fc) => {
       const attempt = (tries) => {
         loadUplot()
           .then((UPlot) => {
@@ -4769,9 +5046,26 @@
               if (tries < 20) setTimeout(() => attempt(tries + 1), 16);
               return;
             }
-            if (burndownPlot !== null) burndownPlot.destroy();
+            retireBurndown();
             const now = Date.now();
-            burndownPlot = new UPlot(burndownOptions(UPlot, bd, fc, now), burndownData(bd, fc, now), host);
+            const plot = new UPlot(
+              burndownOptions(UPlot, bd, fc, now, burndownHostSize(host), burndownDescriber(chart)),
+              burndownData(bd, fc, now),
+              host,
+            );
+            burndownPlot = plot;
+            if (typeof ResizeObserver === "function") {
+              burndownObserver = new ResizeObserver(() => {
+                if (burndownPlot !== plot) return;
+                if (!host.isConnected) {
+                  retireBurndown();
+                  return;
+                }
+                const size = burndownHostSize(host);
+                if (size.width !== plot.width || size.height !== plot.height) plot.setSize(size);
+              });
+              burndownObserver.observe(host);
+            }
           })
           .catch((err) => {
             if (host.isConnected) {
@@ -4835,18 +5129,22 @@
       const bd = held.burndown;
       const fc = held.forecast;
       const host = div({ class: "app-burndown-canvas" });
-      drawBurndown(host, bd, fc);
+      const dated = forecastDated(fc);
+      const chart = div(
+        {
+          "data-testid": "burndown-chart",
+          "data-burndown-forecast": dated ? "dated" : "refused",
+          "data-burndown-band": dated ? "shown" : "hidden",
+          class: "app-burndown-chart",
+          role: "img",
+          "aria-label": `${bd.release} SCRUM burndown: story points remaining, the ideal line, the actual line with each step's event, and the forecast band`,
+        },
+        host,
+      );
+      drawBurndown(chart, host, bd, fc);
       return div(
         { class: "app-analytics-body" },
-        div(
-          {
-            "data-testid": "burndown-chart",
-            class: "app-burndown-chart",
-            role: "img",
-            "aria-label": `${bd.release} SCRUM burndown: story points remaining, the ideal line, the actual line with each step's event, and the forecast band`,
-          },
-          host,
-        ),
+        chart,
         div({ class: "app-card-meta app-burndown-caption" }, burndownCaption(bd, fc)),
         AnalyticsForecast(bd, fc),
       );

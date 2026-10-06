@@ -2193,24 +2193,68 @@ body {
   color: var(--ink);
 }
 
-/* The analytics pane (F14¾): the chart scrolls inside its OWN box. */
+/* The analytics pane (F14¾): the chart scrolls inside its OWN box. The body
+   fills the pane's content box; the chart takes whatever height the caption
+   and the forecast card leave, floored so a short pane still shows a
+   readable plot (and scrolls inside itself below that). The canvas host is
+   sized by its flex box alone, never by the plot drawn into it — app.js sizes
+   uPlot to the host's content box and follows its resizes. */
 .app-analytics-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 100%;
 }
+.app-analytics-body > :not(.app-burndown-chart) { flex: 0 0 auto; }
 .app-burndown-chart {
-  overflow-x: auto;
+  flex: 1 1 0;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 4px;
 }
 .app-burndown-canvas {
-  width: 560px;
-  min-height: 230px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   font: 400 10px var(--mono);
   color: var(--ink-faint);
 }
+/* The chart's DOM description (app.js `burndownDescriber`): a list over the
+   canvas, invisible but for one reused tooltip. Each step is a small,
+   transparent, focusable target centred on its point. */
+.app-burndown-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.app-burndown-label { display: none; }
+.app-burndown-target {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: auto;
+  outline: none;
+}
+.app-burndown-tooltip {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 10px var(--mono);
+}
+.app-burndown-tooltip[hidden] { display: none; }
 .app-analytics-health.ahead { color: var(--pass); }
 .app-analytics-health.at-risk { color: var(--heat); }
 .app-analytics-health.behind { color: var(--fail); }
