@@ -487,11 +487,13 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
   const now = Date.now();
   const projects = store.listProjects(archived).map((project) => {
     const agents = store.listAgents(project.key);
-    const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
-    const last = events[0];
+    // Bounded reads, never the project's whole event history: the newest
+    // feed row, and each UTC day's newest coverage-bearing run.
+    const last = store.newestEvent(project.key);
+    const coverageDays = store.listCoverageDays(project.key);
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
-    const greenCovered = events.find((e) => e.coverage !== undefined);
+    const greenCovered = coverageDays[0];
     // CR-CRU-033 §S2 (DN-crucible-coverage-trend.md §6) — date-keyed
     // coverage-trend series: a MERGE, per UTC day, of the DURABLE rollup
     // buckets (old days that survived retention pruning) PLUS the
@@ -509,16 +511,11 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
         byDay.set(r.bucket, r.lastCoverage.lines.percent);
       }
     }
-    // Live day-points (within retention): group coverage-bearing events by
-    // UTC day, last-of-day wins. `events` is newest-first, so the FIRST
-    // event seen for a day is its last-of-day; live overwrites any rollup.
-    const liveSeen = new Set<string>();
-    for (const e of events) {
-      if (e.coverage === undefined) continue;
-      const day = new Date(e.timestamp).toISOString().slice(0, 10);
-      if (liveSeen.has(day)) continue;
-      liveSeen.add(day);
-      byDay.set(day, e.coverage.lines.percent);
+    // Live day-points (within retention): each UTC day's last-of-day
+    // coverage-bearing run (`coverageDays` holds exactly one per day); live
+    // overwrites any rollup.
+    for (const e of coverageDays) {
+      byDay.set(new Date(e.timestamp).toISOString().slice(0, 10), e.coverage.lines.percent);
     }
     const coverageTrend = Array.from(byDay.entries())
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
