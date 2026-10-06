@@ -17,10 +17,17 @@ small, and compared with storyboard F16 it is missing the projection traces.
   `−3 · CR-CRU-141 voided`).
 - **No projection.** F16 draws the actual line to a `← today · 29 pts` marker, then P50 (green) and
   P80 (amber) traces from today to zero, beside a labelled `target oct 03`. The live chart has no
-  today marker and no traces: `forecast?release=0.3.0` answers `status: insufficient_history`
-  (1 of 3 completed weeks), so `burndownData` gets no P50/P80 to plot. The cause is the velocity
-  model; **CR-CRU-161** replaces it. This CR makes the chart draw what F16 shows once a forecast
-  exists, and say why on its face when it does not.
+  today marker and no traces: `forecast?release=0.3.0` answered `status: insufficient_history`
+  (1 of 3 completed weeks), so `burndownData` got no P50/P80 to plot.
+
+**Gap analysis, 2026-10-07 (live chart in the Pi tab, `burndownOptions` / `burndownData` read):**
+0.3.0's forecast is now dated (P50 10-20), so this CR no longer waits on CR-CRU-161's velocity model.
+The projection F16 and F18 §3 draw is already coded: the today dot and `← today · N pts` label, the
+P50/P80 series with the shaded band between them, their date labels and the target rule. What hides
+it is the chart's size and its label placement: a fixed 560 × 230 canvas, and a collision rule
+(`drawLabel`) that moves each colliding label down without limit, so with **63** steps (36 when this
+CR was filed) the step labels, the today label and the P50/P80 labels pile up and fall below the
+plot. A refused forecast is stated only in the forecast card, not in the plot.
 
 ## Scope
 
@@ -39,10 +46,14 @@ pane resizes. The phone band keeps CR-CRU-018's full-viewport detail-column shap
 - When the forecast refuses (`insufficient_history`, `unpointed`), the chart states the refusal in
   the plot area, where the traces would be.
 
-### §S3 — labels stay inside the plot
+### §S3 — labels stay inside the plot, and the projection's labels always show
 
-Every step label is drawn inside the plot area. Labels that would collide are displaced within the
-plot, never below or outside it.
+Every label is drawn inside the plot area, never below or outside it. The today marker's label, the
+P50 and P80 labels and the target label are placed first and always shown. Step labels are then
+placed largest move first, each only where it fits inside the plot without overlapping a label
+already placed; the steps left unlabelled are counted in one `+ N more` note inside the plot (as in
+F18 §3). Every step, labelled or not, shows its full label (`−8 · CR-CRU-015 merged`) when the
+pointer rests on it.
 
 ## Acceptance criteria
 
@@ -51,6 +62,9 @@ plot, never below or outside it.
 - [ ] **AC2** — With a dated forecast (fixture), the chart draws the today marker, the P50 and P80
       traces with their date labels and the target label, asserted in a real browser.
 - [ ] **AC3** — With a refused forecast, the plot area states the reason, and no traces are drawn.
-- [ ] **AC4** — With the 0.3.0 history (36 steps), no label is drawn outside the plot area.
+- [ ] **AC4** — With a 63-step history (fixture), no label is drawn outside the plot area or
+      overlapping another; the today, P50, P80 and target labels are all drawn; the number of
+      unlabelled steps equals the `+ N more` note's N; resting the pointer on an unlabelled step shows
+      its full label, asserted in a real browser.
 - [ ] **AC5** — The live chart matches storyboard **F18 §3** (drawn 2026-09-27, the visual contract),
       including the refusal stated inside the plot, checked in a real browser at VERIFY.
