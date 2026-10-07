@@ -7058,14 +7058,29 @@ export class Store {
         `SELECT * FROM plans WHERE project_key = ? ORDER BY plan_id ASC`,
       )
       .all(projectKey);
-    return rows
-      .filter(
-        (row) =>
-          (filter?.cr === undefined || row.cr === filter.cr) &&
-          (filter?.track === undefined || row.track === filter.track) &&
-          (filter?.status === undefined || Store.planStatusOf(row.status) === filter.status),
+    const kept = rows.filter(
+      (row) =>
+        (filter?.cr === undefined || row.cr === filter.cr) &&
+        (filter?.track === undefined || row.track === filter.track) &&
+        (filter?.status === undefined || Store.planStatusOf(row.status) === filter.status),
+    );
+    // One read of every cycle the project holds, grouped by plan in memory —
+    // never one cycle query per plan — so a plan read runs the same two
+    // statements however many plans the project has. Each plan's cycles keep
+    // listCycleRows' `seq, cycle_id` order.
+    const cyclesByPlan = new Map<number, PlanCycleRow[]>();
+    const cycleRows = this.db
+      .query<PlanCycleRow, [string]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ?
+         ORDER BY plan_id ASC, seq ASC, cycle_id ASC`,
       )
-      .map((row) => this.toPlan(row));
+      .all(projectKey);
+    for (const cycle of cycleRows) {
+      const group = cyclesByPlan.get(cycle.plan_id);
+      if (group === undefined) cyclesByPlan.set(cycle.plan_id, [cycle]);
+      else group.push(cycle);
+    }
+    return kept.map((row) => this.toPlan(row, cyclesByPlan.get(row.plan_id) ?? []));
   }
 
   /**
@@ -7939,8 +7954,16 @@ export class Store {
     return stored === "closed" ? "closed" : stored === "aborted" ? "aborted" : "open";
   }
 
-  private toPlan(row: PlanRow): Plan {
-    const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
+  /**
+   * Build a plan from its row and its cycle rows. A single-plan caller reads
+   * the cycles here; `listPlans` passes the rows it read for the whole
+   * project in one statement.
+   */
+  private toPlan(
+    row: PlanRow,
+    cycleRows: PlanCycleRow[] = this.listCycleRows(row.project_key, row.plan_id),
+  ): Plan {
+    const cycles: PlanCycle[] = cycleRows.map(
       (cycle) => ({
         id: cycle.cycle_id,
         label: cycle.label,
