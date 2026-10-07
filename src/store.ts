@@ -275,6 +275,10 @@ interface PlanRow {
   abort_reason?: string | null;
   abort_cause?: string | null;
   abort_spec_ref?: string | null;
+  // The commit boundary stamped at close (NULL until a merged close).
+  boundary_branch?: string | null;
+  boundary_first_commit?: string | null;
+  boundary_last_commit?: string | null;
 }
 
 interface PlanCycleRow {
@@ -750,6 +754,99 @@ interface BoundaryEventRow {
    */
   id: string;
   context: string;
+}
+
+/**
+ * A plan's stored commit-boundary columns: NULL where no linked run carried
+ * git context, and on every plan not closed with a merge.
+ */
+interface BoundaryColumns {
+  boundary_branch: string | null;
+  boundary_first_commit: string | null;
+  boundary_last_commit: string | null;
+}
+
+/**
+ * The plan's commit boundary, derived ONCE: branch + the earliest/latest linked
+ * commits from the `context.git` of every event, gate and milestone filed
+ * against one of `cycleIds` (in display order). Called only where a closed,
+ * merged plan's boundary is stamped onto its row — `Store.closePlan` and the
+ * migration step that backfills plans closed before the columns existed.
+ */
+function deriveBoundaryColumns(db: Database, projectKey: string, cycleIds: readonly number[]): BoundaryColumns {
+  // CR-CRU-126 §S1 — one INDEXED seek per cycle, projecting the three
+  // columns the answer needs, replacing the `SELECT *` scan of every event
+  // in the project. The wide columns (`tree`/`coverage`/`compile`/`payload`)
+  // were the dominant cost — ~37 MB marshalled per scan to read two strings.
+  //
+  // Equality on `cycle_id`, one cycle at a time, rather than one `IN (…)`
+  // over the plan's cycles: MEASURED 2026-09-12, with no ANALYZE stats (and
+  // this store runs none), the `IN` form makes SQLite fall back to
+  // `idx_events_project_timestamp` — a full project scan again — because the
+  // sort-free ordering outbids a multi-seek it has no statistics for. The
+  // equality form plans to `idx_events_project_cycle` unconditionally, and
+  // sort-free, since the index carries `timestamp` third.
+  //
+  // The membership test is the `cycle_id` COLUMN, which CR-CRU-094 §S1
+  // derives at the one row-insert seam from `context.cycleId`, so the two
+  // cannot disagree; `context IS NOT NULL` still excludes the lifecycle rows
+  // (§S2) that carry a cycle binding but no run context.
+  //
+  // CR-CRU-129 §S1 — over the record tables too: a gate carries a cycle
+  // binding and a run context (CR-CRU-056 gates parity), so it contributed
+  // to this boundary before the move and must keep contributing after it.
+  // Their seeks are equality on `cycle_id` like the one above, over tables
+  // holding a project's records rather than its telemetry. A table an older
+  // store being migrated does not hold yet has nothing to contribute.
+  const rows: BoundaryEventRow[] = [];
+  for (const table of ["events", "milestones", "gates"] as const) {
+    if (!tableExists(db, table)) continue;
+    for (const cycleId of cycleIds) {
+      for (const row of db
+        .query<BoundaryEventRow, [string, number]>(
+          `SELECT timestamp, id, context FROM ${table}
+           WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
+           ORDER BY timestamp ASC, rowid ASC`,
+        )
+        .all(projectKey, cycleId)) {
+        rows.push(row);
+      }
+    }
+  }
+  // A multi-cycle plan's runs INTERLEAVE in time, and first/last are the
+  // earliest and latest across the whole plan — so the per-cycle, per-table
+  // seeks are merged back into the one insertion order the single scan had.
+  rows.sort((left, right) =>
+    left.timestamp !== right.timestamp
+      ? left.timestamp - right.timestamp
+      : insertOrdinal(left.id) - insertOrdinal(right.id),
+  );
+  let branch: string | null = null;
+  let first: string | null = null;
+  let last: string | null = null;
+  for (const row of rows) {
+    const context = JSON.parse(row.context) as RunContext;
+    if (context.git === undefined) {
+      continue;
+    }
+    branch ??= context.git.branch;
+    first ??= context.git.commit;
+    last = context.git.commit;
+  }
+  return { boundary_branch: branch, boundary_first_commit: first, boundary_last_commit: last };
+}
+
+/**
+ * CR-CRU-129 §S1 — newest-first across the THREE tables an event can now
+ * live in, reproducing the `ORDER BY timestamp DESC, rowid DESC` each table
+ * is read in: within one millisecond the later-inserted row still comes
+ * first. The tiebreak is the store's own monotonic insert sequence, which is
+ * the tail of the id it mints (`evt-<ms>-<seq>`); an id from anywhere else
+ * ranks 0 and keeps the timestamp order it arrived in.
+ */
+function insertOrdinal(id: string): number {
+  const tail = Number(id.slice(id.lastIndexOf("-") + 1));
+  return Number.isFinite(tail) ? tail : 0;
 }
 
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
@@ -2824,7 +2921,73 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       );
     },
   },
+  {
+    description:
+      "plans: a closed plan's commit boundary is stored when it closes — nullable `boundary_branch`, `boundary_first_commit` and `boundary_last_commit` columns, backfilled for every plan already closed with a merge exactly as it was derived on read; every other plan stores none",
+    apply(db) {
+      // A store with no plans table has no plan to backfill; the table is
+      // created later in its CURRENT shape.
+      if (!tableExists(db, "plans")) return;
+      for (const { column, ddl } of BOUNDARY_COLUMNS) {
+        if (!columnsOf(db, "plans").has(column)) db.exec(ddl);
+      }
+      backfillCommitBoundaries(db);
+    },
+    satisfiedBy(db) {
+      // A store already carrying the columns was written by a build that
+      // stamps the boundary at close, so it owes no backfill. A table the
+      // store never had is created later in its CURRENT shape.
+      if (!tableExists(db, "plans")) return true;
+      const cols = columnsOf(db, "plans");
+      return BOUNDARY_COLUMNS.every(({ column }) => cols.has(column));
+    },
+  },
 ];
+
+/** The stored commit-boundary columns, each with its literal additive DDL. */
+const BOUNDARY_COLUMNS: ReadonlyArray<{ column: keyof BoundaryColumns; ddl: string }> = [
+  { column: "boundary_branch", ddl: "ALTER TABLE plans ADD COLUMN boundary_branch TEXT" },
+  { column: "boundary_first_commit", ddl: "ALTER TABLE plans ADD COLUMN boundary_first_commit TEXT" },
+  { column: "boundary_last_commit", ddl: "ALTER TABLE plans ADD COLUMN boundary_last_commit TEXT" },
+];
+
+/**
+ * Stamp the boundary of every plan closed with a merge before the columns
+ * existed, through the one derivation `Store.closePlan` uses, over the plan's
+ * cycles in display order. Open, aborted and unmerged plans keep NULL.
+ */
+function backfillCommitBoundaries(db: Database): void {
+  const closed = db
+    .query<{ plan_id: number; project_key: string }, []>(
+      `SELECT plan_id, project_key FROM plans
+        WHERE status = 'closed' AND merge_commit IS NOT NULL AND closed_at IS NOT NULL
+        ORDER BY plan_id ASC`,
+    )
+    .all();
+  const hasCycles = tableExists(db, "plan_cycles");
+  const stamp = db.query(
+    `UPDATE plans SET boundary_branch = ?, boundary_first_commit = ?, boundary_last_commit = ?
+      WHERE plan_id = ?`,
+  );
+  for (const plan of closed) {
+    const cycleIds = hasCycles
+      ? db
+          .query<{ cycle_id: number }, [string, number]>(
+            `SELECT cycle_id FROM plan_cycles WHERE project_key = ? AND plan_id = ?
+              ORDER BY seq ASC, cycle_id ASC`,
+          )
+          .all(plan.project_key, plan.plan_id)
+          .map((cycle) => cycle.cycle_id)
+      : [];
+    const boundary = deriveBoundaryColumns(db, plan.project_key, cycleIds);
+    stamp.run(
+      boundary.boundary_branch,
+      boundary.boundary_first_commit,
+      boundary.boundary_last_commit,
+      plan.plan_id,
+    );
+  }
+}
 
 /** The two tables a run's release is stored on: its event and its open run row. */
 const RELEASE_COLUMN_TABLES = ["events", "runs"] as const;
@@ -3174,7 +3337,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
         ON events (project_key, timestamp);
 
-      -- CR-CRU-126 §S1 — the cycle-scoped seek deriveCommitBoundary issues,
+      -- CR-CRU-126 §S1 — the cycle-scoped seek deriveBoundaryColumns issues,
       -- which without it re-scanned every event in the project once per closed
       -- plan. COMPOSITE on purpose, and timestamp is the third column for a
       -- measured reason: the derivation orders by it, and an index carrying
@@ -3250,7 +3413,10 @@ export class Store {
         closed_at INTEGER,
         abort_reason TEXT,
         abort_cause TEXT,
-        abort_spec_ref TEXT
+        abort_spec_ref TEXT,
+        boundary_branch TEXT,
+        boundary_first_commit TEXT,
+        boundary_last_commit TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_plans_project_cr
@@ -4922,24 +5088,11 @@ export class Store {
     };
   }
 
-  /**
-   * CR-CRU-129 §S1 — newest-first across the THREE tables an event can now
-   * live in, reproducing the `ORDER BY timestamp DESC, rowid DESC` each table
-   * is read in: within one millisecond the later-inserted row still comes
-   * first. The tiebreak is the store's own monotonic insert sequence, which is
-   * the tail of the id it mints (`evt-<ms>-<seq>`); an id from anywhere else
-   * ranks 0 and keeps the timestamp order it arrived in.
-   */
-  private static insertOrdinal(id: string): number {
-    const tail = Number(id.slice(id.lastIndexOf("-") + 1));
-    return Number.isFinite(tail) ? tail : 0;
-  }
-
   private static newestFirst(
     a: Pick<EventRow, "id" | "timestamp">,
     b: Pick<EventRow, "id" | "timestamp">,
   ): number {
-    return b.timestamp - a.timestamp || Store.insertOrdinal(b.id) - Store.insertOrdinal(a.id);
+    return b.timestamp - a.timestamp || insertOrdinal(b.id) - insertOrdinal(a.id);
   }
 
   /**
@@ -5035,7 +5188,7 @@ export class Store {
    * listEvents; archived projects excluded. Unlinked runs (no context) and
    * other cycles' runs are filtered out. `context` is JSON in the column, so
    * the match is done on the parsed value (same pattern as
-   * deriveCommitBoundary).
+   * deriveBoundaryColumns).
    *
    * CR-CRU-129 §S1 — over all three tables: a gate carries a cycle binding
    * (CR-CRU-056 gates parity) and belongs in its cycle's fetch wherever the
@@ -6674,7 +6827,8 @@ export class Store {
     }
     // CR-CRU-048 §S2 — the filtering (CYCLE_TERMINAL = done|skipped|failed) is
     // unchanged; only the REPORTING gains each blocking cycle's label.
-    const openCycleRefs = this.listCycleRows(projectKey, planId)
+    const cycleRows = this.listCycleRows(projectKey, planId);
+    const openCycleRefs = cycleRows
       .filter((cycle) => !Store.CYCLE_TERMINAL.has(cycle.status))
       .map((cycle) => ({ id: cycle.cycle_id, label: cycle.label }));
     if (openCycleRefs.length > 0) {
@@ -6686,15 +6840,42 @@ export class Store {
       };
     }
     const closedAt = Date.now();
-    this.db
-      .query(`UPDATE plans SET status = 'closed', merge_commit = ?, closed_at = ? WHERE plan_id = ?`)
-      .run(merge?.commit ?? null, closedAt, planId);
+    const mergeCommit = merge?.commit ?? null;
+    // The boundary is derived ONCE, here, and stored: a later run, gate or
+    // milestone, or retention evicting one, never moves a closed plan's record.
+    const close = this.db.transaction((): BoundaryColumns => {
+      const boundary =
+        mergeCommit === null
+          ? { boundary_branch: null, boundary_first_commit: null, boundary_last_commit: null }
+          : deriveBoundaryColumns(
+              this.db,
+              projectKey,
+              cycleRows.map((cycle) => cycle.cycle_id),
+            );
+      this.db
+        .query(
+          `UPDATE plans SET status = 'closed', merge_commit = ?, closed_at = ?,
+             boundary_branch = ?, boundary_first_commit = ?, boundary_last_commit = ?
+           WHERE plan_id = ?`,
+        )
+        .run(
+          mergeCommit,
+          closedAt,
+          boundary.boundary_branch,
+          boundary.boundary_first_commit,
+          boundary.boundary_last_commit,
+          planId,
+        );
+      return boundary;
+    });
+    const boundary = close();
     this.emit("events", projectKey);
     return this.toPlan({
       ...row,
       status: "closed",
-      merge_commit: merge?.commit ?? null,
+      merge_commit: mergeCommit,
       closed_at: closedAt,
+      ...boundary,
     });
   }
 
@@ -7804,89 +7985,20 @@ export class Store {
       ...(typeof row.abort_cause === "string" ? { cause: row.abort_cause as ChangeCause } : {}),
       ...(typeof row.abort_spec_ref === "string" ? { specRef: row.abort_spec_ref } : {}),
     };
-    const boundary = this.deriveCommitBoundary(plan);
-    return boundary !== undefined ? { ...plan, commitBoundary: boundary } : plan;
-  }
-
-  /**
-   * §S0 commit boundary — derived read-only on CLOSED plans: branch + the
-   * earliest/latest linked-run commits from the runs' `context.git`, linked
-   * via `context.cycleId`. Absent fields are OMITTED (never null).
-   */
-  private deriveCommitBoundary(plan: Plan): CommitBoundary | undefined {
+    // The boundary a closed, merged plan stored when it closed: READ, never
+    // derived (the merge commit and close time are its own columns).
     if (plan.status !== "closed" || plan.merge === undefined || plan.closedAt === undefined) {
-      return undefined;
+      return plan;
     }
-    // CR-CRU-126 §S1 — one INDEXED seek per cycle, projecting the three
-    // columns the answer needs, replacing the `SELECT *` scan of every event
-    // in the project. The wide columns (`tree`/`coverage`/`compile`/`payload`)
-    // were the dominant cost — ~37 MB marshalled per scan to read two strings.
-    //
-    // Equality on `cycle_id`, one cycle at a time, rather than one `IN (…)`
-    // over the plan's cycles: MEASURED 2026-09-12, with no ANALYZE stats (and
-    // this store runs none), the `IN` form makes SQLite fall back to
-    // `idx_events_project_timestamp` — a full project scan again — because the
-    // sort-free ordering outbids a multi-seek it has no statistics for. The
-    // equality form plans to `idx_events_project_cycle` unconditionally, and
-    // sort-free, since the index carries `timestamp` third.
-    //
-    // The membership test is the `cycle_id` COLUMN, which CR-CRU-094 §S1
-    // derives at the one row-insert seam from `context.cycleId`, so the two
-    // cannot disagree; `context IS NOT NULL` still excludes the lifecycle rows
-    // (§S2) that carry a cycle binding but no run context.
-    //
-    // CR-CRU-129 §S1 — over the record tables too: a gate carries a cycle
-    // binding and a run context (CR-CRU-056 gates parity), so it contributed
-    // to this boundary before the move and must keep contributing after it.
-    // Their seeks are equality on `cycle_id` like the one above, over tables
-    // holding a project's records rather than its telemetry.
-    const rows: BoundaryEventRow[] = [];
-    for (const source of [
-      `SELECT timestamp, id, context FROM events`,
-      `SELECT timestamp, id, context FROM milestones`,
-      `SELECT timestamp, id, context FROM gates`,
-    ]) {
-      for (const cycle of plan.cycles) {
-        for (const row of this.db
-          .query<BoundaryEventRow, [string, number]>(
-            `${source}
-             WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
-             ORDER BY timestamp ASC, rowid ASC`,
-          )
-          .all(plan.projectKey, cycle.id)) {
-          rows.push(row);
-        }
-      }
-    }
-    // A multi-cycle plan's runs INTERLEAVE in time, and first/last are the
-    // earliest and latest across the whole plan — so the per-cycle, per-table
-    // seeks are merged back into the one insertion order the single scan had.
-    rows.sort((left, right) =>
-      left.timestamp !== right.timestamp
-        ? left.timestamp - right.timestamp
-        : Store.insertOrdinal(left.id) - Store.insertOrdinal(right.id),
-    );
-    let branch: string | undefined;
-    let firstRunCommit: string | undefined;
-    let lastRunCommit: string | undefined;
-    for (const row of rows) {
-      const context = JSON.parse(row.context) as RunContext;
-      if (context.git === undefined) {
-        continue;
-      }
-      branch ??= context.git.branch;
-      firstRunCommit ??= context.git.commit;
-      lastRunCommit = context.git.commit;
-    }
-    return {
+    const commitBoundary: CommitBoundary = {
       mergeCommit: plan.merge.commit,
-      ...(branch !== undefined ? { branch } : {}),
-      ...(firstRunCommit !== undefined ? { firstRunCommit } : {}),
-      ...(lastRunCommit !== undefined ? { lastRunCommit } : {}),
+      ...(typeof row.boundary_branch === "string" ? { branch: row.boundary_branch } : {}),
+      ...(typeof row.boundary_first_commit === "string" ? { firstRunCommit: row.boundary_first_commit } : {}),
+      ...(typeof row.boundary_last_commit === "string" ? { lastRunCommit: row.boundary_last_commit } : {}),
       closedAt: plan.closedAt,
     };
+    return { ...plan, commitBoundary };
   }
-
 
   onChange(fn: ChangeListener): () => void {
     this.listeners.add(fn);
