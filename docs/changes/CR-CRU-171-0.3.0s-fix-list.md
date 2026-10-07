@@ -55,10 +55,10 @@ release run per CR-CRU-164 still refuses a cycle).
 
 ## Acceptance criteria
 
-- [ ] For each client's optional-agent suite verbs, a run without `--agent` posts nothing to the
+- [x] For each client's optional-agent suite verbs, a run without `--agent` posts nothing to the
       board and exits with the runner's code — asserted per client with the subprocess harness, bun's
       declared-tier verbs included (flag and raw-report targets); each required-agent evidence verb
       named in §S1, run without `--agent`, is refused before the runner starts and posts nothing —
       asserted per client.
-- [ ] Each of the nine verbs in §S2 accepts `--cycle` and binds the run exactly as the other verbs
+- [x] Each of the nine verbs in §S2 accepts `--cycle` and binds the run exactly as the other verbs
       do, and its `--help` lists it — asserted per client.
