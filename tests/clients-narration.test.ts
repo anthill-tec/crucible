@@ -1091,6 +1091,7 @@ describe("CR-CRU-049 — mvn narration hardening", () => {
       const dir = scratch.dir("narration-mvn-module-batchmode-");
       writeMvnNarrationFixture(dir, key);
       const agentId = "narration-mvn-module-batchmode-agent";
+      await ensureRegistered(baseUrl, key, agentId);
 
       const proc = spawnScript(MVN_SCRIPT_PATH, ["module", "--agent", agentId, "--project-dir", dir], {
         cwd: dir,
