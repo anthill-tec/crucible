@@ -4785,6 +4785,23 @@ export class Store {
   }
 
   /**
+   * The client's own abort of an open run (POST /api/v2/runs/<runId>/abort):
+   * settled by the SAME path the sweep uses (`abortRun`), role off the agent
+   * row as the sweep reads it. The open state is re-read INSIDE the
+   * transaction, so a run that settled meanwhile (filed, swept, or aborted by
+   * a racing request) is left untouched and no second event is written —
+   * null then, and the caller answers 409.
+   */
+  abortOpenRun(runId: string, reason: string, now: number = Date.now()): RunEvent | null {
+    return this.db.transaction((): RunEvent | null => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return null;
+      const agent = this.getAgent(run.projectKey, run.agentId, now);
+      return this.abortRun(run, reason, now, agent?.role);
+    })();
+  }
+
+  /**
    * §S1 — settle an open run as ABORTED and store the event that records it,
    * in ONE transaction: the run row and its event can never disagree, and a
    * second sweep can never emit a duplicate abort.
