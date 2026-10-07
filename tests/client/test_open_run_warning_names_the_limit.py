@@ -1,6 +1,21 @@
 """CR-CRU-131 §S1b -- what a CLIENT TELLS A USER about an abandoned run names
 the LIMIT, not a retired environment variable.
 
+CR-CRU-170 §S2 RE-PIN NOTE: this builder (`_run_left_open_warning` /
+`_crucible_axi.run_left_open_warning`) used to be the ONLY disclosure a
+client gave for a run it opened and could not close by ingest -- CR-CRU-017
+§S2's abort route did not exist, so the client posted nothing and this
+warning was unconditional. §S1/§S2 of CR-CRU-170 built that route and wire
+every such exit to call it first; this warning now rides the envelope ONLY
+when that abort attempt itself FAILS (the board refused it, or was
+unreachable) -- a successful abort is disclosed by a NEW `run-aborted`
+warning instead, pinned in `test_a_client_aborts_a_run_it_cannot_file.py`
+and `test_every_opened_run_is_closed_or_disclosed.py`, not here. The builder
+and its wording are UNCHANGED by this re-pin (the sentence below still
+describes exactly what a reader sees when the abort failed); only the
+MODULE DOCSTRINGS/test docstrings below that described it as the client's
+UNIVERSAL disclosure are corrected to name the narrower role it keeps.
+
 `_run_left_open_warning` (clients/bun-crucible.py) builds the `{code,
 detail}` entry that rides the AXI envelope when a run this client OPENED is
 interrupted before it could be closed. Its detail currently ends:
@@ -135,10 +150,15 @@ class OpenRunWarningTest(unittest.TestCase):
 
     def test_the_detail_still_says_what_settles_the_run_and_that_it_is_not_lost(self):
         """CR-CRU-017 §S1's contract, which this cycle changes the WORDING of and
-        must not change the MEANING of: the client posts no abort, the server
-        settles the run on one of two triggers, and the run is abandoned rather
-        than lost. tests/client/test_cr017_client_lifecycle.py asserts the first
-        two reach a real signalled run's envelope; this keeps them true at the
+        must not change the MEANING of, FOR THE CASE this warning still covers
+        after CR-CRU-170 §S2 (re-pin note, module docstring above): once the
+        client's OWN abort of the run it opened has FAILED (the board refused
+        it, or was unreachable), the server settles the run on one of two
+        triggers, and the run is abandoned rather than lost -- it is no
+        longer the UNIVERSAL disclosure (a successful abort is now disclosed
+        by a different, new warning this builder does not build).
+        tests/client/test_cr017_client_lifecycle.py asserts the first two
+        reach a real signalled run's envelope; this keeps them true at the
         source when the sentence around them is rewritten."""
         for phrase in ("auto-abort", "agent died", "abandoned", self.CAUSE):
             self.assertIn(phrase, self.detail,
