@@ -72,18 +72,18 @@ read is computed on every request. The answers are unchanged.
 
 ## Acceptance criteria
 
-- [ ] After the migration, every plan's `commitBoundary` on a copy of the dev store equals today's,
+- [x] After the migration, every plan's `commitBoundary` on a copy of the dev store equals today's,
       byte for byte, asserted on the server.
-- [ ] A store at schema v18 migrates to v19 through the chain (backup written; every closed, merged
+- [x] A store at schema v18 migrates to v19 through the chain (backup written; every closed, merged
       plan's stored boundary equals its derived one; open, aborted and unmerged plans store none);
       a fresh store is built at v19.
-- [ ] A plan read runs the same number of statements for a project with 10 plans and with 200, and no
+- [x] A plan read runs the same number of statements for a project with 10 plans and with 200, and no
       plan read queries the events, milestones or gates tables, asserted on the statements run (not
       timing).
-- [ ] Closing a plan stores its commit boundary, and a later run filed against one of its cycles does
+- [x] Closing a plan stores its commit boundary, and a later run filed against one of its cycles does
       not change it, asserted on the server.
-- [ ] Every plan read (`plans`, `status`, the Workflow and roadmap reads) answers byte-identically to
+- [x] Every plan read (`plans`, `status`, the Workflow and roadmap reads) answers byte-identically to
       today's on a copy of the dev store, asserted on the server.
-- [ ] `AnalyticsCache` no longer exists, and each of velocity, burndown, forecast and the plan-change
+- [x] `AnalyticsCache` no longer exists, and each of velocity, burndown, forecast and the plan-change
       counts answers under 15 ms on a copy of the dev store, measured in process the way this CR's gap
       analysis did (median of 5 after a warm-up; the 2026-10-07 baseline is ~22 ms each).
