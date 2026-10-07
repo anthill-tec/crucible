@@ -25,7 +25,11 @@ release label. The refusal below is new behaviour, not a copy of an existing one
 `--release` all the same, and adding `--cycle` to them is not this CR's scope): bun `test`, `regression`, `pre-merge-gate` and its declared-tier verbs;
 python `test`, `regression`, `pre-merge-gate` and its tier verbs; mvn `test`, its tier verbs,
 `regression` and `pre-merge-gate`; rust `test`, `regression-ingest`, `smoke-test`,
-`workspace-regression` and `pre-merge-gate`; arduino `test`/`unit`/`regression` and `pre-merge-gate`.
+`workspace-regression`, `pre-merge-gate` and its tier verbs; arduino `test`/`unit`/`regression`,
+`pre-merge-gate` and its declared-tier verbs (the last two groups restored 2026-10-07 at C2 GREEN:
+the filed §S1 named every client's declared-tier verbs and the gap-analysis list dropped them).
+`pre-merge-gate --release` passes the release on to every suite it runs, the other stacks'
+declared suites included, so a release's gate is filed under the release whole.
 It rides both the run start (`POST /api/v2/runs/start`) and the ingest that closes the run.
 
 - **Declared release.** A release is declared when the project's roadmap knows it: a CR planned
