@@ -548,22 +548,6 @@ def _close_gate_identity(project_dir, identity):
                                       remove_fn=_remove_agent_silent)
 
 
-def _gated_run(args, project_dir, message, body):
-    """Run `body(identity)` inside the gated-run identity bracket the
-    `regression` verb opens: with `--agent`, an opening heartbeat DECLARES the
-    run's identity (bound to `--cycle` when given), and the closing anti-ghost
-    cleanup fires ONLY for an identity this run created. Without `--agent`
-    nothing is opened, so nothing is posted."""
-    identity = None
-    try:
-        if args.agent:
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None), message)
-        return body(identity)
-    finally:
-        _close_gate_identity(project_dir, identity)
-
-
 # --------------------------------------------------------------------------- #
 # Report discovery + parsing (surefire / failsafe JUnit XML, JaCoCo CSV)
 # --------------------------------------------------------------------------- #
@@ -935,10 +919,12 @@ def _run_surefire_tier(args, goal_extra, label):
     """Shared body for `unit` and `module`: mvn clean test [...], then ingest
     surefire. On no-reports, compile fallback. Surefire only, NEVER coverage."""
     project_dir = _resolve_project_dir(args.project_dir)
-    return _gated_run(
-        args, project_dir, f"gated {label} run starting",
-        lambda identity: _surefire_tier_run(args, goal_extra, label,
-                                            project_dir, identity))
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          f"gated {label} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _surefire_tier_run(args, goal_extra, label, project_dir, identity)
 
 
 def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
@@ -1149,10 +1135,12 @@ def _run_failsafe_tier(args, goals, label):
     produced by this one run; on no reports at all the run is a build failure
     and takes the compile fallback, like every other tier verb here."""
     project_dir = _resolve_project_dir(args.project_dir)
-    return _gated_run(
-        args, project_dir, f"gated {label} run starting",
-        lambda identity: _failsafe_tier_run(args, goals, label, project_dir,
-                                            identity))
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          f"gated {label} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _failsafe_tier_run(args, goals, label, project_dir, identity)
 
 
 def _failsafe_tier_run(args, goals, label, project_dir, identity):
@@ -1478,9 +1466,12 @@ def cmd_test(args, tier=None):
     (the run's own; every module writes there) and ingest via the junit-dir
     path."""
     project_dir = _resolve_project_dir(args.project_dir)
-    return _gated_run(
-        args, project_dir, "gated test run starting",
-        lambda identity: _test_run(args, tier, project_dir, identity))
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _test_run(args, tier, project_dir, identity)
 
 
 def _test_run(args, tier, project_dir, identity):

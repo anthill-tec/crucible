@@ -760,15 +760,12 @@ def cmd_test(args, tier=None, verb="test"):
     closing anti-ghost cleanup fires ONLY for an identity this run created.
     Without `--agent` nothing is opened, so nothing is posted."""
     project_dir = _resolve_project_dir(args.project_dir)
-    identity = None
-    try:
-        if args.agent:
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated test run starting")
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         return _test_run(args, tier, verb, project_dir, identity)
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def _test_run(args, tier, verb, project_dir, identity):

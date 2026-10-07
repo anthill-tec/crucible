@@ -820,22 +820,6 @@ def _close_gate_identity(project_dir, identity):
                                       remove_fn=_remove_agent_silent)
 
 
-def _gated_run(args, project_dir, message, body):
-    """Run `body(identity)` inside the gated-run identity bracket
-    `regression-ingest` opens: with `--agent`, an opening heartbeat DECLARES
-    the run's identity (bound to `--cycle` when given), and the closing
-    anti-ghost cleanup fires ONLY for an identity this run created. Without
-    `--agent` nothing is opened, so nothing is posted."""
-    identity = None
-    try:
-        if getattr(args, "agent", None):
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None), message)
-        return body(identity)
-    finally:
-        _close_gate_identity(project_dir, identity)
-
-
 def _clean_stale_junit(project_dir, profile=None):
     now = time.time()
     paths = [
@@ -1235,10 +1219,12 @@ def cmd_test(args, tier=None, select=(), profile=None):
     `--workspace`, cargo's own way to say "every crate" — so a tier verb never
     fails on argparse where cargo itself would have run."""
     project_dir = _resolve_project_dir(args.project_dir)
-    return _gated_run(
-        args, project_dir, "gated test run starting",
-        lambda identity: _test_run(args, tier, select, profile, project_dir,
-                                   identity))
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _test_run(args, tier, select, profile, project_dir, identity)
 
 
 def _test_run(args, tier, select, profile, project_dir, identity):
@@ -1580,9 +1566,18 @@ def cmd_smoke_test(args):
     parse junit → /api/v2/runs with `codec: junit`. NO coverage.
     """
     project_dir = _resolve_project_dir(args.project_dir)
-    return _gated_run(
-        args, project_dir, "gated smoke-test run starting",
-        lambda identity: _smoke_test(args, "smoke-test", identity))
+    # The gate-lock and disk-guard refusals come FIRST, outside the identity
+    # bracket, as `cmd_workspace_regression` orders them: a run refused
+    # before it starts opens no identity, so it posts nothing.
+    refused = _smoke_refusal(args, "smoke-test", project_dir)
+    if refused is not None:
+        return refused
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated smoke-test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _smoke_run(args, "smoke-test", project_dir, identity)
 
 
 def _smoke_run_tier(verb, profile):
@@ -1601,13 +1596,23 @@ def _smoke_run_tier(verb, profile):
     return "e2e" if verb == "docker-e2e-gate" or profile == "e2e" else "integration"
 
 
-def _smoke_test(args, verb, identity=None):
-    """The smoke run body, shared by `smoke-test` and its thin wrapper
-    `docker-e2e-gate` (CR-CRU-058 §S1): `verb` names the envelope this run
-    belongs to, so the wrapper's stdout carries ONE document under its OWN verb
-    rather than the inner verb's. `identity` is the caller's gated-run identity
-    when it opened one, observed by every narration tick."""
+def _smoke_test(args, verb):
+    """The smoke run, refusals then body, for `docker-e2e-gate` (CR-CRU-058
+    §S1): `verb` names the envelope this run belongs to, so the wrapper's stdout
+    carries ONE document under its OWN verb rather than the inner verb's. It
+    opens no gated identity, so its narration observes none."""
     project_dir = _resolve_project_dir(args.project_dir)
+    refused = _smoke_refusal(args, verb, project_dir)
+    if refused is not None:
+        return refused
+    return _smoke_run(args, verb, project_dir)
+
+
+def _smoke_refusal(args, verb, project_dir):
+    """The smoke run's pre-run checks, shared by `smoke-test` and
+    `docker-e2e-gate`: the gate lock, the optional `cargo clean`, then the disk
+    guard. Returns the refused run's exit code after emitting its envelope, or
+    None to proceed. Nothing here touches the board."""
     # crucible OWNS the gate-lock FILE: refuse to start if one is already present
     # (no double-runs in a CR/track), else create it + auto-remove on exit/kill.
     if not _acquire_gate_lock(project_dir, getattr(args, "agent", None)):
@@ -1634,7 +1639,13 @@ def _smoke_test(args, verb, identity=None):
                       [_disk_abort_warning(verb)],
                       f"{verb}: ok=False — aborted by the disk guard")
             return 2
+    return None
 
+
+def _smoke_run(args, verb, project_dir, identity=None):
+    """The smoke run body after `_smoke_refusal` let it proceed, shared by
+    `smoke-test` and `docker-e2e-gate`. `identity` is the caller's gated-run
+    identity when it opened one, observed by every narration tick."""
     docker_brought_up = False
     if args.with_docker:
         up_args = argparse.Namespace(
@@ -1825,10 +1836,12 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
         return 2
 
     try:
-        return _gated_run(
-            args, project_dir, "gated workspace-regression run starting",
-            lambda identity: _workspace_regression_run(args, project_dir, verb,
-                                                       identity))
+        with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                              getattr(args, "cycle", None),
+                              "gated workspace-regression run starting",
+                              open_fn=_open_gate_identity,
+                              close_fn=_close_gate_identity) as identity:
+            return _workspace_regression_run(args, project_dir, verb, identity)
     finally:
         if not getattr(args, "keep_target", False):
             _reclaim_disk(project_dir, "workspace-regression")
