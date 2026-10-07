@@ -1159,7 +1159,7 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
   if (typeof reason !== "string" || reason.trim().length === 0) {
     return fail(400, "reason must be a non-empty string — run NOT aborted");
   }
-  const close = resolveRunClose(store, pk.key, caller.agentId, { ...body, runId });
+  const close = resolveRunClose(store, pk.key, caller.agentId, { ...body, runId }, "run NOT aborted");
   if (close.fail !== undefined) return close.fail;
   if (store.abortOpenRun(runId, reason) === null) {
     return fail(409, `run ${runId} settled before it could be aborted — run NOT aborted`);
@@ -1177,12 +1177,16 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
  *  - already ended or aborted → 409, nothing stored (the CR's end/end and
  *    end-after-abort races);
  *  - open → the lifecycle stamp for the ONE event about to be written.
+ *
+ * `outcome` ends every refusal — what did NOT happen on the calling route
+ * (the ingest routes store nothing; `handleRunAbort` aborts nothing).
  */
 function resolveRunClose(
   store: Store,
   projectKey: string,
   agentId: string,
   body: V2Body,
+  outcome = "run NOT stored",
 ): {
   fail?: Response;
   runId?: string;
@@ -1190,7 +1194,7 @@ function resolveRunClose(
 } {
   if (body.runId === undefined || body.runId === null) return {};
   if (typeof body.runId !== "string" || body.runId.length === 0) {
-    return { fail: fail(400, "runId must be a non-empty string — run NOT stored") };
+    return { fail: fail(400, `runId must be a non-empty string — ${outcome}`) };
   }
   const runId = body.runId;
   const run = store.getRun(runId);
@@ -1198,7 +1202,7 @@ function resolveRunClose(
     return {
       fail: fail(
         400,
-        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); run NOT stored`,
+        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); ${outcome}`,
       ),
     };
   }
@@ -1206,7 +1210,7 @@ function resolveRunClose(
     return {
       fail: fail(
         400,
-        `runId ${runId} belongs to agent ${run.agentId} in another run context — run NOT stored`,
+        `runId ${runId} belongs to agent ${run.agentId} in another run context — ${outcome}`,
       ),
     };
   }
@@ -1214,7 +1218,7 @@ function resolveRunClose(
     return {
       fail: fail(
         409,
-        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; run NOT stored`,
+        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
       ),
     };
   }
