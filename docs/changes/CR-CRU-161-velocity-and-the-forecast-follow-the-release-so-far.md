@@ -67,21 +67,21 @@ F18 §2 (the projects manager's window control) is withdrawn.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — Velocity is the release's pointed points merged since its start divided by the days
+- [x] **AC1** — Velocity is the release's pointed points merged since its start divided by the days
       since, today included, asserted against fixed merge fixtures (merges on the first day, after idle
       days, today; unpointed CRs; another release's merges, which never count), and every surface that
       shows it (Velocity card, phone foot strip, release band) reads `pts / day` for the focused
       release.
-- [ ] **AC2** — The forecast samples the release's daily throughput since its start (zero days
+- [x] **AC2** — The forecast samples the release's daily throughput since its start (zero days
       included), completes on whole days, is dated as soon as one pointed CR of the release has
       merged, and refuses before that saying so; its answer carries `sampleDays`, asserted with a fixed
       seed.
-- [ ] **AC3** — On the dev board's own history (a copy of its store), 0.3.0's forecast is dated and
+- [x] **AC3** — On the dev board's own history (a copy of its store), 0.3.0's forecast is dated and
       its P50 and P80 fall on different days.
-- [ ] **AC4** — With a dated forecast whose P50 and P80 differ, the burndown draws both traces from the
+- [x] **AC4** — With a dated forecast whose P50 and P80 differ, the burndown draws both traces from the
       today marker to zero at their own dates and the band between them, read from what uPlot drew,
       asserted in a real browser.
-- [ ] **AC5** — The Velocity card matches storyboard **F18 §1** as redrawn, checked in a real browser
+- [x] **AC5** — The Velocity card matches storyboard **F18 §1** as redrawn, checked in a real browser
       at VERIFY; the projects manager has no velocity-window control.
-- [ ] **AC6** — Every existing analytics test still passes, or is re-pinned in this CR's RED where it
+- [x] **AC6** — Every existing analytics test still passes, or is re-pinned in this CR's RED where it
       pinned the calendar-week model, each such change named in the RED report.
