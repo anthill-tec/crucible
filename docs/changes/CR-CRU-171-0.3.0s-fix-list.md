@@ -33,7 +33,16 @@ total stays current: it changes with replanning — a voided or superseded CR lo
 to the release raises it, a re-point moves it — so it is always the points of the release's live
 CRs (merged + pending). DN-crucible-analytics §10 is amended to match at gap analysis.
 
-### 3 — …
+### 3 — nine run-opening verbs take no `--cycle`
+
+**Measured 2026-10-07 (CR-CRU-164 C2 RED, cycle 601):** python `test`, mvn `test`, `unit`, `module`,
+`integration` and `e2e`, and rust `test`, `smoke-test`, `workspace-regression` and `pre-merge-gate`
+open and file a run but accept no `--cycle`; every other client's run-opening verbs do (the shared
+`add_gate_cycle_arg`). An agent of those stacks can only bind by `register --cycle` beforehand, so the
+five clients do not bind a run the same way. **User ruling 2026-10-07:** into this CR — each of the
+nine gains `--cycle` through the shared helper, with the same semantics as everywhere else.
+
+### 4 — …
 
 (more to be added by the user)
 

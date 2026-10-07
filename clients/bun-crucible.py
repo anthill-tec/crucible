@@ -886,7 +886,7 @@ def _run_context():
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, run_id=None):
+                   context=None, raw=None, run_id=None, release=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
@@ -912,7 +912,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # pre-lifecycle one and the server stores no lifecycle fields at all.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -930,7 +931,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
 
 
 def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
-                run_id=None):
+                run_id=None, release=None):
     """CR-CRU-015 §S2 — POST the RAW report and let the BOARD decode it, at
     `/api/v2/runs`, whose `codec` names the decoder the server resolves from its
     own registry (`mvn-crucible.py`'s `_ingest_junit_dir` already ingests this
@@ -959,7 +960,7 @@ def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
     # route shares; absent, the server stores no lifecycle fields.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
     run = resp.get("run") or {}
     print(
         f"ingest {raw_report['codec']}: ok={resp.get('ok')} "
@@ -987,7 +988,7 @@ def _decoded_summary(resp):
             "pending": count("pending"), "total": count("total")}
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "typescript",
@@ -998,7 +999,8 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
     # the run this client opened, so the span is measured instead of abandoned.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+                              release=release)
     # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
     # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
     # path, and with it `pre-merge-gate`'s), leaving stdout un-decodable.
@@ -1089,13 +1091,13 @@ def _run_left_open_help():
     return _axi().run_left_open_help()
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None):
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
     """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`,
     through the shared `open_run`: a refusal degrades to single-shot with a
     warning naming the fallback; an `ok` answer with no runId is a server that
     simply did not open one, and the ingest is the unchanged single-shot POST."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context)
+                           tier=tier, context=context, release=release)
 
 
 def _abandon_trap(run_id):
@@ -1140,6 +1142,8 @@ def cmd_test(args, tier=None):
     # created; a caller who registered BEFORE the run keeps its registration
     # and its cycle binding. Omitted --agent: no lifecycle calls at all.
     identity = None
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     # CR-CRU-017 §S4 — the RUN lifecycle rides INSIDE the identity bracket: the
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
@@ -1166,7 +1170,7 @@ def cmd_test(args, tier=None):
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=release)
             # bun ≥1.3 hides per-test completion lines when it detects an agent
             # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
@@ -1178,7 +1182,8 @@ def cmd_test(args, tier=None):
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
-                                                  context=_run_context())
+                                                  context=_run_context(),
+                                                  release=release)
             # The pre-flight finding rides the SAME envelope warnings[] the
             # run's own lifecycle warnings do, ahead of them (it was decided
             # first) — §S3's second channel.
@@ -1211,7 +1216,7 @@ def cmd_test(args, tier=None):
                                   tier=tier,
                                   context=_run_context(),
                                   raw=getattr(result, "stdout", None),
-                                  run_id=run_id)
+                                  run_id=run_id, release=release)
             _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1230,7 +1235,7 @@ def cmd_test(args, tier=None):
                      "bun test produced no JUnit XML (collection/compile failure)")
         rc = _ingest_compile(project_dir, args.agent,
                              synthetic + ("\n\n" + tail if tail else ""),
-                             run_id=run_id)
+                             run_id=run_id, release=release)
         # CR-CRU-064 §S3 — the synthetic TS0000 ingest above is UNCHANGED
         # (errorCount=1, red card); the envelope is additive and the exit code
         # is still the ingest's own (AC5).
@@ -1283,6 +1288,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
     # the final ingest, try/finally, and (CR-CRU-056) removal ONLY of an
     # identity this run created.
     identity = None
+    # §S1 — the release this run is filed under, exactly as `cmd_test` reads it.
+    release = getattr(args, "release", None)
     # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
@@ -1324,7 +1331,7 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=release)
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
@@ -1334,7 +1341,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
-                                                  context=_run_context())
+                                                  context=_run_context(),
+                                                  release=release)
             run_warnings = preflight_warnings + run_warnings
         try:
             with _abandon_trap(run_id):
@@ -1409,7 +1417,8 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                 run_warnings.append(
                     _raw_route_coverage_warning(raw_report["codec"], script))
             resp = _ingest_raw(project_dir, args.agent, raw_report, tier=tier,
-                               context=_run_context(), run_id=run_id)
+                               context=_run_context(), run_id=run_id,
+                               release=release)
             summary = _decoded_summary(resp)
         else:
             summary, tree, files = _parse_junit_file(junit_path)
@@ -1423,7 +1432,7 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                           f"{lcov_path}", file=sys.stderr)
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   coverage, tier=tier, context=_run_context(),
-                                  run_id=run_id)
+                                  run_id=run_id, release=release)
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
@@ -1572,6 +1581,7 @@ def _gate_regression_args(args):
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
         log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
+        release=getattr(args, "release", None),
         # CR-CRU-017 §S4 — the gate's own opt-out decision carries into the
         # regression it runs; the step must never re-decide it.
         no_lifecycle=getattr(args, "no_lifecycle", True),
@@ -1589,7 +1599,9 @@ def _dispatch_gate_suite(args, suite):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     return (_axi().sibling_client_argv(suite.stack, suite.command,
-                                       agent=args.agent), package_dir)
+                                       agent=args.agent,
+                                       release=getattr(args, "release", None)),
+            package_dir)
 
 
 # ── CR-CRU-008 — plan verbs (plan-file / cycle-activate / cycle-done / cr-close) ──
@@ -2113,6 +2125,12 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_run_release_arg(p):
+    """§S1 — `--release` on a test-run verb, beside `--cycle` (delegates to the
+    shared declaration so all five clients document it identically)."""
+    return _axi().add_run_release_arg(p)
+
+
 def _add_regression_tier_args(p):
     """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
     shared tier registration and keeps every flag it had; the registrar
@@ -2138,6 +2156,7 @@ def _add_declared_tier_args(p):
     p.add_argument("--coverage", action="store_true",
                    help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
     _add_gate_cycle_arg(p)
+    _add_run_release_arg(p)
     _add_reports_arg(p)
     _add_bun_arg(p)
     _add_package_dir_arg(p)
@@ -2344,6 +2363,7 @@ def main():
                    help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
     t.add_argument("--agent", help="If set, ingest the junit result after the run")
     _add_gate_cycle_arg(t)
+    _add_run_release_arg(t)
     _add_reports_arg(t)
     _add_bun_arg(t)
     _add_package_dir_arg(t)
@@ -2367,9 +2387,9 @@ def main():
             cmd_regression,
             "Runs the full-suite `bun test` and ingests it; --coverage adds "
             "lcov.",
-            (_add_regression_tier_args, _add_gate_cycle_arg, _add_reports_arg,
-             _add_bun_arg, _add_package_dir_arg, _add_log_arg,
-             _add_no_lifecycle_arg))),
+            (_add_regression_tier_args, _add_gate_cycle_arg,
+             _add_run_release_arg, _add_reports_arg, _add_bun_arg,
+             _add_package_dir_arg, _add_log_arg, _add_no_lifecycle_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
@@ -2397,6 +2417,7 @@ def main():
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
     _add_gate_cycle_arg(pmg)
+    _add_run_release_arg(pmg)
     _add_reports_arg(pmg)
     _add_bun_arg(pmg)
     _add_package_dir_arg(pmg)

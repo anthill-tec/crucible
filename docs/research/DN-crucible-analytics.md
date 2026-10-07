@@ -198,12 +198,16 @@ existing plan/queue ticks.
   focus it says so.
 - **Release band** in the **header of zone 3**, above the release-scoped table (testid
   `roadmap-progress`): a burndown thumbnail, `remaining of committed pts`, velocity, the P50/P80 chip,
-  and the schedule-health chip when a target is declared. Tap → the analytics pane.
+  and the schedule-health chip when a target is declared, plus (amended 2026-10-07) a
+  `verified · N runs ↗` chip (`roadmap-verified-chip`, singular `1 run`) when runs are filed under the
+  focused release — it opens the Runs tab filtered to that release (`?release=`); none at 0. Tap
+  anywhere else on the band → the analytics pane.
 - **Analytics pane** (testid `analytics-pane`; F14¾): the Roadmap pane swaps to the release's SCRUM
   burndown (testid `burndown-chart`) and the forecast; `← roadmap`, Esc or back restores the roadmap with
   scroll intact (CR-016 one-rule pane state). Velocity is not duplicated into the pane.
 - **Phone** (responsive DN): the band collapses to one ≥44px line; velocity rides the Project band's foot
-  strip; the pane fills the viewport and the chart scrolls inside its own box.
+  strip; the verified-runs chip moves into the analytics pane's header (never both places); the pane
+  fills the viewport and the chart scrolls inside its own box.
 - **Charting library — picked at CR-022 gap analysis: uPlot 1.6.32** (MIT, ~48 KB single
   `iife.min.js`, zero-build, vendored beside VanJS). Stepped paths draw the actual line, high/low bands
   draw P50/P80, hooks draw event labels and the target line. It renders to canvas, so unit tests assert

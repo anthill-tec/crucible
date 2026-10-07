@@ -196,3 +196,20 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the history cycle line for that cycle measures at least 90% of its row's width
     And tapping the history cycle line for that cycle in its empty space opens then closes its linked runs
 
+  # CR-CRU-164 \u00a7S2 \u2014 the verified-runs chip is part of the band's phone-band
+  # collapse: the one-line band has no room for it (CR-CRU-022 \u00a7S5's own
+  # ≥44px one-line rule), so it rides the analytics pane instead, the same
+  # relocation pattern CR-CRU-022's own phone scenario already established
+  # for velocity (the Project band's foot strip) \u2014 here the destination is
+  # the pane the band's own tap already opens.
+  Scenario: CR-CRU-164 \u00a7S2 \u2014 on the phone band the verified-runs chip does not render in the one-line release band but does render in the analytics pane
+    Given a project named "MOB Verify Chip Project" is registered
+    And an online agent "mob-verify-chip-agent" with message "building" is registered on that project
+    And a CR queue registering cr "CR-MOB-VCHIP" titled "mobile verified chip fixture" in wave "1" is posted for that project
+    And 2 passing runs are filed under that release
+    When I open the workspace for that project
+    And I click the "Roadmap" workspace tab
+    Then the roadmap release band does not show the verified-runs chip
+    When I tap the roadmap release band
+    Then the analytics pane shows the verified-runs chip reading "verified · 2 runs ↗"
+

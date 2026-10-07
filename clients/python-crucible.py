@@ -322,12 +322,12 @@ def _narrator(project_dir, agent_id, identity=None):
         _recognise_completion)
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None):
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
     """Open the run BEFORE xmlrunner is spawned, through the shared
     `open_run`. Returns `(run_id, warnings)`; a refusal degrades to a
     single-shot ingest with a warning naming the fallback."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context)
+                           tier=tier, context=context, release=release)
 
 
 # ── Agent lifecycle ─────────────────────────────────────────────────────────
@@ -609,7 +609,7 @@ def _is_zero_discovery(result):
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
                    context=None, raw=None, files=None, run_id=None,
-                   stack_on_start=False):
+                   stack_on_start=False, release=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
     Returns the parsed response dict (the caller emits the §S1 envelope).
 
@@ -641,7 +641,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["raw"] = raw
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -658,7 +659,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None):
     """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context).
 
     CR-CRU-111 AC13a — no COMPILE ingest carries a test tier, so this helper takes
@@ -676,7 +677,8 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+                              release=release)
     print(f"ingest compile (python): ok={resp.get('ok')}"
           + (f" error={resp['error']}" if resp.get("error") else ""),
           file=sys.stderr)
@@ -761,6 +763,8 @@ def cmd_test(args, tier=None, verb="test"):
     cmd = _xmlrunner_cmd(python, getattr(args, "tests", None), args.start_dir,
                          args.pattern, reports_dir)
     env = os.environ.copy()
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
     # can still be supplied: ask the board whether this agent is bound and say
     # so on both channels if it is not. Best-effort — a failed lookup warns
@@ -768,7 +772,7 @@ def cmd_test(args, tier=None, verb="test"):
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
-        context=_run_context())
+        context=_run_context(), release=release)
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     narrator, run_id = None, None
     stack_on_start = False
@@ -777,7 +781,8 @@ def cmd_test(args, tier=None, verb="test"):
         # BEFORE xmlrunner is spawned so the board shows it running.
         narrator = _narrator(project_dir, args.agent)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                          context=_run_context())
+                                          context=_run_context(),
+                                          release=release)
         stack_on_start = not run_warnings
         preflight_warnings = list(preflight_warnings) + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the day
@@ -807,7 +812,7 @@ def cmd_test(args, tier=None, verb="test"):
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files, run_id=run_id,
-                              stack_on_start=stack_on_start)
+                              stack_on_start=stack_on_start, release=release)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          warnings=(list(preflight_warnings)
                                    + _axi().unit_run_wall_vs_cpu_warnings(
@@ -820,7 +825,7 @@ def cmd_test(args, tier=None, verb="test"):
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
     # tier, whatever verb reached it.
     _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
-                    run_id=run_id)
+                    run_id=run_id, release=release)
     # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
     # additive, so a starved toolchain stops returning an exit code with empty
     # stdout. The exit code is untouched (AC5).
@@ -857,7 +862,7 @@ def cmd_regression(args, verb="regression"):
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=getattr(args, "release", None))
         return _regression_run(args, verb, preflight_warnings, identity)
     finally:
         _close_gate_identity(project_dir, identity)
@@ -877,6 +882,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     agent = getattr(args, "agent", None)
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     reports_dir = _reports_dir(project_dir, args.reports, agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
@@ -915,7 +922,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # BEFORE the sweep is spawned so the board shows it running.
         narrator = _narrator(project_dir, agent, identity)
         run_id, run_warnings = _start_run(project_dir, agent, tier="regression",
-                                          context=_run_context())
+                                          context=_run_context(),
+                                          release=release)
         stack_on_start = not run_warnings
         preflight_warnings += run_warnings
     try:
@@ -957,7 +965,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # test tier, so no tier goes on this body.
         _axi().close_narration(narrator)
         _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
-                        run_id=run_id)
+                        run_id=run_id, release=release)
         # CR-CRU-064 §S2/AC6 — emitted under the `verb` PARAMETER, never the
         # literal "regression": `pre-merge-gate` runs this body as its
         # regression step, so a starved GATE must speak as the gate. The
@@ -979,7 +987,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     _axi().close_narration(narrator)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(), files=files,
-                          run_id=run_id, stack_on_start=stack_on_start)
+                          run_id=run_id, stack_on_start=stack_on_start,
+                          release=release)
     ok = bool(resp.get("ok")) and summary["failed"] == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
@@ -1110,6 +1119,7 @@ def cmd_pre_merge_gate(args):
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
+        release=getattr(args, "release", None),
     )
     # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
     # composed once for the fleet. This stack's surface enumerates none (the
@@ -1473,6 +1483,13 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_run_release_arg(p):
+    """§S1 — `--release` on a test-run verb, beside `--cycle` where it has one
+    (delegates to the shared declaration so all five clients document it
+    identically)."""
+    return _axi().add_run_release_arg(p)
+
+
 def _add_regression_tier_args(p):
     """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
     shared tier registration and keeps every flag it had; the registrar
@@ -1510,6 +1527,7 @@ def _add_declared_tier_args(p):
     _add_python_arg(p)
     _add_log_arg(p)
     _add_gate_cycle_arg(p)
+    _add_run_release_arg(p)
 
 
 def _read_declared_discovery(args, _target):
@@ -1653,6 +1671,7 @@ def main():
                    help="Dotted test target(s), e.g. tests.test_mcp_server or "
                         "tests.test_mcp_server.Cls.test_x. Omit to discover.")
     t.add_argument("--agent", help="If set, ingest the result after the run")
+    _add_run_release_arg(t)
     _add_discover_args(t)
     _add_python_arg(t)
     _add_project_dir_arg(t)
@@ -1676,7 +1695,8 @@ def main():
             "Runs full-suite unittest discovery via xmlrunner and ingests it; "
             "--coverage adds coverage.py.",
             (_add_regression_tier_args, _add_gate_cycle_arg,
-             _add_discover_args, _add_python_arg, _add_log_arg))),
+             _add_run_release_arg, _add_discover_args, _add_python_arg,
+             _add_log_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
@@ -1711,6 +1731,7 @@ def main():
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
     _add_gate_cycle_arg(pmg)
+    _add_run_release_arg(pmg)
     _add_discover_args(pmg)
     _add_python_arg(pmg)
     _add_project_dir_arg(pmg)

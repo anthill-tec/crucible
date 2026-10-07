@@ -1011,6 +1011,67 @@ function resolveIngestAttach(
 }
 
 /**
+ * The release a run is filed under — checked on every run route (the start
+ * and the three ingests) BEFORE any write or `touchAgent`, beside
+ * `resolveIngestAttach` and independent of its `validateUnbound`:
+ *  - no `release` → `{}`, the route is unchanged;
+ *  - not a non-empty string → 400;
+ *  - beside a cycle — an explicit `context.cycleId`, or a poster BOUND to a
+ *    cycle → 400: a cycle's runs are its CR's evidence, a release's runs are
+ *    its verification, and one run is never both;
+ *  - a label the roadmap has not declared (`Store#declaredReleaseLabels`) →
+ *    400 naming every label it has;
+ *  - otherwise the label, for the route to stamp on the run row and event.
+ * `outcome` ends every refusal: what did NOT happen on the calling route.
+ */
+function resolveRunRelease(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  body: V2Body,
+  outcome = "run NOT stored",
+): { fail?: Response; release?: string } {
+  const release = body.release;
+  if (release === undefined || release === null) return {};
+  if (typeof release !== "string" || release.length === 0) {
+    return { fail: fail(400, `release must be a non-empty string — ${outcome}`) };
+  }
+  const context = body.context;
+  const explicitCycle =
+    typeof context === "object" && context !== null
+      ? (context as { cycleId?: unknown }).cycleId
+      : undefined;
+  if (explicitCycle !== undefined && explicitCycle !== null) {
+    return {
+      fail: fail(
+        400,
+        `release ${release} cannot be filed beside context.cycleId ${String(explicitCycle)} — a run is a cycle's or a release's, never both; ${outcome}`,
+      ),
+    };
+  }
+  const bound = store.getAgent(projectKey, agentId)?.boundCycleId;
+  if (bound !== undefined) {
+    return {
+      fail: fail(
+        400,
+        `release ${release} cannot be filed by agent ${agentId}, which is bound to cycle ${bound} — a run is a cycle's or a release's, never both; ${outcome}`,
+      ),
+    };
+  }
+  const declared = store.declaredReleaseLabels(projectKey);
+  if (!declared.includes(release)) {
+    const named = declared.length > 0 ? declared.join(", ") : "none";
+    return {
+      fail: fail(
+        400,
+        `release ${release} is not declared on this project's roadmap (declared: ${named}) — ${outcome}`,
+      ),
+    };
+  }
+  return { release };
+}
+
+/**
  * §S2/G4 — a run ingest the attach seam refused: the server, which refused
  * it, writes the refusal onto the agent's `message` (when the seam composed
  * one) before answering with the refusal itself.
@@ -1116,12 +1177,15 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body, "run NOT started");
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) return attach.fail;
 
   const run = store.startRun(pk.key, agentId, {
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   return json(
     {
@@ -1248,6 +1312,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body);
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) {
     return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
@@ -1264,6 +1330,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   // The run is settled by the event that closed it — recorded after the write,
   // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
@@ -1314,6 +1381,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body);
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) {
     return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
@@ -1331,6 +1400,7 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
@@ -1363,6 +1433,10 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  // The release is checked here whatever `validateUnbound` says below: an
+  // explicit cycle beside a release is refused on this route too.
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body);
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   // CR-CRU-057 §S1 — compile evidence is stamped on the SAME footing as run and
   // gate evidence: the one CR-CRU-056 attach seam resolves the poster's row
   // once and yields both its declared role and its bound cycle (gates parity —
@@ -1381,6 +1455,7 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
@@ -4182,6 +4257,9 @@ function eventBrief(event: RunEvent) {
     // `context` is untouched beside it — §S1 keeps it authoritative for the
     // frontend consumers that already read `context.cycleId`.
     ...(event.cycleId !== undefined ? { cycleId: event.cycleId } : {}),
+    // The release a run verifies, top-level beside `cycleId`; key ABSENT on
+    // every event filed under none.
+    ...(event.release !== undefined ? { release: event.release } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.
@@ -4263,6 +4341,16 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
         ...(cycle !== null ? { cycle } : {}),
       });
     }
+  }
+  // The by-release anchor, parallel to the cycleId one: exactly the runs filed
+  // under that release, newest first, aborted ones included, in the list's own
+  // brief shape. An unknown label is 200 with an empty set.
+  const release = url.searchParams.get("release");
+  if (release !== null && project !== undefined) {
+    return reply(req, url, {
+      ok: true,
+      events: withDecisionSummaries(store, store.listEventsForRelease(project, release)),
+    });
   }
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;

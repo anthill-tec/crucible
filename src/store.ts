@@ -189,6 +189,11 @@ interface EventRow {
   // at insert from `context.cycleId`. NULL on an unbound run and on every
   // pre-094 row (the retrofit reconstructs nothing).
   cycle_id: number | null;
+  // The release this run verifies, stamped at ingest from the request's own
+  // top-level `release`. NULL on a cycle's run and on every row stored before
+  // the column existed (the retrofit invents no release for history). A
+  // record table carries none: its projection serves NULL.
+  release: string | null;
 }
 
 /** CR-CRU-017 §S1 — one issued run: `runs` is the OPEN-run store, on disk. */
@@ -204,6 +209,9 @@ interface RunRow {
   settled_at: number | null;
   abort_reason: string | null;
   event_id: string | null;
+  // The release the run was opened under, so an aborted run is filed under
+  // it too. NULL when it was opened under none.
+  release: string | null;
 }
 
 /**
@@ -227,6 +235,8 @@ export interface RunRecord {
   abortReason?: string;
   /** The event that settled this run (end or abort); absent while open. */
   eventId?: string;
+  /** The release this run verifies; absent when it was opened under none. */
+  release?: string;
 }
 
 interface RollupRow {
@@ -765,6 +775,11 @@ export interface RecordEventMeta {
    * the graceful-degradation path (a single-shot ingest is unchanged).
    */
   lifecycle?: { startedAt: number; runtimeMs: number };
+  /**
+   * The release this run verifies, already checked at the route boundary
+   * (declared, and never beside a cycle). Omitting it stores NULL.
+   */
+  release?: string;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -1829,7 +1844,7 @@ function recordProjection(table: "milestones" | "gates", kind: "milestone" | "ga
                  NULL AS pending, NULL AS duration_ms, NULL AS tree, NULL AS coverage,
                  NULL AS compile, context, NULL AS action, NULL AS first_seen, payload,
                  role, role_inferred, NULL AS started_at, NULL AS runtime_ms, NULL AS status,
-                 retired_at, cycle_id
+                 retired_at, cycle_id, NULL AS release
           FROM ${table}`;
 }
 
@@ -2789,7 +2804,37 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
     },
     compactsAfter: true,
   },
+  {
+    description:
+      "events + runs: a release's verification run is filed under the release — a nullable `release` column on the run's event and on its open run row, and an index on (project_key, release, timestamp). Existing rows carry no release",
+    apply(db) {
+      // Additive ALTERs and nothing else, so every existing row is kept and
+      // reads NULL: no release is invented for a run that never declared one.
+      // A table the store never had is created later in its CURRENT shape.
+      for (const table of RELEASE_COLUMN_TABLES) {
+        if (tableExists(db, table) && !columnsOf(db, table).has("release")) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN release TEXT`);
+        }
+      }
+      if (tableExists(db, "events")) db.exec(EVENTS_RELEASE_INDEX_DDL);
+    },
+    satisfiedBy(db) {
+      return RELEASE_COLUMN_TABLES.every(
+        (table) => !tableExists(db, table) || columnsOf(db, table).has("release"),
+      );
+    },
+  },
 ];
+
+/** The two tables a run's release is stored on: its event and its open run row. */
+const RELEASE_COLUMN_TABLES = ["events", "runs"] as const;
+
+/**
+ * The by-release read's seek, composite on the `idx_events_project_cycle`
+ * terms: the filter's equality columns, then the `timestamp` it orders by.
+ */
+const EVENTS_RELEASE_INDEX_DDL = `CREATE INDEX IF NOT EXISTS idx_events_project_release
+  ON events (project_key, release, timestamp)`;
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
 export const MIGRATIONS: readonly MigrationStep[] = MIGRATION_BODIES.map((body, index) => ({
@@ -3120,7 +3165,10 @@ export class Store {
         -- CR-CRU-094 §S1 — the run's cycle binding, in the base schema so a
         -- brand-new store and the end of the chain agree (the retrofit never
         -- runs on a store this build created).
-        cycle_id INTEGER
+        cycle_id INTEGER,
+        -- The release this run verifies, in the base schema so a brand-new
+        -- store and the end of the chain agree.
+        release TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -3136,6 +3184,8 @@ export class Store {
       -- one index serves BOTH the equality filter and the ordering.
       CREATE INDEX IF NOT EXISTS idx_events_project_cycle
         ON events (project_key, cycle_id, timestamp);
+
+      ${EVENTS_RELEASE_INDEX_DDL};
 
       -- CR-CRU-017 §S1 — OPEN and settled RUNS. A new table, never a retrofit:
       -- the base pass creates it whole for every store, old or new (which is
@@ -3167,7 +3217,10 @@ export class Store {
         run_state TEXT NOT NULL,
         settled_at INTEGER,
         abort_reason TEXT,
-        event_id TEXT
+        event_id TEXT,
+        -- The release the run was opened under (NULL: none), so an aborted
+        -- verification run is still filed under its release.
+        release TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_runs_open
@@ -3844,6 +3897,7 @@ export class Store {
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.name !== undefined ? { name: meta.name } : {}),
+      ...(meta?.release !== undefined ? { release: meta.release } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
       ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
@@ -3860,7 +3914,10 @@ export class Store {
     projectKey: string,
     agentId: string,
     compile: CompileReport,
-    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "role" | "lifecycle">,
+    meta?: Pick<
+      RecordEventMeta,
+      "tier" | "stack" | "context" | "codec" | "role" | "lifecycle" | "release"
+    >,
   ): RunEvent {
     // A compile report is stored as rows; a value that is not one is refused
     // before anything is written, the agent row included.
@@ -3880,6 +3937,7 @@ export class Store {
       timestamp: Date.now(),
       compile,
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
+      ...(meta?.release !== undefined ? { release: meta.release } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
@@ -4670,7 +4728,7 @@ export class Store {
   startRun(
     projectKey: string,
     agentId: string,
-    opts?: { tier?: Tier; stack?: string; context?: RunContext },
+    opts?: { tier?: Tier; stack?: string; context?: RunContext; release?: string },
   ): RunRecord {
     this.touchAgent(projectKey, agentId);
     const run: RunRecord = {
@@ -4682,12 +4740,13 @@ export class Store {
       ...(opts?.tier !== undefined ? { tier: opts.tier } : {}),
       ...(opts?.stack !== undefined ? { stack: opts.stack } : {}),
       ...(opts?.context !== undefined ? { context: opts.context } : {}),
+      ...(opts?.release !== undefined ? { release: opts.release } : {}),
     };
     this.db
       .query(
         `INSERT INTO runs (run_id, project_key, agent_id, started_at, tier, stack, context,
-           run_state, settled_at, abort_reason, event_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL)`,
+           run_state, settled_at, abort_reason, event_id, release)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?)`,
       )
       .run(
         run.runId,
@@ -4697,6 +4756,7 @@ export class Store {
         run.tier ?? null,
         run.stack ?? null,
         run.context !== undefined ? JSON.stringify(run.context) : null,
+        run.release ?? null,
       );
     // The dashboard's live "running…" card is driven off the same feed the
     // events stream already refreshes.
@@ -4828,6 +4888,8 @@ export class Store {
       abortReason: reason,
       ...(run.stack !== undefined ? { stack: run.stack } : {}),
       ...(run.context !== undefined ? { context: run.context } : {}),
+      // An aborted verification run stays filed under its release.
+      ...(run.release !== undefined ? { release: run.release } : {}),
       // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
       ...(role !== undefined ? { role, roleInferred: false } : {}),
     };
@@ -4856,6 +4918,7 @@ export class Store {
       ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
       ...(row.abort_reason !== null ? { abortReason: row.abort_reason } : {}),
       ...(row.event_id !== null ? { eventId: row.event_id } : {}),
+      ...((row.release ?? null) !== null ? { release: row.release! } : {}),
     };
   }
 
@@ -4996,6 +5059,44 @@ export class Store {
         .sort(Store.newestFirst),
       false,
     );
+  }
+
+  /**
+   * The runs filed under one release, newest first, aborted ones included —
+   * the `listEventsForCycle` anchor's counterpart, read off the `release`
+   * column through its `(project_key, release, timestamp)` index. Only the
+   * events table carries the column, so no record table is read. An unknown
+   * label answers an empty list; archived projects are excluded.
+   */
+  listEventsForRelease(projectKey: string, release: string): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string, string]>(
+        `SELECT * FROM events WHERE project_key = ? AND release = ?
+           AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
+      )
+      .all(projectKey, release);
+    return this.toEvents(rows.sort(Store.newestFirst), false);
+  }
+
+  /**
+   * Every release label the project's roadmap has declared: the release a
+   * queued CR is planned into, a live release proposal, and a recorded
+   * release. Deduplicated and in version order. A run may be filed only
+   * under one of these.
+   */
+  declaredReleaseLabels(projectKey: string): string[] {
+    const queued = this.db
+      .query<{ release: string }, [string]>(
+        `SELECT DISTINCT release FROM queue_entries
+          WHERE project_key = ? AND release IS NOT NULL`,
+      )
+      .all(projectKey)
+      .map((row) => row.release);
+    const recorded = [...this.listReleaseProposals(projectKey), ...this.listReleases(projectKey)]
+      .map((event) => event.label)
+      .filter((label): label is string => label !== undefined);
+    return [...new Set([...queued, ...recorded])].sort(compareVersionLabels);
   }
 
   /**
@@ -5519,8 +5620,8 @@ export class Store {
              timestamp, name, total, passed, failed, pending, duration_ms,
              tree, coverage, compile, context, action, first_seen, payload,
              role, role_inferred, started_at, runtime_ms, status, retired_at,
-             cycle_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cycle_id, release)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           event.id,
@@ -5573,6 +5674,9 @@ export class Store {
           // constructor still stamps `context` alone, so the two
           // representations remain incapable of disagreeing.
           event.context?.cycleId ?? event.cycleId ?? null,
+          // The release this run verifies, as the route stamped it; NULL when
+          // the run declared none.
+          event.release ?? null,
         );
       writeRunDetailRows(this.db, event);
     })();
@@ -5783,6 +5887,9 @@ export class Store {
       // re-derived from the blob, so the projection proves the stored fact).
       // ABSENT on an unbound run and on every pre-094 row.
       ...((row.cycle_id ?? null) !== null ? { cycleId: row.cycle_id! } : {}),
+      // The release a run verifies, served from its own column. ABSENT on a
+      // run filed under none, on every record and on every older row.
+      ...((row.release ?? null) !== null ? { release: row.release! } : {}),
     };
   }
 

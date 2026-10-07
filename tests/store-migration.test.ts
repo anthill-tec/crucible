@@ -1370,3 +1370,178 @@ describe("CR-CRU-094 §S1/AC2 — events.cycle_id is an APPENDED body: additive,
     expect(migrationChain()[step.from - 1]!.description).toContain("queue_entries");
   });
 });
+
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+// Release-scoped verification runs \u2014 schema v17 -> v18
+// (docs/changes/CR-CRU-164-a-releases-verification-runs-are-filed-under-it.md
+// \u00a7S1 "Stored natively": a release is a COLUMN on the run's event and on its
+// open run row, added through the migration chain, with an index on
+// (project_key, release, timestamp) \u2014 never a key inside the JSON `context`
+// blob). RED for cycle 600 (C1).
+//
+// Measured on THIS build (`bun -e "import('./src/store.ts').then(m =>
+// console.log(m.SCHEMA_VERSION, m.MIGRATIONS.length))"`): both read 17.
+// Neither `events` nor `runs` carries a `release` column and no index names
+// one, so every assertion below fails for that reason \u2014 a missing column, a
+// missing index, a version that never moves \u2014 never a typo.
+// \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+const PRE_RELEASE_VERSION = 17;
+
+/**
+ * A store from THIS build, walked BACK to the shape it had before the
+ * release column/index existed \u2014 the `makePreCycleIdStore` pattern (above),
+ * applied to this CR's own retrofit. The index is dropped before the column
+ * it names (sqlite refuses to drop a column an index still references, the
+ * same ordering `makePreCycleIdStore` uses for `idx_events_project_cycle`).
+ */
+function makePreReleaseStore(dir: string): string {
+  const dbPath = path.join(dir, "crucible.db");
+  Store.open(dbPath);
+  const db = new Database(dbPath);
+  try {
+    db.query(
+      `INSERT INTO projects (key, name, type, sut_root, created_at)
+       VALUES ('p-rel164', 'P', 'backend', '/tmp/p', 1000)`,
+    ).run();
+    db.query(
+      `INSERT INTO events (id, project_key, agent_id, kind, tier, timestamp)
+       VALUES ('e-rel164', 'p-rel164', 'worker-RED', 'test', 'unit', 1000)`,
+    ).run();
+    db.query(
+      `INSERT INTO runs (run_id, project_key, agent_id, started_at, run_state)
+       VALUES ('run-rel164', 'p-rel164', 'worker-RED', 1000, 'open')`,
+    ).run();
+    const eventCols = db
+      .query<{ name: string }, []>(`PRAGMA table_info(events)`)
+      .all()
+      .map((c) => c.name);
+    const runCols = db
+      .query<{ name: string }, []>(`PRAGMA table_info(runs)`)
+      .all()
+      .map((c) => c.name);
+    db.exec(`DROP INDEX IF EXISTS idx_events_project_release`);
+    if (eventCols.includes("release")) db.exec(`ALTER TABLE events DROP COLUMN release`);
+    if (runCols.includes("release")) db.exec(`ALTER TABLE runs DROP COLUMN release`);
+    db.exec(`PRAGMA user_version = ${PRE_RELEASE_VERSION}`);
+  } finally {
+    db.close();
+  }
+  return dbPath;
+}
+
+/** The stored `release` column per events/runs row id, read with a second raw connection. */
+function storedReleases(dbPath: string): {
+  events: Record<string, unknown>;
+  runs: Record<string, unknown>;
+} {
+  const db = new Database(dbPath);
+  try {
+    const events = Object.fromEntries(
+      db
+        .query<{ id: string; release: unknown }, []>(`SELECT id, release FROM events`)
+        .all()
+        .map((r) => [r.id, r.release]),
+    );
+    const runs = Object.fromEntries(
+      db
+        .query<{ run_id: string; release: unknown }, []>(`SELECT run_id, release FROM runs`)
+        .all()
+        .map((r) => [r.run_id, r.release]),
+    );
+    return { events, runs };
+  } finally {
+    db.close();
+  }
+}
+
+/** `table`'s own row count \u2014 `rowCounts`' COUNTED_TABLES omits `runs` entirely. */
+function countTable(dbPath: string, table: string): number {
+  const db = new Database(dbPath);
+  try {
+    return db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1;
+  } finally {
+    db.close();
+  }
+}
+
+/** An index's own DDL on `table` that names `column` \u2014 never a guessed index name. */
+function indexesNaming(dbPath: string, table: string, column: string): string[] {
+  const db = new Database(dbPath);
+  try {
+    return db
+      .query<{ sql: string | null }, [string]>(
+        `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`,
+      )
+      .all(table)
+      .map((r) => r.sql ?? "")
+      .filter((sql) => sql.includes(column));
+  } finally {
+    db.close();
+  }
+}
+
+describe("CR-CRU-164 \u00a7S1 \u2014 release is stored NATIVELY on the migration chain: schema v17 -> v18", () => {
+  test("a store from the PREVIOUS build gains `release` on events AND runs, loses NOT ONE row, and earns the (project_key, release, timestamp) index", () => {
+    const dir = tmpDir();
+    const dbPath = makePreReleaseStore(dir);
+
+    // Precondition, so the test can never pass by testing nothing.
+    expect(userVersion(dbPath)).toBe(PRE_RELEASE_VERSION);
+    expect(columnsOf(dbPath, "events")).not.toContain("release");
+    expect(columnsOf(dbPath, "runs")).not.toContain("release");
+    expect(indexesNaming(dbPath, "events", "release")).toEqual([]);
+    const before = rowCounts(dbPath);
+    expect(before.events).toBe(1);
+    expect(before.projects).toBe(1);
+    const runsBefore = countTable(dbPath, "runs");
+    expect(runsBefore).toBe(1);
+
+    Store.open(dbPath);
+
+    expect(columnsOf(dbPath, "events")).toContain("release");
+    expect(columnsOf(dbPath, "runs")).toContain("release");
+    // Migrated to the END of the chain, whatever this build's end is.
+    expect(userVersion(dbPath)).toBe(schemaVersion());
+    expect(userVersion(dbPath)).toBeGreaterThan(PRE_RELEASE_VERSION);
+    // EVERY counted table, not just events/runs: a retrofit that rebuilds a
+    // table (CREATE-copy-DROP) shows up here as a lost row somewhere.
+    expect(rowCounts(dbPath)).toEqual(before);
+    expect(countTable(dbPath, "runs")).toBe(runsBefore);
+
+    // \u00a7S1 \u2014 the pre-existing event and the pre-existing OPEN run carry NO
+    // release: the retrofit never invents one for history it cannot see.
+    const { events, runs } = storedReleases(dbPath);
+    expect(events).toEqual({ "e-rel164": null });
+    expect(runs).toEqual({ "run-rel164": null });
+
+    // \u00a7S1 \u2014 "stored natively\u2026 with an index on (project_key, release,
+    // timestamp) \u2014 not a key in the JSON context": an index naming `release`
+    // now exists on `events`, and its own DDL carries the full composite.
+    const named = indexesNaming(dbPath, "events", "release");
+    expect(named.length).toBeGreaterThan(0);
+    expect(named[0]).toContain("project_key");
+    expect(named[0]).toContain("timestamp");
+
+    // CR-CRU-071 AC4 \u2014 a pre-upgrade backup was written before this build's
+    // own retrofit touched the file; this is THIS step's own instance of it,
+    // on a file this test can inspect directly.
+    expect(siblings(dir, PRE_UPGRADE_RE).length).toBeGreaterThan(0);
+  });
+
+  test("a BRAND-NEW store is built AT the release schema already: no retrofit owed, no backup written", () => {
+    const dir = tmpDir();
+    const fresh = path.join(dir, "crucible.db");
+
+    const store = Store.open(fresh);
+
+    expect(store.schemaVersion).toBe(schemaVersion());
+    expect(schemaVersion()).toBeGreaterThan(PRE_RELEASE_VERSION);
+    expect(columnsOf(fresh, "events")).toContain("release");
+    expect(columnsOf(fresh, "runs")).toContain("release");
+    expect(indexesNaming(fresh, "events", "release").length).toBeGreaterThan(0);
+    expect(migrationOf(store)).toBeNull();
+    expect(siblings(dir, PRE_UPGRADE_RE)).toEqual([]);
+  });
+});
+

@@ -19,11 +19,17 @@ release label. The refusal below is new behaviour, not a copy of an existing one
 
 ### §S1 — `--release` on test runs
 
-`--release X.Y.Z` sits beside `--cycle` at every place a client declares it (the shared
-`add_gate_cycle_arg` sites): bun `test`, `regression`, `pre-merge-gate` and its declared-tier verbs;
+`--release X.Y.Z` is accepted by each of these verbs, beside `--cycle` where the verb has one
+(corrected 2026-10-07 at C2 RED: python `test`, mvn `test` and its tier verbs, and rust `test`,
+`smoke-test`, `workspace-regression` and `pre-merge-gate` take no `--cycle` today; they take
+`--release` all the same, and adding `--cycle` to them is not this CR's scope): bun `test`, `regression`, `pre-merge-gate` and its declared-tier verbs;
 python `test`, `regression`, `pre-merge-gate` and its tier verbs; mvn `test`, its tier verbs,
 `regression` and `pre-merge-gate`; rust `test`, `regression-ingest`, `smoke-test`,
-`workspace-regression` and `pre-merge-gate`; arduino `test`/`unit`/`regression` and `pre-merge-gate`.
+`workspace-regression`, `pre-merge-gate` and its tier verbs; arduino `test`/`unit`/`regression`,
+`pre-merge-gate` and its declared-tier verbs (the last two groups restored 2026-10-07 at C2 GREEN:
+the filed §S1 named every client's declared-tier verbs and the gap-analysis list dropped them).
+`pre-merge-gate --release` passes the release on to every suite it runs, the other stacks'
+declared suites included, so a release's gate is filed under the release whole.
 It rides both the run start (`POST /api/v2/runs/start`) and the ingest that closes the run.
 
 - **Declared release.** A release is declared when the project's roadmap knows it: a CR planned
@@ -53,16 +59,16 @@ does not overflow; a release with no runs shows no chip.
 
 ## Acceptance criteria
 
-- [ ] For each verb named in §S1, in each of the five clients, `--release 0.4.0` files a run whose
+- [x] For each verb named in §S1, in each of the five clients, `--release 0.4.0` files a run whose
       event and run row carry release `0.4.0`, and the envelope carries the `release-run` note and
       no `no-cycle` warning — asserted per client against the five-client subprocess harness, and
       once end to end against a real server.
-- [ ] An undeclared release is refused (400) naming the declared ones; `--release` with `--cycle`,
+- [x] An undeclared release is refused (400) naming the declared ones; `--release` with `--cycle`,
       or from an agent bound to a cycle, is refused (400); in both cases nothing is stored —
       asserted on the server.
-- [ ] A store at schema v17 migrates to v18 through the chain (backup written, existing runs carry
+- [x] A store at schema v17 migrates to v18 through the chain (backup written, existing runs carry
       no release, the index exists); a fresh store is built at v18.
-- [ ] `GET /api/v2/events?project=…&release=X` answers exactly that release's runs, aborted ones
+- [x] `GET /api/v2/events?project=…&release=X` answers exactly that release's runs, aborted ones
       included, and nothing else; the release band shows `verified · N runs ↗` with the right N
       for the focused release, none when N is 0, and opens the Runs tab showing exactly those runs;
       on a phone the chip is in the analytics pane — asserted on the server and in a real browser.

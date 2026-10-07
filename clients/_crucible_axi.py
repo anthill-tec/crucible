@@ -1289,6 +1289,17 @@ GATE_RELEASE_HELP = (
     "release: a gate naming one is exempt from pruning until that release "
     "records, and is retired the moment it does.")
 
+# §S1 — the ONE `--release` help text for the TEST-RUN verbs, so all five
+# clients document the flag identically. Not the gate's text: a gate NAMES the
+# release it gates (its `version`), while a test run is FILED under one.
+RUN_RELEASE_HELP = (
+    "Label of the release this run verifies (e.g. 0.4.0), posted VERBATIM as "
+    "the top-level `release` of the run start and of every ingest of the run — "
+    "never invented, normalised or put in `context`. The run is filed under "
+    "that release instead of a cycle: the board refuses a release its roadmap "
+    "does not declare, and a release beside --cycle or from an agent bound to "
+    "a cycle, and then nothing is run or stored. Omit it for a cycle's runs.")
+
 
 # CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five
 # clients document the flag identically. OPTIONAL, because a CR can be born
@@ -1660,6 +1671,21 @@ def no_cycle_line():
     return f"[crucible] WARN: {w['code']} — {w['detail']}"
 
 
+RELEASE_RUN_CODE = "release-run"
+
+
+def release_run_note(release):
+    """§S1 — the note a run filed under `--release` carries INSTEAD of the
+    `no-cycle` warning: it has no cycle attribution on purpose, because a
+    release's runs are its verification and never a cycle's evidence."""
+    return {
+        "code": RELEASE_RUN_CODE,
+        "detail": (f"this run is filed under release {release} — a release "
+                   f"verification run, so it carries no cycle attribution by "
+                   f"design and is read back by that release, not by a cycle"),
+    }
+
+
 def _bound_cycle_id(resp, agent_id):
     """`(known, bound_cycle_id)` for `agent_id` in a `GET /api/v2/agents`
     response. `known` is False whenever the board did not actually answer for
@@ -1678,7 +1704,7 @@ def _bound_cycle_id(resp, agent_id):
 
 
 def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
-                             context=None, stream=None):
+                             context=None, stream=None, release=None):
     """§S3 — the pre-flight attribution check every ingesting run makes BEFORE
     it spawns its runner. Returns the envelope `warnings[]` fragment (`[]` or
     one `{code, detail}`) and prints the same warning's stderr line, so both
@@ -1688,6 +1714,10 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
     a malformed answer or ANY raised exception yields no warning and the run
     proceeds. `get` is the calling client's own `_get` (its test harnesses
     patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
+
+    §S1 — a run filed under `release` is unattributed to a cycle on purpose:
+    the binding is read as for any run, but the verdict is the `release-run`
+    note (`release_run_note`), never `no-cycle`, on either channel.
     """
     try:
         if not agent_id or not project_key:
@@ -1700,6 +1730,11 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
             return []
         resp = get(f"/api/v2/agents?project={project_key}",
                    timeout=PREFLIGHT_TIMEOUT_S)
+        if release:
+            note = release_run_note(release)
+            print(f"[crucible] NOTE: {note['code']} — {note['detail']}",
+                  file=stream if stream is not None else sys.stderr)
+            return [note]
         known, bound = _bound_cycle_id(resp, agent_id)
         if not known or bound is not None:
             return []
@@ -2147,6 +2182,45 @@ def emit_tier_run_undeclared_hard_stop(verb, refusal, context=None):
     return 1
 
 
+# §S1 — the fourth hard stop: the board refused to open a run under the
+# release it was asked to file it under (an undeclared release, or a release
+# beside a cycle). A release run never degrades to single-shot the way an
+# unattributed run does: the ingest would carry the same release and be
+# refused in turn, after the suite had burned its minutes. Same route as the
+# hard stops above — raised by `open_run`, converted by `run_verb` — so
+# nothing is run and nothing is ingested.
+
+RELEASE_RUN_REFUSED_CODE = "release-run-refused"
+
+
+class ReleaseRunRefused(Exception):
+    """§S1 — raised by `open_run` when the board refuses to open a run filed
+    under `release`; carries the board's own `error`, verbatim."""
+
+    def __init__(self, release, error):
+        self.release = release
+        self.error = error
+        self.detail = (f"the board refused to open a run under release "
+                       f"{release}: {error}")
+        self.help = [
+            "declare the release on the roadmap (cr-plan a CR into it, or "
+            "release-propose it), then re-run with --release",
+            "a release run takes no --cycle and no cycle-bound agent: re-run "
+            "it unbound, or drop --release to file a cycle's run"]
+        super().__init__(self.detail)
+
+
+def emit_release_run_refused_hard_stop(verb, refusal, context=None):
+    """§S1 — emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a refused release run, and return the non-zero exit code.
+    Nothing is run, nothing is ingested from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {RELEASE_RUN_REFUSED_CODE} — {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2185,6 +2259,10 @@ def run_verb(func, args, project_key_fn=None):
             _hard_stop_context(args, project_key_fn))
     except TierRunUndeclared as refusal:
         return emit_tier_run_undeclared_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn))
+    except ReleaseRunRefused as refusal:
+        return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
 
@@ -5071,7 +5149,7 @@ def take_refused_ingest_warnings():
     return taken
 
 
-def post_ingest(post_fn, path, payload):
+def post_ingest(post_fn, path, payload, *, release=None):
     """§S5/AC7 — send a run to the board through the client's own `_post` seam
     and REMEMBER what went out, so `emit_axi` can state the tier of the run it
     ingested without any client deciding that answer for itself.
@@ -5081,8 +5159,13 @@ def post_ingest(post_fn, path, payload):
     of an ingest, never the transport. The tier is read off the BODY rather
     than from a parameter, so the envelope can only repeat what the wire
     carried — an ingest that stated no tier is remembered as having stated
-    none, which §S2/AC3 made the honest answer."""
+    none, which §S2/AC3 made the honest answer.
+
+    §S1 — `release` (the verb's `--release`) rides as the body's own
+    TOP-LEVEL `release`, on every ingest of a release run and on none other."""
     global _ingested_run_tier, _ingested_compile
+    if release:
+        payload = {**(payload or {}), "release": release}
     if path in RUN_INGEST_PATHS:
         _ingested_run_tier = (payload or {}).get("tier")
     elif path == COMPILE_INGEST_PATH:
@@ -5366,7 +5449,7 @@ def _python_suite_argv(tokens):
 _SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
 
 
-def sibling_client_argv(stack, command, agent=None):
+def sibling_client_argv(stack, command, agent=None, *, release=None):
     """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
     `command` declares, or None when this declaration cannot be dispatched.
 
@@ -5380,7 +5463,10 @@ def sibling_client_argv(stack, command, agent=None):
 
     The gate's `--agent` rides last so the dispatched run is attributed to the
     gate that asked for it; a client handed the flag twice takes the last,
-    which is this one."""
+    which is this one.
+
+    §S1 — a gate given `--release` passes it on the same way, and only then,
+    so a release's gate is filed under the release whole."""
     try:
         tokens = shlex.split(command or "")
     except ValueError:
@@ -5394,6 +5480,8 @@ def sibling_client_argv(stack, command, agent=None):
         argv = builder(tokens) if builder else None
     if argv and agent:
         argv += ["--agent", agent]
+    if argv and release:
+        argv += ["--release", release]
     return argv
 
 
@@ -6192,18 +6280,25 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
     return 128 + abandoned.signum
 
 
-def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None):
+def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
+             *, release=None):
     """Open the run BEFORE the suite is spawned. Returns `(run_id, warnings)`.
 
     A refusal degrades to single-shot with a warning naming the fallback. An
     `ok` answer that carries no runId is a server that simply did not open one
     (nothing failed, so there is nothing to report): the ingest is then the
-    unchanged single-shot POST."""
+    unchanged single-shot POST.
+
+    \u00a7S1 \u2014 `release` rides the start body's TOP-LEVEL `release`, and a
+    refused release run raises `ReleaseRunRefused` instead of degrading: its
+    single-shot ingest would carry the same release and be refused in turn."""
     payload = {"projectKey": project_key, "agentId": agent_id, "stack": stack}
     if tier:
         payload["tier"] = tier
     if context:
         payload["context"] = context
+    if release:
+        payload["release"] = release
     resp = post_fn(RUN_START_PATH, payload) or {}
     run_id = resp.get("runId")
     if run_id:
@@ -6212,6 +6307,8 @@ def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None):
     if resp.get("ok"):
         return None, []
     error = resp.get("error") or "the server opened no run"
+    if release:
+        raise ReleaseRunRefused(release, error)
     print(f"[crucible] WARN: run lifecycle unavailable ({error}) \u2014 "
           f"single-shot ingest", file=sys.stderr)
     return None, [run_lifecycle_unavailable_warning(error)]
@@ -6479,6 +6576,14 @@ def add_gate_release_arg(p):
     One helper for the whole fleet, so all five clients spell the flag and its
     help identically."""
     p.add_argument("--release", help=GATE_RELEASE_HELP)
+
+
+def add_run_release_arg(p):
+    """\u00a7S1 \u2014 declare `--release` on a TEST-RUN verb: the release this run
+    is filed under, beside `--cycle` where the verb has one. One helper for
+    the whole fleet, with its OWN help (`RUN_RELEASE_HELP`) \u2014 a gate names
+    the release it gates, a run is filed under one."""
+    p.add_argument("--release", help=RUN_RELEASE_HELP)
 
 
 def add_gate_respond_verb(sub, func, *, parents=(), add_args=()):
