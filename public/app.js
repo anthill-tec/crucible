@@ -93,9 +93,10 @@
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
 
     // CR-CRU-022 §S5 — the analytics reads (DN-crucible-analytics §10). Velocity
-    // is PROJECT-level; burndown + forecast belong to the FOCUSED release and
-    // are held as one pair keyed by that release, so a band can never pair one
-    // release's burndown with another's forecast. Out of the vanX tree on
+    // (the release's pace so far), burndown and forecast all belong to the
+    // FOCUSED release; burndown + forecast are held as one pair keyed by that
+    // release, so a band can never pair one release's burndown with another's
+    // forecast, and velocity names its own release. Out of the vanX tree on
     // purpose: each is replaced wholesale, and only when its JSON changed, so
     // an SSE tick carrying no analytics change re-renders nothing (and never
     // redraws the chart).
@@ -504,9 +505,9 @@
     // response draws nothing rather than a band of undefineds. A failed read
     // keeps the last-known value for the SAME release; a different release
     // never inherits another's numbers.
-    const isVelocityBody = (body) =>
-      body !== null && typeof body === "object" && Array.isArray(body.weeks) &&
-      typeof body.sampleWeeks === "number";
+    const isVelocityBody = (body, release) =>
+      body !== null && typeof body === "object" && body.release === release &&
+      Array.isArray(body.days) && typeof body.sampleDays === "number";
     const isBurndownBody = (body, release) =>
       body !== null && typeof body === "object" && body.release === release &&
       typeof body.committedPoints === "number" && Array.isArray(body.points);
@@ -522,20 +523,23 @@
       }
       const projectKey = state.route.projectKey;
       const base = `/api/v2/projects/${encodeURIComponent(projectKey)}/analytics`;
-      try {
-        const body = await getJson(`${base}/velocity`);
-        if (state.route.projectKey === projectKey) {
-          setIfChanged(velocityData, isVelocityBody(body) ? body : null);
-        }
-      } catch {
-        // Keep the last-known velocity while the read is unreachable.
-      }
       const release = focusedReleaseLabel();
       if (release === undefined) {
+        // Velocity is the focused release's pace: with no release in focus
+        // there is nothing to read, and no other release's figure may linger.
+        velocityData.val = null;
         releaseAnalytics.val = null;
         return;
       }
       const query = `release=${encodeURIComponent(release)}`;
+      const heldVelocity = velocityData.val;
+      let velocity = heldVelocity !== null && heldVelocity.release === release ? heldVelocity : null;
+      try {
+        const body = await getJson(`${base}/velocity?${query}`);
+        velocity = isVelocityBody(body, release) ? body : null;
+      } catch {
+        // Keep the last-known velocity of the SAME release while unreachable.
+      }
       const held = releaseAnalytics.val;
       const same = held !== null && held.projectKey === projectKey && held.release === release;
       let burndown = same ? held.burndown : null;
@@ -553,6 +557,7 @@
         // Same as above: the band states only what was answered.
       }
       if (state.route.projectKey !== projectKey || focusedReleaseLabel() !== release) return;
+      setIfChanged(velocityData, velocity);
       setIfChanged(releaseAnalytics, { projectKey, release, burndown, forecast });
     }
 
@@ -900,8 +905,8 @@
       return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
     };
     const velocityFigure = () => {
-      const mean = velocityData.val?.pointsPerWeek;
-      return typeof mean === "number" ? fmtPoints(mean) : "—";
+      const rate = velocityData.val?.pointsPerDay;
+      return typeof rate === "number" ? fmtPoints(rate) : "—";
     };
 
     // CR-CRU-021 §S3 — cycle-timer format: OWN zero-padded-seconds form
@@ -2808,28 +2813,46 @@
         // CR-CRU-022 §S5 — on the phone band velocity rides the foot strip.
         span(
           { "data-testid": "project-band-velocity", class: "app-card-meta" },
-          () => `${velocityFigure()} pts / week`,
+          () => `${velocityFigure()} pts / day`,
         ),
         span({ class: "app-band-foot-open" }, "open"),
       );
 
-    // CR-CRU-022 §S5 / F16 — the Project band's Velocity card: story points
-    // merged per calendar week (the 3-week mean), the weekly bars, the sample
-    // it rests on, and the secondary FLOW line (exec · gate per cycle), which
-    // is never summed into velocity. Project-level, so it rides the Project
-    // pane and is the same on every tab. Its heading is a plain section title,
-    // not a `pane-section-title` handle: the pane's two named sections
-    // (Project, Vitals) are unchanged.
+    // CR-CRU-022 §S5 / F18 §1 — the Project band's Velocity card: the FOCUSED
+    // release's pace so far (its points merged since it started ÷ the days
+    // since, today included), what that covers, one bar per day with the
+    // dashed rate line, and the secondary FLOW line (exec · gate per cycle),
+    // which is never summed into velocity. It rides the Project pane and is
+    // the same on every tab; with no release in focus it states so and shows
+    // no figure. Its heading is a plain section title, not a
+    // `pane-section-title` handle: the pane's two named sections (Project,
+    // Vitals) are unchanged.
+    const dayLabel = (day) => `${Number(day.slice(5, 7))}/${day.slice(8, 10)}`;
     const VelocityCard = () => {
       const v = velocityData.val;
-      if (v === null) return "";
-      const mean = v.pointsPerWeek;
-      const weeks = v.weeks;
-      const top = Math.max(1, typeof mean === "number" ? mean : 0, ...weeks.map((w) => w.points));
-      const sample =
-        typeof mean !== "number"
-          ? "no pointed merges yet"
-          : `mean of the last ${v.sampleWeeks} week${v.sampleWeeks === 1 ? "" : "s"}`;
+      const heading = div({ class: "app-pane-section-title" }, "Velocity");
+      if (v === null) {
+        const release = focusedReleaseLabel();
+        return div(
+          { class: "app-rail-section app-velocity" },
+          heading,
+          div(
+            { "data-testid": "project-velocity", class: "app-card app-velocity-card" },
+            div(
+              { class: "app-card-meta" },
+              release === undefined ? "no release in focus" : `${release} · no pace read yet`,
+            ),
+          ),
+        );
+      }
+      const rate = v.pointsPerDay;
+      const days = v.days;
+      const merged = days.reduce((sum, d) => sum + d.points, 0);
+      const top = Math.max(1, typeof rate === "number" ? rate : 0, ...days.map((d) => d.points));
+      const covers =
+        days.length === 0
+          ? `${v.release} · not started`
+          : `${v.release} so far · ${v.sampleDays} day${v.sampleDays === 1 ? "" : "s"} · ${fmtPoints(merged)} pts`;
       const flow = v.flow ?? {};
       const flowText =
         typeof flow.execMsPerCycle === "number" && typeof flow.gateMsPerCycle === "number"
@@ -2839,39 +2862,39 @@
           : "flow · no timed cycles yet";
       return div(
         { class: "app-rail-section app-velocity" },
-        div({ class: "app-pane-section-title" }, "Velocity"),
+        heading,
         div(
           { "data-testid": "project-velocity", class: "app-card app-velocity-card" },
-          div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / week"),
-          div({ class: "app-card-meta" }, sample),
-          weeks.length === 0
+          div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / day"),
+          div({ class: "app-card-meta" }, covers),
+          days.length === 0
             ? null
             : div(
                 {
                   "data-testid": "velocity-bars",
                   class: "app-velocity-bars",
                   role: "img",
-                  "aria-label": "story points merged per week",
+                  "aria-label": `story points of ${v.release} merged per day since it started`,
                 },
-                weeks.map((w) =>
+                days.map((d) =>
                   div({
                     class: "app-velocity-bar",
-                    title: `${w.week} · ${w.points} pts`,
-                    style: `height:${Math.round((w.points / top) * 100)}%;`,
+                    title: `${d.day} · ${d.points} pts`,
+                    style: `height:${Math.round((d.points / top) * 100)}%;`,
                   }),
                 ),
-                typeof mean === "number"
+                typeof rate === "number"
                   ? div({
                       class: "app-velocity-mean",
-                      style: `bottom:${Math.round((mean / top) * 100)}%;`,
+                      style: `bottom:${Math.round((rate / top) * 100)}%;`,
                     })
                   : null,
               ),
-          weeks.length === 0
+          days.length === 0
             ? null
             : div(
                 { class: "app-card-meta" },
-                `${weeks[0].week} … ${weeks[weeks.length - 1].week} · dashed = the mean`,
+                `${dayLabel(days[0].day)} … ${dayLabel(days[days.length - 1].day)} · dashed = the rate · today counts`,
               ),
           div({ "data-testid": "velocity-flow", class: "app-card-meta app-velocity-flow" }, flowText),
         ),
@@ -4400,13 +4423,14 @@
       typeof fc.p50Ts === "number" &&
       typeof fc.p80Ts === "number";
 
-    const FORECAST_SAMPLE_WEEKS = 3; // DN §7 — the confidence gate
+    // DN §7 — how many days a dated forecast rests on (`sampleDays`).
+    const forecastDays = (fc) => `${fc.sampleDays} day${fc.sampleDays === 1 ? "" : "s"}`;
 
+    // DN §7 — the confidence gate: the forecast is dated once one pointed CR
+    // of the release has merged; before that it refuses, saying so.
     const forecastRefusal = (fc) => {
       if (fc === null || fc === undefined) return "no forecast";
-      if (fc.status === "insufficient_history") {
-        return `no forecast · ${fc.sampleWeeks} of ${FORECAST_SAMPLE_WEEKS} weeks of velocity`;
-      }
+      if (fc.status === "insufficient_history") return "no forecast · no pointed CR merged yet";
       if (fc.status === "unpointed") return "no forecast · unpointed CRs";
       return "no forecast";
     };
@@ -4414,10 +4438,7 @@
     const forecastRefusalLong = (fc, bd) => {
       if (fc === null || fc === undefined) return "No forecast was answered for this release.";
       if (fc.status === "insufficient_history") {
-        return (
-          `No forecast yet: ${fc.sampleWeeks} of the ${FORECAST_SAMPLE_WEEKS} completed weeks ` +
-          "of pointed velocity it needs."
-        );
+        return "No forecast yet: no pointed CR of the release has merged yet.";
       }
       if (fc.status === "unpointed") {
         const names = fc.unpointed ?? bd.unpointed ?? [];
@@ -4505,7 +4526,7 @@
           b(fmtPoints(burndownRemaining(bd, fc))),
           ` of ${fmtPoints(bd.committedPoints)} pts left`,
         ),
-        span({ class: "app-roadmap-progress-text" }, `${velocityFigure()} pts/wk`),
+        span({ class: "app-roadmap-progress-text" }, `${velocityFigure()} pts / day`),
         span(
           { "data-testid": "roadmap-forecast-chip", class: "app-chip app-roadmap-progress-chip" },
           dated ? `P50 ${shortDay(fc.p50Ts)} · P80 ${shortDay(fc.p80Ts)}` : forecastRefusal(fc),
@@ -5086,7 +5107,7 @@
         "Orange: points actually remaining; it drops when a CR merges, rises when scope is added, " +
         "and every step carries its event label.";
       const band = forecastDated(fc)
-        ? " From today, the band projects the remaining points forward at the velocity distribution (P50 green, P80 amber)."
+        ? ` From today, the band projects the remaining points forward by sampling the release's ${forecastDays(fc)} (P50 green, P80 amber).`
         : "";
       return ideal + actual + band;
     };
@@ -5112,7 +5133,7 @@
         dated
           ? div(
               { class: "app-card-meta" },
-              `1,000 draws of weekly velocity against the ${fmtPoints(fc.remainingPoints)} pts left`,
+              `1,000 draws of the release's ${forecastDays(fc)} against the ${fmtPoints(fc.remainingPoints)} pts left`,
             )
           : null,
       );
