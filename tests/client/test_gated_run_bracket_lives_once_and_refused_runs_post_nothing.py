@@ -9,8 +9,11 @@ starts posts nothing.
     `_gated_run`, and each call site that used to carry its own copy (mvn's
     surefire/failsafe tiers and `cmd_test`; rust's `cmd_test`,
     `cmd_smoke_test` and `cmd_workspace_regression`; python's `cmd_test`;
-    bun's `cmd_test` and `cmd_regression`) enters the shared one and no longer
-    calls `_open_gate_identity` / `_close_gate_identity` itself.
+    bun's `cmd_test` and `cmd_regression`; the regression brackets that run
+    the cycle pre-flight inside the open: mvn `cmd_regression`, rust
+    `cmd_regression_ingest`, python `cmd_regression`, arduino
+    `_run_native_tests`) enters the shared one and no longer calls
+    `_open_gate_identity` / `_close_gate_identity` itself.
 
 (b) `RefusedRustRunPostsNothingTest` — behavioural, a real subprocess against
     a `RecordingBoard`. rust `smoke-test` refused by a held gate lock, or by
@@ -58,6 +61,10 @@ SHARED_BRACKET_CALL_SITES = (
     ("python-crucible.py", "cmd_test"),
     ("bun-crucible.py", "cmd_test"),
     ("bun-crucible.py", "cmd_regression"),
+    ("mvn-crucible.py", "cmd_regression"),
+    ("rust-crucible.py", "cmd_regression_ingest"),
+    ("python-crucible.py", "cmd_regression"),
+    ("arduino-crucible.py", "_run_native_tests"),
 )
 
 _HAND_ROLLED_BRACKET_CALLS = ("_open_gate_identity", "_close_gate_identity")
