@@ -51,7 +51,7 @@ export interface ForecastFixture {
   p50Ts?: number;
   p80Ts?: number;
   scheduleHealth?: string;
-  sampleWeeks: number;
+  sampleDays: number;
   status: "ok" | "insufficient_history" | "unpointed";
   unpointed?: string[];
 }
@@ -150,7 +150,7 @@ export async function mockDatedForecast(
     remainingPoints: remaining,
     p50Ts,
     p80Ts,
-    sampleWeeks: 3,
+    sampleDays: 3,
     status: "ok",
   };
   await routeAnalytics(page, projectKey, burndown, forecast);
@@ -166,8 +166,9 @@ export interface RefusalExpectation {
   mustContain: string[];
 }
 
-/** A forecast that refuses with `insufficient_history` — fewer than the 3
- * completed weeks `FORECAST_SAMPLE_WEEKS` (public/app.js) needs. */
+/** A forecast that refuses with `insufficient_history` — CR-CRU-161 §S2's
+ * confidence gate (amended 2026-10-07): no pointed CR of the release has
+ * merged yet. A BINARY gate, not the old "N of 3 weeks" sample-count one. */
 export async function mockRefusedInsufficientHistory(
   page: Page,
   projectKey: string,
@@ -180,14 +181,14 @@ export async function mockRefusedInsufficientHistory(
   };
   const forecast: ForecastFixture = {
     remainingPoints: 10,
-    sampleWeeks: 1,
+    sampleDays: 0,
     status: "insufficient_history",
   };
   await routeAnalytics(page, projectKey, burndown, forecast);
-  // Specific to THIS refusal: the sample-weeks figures actually answered
-  // (1 of 3), never a generic "no forecast" string a no-op stub could print
-  // for either refusal kind.
-  return { mustContain: ["1", "3"] };
+  // Specific to THIS refusal: the spec's own wording for the gate (§S2 —
+  // "saying no pointed CR of the release has merged yet"), never a generic
+  // "no forecast" string a no-op stub could print for either refusal kind.
+  return { mustContain: ["no pointed cr of the release has merged yet"] };
 }
 
 /** A forecast that refuses with `unpointed` — naming the unpointed CRs. */
@@ -204,7 +205,7 @@ export async function mockRefusedUnpointed(
   };
   const forecast: ForecastFixture = {
     remainingPoints: 10,
-    sampleWeeks: 3,
+    sampleDays: 3,
     status: "unpointed",
     unpointed,
   };
@@ -256,7 +257,7 @@ export async function mockManyStepsDatedForecast(
     remainingPoints: remaining,
     p50Ts,
     p80Ts,
-    sampleWeeks: 3,
+    sampleDays: 3,
     status: "ok",
   };
   await routeAnalytics(page, projectKey, burndown, forecast);

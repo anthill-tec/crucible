@@ -33,17 +33,20 @@ const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 const PROJECT_KEY = "proj-vitals-velocity-order-1";
 
-// AC1's own velocity fixture — needs real `weeks`/`sampleWeeks` shape so
-// `VelocityCard` actually renders `project-velocity` (an empty/null read
-// renders nothing, which would fail this test for the WRONG reason).
+// AC1's own velocity fixture — needs the real new-shape body (CR-CRU-161
+// \u00a7S3: `days`/`sampleDays`/`pointsPerDay`, not `weeks`/`sampleWeeks`/
+// `pointsPerWeek`) so `VelocityCard` actually renders `project-velocity` (an
+// empty/null read renders nothing, which would fail this test for the WRONG
+// reason).
 const VELOCITY_BODY = {
   ok: true,
-  pointsPerWeek: 12,
-  weeks: [
-    { week: "2026-W40", points: 10 },
-    { week: "2026-W41", points: 14 },
+  release: "irrelevant-to-this-order-test",
+  pointsPerDay: 12,
+  days: [
+    { day: "2026-10-01", points: 10 },
+    { day: "2026-10-02", points: 14 },
   ],
-  sampleWeeks: 2,
+  sampleDays: 2,
   flow: { execMsPerCycle: 1_000_000, gateMsPerCycle: 500_000, sampleCycles: 4 },
 };
 

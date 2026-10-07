@@ -73,16 +73,20 @@ const QUEUE: QueueFixture[] = [
   { cr: "CR-UI-2", title: "unpointed cr", wave: "7", dependsOn: [], status: "PENDING", seq: 20, release: RELEASE },
 ];
 
-/** §S2/AC1 — the Velocity card's own fixture. */
+/** §S2/AC1 — the Velocity card's own fixture (CR-CRU-161 §S3/AC1 shape:
+ *  the FOCUSED RELEASE's daily pace, replacing the project's weekly one —
+ *  `GET …/analytics/velocity?release=` now answers `{release, startTs,
+ *  pointsPerDay?, days:[{day, points}], sampleDays, flow}`, src/analytics.ts). */
 const VELOCITY_BODY = {
   ok: true,
-  pointsPerWeek: 21,
-  weeks: [
-    { week: "2026-W34", points: 18 },
-    { week: "2026-W35", points: 22 },
-    { week: "2026-W36", points: 23 },
+  release: RELEASE,
+  pointsPerDay: 21,
+  days: [
+    { day: "2026-09-22", points: 18 },
+    { day: "2026-09-23", points: 22 },
+    { day: "2026-09-24", points: 23 },
   ],
-  sampleWeeks: 3,
+  sampleDays: 3,
   flow: { execMsPerCycle: 2_280_000, gateMsPerCycle: 1_320_000, sampleCycles: 6 },
 };
 
@@ -108,7 +112,7 @@ const FORECAST_BODY = {
   p50Ts: 1_790_000_000_000,
   p80Ts: 1_790_500_000_000,
   scheduleHealth: "at-risk",
-  sampleWeeks: 3,
+  sampleDays: 3,
   status: "ok",
 };
 
@@ -117,7 +121,7 @@ const FORECAST_INSUFFICIENT = {
   ok: true,
   release: RELEASE,
   remainingPoints: 5,
-  sampleWeeks: 1,
+  sampleDays: 1,
   status: "insufficient_history",
 };
 
@@ -204,13 +208,13 @@ describe("CR-CRU-022 §S5 — the hybrid UI: Velocity card, roadmap-progress ban
     expect(found).toBe(true);
   });
 
-  test("the Project band's Velocity card renders the exact pts/week figure and the flow split, on the Roadmap tab", async () => {
+  test("the Project band's Velocity card renders the exact pts/day figure and the flow split, on the Roadmap tab", async () => {
     await mountApp();
     const projectPane = document.querySelector('[data-testid="project-pane"], [data-testid="project-band-foot"]');
     expect(projectPane).not.toBeNull();
     const body = text(document.body);
     expect(body).toContain("21");
-    expect(body).toContain("pts / week");
+    expect(body).toContain("pts / day");
   });
 
   test("`roadmap-progress` renders in zone 3's header, above the release-scoped table, names the remaining/committed points and the unpointed CR", async () => {
@@ -243,7 +247,7 @@ describe("CR-CRU-022 §S5 — the hybrid UI: Velocity card, roadmap-progress ban
     expect(pane).not.toBeNull();
     expect(pane!.querySelector('[data-testid="burndown-chart"]')).not.toBeNull();
     // Velocity is not duplicated into the pane.
-    expect(text(pane).toLowerCase()).not.toContain("pts / week");
+    expect(text(pane).toLowerCase()).not.toContain("pts / day");
 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await settleDom({ ticks: 6 });

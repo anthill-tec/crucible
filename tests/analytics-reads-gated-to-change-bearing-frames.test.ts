@@ -110,7 +110,7 @@ async function mountApp(key: string): Promise<void> {
       return okResponse({ ok: true, plans: [] });
     }
     if (/\/api\/v2\/projects\/[^/?]+\/analytics\/velocity/.test(url)) {
-      return okResponse({ weeks: [], sampleWeeks: 0 });
+      return okResponse({ release: PROPOSAL.label, days: [], sampleDays: 0, flow: { sampleCycles: 0 } });
     }
     if (/\/api\/v2\/projects\/[^/?]+\/analytics\/burndown/.test(url)) {
       return okResponse({ release: PROPOSAL.label, committedPoints: 0, points: [] });

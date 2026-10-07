@@ -91,7 +91,7 @@ export async function mountWorkspace(keys: string[]): Promise<Mounted> {
     if (/\/api\/v2\/projects\/[^/?]+\/queue/.test(url)) return okResponse({ ok: true, entries: [] });
     if (/\/api\/v2\/projects\/[^/?]+\/plans/.test(url)) return okResponse({ ok: true, plans: [] });
     if (/\/api\/v2\/projects\/[^/?]+\/analytics\/velocity/.test(url)) {
-      return okResponse({ weeks: [], sampleWeeks: 0 });
+      return okResponse({ release: PROPOSAL.label, days: [], sampleDays: 0, flow: { sampleCycles: 0 } });
     }
     if (/\/api\/v2\/projects\/[^/?]+\/analytics\/burndown/.test(url)) {
       return okResponse({ release: PROPOSAL.label, committedPoints: 0, points: [] });
