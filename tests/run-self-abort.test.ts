@@ -458,3 +458,86 @@ describe("POST /api/v2/runs/<runId>/abort — a SECOND abort after a successful 
     expect(abortedEvents(handle, key)).toHaveLength(1);
   });
 });
+
+/** The refusal's `error`, read off the response body. */
+async function errorOf(res: Response): Promise<string> {
+  const body = (await res.json()) as Record<string, unknown>;
+  return typeof body.error === "string" ? body.error : "";
+}
+
+/** Every abort-route refusal names what did NOT happen: the run was not aborted. */
+function expectAbortRefusalWording(error: string): void {
+  expect(error).toEndWith("run NOT aborted");
+  expect(error).not.toContain("stored");
+}
+
+describe("POST /api/v2/runs/<runId>/abort — every ownership/state refusal says the run was NOT aborted (never the ingest routes' 'NOT stored')", () => {
+  test("an UNKNOWN runId: 400, and the error ends 'run NOT aborted'", async () => {
+    const handle = boot();
+    const key = seedProject(handle);
+    await register(handle, key, "wording-ghost");
+
+    const res = await abortRun(handle, "run-never-issued-wording", {
+      projectKey: key,
+      agentId: "wording-ghost",
+      reason: "no such run",
+    });
+    expect(res.status).toBe(400);
+    expectAbortRefusalWording(await errorOf(res));
+  });
+
+  test("a run ANOTHER AGENT opened: 400, and the error ends 'run NOT aborted'", async () => {
+    const handle = boot();
+    const key = seedProject(handle);
+    await register(handle, key, "wording-owner");
+    await register(handle, key, "wording-outsider");
+    const started = await startRun(handle, key, "wording-owner");
+
+    const res = await abortRun(handle, started.runId, {
+      projectKey: key,
+      agentId: "wording-outsider",
+      reason: "not mine to abort",
+    });
+    expect(res.status).toBe(400);
+    expectAbortRefusalWording(await errorOf(res));
+  });
+
+  test("a run of ANOTHER PROJECT: 400, and the error ends 'run NOT aborted'", async () => {
+    const handle = boot();
+    const home = seedProject(handle);
+    const elsewhere = seedProject(handle);
+    await register(handle, home, "wording-cross");
+    await register(handle, elsewhere, "wording-cross");
+    const started = await startRun(handle, home, "wording-cross");
+
+    const res = await abortRun(handle, started.runId, {
+      projectKey: elsewhere,
+      agentId: "wording-cross",
+      reason: "wrong project context",
+    });
+    expect(res.status).toBe(400);
+    expectAbortRefusalWording(await errorOf(res));
+  });
+
+  test("a run NOT OPEN (already filed): 409, and the error ends 'run NOT aborted'", async () => {
+    const handle = boot();
+    const key = seedProject(handle);
+    await register(handle, key, "wording-filed");
+    const started = await startRun(handle, key, "wording-filed");
+    const ingest = await postJson(handle, "/api/v2/runs/parsed", {
+      projectKey: key,
+      agentId: "wording-filed",
+      runId: started.runId,
+      ...PARSED_RUN,
+    });
+    expect(ingest.status).toBe(200);
+
+    const res = await abortRun(handle, started.runId, {
+      projectKey: key,
+      agentId: "wording-filed",
+      reason: "too late, already filed",
+    });
+    expect(res.status).toBe(409);
+    expectAbortRefusalWording(await errorOf(res));
+  });
+});
