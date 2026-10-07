@@ -553,7 +553,7 @@ class ExitsThatAlreadyFileSomethingStayUnchangedTest(_RunAbortCase):
              "--package-dir", self.project, "--reports", "reports",
              "--agent", AGENT],
             self.env(FAKE_NO_REPORT="1"))
-        self.assertNotEqual(result.returncode, 0)
+        self.assertIs(self.axi(result.stdout).get("ok"), False)
         compile_posts = [b for p, b in self.board.posts() if p == "/api/v2/runs/compile"]
         self.assertEqual(
             len(compile_posts), 1,
