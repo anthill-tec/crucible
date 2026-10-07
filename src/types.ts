@@ -211,6 +211,12 @@ export interface RunEvent {
    * leaves NULL rather than reconstructing a binding that was never recorded.
    */
   cycleId?: number;
+  /**
+   * The release this run verifies, served from its own column. Set only by
+   * a run filed with a declared release and never beside a cycle; ABSENT on
+   * every other event, never null.
+   */
+  release?: string;
   timestamp: number;
   // CR-CRU-011 §S1 (additive) — lifecycle events only: which transition this
   // event records, and (on "unregistered") the firstSeen snapshot taken
