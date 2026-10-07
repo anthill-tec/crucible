@@ -6050,13 +6050,14 @@ def run_left_open_warning(run_id, cause):
     # warning means that post did not settle the run.
     return {
         "code": RUN_LEFT_OPEN_CODE,
-        "detail": (f"{cause} \u2014 run {run_id} was never closed by an ingest. "
-                   f"The client posts no abort: the server settles it with "
-                   f"its own auto-abort \u2014 reason `agent died` as soon as "
-                   f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than the `run_abandon_ms` limit the server resolves "
-                   f"from the crucible.toml beside its database. The run is "
-                   f"abandoned, not lost"),
+        "detail": (f"{cause} \u2014 run {run_id} was never closed by an ingest, "
+                   f"and the client's abort of it was not accepted (refused, "
+                   f"or the board could not be reached), so the server "
+                   f"settles it with its own auto-abort \u2014 reason `agent "
+                   f"died` as soon as this agent tombstones, else `abandoned` "
+                   f"once the run is older than the `run_abandon_ms` limit "
+                   f"the server resolves from the crucible.toml beside its "
+                   f"database. The run is abandoned, not lost"),
     }
 
 
@@ -6102,7 +6103,7 @@ def abort_run(post_fn, project_key, agent_id, run_id, reason):
     print(f"[crucible] WARN: the abort of run {run_id} was not accepted "
           f"({error}) \u2014 it is left to the server's auto-abort", file=sys.stderr)
     return run_left_open_warning(
-        run_id, f"{reason}; the client's abort of it was not accepted ({error})")
+        run_id, f"{reason} (the abort answered: {error})")
 
 
 def no_report_left_open_warnings(run_id, artifact, *, post_fn, project_key,
