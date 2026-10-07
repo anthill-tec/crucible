@@ -109,6 +109,8 @@ describe("CR-CRU-161 §S2 — forecast: the release's daily pace, so far", () =>
       release: RELEASE,
       entries,
       plans,
+      // The release's start: CR-A filed at 2026-09-01T09:00Z.
+      filedAt: new Map([["CR-A", start]]),
       now,
       random: seededRandom(42),
     });
@@ -157,6 +159,8 @@ describe("CR-CRU-161 §S2 — forecast: the release's daily pace, so far", () =>
       release: RELEASE,
       entries,
       plans,
+      // Every 9.5.0 CR filed at the release's start, 2026-09-01T09:00Z.
+      filedAt: new Map(entries.map((e) => [e.cr, start])),
       now,
       random: seededRandom(42),
     });
@@ -209,6 +213,8 @@ describe("CR-CRU-161 §S2 — forecast: the release's daily pace, so far", () =>
       release: RELEASE,
       entries,
       plans,
+      // Every 9.6.0 CR filed at the release's start, 2026-09-01T09:00Z.
+      filedAt: new Map(entries.map((e) => [e.cr, Date.parse("2026-09-01T09:00:00.000Z")])),
       now,
       random: seededRandom(42),
     });
