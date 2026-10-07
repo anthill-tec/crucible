@@ -1010,11 +1010,12 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
 # an OLDER SERVER whose /runs/start route does not exist (404) — the latter
 # warns, naming the fallback, because it was not asked for.
 #
-# There is deliberately NO client-side abort. `POST /runs/<id>/abort` is §S2 and
-# does not exist yet; §S1 already ships the server-side sweep that settles an
-# open run (reason `agent died` when its agent tombstones, `abandoned` past the
-# server's `run_abandon_ms` limit). So the signal/no-result paths STATE that the
-# run was left to that sweep rather than inventing a route.
+# A run that reaches an exit filing nothing (a signal mid-run, no report, a
+# refused ingest) is CLOSED by this client through the shared `abort_run`
+# (`POST /runs/<id>/abort`, reason naming the exit). Only when that abort
+# itself fails is the run left to the server-side sweep (reason `agent died`
+# when its agent tombstones, `abandoned` past the server's `run_abandon_ms`
+# limit), and the envelope then STATES so.
 
 NO_LIFECYCLE_ENV = "BUN_CRUCIBLE_NO_LIFECYCLE"
 _TRUTHY = ("1", "true", "yes", "on")
@@ -1093,10 +1094,10 @@ def _abandon_trap(run_id):
 def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                         warnings=None):
     """The signal path's ONLY output — the shared `emit_run_abandoned`, which
-    names the signal and the open run the server will settle and returns the
-    exit code (128+signum). No POST of any kind is made."""
+    aborts the open run through `abort_run`, names the signal and the run, and
+    returns the exit code (128+signum)."""
     return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent_id,
-                                     run_id, abandoned, warnings)
+                                     run_id, abandoned, warnings, post_fn=_post)
 
 
 def cmd_test(args, tier=None):
@@ -1340,13 +1341,11 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             # `pre-merge-gate` speaks as the gate, never as the inner
             # `regression`. The capture exists here today and was simply
             # discarded; it now carries the cause.
-            # §S4 — nothing was produced, so nothing CLOSES the open run: say
-            # which sweep will settle it rather than leaving it silently open.
-            warnings = list(run_warnings)
-            if run_id:
-                warnings.append(_run_left_open_warning(
-                    run_id, f"the runner produced no {ingest_name}, so there "
-                            f"was nothing to ingest"))
+            # §S4 — nothing was produced, so nothing will ever file the open
+            # run: close it through the shared `abort_run`.
+            warnings = list(run_warnings) + _axi().no_report_left_open_warnings(
+                run_id, ingest_name, post_fn=_post,
+                project_key=_project_key(project_dir), agent_id=args.agent)
             # CR-CRU-133 §S3/AC5 — a DECLARED target that produced nothing is
             # named: which script starved, the exact command that ran it, and
             # the path the report was expected at. It rides the ADDITIVE
