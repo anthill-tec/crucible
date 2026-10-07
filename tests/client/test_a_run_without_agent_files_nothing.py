@@ -299,7 +299,7 @@ class BunDeclaredTierVerbPostsNothingWhenUnfiledTest(unittest.TestCase):
         posts = _run_filing_posts(self.board.posts())
         self.assertEqual(
             posts, [],
-            f"THE INCIDENT (CR-CRU-170 C3 GREEN, cycle 597): a declared "
+            f"THE INCIDENT (C3 GREEN, cycle 597): a declared "
             f"target with a RAW-report mechanism (bun's own test:e2e "
             f"shape) run unfiled still POSTs the decoded report, and the "
             f"real board's 409 turned a 4/4 pass into ok:false exit 1; "
