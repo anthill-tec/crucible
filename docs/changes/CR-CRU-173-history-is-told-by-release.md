@@ -17,6 +17,17 @@ first — the Now and History panes — is CR-CRU-172.
 lead up to it; a release's own workflow (the no-mistakes gate, verification, the ship) happens
 **between waves**, when no wave and no CR is active; time order is kept at every level.
 
+## Design (approved — implement to it)
+
+The approved design is storyboard **F22** in `.lavish/crucible-v2-design.html` (the History pane:
+release rows latest first, each opening to its release workflow — gate runs, verification, shipped —
+and then its waves; cards a–c beneath it), with **F21** (the gate view and its decisions line, F21·d)
+and **F8½** (the gate drill-in) as the frames it opens to. F22's rows carry this board's real data
+for 0.2.0, 0.2.1, 0.2.2 and 0.1.x — the AC's dev-store checks are taken from them. The storyboard is
+local to this checkout (gitignored), so every RED, GREEN and VERIFY agent reads it there and matches
+it: row order and nesting, folding, the wording of each row. Where this spec and F22 disagree, F22
+wins and the disagreement is raised with the orchestrator.
+
 ## Steps
 
 ### §S1 — History lists releases, each holding its workflow and then its waves

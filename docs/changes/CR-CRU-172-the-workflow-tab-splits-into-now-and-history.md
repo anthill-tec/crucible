@@ -12,6 +12,16 @@ share one long scroll. Storyboard **F22** (approved 2026-10-08) is the design; t
 half: the two panes and what Now shows. The second half — History told by release — is
 CR-CRU-173.
 
+## Design (approved — implement to it)
+
+The approved design is storyboard **F22** in `.lavish/crucible-v2-design.html` (frame head
+`F22 · Workflow in two panes — Now, and a History of releases…`, APPROVED 2026-10-08), with **F21**
+(the gate view Now shows for a running release workflow) and **F13**/**F15d** (today's active section
+and the phone row rule) as the frames it builds on. The storyboard is local to this checkout
+(gitignored), so every RED, GREEN and VERIFY agent reads it there and matches it: pane layout, the
+exact empty-state text `Nothing running → Roadmap`, and the phone sub-tabs. Where this spec and F22
+disagree, F22 wins and the disagreement is raised with the orchestrator.
+
 ## Steps
 
 ### §S1 — two panes
