@@ -1,6 +1,6 @@
 # CR-CRU-171 — the client's fix list for 0.3.0
 
-**Type** fix · **Points** unscored (set at gap analysis) · **Wave** 7 (0.3.0) · **Depends on** none ·
+**Type** fix · **Points** 3 (provisional, 2026-10-07, so the release forecast stands; re-scored at gap analysis) · **Wave** 7 (0.3.0) · **Depends on** none ·
 **Status** PENDING — filed 2026-10-07; held LAST in wave 7 while the user adds issues (user ruling 2026-10-07)
 
 ## Problem
