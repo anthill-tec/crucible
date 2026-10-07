@@ -820,6 +820,22 @@ def _close_gate_identity(project_dir, identity):
                                       remove_fn=_remove_agent_silent)
 
 
+def _gated_run(args, project_dir, message, body):
+    """Run `body(identity)` inside the gated-run identity bracket
+    `regression-ingest` opens: with `--agent`, an opening heartbeat DECLARES
+    the run's identity (bound to `--cycle` when given), and the closing
+    anti-ghost cleanup fires ONLY for an identity this run created. Without
+    `--agent` nothing is opened, so nothing is posted."""
+    identity = None
+    try:
+        if getattr(args, "agent", None):
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None), message)
+        return body(identity)
+    finally:
+        _close_gate_identity(project_dir, identity)
+
+
 def _clean_stale_junit(project_dir, profile=None):
     now = time.time()
     paths = [
@@ -1219,6 +1235,14 @@ def cmd_test(args, tier=None, select=(), profile=None):
     `--workspace`, cargo's own way to say "every crate" — so a tier verb never
     fails on argparse where cargo itself would have run."""
     project_dir = _resolve_project_dir(args.project_dir)
+    return _gated_run(
+        args, project_dir, "gated test run starting",
+        lambda identity: _test_run(args, tier, select, profile, project_dir,
+                                   identity))
+
+
+def _test_run(args, tier, select, profile, project_dir, identity):
+    """`cmd_test`'s run body, inside its gated-identity bracket."""
     # §S1's one-document rule, as `_smoke_test` already applies it: a tier verb
     # runs THIS body, so the envelope must carry the verb the caller actually
     # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
@@ -1254,7 +1278,7 @@ def cmd_test(args, tier=None, select=(), profile=None):
     if args.agent:
         # The shared run path: narrate per-test progress against nextest's own
         # stated total, and open the run BEFORE nextest is spawned.
-        narrator = _narrator(project_dir, args.agent)
+        narrator = _narrator(project_dir, args.agent, identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
                                           release=release)
@@ -1555,7 +1579,10 @@ def cmd_smoke_test(args):
     --workspace [--all-features|--features X] -P <profile> --no-fail-fast →
     parse junit → /api/v2/runs with `codec: junit`. NO coverage.
     """
-    return _smoke_test(args, "smoke-test")
+    project_dir = _resolve_project_dir(args.project_dir)
+    return _gated_run(
+        args, project_dir, "gated smoke-test run starting",
+        lambda identity: _smoke_test(args, "smoke-test", identity))
 
 
 def _smoke_run_tier(verb, profile):
@@ -1574,11 +1601,12 @@ def _smoke_run_tier(verb, profile):
     return "e2e" if verb == "docker-e2e-gate" or profile == "e2e" else "integration"
 
 
-def _smoke_test(args, verb):
+def _smoke_test(args, verb, identity=None):
     """The smoke run body, shared by `smoke-test` and its thin wrapper
     `docker-e2e-gate` (CR-CRU-058 §S1): `verb` names the envelope this run
     belongs to, so the wrapper's stdout carries ONE document under its OWN verb
-    rather than the inner verb's."""
+    rather than the inner verb's. `identity` is the caller's gated-run identity
+    when it opened one, observed by every narration tick."""
     project_dir = _resolve_project_dir(args.project_dir)
     # crucible OWNS the gate-lock FILE: refuse to start if one is already present
     # (no double-runs in a CR/track), else create it + auto-remove on exit/kill.
@@ -1661,7 +1689,7 @@ def _smoke_test(args, verb):
         release = getattr(args, "release", None)
         narrator, run_id, run_warnings = None, None, []
         if args.agent:
-            narrator = _narrator(project_dir, args.agent)
+            narrator = _narrator(project_dir, args.agent, identity)
             run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                               context=_run_context(),
                                               release=release)
@@ -1797,13 +1825,17 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
         return 2
 
     try:
-        return _workspace_regression_run(args, project_dir, verb)
+        return _gated_run(
+            args, project_dir, "gated workspace-regression run starting",
+            lambda identity: _workspace_regression_run(args, project_dir, verb,
+                                                       identity))
     finally:
         if not getattr(args, "keep_target", False):
             _reclaim_disk(project_dir, "workspace-regression")
 
 
-def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
+def _workspace_regression_run(args, project_dir, verb="workspace-regression",
+                              identity=None):
     """Build + run + ingest body (wrapped by cmd_workspace_regression's disk guard +
     post-run reclaim). Assumes the workspace was already `cargo clean`ed."""
     own_dir = _run_reports_dir(args, project_dir)
@@ -1835,7 +1867,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     release = getattr(args, "release", None)
     narrator, run_id, run_warnings = None, None, []
     if args.agent:
-        narrator = _narrator(project_dir, args.agent)
+        narrator = _narrator(project_dir, args.agent, identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
                                           context=_run_context(), release=release)
         # §S1 — the release run's note, as `_smoke_test` carries it.
@@ -2104,6 +2136,7 @@ def cmd_pre_merge_gate(args):
         min_free_g=getattr(args, "min_free_g", 80),
         keep_target=getattr(args, "keep_target", False),
         release=getattr(args, "release", None),
+        cycle=getattr(args, "cycle", None),
     )
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own workspace regression
     # always runs, and every declared profile it covers is a SUBSET of that run
@@ -2829,6 +2862,7 @@ def main():
     t.add_argument("--filter", help="Nextest -E filter expression")
     t.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
     t.add_argument("--agent", help="If set, auto-ingest junit after the run")
+    _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
     _add_project_dir_arg(t)
     _add_log_arg(t)
@@ -2910,6 +2944,7 @@ def main():
         "--keep-target", action="store_true",
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
+    _add_gate_cycle_arg(w)
     _add_run_release_arg(w)
     _add_project_dir_arg(w)
     _add_reports_arg(w)
@@ -2947,6 +2982,7 @@ def main():
         help="Compose file path (rel to project root). Default: $RUST_CRUCIBLE_COMPOSE_FILE "
              "or CRUCIBLE_COMPOSE_FILE in .env, else docker auto-discovery (compose.yaml).",
     )
+    _add_gate_cycle_arg(st)
     _add_run_release_arg(st)
     _add_project_dir_arg(st)
     _add_reports_arg(st)
@@ -3029,6 +3065,7 @@ def main():
              "--all-targets --all-features -- -D warnings` BEFORE the coverage regression and "
              "aborts on any lint. Pass this only for a deliberate bypass.",
     )
+    _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _add_project_dir_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
