@@ -11,32 +11,22 @@ import { isDeadCr } from "./types.ts";
 import type { Plan, QueueEntry } from "./types.ts";
 
 const DAY_MS = 86_400_000;
-/** One calendar week — the iteration (DN §5: Crucible has no sprints). */
-export const WEEK_MS = 7 * DAY_MS;
-/** DN §5 — the displayed velocity is the mean of the last 3 completed weeks. */
-export const VELOCITY_WINDOW_WEEKS = 3;
 /** DN §7 — the Monte Carlo's draw count. */
 export const FORECAST_DRAWS = 1000;
 /**
- * A draw's safety stop, in simulated weeks. Unreachable in practice — the
- * history always holds at least one positive week, so every draw terminates —
- * but a loop over sampled values must never be able to spin forever.
+ * A draw's safety stop, in simulated days. Unreachable while the release's
+ * history holds a positive day — every such draw terminates — but a loop over
+ * sampled values must never be able to spin forever.
  */
-const MAX_SIMULATED_WEEKS = 10_000;
+const MAX_SIMULATED_DAYS = 100_000;
 
-/**
- * The calendar week an instant falls in: its Monday 00:00 UTC (ISO-8601
- * weeks). The CR/DN pin no convention; ISO's Monday start is the one a week
- * label (`YYYY-MM-DD` of that Monday) reads unambiguously.
- */
-export function weekStart(ts: number): number {
+/** The UTC calendar day an instant falls on: its 00:00 UTC. */
+function dayStart(ts: number): number {
   const day = new Date(ts);
-  const midnight = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
-  const sinceMonday = (day.getUTCDay() + 6) % 7;
-  return midnight - sinceMonday * DAY_MS;
+  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
 }
 
-function weekLabel(start: number): string {
+function dayLabel(start: number): string {
   return new Date(start).toISOString().slice(0, 10);
 }
 
@@ -58,48 +48,83 @@ export function mergedAtByCr(plans: Plan[]): Map<string, number> {
 }
 
 /**
- * The project's pointed velocity, per COMPLETED calendar week. `weeks` holds
- * only the weeks a pointed merge landed in (§S2 AC1). `history` is the
- * calendar series from the first pointed merge's week to the last completed
- * week — a week inside it with no merge is a real zero; weeks before the
- * first pointed merge are absent, not zero (DN §5).
+ * The crs ever planned into `release`: its present members, plus every cr a
+ * journalled release move took into or out of it (DN §6).
  */
-interface WeeklyVelocity {
-  weeks: Array<{ week: string; points: number }>;
-  history: number[];
-}
-
-function weeklyVelocity(
-  merged: Map<string, number>,
-  points: Map<string, number>,
-  now: number,
-): WeeklyVelocity {
-  const currentWeek = weekStart(now);
-  const byWeek = new Map<number, number>();
-  for (const [cr, at] of merged) {
-    const declared = points.get(cr);
-    if (declared === undefined) continue; // unpointed: never counted as 1
-    const week = weekStart(at);
-    if (week >= currentWeek) continue; // the open week is not completed
-    byWeek.set(week, (byWeek.get(week) ?? 0) + declared);
+function releaseMembers(release: string, entries: QueueEntry[], journal: QueueDeclaration[]): Set<string> {
+  const members = new Set<string>();
+  for (const entry of entries) {
+    if (entry.release === release) members.add(entry.cr);
   }
-  const starts = [...byWeek.keys()].sort((a, b) => a - b);
-  const weeks = starts.map((start) => ({ week: weekLabel(start), points: byWeek.get(start)! }));
-  const history: number[] = [];
-  if (starts.length > 0) {
-    for (let week = starts[0]!; week < currentWeek; week += WEEK_MS) {
-      history.push(byWeek.get(week) ?? 0);
+  for (const row of journal) {
+    const moved = releaseChange(row);
+    if (moved !== undefined && (moved.from === release || moved.to === release)) {
+      members.add(row.cr);
     }
   }
-  return { weeks, history };
+  return members;
 }
 
-function pointsByCr(entries: QueueEntry[]): Map<string, number> {
-  const points = new Map<string, number>();
-  for (const entry of entries) {
-    if (entry.points !== undefined) points.set(entry.cr, entry.points);
+/**
+ * DN §6 — the release's start: the earliest `filed_at` among its crs, and
+ * the cr that set it. Undefined when none of them carries a `filed_at`.
+ */
+function releaseStart(
+  members: Iterable<string>,
+  filedAt: Map<string, number>,
+): { ts: number; cr: string } | undefined {
+  let start: { ts: number; cr: string } | undefined;
+  for (const cr of members) {
+    const ts = filedAt.get(cr);
+    if (ts !== undefined && (start === undefined || ts < start.ts)) start = { ts, cr };
   }
-  return points;
+  return start;
+}
+
+/** The release's pointed throughput per UTC day, since its start. */
+interface ReleaseDays {
+  /** Undefined only when no member carries a `filed_at` — then `days` is empty. */
+  startTs?: number;
+  /** One entry per UTC day from the start's day to today inclusive; a day with no merge is 0. */
+  days: Array<{ day: string; points: number }>;
+  /** How many of the release's pointed crs have merged inside `days`. */
+  pointedMerges: number;
+}
+
+/**
+ * DN §5/§7 — the release's daily series: each pointed cr of the release
+ * counts its points on the UTC day its plan closed with a merge. Unpointed
+ * crs never count, and neither does another release's merge.
+ */
+function releaseDays(
+  release: string,
+  members: Set<string>,
+  entries: QueueEntry[],
+  plans: Plan[],
+  filedAt: Map<string, number>,
+  now: number,
+): ReleaseDays {
+  const start = releaseStart(members, filedAt);
+  if (start === undefined) return { days: [], pointedMerges: 0 };
+  const merged = mergedAtByCr(plans);
+  const firstDay = dayStart(start.ts);
+  const today = dayStart(now);
+  const byDay = new Map<number, number>();
+  let pointedMerges = 0;
+  for (const entry of entries) {
+    if (entry.release !== release || entry.points === undefined) continue;
+    const at = merged.get(entry.cr);
+    if (at === undefined) continue;
+    const day = dayStart(at);
+    if (day < firstDay || day > today) continue;
+    byDay.set(day, (byDay.get(day) ?? 0) + entry.points);
+    pointedMerges += 1;
+  }
+  const days: Array<{ day: string; points: number }> = [];
+  for (let day = firstDay; day <= today; day += DAY_MS) {
+    days.push({ day: dayLabel(day), points: byDay.get(day) ?? 0 });
+  }
+  return { startTs: start.ts, days, pointedMerges };
 }
 
 function mean(values: number[]): number {
@@ -109,32 +134,50 @@ function mean(values: number[]): number {
 // ── §S2 — velocity ────────────────────────────────────────────────────────
 
 export interface VelocityInput {
+  release: string;
   plans: Plan[];
   entries: QueueEntry[];
+  /** Each queued cr's internal `filed_at` (epoch ms) — sets the release's start. */
+  filedAt: Map<string, number>;
+  /** The declaration journal — the release's membership, as `burndown` reads it. Absent: the present queue only. */
+  journal?: QueueDeclaration[];
   /** `exec(c)` per cycle id — Σ duration_ms of its cycle-linked runs. */
   execByCycle: Map<number, number>;
   now: number;
 }
 
 export interface VelocityPayload {
-  /** Absent while no completed week has pointed velocity — never a fabricated 0. */
-  pointsPerWeek?: number;
-  weeks: Array<{ week: string; points: number }>;
-  sampleWeeks: number;
+  release: string;
+  /** The release's start (its earliest `filed_at`). Absent only when no member carries one. */
+  startTs?: number;
+  /** Absent while the series covers no day — never a fabricated 0. */
+  pointsPerDay?: number;
+  days: Array<{ day: string; points: number }>;
+  sampleDays: number;
   flow: { execMsPerCycle?: number; gateMsPerCycle?: number; sampleCycles: number };
 }
 
 /**
- * §S2 — `pointsPerWeek` is the mean over the last 3 COMPLETED calendar weeks
- * (fewer while the history is younger; `sampleWeeks` says how many). `flow`
- * keeps DN §3's two clocks per sealed cycle — exec = Σ its cycle-linked runs,
+ * DN §5 — the release's pace so far: its pointed points
+ * merged since its start, divided by the days since that start, today
+ * included (`pointsPerDay`), with the per-day series (`days`, zero-filled)
+ * and how many days it covers (`sampleDays`). `flow` keeps DN §3's two
+ * clocks per sealed cycle, project-level — exec = Σ its cycle-linked runs,
  * gate = loop − exec floored at 0 — reported beside velocity, never summed
- * into it.
+ * into it. `null` when no cr was ever planned into the release.
  */
-export function velocity(input: VelocityInput): VelocityPayload {
-  const merged = mergedAtByCr(input.plans);
-  const { weeks, history } = weeklyVelocity(merged, pointsByCr(input.entries), input.now);
-  const window = history.slice(-VELOCITY_WINDOW_WEEKS);
+export function velocity(input: VelocityInput): VelocityPayload | null {
+  const members = releaseMembers(input.release, input.entries, input.journal ?? []);
+  if (members.size === 0) return null;
+  const { startTs, days } = releaseDays(
+    input.release,
+    members,
+    input.entries,
+    input.plans,
+    input.filedAt,
+    input.now,
+  );
+  const merged = days.reduce((sum, day) => sum + day.points, 0);
 
   const execs: number[] = [];
   const gates: number[] = [];
@@ -148,9 +191,11 @@ export function velocity(input: VelocityInput): VelocityPayload {
   }
 
   return {
-    ...(window.length > 0 ? { pointsPerWeek: mean(window) } : {}),
-    weeks,
-    sampleWeeks: window.length,
+    release: input.release,
+    ...(startTs !== undefined ? { startTs } : {}),
+    ...(days.length > 0 ? { pointsPerDay: merged / days.length } : {}),
+    days,
+    sampleDays: days.length,
     flow: {
       ...(execs.length > 0
         ? {
@@ -264,32 +309,20 @@ export function burndown(input: BurndownInput): BurndownPayload | null {
     rows.push(row);
     rowsByCr.set(row.cr, rows);
   }
-  const members = new Set<string>();
-  for (const entry of input.entries) {
-    if (entry.release === release) members.add(entry.cr);
-  }
-  for (const row of input.journal) {
-    const moved = releaseChange(row);
-    if (moved !== undefined && (moved.from === release || moved.to === release)) {
-      members.add(row.cr);
-    }
-  }
+  const members = releaseMembers(release, input.entries, input.journal);
   if (members.size === 0) return null;
 
   const merged = mergedAtByCr(input.plans);
   const standings = new Map<string, CrStanding>();
   const events: ReplayEvent[] = [];
-  let start = Number.POSITIVE_INFINITY;
-  let startCr: string | undefined;
+  const filed = releaseStart(members, input.filedAt);
+  let start = filed?.ts ?? Number.POSITIVE_INFINITY;
+  let startCr: string | undefined = filed?.cr;
 
   for (const cr of members) {
     const entry = entryByCr.get(cr);
     const rows = rowsByCr.get(cr) ?? [];
     const filedAt = input.filedAt.get(cr);
-    if (filedAt !== undefined && filedAt < start) {
-      start = filedAt;
-      startCr = cr;
-    }
     const firstPointed = rows.find((row) => row.points !== undefined);
     standings.set(cr, {
       inRelease: false,
@@ -448,6 +481,10 @@ export interface ForecastInput {
   release: string;
   entries: QueueEntry[];
   plans: Plan[];
+  /** Each queued cr's internal `filed_at` (epoch ms) — sets the release's start, as `burndown` reads it. */
+  filedAt: Map<string, number>;
+  /** The declaration journal — the release's membership, as `burndown` reads it. Absent: the present queue only. */
+  journal?: QueueDeclaration[];
   now: number;
   /** The release's declared target (CR-CRU-091), epoch SECONDS. */
   targetAt?: number;
@@ -462,7 +499,8 @@ export interface ForecastPayload {
   p50Ts?: number;
   p80Ts?: number;
   scheduleHealth?: ScheduleHealth;
-  sampleWeeks: number;
+  /** How many days of the release's history the forecast rests on. */
+  sampleDays: number;
   status: "ok" | "insufficient_history" | "unpointed";
   /** The release's live, unmerged crs that carry no points. Absent when none. */
   unpointed?: string[];
@@ -474,19 +512,30 @@ function percentile(sorted: number[], p: number): number {
 }
 
 /**
- * §S4 — Monte Carlo over the project's weekly pointed velocity (DN §7): each
- * of 1,000 draws samples whole weeks uniformly from the empirical weekly
- * history until the release's remaining points reach 0, completing that many
- * weeks from `now`. P50/P80 of those instants.
+ * DN §7 — Monte Carlo over the release's DAILY pointed
+ * throughput since its start (a day with no merge is a real zero): each of
+ * 1,000 draws samples whole days uniformly from that series until the
+ * release's remaining points reach 0, completing that many days from `now`.
+ * P50/P80 of those instants. `sampleDays` says how many days it rests on.
  *
- * Gates, both with NO band values: fewer than 3 completed weeks of history →
- * `insufficient_history`; any live, unmerged cr unpointed → `unpointed`,
- * naming them (`unpointed` is carried whenever such a cr exists, so the band
- * can say why). `scheduleHealth` only against a declared target (DN §8).
+ * Gates, both with NO band values: no pointed cr of the release has merged
+ * yet → `insufficient_history`; any live, unmerged cr unpointed →
+ * `unpointed`, naming them (`unpointed` is carried whenever such a cr
+ * exists, so the band can say why). `scheduleHealth` only against a
+ * declared target (DN §8).
  */
 export function forecast(input: ForecastInput): ForecastPayload {
   const merged = mergedAtByCr(input.plans);
-  const { history } = weeklyVelocity(merged, pointsByCr(input.entries), input.now);
+  const members = releaseMembers(input.release, input.entries, input.journal ?? []);
+  const { days, pointedMerges } = releaseDays(
+    input.release,
+    members,
+    input.entries,
+    input.plans,
+    input.filedAt,
+    input.now,
+  );
+  const history = days.map((day) => day.points);
   const remaining = input.entries.filter(
     (entry) => entry.release === input.release && !isDeadCr(entry) && !merged.has(entry.cr),
   );
@@ -495,21 +544,21 @@ export function forecast(input: ForecastInput): ForecastPayload {
   const base = {
     release: input.release,
     remainingPoints,
-    sampleWeeks: history.length,
+    sampleDays: history.length,
     ...(unpointed.length > 0 ? { unpointed } : {}),
   };
-  if (history.length < VELOCITY_WINDOW_WEEKS) return { ...base, status: "insufficient_history" };
+  if (pointedMerges === 0) return { ...base, status: "insufficient_history" };
   if (unpointed.length > 0) return { ...base, status: "unpointed" };
 
   const completions: number[] = [];
   for (let draw = 0; draw < FORECAST_DRAWS; draw += 1) {
     let burned = 0;
-    let weeks = 0;
-    while (burned < remainingPoints && weeks < MAX_SIMULATED_WEEKS) {
+    let elapsed = 0;
+    while (burned < remainingPoints && elapsed < MAX_SIMULATED_DAYS) {
       burned += history[Math.floor(input.random() * history.length)]!;
-      weeks += 1;
+      elapsed += 1;
     }
-    completions.push(input.now + weeks * WEEK_MS);
+    completions.push(input.now + elapsed * DAY_MS);
   }
   completions.sort((a, b) => a - b);
   const p50Ts = percentile(completions, 0.5);
