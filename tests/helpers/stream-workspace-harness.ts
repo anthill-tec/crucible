@@ -157,7 +157,10 @@ export const RESOURCES: Record<string, (url: string) => boolean> = {
   projects: (u) => u === "/api/v2/projects",
   agents: (u) => u.startsWith("/api/v2/agents"),
   health: (u) => u.startsWith("/api/v2/health"),
-  "events list": (u) => u.startsWith("/api/v2/events?"),
+  // The plain list read — not the by-release read, which shares its route.
+  "events list": (u) => u.startsWith("/api/v2/events?") && !/[?&]release=/.test(u),
+  // The focused release's verified-runs count, read with the analytics.
+  "verified runs": (u) => u.startsWith("/api/v2/events?") && /[?&]release=/.test(u),
   plans: (u) => /\/plans(?:\?|$)/.test(u),
   queue: (u) => /\/queue(?:\?|$)/.test(u),
   releases: (u) => /\/releases(?:\?|$)/.test(u),
@@ -168,7 +171,15 @@ export const RESOURCES: Record<string, (url: string) => boolean> = {
 };
 
 /** The roadmap and analytics resources a workspace load reads once. */
-export const ROADMAP_RESOURCES = ["velocity", "burndown", "forecast", "releases", "queue", "release-proposals"];
+export const ROADMAP_RESOURCES = [
+  "velocity",
+  "burndown",
+  "forecast",
+  "verified runs",
+  "releases",
+  "queue",
+  "release-proposals",
+];
 
 /** How many times each resource was read in `urls`. */
 export function countReads(urls: readonly string[]): Record<string, number> {
