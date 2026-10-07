@@ -188,7 +188,7 @@ export async function mockRefusedInsufficientHistory(
   // Specific to THIS refusal: the spec's own wording for the gate (§S2 —
   // "saying no pointed CR of the release has merged yet"), never a generic
   // "no forecast" string a no-op stub could print for either refusal kind.
-  return { mustContain: ["no pointed cr of the release has merged yet"] };
+  return { mustContain: ["no pointed CR of the release has merged yet"] };
 }
 
 /** A forecast that refuses with `unpointed` — naming the unpointed CRs. */
