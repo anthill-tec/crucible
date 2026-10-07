@@ -59,16 +59,16 @@ does not overflow; a release with no runs shows no chip.
 
 ## Acceptance criteria
 
-- [ ] For each verb named in §S1, in each of the five clients, `--release 0.4.0` files a run whose
+- [x] For each verb named in §S1, in each of the five clients, `--release 0.4.0` files a run whose
       event and run row carry release `0.4.0`, and the envelope carries the `release-run` note and
       no `no-cycle` warning — asserted per client against the five-client subprocess harness, and
       once end to end against a real server.
-- [ ] An undeclared release is refused (400) naming the declared ones; `--release` with `--cycle`,
+- [x] An undeclared release is refused (400) naming the declared ones; `--release` with `--cycle`,
       or from an agent bound to a cycle, is refused (400); in both cases nothing is stored —
       asserted on the server.
-- [ ] A store at schema v17 migrates to v18 through the chain (backup written, existing runs carry
+- [x] A store at schema v17 migrates to v18 through the chain (backup written, existing runs carry
       no release, the index exists); a fresh store is built at v18.
-- [ ] `GET /api/v2/events?project=…&release=X` answers exactly that release's runs, aborted ones
+- [x] `GET /api/v2/events?project=…&release=X` answers exactly that release's runs, aborted ones
       included, and nothing else; the release band shows `verified · N runs ↗` with the right N
       for the focused release, none when N is 0, and opens the Runs tab showing exactly those runs;
       on a phone the chip is in the analytics pane — asserted on the server and in a real browser.
