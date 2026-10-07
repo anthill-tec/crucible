@@ -1331,13 +1331,13 @@ def cmd_regression(args, verb="regression"):
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
-    identity = None
-    try:
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
             # makes, before this (far longer) reactor sweep burns its minutes.
             preflight_warnings = _axi().preflight_cycle_warnings(
@@ -1345,8 +1345,6 @@ def cmd_regression(args, verb="regression"):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
         return _regression_run(args, identity, verb, preflight_warnings)
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def _regression_run(args, identity=None, verb="regression",

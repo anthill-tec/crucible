@@ -967,13 +967,13 @@ def cmd_regression_ingest(args):
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
     caller who registered BEFORE the run keeps its registration and binding."""
     project_dir = _resolve_project_dir(args.project_dir)
-    identity = None
-    try:
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the pre-flight attribution check, before this
             # (far longer) coverage sweep burns its minutes and while `--cycle`
             # can still be supplied. Best-effort; never delays the run.
@@ -982,8 +982,6 @@ def cmd_regression_ingest(args):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
         return _regression_ingest_run(args, preflight_warnings, identity)
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def _regression_ingest_run(args, preflight_warnings=(), identity=None):

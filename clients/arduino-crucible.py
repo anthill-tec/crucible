@@ -528,21 +528,22 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
     caller who registered BEFORE the run keeps its registration and binding."""
     pd = _project_dir(args)
-    identity = None
     preflight_warnings = []
-    try:
+    # Open under the SAME id the run will ingest under. The body
+    # resolves via `_agent_id(args)`, the CR-CRU-044 §S5
+    # declared-identity resolver: the explicit `--agent` value or a hard
+    # stop. There is no $WORKFLOW_ROLE branch and no
+    # `"arduino-crucible"` filename default — both were deleted, and
+    # neither may be reinstated. Resolve the bracket id through that
+    # identical call so a run can never drift from the registered row
+    # and orphan a ghost.
+    with _axi().gated_run(pd, (_agent_id(args) if getattr(args, "agent", None)
+                               else None),
+                          getattr(args, "cycle", None),
+                          f"gated {verb} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         if getattr(args, "agent", None):
-            # Open under the SAME id the run will ingest under. The body
-            # resolves via `_agent_id(args)`, the CR-CRU-044 §S5
-            # declared-identity resolver: the explicit `--agent` value or a hard
-            # stop. There is no $WORKFLOW_ROLE branch and no
-            # `"arduino-crucible"` filename default — both were deleted, and
-            # neither may be reinstated. Resolve the bracket id through that
-            # identical call so a run can never drift from the registered row
-            # and orphan a ghost.
-            identity = _open_gate_identity(pd, _agent_id(args),
-                                           getattr(args, "cycle", None),
-                                           f"gated {verb} run starting")
             # CR-CRU-094 §S3 — PRE-FLIGHT, before `make junit` spawns and while
             # `--cycle` can still be supplied: ask the board whether this agent
             # is bound and say so on both channels if it is not. Best-effort —
@@ -553,8 +554,6 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
                 context=_run_context(), release=getattr(args, "release", None))
         return _run_native_tests_body(args, verb, tier, want_coverage, pd,
                                       preflight_warnings, target, identity)
-    finally:
-        _close_gate_identity(pd, identity)
 
 
 def _run_reports_dir(args, pd):
