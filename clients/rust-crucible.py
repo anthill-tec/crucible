@@ -2642,6 +2642,7 @@ def _add_regression_tier_args(p):
                         "free /home is still below this (default: 80).")
     p.add_argument("--keep-target", action="store_true",
                    help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).")
+    _add_run_release_arg(p)
     _add_reports_arg(p)
 
 
@@ -2677,6 +2678,7 @@ def _add_cargo_tier_run_args(p):
     p.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
     p.add_argument("--agent", help="If set, auto-ingest junit after the run")
     _add_gate_cycle_arg(p)
+    _add_run_release_arg(p)
     _add_log_arg(p)
     _add_reports_arg(p)
 

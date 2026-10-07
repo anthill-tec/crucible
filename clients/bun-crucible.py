@@ -1599,7 +1599,9 @@ def _dispatch_gate_suite(args, suite):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     return (_axi().sibling_client_argv(suite.stack, suite.command,
-                                       agent=args.agent), package_dir)
+                                       agent=args.agent,
+                                       release=getattr(args, "release", None)),
+            package_dir)
 
 
 # ── CR-CRU-008 — plan verbs (plan-file / cycle-activate / cycle-done / cr-close) ──

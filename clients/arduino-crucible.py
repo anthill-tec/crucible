@@ -1335,6 +1335,7 @@ def _add_declared_tier_args(p):
     `--project-dir` ride the `common` parent, as they do for every verb here."""
     _add_native_dir_arg(p)
     _add_gate_cycle_arg(p)
+    _add_run_release_arg(p)
     _add_reports_arg(p)
     _add_log_arg(p)
 

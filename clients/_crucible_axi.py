@@ -5449,7 +5449,7 @@ def _python_suite_argv(tokens):
 _SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
 
 
-def sibling_client_argv(stack, command, agent=None):
+def sibling_client_argv(stack, command, agent=None, *, release=None):
     """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
     `command` declares, or None when this declaration cannot be dispatched.
 
@@ -5463,7 +5463,10 @@ def sibling_client_argv(stack, command, agent=None):
 
     The gate's `--agent` rides last so the dispatched run is attributed to the
     gate that asked for it; a client handed the flag twice takes the last,
-    which is this one."""
+    which is this one.
+
+    §S1 — a gate given `--release` passes it on the same way, and only then,
+    so a release's gate is filed under the release whole."""
     try:
         tokens = shlex.split(command or "")
     except ValueError:
@@ -5477,6 +5480,8 @@ def sibling_client_argv(stack, command, agent=None):
         argv = builder(tokens) if builder else None
     if argv and agent:
         argv += ["--agent", agent]
+    if argv and release:
+        argv += ["--release", release]
     return argv
 
 
