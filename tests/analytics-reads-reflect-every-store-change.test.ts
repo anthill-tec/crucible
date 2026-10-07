@@ -160,6 +160,9 @@ describe("the four analytics reads recompute on every request — no held answer
     const before = await getJson(h, `/api/v2/projects/${P_BURNDOWN}/analytics/burndown?release=${release}`);
     expect(before.status).toBe(200);
     expect(before.body.committedPoints).toBe(5);
+    type Step = { cr: string; event?: string; verb?: string; delta: number; remaining: number };
+    const beforeSteps = (before.body.points ?? []) as Step[];
+    expect(beforeSteps.some((p) => p.cr === "CR-BETA" && p.event === "repointed")).toBe(false);
 
     const raw = rawConnection(dbPath);
     raw
@@ -174,7 +177,16 @@ describe("the four analytics reads recompute on every request — no held answer
     expect(after.status).toBe(200);
     // POSITIVE — the re-point lands as a +7 step; NEGATIVE/BOUND — never
     // the stale 5 the cache would have held.
-    expect(after.body.committedPoints).toBe(12);
+    const afterSteps = (after.body.points ?? []) as Step[];
+    const last = afterSteps[afterSteps.length - 1];
+    expect(last).toBeDefined();
+    expect(last!.cr).toBe("CR-BETA");
+    expect(last!.event).toBe("repointed");
+    expect(last!.verb).toBe("cr-plan");
+    expect(last!.delta).toBe(7);
+    expect(last!.remaining).toBe(12);
+    // committedPoints is the release's total at its start, so a later re-point is a step, never a change to it.
+    expect(after.body.committedPoints).toBe(5);
   });
 
   test("forecast's remainingPoints reflects a release member's re-point, even though the re-point fired no `events` change", async () => {
