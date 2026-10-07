@@ -268,3 +268,37 @@ describe("CR-CRU-022 §S3 — burndown: GET …/analytics/burndown", () => {
     expect(body.ideal).toBeUndefined();
   });
 });
+
+describe("burndown answers per project and per release", () => {
+  test("each burndown answer names its own release, and two projects sharing a release label never share an answer", async () => {
+    boot();
+    const P1 = "00000000-0000-4000-8000-0000a0000001";
+    const P2 = "00000000-0000-4000-8000-0000a0000002";
+    const release1 = "9.9.0";
+    const release2 = "9.8.0";
+
+    // P1: a 3-point member of release1 with a filed plan, plus a 5-point
+    // member of a SECOND release in the same project.
+    handle!.store.addProject({ key: P1, name: "burn-sep-1", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
+    handle!.store.upsertQueueEntry(P1, { cr: "CR-BURN-SEP-A", release: release1, wave: "1", title: "CR-BURN-SEP-A", points: 3 });
+    planned(handle!.store.filePlan(P1, { cr: "CR-BURN-SEP-A", cycles: [{ label: "c1", kind: "red-green" }] }));
+    handle!.store.upsertQueueEntry(P1, { cr: "CR-BURN-SEP-C", release: release2, wave: "1", title: "CR-BURN-SEP-C", points: 5 });
+
+    // P2: an 8-point member of the SAME release label, in another project.
+    handle!.store.addProject({ key: P2, name: "burn-sep-2", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
+    handle!.store.upsertQueueEntry(P2, { cr: "CR-BURN-SEP-B", release: release1, wave: "1", title: "CR-BURN-SEP-B", points: 8 });
+    planned(handle!.store.filePlan(P2, { cr: "CR-BURN-SEP-B", cycles: [{ label: "c1", kind: "red-green" }] }));
+
+    const p1r1 = await getBurndown(P1, release1);
+    const p1r2 = await getBurndown(P1, release2);
+    const p2r1 = await getBurndown(P2, release1);
+
+    // POSITIVE — each answer names its OWN release, never a neighbour's.
+    expect(p1r1.body.release).toBe(release1);
+    expect(p1r2.body.release).toBe(release2);
+    expect(p2r1.body.release).toBe(release1);
+    // NEGATIVE — the two release1 answers (different projects, SAME release
+    // label) differ: the 3-point burndown is not the 8-point one.
+    expect(JSON.stringify(p1r1.body)).not.toBe(JSON.stringify(p2r1.body));
+  });
+});
