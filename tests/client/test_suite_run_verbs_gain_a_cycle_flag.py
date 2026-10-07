@@ -161,7 +161,7 @@ def _rust_workspace_regression_setup(project_dir, bin_dir):
 def _rust_pre_merge_gate_setup(project_dir, bin_dir):
     write_fake_cargo(bin_dir)
     return (["--skip-clippy", "--min-free-g", "0", "--keep-target",
-             "--project-dir", project_dir, "--reports", "reports"],
+             "--project-dir", project_dir],
            {"FAKE_TOTAL": "1"})
 
 def _bun_test_setup(project_dir, bin_dir):
