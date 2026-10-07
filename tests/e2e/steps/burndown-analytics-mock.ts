@@ -51,7 +51,7 @@ export interface ForecastFixture {
   p50Ts?: number;
   p80Ts?: number;
   scheduleHealth?: string;
-  sampleWeeks: number;
+  sampleDays: number;
   status: "ok" | "insufficient_history" | "unpointed";
   unpointed?: string[];
 }
@@ -128,18 +128,49 @@ export interface ProjectionLabelExpectations {
   target: string;
 }
 
-/** A small dated-forecast fixture: one merge step, a future P50/P80/target. */
+// CR-CRU-161 §S4/AC4 — the dated-forecast trace geometry's own anchors:
+// GREEN's `data-p50-line`/`data-p80-line` describe what uPlot actually drew
+// for each trace (CSS-px vertices, same local space as `data-actual-line`),
+// starting at the today marker and ending on the zero line at the trace's
+// OWN date. A test cannot replicate uPlot's internal scale/padding math, so
+// it instead derives the expected pixel for an arbitrary date by linearly
+// interpolating between two points uPlot ALREADY placed on the very same
+// shared x (time) scale — the drawn actual line's first real point and its
+// last (today). That interpolation needs the real timestamps behind those
+// two points, plus the forecast's own p50Ts/p80Ts — not reconstructable from
+// the rendered DOM alone — hence this fixture now also returns `trace`.
+export interface BurndownTraceExpectation {
+  /** The real timestamp (ms) of the burndown's own "today" point — the
+   *  same instant `mockDatedForecast` stamped onto the fixture's remaining
+   *  point and the forecast's own `now`. */
+  todayTs: number;
+  /** The real timestamp (ms) of the fixture's first (oldest) burndown
+   *  point — a second, distinct known point on the same x scale. */
+  firstPointTs: number;
+  p50Ts: number;
+  p80Ts: number;
+}
+
+export interface DatedForecastExpectations extends ProjectionLabelExpectations {
+  trace: BurndownTraceExpectation;
+}
+
+/** A small dated-forecast fixture: one merge step, a future P50/P80/target.
+ *  P50Ts and P80Ts are deliberately DIFFERENT dates (7 days apart) so a
+ *  dated forecast's two traces never collapse onto the same end x — the
+ *  exact precondition CR-CRU-161 §S4/AC4 requires. */
 export async function mockDatedForecast(
   page: Page,
   projectKey: string,
-): Promise<ProjectionLabelExpectations> {
+): Promise<DatedForecastExpectations> {
   const now = Date.now();
   const remaining = 30;
+  const firstPointTs = now - 10 * DAY_MS;
   const burndown: BurndownFixture = {
     committedPoints: 48,
     target: Math.floor((now + 15 * DAY_MS) / 1000),
     points: [
-      { ts: now - 10 * DAY_MS, remaining: 48, event: "start", cr: "CR-FIX-000", delta: 0 },
+      { ts: firstPointTs, remaining: 48, event: "start", cr: "CR-FIX-000", delta: 0 },
       { ts: now - 4 * DAY_MS, remaining, event: "merged", cr: "CR-FIX-001", delta: -18 },
     ],
     unpointed: [],
@@ -150,7 +181,7 @@ export async function mockDatedForecast(
     remainingPoints: remaining,
     p50Ts,
     p80Ts,
-    sampleWeeks: 3,
+    sampleDays: 3,
     status: "ok",
   };
   await routeAnalytics(page, projectKey, burndown, forecast);
@@ -159,6 +190,7 @@ export async function mockDatedForecast(
     p50: `P50 ${shortDay(p50Ts)}`,
     p80: `P80 ${shortDay(p80Ts)}`,
     target: `target ${shortDay((burndown.target as number) * 1000)}`,
+    trace: { todayTs: now, firstPointTs, p50Ts, p80Ts },
   };
 }
 
@@ -166,8 +198,9 @@ export interface RefusalExpectation {
   mustContain: string[];
 }
 
-/** A forecast that refuses with `insufficient_history` — fewer than the 3
- * completed weeks `FORECAST_SAMPLE_WEEKS` (public/app.js) needs. */
+/** A forecast that refuses with `insufficient_history` — CR-CRU-161 §S2's
+ * confidence gate (amended 2026-10-07): no pointed CR of the release has
+ * merged yet. A BINARY gate, not the old "N of 3 weeks" sample-count one. */
 export async function mockRefusedInsufficientHistory(
   page: Page,
   projectKey: string,
@@ -180,14 +213,14 @@ export async function mockRefusedInsufficientHistory(
   };
   const forecast: ForecastFixture = {
     remainingPoints: 10,
-    sampleWeeks: 1,
+    sampleDays: 0,
     status: "insufficient_history",
   };
   await routeAnalytics(page, projectKey, burndown, forecast);
-  // Specific to THIS refusal: the sample-weeks figures actually answered
-  // (1 of 3), never a generic "no forecast" string a no-op stub could print
-  // for either refusal kind.
-  return { mustContain: ["1", "3"] };
+  // Specific to THIS refusal: the spec's own wording for the gate (§S2 —
+  // "saying no pointed CR of the release has merged yet"), never a generic
+  // "no forecast" string a no-op stub could print for either refusal kind.
+  return { mustContain: ["no pointed CR of the release has merged yet"] };
 }
 
 /** A forecast that refuses with `unpointed` — naming the unpointed CRs. */
@@ -204,7 +237,7 @@ export async function mockRefusedUnpointed(
   };
   const forecast: ForecastFixture = {
     remainingPoints: 10,
-    sampleWeeks: 3,
+    sampleDays: 3,
     status: "unpointed",
     unpointed,
   };
@@ -256,7 +289,7 @@ export async function mockManyStepsDatedForecast(
     remainingPoints: remaining,
     p50Ts,
     p80Ts,
-    sampleWeeks: 3,
+    sampleDays: 3,
     status: "ok",
   };
   await routeAnalytics(page, projectKey, burndown, forecast);

@@ -92,7 +92,7 @@ async function getJson(path: string): Promise<{ status: number; body: ChangesBod
 /** The four analytics routes §S2 names, for one project/release. */
 function routesFor(key: string, release: string): Array<{ name: string; path: string }> {
   return [
-    { name: "velocity", path: `/api/v2/projects/${key}/analytics/velocity` },
+    { name: "velocity", path: `/api/v2/projects/${key}/analytics/velocity?release=${encodeURIComponent(release)}` },
     {
       name: "burndown",
       path: `/api/v2/projects/${key}/analytics/burndown?release=${encodeURIComponent(release)}`,

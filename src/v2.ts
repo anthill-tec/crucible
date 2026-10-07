@@ -4676,18 +4676,29 @@ function declaredTarget(store: Store, key: string, release: string): number | un
   return store.listReleases(key).find((event) => event.label === release)?.targetAt;
 }
 
-/** §S2 — GET …/analytics/velocity: project-level pointed velocity + flow. */
+/**
+ * DN §5/§9 — GET …/analytics/velocity?release=: the release's pace so far
+ * (points per day since its start) + the project-level flow line.
+ */
 function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
   const missing = requireHeldProject(store, key);
   if (missing !== null) return missing;
-  const payload = analyticsCacheFor(store).answer(key, ["velocity"], () =>
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const payload = analyticsCacheFor(store).answer(key, ["velocity", release], () =>
     velocity({
+      release,
       plans: store.listPlans(key),
       entries: store.listQueue(key),
+      filedAt: store.queueFiledAt(key),
+      journal: store.listQueueDeclarations(key),
       execByCycle: store.cycleExecMs(key),
       now: Date.now(),
     }),
   );
+  if (payload === null) {
+    return fail(404, `no CR was ever planned into release ${release}`);
+  }
   return reply(req, url, { ok: true, ...payload });
 }
 
@@ -4738,6 +4749,8 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
       release,
       entries,
       plans: store.listPlans(key),
+      filedAt: store.queueFiledAt(key),
+      journal: store.listQueueDeclarations(key),
       now: Date.now(),
       ...(target !== undefined ? { targetAt: target } : {}),
       random: seed !== undefined ? seededRandom(seed) : Math.random,

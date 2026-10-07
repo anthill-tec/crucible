@@ -471,10 +471,11 @@ Step("velocity appears on the project band foot strip", async ({ page }) => {
   await expect(foot).toBeVisible();
   const text = (await foot.innerText()).toLowerCase();
   // The exact wording tests/cr022-analytics-ui.test.ts's Velocity-card unit
-  // test already pins for the Project band (\"N pts / week\") \u2014 matched here
+  // test already pins for the Project band (CR-CRU-161 \u00a7S3: \"N pts / day\",
+  // the release's per-day rate, not the project's weekly one) \u2014 matched here
   // rather than a bare non-empty check, so a foot strip that renders SOME
   // extra text but never the velocity figure still fails this.
-  expect(text).toContain("pts / week");
+  expect(text).toContain("pts / day");
 });
 
 Step("I tap the roadmap release band", async ({ page }) => {

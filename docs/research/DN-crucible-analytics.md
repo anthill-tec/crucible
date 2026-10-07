@@ -184,7 +184,7 @@ Against the **release's declared target** (CR-CRU-091): `P80 ≤ target` → `ah
 |---|---|
 | `GET /api/v2/projects/<key>/analytics/velocity?release=<label>` | `{release, startTs, pointsPerDay?, days:[{day, points}], sampleDays, flow:{execMsPerCycle, gateMsPerCycle, sampleCycles}}` (amended 2026-10-07; the flow is project-level) |
 | `GET …/analytics/burndown?release=<label>` | `{release, committedPoints, target?, ideal?:[…], points:[{ts, remaining, event, cr, verb, delta}], unpointed:[cr]}` |
-| `GET …/analytics/forecast?release=<label>` | `{release, remainingPoints, p50Ts?, p80Ts?, scheduleHealth?, sampleDays, status}` (amended 2026-10-07) |
+| `GET …/analytics/forecast?release=<label>` | `{release, remainingPoints, p50Ts?, p80Ts?, scheduleHealth?, sampleDays, status, unpointed?:[cr]}` (amended 2026-10-07) |
 
 Plus: `points` on queue entries (set via `cr-plan --points`); the declaration journal. JSON only, like
 every v2 GET (CR-CRU-132 retired TOON rendering). No new SSE event kinds — the UI recomputes on the
@@ -192,8 +192,10 @@ existing plan/queue ticks.
 
 ## 10 UI surfaces (F16 + F14¾, approved 2026-09-24)
 
-- **Project band → Velocity card:** `N pts / week` (3-week mean), the weekly bars, the sample, and a
-  secondary *flow* line with the exec/gate split. Project-level; every tab.
+- **Project band → Velocity card (amended 2026-10-07):** the focused release's pace, `N pts / day`,
+  what it covers (`0.3.0 so far · 29 days · 188 pts`), the release's daily bars with the dashed rate,
+  and a secondary *flow* line with the exec/gate split (project-level). Every tab; with no release in
+  focus it says so.
 - **Release band** in the **header of zone 3**, above the release-scoped table (testid
   `roadmap-progress`): a burndown thumbnail, `remaining of committed pts`, velocity, the P50/P80 chip,
   and the schedule-health chip when a target is declared. Tap → the analytics pane.
@@ -214,7 +216,7 @@ existing plan/queue ticks.
 |---|---|
 | story point | the planning-game estimate on a CR; Fibonacci 1·2·3·5·8·13 |
 | planning game | the orchestrator proposes points at gap analysis; the user confirms |
-| velocity | story points merged per calendar week (3-week mean) |
+| velocity | the focused release's story points merged since it started, per day (amended 2026-10-07) |
 | flow | the two clocks — exec and gate time per cycle; not velocity |
 | committed points | a release's points at its start |
 | scope-change step | a journalled declaration that moved the release's remaining points |
