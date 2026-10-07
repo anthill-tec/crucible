@@ -4670,6 +4670,24 @@
       }
       return vertices;
     };
+    // A forecast trace as uPlot drew it (a straight line through its points,
+    // gaps spanned), from its first point to the first where it reaches zero;
+    // null when that series is not drawn this time (hidden or unstroked).
+    // Vertices in CSS px local to the canvas, read from the chart's own series
+    // data at draw time.
+    const traceVertices = (u, series, px) => {
+      const s = u.series[series];
+      if (s === undefined || s.show === false || !s.stroke) return null;
+      const xs = u.data[0];
+      const ys = u.data[series];
+      const vertices = [];
+      for (let i = 0; i < xs.length; i++) {
+        if (ys[i] === null || ys[i] === undefined) continue;
+        vertices.push({ x: u.valToPos(xs[i], "x", true) / px, y: u.valToPos(ys[i], "y", true) / px });
+        if (ys[i] === 0) break;
+      }
+      return vertices.length > 1 ? vertices : null;
+    };
     // A box crosses a line when any of its segments comes within `gap` px of
     // it (the stroke's half-width, its pixel snapping, and a little air).
     const BURNDOWN_LINE_GAP = 2;
@@ -4961,7 +4979,13 @@
                 ctx.fillText(item.text, box.x * px, (box.y + 1) * px);
               }
               ctx.restore();
-              if (typeof describe === "function") describe(u, plotCss, items, actualLine);
+              if (typeof describe === "function") {
+                // What uPlot drew this time for each forecast trace and the band.
+                const p50Line = traceVertices(u, 3, px);
+                const p80Line = traceVertices(u, 4, px);
+                const band = u.bands.length > 0 && p50Line !== null && p80Line !== null;
+                describe(u, plotCss, items, actualLine, { p50Line, p80Line, band });
+              }
             },
           ],
         },
@@ -4988,7 +5012,9 @@
       height: Math.max(1, Math.floor(host.clientHeight)),
     });
     // The chart's DOM description, rebuilt on every draw: the host carries the
-    // forecast's state, the plot box and the actual line's drawn vertices; one list beside the canvas names every
+    // forecast's state, the plot box, the actual line's drawn vertices, each
+    // forecast trace's drawn vertices (only when drawn) and whether the band
+    // was drawn; one list beside the canvas names every
     // label the draw decided about (kind, full text, drawn or not, its box).
     // Each step is also an invisible, focusable target over its point; resting
     // the pointer on one, or focusing it, shows its full label in ONE reused
@@ -5012,15 +5038,22 @@
       const leave = (e) => {
         if (stepOf(e) !== null) tip.hidden = true;
       };
-      return (u, plot, items, actualLine) => {
+      return (u, plot, items, actualLine, drawn) => {
+        const line = (vertices) =>
+          vertices.map((v) => `${Math.round(v.x * 100) / 100},${Math.round(v.y * 100) / 100}`).join(" ");
         chart.setAttribute("data-plot-left", String(plot.left));
         chart.setAttribute("data-plot-top", String(plot.top));
         chart.setAttribute("data-plot-right", String(plot.right));
         chart.setAttribute("data-plot-bottom", String(plot.bottom));
-        chart.setAttribute(
-          "data-actual-line",
-          actualLine.map((v) => `${Math.round(v.x * 100) / 100},${Math.round(v.y * 100) / 100}`).join(" "),
-        );
+        chart.setAttribute("data-actual-line", line(actualLine));
+        for (const [name, vertices] of [
+          ["data-p50-line", drawn.p50Line],
+          ["data-p80-line", drawn.p80Line],
+        ]) {
+          if (vertices === null) chart.removeAttribute(name);
+          else chart.setAttribute(name, line(vertices));
+        }
+        chart.setAttribute("data-burndown-band", drawn.band ? "shown" : "hidden");
         if (layer === null) {
           layer = div({ "data-testid": "burndown-chart-labels", class: "app-burndown-labels" });
           tip = div({ "data-testid": "burndown-chart-tooltip", class: "app-burndown-tooltip", hidden: true });
@@ -5155,7 +5188,7 @@
         {
           "data-testid": "burndown-chart",
           "data-burndown-forecast": dated ? "dated" : "refused",
-          "data-burndown-band": dated ? "shown" : "hidden",
+          "data-burndown-band": "hidden",
           class: "app-burndown-chart",
           role: "img",
           "aria-label": `${bd.release} SCRUM burndown: story points remaining, the ideal line, the actual line with each step's event, and the forecast band`,
