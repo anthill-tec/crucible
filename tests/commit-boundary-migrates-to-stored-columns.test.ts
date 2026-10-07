@@ -17,9 +17,10 @@
 // .test.ts` idiom, so the same fixture-builder keeps testing the real migration
 // once it exists rather than a shape only a pre-GREEN build can produce.
 //
-// The real-scale case touches `data/crucible.db` ONLY as two independent
-// `copyFileSync` copies (database file + `-wal`/`-shm` siblings) into mkdtemp
-// directories; the live file itself is never opened, written or migrated. When
+// The real-scale case touches `data/crucible.db` ONLY as one `copyFileSync`
+// snapshot (database file + `-wal`/`-shm` siblings) into an mkdtemp directory,
+// duplicated there for the before and after stores; the live file itself is
+// never opened, written or migrated. When
 // there is no dev store (CI, a clean checkout) the case states that and skips.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -47,7 +48,7 @@ afterEach(() => {
 });
 
 function tmpDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "cru169-migrate-"));
+  const dir = mkdtempSync(join(tmpdir(), "boundary-migrate-"));
   scratchDirs.push(dir);
   return dir;
 }
@@ -369,10 +370,11 @@ describe("AC1 — a copy of the dev store, migrated, answers every plan's commit
       return;
     }
     const dir = tmpDir();
+    const snapshotPath = join(dir, "snapshot.db");
     const beforePath = join(dir, "before.db");
     const afterPath = join(dir, "after.db");
 
-    // TWO INDEPENDENT COPIES, never one read twice — reasoned out:
+    // TWO INDEPENDENT DUPLICATES of one snapshot, never one read twice — reasoned out:
     //
     // `Store.open` always migrates whatever it opens up to THIS build's own
     // `SCHEMA_VERSION`, and a migration cannot be undone in place. So the
@@ -387,8 +389,17 @@ describe("AC1 — a copy of the dev store, migrated, answers every plan's commit
     // way and migrates all the way to `SCHEMA_VERSION`, exercising the real
     // chain. Comparing the two is then "the migrated answer equals today's",
     // which is what AC1 states.
-    if (!copyLiveStore(beforePath) || !copyLiveStore(afterPath)) {
+    if (!copyLiveStore(snapshotPath)) {
       throw new Error(`copyFileSync of ${LIVE_STORE} failed after existsSync reported it present`);
+    }
+    // ONE copy of the live store, then duplicated: the live board writes while
+    // suites run, so two separate copies of the live file can diverge or tear.
+    // The snapshot's own `-wal`/`-shm` siblings travel with each duplicate.
+    for (const dest of [beforePath, afterPath]) {
+      copyFileSync(snapshotPath, dest);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (existsSync(`${snapshotPath}${suffix}`)) copyFileSync(`${snapshotPath}${suffix}`, `${dest}${suffix}`);
+      }
     }
 
     const chain = migrationChain();
