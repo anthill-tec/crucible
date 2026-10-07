@@ -33,11 +33,18 @@ nine gains `--cycle` through the shared helper, with the same semantics as every
 
 ### §S1 — an unfiled run files nothing (issue 1)
 
-A suite verb run without `--agent` runs the suite and files nothing — no run start, no ingest, no
-abort — and exits with the runner's own code, exactly as bun `test` does today. Measured
-2026-10-08: bun's `cmd_regression` (regression, pre-merge-gate, every declared-tier verb) is the
-path that ingests regardless; each client's suite verbs are checked the same way and any other
-offender is fixed by the same rule.
+A suite verb that **may** run without `--agent` (bun `test` and its declared-tier verbs; python,
+mvn, rust and arduino `test` and their tier verbs) runs the suite and files nothing — no run start,
+no ingest, no abort — and exits with the runner's own code, exactly as bun `test` does today.
+Measured 2026-10-08 (cycle 608 RED): bun's declared-tier verbs are the only offenders — they run
+`cmd_regression`'s body, which ingests regardless; the other clients' optional-agent verbs already
+file nothing.
+
+The evidence verbs keep `--agent` **required** (user ruling 2026-10-08): bun, python and mvn
+`regression` and `pre-merge-gate`, and rust `regression`, `workspace-regression`, `smoke-test`,
+`regression-ingest` and `pre-merge-gate` exist to file evidence, and a gate that runs without a
+record defeats the gate. Without `--agent` they are refused before anything runs or posts, as
+today.
 
 ### §S2 — nine verbs take `--cycle` (issue 3)
 
@@ -48,8 +55,10 @@ release run per CR-CRU-164 still refuses a cycle).
 
 ## Acceptance criteria
 
-- [ ] For each client's suite verbs, a run without `--agent` posts nothing to the board and exits
-      with the runner's code — asserted per client with the subprocess harness (bun declared-tier,
-      regression and pre-merge-gate included).
+- [ ] For each client's optional-agent suite verbs, a run without `--agent` posts nothing to the
+      board and exits with the runner's code — asserted per client with the subprocess harness, bun's
+      declared-tier verbs included (flag and raw-report targets); each required-agent evidence verb
+      named in §S1, run without `--agent`, is refused before the runner starts and posts nothing —
+      asserted per client.
 - [ ] Each of the nine verbs in §S2 accepts `--cycle` and binds the run exactly as the other verbs
       do, and its `--help` lists it — asserted per client.
