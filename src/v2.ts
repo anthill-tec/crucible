@@ -7,7 +7,6 @@ import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
 import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
-import { analyticsCacheFor } from "./analytics-cache.ts";
 import { resolveNext } from "./next.ts";
 import {
   authHints,
@@ -4814,17 +4813,15 @@ function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: U
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const payload = analyticsCacheFor(store).answer(key, ["velocity", release], () =>
-    velocity({
-      release,
-      plans: store.listPlans(key),
-      entries: store.listQueue(key),
-      filedAt: store.queueFiledAt(key),
-      journal: store.listQueueDeclarations(key),
-      execByCycle: store.cycleExecMs(key),
-      now: Date.now(),
-    }),
-  );
+  const payload = velocity({
+    release,
+    plans: store.listPlans(key),
+    entries: store.listQueue(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    execByCycle: store.cycleExecMs(key),
+    now: Date.now(),
+  });
   if (payload === null) {
     return fail(404, `no CR was ever planned into release ${release}`);
   }
@@ -4837,16 +4834,14 @@ function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: U
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const payload = analyticsCacheFor(store).answer(key, ["burndown", release], () => {
-    const target = declaredTarget(store, key, release);
-    return burndown({
-      release,
-      entries: store.listQueue(key),
-      filedAt: store.queueFiledAt(key),
-      journal: store.listQueueDeclarations(key),
-      plans: store.listPlans(key),
-      ...(target !== undefined ? { targetAt: target } : {}),
-    });
+  const target = declaredTarget(store, key, release);
+  const payload = burndown({
+    release,
+    entries: store.listQueue(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    plans: store.listPlans(key),
+    ...(target !== undefined ? { targetAt: target } : {}),
   });
   if (payload === null) {
     return fail(404, `no CR was ever planned into release ${release}`);
@@ -4868,28 +4863,21 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
   if (seed !== undefined && !Number.isInteger(seed)) {
     return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
   }
-  // Only the unseeded answer is held: a seeded read is the test-only
-  // deterministic draw, computed per read, so the cache never grows by seed.
-  const compute = () => {
-    const entries = store.listQueue(key);
-    if (!entries.some((entry) => entry.release === release)) return null;
-    const target = declaredTarget(store, key, release);
-    return forecast({
-      release,
-      entries,
-      plans: store.listPlans(key),
-      filedAt: store.queueFiledAt(key),
-      journal: store.listQueueDeclarations(key),
-      now: Date.now(),
-      ...(target !== undefined ? { targetAt: target } : {}),
-      random: seed !== undefined ? seededRandom(seed) : Math.random,
-    });
-  };
-  const payload =
-    seed !== undefined ? compute() : analyticsCacheFor(store).answer(key, ["forecast", release], compute);
-  if (payload === null) {
+  const entries = store.listQueue(key);
+  if (!entries.some((entry) => entry.release === release)) {
     return fail(404, `no CR is planned into release ${release}`);
   }
+  const target = declaredTarget(store, key, release);
+  const payload = forecast({
+    release,
+    entries,
+    plans: store.listPlans(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    now: Date.now(),
+    ...(target !== undefined ? { targetAt: target } : {}),
+    random: seed !== undefined ? seededRandom(seed) : Math.random,
+  });
   return reply(req, url, { ok: true, ...payload });
 }
 
@@ -4903,9 +4891,7 @@ function handleAnalyticsChanges(store: Store, key: string, req: Request, url: UR
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
-  const payload = analyticsCacheFor(store).answer(key, ["changes", release], () =>
-    planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) }),
-  );
+  const payload = planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) });
   if (payload === null) {
     return fail(404, `no CR is planned into release ${release}`);
   }
