@@ -1352,6 +1352,12 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
+        # An unfiled run (no --agent — reachable only through an
+        # optional-agent caller such as a declared tier verb) files nothing,
+        # exactly as `cmd_test`: no ingest, no abort, the runner's own code.
+        if not args.agent:
+            return result.returncode
+
         # CR-CRU-015 §S2 — the report that MATTERS is the one this run will
         # ingest: the raw report the board decodes when the target declares
         # one, and the JUnit XML this client parses otherwise. A run whose
