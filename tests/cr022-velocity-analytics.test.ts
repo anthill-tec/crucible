@@ -1,45 +1,32 @@
-// CR-CRU-022 §S2 — velocity (project-level): GET …/analytics/velocity.
+// CR-CRU-022 §S2 — velocity: GET …/analytics/velocity.
 //
-// Spec: docs/changes/CR-CRU-022-roadmap-analytics.md §S2 + its two ACs.
-// Design: docs/research/DN-crucible-analytics.md §5 (velocity) + §3 (the
-// two clocks / the 2026-09-24 "flow" amendment — BDD e2e runs count toward
-// exec time).
+// RE-PINNED for CR-CRU-161 §S1 (2026-10-07 re-specification): velocity is
+// now the FOCUSED RELEASE's pace so far — points merged since the
+// release's start (its earliest `filed_at`) divided by the days since,
+// today included — not the project-wide mean of the last 3 completed ISO
+// calendar weeks this file originally pinned. The route now REQUIRES
+// `?release=` (400 without it, like `burndown`/`forecast`), and the
+// payload's shape changed: `pointsPerWeek`/`weeks`/`sampleWeeks` are gone,
+// replaced by `startTs`/`pointsPerDay`/`days`/`sampleDays`. The most
+// consequential reversal: gap DAYS are now a real ZERO in `days` (the
+// release's daily bars need a bar for every day), where gap WEEKS used to
+// be ABSENT from `weeks` — the opposite convention.
 //
-// Baseline (measured 2026-09-24, re-confirmed at this RED pass): no
-// `/analytics/*` route exists anywhere in src/v2.ts's dispatch (grep over
-// the file for "analytics" returns zero route registrations), and no
-// analytics code exists in src/ or public/. Every assertion below is
-// expected to FAIL against an unknown-route response (404/undefined body),
-// never the §S2 payload `{pointsPerWeek, weeks[], sampleWeeks, flow}`.
+// Spec: docs/changes/CR-CRU-161-velocity-and-the-forecast-follow-the-release-so-far.md
+// §S1/AC1. Design: docs/research/DN-crucible-analytics.md §5 (amended
+// 2026-10-07).
 //
-// FIXTURE DESIGN, so the RED signal cannot be second-guessed later:
+// Baseline (measured at this RED pass): `handleAnalyticsVelocity` still
+// calls `requireHeldProject` only (no `requireReleaseParam`), and
+// `velocity()` still answers the calendar-week shape — so `getVelocity`'s
+// new `?release=` argument is accepted (ignored) by the current route, and
+// every assertion on `startTs`/`pointsPerDay`/`days`/`sampleDays` below
+// fails on an `undefined` field, never an exception.
 //
-//   * "calendar week" — the CR/DN never pin Mon-Sun vs Sun-Sat. Every
-//     fixture instant below is placed exactly 7 (or 14, for the deliberate
-//     gap) days apart, anchored on a Wednesday — a shift that lands in the
-//     immediately-next 7-day bucket under EITHER convention, so this file's
-//     week-boundary assertions hold regardless of which one GREEN picks
-//     (RED agent's documented choice: date PLACEMENT is convention-proof
-//     rather than committing to one convention's exact bucket labels).
-//   * every fixture cycle carries the SAME exec/loop/gate shape (exec
-//     1000ms, loop 3000ms, gate 2000ms) — deliberately, so `flow`'s mean is
-//     the same number regardless of WHICH population of cycles an
-//     implementation samples (last-3-weeks only vs. all project history):
-//     the assertion is robust to that unstated choice, unlike
-//     `pointsPerWeek`'s population, which the AC pins exactly ("last 3
-//     completed weeks").
-//   * CR-VEL-4's linked run is split into a 500ms "unit" event and a 500ms
-//     "bdd" event. If BDD-tier runs were wrongly excluded from exec(c) (the
-//     open question §3's 2026-09-24 amendment resolved to "yes, they
-//     count"), that ONE cycle's exec would read 500ms instead of 1000ms and
-//     the flow.execMsPerCycle MEAN below would read 875, not 1000 — so one
-//     fixture proves both the mean's convention-robustness and the
-//     BDD-inclusion rule in the same assertion.
-//   * "today" is pinned by `setSystemTime` to a Wednesday inside week W5, so
-//     W1-W4 are unambiguously its 4 preceding COMPLETED weeks, and W5 (which
-//     carries no merge) never enters the series. W1 sits a full extra week
-//     before W2 (a deliberate GAP with zero merges) so an implementation
-//     that zero-fills empty weeks is caught by `weeks.length` alone.
+// Flow (`exec`/`gate` per cycle) is UNCHANGED by CR-CRU-161 — project-level,
+// §5's own words — so this file's flow fixture/assertions (same
+// exec 1000ms / loop 3000ms / gate 2000ms shape, the BDD-tier split on
+// CR-VEL-4) are KEPT VERBATIM from the original pin.
 //
 // Every server here is booted on an OS-assigned port against an
 // mkdtempSync scratch db. The live data/crucible.db and port 3849 are never
@@ -69,9 +56,12 @@ function planned<T extends object>(result: T): Exclude<T, { error: string }> {
 
 interface VelocityBody {
   ok?: boolean;
-  pointsPerWeek?: number;
-  weeks?: Array<{ week: string; points: number }>;
-  sampleWeeks?: number;
+  error?: string;
+  release?: string;
+  startTs?: number;
+  pointsPerDay?: number;
+  days?: Array<{ day: string; points: number }>;
+  sampleDays?: number;
   flow?: { execMsPerCycle: number; gateMsPerCycle: number; sampleCycles: number };
   [key: string]: unknown;
 }
@@ -99,8 +89,9 @@ function base(): string {
   return `http://localhost:${handle!.server.port}`;
 }
 
-async function getVelocity(key: string): Promise<{ status: number; body: VelocityBody }> {
-  const res = await fetch(`${base()}/api/v2/projects/${key}/analytics/velocity`);
+async function getVelocity(key: string, release?: string): Promise<{ status: number; body: VelocityBody }> {
+  const qs = release !== undefined ? `?release=${encodeURIComponent(release)}` : "";
+  const res = await fetch(`${base()}/api/v2/projects/${key}/analytics/velocity${qs}`);
   let body: VelocityBody = {};
   try {
     body = (await res.json()) as VelocityBody;
@@ -156,13 +147,14 @@ function mergeCr(key: string, fx: MergeFixture): void {
 }
 
 describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
-  test("pointsPerWeek is the mean of the last 3 COMPLETED weeks; weeks lists every week with a pointed merge, gap weeks stay absent (never zero); a BDD-tier run counts toward exec time", async () => {
+  test("pointsPerDay is the release's pointed points merged since its start ÷ the days since, today included; days is a ZERO-FILLED per-day series (the idle gap between CR-VEL-1 and CR-VEL-2 reads 0, never absent); a BDD-tier run counts toward exec time", async () => {
     boot();
     const key = "00000000-0000-7000-8022-000000000a01";
     handle!.store.addProject({ key, name: "vel", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
 
-    // W1 — Wed 2026-08-05 (a full week BEFORE the gap week 2026-08-12,
-    // which carries no merge at all).
+    // CR-VEL-1 — Wed 2026-08-05: merges THREE WEEKS after 9.5.0's own start
+    // (its own filed_at, 2026-08-01, is the EARLIEST among 9.5.0's CRs — so
+    // it sets the release's start even though it merges four days later).
     mergeCr(key, {
       cr: "CR-VEL-1",
       points: 3,
@@ -172,7 +164,7 @@ describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
       doneAt: "2026-08-05T09:00:03.000Z",
       mergedAt: "2026-08-05T10:00:00.000Z",
     });
-    // W2 — Wed 2026-08-19
+    // CR-VEL-2 — Wed 2026-08-19, after a 2-week idle gap with no merges at all.
     mergeCr(key, {
       cr: "CR-VEL-2",
       points: 5,
@@ -182,7 +174,7 @@ describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
       doneAt: "2026-08-19T09:00:03.000Z",
       mergedAt: "2026-08-19T10:00:00.000Z",
     });
-    // W3 — Wed 2026-08-26
+    // CR-VEL-3 — Wed 2026-08-26
     mergeCr(key, {
       cr: "CR-VEL-3",
       points: 8,
@@ -192,7 +184,7 @@ describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
       doneAt: "2026-08-26T09:00:03.000Z",
       mergedAt: "2026-08-26T10:00:00.000Z",
     });
-    // W4 — Wed 2026-09-02, the split unit+bdd run
+    // CR-VEL-4 — Wed 2026-09-02, the split unit+bdd run
     mergeCr(key, {
       cr: "CR-VEL-4",
       points: 2,
@@ -204,47 +196,52 @@ describe("CR-CRU-022 §S2 — velocity: GET …/analytics/velocity", () => {
       splitBdd: true,
     });
 
-    // "today" — Wed 2026-09-09, inside W5 (open, no merge in it at all).
+    // "today" — Wed 2026-09-09.
     setSystemTime(new Date("2026-09-09T12:00:00.000Z"));
 
-    const { status, body } = await getVelocity(key);
+    const { status, body } = await getVelocity(key, "9.5.0");
     expect(status).toBe(200);
     expect(body.ok).not.toBe(false);
 
-    // §S2/AC1 — the mean of the last 3 COMPLETED weeks: (5 + 8 + 2) / 3.
-    expect(body.pointsPerWeek).toBe(5);
-    expect(body.sampleWeeks).toBe(3);
+    // §S1/AC1 — the release's start is CR-VEL-1's own filed_at, the
+    // earliest among 9.5.0's CRs.
+    expect(body.release).toBe("9.5.0");
+    expect(body.startTs).toBe(Date.parse("2026-08-01T09:00:00.000Z"));
+    // 2026-08-01 .. 2026-09-09 inclusive = 40 days (31 in August + 9 in September).
+    expect(body.sampleDays).toBe(40);
+    // (3 + 5 + 8 + 2) pointed points / 40 days.
+    expect(body.pointsPerDay).toBe(0.45);
 
-    // Exactly the weeks that had pointed merges: W1 counts (it merged
-    // points, even though it falls OUTSIDE the 3-week mean window), the
-    // empty gap week between W1 and W2 is ABSENT (not a zero entry), and W5
-    // (the still-open week) never appears.
-    expect(Array.isArray(body.weeks)).toBe(true);
-    expect(body.weeks!.length).toBe(4);
-    expect(body.weeks!.map((w) => w.points)).toEqual([3, 5, 8, 2]);
-    for (const w of body.weeks!) {
-      expect(typeof w.week).toBe("string");
-      expect(w.week.length).toBeGreaterThan(0);
+    expect(Array.isArray(body.days)).toBe(true);
+    expect(body.days!.length).toBe(40);
+    const expectedDays = new Array(40).fill(0) as number[];
+    expectedDays[4] = 3; // 2026-08-05 — CR-VEL-1
+    expectedDays[18] = 5; // 2026-08-19 — CR-VEL-2 (the idle gap at indices 5-17 stays 0, never absent)
+    expectedDays[25] = 8; // 2026-08-26 — CR-VEL-3
+    expectedDays[32] = 2; // 2026-09-02 — CR-VEL-4
+    expect(body.days!.map((d) => d.points)).toEqual(expectedDays);
+    for (const d of body.days!) {
+      expect(typeof d.day).toBe("string");
+      expect(d.day.length).toBeGreaterThan(0);
     }
 
-    // §S2/AC2 — flow: every fixture cycle carries exec 1000ms / loop 3000ms
-    // / gate 2000ms, so the mean is 1000/2000 no matter which population of
-    // cycles the implementation samples.
+    // Flow: UNCHANGED by CR-CRU-161 — every fixture cycle carries exec
+    // 1000ms / loop 3000ms / gate 2000ms, so the mean is 1000/2000 no
+    // matter which population of cycles the implementation samples.
     expect(body.flow).toBeDefined();
     expect(body.flow!.execMsPerCycle).toBe(1000);
     expect(body.flow!.gateMsPerCycle).toBe(2000);
     expect(body.flow!.sampleCycles).toBeGreaterThanOrEqual(1);
   });
 
-  test("with no pointed merges at all, weeks/sampleWeeks reflect an empty history, never a zero-filled one", async () => {
+  test("a release with no CR ever planned into it 404s, like the other release-scoped analytics reads", async () => {
     boot();
     const key = "00000000-0000-7000-8022-000000000a02";
     handle!.store.addProject({ key, name: "vel-empty", type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
     setSystemTime(new Date("2026-09-09T12:00:00.000Z"));
-    const { status, body } = await getVelocity(key);
-    expect(status).toBe(200);
-    expect(Array.isArray(body.weeks)).toBe(true);
-    expect(body.weeks!.length).toBe(0);
-    expect(body.sampleWeeks).toBe(0);
+    const { status, body } = await getVelocity(key, "9.5.0");
+    expect(status).toBe(404);
+    expect(typeof body.error).toBe("string");
   });
 });
+
