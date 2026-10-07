@@ -27,8 +27,7 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store, SCHEMA_VERSION, type MigrationStep } from "../src/store.ts";
-import * as storeModule from "../src/store.ts";
+import { Store, SCHEMA_VERSION } from "../src/store.ts";
 import type { ChangeRecord, CommitBoundary, Plan, RunSchema } from "../src/types.ts";
 
 const t0 = 1_700_000_000_000;
@@ -51,14 +50,6 @@ function tmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "boundary-migrate-"));
   scratchDirs.push(dir);
   return dir;
-}
-
-function migrationChain(): readonly MigrationStep[] {
-  const mod = storeModule as { MIGRATIONS?: unknown };
-  if (!Array.isArray(mod.MIGRATIONS)) {
-    throw new Error("CR-CRU-169 §S1: src/store.ts exports no MIGRATIONS chain");
-  }
-  return mod.MIGRATIONS as readonly MigrationStep[];
 }
 
 function userVersion(dbPath: string): number {
@@ -360,6 +351,99 @@ function allPlanBoundaries(store: Store): Record<string, CommitBoundary | null> 
   return out;
 }
 
+/**
+ * A FROZEN ORACLE of the pre-change rule: `Store.deriveCommitBoundary` in
+ * `src/store.ts` as of commit 9a11ae6, the rule every plan read applied
+ * before the boundary was stored. It is restated here, never imported, so the
+ * baseline cannot move with the code it checks. Read through a raw
+ * connection on the snapshot COPY only, for every plan of every project (the
+ * plans `allPlanBoundaries` reaches through `listProjects`):
+ *   - only a closed plan with a merge commit and a close time has a boundary;
+ *   - its cycles in display order (`seq`, then `cycle_id`); for each of
+ *     `events`, `milestones`, `gates`, then each cycle, the rows with that
+ *     `cycle_id` and a non-null `context`, by `timestamp` then `rowid`;
+ *   - merged by `timestamp`, ties by the id's trailing insert sequence (an id
+ *     with no numeric tail ranks 0), stable otherwise;
+ *   - the first `context.git` gives `branch` and `firstRunCommit`, the last
+ *     gives `lastRunCommit`; a field with no git context is omitted.
+ */
+function referenceBoundaries(dbPath: string): Record<string, CommitBoundary | null> {
+  interface PlanRowRef {
+    plan_id: number;
+    project_key: string;
+    status: string;
+    merge_commit: string | null;
+    closed_at: number | null;
+  }
+  interface ContextRow {
+    timestamp: number;
+    id: string;
+    context: string;
+  }
+  const ordinal = (id: string): number => {
+    const tail = Number(id.slice(id.lastIndexOf("-") + 1));
+    return Number.isFinite(tail) ? tail : 0;
+  };
+  const db = new Database(dbPath);
+  try {
+    const out: Record<string, CommitBoundary | null> = {};
+    const plans = db
+      .query<PlanRowRef, []>(
+        `SELECT plan_id, project_key, status, merge_commit, closed_at FROM plans
+          WHERE project_key IN (SELECT key FROM projects)`,
+      )
+      .all();
+    for (const plan of plans) {
+      if (plan.status !== "closed" || plan.merge_commit === null || plan.closed_at === null) {
+        out[String(plan.plan_id)] = null;
+        continue;
+      }
+      const cycleIds = db
+        .query<{ cycle_id: number }, [string, number]>(
+          `SELECT cycle_id FROM plan_cycles WHERE project_key = ? AND plan_id = ?
+            ORDER BY seq ASC, cycle_id ASC`,
+        )
+        .all(plan.project_key, plan.plan_id)
+        .map((cycle) => cycle.cycle_id);
+      const rows: ContextRow[] = [];
+      for (const table of ["events", "milestones", "gates"]) {
+        for (const cycleId of cycleIds) {
+          rows.push(
+            ...db
+              .query<ContextRow, [string, number]>(
+                `SELECT timestamp, id, context FROM ${table}
+                  WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
+                  ORDER BY timestamp ASC, rowid ASC`,
+              )
+              .all(plan.project_key, cycleId),
+          );
+        }
+      }
+      rows.sort((left, right) => left.timestamp - right.timestamp || ordinal(left.id) - ordinal(right.id));
+      let branch: string | undefined;
+      let firstRunCommit: string | undefined;
+      let lastRunCommit: string | undefined;
+      for (const row of rows) {
+        const git = (JSON.parse(row.context) as { git?: { branch: string; commit: string } }).git;
+        if (git === undefined) continue;
+        branch ??= git.branch;
+        firstRunCommit ??= git.commit;
+        lastRunCommit = git.commit;
+      }
+      out[String(plan.plan_id)] = {
+        mergeCommit: plan.merge_commit,
+        ...(branch !== undefined ? { branch } : {}),
+        ...(firstRunCommit !== undefined ? { firstRunCommit } : {}),
+        ...(lastRunCommit !== undefined ? { lastRunCommit } : {}),
+        closedAt: plan.closed_at,
+      };
+    }
+    return out;
+  } finally {
+    db.close();
+  }
+}
+
 describe("AC1 — a copy of the dev store, migrated, answers every plan's commitBoundary exactly as today's build does", () => {
   test("every plan's commitBoundary on a migrated copy of the dev store equals the SAME copy-of-today's-build answer, byte for byte", () => {
     if (!existsSync(LIVE_STORE)) {
@@ -377,18 +461,15 @@ describe("AC1 — a copy of the dev store, migrated, answers every plan's commit
     // TWO INDEPENDENT DUPLICATES of one snapshot, never one read twice — reasoned out:
     //
     // `Store.open` always migrates whatever it opens up to THIS build's own
-    // `SCHEMA_VERSION`, and a migration cannot be undone in place. So the
-    // "before" baseline and the "after migration" read cannot come from the
-    // same open: opening once with the ordinary door already mutates the file
-    // to the post-migration shape, and there is no way to ask it for the
-    // pre-migration answer afterwards. The `beforePath` copy is therefore
-    // opened via the AC7 injection seam (`{ migrations }`), its chain
-    // TRUNCATED to stop at `PRE_BOUNDARY_VERSION` — so it reads EXACTLY what
-    // today's (pre-this-CR) derivation answers, regardless of whether GREEN
-    // has landed in this build. The `afterPath` copy is opened the ordinary
-    // way and migrates all the way to `SCHEMA_VERSION`, exercising the real
-    // chain. Comparing the two is then "the migrated answer equals today's",
-    // which is what AC1 states.
+    // `SCHEMA_VERSION`, and a migration cannot be undone in place, and this
+    // build READS the stored boundary rather than deriving it — so no open of
+    // a store through this build can answer what today's derivation answers.
+    // The `beforePath` copy is therefore never opened through `Store` at all:
+    // `referenceBoundaries` reads it through a raw connection and applies the
+    // pre-change derivation rule, frozen in this file. The `afterPath` copy is
+    // opened the ordinary way and migrates all the way to `SCHEMA_VERSION`,
+    // exercising the real chain. Comparing the two is then "the migrated
+    // answer equals today's", which is what AC1 states.
     if (!copyLiveStore(snapshotPath)) {
       throw new Error(`copyFileSync of ${LIVE_STORE} failed after existsSync reported it present`);
     }
@@ -402,11 +483,7 @@ describe("AC1 — a copy of the dev store, migrated, answers every plan's commit
       }
     }
 
-    const chain = migrationChain();
-    const preBoundaryChain = chain.slice(0, PRE_BOUNDARY_VERSION);
-    const before = Store.open(beforePath, { migrations: preBoundaryChain });
-    const beforeBoundaries = allPlanBoundaries(before);
-    closeStore(before);
+    const beforeBoundaries = referenceBoundaries(beforePath);
 
     if (Object.keys(beforeBoundaries).length === 0) {
       console.log(

@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 function scratchDbPath(): string {
-  const dir = mkdtempSync(join(tmpdir(), "cru169-close-"));
+  const dir = mkdtempSync(join(tmpdir(), "boundary-close-"));
   scratchDirs.push(dir);
   return join(dir, "crucible.db");
 }
