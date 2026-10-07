@@ -766,12 +766,12 @@ def _narrator(project_dir, agent_id, identity=None):
         progress.recognise, total=lambda: progress.total)
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None):
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
     """Open the run BEFORE cargo is spawned, through the shared `open_run`.
     Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
     with a warning naming the fallback."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context)
+                           tier=tier, context=context, release=release)
 
 
 def cmd_register(args):
@@ -980,7 +980,7 @@ def cmd_regression_ingest(args):
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=getattr(args, "release", None))
         return _regression_ingest_run(args, preflight_warnings, identity)
     finally:
         _close_gate_identity(project_dir, identity)
@@ -994,6 +994,8 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     emit, ahead of whatever the run itself discovers. `identity` is the gated
     run's identity, observing every narration tick."""
     preflight_warnings = list(preflight_warnings)
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     project_dir = _resolve_project_dir(args.project_dir)
     crates = [c.strip() for c in args.crates.split(",") if c.strip()]
 
@@ -1018,7 +1020,7 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     # output live, and narrate against nextest's own stated total.
     narrator = _narrator(project_dir, args.agent, identity)
     run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
-                                      context=_run_context())
+                                      context=_run_context(), release=release)
     preflight_warnings += run_warnings
     try:
         with _axi().abandon_trap(run_id):
@@ -1089,7 +1091,8 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
 
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
@@ -1135,7 +1138,7 @@ def _resolve_junit_path(project_dir, profile=None):
 
 
 def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None,
-                      run_id=None):
+                      run_id=None, release=None):
     """Ingest a junit XML to /api/v2/runs (server-side codec=junit parse) and return
     the parsed response dict (the caller emits the §S1 envelope). The human-readable
     ingest line is interactive-only (stderr) — stdout is the machine channel.
@@ -1152,7 +1155,7 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
     s = resp.get("run", {}) or {}
     print(
         f"ingest junit: ok={resp.get('ok')} "
@@ -1164,7 +1167,8 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
     return resp
 
 
-def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_id=None):
+def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_id=None,
+                         release=None):
     """Helper: ingest rustc / clippy stderr to /api/v2/runs/compile. `run_id` is
     the OPEN run a test verb's compile fallback closes."""
     err_count = stderr_text.count("error[E") + stderr_text.count("error: ")
@@ -1180,7 +1184,8 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+                              release=release)
     print(
         f"ingest compile ({kind}): ok={resp.get('ok')} "
         f"errors={err_count} warnings={warn_count}",
@@ -1234,6 +1239,8 @@ def cmd_test(args, tier=None, select=(), profile=None):
         cmd += ["-E", args.filter]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     # CR-CRU-094 §S3 — PRE-FLIGHT, before nextest spawns and while `--cycle`
     # can still be supplied: ask the board whether this agent is bound and say
     # so on both channels if it is not. Best-effort — a failed lookup warns
@@ -1241,7 +1248,7 @@ def cmd_test(args, tier=None, select=(), profile=None):
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
-        context=_run_context())
+        context=_run_context(), release=release)
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     narrator, run_id = None, None
     if args.agent:
@@ -1249,7 +1256,8 @@ def cmd_test(args, tier=None, select=(), profile=None):
         # stated total, and open the run BEFORE nextest is spawned.
         narrator = _narrator(project_dir, args.agent)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                          context=_run_context())
+                                          context=_run_context(),
+                                          release=release)
         preflight_warnings = list(preflight_warnings) + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
     # run that spends its wall clock waiting says so in its own envelope. The
@@ -1275,7 +1283,8 @@ def cmd_test(args, tier=None, select=(), profile=None):
                                    own_dir, _OWN_JUNIT_FILE)
         if junit_path:
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
-                                     context=_run_context(), run_id=run_id)
+                                     context=_run_context(), run_id=run_id,
+                                     release=release)
             _emit_ingest_axi(verb, resp, project_dir, args.agent,
                              list(preflight_warnings)
                              + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1292,7 +1301,7 @@ def cmd_test(args, tier=None, select=(), profile=None):
         check_result = subprocess.run(check_cmd, capture_output=True, text=True,
                                       cwd=project_dir, env=env)
         _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr,
-                             kind="test-compile", run_id=run_id)
+                             kind="test-compile", run_id=run_id, release=release)
         _emit_axi(verb, False, {"help": _axi().HELP_STEPS["test"]},
                   _axi_context(project_dir, agent_id=args.agent),
                   preflight_warnings)
@@ -1648,11 +1657,19 @@ def _smoke_test(args, verb):
         # The shared run path: open the run BEFORE nextest spawns and narrate
         # against nextest's own stated total.
         tier = _smoke_run_tier(verb, args.profile)
+        # §S1 — the release this run is filed under (None: a cycle's run).
+        release = getattr(args, "release", None)
         narrator, run_id, run_warnings = None, None, []
         if args.agent:
             narrator = _narrator(project_dir, args.agent)
             run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                              context=_run_context())
+                                              context=_run_context(),
+                                              release=release)
+            # §S1 — this body makes no pre-flight, so a release run's note
+            # rides ahead of the run's own warnings, where the pre-flight's
+            # would.
+            if release:
+                run_warnings = [_axi().release_run_note(release)] + run_warnings
         try:
             with _axi().abandon_trap(run_id):
                 result = _run_logged(cmd, project_dir, env, None, narrator,
@@ -1703,7 +1720,7 @@ def _smoke_test(args, verb):
             payload["runId"] = run_id
         # The final count, then `ingesting…`, both ahead of the ingest below.
         _axi().close_narration(narrator)
-        resp = _axi().post_ingest(_post, "/api/v2/runs", payload)
+        resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
         s = resp.get("run", {})
         # The `run:` block is parsed CLIENT-side: the ingest response carries no
         # counts when the server could not be reached, and an envelope that
@@ -1814,11 +1831,16 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     # The shared run path: open the run BEFORE llvm-cov spawns and narrate
     # against nextest's own stated total.
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     narrator, run_id, run_warnings = None, None, []
     if args.agent:
         narrator = _narrator(project_dir, args.agent)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
-                                          context=_run_context())
+                                          context=_run_context(), release=release)
+        # §S1 — the release run's note, as `_smoke_test` carries it.
+        if release:
+            run_warnings = [_axi().release_run_note(release)] + run_warnings
     try:
         with _axi().abandon_trap(run_id):
             result = _run_logged(cmd, project_dir, env, None, narrator,
@@ -1885,7 +1907,8 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
 
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
@@ -2080,6 +2103,7 @@ def cmd_pre_merge_gate(args):
         ignore_run_fail=True,
         min_free_g=getattr(args, "min_free_g", 80),
         keep_target=getattr(args, "keep_target", False),
+        release=getattr(args, "release", None),
     )
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own workspace regression
     # always runs, and every declared profile it covers is a SUBSET of that run
@@ -2459,6 +2483,13 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_run_release_arg(p):
+    """§S1 — `--release` on a test-run verb, beside `--cycle` where it has one
+    (delegates to the shared declaration so all five clients document it
+    identically)."""
+    return _axi().add_run_release_arg(p)
+
+
 def _add_workflow_agent_arg(p, extra=""):
     """CR-CRU-056 §S2b — the shared `--agent` flag for workflow verbs: every
     mutating workflow verb posts as a LIVE registered caller (`agentId` on the
@@ -2776,6 +2807,7 @@ def main():
     )
     g.add_argument("--features", help="Optional --features flag")
     _add_gate_cycle_arg(g)
+    _add_run_release_arg(g)
     _add_project_dir_arg(g)
     _add_reports_arg(g)
     g.set_defaults(func=cmd_regression_ingest)
@@ -2795,6 +2827,7 @@ def main():
     t.add_argument("--filter", help="Nextest -E filter expression")
     t.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
     t.add_argument("--agent", help="If set, auto-ingest junit after the run")
+    _add_run_release_arg(t)
     _add_project_dir_arg(t)
     _add_log_arg(t)
     _add_reports_arg(t)
@@ -2875,6 +2908,7 @@ def main():
         "--keep-target", action="store_true",
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
+    _add_run_release_arg(w)
     _add_project_dir_arg(w)
     _add_reports_arg(w)
     w.set_defaults(func=cmd_workspace_regression)
@@ -2911,6 +2945,7 @@ def main():
         help="Compose file path (rel to project root). Default: $RUST_CRUCIBLE_COMPOSE_FILE "
              "or CRUCIBLE_COMPOSE_FILE in .env, else docker auto-discovery (compose.yaml).",
     )
+    _add_run_release_arg(st)
     _add_project_dir_arg(st)
     _add_reports_arg(st)
     st.set_defaults(func=cmd_smoke_test)
@@ -2992,6 +3027,7 @@ def main():
              "--all-targets --all-features -- -D warnings` BEFORE the coverage regression and "
              "aborts on any lint. Pass this only for a deliberate bypass.",
     )
+    _add_run_release_arg(pmg)
     _add_project_dir_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 

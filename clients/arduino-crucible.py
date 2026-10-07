@@ -506,12 +506,12 @@ def _narrator(pd, agent_id, identity=None):
         _recognise_completion)
 
 
-def _start_run(pd, agent_id, tier=None, context=None):
+def _start_run(pd, agent_id, tier=None, context=None, release=None):
     """Open the run BEFORE `make` is spawned, through the shared `open_run`.
     Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
     with a warning naming the fallback."""
     return _axi().open_run(_post, _project_key(pd), agent_id, _STACK,
-                           tier=tier, context=context)
+                           tier=tier, context=context, release=release)
 
 
 def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
@@ -550,7 +550,7 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(pd), _agent_id(args),
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=getattr(args, "release", None))
         return _run_native_tests_body(args, verb, tier, want_coverage, pd,
                                       preflight_warnings, target, identity)
     finally:
@@ -650,6 +650,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     to stderr and `--log` either way. `identity` is the gated run's identity,
     so a narration tick that re-creates a pruned row is this run's to clean."""
     preflight_warnings = list(preflight_warnings)
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     key, name = _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
     # no-ingest early return below), so it needs no declared identity; the id is
@@ -664,7 +666,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     if agent_id:
         narrator = _narrator(pd, agent_id, identity)
         run_id, run_warnings = _start_run(pd, agent_id, tier=tier,
-                                          context=_run_context())
+                                          context=_run_context(),
+                                          release=release)
         preflight_warnings += run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
     # run that spends its wall clock waiting says so in its own envelope. The
@@ -768,7 +771,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         payload["runId"] = run_id
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
@@ -982,7 +986,8 @@ def cmd_pre_merge_gate(args):
     reg_args = argparse.Namespace(
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
-        cycle=getattr(args, "cycle", None))
+        cycle=getattr(args, "cycle", None),
+        release=getattr(args, "release", None))
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own native regression always
     # runs, and every declared target it covers is a SUBSET of that run rather
     # than a replacement for it, so the gate's `suites[]` names them beside it.
@@ -1287,6 +1292,12 @@ def _add_gate_cycle_arg(p):
     return _axi().add_gate_cycle_arg(p)
 
 
+def _add_run_release_arg(p):
+    """§S1 — `--release` on a test-run verb, beside `--cycle` (delegates to the
+    shared declaration so all five clients document it identically)."""
+    return _axi().add_run_release_arg(p)
+
+
 # The native target-dir help, at module scope because the tier verbs' flag
 # adders below are module-level functions the shared registrar calls.
 _DIR_HELP = ("test-target subdir under the project (default tests/native; "
@@ -1406,6 +1417,7 @@ def main():
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
     t.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     _add_gate_cycle_arg(t)
+    _add_run_release_arg(t)
     _add_reports_arg(t)
     _add_log_arg(t)
     t.set_defaults(func=cmd_test)
@@ -1426,14 +1438,15 @@ def main():
                  cmd_unit,
                  "Runs the native host tests (`make junit`) under --dir -> "
                  "/api/v2/runs/parsed.",
-                 (_add_native_dir_arg, _add_gate_cycle_arg, _add_reports_arg,
-                  _add_log_arg)),
+                 (_add_native_dir_arg, _add_gate_cycle_arg,
+                  _add_run_release_arg, _add_reports_arg, _add_log_arg)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "
                  "/api/v2/runs/parsed; --coverage attaches lcov.",
                  (_add_native_dir_arg, _add_native_coverage_arg,
-                  _add_gate_cycle_arg, _add_reports_arg, _add_log_arg))),
+                  _add_gate_cycle_arg, _add_run_release_arg, _add_reports_arg,
+                  _add_log_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         parents=[common])
 
@@ -1458,6 +1471,7 @@ def main():
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
     _add_gate_cycle_arg(pmg)
+    _add_run_release_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common],
