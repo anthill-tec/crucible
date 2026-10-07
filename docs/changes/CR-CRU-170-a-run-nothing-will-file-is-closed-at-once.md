@@ -72,19 +72,19 @@ other. Without `--` it runs the whole suite, as today.
 
 ## Acceptance criteria
 
-- [ ] A run opened and then aborted by its own agent through `POST /api/v2/runs/<runId>/abort` is
+- [x] A run opened and then aborted by its own agent through `POST /api/v2/runs/<runId>/abort` is
       settled `aborted` with the given reason at once, stored as one `status: "aborted"` event and
       shown on the timeline as an auto-aborted run is; an abort by another agent or an unregistered
       caller, of an unknown, filed or already aborted run, or with an empty reason, is refused and
       changes nothing, asserted on the server.
-- [ ] For each exit in §S2's table, in each client it names, the client posts exactly one abort
+- [x] For each exit in §S2's table, in each client it names, the client posts exactly one abort
       for the run it opened, carrying a reason that names the exit, and its envelope reports the
       run aborted with no `run-left-open` warning; when the abort itself fails, the envelope
       carries the `run-left-open` warning instead. Asserted per client and per exit with the
       five-client subprocess harness (`tests/client/live_run_harness.py`), and once end to end
       against a real server: a bun declared target that exits without a report leaves the run
       `aborted` with its reason on the board.
-- [ ] `e2e … -- <args>` passes exactly `<args>` to the declared target and files exactly the
+- [x] `e2e … -- <args>` passes exactly `<args>` to the declared target and files exactly the
       results its report holds; without `--` the target receives no extra argument. Asserted with
       a fixture target shaped `a && b` that records its argv and writes a Playwright-shaped report;
       a real filtered Playwright run is checked at VERIFY.
