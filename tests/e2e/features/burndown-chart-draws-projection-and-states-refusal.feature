@@ -23,6 +23,16 @@ Feature: the Roadmap's burndown chart draws F16's projection and states a refuse
   draw hook placed, each tagged `data-label-kind`, `data-label-text` and
   (when actually drawn) `data-label-drawn="true"`.
 
+  CR-CRU-161 §S4/AC4 extends that same contract with the trace geometry
+  itself: with a dated forecast the host ALSO carries `data-p50-line` and
+  `data-p80-line` — each the drawn trace's own `x,y` vertex pairs (CSS px,
+  space-separated, drawing order, the SAME local space `data-actual-line`
+  already uses), starting at the today marker's own drawn point and ending
+  on the zero line at that trace's own date; a refused forecast carries
+  neither attribute at all (burndown-analytics-mock.ts's
+  `BurndownTraceExpectation` documents the real timestamps a test
+  interpolates the expected pixel from).
+
   Scenario: with a dated forecast the burndown draws the today marker, the P50 and P80 traces with their date labels, the shaded band and the labelled target
     Given a project named "Burndown Projection Project" is registered
     And an online agent "burndown-projection-agent" with message "building" is registered on that project
@@ -35,6 +45,8 @@ Feature: the Roadmap's burndown chart draws F16's projection and states a refuse
     Then the burndown chart states its forecast as "dated"
     And the burndown chart draws the expected today, P50, P80 and target labels
     And the burndown chart shows the P50 and P80 band
+    And the burndown chart draws the P50 and P80 traces from today to their own zero dates
+    And the P50 and P80 traces end at different dates
 
   Scenario: with a forecast refused for insufficient history the plot states the refusal and draws no traces
     Given a project named "Burndown Refusal History Project" is registered
@@ -49,6 +61,7 @@ Feature: the Roadmap's burndown chart draws F16's projection and states a refuse
     And the burndown chart draws a refusal label naming the real refusal it was answered
     And the burndown chart draws no P50 or P80 label
     And the burndown chart hides the P50 and P80 band
+    And the burndown chart draws no P50 or P80 trace
 
   Scenario: with a forecast refused for unpointed CRs the plot states the refusal and draws no traces
     Given a project named "Burndown Refusal Unpointed Project" is registered
@@ -63,3 +76,4 @@ Feature: the Roadmap's burndown chart draws F16's projection and states a refuse
     And the burndown chart draws a refusal label naming the real refusal it was answered
     And the burndown chart draws no P50 or P80 label
     And the burndown chart hides the P50 and P80 band
+    And the burndown chart draws no P50 or P80 trace
