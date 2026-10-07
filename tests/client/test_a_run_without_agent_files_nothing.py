@@ -21,13 +21,14 @@ WHAT IS RED HERE, and why, read from the clients at HEAD of this branch:
     mechanism the real incident used) — `cmd_regression`'s `_ingest_parsed`/
     `_ingest_raw` calls carry no `if not args.agent` guard at all, so a passing,
     unfiled run still POSTs. RED on the "posts nothing" assertion.
-  * bun/python/mvn's bare `regression` and `pre-merge-gate`, and rust's
-    `regression` (tier cell), `workspace-regression`, `smoke-test`,
-    `regression-ingest` and `pre-merge-gate` — all declare `--agent
-    required=True` in argparse, so an unfiled drive never even reaches the
-    runner: argparse exits 2 before the suite starts, which is as far from
-    "runs the suite and files nothing" as the declared-tier bug is. RED on
-    the exit-code assertion (2, not the runner's own code).
+
+THE EVIDENCE VERBS (user ruling 2026-10-08, §S1 amended 8df5ade): bun/python/
+mvn's bare `regression` and `pre-merge-gate`, and rust's `regression` (tier
+cell), `workspace-regression`, `smoke-test`, `regression-ingest` and
+`pre-merge-gate` exist to file evidence, so they KEEP `--agent required=True`:
+without it each is refused before the runner starts (the fake runner is never
+invoked — its marker file stays absent), posts nothing, and exits non-zero
+with a message naming `--agent`. Those classes pin that refusal.
 
 PINS (pass today, read the same way): bun `test` already returns
 `result.returncode` with no POST when `--agent` is absent (explicit per the
@@ -39,13 +40,10 @@ result.returncode` verbatim in `cmd_test`/`_run_surefire_tier`/
 this since CR-CRU-044 §S5 and applies it to EVERY verb that shares the body,
 `regression` and `pre-merge-gate` included — arduino has no offender at all).
 
-Both proofs, per test: today's failure names the defect (an extra POST, or
-the wrong exit code — never an import/fixture error), and a GREEN that adds
-the missing `if not agent` guard to `cmd_regression` (bun)/`_regression_run`
-(python/mvn) and loosens `--agent` from `required=True` to optional on
-`regression`/`pre-merge-gate` (bun/python/mvn) and on `regression`/
-`workspace-regression`/`smoke-test`/`regression-ingest`/`pre-merge-gate`
-(rust) satisfies every assertion here with room to spare.
+Both proofs, per test: today's failure names the defect (an extra POST —
+never an import/fixture error), and a GREEN that adds the missing `if not
+agent` guard to `cmd_regression`'s shared body (bun) satisfies every
+assertion here, with no `required=True` relaxed anywhere.
 
 Invocation:
     python3 -m unittest tests.client.test_a_run_without_agent_files_nothing -v
@@ -201,6 +199,43 @@ def _write_fake_raw_leaf(project_dir):
                              "#!" + sys.executable + "\n" + _FAKE_RAW_LEAF_BODY)
 
 
+# The evidence verbs' refusal must happen BEFORE the runner starts. A fake
+# runner proves it was never invoked by wrapping it: the wrapper writes a
+# marker file and then execs the real fake, so an absent marker means the
+# client never spawned the runner at all.
+_MARKER_WRAPPER_BODY = """
+import os
+import sys
+
+with open(%r, "w") as handle:
+    handle.write(" ".join(sys.argv))
+os.execv(%r, [%r] + sys.argv[1:])
+"""
+
+def _mark_runner(runner, marker):
+    real = runner + ".real"
+    os.rename(runner, real)
+    _write_executable(runner, "#!" + sys.executable + "\n"
+                      + _MARKER_WRAPPER_BODY % (marker, real, real))
+    return runner
+
+def _assert_refused_before_the_runner_starts(case, label, result, marker, posts):
+    case.assertEqual(posts, [], f"{label}: got {posts!r}")
+    case.assertFalse(
+        os.path.exists(marker),
+        f"{label}: an evidence verb run without --agent must be refused "
+        f"BEFORE the runner starts \u2014 the fake runner was invoked; "
+        f"stderr={result.stderr[-800:]!r}")
+    case.assertNotEqual(
+        result.returncode, 0,
+        f"{label}: an unfiled evidence verb must exit non-zero; "
+        f"stdout={result.stdout!r} stderr={result.stderr[-800:]!r}")
+    case.assertIn(
+        "--agent", result.stdout + result.stderr,
+        f"{label}: the refusal must name --agent; stdout={result.stdout!r} "
+        f"stderr={result.stderr[-800:]!r}")
+
+
 class BunDeclaredTierVerbPostsNothingWhenUnfiledTest(unittest.TestCase):
     """RED — bun's declared-tier cells (`unit`/`module`/`integration`/`e2e`/
     `bdd`) all dispatch into `cmd_regression`'s `script=` branch, which carries
@@ -271,19 +306,19 @@ class BunDeclaredTierVerbPostsNothingWhenUnfiledTest(unittest.TestCase):
             f"got {posts!r}")
 
 
-class BunRegressionAndPreMergeGateMustAcceptAnUnfiledRunTest(unittest.TestCase):
-    """RED — the two verbs §S1's own measurement names beside the declared
-    cells, sharing the SAME unguarded `cmd_regression` body. The CLI blocks
-    the drive before that body is ever reached: `--agent required=True` on
-    both (`_add_regression_tier_args` and the `pre-merge-gate` subparser), so
-    today's failure is argparse exiting 2, not a POST — exactly as far from
-    "runs the suite and files nothing" as the declared-tier bug is."""
+class BunRegressionAndPreMergeGateRefuseAnUnfiledRunBeforeItStartsTest(unittest.TestCase):
+    """PIN (user ruling 2026-10-08) — bun's evidence verbs `regression` and
+    `pre-merge-gate` keep `--agent required=True` (`_add_regression_tier_args`
+    and the `pre-merge-gate` subparser): run without it, each is refused
+    before the runner starts, posts nothing, and exits non-zero naming
+    `--agent`."""
 
     def setUp(self):
         self.project = new_scratch("cr171-bun-reg-")
         self.board = RecordingBoard()
         install_project(self.project, self.board.url, "cr171-bun-reg-key")
-        self.fake_bun = _write_fake_bun(self.project)
+        self.marker = os.path.join(self.project, "runner-was-invoked")
+        self.fake_bun = _mark_runner(_write_fake_bun(self.project), self.marker)
 
     def tearDown(self):
         self.board.close()
@@ -297,41 +332,32 @@ class BunRegressionAndPreMergeGateMustAcceptAnUnfiledRunTest(unittest.TestCase):
         return subprocess.run(cmd, cwd=self.project, env=env,
                               capture_output=True, text=True, timeout=TIMEOUT)
 
-    def test_regression_unfiled_runs_the_suite_and_posts_nothing(self):
+    def test_regression_unfiled_is_refused_before_the_runner_starts(self):
         result = self._drive(["regression"])
-        posts = _run_filing_posts(self.board.posts())
-        self.assertEqual(posts, [], f"got {posts!r}")
-        self.assertEqual(
-            result.returncode, 0,
-            f"an unfiled `regression` must run the suite and exit with the "
-            f"runner's own code, exactly as `test` already does — today "
-            f"argparse's `--agent required=True` refuses the run before it "
-            f"starts (exit {result.returncode}); "
-            f"stderr={result.stderr[-800:]!r}")
+        _assert_refused_before_the_runner_starts(
+            self, "regression", result, self.marker,
+            _run_filing_posts(self.board.posts()))
 
-    def test_pre_merge_gate_unfiled_runs_the_suite_and_posts_nothing(self):
+    def test_pre_merge_gate_unfiled_is_refused_before_the_runner_starts(self):
         result = self._drive(["pre-merge-gate", "--skip-check"])
-        posts = _run_filing_posts(self.board.posts())
-        self.assertEqual(posts, [], f"got {posts!r}")
-        self.assertEqual(
-            result.returncode, 0,
-            f"an unfiled `pre-merge-gate` must run the suite and exit with "
-            f"the runner's own code — today argparse's `--agent "
-            f"required=True` refuses the run before it starts (exit "
-            f"{result.returncode}); stderr={result.stderr[-800:]!r}")
+        _assert_refused_before_the_runner_starts(
+            self, "pre-merge-gate", result, self.marker,
+            _run_filing_posts(self.board.posts()))
 
 
-class PythonRegressionAndPreMergeGateMustAcceptAnUnfiledRunTest(unittest.TestCase):
-    """RED — python's `_regression_run` carries no `if not args.agent` guard
-    (unlike `cmd_test`'s), but both bare `regression` and `pre-merge-gate`
-    declare `--agent required=True`, so today's failure is argparse exiting
-    2 before the suite ever starts."""
+class PythonRegressionAndPreMergeGateRefuseAnUnfiledRunBeforeItStartsTest(unittest.TestCase):
+    """PIN (user ruling 2026-10-08) — python's evidence verbs `regression`
+    and `pre-merge-gate` keep `--agent required=True`: run without it, each
+    is refused before the runner starts, posts nothing, and exits non-zero
+    naming `--agent`."""
 
     def setUp(self):
         self.project = new_scratch("cr171-py-reg-")
         self.board = RecordingBoard()
         install_project(self.project, self.board.url, "cr171-py-reg-key")
-        self.fake_python = write_fake_python(self.project)
+        self.marker = os.path.join(self.project, "runner-was-invoked")
+        self.fake_python = _mark_runner(write_fake_python(self.project),
+                                        self.marker)
 
     def tearDown(self):
         self.board.close()
@@ -345,40 +371,31 @@ class PythonRegressionAndPreMergeGateMustAcceptAnUnfiledRunTest(unittest.TestCas
         return subprocess.run(cmd, cwd=self.project, env=env,
                               capture_output=True, text=True, timeout=TIMEOUT)
 
-    def test_regression_unfiled_runs_the_suite_and_posts_nothing(self):
+    def test_regression_unfiled_is_refused_before_the_runner_starts(self):
         result = self._drive(["regression"])
-        posts = _run_filing_posts(self.board.posts())
-        self.assertEqual(posts, [], f"got {posts!r}")
-        self.assertEqual(
-            result.returncode, 0,
-            f"an unfiled `regression` must run the suite and exit with the "
-            f"runner's own code — today argparse's `--agent required=True` "
-            f"refuses the run before it starts (exit {result.returncode}); "
-            f"stderr={result.stderr[-800:]!r}")
+        _assert_refused_before_the_runner_starts(
+            self, "regression", result, self.marker,
+            _run_filing_posts(self.board.posts()))
 
-    def test_pre_merge_gate_unfiled_runs_the_suite_and_posts_nothing(self):
+    def test_pre_merge_gate_unfiled_is_refused_before_the_runner_starts(self):
         result = self._drive(["pre-merge-gate", "--skip-check"])
-        posts = _run_filing_posts(self.board.posts())
-        self.assertEqual(posts, [], f"got {posts!r}")
-        self.assertEqual(
-            result.returncode, 0,
-            f"an unfiled `pre-merge-gate` must run the suite and exit with "
-            f"the runner's own code — today argparse's `--agent "
-            f"required=True` refuses the run before it starts (exit "
-            f"{result.returncode}); stderr={result.stderr[-800:]!r}")
+        _assert_refused_before_the_runner_starts(
+            self, "pre-merge-gate", result, self.marker,
+            _run_filing_posts(self.board.posts()))
 
 
-class MvnRegressionAndPreMergeGateMustAcceptAnUnfiledRunTest(unittest.TestCase):
-    """RED — mvn's `_regression_run` carries no `if not args.agent` guard
-    (unlike `_run_surefire_tier`'s), but both bare `regression` and
-    `pre-merge-gate` declare `--agent required=True`, so today's failure is
-    argparse exiting 2 before the suite ever starts."""
+class MvnRegressionAndPreMergeGateRefuseAnUnfiledRunBeforeItStartsTest(unittest.TestCase):
+    """PIN (user ruling 2026-10-08) — mvn's evidence verbs `regression` and
+    `pre-merge-gate` keep `--agent required=True`: run without it, each is
+    refused before the runner starts, posts nothing, and exits non-zero
+    naming `--agent`."""
 
     def setUp(self):
         self.project = new_scratch("cr171-mvn-reg-")
         self.board = RecordingBoard()
         install_project(self.project, self.board.url, "cr171-mvn-reg-key")
-        write_fake_mvnw(self.project)
+        self.marker = os.path.join(self.project, "runner-was-invoked")
+        _mark_runner(write_fake_mvnw(self.project), self.marker)
 
     def tearDown(self):
         self.board.close()
@@ -391,36 +408,26 @@ class MvnRegressionAndPreMergeGateMustAcceptAnUnfiledRunTest(unittest.TestCase):
         return subprocess.run(cmd, cwd=self.project, env=env,
                               capture_output=True, text=True, timeout=TIMEOUT)
 
-    def test_regression_unfiled_runs_the_suite_and_posts_nothing(self):
+    def test_regression_unfiled_is_refused_before_the_runner_starts(self):
         result = self._drive(["regression"])
-        posts = _run_filing_posts(self.board.posts())
-        self.assertEqual(posts, [], f"got {posts!r}")
-        self.assertEqual(
-            result.returncode, 0,
-            f"an unfiled `regression` must run the suite and exit with the "
-            f"runner's own code — today argparse's `--agent required=True` "
-            f"refuses the run before it starts (exit {result.returncode}); "
-            f"stderr={result.stderr[-800:]!r}")
+        _assert_refused_before_the_runner_starts(
+            self, "regression", result, self.marker,
+            _run_filing_posts(self.board.posts()))
 
-    def test_pre_merge_gate_unfiled_runs_the_suite_and_posts_nothing(self):
+    def test_pre_merge_gate_unfiled_is_refused_before_the_runner_starts(self):
         result = self._drive(["pre-merge-gate"])
-        posts = _run_filing_posts(self.board.posts())
-        self.assertEqual(posts, [], f"got {posts!r}")
-        self.assertEqual(
-            result.returncode, 0,
-            f"an unfiled `pre-merge-gate` must run the suite and exit with "
-            f"the runner's own code — today argparse's `--agent "
-            f"required=True` refuses the run before it starts (exit "
-            f"{result.returncode}); stderr={result.stderr[-800:]!r}")
+        _assert_refused_before_the_runner_starts(
+            self, "pre-merge-gate", result, self.marker,
+            _run_filing_posts(self.board.posts()))
 
 
-class RustRegressionFamilyMustAcceptAnUnfiledRunTest(unittest.TestCase):
-    """RED, table-driven — every rust verb that shares a regression-shaped
-    body (`regression` the tier cell == `cmd_workspace_regression`,
+class RustRegressionFamilyRefusesAnUnfiledRunBeforeItStartsTest(unittest.TestCase):
+    """PIN (user ruling 2026-10-08), table-driven — every rust evidence verb
+    (`regression` the tier cell == `cmd_workspace_regression`,
     `workspace-regression`, `smoke-test`, `regression-ingest`, and
-    `pre-merge-gate`'s whole-suite step) declares `--agent required=True`, so
-    today's failure on each row is argparse exiting 2 before the suite ever
-    starts."""
+    `pre-merge-gate`) keeps `--agent required=True`: run without it, each is
+    refused before the runner starts, posts nothing, and exits non-zero
+    naming `--agent`."""
 
     VERBS = (
         ("regression", ("--min-free-g", "0", "--keep-target")),
@@ -435,14 +442,15 @@ class RustRegressionFamilyMustAcceptAnUnfiledRunTest(unittest.TestCase):
         self.bin_dir = new_scratch("cr171-rust-reg-bin-")
         self.board = RecordingBoard()
         install_project(self.project, self.board.url, "cr171-rust-reg-key")
-        write_fake_cargo(self.bin_dir)
+        self.marker = os.path.join(self.bin_dir, "runner-was-invoked")
+        _mark_runner(write_fake_cargo(self.bin_dir), self.marker)
 
     def tearDown(self):
         self.board.close()
         shutil.rmtree(self.project, ignore_errors=True)
         shutil.rmtree(self.bin_dir, ignore_errors=True)
 
-    def test_every_regression_shaped_verb_runs_unfiled_and_posts_nothing(self):
+    def test_every_evidence_verb_is_refused_unfiled_before_the_runner_starts(self):
         for verb, extra in self.VERBS:
             with self.subTest(verb=verb):
                 env = scrubbed_env(self.bin_dir, FAKE_TOTAL="3")
@@ -452,15 +460,9 @@ class RustRegressionFamilyMustAcceptAnUnfiledRunTest(unittest.TestCase):
                 result = subprocess.run(cmd, cwd=self.project, env=env,
                                         capture_output=True, text=True,
                                         timeout=TIMEOUT)
-                posts = _run_filing_posts(self.board.posts())
-                self.assertEqual(posts, [], f"{verb}: got {posts!r}")
-                self.assertEqual(
-                    result.returncode, 0,
-                    f"{verb}: an unfiled run must run the suite and exit "
-                    f"with the runner's own code — today argparse's "
-                    f"`--agent required=True` refuses the run before it "
-                    f"starts (exit {result.returncode}); "
-                    f"stderr={result.stderr[-800:]!r}")
+                _assert_refused_before_the_runner_starts(
+                    self, verb, result, self.marker,
+                    _run_filing_posts(self.board.posts()))
 
 
 class AClientsAlreadyGuardedSuiteVerbRunsUnfiledAndPostsNothingTest(unittest.TestCase):
