@@ -85,12 +85,17 @@
       // unfolded. A reactive array (reassigned wholesale, like a scalar) so a
       // click re-renders the CoverageTrendCard.
       coverageDrillPath: [],
+      // The release the Runs tab is filtered to — the `?release=` query of
+      // the workspace URL, so Back, reload and deep links keep it; null =
+      // the unfiltered feed.
+      runsRelease: releaseInSearch(location.search),
     });
 
     // CR-CRU-014 §S3 — a cold /p/<key>/roadmap deep-link lands on the Roadmap
     // tab (mirrors how a /run/<id> deep-link lands the run overlay); every
     // other workspace entry keeps the Workflow primary default.
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
+    runsTabFollows(state.route);
 
     // CR-CRU-022 §S5 — the analytics reads (DN-crucible-analytics §10). Velocity
     // (the release's pace so far), burndown and forecast all belong to the
@@ -102,6 +107,9 @@
     // redraws the chart).
     const velocityData = van.state(null);
     const releaseAnalytics = van.state(null);
+    // The Runs tab's filtered feed: `{projectKey, release, events}` as the
+    // by-release read answered it, or null while unfiltered or unread.
+    const releaseRuns = van.state(null);
     const setIfChanged = (holder, value) => {
       if (JSON.stringify(holder.val) !== JSON.stringify(value)) holder.val = value;
     };
@@ -130,7 +138,7 @@
       return route.overlay !== undefined || route.analytics === true;
     }
 
-    function navigate(pathname) {
+    function navigate(pathname, search = "") {
       const next = L.routeParse(pathname);
       // CR-CRU-016 AC2 — opening a detail: remember the ACTIVE pane's own
       // scrollTop so closing can restore the feed at its exact position.
@@ -153,14 +161,17 @@
       const sameSurface =
         next.page === state.route.page &&
         (next.page !== "workspace" || next.projectKey === state.route.projectKey);
-      history.pushState(null, "", pathname);
+      history.pushState(null, "", pathname + search);
       state.route = next;
+      state.runsRelease = releaseInSearch(search);
       if (!sameSurface) {
         state.workspaceTab = "Workflow";
         state.selectedAgent = null;
         scopeChanged();
       }
       roadmapTabFollows(next);
+      runsTabFollows(next);
+      if (sameSurface) followReleaseRuns();
     }
 
     // CR-CRU-079 §S1 — the route is the source of truth for the Roadmap tab
@@ -173,6 +184,35 @@
       if (route.page !== "workspace") return;
       if (route.roadmap === true) state.workspaceTab = "Roadmap";
       else if (state.workspaceTab === "Roadmap") state.workspaceTab = "Workflow";
+    }
+
+    // The Runs tab's release filter is route state too: a workspace URL that
+    // carries `?release=` lands on Runs, filtered, and its runs are read.
+    function releaseInSearch(search) {
+      const release = new URLSearchParams(search).get("release");
+      return release === null || release === "" ? null : release;
+    }
+    function runsTabFollows(route) {
+      if (route.page !== "workspace" || route.roadmap === true || state.runsRelease === null) return;
+      state.workspaceTab = "Runs";
+    }
+    // Reads the filtered feed when the held one is not the URL's release.
+    function followReleaseRuns() {
+      if (state.route.page !== "workspace" || state.runsRelease === null) return;
+      const held = releaseRuns.val;
+      if (held === null || held.projectKey !== state.route.projectKey || held.release !== state.runsRelease) {
+        void refetchReleaseRuns();
+      }
+    }
+    // Leaving the filter: the URL loses `?release=` (pushed, so Back returns
+    // to the filtered list; replaced when a tab swap drops it, since tab
+    // swaps are not history entries) and the feed is the whole window again.
+    function clearRunsRelease(push) {
+      if (state.runsRelease === null) return;
+      if (push) history.pushState(null, "", location.pathname);
+      else history.replaceState(null, "", location.pathname);
+      state.runsRelease = null;
+      releaseRuns.val = null;
     }
 
     // CR-CRU-079 §S1 — BOTH doors (tab strip + 🗺 chip) route to
@@ -193,6 +233,7 @@
         return;
       }
       if (onRoadmap) navigate(workspacePath(""));
+      if (name !== "Runs") clearRunsRelease(false);
       state.workspaceTab = name;
     }
 
@@ -214,6 +255,7 @@
       // CR-CRU-022 §S5 — analytics are per project, cleared in the same step.
       velocityData.val = null;
       releaseAnalytics.val = null;
+      releaseRuns.val = null;
       // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
       // deterministic and collide across projects, so a leftover open drill
       // path would render a row pre-unfolded on the newly-navigated project.
@@ -246,7 +288,8 @@
       openDetailBody = null;
       const base =
         location.pathname.replace(/\/run\/[^/]+\/?$/, "").replace(/\/analytics\/?$/, "") || "/";
-      history.pushState(null, "", base);
+      // A run opened from the release-filtered Runs list returns to it.
+      history.pushState(null, "", base + location.search);
       state.route = L.routeParse(base);
     }
 
@@ -256,6 +299,7 @@
       const prev = state.route;
       const next = L.routeParse(location.pathname);
       state.route = next;
+      state.runsRelease = releaseInSearch(location.search);
       const sameSurface =
         next.page === prev.page &&
         (next.page !== "workspace" || next.projectKey === prev.projectKey);
@@ -263,6 +307,8 @@
       // CR-CRU-079 §S1 — Back/Forward across /p/<key>/roadmap re-lands the
       // pane, not just the URL.
       roadmapTabFollows(next);
+      runsTabFollows(next);
+      if (sameSurface) followReleaseRuns();
     });
 
     // CR-CRU-012 §S2 — close the Projects manager slide-over back to home
@@ -344,6 +390,7 @@
           slices.has("health") ? refetchHealth() : null,
         ]);
         if (slices.has("events") && !scopeMoved()) {
+          if (state.runsRelease !== null) await refetchReleaseRuns();
           await refetchPlans();
           if (!scopeMoved()) await refetchRoadmap();
         }
@@ -421,6 +468,29 @@
       } catch {
         // Keep the last-known feed visible.
       }
+    }
+
+    // The workspace's anchored reads of one project's runs — by `cycleId`
+    // (the `→ Runs` boundary) and by `release` (the release band's count and
+    // the Runs tab's release filter) — share the one events route.
+    function anchoredEventsUrl(projectKey, anchor, value) {
+      return `/api/v2/events?project=${encodeURIComponent(projectKey)}&${anchor}=${encodeURIComponent(value)}`;
+    }
+
+    // The Runs tab's release-filtered feed: exactly the runs filed under the
+    // URL's release. A failed read keeps the last answer for the SAME release.
+    async function refetchReleaseRuns() {
+      const projectKey = state.route.projectKey;
+      const release = state.runsRelease;
+      if (state.route.page !== "workspace" || release === null) return;
+      let body;
+      try {
+        body = await getJson(anchoredEventsUrl(projectKey, "release", release));
+      } catch {
+        return;
+      }
+      if (state.route.projectKey !== projectKey || state.runsRelease !== release) return;
+      setIfChanged(releaseRuns, { projectKey, release, events: Array.isArray(body.events) ? body.events : [] });
     }
 
     // CR-CRU-011 §S3 — the Workflow tab's plan slice (the C1 project-scoped
@@ -556,9 +626,17 @@
       } catch {
         // Same as above: the band states only what was answered.
       }
+      // How many runs verify the release: the by-release read, counted.
+      let verifiedRuns = same ? held.verifiedRuns : null;
+      try {
+        const body = await getJson(anchoredEventsUrl(projectKey, "release", release));
+        verifiedRuns = Array.isArray(body.events) ? body.events.length : null;
+      } catch {
+        // Keep the last-known count of the SAME release while unreachable.
+      }
       if (state.route.projectKey !== projectKey || focusedReleaseLabel() !== release) return;
       setIfChanged(velocityData, velocity);
-      setIfChanged(releaseAnalytics, { projectKey, release, burndown, forecast });
+      setIfChanged(releaseAnalytics, { projectKey, release, burndown, forecast, verifiedRuns });
     }
 
     // SSE client with watchdog (§S5): data frames (hello/changes) prove
@@ -1044,7 +1122,7 @@
         state.route.page === "workspace"
           ? `/p/${encodeURIComponent(state.route.projectKey)}`
           : "";
-      navigate(`${prefix}/run/${encodeURIComponent(eventId)}`);
+      navigate(`${prefix}/run/${encodeURIComponent(eventId)}`, prefix === "" ? "" : location.search);
     }
 
     // CR-CRU-016 §S4 F7 (user defect 2026-07-16) — regression-run
@@ -1583,7 +1661,7 @@
     // unlinked runs / planless projects keep the heuristic byte-identical.
     // CR-CRU-013 §S4b — `surface` ("home" | "workspace") scopes gate/merge to
     // compact on home, and milestone-entries to workspace only.
-    function runFeed(events, surface) {
+    function runFeed(events, surface, openRuns = visibleOpenRuns()) {
       const home = surface === "home";
       const rows = [];
       // CR-CRU-017 §S3 — a run that is happening NOW belongs at the head of a
@@ -1591,7 +1669,7 @@
       // `timelineRows` on purpose: an open run has no event, so it takes part in
       // no transition pair, no declared span and no rollup — it is a card, not
       // history.
-      for (const run of visibleOpenRuns()) rows.push(RunningCard(run));
+      for (const run of openRuns) rows.push(RunningCard(run));
       for (const row of L.timelineRows(events, state.plans)) {
         if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
         else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
@@ -2389,6 +2467,8 @@
             div({ class: "app-pane-controls" }, DensityToggle()),
           ),
           () => {
+            const filtered = ReleaseRunsFeed();
+            if (filtered !== null) return filtered;
             const runs = visibleEvents();
             // CR-CRU-017 §S3 — a project whose FIRST run is still running has
             // no events yet, and "no runs yet" would be a lie: the run is right
@@ -2435,6 +2515,35 @@
       );
     };
 
+    // The Runs tab filtered to one release (`?release=`): a banner naming it,
+    // with the way back to the whole feed, over exactly the runs the
+    // by-release read answered — settled runs only, as event cards.
+    const ReleaseFilterBanner = () => {
+      const release = state.runsRelease;
+      if (release === null) return null;
+      return div(
+        { "data-testid": "runs-release-filter", class: "app-anchor-fetch-feedback app-card-meta" },
+        `filtered to the runs filed under release ${release} `,
+        button(
+          { "data-testid": "runs-release-filter-clear", class: "app-chip", onclick: () => clearRunsRelease(true) },
+          "← all runs",
+        ),
+      );
+    };
+
+    function ReleaseRunsFeed() {
+      const release = state.runsRelease;
+      if (release === null) return null;
+      const held = releaseRuns.val;
+      if (held === null || held.projectKey !== state.route.projectKey || held.release !== release) {
+        return div({ class: "app-empty" }, `reading the runs filed under ${release}…`);
+      }
+      const runs = L.filterEvents(held.events, activeFilters()).filter((e) => e.kind !== "lifecycle");
+      return runs.length === 0
+        ? div({ class: "app-empty" }, `no runs filed under ${release}`)
+        : div(runFeed(runs, "workspace", []));
+    }
+
     const WorkspaceRuns = () =>
       div(
         { "data-testid": "workspace-runs", class: greyed("app-center") },
@@ -2442,6 +2551,7 @@
         // keeps this reactive binding alive — a `null`-first derived child is
         // GC'd and never re-renders (same guard as the home feed at §S0b).
         () => AnchorFetchFeedback() ?? span({ "aria-hidden": "true" }),
+        () => ReleaseFilterBanner() ?? span({ "aria-hidden": "true" }),
         WorkspaceRunsFeed(),
       );
 
@@ -4486,6 +4596,30 @@
 
     const openAnalytics = () => navigate(workspacePath("/roadmap/analytics"));
 
+    // The focused release's verification runs, one tap from their list: the
+    // count the analytics read answered, and no chip for none. Its own tap
+    // never reaches the band's (which opens the analytics pane).
+    const VerifiedRunsChip = () => {
+      const held = releaseAnalytics.val;
+      if (held === null || held.projectKey !== state.route.projectKey) return null;
+      const count = held.verifiedRuns;
+      if (typeof count !== "number" || count === 0) return null;
+      const release = held.release;
+      return button(
+        {
+          "data-testid": "roadmap-verified-chip",
+          class: "app-chip app-roadmap-progress-chip",
+          title: `open the runs filed under ${release}`,
+          onclick: (e) => {
+            e.stopPropagation();
+            navigate(workspacePath(""), `?release=${encodeURIComponent(release)}`);
+          },
+          onkeydown: (e) => e.stopPropagation(),
+        },
+        `verified · ${count} ${count === 1 ? "run" : "runs"} ↗`,
+      );
+    };
+
     const RoadmapProgressBand = (version) => {
       const held = releaseAnalytics.val;
       if (
@@ -4541,6 +4675,9 @@
               `${fc.scheduleHealth} vs ${shortDay(bd.target * 1000)}`,
             )
           : null,
+        // The one-line phone band has no room for it: there it rides the
+        // analytics pane the band's tap opens.
+        isPhoneBand() ? null : VerifiedRunsChip(),
         unpointed.length === 0
           ? null
           : span(
@@ -5220,6 +5357,7 @@
               ? "burndown · story points remaining"
               : `${held.release} burndown · story points remaining`;
           }),
+          () => (isPhoneBand() ? VerifiedRunsChip() : null) ?? span({ "aria-hidden": "true" }),
         ),
         div(
           { class: greyed("app-center") },
@@ -5572,9 +5710,7 @@
       if (key === undefined || key === null) return;
       let body;
       try {
-        body = await getJson(
-          `/api/v2/events?project=${encodeURIComponent(key)}&cycleId=${encodeURIComponent(cycleId)}`,
-        );
+        body = await getJson(anchoredEventsUrl(key, "cycleId", cycleId));
       } catch {
         return;
       }
