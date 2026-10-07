@@ -1027,7 +1027,8 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned("regression-ingest",
                                          _project_key(project_dir), args.agent,
-                                         run_id, abandoned, preflight_warnings)
+                                         run_id, abandoned, preflight_warnings,
+                                         post_fn=_post)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/ci/junit.xml",
@@ -1043,7 +1044,10 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
                   + [_axi().no_report_warning(
                       "regression-ingest", "junit.xml", result.returncode,
                       result.stdout or "")]
-                  + _axi().no_report_left_open_warnings(run_id, "junit.xml"),
+                  + _axi().no_report_left_open_warnings(
+                      run_id, "junit.xml", post_fn=_post,
+                      project_key=_project_key(project_dir),
+                      agent_id=args.agent),
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
         return 1
 
@@ -1259,7 +1263,8 @@ def cmd_test(args, tier=None, select=(), profile=None):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         preflight_warnings)
+                                         preflight_warnings,
+                                         post_fn=_post)
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
         # The final count, then `ingesting…`, both ahead of either ingest below.
@@ -1655,7 +1660,8 @@ def _smoke_test(args, verb):
         except _axi().RunAbandoned as abandoned:
             return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                              args.agent, run_id, abandoned,
-                                             run_warnings)
+                                             run_warnings,
+                                             post_fn=_post)
         print(f"[smoke-test] cargo nextest exit={result.returncode}", file=sys.stderr)
 
         # Ingest JUnit regardless of exit code (failed tests still report).
@@ -1672,7 +1678,10 @@ def _smoke_test(args, verb):
                       run_warnings
                       + [_axi().no_report_warning(verb, "junit.xml",
                                                   result.returncode, "")]
-                      + _axi().no_report_left_open_warnings(run_id, "junit.xml"),
+                      + _axi().no_report_left_open_warnings(
+                          run_id, "junit.xml", post_fn=_post,
+                          project_key=_project_key(project_dir),
+                          agent_id=args.agent),
                       "[smoke-test] no junit.xml found — nothing to ingest")
             return 1
 
@@ -1817,7 +1826,8 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         run_warnings)
+                                         run_warnings,
+                                         post_fn=_post)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/{args.profile}/junit.xml",
@@ -1831,7 +1841,10 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
                   run_warnings
                   + [_axi().no_report_warning(verb, "junit.xml",
                                               result.returncode, "")]
-                  + _axi().no_report_left_open_warnings(run_id, "junit.xml"),
+                  + _axi().no_report_left_open_warnings(
+                      run_id, "junit.xml", post_fn=_post,
+                      project_key=_project_key(project_dir),
+                      agent_id=args.agent),
                   f"[crucible] ERROR: no junit.xml at {junit_path}")
         return 1
 

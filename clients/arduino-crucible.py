@@ -680,7 +680,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                                       capture=True)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(pd), agent_id, run_id,
-                                         abandoned, preflight_warnings)
+                                         abandoned, preflight_warnings,
+                                         post_fn=_post)
     # A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
     # dirs: its output is moved into the run's own directory, and said so.
     preflight_warnings += _move_ignored_outputs(native_dir, own_dir, want_coverage)
@@ -700,7 +701,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                   preflight_warnings
                   + [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
                                               run.stdout or "")]
-                  + _axi().no_report_left_open_warnings(run_id, "TEST-*.xml"),
+                  + _axi().no_report_left_open_warnings(
+                      run_id, "TEST-*.xml", post_fn=_post,
+                      project_key=_project_key(pd), agent_id=agent_id),
                   message)
         return 1
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}

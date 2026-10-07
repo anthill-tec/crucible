@@ -82,6 +82,7 @@ import contextlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -540,7 +541,7 @@ def _declared_raw_report(package_dir, script, reports_dir):
 
 
 def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
-                        mechanism=None):
+                        mechanism=None, passthrough=()):
     """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
     is run BY NAME (`bun run test:unit`), never by re-parsing its body.
 
@@ -554,25 +555,37 @@ def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
     standing behind the name. Returns `(cmd, env)` — the invocation, and the
     environment OVERLAY it must be spawned with: empty under the flag default,
     one variable under `env:<VAR>`, and under the latter the invocation carries
-    nothing the target's runner never agreed to accept."""
+    nothing the target's runner never agreed to accept.
+
+    `passthrough` is what the operator typed after `--` on the tier verb. It
+    rides the END of the invocation, behind `--` and after anything the report
+    mechanism appended, so bun forwards it verbatim to the script's last
+    command; with none typed the invocation is exactly what it was without it."""
     variable = _report_path_variable(mechanism)
+    tail = ["--", *passthrough] if passthrough else []
     if variable:
-        return [bun, "run", script], {variable: junit_path}
+        return [bun, "run", script] + tail, {variable: junit_path}
     return ([bun, "run", script]
-            + _bun_test_report_flags(junit_path, coverage, coverage_dir), {})
+            + _bun_test_report_flags(junit_path, coverage, coverage_dir)
+            + tail, {})
 
 
-def _render_invocation(cmd, report_env=None):
+def _render_invocation(cmd, report_env=None, passthrough=()):
     """CR-CRU-133 §S3 — the invocation as an operator must TYPE it, which under
     the env mechanism is not the argv alone: the report path rides an
     environment overlay THIS client supplied, so a message printing only
     `bun run test:e2e` hands back a command that writes its report somewhere
     else under any non-default `--reports` dir. The overlay renders as sorted
     `VAR=value` prefixes so the string is stable; under the flag default the
-    overlay is empty and the rendering is the argv, unchanged."""
+    overlay is empty and the rendering is the argv, unchanged.
+
+    `passthrough` names the trailing tokens of `cmd` the operator typed after
+    `--`; they are shell-quoted so a `--grep "a title"` prints as it ran. With
+    none, the rendering is the argv joined, unchanged."""
     prefix = "".join(f"{name}={value} "
                      for name, value in sorted((report_env or {}).items()))
-    return prefix + " ".join(cmd)
+    head = cmd[:len(cmd) - len(passthrough)]
+    return prefix + " ".join(list(head) + [shlex.quote(a) for a in passthrough])
 
 
 def _parse_junit_file(junit_path):
@@ -1010,11 +1023,12 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
 # an OLDER SERVER whose /runs/start route does not exist (404) — the latter
 # warns, naming the fallback, because it was not asked for.
 #
-# There is deliberately NO client-side abort. `POST /runs/<id>/abort` is §S2 and
-# does not exist yet; §S1 already ships the server-side sweep that settles an
-# open run (reason `agent died` when its agent tombstones, `abandoned` past the
-# server's `run_abandon_ms` limit). So the signal/no-result paths STATE that the
-# run was left to that sweep rather than inventing a route.
+# A run that reaches an exit filing nothing (a signal mid-run, no report, a
+# refused ingest) is CLOSED by this client through the shared `abort_run`
+# (`POST /runs/<id>/abort`, reason naming the exit). Only when that abort
+# itself fails is the run left to the server-side sweep (reason `agent died`
+# when its agent tombstones, `abandoned` past the server's `run_abandon_ms`
+# limit), and the envelope then STATES so.
 
 NO_LIFECYCLE_ENV = "BUN_CRUCIBLE_NO_LIFECYCLE"
 _TRUTHY = ("1", "true", "yes", "on")
@@ -1093,10 +1107,10 @@ def _abandon_trap(run_id):
 def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                         warnings=None):
     """The signal path's ONLY output — the shared `emit_run_abandoned`, which
-    names the signal and the open run the server will settle and returns the
-    exit code (128+signum). No POST of any kind is made."""
+    aborts the open run through `abort_run`, names the signal and the run, and
+    returns the exit code (128+signum)."""
     return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent_id,
-                                     run_id, abandoned, warnings)
+                                     run_id, abandoned, warnings, post_fn=_post)
 
 
 def cmd_test(args, tier=None):
@@ -1231,7 +1245,8 @@ def cmd_test(args, tier=None):
         _close_gate_identity(project_dir, identity)
 
 
-def cmd_regression(args, verb="regression", tier="regression", script=None):
+def cmd_regression(args, verb="regression", tier="regression", script=None,
+                   passthrough=()):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     carries ONE document under the GATE's own verb, not the inner one's.
@@ -1240,7 +1255,10 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     (run by name; `None` is this verb's own full-suite `bun test`), and `tier`
     is the tier the run is stamped with. They move together because §S2's rule
     is unchanged: the tier a run reports is the VERB's, so a declared target
-    detected for `unit` rides `unit` and never this body's own name."""
+    detected for `unit` rides `unit` and never this body's own name.
+
+    `passthrough` — what was typed after `--` on a declared tier verb — rides
+    only a declared `script`; this verb's own `bun test` takes none."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1276,7 +1294,7 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             # target's DECLARATION asked the report path to be carried in.
             cmd, report_env = _bun_run_script_cmd(
                 bun, script, junit_path, coverage_on, coverage_dir,
-                _declared_report_mechanism(package_dir, script))
+                _declared_report_mechanism(package_dir, script), passthrough)
             # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
             # discipline, for the same reason: the client picks WHERE the
             # report lands (its reports dir) and the declaration states HOW the
@@ -1286,10 +1304,11 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
                 report_env[raw_report["variable"]] = raw_report["path"]
             env.update(report_env)
         else:
+            passthrough = ()
             cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
         # §S3 — the echo names the invocation INCLUDING the overlay this client
         # supplied, so what is printed is what actually ran.
-        invocation = _render_invocation(cmd, report_env)
+        invocation = _render_invocation(cmd, report_env, passthrough)
         print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
         # §S2c — capture the run output (failure detail lives only there).
         log_path = getattr(args, "log", None)
@@ -1340,13 +1359,11 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             # `pre-merge-gate` speaks as the gate, never as the inner
             # `regression`. The capture exists here today and was simply
             # discarded; it now carries the cause.
-            # §S4 — nothing was produced, so nothing CLOSES the open run: say
-            # which sweep will settle it rather than leaving it silently open.
-            warnings = list(run_warnings)
-            if run_id:
-                warnings.append(_run_left_open_warning(
-                    run_id, f"the runner produced no {ingest_name}, so there "
-                            f"was nothing to ingest"))
+            # §S4 — nothing was produced, so nothing will ever file the open
+            # run: close it through the shared `abort_run`.
+            warnings = list(run_warnings) + _axi().no_report_left_open_warnings(
+                run_id, ingest_name, post_fn=_post,
+                project_key=_project_key(project_dir), agent_id=args.agent)
             # CR-CRU-133 §S3/AC5 — a DECLARED target that produced nothing is
             # named: which script starved, the exact command that ran it, and
             # the path the report was expected at. It rides the ADDITIVE
@@ -2126,6 +2143,22 @@ def _add_declared_tier_args(p):
     _add_package_dir_arg(p)
     _add_log_arg(p)
     _add_no_lifecycle_arg(p)
+    p.add_argument("passthrough", nargs=argparse.REMAINDER,
+                   action=_AfterDashDash, metavar="-- ARGS",
+                   help="Everything after `--` is passed verbatim to the declared "
+                        "target (`bun run <target> -- ARGS`).")
+
+
+class _AfterDashDash(argparse.Action):
+    """A declared tier verb's passthrough: only what follows a bare `--`, with
+    that `--` dropped. A stray positional NOT behind `--` stays the usage error
+    it always was, so nothing reaches the target that was not asked to."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        values = list(values or [])
+        if values and values[0] != "--":
+            parser.error(f"unrecognized arguments: {' '.join(values)}")
+        setattr(namespace, self.dest, values[1:])
 
 
 def _package_manifest(package_dir):
@@ -2181,8 +2214,9 @@ def _read_declared_suites(args, surface):
 
 def _run_declared_script(args, tier, script):
     """§S6, bun's RUN — the declared script, by name, ingested under the tier
-    of the VERB that asked for it."""
-    return cmd_regression(args, verb=tier, tier=tier, script=script)
+    of the VERB that asked for it, with whatever was typed after `--`."""
+    return cmd_regression(args, verb=tier, tier=tier, script=script,
+                          passthrough=getattr(args, "passthrough", None) or ())
 
 
 _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(

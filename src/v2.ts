@@ -1136,6 +1136,38 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
 }
 
 /**
+ * POST /api/v2/runs/<runId>/abort {projectKey, agentId, reason}: the agent
+ * that opened a run closes it at once, when it knows nothing will file it.
+ * The same caller boundary as `handleRunStart`, the same ownership/state
+ * refusals as `resolveRunClose` (400 unknown or another agent's/project's
+ * run; 409 a run already settled), and a reason is required (400). Settled
+ * by `Store#abortOpenRun` — the sweep's own store path, one run row and one
+ * `status: "aborted"` event — so the timeline and live stream see it as they
+ * see a run the server aborted itself.
+ */
+/** The one parameterised run route: `/api/v2/runs/<runId>/abort`. */
+const RUN_ABORT_RE = /^\/api\/v2\/runs\/([^/]+)\/abort$/;
+
+async function handleRunAbort(store: Store, runId: string, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const reason = body.reason;
+  if (typeof reason !== "string" || reason.trim().length === 0) {
+    return fail(400, "reason must be a non-empty string — run NOT aborted");
+  }
+  const close = resolveRunClose(store, pk.key, caller.agentId, { ...body, runId }, "run NOT aborted");
+  if (close.fail !== undefined) return close.fail;
+  if (store.abortOpenRun(runId, reason) === null) {
+    return fail(409, `run ${runId} settled before it could be aborted — run NOT aborted`);
+  }
+  return json({ ok: true, changed: true, runId, status: "aborted", reason });
+}
+
+/**
  * CR-CRU-017 §S1 — the OPTIONAL `runId` seam every ingest route shares.
  *
  * No `runId` → `{}`: the single-shot path is untouched, stores no lifecycle
@@ -1145,12 +1177,16 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
  *  - already ended or aborted → 409, nothing stored (the CR's end/end and
  *    end-after-abort races);
  *  - open → the lifecycle stamp for the ONE event about to be written.
+ *
+ * `outcome` ends every refusal — what did NOT happen on the calling route
+ * (the ingest routes store nothing; `handleRunAbort` aborts nothing).
  */
 function resolveRunClose(
   store: Store,
   projectKey: string,
   agentId: string,
   body: V2Body,
+  outcome = "run NOT stored",
 ): {
   fail?: Response;
   runId?: string;
@@ -1158,7 +1194,7 @@ function resolveRunClose(
 } {
   if (body.runId === undefined || body.runId === null) return {};
   if (typeof body.runId !== "string" || body.runId.length === 0) {
-    return { fail: fail(400, "runId must be a non-empty string — run NOT stored") };
+    return { fail: fail(400, `runId must be a non-empty string — ${outcome}`) };
   }
   const runId = body.runId;
   const run = store.getRun(runId);
@@ -1166,7 +1202,7 @@ function resolveRunClose(
     return {
       fail: fail(
         400,
-        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); run NOT stored`,
+        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); ${outcome}`,
       ),
     };
   }
@@ -1174,7 +1210,7 @@ function resolveRunClose(
     return {
       fail: fail(
         400,
-        `runId ${runId} belongs to agent ${run.agentId} in another run context — run NOT stored`,
+        `runId ${runId} belongs to agent ${run.agentId} in another run context — ${outcome}`,
       ),
     };
   }
@@ -1182,7 +1218,7 @@ function resolveRunClose(
     return {
       fail: fail(
         409,
-        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; run NOT stored`,
+        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
       ),
     };
   }
@@ -4605,6 +4641,11 @@ export function handleV2(
   }
   if (req.method === "POST" && pathname === "/api/v2/runs/compile") {
     return handleRunsCompile(store, req);
+  }
+  // A client's abort of its own open run, beside the opener it settles.
+  const abortRunId = RUN_ABORT_RE.exec(pathname)?.[1];
+  if (req.method === "POST" && abortRunId !== undefined) {
+    return handleRunAbort(store, decodeURIComponent(abortRunId), req);
   }
   // CR-CRU-013 §S1+§S4b — flat top-level gate/milestone routes (next to
   // /runs, NOT under /projects/).

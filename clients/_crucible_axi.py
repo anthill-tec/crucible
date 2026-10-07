@@ -867,10 +867,18 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
     operator did not choose. A per-verb or per-client wiring would be five
     places for four of them to be right.
 
+    A run this invocation aborted because the board refused the ingest that
+    carried its runId (`post_ingest`) is disclosed HERE too, for the same
+    reason: the warning `abort_run` gave it rides this exit's `warnings[]`
+    after the caller's own, and an exit that carries one says ok:false — the
+    run it opened filed nothing.
+
     §S8 — `fmt=AXI_FORMAT_JSON` writes the same `axi` object (from
     `axi_object`) as ONE unwrapped JSON object instead; the stderr line is
     unchanged either way."""
-    axi = axi_object(verb, ok, result_fields, context, warnings)
+    refused = take_refused_ingest_warnings()
+    axi = axi_object(verb, False if refused else ok, result_fields, context,
+                     list(warnings) + refused)
     if fmt == AXI_FORMAT_JSON:
         sys.stdout.write(json.dumps(axi, ensure_ascii=False) + "\n")
     else:
@@ -5035,6 +5043,12 @@ COMPILE_INGEST_PATH = "/api/v2/runs/compile"
 # process cannot inherit the first one's claim.
 _ingested_run_tier = AXI_UNSET
 _ingested_compile = False
+# The runs this invocation closed with `abort_run` because the board refused
+# the ingest that carried their runId, and the warning each abort produced,
+# waiting for the exit's envelope (`emit_axi` takes them) \u2014 the same reason
+# the claim above is module state: the ingest and the envelope are one exit.
+_refused_ingest_runs = set()
+_refused_ingest_warnings = []
 
 
 def forget_ingested_run():
@@ -5044,6 +5058,17 @@ def forget_ingested_run():
     global _ingested_run_tier, _ingested_compile
     _ingested_run_tier = AXI_UNSET
     _ingested_compile = False
+    _refused_ingest_runs.clear()
+    _refused_ingest_warnings.clear()
+
+
+def take_refused_ingest_warnings():
+    """The warnings `post_ingest` recorded for runs it aborted after a refused
+    ingest, removed as they are returned so one exit's envelope carries each
+    exactly once."""
+    taken = list(_refused_ingest_warnings)
+    _refused_ingest_warnings.clear()
+    return taken
 
 
 def post_ingest(post_fn, path, payload):
@@ -5062,7 +5087,18 @@ def post_ingest(post_fn, path, payload):
         _ingested_run_tier = (payload or {}).get("tier")
     elif path == COMPILE_INGEST_PATH:
         _ingested_compile = True
-    return post_fn(path, payload)
+    resp = post_fn(path, payload)
+    # An ingest carrying a runId that the board REFUSED files nothing for the
+    # run this client opened, so the run is closed here, once, through
+    # `abort_run` \u2014 the one seam every client's every ingest passes through.
+    run_id = (payload or {}).get("runId")
+    if run_id and not (resp or {}).get("ok") and run_id not in _refused_ingest_runs:
+        _refused_ingest_runs.add(run_id)
+        error = (resp or {}).get("error") or "no reason given"
+        _refused_ingest_warnings.append(abort_run(
+            post_fn, payload.get("projectKey"), payload.get("agentId"), run_id,
+            f"the board refused the ingest that carried it ({error})"))
+    return resp
 
 
 def ingested_tier():
@@ -5838,8 +5874,13 @@ def unit_run_wall_vs_cpu_warnings(tier, client, timing,
 #      allowed, then `ingesting\u2026` ahead of the ingest POST itself.
 
 RUN_START_PATH = "/api/v2/runs/start"
+# The client's own close of a run it opened and can no longer file: `POST
+# /api/v2/runs/<runId>/abort {projectKey, agentId, reason}`. Filled in per run
+# by `run_abort_path` and posted ONLY by `abort_run`, below.
+RUN_ABORT_PATH = "/api/v2/runs/{run_id}/abort"
 RUN_LIFECYCLE_UNAVAILABLE_CODE = "run-lifecycle-unavailable"
 RUN_LEFT_OPEN_CODE = "run-left-open"
+RUN_ABORTED_CODE = "run-aborted"
 INGESTING_MESSAGE = "ingesting\u2026"
 NARRATION_LABEL_JOINER = " \u00b7 "
 
@@ -5997,25 +6038,26 @@ def run_left_open_warning(run_id, cause):
     """The structured warning for a run this client OPENED and then could not
     close. It names the settlement path precisely, because the alternative
     reading \u2014 "the run was lost" \u2014 is wrong and would send an operator hunting
-    for a missing event. ONE wording for the fleet: every stack client that
-    opens a run and cannot close it (no report to ingest, or a signal mid-run)
-    discloses it through this builder."""
-    # THE DETAIL NAMES NO CR AND NO UNBUILT ROUTE (CR-CRU-097 AC3a). This
-    # string is emitted to the user in the AXI envelope on ANY project's
-    # board, so it states what the client DOES \u2014 posts no abort, the server
-    # settles the run \u2014 and nothing about our backlog. The lineage lives
-    # here: a client-side abort endpoint is CR-CRU-017 \u00a7S2 and is not built,
-    # which is WHY there is no post to make; when it ships, this warning
-    # changes behaviour, not just wording.
+    for a missing event. ONE wording for the fleet, built only by `abort_run`:
+    an exit that files nothing first posts the client's own abort, and this
+    warning rides its envelope when that abort itself failed (the board refused
+    it, or could not be reached), so the server's own sweep still settles it."""
+    # THE DETAIL NAMES NO CR AND NO ROUTE (CR-CRU-097 AC3a). This string is
+    # emitted to the user in the AXI envelope on ANY project's board, so it
+    # states what settles the run \u2014 the server's own auto-abort \u2014 and nothing
+    # about our backlog. The lineage lives here: the client-side abort route
+    # CR-CRU-017 \u00a7S2 designed now exists and `abort_run` posts it first; this
+    # warning means that post did not settle the run.
     return {
         "code": RUN_LEFT_OPEN_CODE,
-        "detail": (f"{cause} \u2014 run {run_id} was never closed by an ingest. "
-                   f"The client posts no abort: the server settles it with "
-                   f"its own auto-abort \u2014 reason `agent died` as soon as "
-                   f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than the `run_abandon_ms` limit the server resolves "
-                   f"from the crucible.toml beside its database. The run is "
-                   f"abandoned, not lost"),
+        "detail": (f"{cause} \u2014 run {run_id} was never closed by an ingest, "
+                   f"and the client's abort of it was not accepted (refused, "
+                   f"or the board could not be reached), so the server "
+                   f"settles it with its own auto-abort \u2014 reason `agent "
+                   f"died` as soon as this agent tombstones, else `abandoned` "
+                   f"once the run is older than the `run_abandon_ms` limit "
+                   f"the server resolves from the crucible.toml beside its "
+                   f"database. The run is abandoned, not lost"),
     }
 
 
@@ -6026,15 +6068,55 @@ def run_left_open_help():
     return ["status", "re-run the verb to record a fresh run"]
 
 
-def no_report_left_open_warnings(run_id, artifact):
-    """The disclosure a suite verb adds when its runner produced no `artifact`
-    and the run it opened therefore has nothing to close it: `[]` when no run
-    was opened (a single-shot run leaves nothing on the board to settle)."""
+def run_aborted_warning(run_id, reason):
+    """The structured warning for a run this client OPENED, could not file, and
+    closed itself: the board settled it `aborted` with `reason`, so nothing is
+    left open for the server's sweep."""
+    return {
+        "code": RUN_ABORTED_CODE,
+        "detail": (f"run {run_id} was aborted: {reason} \u2014 nothing was "
+                   f"ingested for it"),
+    }
+
+
+def run_abort_path(run_id):
+    """`RUN_ABORT_PATH` for ONE run."""
+    return RUN_ABORT_PATH.format(run_id=urllib.parse.quote(str(run_id), safe=""))
+
+
+def abort_run(post_fn, project_key, agent_id, run_id, reason):
+    """Close a run this client opened and can no longer file: ONE `POST
+    /api/v2/runs/<runId>/abort {projectKey, agentId, reason}` through the
+    client's own `post_fn`, `reason` naming the exit that reached it.
+
+    Returns the ONE warning that exit's envelope carries for the run:
+    `run-aborted` when the board settled it, else `run-left-open` (the abort
+    was refused or never reached the board, so the server's own sweep still
+    settles the run). The fleet's every abort goes through here."""
+    resp = post_fn(run_abort_path(run_id),
+                   {"projectKey": project_key, "agentId": agent_id,
+                    "reason": reason}) or {}
+    if resp.get("ok"):
+        print(f"[crucible] run {run_id} aborted: {reason}", file=sys.stderr)
+        return run_aborted_warning(run_id, reason)
+    error = resp.get("error") or "the board did not settle it"
+    print(f"[crucible] WARN: the abort of run {run_id} was not accepted "
+          f"({error}) \u2014 it is left to the server's auto-abort", file=sys.stderr)
+    return run_left_open_warning(
+        run_id, f"{reason} (the abort answered: {error})")
+
+
+def no_report_left_open_warnings(run_id, artifact, *, post_fn, project_key,
+                                 agent_id):
+    """The run-closing step a suite verb takes when its runner produced no
+    `artifact`, so nothing will ever file the run it opened: `abort_run`'s one
+    warning, or `[]` when no run was opened (a single-shot run leaves nothing
+    on the board to settle)."""
     if not run_id:
         return []
-    return [run_left_open_warning(
-        run_id, f"the runner produced no {artifact}, so there was nothing "
-                f"to ingest")]
+    return [abort_run(
+        post_fn, project_key, agent_id, run_id,
+        f"the runner produced no {artifact}, so there was nothing to ingest")]
 
 
 class RunAbandoned(Exception):
@@ -6082,11 +6164,13 @@ def abandon_trap(run_id):
 
 
 def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
-                       warnings=None):
-    """The signal path's ONLY output: one ok:false envelope naming the signal
-    and the open run the server will settle. No POST of any kind is made here \u2014
-    a gated run's closing identity tombstone in the caller's `finally` is what
-    ARMS the server's `agent died` auto-abort. Returns the exit code, 128+signum.
+                       warnings=None, *, post_fn):
+    """The signal path's ONLY output: the run it opened is closed through
+    `abort_run` (reason naming the signal), then one ok:false envelope names
+    the signal and the run, aborted or \u2014 when that abort failed \u2014 left to
+    the server's auto-abort. Called from the verb's `except`, so the abort
+    lands BEFORE a gated run's closing identity tombstone in its `finally`.
+    Returns the exit code, 128+signum.
 
     CR-CRU-094 \u00a7S3 \u2014 `warnings` are the findings this run had ALREADY
     accumulated when the signal landed (the pre-flight `no-cycle` among them).
@@ -6094,14 +6178,17 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
     would print a warning on stderr and omit it from `warnings[]`; the
     two-channel guarantee holds on EVERY exit or on none."""
     signame = signal.Signals(abandoned.signum).name
+    closing = abort_run(post_fn, project_key, agent_id, run_id,
+                        f"{signame} interrupted the wrapped run")
+    settled = ("aborted" if closing["code"] == RUN_ABORTED_CODE
+               else "left open for the server's auto-abort")
     emit_axi(
         verb, False,
         {"runId": run_id, "signal": signame, "help": run_left_open_help()},
         axi_context(project_key, agent_id=agent_id),
-        list(warnings or [])
-        + [run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
-        f"{verb}: ok=False \u2014 {signame} interrupted the run; run {run_id} left "
-        f"open for the server's auto-abort")
+        list(warnings or []) + [closing],
+        f"{verb}: ok=False \u2014 {signame} interrupted the run; run {run_id} "
+        f"{settled}")
     return 128 + abandoned.signum
 
 

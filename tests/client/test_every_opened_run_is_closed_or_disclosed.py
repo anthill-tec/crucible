@@ -1,21 +1,37 @@
-"""Every run a client OPENS is either closed by an ingest or disclosed — never
-left silently open on the board.
+"""CR-CRU-170 \u00a7S2 (re-pinned) \u2014 every run a client OPENS is either closed
+by an ingest, closed by the client's OWN abort, or disclosed as left open
+for the server to sweep \u2014 never silently open on the board with nothing
+said about it.
 
-Two paths reach a run that no ingest will close:
+Two paths reach a run that no ingest will close (a third, the board
+refusing the runId-carrying ingest itself, is covered in
+`test_a_client_aborts_a_run_it_cannot_file.py` beside the abort-refused
+fallback for these same two):
 
 1. The runner produced no report (python's zero-test discovery; rust's
    `regression-ingest`, `smoke-test` and `workspace-regression` with no
-   junit.xml; arduino's native body with no TEST-*.xml). Like bun's own
-   `regression`, the client discloses it with the shared `run-left-open`
-   warning naming the run id — no fabricated ingest — and the server settles
-   the run with its own auto-abort.
-2. SIGINT/SIGTERM mid-run. Every stack traps it the way bun does, through the
-   one shared trap: the runner is reaped, no abort and no ingest is posted,
-   and one ok:false envelope names the signal and the open run, exiting
-   128+signum.
+   junit.xml; arduino's native body with no TEST-*.xml). The client now
+   closes the run itself: ONE `POST /api/v2/runs/<id>/abort` naming the
+   exit, and the envelope reports the run ABORTED \u2014 no `run-left-open`
+   warning, since the server has nothing left to sweep.
+2. SIGINT/SIGTERM mid-run. Every stack traps it the way bun does, through
+   the one shared trap: the runner is reaped, then \u2014 beside the existing
+   gated-identity teardown \u2014 the SAME one abort is posted for the run this
+   signalled invocation opened, before the ok:false envelope (naming the
+   signal and the run) is emitted, exiting 128+signum.
 
 Each drive is a genuine OS subprocess against a fake runner and the stand-in
-board (`RecordingBoard`).
+board (`RecordingBoard`), which answers every abort POST `ok` here \u2014 the
+abort-REFUSED fallback (`run-left-open` stays exactly as it read before this
+CR) is pinned in `test_a_client_aborts_a_run_it_cannot_file.py`, not here.
+
+RE-PIN NOTE (CR-CRU-170 \u00a7S2): this file used to pin "the client posts no
+abort" \u2014 the behaviour CR-CRU-017 \u00a7S2 left unbuilt. \u00a7S1 built the route
+(`POST /api/v2/runs/<runId>/abort`, cycle `C1`) and \u00a7S2 wires every exit
+here to call it; `assert_disclosed` below is migrated to the new contract,
+every other assertion's MEANING (the run was opened, nothing was ingested,
+the envelope is ok:false and names the signal/runId where it always did)
+is unchanged.
 """
 
 import shutil
@@ -70,28 +86,48 @@ class _OpenRunCase(unittest.TestCase):
         return decoded["axi"]
 
     def assert_disclosed(self, axi, verb, cause_fragment=None):
-        """The envelope names the open run with the shared warning, and the
-        board saw the run opened but never closed by any ingest."""
+        """CR-CRU-170 \u00a7S2 (re-pinned) \u2014 the board saw the run opened and then
+        closed by EXACTLY ONE abort this client posted itself (carrying this
+        fixture's own project/agent identity and a reason naming the exit),
+        never by a fabricated ingest; the envelope reports the run as
+        ABORTED and carries NO `run-left-open` warning (the server has
+        nothing left to sweep \u2014 this client already closed it)."""
         paths = [p for p, _ in self.board.posts()]
         self.assertIn(START, paths, f"the run must have been opened; paths={paths!r}")
         self.assertEqual(
             [p for p in paths if p in INGEST_PATHS], [],
             f"nothing was produced, so nothing may be ingested; paths={paths!r}")
-        self.assertEqual([p for p in paths if "abort" in p], [],
-                         f"the client posts no abort; paths={paths!r}")
+        aborts = self.board.aborts()
+        self.assertEqual(
+            len(aborts), 1,
+            f"the client must close the run IT opened with exactly one "
+            f"abort; paths={paths!r}")
+        abort_path, abort_body = aborts[0]
+        self.assertEqual(
+            abort_path, "/api/v2/runs/run-live-1/abort",
+            f"the abort must target the run this client itself opened; got "
+            f"path={abort_path!r}")
+        self.assertEqual(abort_body.get("projectKey"), PROJECT_KEY, f"got {abort_body!r}")
+        self.assertEqual(abort_body.get("agentId"), AGENT, f"got {abort_body!r}")
         self.assertEqual(axi.get("verb"), verb)
         self.assertIs(axi.get("ok"), False)
-        left_open = [w for w in axi.get("warnings") or []
-                     if w.get("code") == "run-left-open"]
+        warnings = axi.get("warnings") or []
+        left_open = [w for w in warnings if w.get("code") == "run-left-open"]
         self.assertEqual(
-            len(left_open), 1,
-            f"exactly one run-left-open warning; warnings={axi.get('warnings')!r}")
-        detail = left_open[0]["detail"]
-        self.assertIn("run-live-1", detail, "the warning names the open run")
-        self.assertIn("auto-abort", detail)
-        self.assertIn("abandoned, not lost", detail)
+            left_open, [],
+            f"an abort that SUCCEEDED carries NO run-left-open warning \u2014 "
+            f"the server has nothing left to sweep; warnings={warnings!r}")
+        aborted = [w for w in warnings if w.get("code") == "run-aborted"]
+        self.assertEqual(
+            len(aborted), 1,
+            f"exactly one run-aborted warning disclosing the close; "
+            f"warnings={warnings!r}")
+        detail = aborted[0]["detail"]
+        self.assertIn("run-live-1", detail, "the warning names the aborted run")
         if cause_fragment:
-            self.assertIn(cause_fragment, detail)
+            self.assertIn(
+                cause_fragment, abort_body.get("reason") or "",
+                "the abort's own reason must name the exit that triggered it")
         return detail
 
 

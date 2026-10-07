@@ -942,7 +942,8 @@ def _run_surefire_tier(args, goal_extra, label):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(label, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         run_warnings)
+                                         run_warnings,
+                                         post_fn=_post)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
@@ -1133,7 +1134,8 @@ def _run_failsafe_tier(args, goals, label):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(label, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         run_warnings)
+                                         run_warnings,
+                                         post_fn=_post)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
@@ -1353,7 +1355,8 @@ def _regression_run(args, identity=None, verb="regression",
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         preflight_warnings)
+                                         preflight_warnings,
+                                         post_fn=_post)
     print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
     _axi().close_narration(narrator)
 
@@ -1447,7 +1450,8 @@ def cmd_test(args, tier=None):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned("test", _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         preflight_warnings)
+                                         preflight_warnings,
+                                         post_fn=_post)
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode

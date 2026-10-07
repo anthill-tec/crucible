@@ -63,6 +63,18 @@ class RecordingBoard:
         self.events = []  # [(received_at, method, path, body)]
         self._lock = threading.Lock()
         self._run_seq = 0
+        # CR-CRU-170 \u00a7S2 \u2014 scripted refusals, so a RED test can drive the real
+        # abort-posting path both ways: the board answering the client's own
+        # `POST .../abort` non-ok (board refuses the close), and the board
+        # answering a runId-carrying ingest non-ok (the exit \u00a7S2's table calls
+        # "the board refused the ingest that carried the runId"). Both default
+        # to off \u2014 every pre-existing drive that never calls `refuse_next_abort`/
+        # `refuse_ingest_for` sees the unchanged all-`ok` board.
+        self._refuse_abort_remaining = 0
+        self._refuse_abort_status = 409
+        self._refuse_ingest_run_id = None
+        self._refuse_ingest_remaining = 0
+        self._refuse_ingest_status = 409
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -79,6 +91,18 @@ class RecordingBoard:
             def _reply(self, payload):
                 encoded = json.dumps(payload).encode()
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def _reply_status(self, status, payload):
+                """A non-200 JSON reply \u2014 `urllib`'s client side raises `HTTPError`
+                for it, which `_crucible_axi.http_request` turns into the real
+                `{ok: False, error}` shape a genuine refusal (400/409) produces.
+                Used only by the scripted-refusal branches below."""
+                encoded = json.dumps(payload).encode()
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(encoded)))
                 self.end_headers()
@@ -102,9 +126,35 @@ class RecordingBoard:
                         run_id = f"run-live-{board._run_seq}"
                     self._reply({"ok": True, "changed": True, "runId": run_id,
                                  "startedAt": int(time.time() * 1000)})
-                elif self.path == "/api/v2/runs":
-                    self._reply({"ok": True, "changed": True,
+                elif self.path.startswith("/api/v2/runs/") and self.path.endswith("/abort"):
+                    refuse, status = False, 409
+                    with board._lock:
+                        if board._refuse_abort_remaining > 0:
+                            board._refuse_abort_remaining -= 1
+                            refuse, status = True, board._refuse_abort_status
+                    if refuse:
+                        self._reply_status(status, {"ok": False, "error": "abort refused"})
+                    else:
+                        run_id = (body or {}).get("runId") if isinstance(body, dict) else None
+                        reason = (body or {}).get("reason") if isinstance(body, dict) else None
+                        self._reply({"ok": True, "changed": True, "runId": run_id,
+                                     "status": "aborted", "reason": reason})
+                elif self.path in INGEST_PATHS:
+                    run_id = (body or {}).get("runId") if isinstance(body, dict) else None
+                    refuse, status = False, 409
+                    with board._lock:
+                        if (board._refuse_ingest_run_id is not None
+                                and run_id == board._refuse_ingest_run_id
+                                and board._refuse_ingest_remaining > 0):
+                            board._refuse_ingest_remaining -= 1
+                            refuse, status = True, board._refuse_ingest_status
+                    if refuse:
+                        self._reply_status(status, {"ok": False, "error": "ingest refused"})
+                    elif self.path == "/api/v2/runs":
+                        self._reply({"ok": True, "changed": True,
                                  "run": {"total": 0, "passed": 0, "failed": 0}})
+                    else:
+                        self._reply({"ok": True, "changed": True})
                 else:
                     self._reply({"ok": True, "changed": True})
 
@@ -128,6 +178,37 @@ class RecordingBoard:
         """`[(path, body), ...]` for every POST, in wire order."""
         with self._lock:
             return [(p, b) for _, m, p, b in self.events if m == "POST"]
+
+    def aborts(self):
+        """CR-CRU-170 \u00a7S2 \u2014 `[(path, body), ...]` for every `POST
+        /api/v2/runs/<runId>/abort`, in wire order (a strict subset of
+        `posts()`, filtered the same way the live-run tests already filter
+        `paths` for `"abort" in p`)."""
+        with self._lock:
+            return [(p, b) for _, m, p, b in self.events
+                   if m == "POST" and p.startswith("/api/v2/runs/") and p.endswith("/abort")]
+
+    def refuse_next_abort(self, times=1, status=409):
+        """CR-CRU-170 \u00a7S2 \u2014 script the next `times` `POST .../abort` calls to
+        answer non-ok (`{ok: False}`, HTTP `status`) instead of settling the
+        run \u2014 the board REFUSING the client's own close, so a RED test can
+        drive the `run-left-open` fallback the spec requires when the abort
+        itself fails. The call is still recorded in `posts()`/`aborts()`
+        exactly as a successful one would be."""
+        with self._lock:
+            self._refuse_abort_remaining = times
+            self._refuse_abort_status = status
+
+    def refuse_ingest_for(self, run_id, times=1, status=409):
+        """CR-CRU-170 \u00a7S2 \u2014 script the next `times` ingest POSTs (any of
+        `INGEST_PATHS`) that carry `runId == run_id` to answer non-ok \u2014 "the
+        board refused the ingest that carried the runId", the third exit in
+        \u00a7S2's table. An ingest for a DIFFERENT runId, or one carrying none, is
+        answered exactly as the unscripted board answers it."""
+        with self._lock:
+            self._refuse_ingest_run_id = run_id
+            self._refuse_ingest_remaining = times
+            self._refuse_ingest_status = status
 
     def received_at(self, post_index):
         with self._lock:

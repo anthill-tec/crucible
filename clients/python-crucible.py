@@ -793,7 +793,8 @@ def cmd_test(args, tier=None, verb="test"):
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         preflight_warnings)
+                                         preflight_warnings,
+                                         post_fn=_post)
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not args.agent:
@@ -923,7 +924,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                                  getattr(args, "log", None), narrator)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent,
-                                         run_id, abandoned, preflight_warnings)
+                                         run_id, abandoned, preflight_warnings,
+                                         post_fn=_post)
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not _produced_xml(reports_dir):
@@ -936,14 +938,17 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                       f"pattern={args.pattern!r} matched nothing")
             warning = {"code": "no-tests-discovered", "detail": detail}
             print(f"[crucible] ERROR: no-tests-discovered — {detail}", file=sys.stderr)
-            # Nothing ran, so nothing closes the run this verb opened: say
-            # which sweep settles it rather than leaving it silently open.
+            # Nothing ran, so nothing will ever file the run this verb opened:
+            # close it through the shared `abort_run`.
             _emit_axi(verb, False,
                       {"help": ["check --start-dir / --pattern; ensure the test dir "
                                 "is a package (has __init__.py)"]},
                       _axi_context(project_dir, agent_id=args.agent),
                       preflight_warnings + [warning]
-                      + _axi().no_report_left_open_warnings(run_id, "TEST-*.xml"))
+                      + _axi().no_report_left_open_warnings(
+                          run_id, "TEST-*.xml", post_fn=_post,
+                          project_key=_project_key(project_dir),
+                          agent_id=args.agent))
             return result.returncode or 1
         print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
               file=sys.stderr)
