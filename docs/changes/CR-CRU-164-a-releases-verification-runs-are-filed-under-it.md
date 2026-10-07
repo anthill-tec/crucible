@@ -19,8 +19,10 @@ release label. The refusal below is new behaviour, not a copy of an existing one
 
 ### §S1 — `--release` on test runs
 
-`--release X.Y.Z` sits beside `--cycle` at every place a client declares it (the shared
-`add_gate_cycle_arg` sites): bun `test`, `regression`, `pre-merge-gate` and its declared-tier verbs;
+`--release X.Y.Z` is accepted by each of these verbs, beside `--cycle` where the verb has one
+(corrected 2026-10-07 at C2 RED: python `test`, mvn `test` and its tier verbs, and rust `test`,
+`smoke-test`, `workspace-regression` and `pre-merge-gate` take no `--cycle` today; they take
+`--release` all the same, and adding `--cycle` to them is not this CR's scope): bun `test`, `regression`, `pre-merge-gate` and its declared-tier verbs;
 python `test`, `regression`, `pre-merge-gate` and its tier verbs; mvn `test`, its tier verbs,
 `regression` and `pre-merge-gate`; rust `test`, `regression-ingest`, `smoke-test`,
 `workspace-regression` and `pre-merge-gate`; arduino `test`/`unit`/`regression` and `pre-merge-gate`.
