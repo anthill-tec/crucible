@@ -125,3 +125,13 @@ VERIFY (cycle 633) approved AC1 and AC2 with two should-fixes, both fixed in cyc
    that gets no run id (refused before any snapshot) opens none. AC1's wording reads
    `<caller>·gate·<run>` wherever it says `<caller>·gate`; asserted additionally by a test with two
    concurrent drives by one caller, where the first's exit leaves the second's identity online.
+3. **Now never scrolls (user ruling 2026-10-08).** Now grows with its content and has no scroll of
+   its own (CR-CRU-172 §S1's half-pane cap is withdrawn; F22's Now caption amended to "grows with its
+   content, never scrolls"). History takes the height Now leaves, with its own scroll, keeping at
+   least a 160 px floor; when Now is taller than the pane leaves room for beside that floor, the
+   Workflow pane scrolls as a whole — Now itself still never shows a scrollbar. Asserted in a real
+   browser at 1280×800 with the 40-cycle plan: Now's scrollHeight equals its clientHeight (nothing
+   clipped), Now has no `overflow` scroll, History scrolls on its own. APPROVED re-pin:
+   `workflow-two-panes.feature`'s desktop scenario ("Now never grows past half…", "Now's pane height
+   is at most half…", "each scroll independently") becomes "Now grows with its content and never
+   scrolls; History scrolls on its own" — the phone scenario and the titles scenario are unchanged.
