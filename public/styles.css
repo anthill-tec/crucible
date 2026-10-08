@@ -2399,12 +2399,14 @@ body {
   .app-burn-thumb { width: 52px; }
 }
 
-/* F22 — the Workflow tab is two panes, Now above History, each scrolling on
-   its own so the running work never scrolls away. The pane-scroll box keeps
-   the horizontal axis (the 660px floor's overflow) and hands the vertical
-   axis to the two panes: its runway fills it as a column instead of
-   reserving extra scroll room. Now takes the height its content needs up to
-   half the pane, then scrolls; History fills the rest and scrolls. On the
+/* F22 — the Workflow tab is two panes, Now above History. Now grows with its
+   content and never scrolls (no cap: the running work is never clipped);
+   History takes the height Now leaves, at least 160px, and scrolls on its
+   own. The pane-scroll box keeps the horizontal axis (the 660px floor's
+   overflow); its runway fills it as a column instead of reserving extra
+   scroll room, and never shrinks below Now plus History's floor — when Now
+   is taller than that leaves room for, the pane-scroll box scrolls as a
+   whole, Now itself still showing no scrollbar. On the
    desktop band (where the 660px floor lives) a pane's width never drops below
    its widest unbreakable content, so a too-wide row still widens the
    pane-scroll box and scrolls there, not inside a pane; below it the floor is
@@ -2413,10 +2415,10 @@ body {
 .app-center > .app-workflow-panes {
   display: flex;
   flex-direction: column;
-  overflow-y: hidden;
+  overflow-y: auto;
 }
 .app-workflow-panes > .app-pane-runway {
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2424,11 +2426,8 @@ body {
 }
 .app-workflow-panes > .app-pane-runway > * { flex: 0 0 auto; }
 .app-workflow-panes > .app-pane-runway > .app-workflow-cols {
-  max-height: 50%;
-  min-height: 0;
   align-items: stretch;
 }
-.app-workflow-panes .app-workflow-now,
 .app-workflow-panes .app-workflow-history { overflow-y: auto; }
 @media (width >= 1025px) {
   .app-workflow-panes .app-workflow-now,
@@ -2436,7 +2435,7 @@ body {
 }
 .app-workflow-panes > .app-pane-runway > .app-workflow-history {
   flex: 1 1 0;
-  min-height: 0;
+  min-height: 160px;
 }
 /* The phone band: two sub-tabs, Now | History, each a full-width row that is
    its own toggle (F15d) and clears the 44px touch floor; the selected pane
@@ -2469,8 +2468,7 @@ body {
 .app-workflow-show-now > .app-pane-runway > .app-workflow-history,
 .app-workflow-show-history > .app-pane-runway > .app-workflow-cols { display: none; }
 .app-workflow-show-now > .app-pane-runway > .app-workflow-cols {
-  flex: 1 1 0;
-  max-height: none;
+  flex: 1 0 auto;
 }
 /* F22 — on desktop each pane carries its title, `Now` / `History`, above its
    own scrolling box and outside it (the storyboard's `m-h` heading). The phone
@@ -2481,4 +2479,21 @@ body {
   letter-spacing: 0.14em;
   color: var(--ink-faint);
   margin: 0 0 -9px;
+}
+
+/* F23 — a cycle's recorded change sits BENEATH its cycle line, never beside
+   it: its own dim line (app-card-meta ink), indented to the label (the
+   13px row's 1.2em glyph + the line's 8px gap; History rows with a drill-
+   down toggle add its 1em glyph + gap), wrapping over as many lines as it
+   needs so the cycle line's label, timer and → Runs stay untouched; it
+   tucks 2px up under its line, as F23 draws it (margin: -2px 0 4px). */
+.app-cycle-change-record {
+  display: block;
+  margin: -2px 0 4px calc(13px * 1.2 + 8px);
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-cycle-row:has(> .app-cycle-line > .app-cycle-toggle) > .app-cycle-change-record {
+  margin-left: calc(13px + 8px + 13px * 1.2 + 8px);
 }

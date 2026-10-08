@@ -83,6 +83,7 @@ interface GateEventFixture {
     intent: string;
     outcome: "checks-passed" | "passed" | "failed" | "cancelled";
     steps: GateStepFixture[];
+    run?: { id: string; branch?: string; head?: string };
     inFlight?: boolean;
   };
 }
@@ -160,6 +161,7 @@ function inFlightGate(key: string, id: string, timestamp: number): GateEventFixt
         { name: "intent", status: "passed" },
         { name: "review", status: "running" },
       ],
+      run: { id: `run-${id}` },
       inFlight: true,
     },
   };
@@ -195,6 +197,21 @@ function runFixtures(eventId: string, projectKey: string, now: number): { detail
   return { detail, brief };
 }
 
+// CR-CRU-176 §S1/AC1 — the posting identity's liveness, exactly the shape
+// `GET /api/v2/agents` answers (src/types.ts `LiveAgent`): `liveness` is the
+// server-computed "online" | "stale" | "tombstoned" the app already reads
+// for agent cards (`agent.liveness === "online"` in public/app.js `AgentRow`).
+interface AgentFixture {
+  agentId: string;
+  projectKey?: string;
+  status?: "online" | "busy";
+  liveness: "online" | "stale" | "tombstoned";
+}
+
+function agentFixture(agentId: string, liveness: AgentFixture["liveness"]): AgentFixture {
+  return { agentId, status: "online", liveness };
+}
+
 interface MountOpts {
   pathname?: string;
   search?: string;
@@ -202,6 +219,7 @@ interface MountOpts {
   plans?: PlanFixture[];
   events?: EventFixture[];
   eventDetails?: Record<string, RunDetailFixture>;
+  agents?: AgentFixture[];
   /** Install a scriptable stream (happy-dom has no EventSource) so a test
    *  can drive the page's normal refresh path with a stream frame. The
    *  fixture lists above are read at fetch time, so a test reassigns them
@@ -252,7 +270,7 @@ async function mountApp(opts: MountOpts): Promise<Mounted> {
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
     } else if (url.includes("/api/v2/agents")) {
-      body = { ok: true, agents: [] };
+      body = { ok: true, agents: opts.agents ?? [] };
     } else if (url.includes("/api/v2/events")) {
       body = { ok: true, events: opts.events ?? [] };
     } else if (url.includes("/api/v2/health")) {
@@ -414,6 +432,11 @@ describe("opening a busy project", () => {
       pathname: `/p/${busyKey}`,
       projects: [project({ key: busyKey, name: "Busy Gate In Flight Project" })],
       events: [inFlightGate(busyKey, "evt-landing-gate-1", now)],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — a gate is running
+      // only while its posting identity is online (or a step is held); this
+      // fixture keeps the same meaning by giving `inFlightGate`'s identity
+      // ("orchestrator-landing-1") a live heartbeat.
+      agents: [agentFixture("orchestrator-landing-1", "online")],
     });
     expect(tabIsOn("Workflow")).toBe(true);
     expect(tabIsOn("Roadmap")).toBe(false);
@@ -434,6 +457,89 @@ describe("opening a busy project", () => {
     });
     expect(tabIsOn("Roadmap")).toBe(true);
     expect(tabIsOn("Workflow")).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// §S1/AC1 (CR-CRU-176) — landing follows the SAME "running" rule as Now: an
+// in-flight gate alone is no longer enough to land on Workflow — its
+// posting identity must be online, or a ladder step held for a decision.
+//
+// RED today: `landingTab()` (public/app.js) treats ANY in-flight gate as
+// busy regardless of `state.agents`, so a stale/absent identity with no
+// held step still lands on Workflow below, and the held-banner text does
+// not exist.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("§S1/AC1 — landing follows a gate's run identity, not merely 'in flight'", () => {
+  function heldInFlightGate(key: string, id: string, timestamp: number, agentId: string): GateEventFixture {
+    return {
+      id,
+      projectKey: key,
+      agentId,
+      kind: "gate",
+      codec: "no-mistakes",
+      timestamp,
+      context: { wave: "1" },
+      gate: {
+        intent: "wave 1 no-mistakes gate (held)",
+        outcome: "checks-passed",
+        steps: [
+          { name: "intent", status: "passed" },
+          { name: "review", status: "awaiting_approval" },
+        ],
+        run: { id: `run-${id}` },
+        inFlight: true,
+      },
+    };
+  }
+
+  test("a gate in flight with its posting identity STALE and no held step lands on the Roadmap pane, not Workflow", async () => {
+    const key = "landing-ac1-stale-no-hold-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Landing Stale No Hold" })],
+      events: [inFlightGate(key, "evt-landing-ac1-stale-1", now)],
+      agents: [agentFixture("orchestrator-landing-1", "stale")],
+    });
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
+  });
+
+  test("a gate in flight with its posting identity ABSENT (never seen) and no held step lands on the Roadmap pane, same as a stale one", async () => {
+    const key = "landing-ac1-absent-no-hold-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Landing Absent No Hold" })],
+      events: [inFlightGate(key, "evt-landing-ac1-absent-1", now)],
+      // No `agents` fixture — the identity was never seen at all.
+    });
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
+  });
+
+  test("a held run (ladder step awaiting_approval) with its posting identity STALE still lands on the Workflow pane, naming the held step as 'awaiting your decision'", async () => {
+    const key = "landing-ac1-held-stale-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Landing Held Stale" })],
+      events: [heldInFlightGate(key, "evt-landing-ac1-held-1", now, "orchestrator-landing-held-1")],
+      agents: [agentFixture("orchestrator-landing-held-1", "stale")],
+    });
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(false);
+    const gatePane = document.querySelector('[data-testid="gate-pane"]');
+    expect(gatePane).not.toBeNull();
+    const banner = gatePane!.querySelector('[data-testid="gate-outcome-banner"]');
+    expect(banner).not.toBeNull();
+    expect(textOf(banner)).toContain("awaiting your decision");
+    expect(textOf(banner)).toContain("review");
   });
 });
 

@@ -1548,6 +1548,16 @@
     // — as the green seal that never happened.
     const gateInFlight = (g) => g?.inFlight === true;
     const gateInFlightClause = (g) => (gateInFlight(g) ? " · in flight" : "");
+    // The step an in-flight run is held at for a decision, or null.
+    const gateHeldStep = (g) =>
+      gateInFlight(g)
+        ? ((g.steps ?? []).find((s) => s.status === "awaiting_approval") ?? null)
+        : null;
+    // F21's held banner: ` · <step> awaiting your decision`, naming the step.
+    const gateHeldClause = (g) => {
+      const held = gateHeldStep(g);
+      return held === null ? "" : ` · ${held.name} awaiting your decision`;
+    };
     // The class stem an in-flight gate takes INSTEAD of pass/fail/cancel: it is
     // not a verdict, so it may not borrow a verdict's colour.
     const gateClassStem = (g) => (gateInFlight(g) ? "inflight" : gateOutcomeClass(g?.outcome));
@@ -6151,16 +6161,16 @@
 
     // §S2/§S1 — every skipped cycle, and every cycle a recorded change
     // touched, carries its record on its row; an ordinary cycle carries none.
+    // F23 — the record is its OWN dim line BENEATH the cycle line (a sibling
+    // after `CycleLine`, never a child of it), indented to the label and
+    // wrapping, so its length never crowds the line's label, timer or badge.
     const cycleChangeRecord = (cycle) =>
       cycle.status === "skipped" || cycle.changeKind !== undefined
-        ? [
-            " · ",
-            span(
-              { "data-testid": "cycle-change-record", class: "app-card-meta app-cycle-change-record" },
-              changeRecordText(cycle),
-            ),
-          ]
-        : [];
+        ? div(
+            { "data-testid": "cycle-change-record", class: "app-card-meta app-cycle-change-record" },
+            changeRecordText(cycle),
+          )
+        : null;
 
     // §S3 — the plan's summary line: `<n> skipped` when any cycle is (no
     // element at all at zero), and an aborted plan's own record.
@@ -6232,8 +6242,8 @@
           // affordance, AFTER the timer, on every row whose cycle could have
           // runs (a separate node — never rebinding). ONE shared predicate.
           ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
-          ...cycleChangeRecord(cycle),
         ),
+        cycleChangeRecord(cycle),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
     };
@@ -6337,7 +6347,7 @@
           // CR-CRU-117 §S1 — the drill-in banner is the same claim in bigger
           // type, so it carries the same qualification: an in-flight ladder is
           // shown as one, never as the verdict its `checks-passed` would read.
-          `no-mistakes ${g.outcome}${gateInFlightClause(g)}`,
+          `no-mistakes ${g.outcome}${gateInFlightClause(g)}${gateHeldClause(g)}`,
           gateRunLine(g),
         ),
         steps.map((s) =>
@@ -6453,13 +6463,28 @@
     // on the board, sealed by a later event. The one selector for "running" —
     // the landing tab and Now both read it. Null when nothing is running; a
     // sealed newest gate belongs to History, so it mounts nothing here.
+    // In flight is not enough on its own: the run must be DRIVEN (the identity
+    // that posted the snapshot is online, by the same liveness the agent cards
+    // read) or HELD for a decision (a ladder step `awaiting_approval`, with no
+    // process alive). A run that died mid-step is neither, so it is not running.
     const runningGate = () => {
       const newest = scopedGateEvents().reduce(
         (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
         null,
       );
-      return newest !== null && gateInFlight(newest.gate) ? newest : null;
+      if (newest === null || !gateInFlight(newest.gate)) return null;
+      return gateRunDriven(newest) || gateHeldStep(newest.gate) !== null ? newest : null;
     };
+
+    // The gate's run is being driven: its posting identity is online on the
+    // agents slice (a row from another project never counts).
+    const gateRunDriven = (event) =>
+      state.agents.some(
+        (a) =>
+          a.agentId === event.agentId &&
+          (a.projectKey === undefined || a.projectKey === event.projectKey) &&
+          a.liveness === "online",
+      );
 
     // F21's header: `Gate · release <X> · no-mistakes`, the release segment
     // omitted when the snapshot names none.
@@ -6590,7 +6615,6 @@
           // on every row whose cycle could have runs. The SAME shared
           // predicate as `CycleRow`, called identically.
           ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
-          ...cycleChangeRecord(cycle),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
@@ -6602,6 +6626,7 @@
                   : ""
             : null,
         ),
+        cycleChangeRecord(cycle),
         // A done cycle is a CLOSED span wrapping its linked runs; the active
         // cycle keeps collecting its runs live (open span, §S3). Both sit
         // behind the row's own toggle (§S2.1/§S2.2 drill-down).
@@ -6790,9 +6815,9 @@
             "← roadmap",
           );
 
-    // F22 \u2014 the Workflow tab is two panes: Now above History, each its own
-    // vertical scroll (styles.css `.app-workflow-panes`), Now capped at half
-    // the pane. On the phone band they become two sub-tabs whose rows are the
+    // F22 \u2014 the Workflow tab is two panes: Now above History (styles.css
+    // `.app-workflow-panes`), Now growing with its content and never
+    // scrolling, History taking the rest with its own scroll. On the phone band they become two sub-tabs whose rows are the
     // toggles (F15d), Now selected on entry: the sub-tab is held per mount, so
     // every entry to the tab starts on Now, and the class on the pane-scroll
     // box shows the selected pane and hides the other.

@@ -73,7 +73,7 @@ never beside it", APPROVED 2026-10-08) — implement to it.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a run is driven or held, or it is not running.** `gate-run`/`gate-respond` in each of
+- [x] **AC1 — a run is driven or held, or it is not running.** `gate-run`/`gate-respond` in each of
       the five clients post every snapshot under the run identity (`<caller>·gate`), heartbeat it
       while driving and remove it on every exit (seal, held, refused, interrupt), leaving the
       caller's own registration intact — asserted per client against a recording board. On the
@@ -81,7 +81,7 @@ never beside it", APPROVED 2026-10-08) — implement to it.
       the identity gone → running, `awaiting your decision`; + identity stale and not held → not
       running (Now `Nothing running → Roadmap`, landing on the Roadmap) — asserted with fixed
       fixtures.
-- [ ] **AC2 — F23.** A cycle with a recorded change (or a skipped one) renders the record as its
+- [x] **AC2 — F23.** A cycle with a recorded change (or a skipped one) renders the record as its
       own line beneath the cycle line in Now and in History; the cycle line's label, kind badge,
       timer and `→ Runs` are unchanged and the label is not truncated by the record — asserted on
       the page and, at 1280×800 and 390×844, in a real browser.
@@ -110,3 +110,28 @@ Anything outside these: stop and ask.
 1. a gate is running only while its run is driven or held for a decision (§S1, AC1)
 2. a cycle's recorded change sits beneath it, never beside it (§S2, AC2)
 3. verify
+
+## VERIFY follow-up (2026-10-08, user ruling: fix both)
+
+VERIFY (cycle 633) approved AC1 and AC2 with two should-fixes, both fixed in cycle 634:
+1. **F23's pull-up.** F23 draws the record 2 px up under its cycle line (`margin: -2px 0 4px …`);
+   GREEN shipped 0 because the e2e "record is below the line" check failed by 1 px. The frame wins:
+   the record takes F23's `-2px`, and the check (approved test edit) allows that 2 px tuck while still
+   failing a record that sits BESIDE the line (same row) or overlaps it by more.
+2. **One identity per run.** Two concurrent gate drives by the same caller shared `<caller>·gate`;
+   the first to finish removed it under the other. Each drive now opens its OWN identity,
+   `<caller>·gate·<run>` (`<run>` = the no-mistakes run id's first 8 characters, from the first
+   snapshot, before that snapshot is posted), so one run's exit never touches another's. A drive
+   that gets no run id (refused before any snapshot) opens none. AC1's wording reads
+   `<caller>·gate·<run>` wherever it says `<caller>·gate`; asserted additionally by a test with two
+   concurrent drives by one caller, where the first's exit leaves the second's identity online.
+3. **Now never scrolls (user ruling 2026-10-08).** Now grows with its content and has no scroll of
+   its own (CR-CRU-172 §S1's half-pane cap is withdrawn; F22's Now caption amended to "grows with its
+   content, never scrolls"). History takes the height Now leaves, with its own scroll, keeping at
+   least a 160 px floor; when Now is taller than the pane leaves room for beside that floor, the
+   Workflow pane scrolls as a whole — Now itself still never shows a scrollbar. Asserted in a real
+   browser at 1280×800 with the 40-cycle plan: Now's scrollHeight equals its clientHeight (nothing
+   clipped), Now has no `overflow` scroll, History scrolls on its own. APPROVED re-pin:
+   `workflow-two-panes.feature`'s desktop scenario ("Now never grows past half…", "Now's pane height
+   is at most half…", "each scroll independently") becomes "Now grows with its content and never
+   scrolls; History scrolls on its own" — the phone scenario and the titles scenario are unchanged.

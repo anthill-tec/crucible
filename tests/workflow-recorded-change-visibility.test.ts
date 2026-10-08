@@ -264,6 +264,14 @@ describe("AC6 — a plan's recorded changes and skips read as a defect signal in
         "docs/changes/spec-x.md §S2",
       ),
     );
+    // RE-PIN (CR-CRU-176 §S2/AC2, F23, approved by the orchestrator — user
+    // ruling 2026-10-08): the record reads BENEATH the cycle line, never
+    // beside it — not a further child of `.app-cycle-line`. Meaning
+    // unchanged (same element, same wording, asserted above); this adds the
+    // DOM-position half of the contract.
+    const skippedLine = skippedRow!.querySelector<HTMLElement>(".app-cycle-line");
+    expect(skippedLine).not.toBeNull();
+    expect(skippedLine!.contains(rowRecord!)).toBe(false);
 
     // BOUND — the abort-FAILED cycle (never skipped, carries no changeKind)
     // gets no record block at all: not every row in an aborted plan is one.
@@ -425,6 +433,14 @@ describe("AC6 — the Active (open-plan) panel shows the same recorded-change si
     expect((recordedBlock!.textContent ?? "").trim()).toBe(
       recordText("gap analysis found cycle 1 obsolete", "gap-analysis", "docs/changes/spec-z.md §G2"),
     );
+    // RE-PIN (CR-CRU-176 §S2/AC2, F23, approved by the orchestrator — user
+    // ruling 2026-10-08): the record reads BENEATH the cycle line, never
+    // beside it — not a further child of `.app-cycle-line`. Meaning
+    // unchanged (same element, same wording, asserted above); this adds the
+    // DOM-position half of the contract.
+    const recordedLine = recordedRow!.querySelector<HTMLElement>(".app-cycle-line");
+    expect(recordedLine).not.toBeNull();
+    expect(recordedLine!.contains(recordedBlock!)).toBe(false);
 
     const unrecordedRow = active().querySelector<HTMLElement>('[data-testid="cycle-row"][data-cycle-id="6014"]');
     expect(unrecordedRow).not.toBeNull();

@@ -149,6 +149,15 @@ interface ProjectFixture {
   lastActivity?: number;
 }
 
+// CR-CRU-176 §S1/AC1 re-pin (approved by the orchestrator) — a gate is
+// running only while the identity that posted it is online (or a step is
+// held for a decision); the shape `GET /api/v2/agents` answers.
+interface AgentFixture {
+  agentId: string;
+  status?: "online" | "busy";
+  liveness: "online" | "stale" | "tombstoned";
+}
+
 interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
@@ -156,6 +165,12 @@ interface MountOpts {
   plans?: PlanFixture[];
   eventDetails?: Record<string, GateEventFixture>;
   fetchLog?: string[];
+  agents?: AgentFixture[];
+}
+
+// The posting identity of a gate fixture, live: its run is being driven.
+function liveIdentity(agentId: string): AgentFixture {
+  return { agentId, status: "online", liveness: "online" };
 }
 
 let cacheBust = 0;
@@ -221,7 +236,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
     } else if (url.includes("/api/v2/agents")) {
-      body = { ok: true, agents: [] };
+      body = { ok: true, agents: opts.agents ?? [] };
     } else if (url.includes("/api/v2/events")) {
       body = { ok: true, events: opts.events };
     } else if (url.includes("/api/v2/health")) {
@@ -481,6 +496,8 @@ describe("Now's gate view (\u00a7S2/AC3) \u2014 the DECISIONS section, sourced o
       events: [bareListFixture],
       plans: [],
       eventDetails: { [bareEventId]: bareDetailFixture },
+      // CR-CRU-176 re-pin (approved by the orchestrator): the run is driven.
+      agents: [liveIdentity(bareListFixture.agentId)],
     });
     await openWorkflowTab();
     await settle();
@@ -523,6 +540,8 @@ describe("Now's gate view (\u00a7S2/AC3) \u2014 the DECISIONS section, sourced o
       plans: [],
       eventDetails: { [eventId]: detailFixture },
       fetchLog,
+      // CR-CRU-176 re-pin (approved by the orchestrator): the run is driven.
+      agents: [liveIdentity(listFixture.agentId)],
     });
     await openWorkflowTab();
     // One more settle: the widget's own decisions fetch (new behaviour, not
@@ -632,6 +651,8 @@ describe("Now's gate view (§S2/AC3) — one detail read per gate, and a failed 
           }),
         },
         fetchLog,
+        // CR-CRU-176 re-pin (approved by the orchestrator): the run is driven.
+        agents: [liveIdentity(events[0]!.agentId)],
       });
       await openWorkflowTab();
       await settle();
@@ -698,6 +719,9 @@ describe("Now's gate view (§S2/AC3) — one detail read per gate, and a failed 
         plans: [],
         eventDetails: {},
         fetchLog,
+        // CR-CRU-176 re-pin (approved by the orchestrator): the run is driven
+        // (gateEvent()'s default posting identity).
+        agents: [liveIdentity("orchestrator-1")],
       });
       const windowErrors: unknown[] = [];
       window.addEventListener("error", (e) => windowErrors.push(e));
