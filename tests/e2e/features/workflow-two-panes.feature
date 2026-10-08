@@ -30,7 +30,7 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
     Given the viewport is 1280x800
     And a project named "W2P Overflow Project" is registered
     And a cycle plan is filed for cr "CR-W2P-1" with 40 cycles
-    And 16 closed CR plans are filed and merged under wave "1" for a long History
+    And 32 closed CR plans are filed and merged under wave "1" for a long History
     When I open the workspace for that project
     And I click the "Workflow" workspace tab
     Then Now sits above History in document order
