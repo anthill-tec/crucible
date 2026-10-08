@@ -202,12 +202,11 @@
     }
 
     // The landing tab: Workflow when the routed project has work running (an
-    // open plan, or a gate in flight), Roadmap when it is idle. Read from the
-    // same scoped selectors the Workflow pane paints from, so no extra read.
+    // open plan, or a release's workflow — `runningGate`), Roadmap when it is
+    // idle. Read from the same scoped selectors Now paints from, so no extra
+    // read, and the landing and Now never disagree.
     function landingTab() {
-      const busy =
-        scopedPlans().some((p) => p.status === "open") ||
-        scopedGateEvents().some((e) => e.gate?.inFlight === true);
+      const busy = scopedPlans().some((p) => p.status === "open") || runningGate() !== null;
       return busy ? "Workflow" : "Roadmap";
     }
 
@@ -1537,7 +1536,7 @@
     };
 
     // CR-CRU-117 §S1 — the mark, read here exactly as `workflowLens` and
-    // `boundaryGate` read it: `gate.inFlight === true`, a key INSIDE the gate
+    // `runningGate` read it: `gate.inFlight === true`, a key INSIDE the gate
     // object (settled 2026-09-10, DN-crucible-wave-track-release D3).
     //
     // The cards are the THIRD reader, and the only one that shows a gate to a
@@ -6264,61 +6263,70 @@
       return props;
     };
 
-    const WorkflowActive = () => {
-      const openPlans = scopedPlans().filter((p) => p.status === "open");
-      return div(
+    // Now's plan section (F13): mounted only while a plan is open — with
+    // nothing running, Now's own empty line (`WorkflowNow`) stands instead.
+    const WorkflowActive = (openPlans) =>
+      div(
         { "data-testid": "workflow-active", class: "app-workflow-active" },
-        openPlans.length === 0
-          ? div(
-              { class: "app-empty" },
-              "no open plan — file one via POST /api/v2/projects/<key>/plans",
-            )
-          : openPlans.map((plan) =>
-              div(
-                { class: "app-workflow-plan" },
-                div(
-                  {
-                    "data-testid": "workflow-active-header",
-                    class: "app-pane-section-title",
-                  },
-                  activeHeaderText(plan),
-                ),
-                // §S6 #11 (re-baselined 2026-07-17) — the CR ROOT:
-                // heat-highlighted id, ` · <title>` when the plan carries
-                // one, ` — <orchestrator>` when stamped (each segment
-                // independently omitted when absent), the cycle rows
-                // INDENTED beneath it.
-                div(
-                  crRootProps(plan.cr),
-                  span(
-                    { "data-testid": "cr-root-id", class: "app-heat-ink" },
-                    plan.cr,
-                  ),
-                  plan.title !== undefined ? ` · ${plan.title}` : null,
-                  plan.title !== undefined && plan.orchestrator !== undefined
-                    ? ` — ${plan.orchestrator}`
-                    : null,
-                  ...planChangeSummary(plan),
-                ),
-                div(
-                  { class: "app-cr-root-cycles" },
-                  (plan.cycles ?? []).map((cycle, i) => CycleRow(cycle, i + 1)),
-                ),
-              ),
+        openPlans.map((plan) =>
+          div(
+            { class: "app-workflow-plan" },
+            div(
+              {
+                "data-testid": "workflow-active-header",
+                class: "app-pane-section-title",
+              },
+              activeHeaderText(plan),
             ),
+            // §S6 #11 (re-baselined 2026-07-17) — the CR ROOT:
+            // heat-highlighted id, ` · <title>` when the plan carries
+            // one, ` — <orchestrator>` when stamped (each segment
+            // independently omitted when absent), the cycle rows
+            // INDENTED beneath it.
+            div(
+              crRootProps(plan.cr),
+              span(
+                { "data-testid": "cr-root-id", class: "app-heat-ink" },
+                plan.cr,
+              ),
+              plan.title !== undefined ? ` · ${plan.title}` : null,
+              plan.title !== undefined && plan.orchestrator !== undefined
+                ? ` — ${plan.orchestrator}`
+                : null,
+              ...planChangeSummary(plan),
+            ),
+            div(
+              { class: "app-cr-root-cycles" },
+              (plan.cycles ?? []).map((cycle, i) => CycleRow(cycle, i + 1)),
+            ),
+          ),
+        ),
       );
+
+    // F21's run line: `run <id> · branch <b> · head <h>`, each part omitted
+    // when the gate's `run` lacks it, the whole line when it carries none.
+    const gateRunLine = (g) => {
+      const run = g.run ?? {};
+      const parts = [];
+      if (run.id !== undefined && run.id !== null) parts.push(`run ${run.id}`);
+      if (run.branch !== undefined && run.branch !== null) parts.push(`branch ${run.branch}`);
+      if (run.head !== undefined && run.head !== null) parts.push(`head ${run.head}`);
+      return parts.length === 0
+        ? null
+        : div({ "data-testid": "gate-run-line", class: "app-gate-run-line" }, parts.join(" · "));
     };
 
     // CR-CRU-013 §S4 — shared no-mistakes gate rendering body (ONE form,
-    // reused by both the §S3 timeline drill-in GateBody AND the Workflow-tab
-    // contextual widget below): outcome banner → one step-row per submitted
-    // step → one fix-row per submitted fix → the push/PR line → (§S2, frame
-    // F21) the run's recorded decisions, beneath the step rows, in posting
-    // order — absent when the run recorded none.
+    // reused by both the §S3 timeline drill-in GateBody AND Now's gate view
+    // below): outcome banner → the run line (F21) → one step-row per
+    // submitted step → one fix-row per submitted fix → the push/PR line, only
+    // when the gate pushed something (an in-flight run has pushed nothing) →
+    // (§S2, frame F21) the run's recorded decisions, beneath the step rows,
+    // in posting order — absent when the run recorded none.
     const gateBodyContent = (g, decisions) => {
       const steps = g.steps ?? [];
       const fixes = g.fixes ?? [];
-      const push = g.push ?? {};
+      const push = g.push;
       return [
         div(
           {
@@ -6330,6 +6338,7 @@
           // shown as one, never as the verdict its `checks-passed` would read.
           `no-mistakes ${g.outcome}${gateInFlightClause(g)}`,
         ),
+        gateRunLine(g),
         steps.map((s) =>
           div(
             { "data-testid": "gate-step-row", class: "app-gate-step-row app-tree-line" },
@@ -6357,12 +6366,14 @@
             span({ class: "app-gate-fix-desc" }, f.description),
           ),
         ),
-        div(
-          { "data-testid": "gate-push-line", class: "app-gate-push-line" },
-          `pushed ${shortCommit(push.commit)} → ${push.remote ?? ""}${
-            g.pr ? ` · ${g.pr}` : ""
-          }`,
-        ),
+        push === undefined || push === null
+          ? null
+          : div(
+              { "data-testid": "gate-push-line", class: "app-gate-push-line" },
+              `pushed ${shortCommit(push.commit)} → ${push.remote ?? ""}${
+                g.pr ? ` · ${g.pr}` : ""
+              }`,
+            ),
         GateDecisions(decisions),
       ];
     };
@@ -6434,42 +6445,43 @@
         (e) => e.projectKey === state.route.projectKey && e.kind === "gate",
       );
 
-    // §S4 — the Workflow-tab primary zone is CONTEXTUAL and mutually
-    // exclusive: it shows the LIVE PLAN during normal execution, OR the
-    // no-mistakes gate widget ONLY at the wave/release boundary (every
-    // scoped plan closed — no CR active — AND a gate event exists). The
-    // boundary gate is the LATEST scoped gate (latest wins). Returns null
-    // when the live plan should own the zone (so no gate element mounts).
-    // CR-CRU-117 §S1 — a gate marked `gate.inFlight === true` is a snapshot
-    // of a run still going, not a verdict, so it is never a candidate for
-    // the boundary: it is dropped before "latest wins" and the zone falls
-    // back to the newest real verdict, or to the live plan when there is
-    // none. Unmarked gates (every pre-CR-117 event) are seals, unchanged.
-    const boundaryGate = () => {
-      const plans = scopedPlans();
-      if (plans.length === 0) return null;
-      if (plans.some((p) => p.status === "open")) return null; // a CR is active
-      const gates = scopedGateEvents().filter((e) => e.gate?.inFlight !== true);
-      if (gates.length === 0) return null;
-      return gates.reduce(
+    // CR-CRU-117 §S1's mark — a gate marked `gate.inFlight === true` is a
+    // snapshot of a run still going, not a verdict. A release's workflow is
+    // RUNNING when the routed project's NEWEST scoped gate carries the mark,
+    // never when ANY gate does: every interim snapshot of a finished run stays
+    // on the board, sealed by a later event. The one selector for "running" —
+    // the landing tab and Now both read it. Null when nothing is running; a
+    // sealed newest gate belongs to History, so it mounts nothing here.
+    const runningGate = () => {
+      const newest = scopedGateEvents().reduce(
         (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
         null,
       );
+      return newest !== null && gateInFlight(newest.gate) ? newest : null;
     };
 
-    // §S4 — the contextual gate widget, mounted under the SAME `gate-pane`
-    // testid the removed CR-011 placeholder used (in place, not a new name),
-    // reusing the shared gate body so its outcome banner + step ladder carry
-    // the identical `gate-outcome-banner` / `gate-step-row` testids.
-    // §S2 — the brief events list the boundary gate comes from carries no
-    // `decisions`, so the widget reads them off the gate's single-event
-    // detail read. WorkflowPrimary re-renders on every poll, so that read is
-    // held per gate id and issued once per mount, never once per render.
-    const GateWidget = (event) => {
+    // F21's header: `Gate · release <X> · no-mistakes`, the release segment
+    // omitted when the snapshot names none.
+    const gateViewHeaderText = (event) =>
+      ["Gate"]
+        .concat(event.version !== undefined && event.version !== null ? [`release ${event.version}`] : [])
+        .concat(["no-mistakes"])
+        .join(" · ");
+
+    // Now's view of a running release workflow (F21), mounted under the
+    // `gate-pane` testid with the shared gate body, so its outcome banner,
+    // run line and step ladder carry the drill-in's testids. §S2 — the brief
+    // events list carries no `decisions`, so they come off the gate's
+    // single-event detail read, keyed by the NEWEST snapshot's id: a newer
+    // snapshot of the run re-reads them; a re-render of the same one does not.
+    const GateView = (event) => {
       const decisions = gateWidgetDecisions(event.id);
       return div(
         { "data-testid": "gate-pane", class: "app-gate-pane" },
-        div({ class: "app-pane-section-title" }, "Gate"),
+        div(
+          { "data-testid": "gate-view-header", class: "app-pane-section-title" },
+          gateViewHeaderText(event),
+        ),
         () =>
           div(
             { class: "app-drillin-gate" },
@@ -6497,10 +6509,28 @@
       return decisions;
     };
 
-    // §S4 — exactly one of the live plan or the gate widget, never both.
-    const WorkflowPrimary = () => {
-      const gate = boundaryGate();
-      return gate !== null ? GateWidget(gate) : WorkflowActive();
+    // Now (F22): what is running, and only that — the open plan's section,
+    // the running release workflow's gate view, or both, plan first. With
+    // nothing running, the single line `Nothing running → Roadmap`, whose
+    // arrow selects the Roadmap tab.
+    const WorkflowNow = () => {
+      const openPlans = scopedPlans().filter((p) => p.status === "open");
+      const gate = runningGate();
+      if (openPlans.length === 0 && gate === null) {
+        return div(
+          { "data-testid": "workflow-now", class: "app-workflow-now app-workflow-now-empty" },
+          "Nothing running ",
+          button(
+            { class: "app-chip app-now-roadmap", onclick: () => selectWorkspaceTab("Roadmap") },
+            "→ Roadmap",
+          ),
+        );
+      }
+      return div(
+        { "data-testid": "workflow-now", class: "app-workflow-now" },
+        openPlans.length > 0 ? WorkflowActive(openPlans) : null,
+        gate !== null ? GateView(gate) : null,
+      );
     };
 
     // ── §S3 history lens — Wave → [Track] → CR → Cycle (C4) ─────────────
@@ -6766,7 +6796,7 @@
           () => WorkflowBackToRoadmap(),
           div(
             { class: "app-workflow-cols" },
-            () => WorkflowPrimary(),
+            () => WorkflowNow(),
           ),
           // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
           () => WorkflowHistory(),
