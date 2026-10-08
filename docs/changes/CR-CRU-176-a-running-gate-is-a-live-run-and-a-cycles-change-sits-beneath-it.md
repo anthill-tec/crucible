@@ -110,3 +110,18 @@ Anything outside these: stop and ask.
 1. a gate is running only while its run is driven or held for a decision (§S1, AC1)
 2. a cycle's recorded change sits beneath it, never beside it (§S2, AC2)
 3. verify
+
+## VERIFY follow-up (2026-10-08, user ruling: fix both)
+
+VERIFY (cycle 633) approved AC1 and AC2 with two should-fixes, both fixed in cycle 634:
+1. **F23's pull-up.** F23 draws the record 2 px up under its cycle line (`margin: -2px 0 4px …`);
+   GREEN shipped 0 because the e2e "record is below the line" check failed by 1 px. The frame wins:
+   the record takes F23's `-2px`, and the check (approved test edit) allows that 2 px tuck while still
+   failing a record that sits BESIDE the line (same row) or overlaps it by more.
+2. **One identity per run.** Two concurrent gate drives by the same caller shared `<caller>·gate`;
+   the first to finish removed it under the other. Each drive now opens its OWN identity,
+   `<caller>·gate·<run>` (`<run>` = the no-mistakes run id's first 8 characters, from the first
+   snapshot, before that snapshot is posted), so one run's exit never touches another's. A drive
+   that gets no run id (refused before any snapshot) opens none. AC1's wording reads
+   `<caller>·gate·<run>` wherever it says `<caller>·gate`; asserted additionally by a test with two
+   concurrent drives by one caller, where the first's exit leaves the second's identity online.
