@@ -1,6 +1,6 @@
 # CR-CRU-172 — the Workflow tab splits into Now and History
 
-**Type** feature · **Points** 8 (re-scored 5 → 8 at gap analysis 2026-10-08, user ruling) · **Wave** 7 (0.3.0) · **Depends on** none ·
+**Type** feature · **Points** 13 (re-scored 5 → 8 at gap analysis, 8 → 13 for §S5's migration, both 2026-10-08, user rulings) · **Wave** 7 (0.3.0) · **Depends on** none ·
 **Status** PENDING — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-171)
 
 ## Problem
@@ -48,7 +48,9 @@ removed.
 The Workflow tab has two panes, **Now** (above) and **History** (below), each scrolling on its own,
 so the running work never scrolls away; Now takes the height its content needs up to half the pane,
 then scrolls. On a phone they are two sub-tabs, Now and History, styled as F15d's toggles (F22, phone
-card); Now is selected on entry.
+card); Now is selected on entry. On desktop each pane carries its title, `Now` and `History`, above
+its own scrolling box, as F22 draws them (user ruling 2026-10-08); on a phone the sub-tab rows are the
+titles.
 
 ### §S2 — Now shows what is running, and only that
 
@@ -87,6 +89,19 @@ PRD-crucible-v2 (the "Gate events + Workflow tab" paragraph: "live section … b
 gate pane; … history lens below") and DN-model-b-language (the "Cycle / plan (live)" row) are
 amended to Now / History per F22.
 
+### §S5 — a sealed run leaves no running snapshot behind
+
+**Found in cycle 620 (user ruling 2026-10-08).** On this board Now showed a gate `checks-passed · in
+flight` from 0.2.0's run of 2026-09-16. That run's seal carried `version` 0.2.0 and was retired when
+0.2.0 shipped (`stampGatesRetired`), and the board's reads leave retired gates out; but its ten
+running snapshots carried no release (DRIFT-2), so nothing retired them, and the newest gate the page
+sees is a running one. §S0 stops new snapshots being orphaned; this repairs the ones already stored.
+
+A declared store migration (schema v20, the CR-CRU-071 mechanism, with its pre-upgrade backup)
+retires every gate that is marked `inFlight`, carries no `version`, and has a LATER gate in the same
+project (retired or not) — a snapshot superseded by a later gate is not a run in progress. Idempotent;
+nothing is deleted; a snapshot with no later gate (a run genuinely still going) is left alone.
+
 ## Acceptance criteria
 
 - [ ] **AC1 — gate identity.** A gate posted by `gate-run` or `gate-respond` carries `gate.run`
@@ -98,7 +113,8 @@ amended to Now / History per F22.
 - [ ] **AC2 — two panes.** The Workflow tab renders Now above History, each scrolling on its own,
       Now no taller than half the pane (desktop, 1280×800, with a plan of many cycles), and on a phone
       (390×844) two sub-tabs where Now is selected on entry and History shows the wave list — asserted
-      in a real browser.
+      in a real browser. On desktop the titles `Now` and `History` sit above their boxes, outside
+      them (Now's own text stays exactly what AC3 pins).
 - [ ] **AC3 — what Now shows**, each on the page with fixed fixtures: an open plan → its cycles; the
       newest gate in flight → F21's gate view naming its release, run id, branch and head, its step
       ladder, its recorded decisions, and no push line; an open plan AND a running gate → both, plan
@@ -111,6 +127,13 @@ amended to Now / History per F22.
 - [ ] **AC5 — the bare card is gone.** With every plan closed and a sealed gate on the board, the
       Workflow tab renders no gate widget and no `gate-pane`; the run drill-in of that gate still
       renders its body, with the run line and the push line — asserted on the page.
+- [ ] **AC7 — the orphans are retired.** Opening a v19 store whose project holds in-flight,
+      version-less snapshots followed by a later (retired) seal migrates it to v20 with those
+      snapshots retired and every other gate untouched (a version-less in-flight snapshot with no
+      later gate stays live; a versioned one is untouched); a second open changes nothing; the backup
+      is written — asserted on a fixture store. On a plain copy of this board's store, after the
+      migration Now reads `Nothing running → Roadmap` and the Crucible project lands on the Roadmap
+      when no plan is open — asserted in VERIFY.
 - [ ] **AC6 — documents.** PRD-crucible-v2 and DN-model-b-language describe the Workflow tab as Now
       and History per F22 — asserted by reading the amended paragraphs (no "beside the no-mistakes
       gate pane" remains).
@@ -172,3 +195,4 @@ the cycle that moved it.
 2. Now shows what is running, and nothing else (§S2, §S3, AC3–AC5)
 3. the Workflow tab is two panes, and two sub-tabs on a phone, and the design documents say so (§S1, §S4, AC2, AC6)
 4. verify
+5. a sealed run leaves no running snapshot behind, and each pane carries its title (§S5, §S1 titles, AC7, AC2) — added after cycle 620, run before verify
