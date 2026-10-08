@@ -318,7 +318,10 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
       projects: [project({ key, name: "Tab Door Project" })],
       queue: [],
     });
-    expect(tabIsOn("Workflow")).toBe(true);
+    // RE-PINNED 2026-10 (approved by the orchestrator, user ruling
+    // 2026-10-07): this fixture is idle (no plans, no gate events), so it
+    // now lands on Roadmap instead of the pre-ruling hard-coded Workflow.
+    expect(tabIsOn("Roadmap")).toBe(true);
     expect(location.pathname).toBe(`/p/${key}`);
 
     tabButton("Roadmap")!.click();

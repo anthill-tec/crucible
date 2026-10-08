@@ -26,13 +26,15 @@
 // position five), so its ordering was decided with no roadmap surface
 // competing for first place.
 //
-// NOT superseded, and guarded here: CR-CRU-021 §S1 AC2 — entering a workspace
-// still LANDS on the Workflow pane. The landing is hard-coded "Workflow"
-// (the `state.workspaceTab = "Workflow"` assignment in `navigate`, public/app.js),
-// never derived from TAB_NAMES[0] (gap analysis F1), so leading the band with
-// Roadmap must NOT move the landing.
-// The "leads the band but is not the landing" test below pins both halves in
-// one place so a future re-order cannot silently drag the landing with it.
+// RE-PINNED (approved by the orchestrator — user ruling 2026-10-07): CR-CRU-021
+// §S1 AC2 ("entering a workspace lands on the Workflow pane") held only while
+// the landing was a single hard-coded tab. The ruling narrows it: an IDLE
+// project (no open plan, no gate in flight) now lands on Roadmap instead; a
+// BUSY project (either) still lands on Workflow exactly as AC2 always said.
+// The test below pins the idle half for the SAME fixture AC2 used — "leads
+// the band" (unchanged) and "lands on" (now Roadmap for this idle fixture)
+// stay pinned together in one place so a future re-order cannot silently
+// drag the landing with it.
 //
 // Drives the REAL production public/app.js shell inside a happy-dom window —
 // same harness pattern as tests/roadmap-pane.test.ts: real VanJS/VanX vendor
@@ -275,22 +277,23 @@ describe("§S1 AC2 — the rendered workspace tab strip leads with Roadmap", () 
     expect(rendered[0]).toBe("Roadmap");
   });
 
-  test("Roadmap LEADS the band but is NOT the landing pane: cold /p/<key> still lands on Workflow (CR-CRU-021 §S1 AC2 stands)", async () => {
+  test("Roadmap LEADS the band, and for this idle fixture (no open plan, no gate in flight) it is ALSO the landing pane (re-pinned, approved by the orchestrator \u2014 user ruling 2026-10-07)", async () => {
     const key = "roadmap-first-landing-1";
     await mountApp({
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Roadmap First Landing" })],
     });
 
-    // AC2 — Roadmap is first in the band…
+    // AC2 \u2014 Roadmap is first in the band\u2026
     expect(renderedTabNames()[0]).toBe("Roadmap");
-    // …AC4 — …and the landing pane is STILL Workflow, unmoved by the
-    // re-order (the landing is hard-coded, never TAB_NAMES[0]).
-    expect(tabIsOn("Workflow")).toBe(true);
-    expect(tabIsOn("Roadmap")).toBe(false);
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
-    // NEGATIVE: leading the band did not mount the Roadmap pane on arrival.
-    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
+    // \u2026and for an IDLE project (this fixture: no plans, no gate events)
+    // it is also where the workspace lands \u2014 the 2026-10-07 ruling narrows
+    // AC2's old "landing is hard-coded Workflow" to busy projects only.
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    // NEGATIVE: the Workflow pane did not mount on arrival.
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
     expect(window.location.pathname).toBe(`/p/${key}`);
   });
 
