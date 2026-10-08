@@ -117,7 +117,7 @@ cards (no click behaviour) take a pointer cursor or a hover state; the switch's 
 As F12's redraw: each project card's facts on their own lines (a long path or key wraps); the add
 row stacks; no horizontal scroll at any viewport the responsive model covers. The edit form groups
 **Project** (name, type, SUT root), **Agent liveness** ("Shown as stale after", "Tombstoned after",
-"Removed after", each in seconds with what it does, in that order, blank = the board default) and
+"Removed after", each in seconds with what it does, in that order; a field left empty keeps its current value — footnote reworded 2026-10-08, user ruling) and
 **Run history** ("Keep the last N runs"); the card's summary reads the same words; T1/T2/T3 appear
 nowhere on the page. The server refuses a liveness patch whose effective thresholds are not strictly
 increasing (stale < tombstoned < removed, after merging with the project's existing override and
@@ -132,18 +132,18 @@ leaving the Roadmap's URL segment follows the same rule.
 
 ## Acceptance criteria
 
-- [ ] The burndown answer carries the release's live total, and on fixed fixtures adding a CR raises
+- [x] The burndown answer carries the release's live total, and on fixed fixtures adding a CR raises
       it, voiding or superseding one lowers it, and a re-point moves it, while `committedPoints` is
       unchanged; the band reads `<remaining> of <total> pts left` — asserted on the server and on the
       page; on a copy of the dev store, 0.3.0's total equals the sum of its live CRs' points.
-- [ ] The Velocity card's switch shows the per-week view as F18 · 1b (figure, caption, one bar per
+- [x] The Velocity card's switch shows the per-week view as F18 · 1b (figure, caption, one bar per
       week from the release's first day, hollow partial week), remembers the choice across reloads,
       and leaves the phone strip, the band and the forecast per day; the Velocity and Vitals cards
       have no pointer cursor — asserted on the page and in a real browser.
-- [ ] `/manage` has no horizontal scroll at the desktop, tablet and phone viewports, its edit form
+- [x] `/manage` has no horizontal scroll at the desktop, tablet and phone viewports, its edit form
       shows the three groups and their wording as F12's redraw, and T1/T2/T3 appear nowhere — asserted
       in a real browser; a non-increasing liveness patch is refused with a 400 naming the order and
       stores nothing — asserted on the server.
-- [ ] A project with no open plan and no gate in flight opens on the Roadmap, one with either opens on
+- [x] A project with no open plan and no gate in flight opens on the Roadmap, one with either opens on
       Workflow, and a URL naming a tab opens that tab — asserted on the page with fixed fixtures and in
       a real browser.

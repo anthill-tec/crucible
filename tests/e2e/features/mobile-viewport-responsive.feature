@@ -192,6 +192,7 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     And cycle 1 of that plan is marked done
     And the plan is closed with merge commit "mob00146"
     When I open the workspace for that project
+    And I click the "Workflow" workspace tab
     And I expand the cr group for "CR-MOB-146"
     Then the history cycle line for that cycle measures at least 90% of its row's width
     And tapping the history cycle line for that cycle in its empty space opens then closes its linked runs

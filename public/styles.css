@@ -637,13 +637,79 @@ body {
 .app-manager-row-head { display: flex; align-items: center; gap: 6px; }
 .app-manager-row-head .app-manager-edit { margin-left: auto; }
 .app-manager-params { margin-top: 2px; }
-.app-manager-edit-form,
+/* F12's redraw: nothing wider than the drawer. The manager's own content box
+   (never the shared pane-scroll class), long paths and keys wrap, and every
+   form grid column may shrink. */
+.app-manager-content { min-width: 0; }
+.app-manager-wrap { overflow-wrap: anywhere; }
+.app-manager-key { opacity: 0.7; }
+.app-manager-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.app-manager-group-head {
+  font: 600 9.5px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+.app-manager-group-head .app-card-meta { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.app-manager-project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+}
+.app-manager-project-grid .app-manager-edit-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font: 9.5px var(--mono);
+}
+.app-manager-span-all { grid-column: 1 / -1; }
+.app-manager-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 150px) 92px minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  font: 9.5px var(--mono);
+}
+.app-manager-setting-label { display: contents; }
+.app-manager-setting-caption { min-width: 0; }
+.app-manager-setting-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.app-manager-setting-explain { min-width: 0; }
+.app-manager-em { font-style: italic; }
+.app-manager-footnote { margin-top: 2px; }
+.app-manager-danger-label {
+  margin-top: 6px;
+  font: 9.5px var(--mono);
+  color: var(--color-error);
+}
+.app-manager-actions { display: flex; gap: 6px; margin-top: 6px; }
+.app-manager-editing { margin-left: auto; }
 .app-manager-add {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
 }
+.app-manager-add-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px 8px;
+}
+.app-manager-add-name-type { grid-template-columns: minmax(0, 1fr) 110px; }
+.app-manager-add > .app-chip { align-self: flex-start; }
+.app-manager input,
+.app-manager select { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.app-manager-setting input { width: 100%; }
+.app-manager-project-grid input,
+.app-manager-project-grid select,
+.app-manager-add-line input,
+.app-manager-add-line select { width: 100%; }
 .app-manager-add {
   border-top: 1px dashed var(--line);
   padding-top: 10px;
@@ -2116,7 +2182,27 @@ body {
    analytics pane (storyboard F16 + F14¾, DN-crucible-analytics §10). Colours
    are the theme's own tokens; the chart reads the same tokens at draw time.
    APPENDED, like the blocks above, so existing citations shift by none. */
-.app-velocity-card { gap: 3px; }
+/* F18 · 1b "the card is not a button" — a scoped override of the shared
+   `.app-card` pointer (agent rows keep theirs); only the day | week switch's
+   two options are clickable. */
+.app-velocity-card { gap: 3px; cursor: default; }
+.app-velocity-head { display: flex; align-items: center; gap: 6px; }
+.app-velocity-toggle {
+  margin-left: auto;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.app-velocity-view {
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font: 8.5px/1.6 var(--mono);
+  cursor: pointer;
+}
+.app-velocity-view.on { background: var(--ember); color: #111; }
 .app-velocity-value { font: 400 12px var(--mono); color: var(--ink); }
 .app-velocity-value b { font-size: 14px; }
 .app-velocity-bars {
@@ -2139,6 +2225,17 @@ body {
   left: 0;
   right: 0;
   border-top: 1px dashed var(--ember);
+}
+/* F18 · 1b — per week, the few bars span the card, as the frame draws them. */
+.app-velocity-bars-week { gap: 8px; }
+.app-velocity-bars-week .app-velocity-bar { max-width: none; }
+/* F18 · 1b — the trailing partial week is drawn hollow: a faint fill inside
+   a dashed outline. */
+.app-velocity-bar[data-hollow-week="true"] {
+  opacity: 1;
+  background: rgba(74, 222, 128, 0.27);
+  outline: 1px dashed var(--pass);
+  outline-offset: -1px;
 }
 .app-velocity-flow {
   margin-top: 4px;

@@ -373,6 +373,11 @@ describe("§S1+§S2 — navigating to a plan-less workspace clears the previous 
     await settle();
     badgeFor("Empty B").click();
     await settle();
+    // ADDED 2026-10 (approved by the orchestrator, user ruling 2026-10-07):
+    // idle B now lands on the Roadmap, so its Workflow pane is opened
+    // explicitly before its content is inspected.
+    findByText(document, '[data-testid="workspace-tab"]', "Workflow")!.click();
+    await settle();
 
     expect(planCallCount(keyB)).toBe(1);
     // CR-011 empty state, testid sweep — neither of A's sections survive.
@@ -543,6 +548,11 @@ describe("§S2 — render guard: a foreign-projectKey plan never paints, in eith
       projects: [project({ key: routedKey, name: "Guard Hist B" })],
       plans: { [routedKey]: [ownClosed, foreignClosed] },
     });
+    // ADDED 2026-10 (approved by the orchestrator, user ruling 2026-10-07):
+    // this idle fixture (closed plans only) now lands on the Roadmap, so its
+    // Workflow History is opened explicitly before it is inspected.
+    findByText(document, '[data-testid="workspace-tab"]', "Workflow")!.click();
+    await settle();
 
     expect(renderedCrs()).toContain("CR-GUARD-HIST-OWN");
     expect(renderedCrs()).not.toContain("CR-GUARD-HIST-FOREIGN");
@@ -590,12 +600,21 @@ describe("§S1 — workspace → home clears stale plans (isolated from the rend
 
     expect(planCallCount(key)).toBe(2); // a FRESH fetch fired, not a cache hit
     expect(renderedCrs()).not.toContain("CR-HOME-A"); // nothing stale in the interim
-    expect(workflowActiveText()).toContain("no open plan");
+    // RE-PINNED 2026-10 (approved by the orchestrator, user ruling
+    // 2026-10-07): the landing tab waits for the read, so while it is
+    // pending no tab is on and no pane paints (was: the Workflow pane's empty
+    // state, painted before the project's state was known).
+    expect(document.querySelector('[data-testid="workspace-tab"].on')).toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-zones"]')).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
 
     releasePlans(key);
     await settle();
 
     expect(renderedCrs()).toContain("CR-HOME-A"); // the fresh fetch's data now renders
+    // ...on the landing pane: the open plan makes this project busy.
+    expect(findByText(document, '[data-testid="workspace-tab"]', "Workflow")!.classList.contains("on")).toBe(true);
   });
 });
 

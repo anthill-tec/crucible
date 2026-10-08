@@ -233,6 +233,8 @@ export interface BurndownStep {
 export interface BurndownPayload {
   release: string;
   committedPoints: number;
+  /** The release's live total: the current points of its live crs, merged and pending. */
+  totalPoints: number;
   target?: number;
   ideal?: Array<{ ts: number; remaining: number }>;
   points: BurndownStep[];
@@ -436,6 +438,9 @@ export function burndown(input: BurndownInput): BurndownPayload | null {
   const unpointed = input.entries
     .filter((entry) => entry.release === release && !isDeadCr(entry) && entry.points === undefined)
     .map((entry) => entry.cr);
+  const totalPoints = input.entries
+    .filter((entry) => entry.release === release && !isDeadCr(entry) && entry.points !== undefined)
+    .reduce((sum, entry) => sum + (entry.points ?? 0), 0);
 
   const points: BurndownStep[] = [
     { ts: start, remaining: committed, event: "start", cr: startCr ?? [...members][0]!, delta: 0 },
@@ -445,6 +450,7 @@ export function burndown(input: BurndownInput): BurndownPayload | null {
   return {
     release,
     committedPoints: committed,
+    totalPoints,
     ...(input.targetAt !== undefined
       ? {
           target: input.targetAt,

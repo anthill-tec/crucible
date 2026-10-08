@@ -268,10 +268,13 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     expect(/rail/i.test(tabsRow!.className)).toBe(false);
   });
 
-  // SANCTIONED RE-TARGET (CR-CRU-021 §S1, dispatch-approved): the workspace's
-  // default active tab flips from Runs to Workflow — the other column on a
-  // cold `/p/<key>` load is now the Workflow pane (`workflow-active`), not
-  // `workspace-runs`. Was: `document.querySelector('[data-testid="workspace-runs"]')`.
+  // RE-PINNED 2026-10 (approved by the orchestrator — user ruling
+  // 2026-10-07): this fixture carries no open plan and no gate in flight
+  // (idle), so the other column is now the Roadmap pane
+  // (`roadmap-zones`/`roadmap-empty`), not the Workflow pane — the
+  // 2026-10-07 ruling narrows the old "Workflow by default" (CR-CRU-021
+  // §S1) landing to busy projects only. Was:
+  // `document.querySelector('[data-testid="workflow-active"]')`.
   test("workspace body renders exactly two columns: main content + Project pane, with no left rail anywhere in the workspace", async () => {
     const key = "fid1-p2";
     await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fid1 Project 2" })] });
@@ -285,11 +288,12 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     const pane = document.querySelector('[data-testid="project-pane"]');
     expect(pane).not.toBeNull();
     expect(body!.contains(pane)).toBe(true);
-    // The other column is the tab's own content pane (Workflow by default,
-    // CR-CRU-021 §S1).
-    const workflowPane = document.querySelector('[data-testid="workflow-active"]');
-    expect(workflowPane).not.toBeNull();
-    expect(body!.contains(workflowPane)).toBe(true);
+    // The other column is the tab's own content pane — Roadmap for this
+    // idle fixture (re-pinned 2026-10-07).
+    const roadmapPane = document.querySelector('[data-testid="roadmap-zones"]');
+    expect(roadmapPane).not.toBeNull();
+    expect(body!.contains(roadmapPane)).toBe(true);
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
   });
 
   // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): the tab count

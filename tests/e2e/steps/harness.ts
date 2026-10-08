@@ -83,11 +83,12 @@ export async function seedProject(
   request: APIRequestContext,
   name: string,
   type?: "backend" | "frontend",
+  sutRoot?: string,
 ): Promise<string> {
   assertEphemeralTarget(`seed project "${name}"`);
   const key = crypto.randomUUID();
   const res = await request.post("/api/v2/projects", {
-    data: { key, name, sutRoot: "/tmp/e2e", ...(type !== undefined ? { type } : {}) },
+    data: { key, name, sutRoot: sutRoot ?? "/tmp/e2e", ...(type !== undefined ? { type } : {}) },
   });
   expect(res.ok()).toBe(true);
   const tracked = seededProjectKeys.get(request);

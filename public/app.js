@@ -53,7 +53,11 @@
       selectedProject: null, // home filter pulldown (null = all projects)
       selectedAgent: null, // agent sub-row click filter (null = all)
       route: L.routeParse(location.pathname),
-      workspaceTab: "Workflow",
+      // null = the project's landing tab is not decided yet: it waits for
+      // the scope's first plans + events reads (see `settleLanding`), and
+      // until then no tab is on and no pane paints, so the page never shows
+      // Workflow and then jumps to Roadmap.
+      workspaceTab: null,
       backendUp: true,
       lastSynced: null,
       // CR-CRU-025 §S2b — the Run Timeline accordion's per-cycleId collapse
@@ -93,7 +97,9 @@
 
     // CR-CRU-014 §S3 — a cold /p/<key>/roadmap deep-link lands on the Roadmap
     // tab (mirrors how a /run/<id> deep-link lands the run overlay); every
-    // other workspace entry keeps the Workflow primary default.
+    // other workspace entry waits for the project's landing tab (Workflow
+    // when it has work running, Roadmap when it is idle; see
+    // `landingTab`).
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
     runsTabFollows(state.route);
 
@@ -152,8 +158,11 @@
       // ONE RULE (CR-CRU-016 §S1, user-approved 2026-07-16) — navigation
       // within the SAME surface (detail open/close, tab-owned pane swaps)
       // never touches the active workspace tab or the agent filter; only a
-      // surface change (home↔workspace, project→project) lands on Workflow
-      // (the CR-CRU-021 §S1 primary tab). ONE CARVED EXCEPTION (CR-CRU-079
+      // surface change (home↔workspace, project→project) lands on the
+      // project's landing tab, the role Workflow held as the CR-CRU-021 §S1
+      // primary tab: it is left undecided (null) here, because the scope's
+      // data was just cleared, and `settleLanding` decides it once the first
+      // plans + events reads land. ONE CARVED EXCEPTION (CR-CRU-079
       // §S1): the Roadmap tab is the only ROUTED tab (/p/<key>/roadmap), so
       // it FOLLOWS the route — see roadmapTabFollows — on every same-surface
       // move too; Runs/Coverage/Compile/BDD have no route segment and keep
@@ -165,7 +174,7 @@
       state.route = next;
       state.runsRelease = releaseInSearch(search);
       if (!sameSurface) {
-        state.workspaceTab = "Workflow";
+        state.workspaceTab = null;
         state.selectedAgent = null;
         scopeChanged();
       }
@@ -177,13 +186,43 @@
     // CR-CRU-079 §S1 — the route is the source of truth for the Roadmap tab
     // and the tab FOLLOWS it, on navigate() AND popstate: whenever the route
     // is (re)parsed on the workspace surface, Roadmap is active iff
-    // `route.roadmap` is set. Leaving the segment lands on Workflow (the
-    // CR-CRU-021 §S1 primary tab); a tab-strip exit then sets its own tab.
+    // `route.roadmap` is set. Leaving the segment lands on the project's
+    // landing tab (`landingTab`, in the role of the CR-CRU-021 §S1 primary
+    // tab); a tab-strip exit then sets its own tab.
     // Roadmap-specific by design — it is the only tab with a URL to follow.
     function roadmapTabFollows(route) {
       if (route.page !== "workspace") return;
       if (route.roadmap === true) state.workspaceTab = "Roadmap";
-      else if (state.workspaceTab === "Roadmap") state.workspaceTab = "Workflow";
+      else if (state.workspaceTab === "Roadmap") {
+        // Decided now from the data on screen when this scope's reads have
+        // landed; otherwise (a Back across projects) left for
+        // `settleLanding`, like any other entry.
+        state.workspaceTab = landedProject === route.projectKey ? landingTab() : null;
+      }
+    }
+
+    // The landing tab: Workflow when the routed project has work running (an
+    // open plan, or a gate in flight), Roadmap when it is idle. Read from the
+    // same scoped selectors the Workflow pane paints from, so no extra read.
+    function landingTab() {
+      const busy =
+        scopedPlans().some((p) => p.status === "open") ||
+        scopedGateEvents().some((e) => e.gate?.inFlight === true);
+      return busy ? "Workflow" : "Roadmap";
+    }
+
+    // The project whose first plans + events reads have landed since the
+    // last scope change (null = none yet).
+    let landedProject = null;
+
+    // Called once a refresh has read the routed project's events and plans.
+    // Decides the landing tab only while it is still undecided: a route that
+    // names a tab, or a tab the user picked, already decided it, and a
+    // project that turns busy or idle while it is open never moves the tab.
+    function settleLanding(projectKey) {
+      if (state.route.page !== "workspace" || state.route.projectKey !== projectKey) return;
+      landedProject = projectKey;
+      if (state.workspaceTab === null) state.workspaceTab = landingTab();
     }
 
     // The Runs tab's release filter is route state too: a workspace URL that
@@ -244,6 +283,7 @@
     // plans fetch plus the core refetch slice. SSE/poll stays the
     // steady-state refresh; navigation no longer depends on it.
     function scopeChanged() {
+      landedProject = null;
       vanX.replace(state.plans, () => []);
       vanX.replace(state.queue, () => []);
       vanX.replace(state.releases, () => []);
@@ -303,7 +343,12 @@
       const sameSurface =
         next.page === prev.page &&
         (next.page !== "workspace" || next.projectKey === prev.projectKey);
-      if (!sameSurface) scopeChanged();
+      if (!sameSurface) {
+        // Across projects (or home to a workspace) the landing tab is decided
+        // afresh, exactly as `navigate` does; same-project history keeps it.
+        state.workspaceTab = null;
+        scopeChanged();
+      }
       // CR-CRU-079 §S1 — Back/Forward across /p/<key>/roadmap re-lands the
       // pane, not just the URL.
       roadmapTabFollows(next);
@@ -392,6 +437,7 @@
         if (slices.has("events") && !scopeMoved()) {
           if (state.runsRelease !== null) await refetchReleaseRuns();
           await refetchPlans();
+          if (!scopeMoved()) settleLanding(projectKey);
           if (!scopeMoved()) await refetchRoadmap();
         }
       } finally {
@@ -1714,10 +1760,13 @@
     // gate review) — the detail header is the single navigation context and
     // NAMES where back goes: the back chip carries the ACTIVE workspace
     // tab's name (`← runs` / `← coverage` / `← compile`, the one-rule's
-    // preserved workspaceTab); home (no tabs) stays `← timeline`.
+    // preserved workspaceTab); home (no tabs) stays `← timeline`. Until a
+    // project's landing tab is decided (`settleLanding`) it names no tab.
     const backChipLabel = () =>
       state.route.page === "workspace"
-        ? `← ${String(state.workspaceTab).toLowerCase()}`
+        ? state.workspaceTab === null
+          ? "←"
+          : `← ${String(state.workspaceTab).toLowerCase()}`
         : "← timeline";
 
     // Shared detail-header content: back chip · RUN DETAIL · density chip.
@@ -1863,24 +1912,26 @@
     };
     const MANAGER_RETENTION_DEFAULT = 100;
 
-    const fmtLivenessMs = (ms) =>
-      ms >= 3600000 && ms % 3600000 === 0 ? `${ms / 3600000}h` : `${Math.round(ms / 1000)}s`;
+    // F12's short durations: whole hours as h, whole minutes as m, seconds
+    // otherwise (100s · 5m · 1h). The edit form stays in seconds.
+    const fmtLivenessMs = (ms) => {
+      const s = Math.round(ms / 1000);
+      if (s >= 3600 && s % 3600 === 0) return `${s / 3600}h`;
+      if (s >= 60 && s % 60 === 0) return `${s / 60}m`;
+      return `${s}s`;
+    };
 
-    // "liveness T1 60s / T2 300s / T3 1h (defaults)" — the "(defaults)"
-    // label ONLY when the project carries no override at all; any override
-    // renders the merged values with no defaults label (F12 editing row).
+    // The card's agents line, "agents: stale after 100s · tombstoned after 5m
+    // · removed after 1h": the EFFECTIVE thresholds (defaults merged with any
+    // override), named by what happens to the agent, with no defaults marker
+    // in either state (F12's redraw).
     function livenessLabel(project) {
-      const overrides = project.liveness ?? {};
-      const hasOverride =
-        typeof overrides.staleAfterMs === "number" ||
-        typeof overrides.tombstoneAfterMs === "number" ||
-        typeof overrides.pruneAfterMs === "number";
-      const v = { ...MANAGER_LIVENESS_DEFAULTS, ...overrides };
-      const core =
-        `liveness T1 ${fmtLivenessMs(v.staleAfterMs)}` +
-        ` / T2 ${fmtLivenessMs(v.tombstoneAfterMs)}` +
-        ` / T3 ${fmtLivenessMs(v.pruneAfterMs)}`;
-      return hasOverride ? core : `${core} (defaults)`;
+      const v = { ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) };
+      return (
+        `agents: stale after ${fmtLivenessMs(v.staleAfterMs)}` +
+        ` · tombstoned after ${fmtLivenessMs(v.tombstoneAfterMs)}` +
+        ` · removed after ${fmtLivenessMs(v.pruneAfterMs)}`
+      );
     }
 
     // CR-CRU-012 §S2 (cycle 28) — archive/unarchive UI state, shared across
@@ -1979,14 +2030,23 @@
                 )
               : "",
         ),
+        // F12's redraw: each fact on its OWN line; a long path or key wraps
+        // instead of widening the drawer.
+        div(
+          { class: "app-card-meta app-manager-params app-manager-wrap" },
+          `sutRoot ${project.sutRoot ?? ""}`,
+        ),
+        div({ class: "app-card-meta app-manager-params" }, livenessLabel(project)),
         div(
           { class: "app-card-meta app-manager-params" },
-          `sutRoot: ${project.sutRoot ?? ""} · ${livenessLabel(project)}` +
-            ` · retention ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
-            // §S4 (CR-CRU-008) — surface the danger state ONLY when enabled;
-            // the default (absent/false) posture stays silent.
-            (project.allowRunDeletion === true ? " · run deletion: enabled" : "") +
-            ` · key ${project.key} (immutable)`,
+          // §S4 (CR-CRU-008) — the run-deletion gate reads on|off in the
+          // card's run-history line, in either state.
+          `keeps the last ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
+            ` · agents may delete runs: ${project.allowRunDeletion === true ? "on" : "off"}`,
+        ),
+        div(
+          { class: "app-card-meta app-manager-params app-manager-key app-manager-wrap" },
+          `key ${project.key} (immutable)`,
         ),
       );
 
@@ -2067,84 +2127,127 @@
         editing.val = false;
         refetch();
       };
+      // F12's redraw: a caption, the field in seconds (or runs) and, beside
+      // it, what the setting does. The label still WRAPS its field (the
+      // association the labels tests pin); `display: contents` lets the
+      // caption and the field sit in the row's grid columns.
+      const settingRow = (testid, caption, control, unit, explain) =>
+        div(
+          { class: "app-manager-setting" },
+          label(
+            { "data-testid": `${testid}-label`, class: "app-manager-edit-label app-manager-setting-label" },
+            span({ class: "app-manager-setting-caption" }, caption),
+            span({ class: "app-manager-setting-value" }, control, span({ class: "app-manager-unit" }, unit)),
+          ),
+          span({ class: "app-card-meta app-manager-setting-explain" }, explain),
+        );
+      const numberInput = (testid, st) =>
+        input({
+          "data-testid": testid,
+          type: "number",
+          value: st,
+          oninput: (e) => (st.val = e.target.value),
+        });
+      const d = MANAGER_LIVENESS_DEFAULTS;
       return div(
         { class: "app-manager-edit-form" },
-        label(
-          { "data-testid": "manager-edit-name-label", class: "app-manager-edit-label" },
-          "Name",
-          input({
-            "data-testid": "manager-edit-name",
-            value: name,
-            oninput: (e) => (name.val = e.target.value),
-          }),
+        div(
+          { class: "app-manager-row-head" },
+          div({ class: "app-card-name" }, project.name || project.key),
+          span({ class: "app-type-badge" }, project.type),
+          span({ class: "app-chip on app-manager-editing" }, "editing…"),
         ),
-        label(
-          { "data-testid": "manager-edit-type-label", class: "app-manager-edit-label" },
-          "Type",
-          select(
+        div({ class: "app-manager-group-head" }, "Project"),
+        div(
+          { class: "app-manager-project-grid" },
+          label(
+            { "data-testid": "manager-edit-name-label", class: "app-manager-edit-label" },
+            "Name",
+            input({
+              "data-testid": "manager-edit-name",
+              value: name,
+              oninput: (e) => (name.val = e.target.value),
+            }),
+          ),
+          label(
+            { "data-testid": "manager-edit-type-label", class: "app-manager-edit-label" },
+            "Type",
+            select(
+              {
+                "data-testid": "manager-edit-type",
+                onchange: (e) => (type.val = e.target.value),
+              },
+              option({ value: "backend", selected: project.type === "backend" }, "backend"),
+              option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+            ),
+          ),
+          label(
             {
-              "data-testid": "manager-edit-type",
-              onchange: (e) => (type.val = e.target.value),
+              "data-testid": "manager-edit-sutroot-label",
+              class: "app-manager-edit-label app-manager-span-all",
             },
-            option({ value: "backend", selected: project.type === "backend" }, "backend"),
-            option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+            "SUT root",
+            input({
+              "data-testid": "manager-edit-sutroot",
+              value: sutRoot,
+              oninput: (e) => (sutRoot.val = e.target.value),
+            }),
           ),
         ),
-        label(
-          { "data-testid": "manager-edit-sutroot-label", class: "app-manager-edit-label" },
-          "SUT root",
-          input({
-            "data-testid": "manager-edit-sutroot",
-            value: sutRoot,
-            oninput: (e) => (sutRoot.val = e.target.value),
-          }),
+        div(
+          { class: "app-manager-group-head" },
+          "Agent liveness ",
+          span(
+            { class: "app-card-meta" },
+            "— how long an agent may stay silent; any call it makes counts as a heartbeat",
+          ),
         ),
-        label(
-          { "data-testid": "manager-edit-t1-label", class: "app-manager-edit-label" },
-          "Stale after (T1, seconds)",
-          input({
-            "data-testid": "manager-edit-t1",
-            type: "number",
-            value: t1,
-            oninput: (e) => (t1.val = e.target.value),
-          }),
+        settingRow(
+          "manager-edit-t1",
+          "Shown as stale after",
+          numberInput("manager-edit-t1", t1),
+          "s",
+          "its card turns amber",
         ),
-        label(
-          { "data-testid": "manager-edit-t2-label", class: "app-manager-edit-label" },
-          "Tombstone after (T2, seconds)",
-          input({
-            "data-testid": "manager-edit-t2",
-            type: "number",
-            value: t2,
-            oninput: (e) => (t2.val = e.target.value),
-          }),
+        settingRow(
+          "manager-edit-t2",
+          "Tombstoned after",
+          numberInput("manager-edit-t2", t2),
+          "s",
+          ["greyed; its open runs are aborted ", span({ class: "app-manager-em" }, "agent died")],
         ),
-        label(
-          { "data-testid": "manager-edit-t3-label", class: "app-manager-edit-label" },
-          "Prune after (T3, seconds)",
-          input({
-            "data-testid": "manager-edit-t3",
-            type: "number",
-            value: t3,
-            oninput: (e) => (t3.val = e.target.value),
-          }),
+        settingRow(
+          "manager-edit-t3",
+          "Removed after",
+          numberInput("manager-edit-t3", t3),
+          "s",
+          "dropped from the agents list",
         ),
-        label(
-          { "data-testid": "manager-edit-retention-label", class: "app-manager-edit-label" },
-          "Retention (runs shown in the timeline window)",
-          input({
-            "data-testid": "manager-edit-retention",
-            type: "number",
-            value: retention,
-            oninput: (e) => (retention.val = e.target.value),
-          }),
+        div(
+          { class: "app-card-meta app-manager-footnote" },
+          "each must be longer than the one before; leave a field empty to keep its current value " +
+            `(board defaults: ${d.staleAfterMs / 1000} s · ${d.tombstoneAfterMs / 1000} s · ${d.pruneAfterMs / 1000} s)`,
+        ),
+        div(
+          { class: "app-manager-group-head" },
+          "Run history ",
+          span({ class: "app-card-meta" }, "— this one is about events, not agents"),
+        ),
+        settingRow(
+          "manager-edit-retention",
+          "Keep the last",
+          numberInput("manager-edit-retention", retention),
+          "runs",
+          "older runs are evicted; the Runs timeline shows up to this many",
         ),
         // §S4 (CR-CRU-008) — the guarded-deletion DANGER toggle: enabling it
         // lets agents delete runs (with per-call user approval), so it wears
         // the destructive styling.
         label(
-          { "data-testid": "manager-edit-allow-deletion-label", class: "app-manager-edit-label" },
-          "Allow agents to delete runs (guarded — per-call approval)",
+          {
+            "data-testid": "manager-edit-allow-deletion-label",
+            class: "app-manager-edit-label app-manager-danger-label",
+          },
           input({
             "data-testid": "manager-edit-allow-deletion",
             type: "checkbox",
@@ -2152,21 +2255,26 @@
             checked: allowDeletion,
             onchange: (e) => (allowDeletion.val = e.target.checked),
           }),
+          " allow agents to delete runs ",
+          span({ class: "app-card-meta" }, "(guarded · per-call approval)"),
         ),
-        button(
-          {
-            "data-testid": "manager-edit-save",
-            class: "app-chip on",
-            // CR-CRU-122 §S4 — no second PATCH while the first is in flight.
-            disabled: savePending,
-            onclick: save,
-          },
-          () => (savePending.val ? Spinner() : ""),
-          "save",
-        ),
-        button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
-          { class: "app-card-meta app-manager-params" },
+          { class: "app-manager-actions" },
+          button(
+            {
+              "data-testid": "manager-edit-save",
+              class: "app-chip on",
+              // CR-CRU-122 §S4 — no second PATCH while the first is in flight.
+              disabled: savePending,
+              onclick: save,
+            },
+            () => (savePending.val ? Spinner() : ""),
+            "save",
+          ),
+          button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
+        ),
+        div(
+          { class: "app-card-meta app-manager-params app-manager-key app-manager-wrap" },
           `key ${project.key} (immutable)`,
         ),
       );
@@ -2320,21 +2428,29 @@
       return div(
         { "data-testid": "manager-add-form", class: "app-manager-add" },
         span({ class: "app-rail-title" }, "+ Add project"),
-        input({
-          "data-testid": "manager-add-name",
-          placeholder: "name",
-          oninput: (e) => (name.val = e.target.value),
-        }),
-        select(
-          { "data-testid": "manager-add-type", onchange: (e) => (type.val = e.target.value) },
-          option({ value: "backend" }, "backend"),
-          option({ value: "frontend" }, "frontend"),
+        // F12's redraw: the row stacks — name and type together, sutRoot
+        // on its own line beneath them.
+        div(
+          { class: "app-manager-add-line app-manager-add-name-type" },
+          input({
+            "data-testid": "manager-add-name",
+            placeholder: "name",
+            oninput: (e) => (name.val = e.target.value),
+          }),
+          select(
+            { "data-testid": "manager-add-type", onchange: (e) => (type.val = e.target.value) },
+            option({ value: "backend" }, "backend"),
+            option({ value: "frontend" }, "frontend"),
+          ),
         ),
-        input({
-          "data-testid": "manager-add-sutroot",
-          placeholder: "sutRoot",
-          oninput: (e) => (sutRoot.val = e.target.value),
-        }),
+        div(
+          { class: "app-manager-add-line" },
+          input({
+            "data-testid": "manager-add-sutroot",
+            placeholder: "sutRoot",
+            oninput: (e) => (sutRoot.val = e.target.value),
+          }),
+        ),
         button(
           {
             "data-testid": "manager-add-submit",
@@ -2371,8 +2487,11 @@
             button({ class: "app-chip", onclick: () => closeManager() }, "← home"),
             span({ class: "app-rail-title" }, "Projects manager · /manage"),
           ),
+          // The manager's OWN content box: the shared pane-scroll class would
+          // pull in the workspace panes' `> *` width floor and push the
+          // drawer sideways.
           div(
-            { class: "app-pane-content" },
+            { class: "app-manager-content" },
             () => div([...state.projects].map(ManagerProjectRow)),
             ManagerAddForm(),
             ManagerArchivedFold,
@@ -2938,7 +3057,65 @@
     // `pane-section-title` handle: the pane's two named sections (Project,
     // Vitals) are unchanged.
     const dayLabel = (day) => `${Number(day.slice(5, 7))}/${day.slice(8, 10)}`;
-    const VelocityCard = () => {
+    // F18 · 1b — the card reads per day (as above) or per week, through a
+    // day | week switch on the card. The choice is a persisted preference,
+    // stored like the density mode and the rail flag: ONE key, a closed value
+    // set, an `includes` guard (anything else means "day"), and a storage
+    // accessor that throws costs the preference, never the boot. It changes
+    // this card only — the phone foot strip, the release band and the forecast
+    // read `velocityFigure()`, which stays per day. The week view is computed
+    // here from the velocity answer already read; it makes no request.
+    const VELOCITY_VIEW_STORAGE_KEY = "crucible.velocity.view";
+    const VELOCITY_VIEWS = ["day", "week"];
+    let storedVelocityView = null;
+    try {
+      storedVelocityView = window.localStorage.getItem(VELOCITY_VIEW_STORAGE_KEY);
+    } catch {
+      storedVelocityView = null;
+    }
+    const velocityView = van.state(
+      VELOCITY_VIEWS.includes(storedVelocityView) ? storedVelocityView : "day",
+    );
+    const chooseVelocityView = (view) => {
+      velocityView.val = view;
+      try {
+        window.localStorage.setItem(VELOCITY_VIEW_STORAGE_KEY, view);
+      } catch {
+        // A full or disabled store loses the preference, not the switch.
+      }
+    };
+    // The switch's options bind `aria-pressed` and their class to the view, so
+    // a flip updates them in place (the card itself is not rebuilt).
+    const VelocityViewToggle = () =>
+      span(
+        { "data-testid": "velocity-view-toggle", class: "app-velocity-toggle", role: "group" },
+        VELOCITY_VIEWS.map((view) =>
+          button(
+            {
+              "data-testid": `velocity-view-${view}`,
+              type: "button",
+              class: () => (velocityView.val === view ? "app-velocity-view on" : "app-velocity-view"),
+              "aria-pressed": () => String(velocityView.val === view),
+              onclick: () => chooseVelocityView(view),
+            },
+            view,
+          ),
+        ),
+      );
+    // Weeks count from the release's first day, not the calendar: one block
+    // per 7 days from `days[0]`; the last block may hold fewer than 7.
+    const velocityWeeks = (days) => {
+      const weeks = [];
+      for (let i = 0; i < days.length; i += 7) {
+        const block = days.slice(i, i + 7);
+        weeks.push({
+          first: block[0].day,
+          length: block.length,
+          points: block.reduce((sum, d) => sum + d.points, 0),
+        });
+      }
+      return weeks;
+    };    const VelocityCard = () => {
       const v = velocityData.val;
       const heading = div({ class: "app-pane-section-title" }, "Velocity");
       if (v === null) {
@@ -2963,6 +3140,18 @@
         days.length === 0
           ? `${v.release} · not started`
           : `${v.release} so far · ${v.sampleDays} day${v.sampleDays === 1 ? "" : "s"} · ${fmtPoints(merged)} pts`;
+      // Per week = the points merged since the start ÷ the weeks since
+      // (days ÷ 7), always shown to one decimal.
+      const weeksSince = v.sampleDays / 7;
+      const weekRate = days.length > 0 && v.sampleDays > 0 ? merged / weeksSince : null;
+      const weeks = velocityWeeks(days);
+      const weekTop = Math.max(1, weekRate ?? 0, ...weeks.map((w) => w.points));
+      const weekCovers =
+        days.length === 0
+          ? `${v.release} · not started`
+          : `${v.release} so far · ${weeksSince.toFixed(1)} weeks · ${fmtPoints(merged)} pts`;
+      const lastWeek = weeks[weeks.length - 1];
+      const isWeek = () => velocityView.val === "week";
       const flow = v.flow ?? {};
       const flowText =
         typeof flow.execMsPerCycle === "number" && typeof flow.gateMsPerCycle === "number"
@@ -2975,37 +3164,77 @@
         heading,
         div(
           { "data-testid": "project-velocity", class: "app-card app-velocity-card" },
-          div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / day"),
-          div({ class: "app-card-meta" }, covers),
+          div(
+            { class: "app-velocity-head" },
+            () =>
+              isWeek()
+                ? div(
+                    { class: "app-velocity-value" },
+                    b(weekRate === null ? "—" : weekRate.toFixed(1)),
+                    " pts / week",
+                  )
+                : div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / day"),
+            VelocityViewToggle(),
+          ),
+          () => div({ class: "app-card-meta" }, isWeek() ? weekCovers : covers),
           days.length === 0
             ? null
-            : div(
-                {
-                  "data-testid": "velocity-bars",
-                  class: "app-velocity-bars",
-                  role: "img",
-                  "aria-label": `story points of ${v.release} merged per day since it started`,
-                },
-                days.map((d) =>
-                  div({
-                    class: "app-velocity-bar",
-                    title: `${d.day} · ${d.points} pts`,
-                    style: `height:${Math.round((d.points / top) * 100)}%;`,
-                  }),
+            : () =>
+                isWeek()
+                  ? div(
+                      {
+                        "data-testid": "velocity-bars",
+                        class: "app-velocity-bars app-velocity-bars-week",
+                        role: "img",
+                        "aria-label": `story points of ${v.release} merged per week since it started`,
+                      },
+                      weeks.map((w, i) =>
+                        div({
+                          class: "app-velocity-bar",
+                          "data-hollow-week": String(w.length < 7),
+                          title: `wk ${i + 1} from ${w.first} · ${w.points} pts`,
+                          style: `height:${Math.round((w.points / weekTop) * 100)}%;`,
+                        }),
+                      ),
+                      weekRate === null
+                        ? null
+                        : div({
+                            class: "app-velocity-mean",
+                            style: `bottom:${Math.round((weekRate / weekTop) * 100)}%;`,
+                          }),
+                    )
+                  : div(
+                      {
+                        "data-testid": "velocity-bars",
+                        class: "app-velocity-bars",
+                        role: "img",
+                        "aria-label": `story points of ${v.release} merged per day since it started`,
+                      },
+                      days.map((d) =>
+                        div({
+                          class: "app-velocity-bar",
+                          title: `${d.day} · ${d.points} pts`,
+                          style: `height:${Math.round((d.points / top) * 100)}%;`,
+                        }),
+                      ),
+                      typeof rate === "number"
+                        ? div({
+                            class: "app-velocity-mean",
+                            style: `bottom:${Math.round((rate / top) * 100)}%;`,
+                          })
+                        : null,
+                    ),
+          days.length === 0
+            ? null
+            : () =>
+                div(
+                  { class: "app-card-meta" },
+                  isWeek()
+                    ? `wk 1 from ${dayLabel(days[0].day)} … wk ${weeks.length} so far (${lastWeek.length} day${
+                        lastWeek.length === 1 ? "" : "s"
+                      }) · dashed = the rate`
+                    : `${dayLabel(days[0].day)} … ${dayLabel(days[days.length - 1].day)} · dashed = the rate · today counts`,
                 ),
-                typeof rate === "number"
-                  ? div({
-                      class: "app-velocity-mean",
-                      style: `bottom:${Math.round((rate / top) * 100)}%;`,
-                    })
-                  : null,
-              ),
-          days.length === 0
-            ? null
-            : div(
-                { class: "app-card-meta" },
-                `${dayLabel(days[0].day)} … ${dayLabel(days[days.length - 1].day)} · dashed = the rate · today counts`,
-              ),
           div({ "data-testid": "velocity-flow", class: "app-card-meta app-velocity-flow" }, flowText),
         ),
       );
@@ -4634,6 +4863,9 @@
       const fc = held.forecast;
       const dated = forecastDated(fc);
       const unpointed = bd.unpointed ?? [];
+      // The band's total is the release's live total; an older board that
+      // answers no `totalPoints` falls back to the start total.
+      const total = typeof bd.totalPoints === "number" ? bd.totalPoints : bd.committedPoints;
       // The band is where the chart's pane is one tap away: fetch uPlot now, so
       // the pane draws at once. A failed warm-up is not an error here — the
       // pane's own draw retries the load and states its failure in the chart box.
@@ -4658,7 +4890,7 @@
           b(version),
           " · ",
           b(fmtPoints(burndownRemaining(bd, fc))),
-          ` of ${fmtPoints(bd.committedPoints)} pts left`,
+          ` of ${fmtPoints(total)} pts left`,
         ),
         span({ class: "app-roadmap-progress-text" }, `${velocityFigure()} pts / day`),
         span(
@@ -6596,6 +6828,9 @@
         wsShowingDetail = true;
         return AnalyticsPane();
       }
+      // The landing tab is not decided yet (`settleLanding`): paint an empty
+      // pane rather than a guess, so no pane flashes before the right one.
+      if (state.workspaceTab === null) return div({ class: "app-center" });
       const pane =
         state.workspaceTab === "Workflow"
           ? WorkflowPanel()

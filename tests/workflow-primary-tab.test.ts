@@ -13,13 +13,16 @@
 // ordering was decided in a world with no roadmap surface competing for
 // first place.
 //
-// NOT superseded: CR-CRU-021 §S1 AC2 — "entering a workspace defaults to the
-// Workflow pane" — is a SEPARATE, BEHAVIOURAL contract and stands untouched.
-// Re-ordering a band is presentation; changing what loads on arrival is
-// behaviour. The landing pane is hard-coded "Workflow" (the
-// `state.workspaceTab = "Workflow"` assignment in `navigate`, public/app.js),
-// never derived from TAB_NAMES[0], so the §S1 AC2 and §S1 AC3
-// blocks below are UNCHANGED by this CR and must stay green as-is.
+// RE-PINNED 2026-10 (approved by the orchestrator — user ruling
+// 2026-10-07): CR-CRU-021 §S1 AC2/AC3 ("entering a workspace lands on the
+// Workflow pane") held only while the landing was a single hard-coded tab.
+// The ruling narrows it: an IDLE project (no open plan, no gate in flight)
+// now lands on Roadmap instead; a BUSY project (either) still lands on
+// Workflow exactly as AC2/AC3 always said. Every fixture in the §S1 AC2 and
+// §S1 AC3 blocks below is idle (no plans/events are ever seeded for them),
+// so their landing-pane assertions are re-pinned to Roadmap; every OTHER
+// assertion in those blocks (tab order, tabs-parked, the one-rule swap) is
+// unchanged.
 //
 // Drives the REAL production public/app.js shell inside a happy-dom window —
 // same harness pattern as tests/inpane-drill-in.test.ts: real VanJS/VanX
@@ -299,8 +302,8 @@ function unitFixture(eventId: string, projectKey: string, now: number) {
 // unchanged.
 // ─────────────────────────────────────────────────────────────────────────
 
-describe("§S1 AC2 — entering a workspace defaults to the Workflow pane", () => {
-  test("badge click from home renders the Workflow pane active: Workflow tab 'on', workflow-active present, Runs pane absent", async () => {
+describe("§S1 AC2 — entering a workspace with an idle project lands on the Roadmap pane (re-pinned 2026-10-07; a busy project still lands on Workflow, see §S1 AC3 below and tests/project-landing-pane.test.ts)", () => {
+  test("badge click from home on an idle project renders the Roadmap pane active: Roadmap tab 'on', roadmap pane present, Workflow tab 'off'", async () => {
     const key = "wf-primary-badge-1";
     await mountApp({
       pathname: "/",
@@ -313,28 +316,36 @@ describe("§S1 AC2 — entering a workspace defaults to the Workflow pane", () =
     await settle();
 
     expect(location.pathname).toBe(`/p/${key}`);
+    const roadmapTab = tabButton("Roadmap");
+    expect(roadmapTab).toBeDefined();
+    expect(roadmapTab!.classList.contains("on")).toBe(true);
     const workflowTab = tabButton("Workflow");
     expect(workflowTab).toBeDefined();
-    expect(workflowTab!.classList.contains("on")).toBe(true);
+    expect(workflowTab!.classList.contains("on")).toBe(false);
     const runsTab = tabButton("Runs");
     expect(runsTab).toBeDefined();
     expect(runsTab!.classList.contains("on")).toBe(false);
 
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
     expect(document.querySelector('[data-testid="workspace-runs"]')).toBeNull();
   });
 
-  test("cold /p/<key> load renders the Workflow pane active: Workflow tab 'on', workflow-active present, Runs pane absent", async () => {
+  test("cold /p/<key> load on an idle project renders the Roadmap pane active: Roadmap tab 'on', roadmap pane present, Workflow tab 'off'", async () => {
     const key = "wf-primary-cold-1";
     await mountApp({
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Cold Load Project" })],
     });
 
+    const roadmapTab = tabButton("Roadmap");
+    expect(roadmapTab).toBeDefined();
+    expect(roadmapTab!.classList.contains("on")).toBe(true);
     const workflowTab = tabButton("Workflow");
     expect(workflowTab).toBeDefined();
-    expect(workflowTab!.classList.contains("on")).toBe(true);
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(workflowTab!.classList.contains("on")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
     expect(document.querySelector('[data-testid="workspace-runs"]')).toBeNull();
   });
 
@@ -406,12 +417,16 @@ describe("§S1 AC2 — entering a workspace defaults to the Workflow pane", () =
 
 // ─────────────────────────────────────────────────────────────────────────
 // AC3 — Cold /p/<key>/run/<id>: the detail renders in-pane; closing it
-// lands on the WORKFLOW pane with its tab `on` (the new default), chip
-// text `← workflow`.
+// lands on the active tab. RE-PINNED 2026-10 (approved by the orchestrator —
+// user ruling 2026-10-07): the "new default" this block pinned was a single
+// hard-coded Workflow tab. The ruling narrows it to busy projects only —
+// every fixture in this block is idle (a plain test-run event, no gate, no
+// plan), so the underlying tab beneath the overlay is now Roadmap, and the
+// back chip reads "← roadmap" instead of "← workflow".
 // ─────────────────────────────────────────────────────────────────────────
 
-describe("§S1 AC3 — cold /p/<key>/run/<id> load closes back to the Workflow pane (the new default)", () => {
-  test("cold-loading the run route renders the detail in-pane with tabs parked and chip '← workflow'", async () => {
+describe("§S1 AC3 — cold /p/<key>/run/<id> load on an idle project closes back to the Roadmap pane (re-pinned 2026-10-07)", () => {
+  test("cold-loading the run route on an idle project renders the detail in-pane with tabs parked and chip '← roadmap'", async () => {
     const key = "wf-primary-cold-run-1";
     const now = Date.now();
     const fx = unitFixture("evt-wf-primary-cold-run-1", key, now);
@@ -423,12 +438,12 @@ describe("§S1 AC3 — cold /p/<key>/run/<id> load closes back to the Workflow p
     });
 
     expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
-    const backChip = findByText(document, "button, a", "← workflow");
+    const backChip = findByText(document, "button, a", "← roadmap");
     expect(backChip).toBeDefined();
-    expect((backChip!.textContent ?? "").trim()).toBe("← workflow");
+    expect((backChip!.textContent ?? "").trim()).toBe("← roadmap");
   });
 
-  test("closing the cold-loaded run detail lands on the WORKFLOW pane: Workflow tab 'on', workflow-active present, Runs pane absent", async () => {
+  test("closing the cold-loaded run detail on an idle project lands on the ROADMAP pane: Roadmap tab 'on', roadmap pane present, Workflow tab 'off'", async () => {
     const key = "wf-primary-cold-run-2";
     const now = Date.now();
     const fx = unitFixture("evt-wf-primary-cold-run-2", key, now);
@@ -439,21 +454,25 @@ describe("§S1 AC3 — cold /p/<key>/run/<id> load closes back to the Workflow p
       eventDetails: { [fx.detail.id]: fx.detail },
     });
 
-    const backChip = findByText(document, "button, a", "← workflow");
+    const backChip = findByText(document, "button, a", "← roadmap");
     expect(backChip).toBeDefined();
     backChip!.click();
     await settle();
 
     expect(location.pathname).toBe(`/p/${key}`);
     expect(document.querySelector('[data-testid="workspace-tabs"]')).not.toBeNull();
+    const roadmapTab = tabButton("Roadmap");
+    expect(roadmapTab).toBeDefined();
+    expect(roadmapTab!.classList.contains("on")).toBe(true);
     const workflowTab = tabButton("Workflow");
     expect(workflowTab).toBeDefined();
-    expect(workflowTab!.classList.contains("on")).toBe(true);
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(workflowTab!.classList.contains("on")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
     expect(document.querySelector('[data-testid="workspace-runs"]')).toBeNull();
   });
 
-  test("closing via Escape from the cold-loaded run route also lands on the Workflow pane", async () => {
+  test("closing via Escape from the cold-loaded run route on an idle project also lands on the Roadmap pane", async () => {
     const key = "wf-primary-cold-run-esc-1";
     const now = Date.now();
     const fx = unitFixture("evt-wf-primary-cold-run-esc-1", key, now);
@@ -468,9 +487,10 @@ describe("§S1 AC3 — cold /p/<key>/run/<id> load closes back to the Workflow p
     await settle();
 
     expect(location.pathname).toBe(`/p/${key}`);
-    const workflowTab = tabButton("Workflow");
-    expect(workflowTab).toBeDefined();
-    expect(workflowTab!.classList.contains("on")).toBe(true);
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    const roadmapTab = tabButton("Roadmap");
+    expect(roadmapTab).toBeDefined();
+    expect(roadmapTab!.classList.contains("on")).toBe(true);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
   });
 });

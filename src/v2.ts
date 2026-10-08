@@ -4042,6 +4042,31 @@ const LIVENESS_WIRE_KEYS = {
 } as const;
 
 /**
+ * The liveness ladder's order rule: stale < tombstoned < removed, strictly.
+ * Returns the refusal naming the first pair out of order, or null when the
+ * effective thresholds climb.
+ */
+function refuseLivenessOrder(effective: LivenessConfig): string | null {
+  const rungs = [
+    { name: "stale", wire: "t1_ms", ms: effective.staleAfterMs },
+    { name: "tombstoned", wire: "t2_ms", ms: effective.tombstoneAfterMs },
+    { name: "removed", wire: "t3_ms", ms: effective.pruneAfterMs },
+  ];
+  for (let i = 1; i < rungs.length; i++) {
+    const before = rungs[i - 1]!;
+    const after = rungs[i]!;
+    if (before.ms >= after.ms) {
+      return (
+        "liveness thresholds must climb: stale (t1_ms) < tombstoned (t2_ms) < removed (t3_ms) — " +
+        `${before.name} after ${before.ms}ms is not shorter than ${after.name} after ${after.ms}ms ` +
+        "once merged with the project's override and the board defaults"
+      );
+    }
+  }
+  return null;
+}
+
+/**
  * CR-CRU-012 §S1 — PATCH …/projects/<key>. Editable: name, type
  * (backend|frontend), sutRoot (camelCase, matching POST's wire contract),
  * liveness {t1_ms,t2_ms,t3_ms} (translated to the store's partial override
@@ -4106,6 +4131,13 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       liveness[internal] = value;
     }
     if (Object.keys(liveness).length > 0) {
+      // The thresholds are an agent's silence ladder — stale, then tombstoned,
+      // then removed — so the EFFECTIVE ladder (defaults ⟵ the project's
+      // existing override ⟵ this patch, the order `livenessConfig` and
+      // `updateProject` merge in) must climb strictly, checked before any write.
+      const effective = { ...store.livenessConfig(pk.key), ...liveness };
+      const order = refuseLivenessOrder(effective);
+      if (order !== null) return fail(400, order);
       patch.liveness = liveness;
     }
   }

@@ -63,6 +63,17 @@
 // verbatim ("liveness T1 60s / T2 300s / T3 1h (defaults)" / "retention 100
 // runs").
 //
+//
+// RE-PIN (CR-CRU-174 §S3, separate commit, approved by the orchestrator —
+// user ruling): F12 was redrawn ("Redrawn for CR-CRU-171 issues 6 + 7",
+// APPROVED 2026-10-08) to drop the "liveness T1 … / T2 … / T3 … (defaults)"
+// card summary and the bare "N runs" retention wording entirely — the card
+// now reads "agents: stale after … · tombstoned after … · removed after …"
+// and "keeps the last N runs · agents may delete runs: on|off", with NO
+// defaults marker in either state. The four tests below ("shows liveness …"
+// x2, "shows the retention cap …" x2) are migrated to the new wording —
+// every other assertion in this file is unchanged.
+//
 // RED phase: every test below is expected to FAIL against the CURRENT
 // public/app.js — there is no `/manage` route, no manager container, no
 // add/edit form, and no wiring to POST/PATCH at all.
@@ -366,7 +377,7 @@ describe("Projects manager — project list rendering (§S2)", () => {
     expect(managerRow("mgr-sutroot-1").textContent ?? "").toContain("/home/dev/root-co");
   });
 
-  test("shows liveness T1/T2/T3 as the system defaults (60s/300s/1h) with a defaults label when no override is set", async () => {
+  test("shows liveness defaults (60s/300s/1h) worded as stale/tombstoned/removed, with no defaults label (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       // No `liveness` key at all — mirrors the server's own omit-when-unset
@@ -376,13 +387,13 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-liveness-default-1").textContent ?? "";
-    expect(text).toMatch(/T1[^0-9]{0,6}60s/);
-    expect(text).toMatch(/T2[^0-9]{0,6}300s/);
-    expect(text).toMatch(/T3[^0-9]{0,6}1h/);
-    expect(text.toLowerCase()).toContain("default");
+    expect(text).toMatch(/stale after[^0-9]{0,6}1m/i);
+    expect(text).toMatch(/tombstoned after[^0-9]{0,6}5m/i);
+    expect(text).toMatch(/removed after[^0-9]{0,6}1h/i);
+    expect(text.toLowerCase()).not.toContain("(defaults)");
   });
 
-  test("shows overridden liveness T1/T2 values, with NO defaults label, when overrides are set", async () => {
+  test("shows overridden stale/tombstoned values, with no defaults label, when overrides are set (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       projects: [
@@ -395,22 +406,22 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-liveness-override-1").textContent ?? "";
-    expect(text).toMatch(/T1[^0-9]{0,6}120s/);
-    expect(text).toMatch(/T2[^0-9]{0,6}600s/);
+    expect(text).toMatch(/stale after[^0-9]{0,6}2m/i);
+    expect(text).toMatch(/tombstoned after[^0-9]{0,6}10m/i);
     expect(text.toLowerCase()).not.toContain("default");
   });
 
-  test("shows the retention cap: the system default (100 runs) when unset", async () => {
+  test("shows the retention cap: the system default (100 runs) when unset (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       projects: [project({ key: "mgr-retention-default-1", name: "Retention Default Co" })],
     });
 
     const text = managerRow("mgr-retention-default-1").textContent ?? "";
-    expect(text).toMatch(/100\s*runs?/i);
+    expect(text).toMatch(/keeps the last 100 runs/i);
   });
 
-  test("shows the retention cap: the override value (200 runs) when set, never the default", async () => {
+  test("shows the retention cap: the override value (200 runs) when set, never the default (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       projects: [
@@ -419,9 +430,10 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-retention-override-1").textContent ?? "";
-    expect(text).toMatch(/200\s*runs?/i);
-    expect(text).not.toMatch(/100\s*runs?/i);
+    expect(text).toMatch(/keeps the last 200 runs/i);
+    expect(text).not.toMatch(/keeps the last 100 runs/i);
   });
+
 
   test("renders the project key as read-only text — no input element anywhere in the manager is bound to it", async () => {
     const key = "mgr-immutable-key-777";

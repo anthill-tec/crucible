@@ -417,6 +417,11 @@ describe("§S2 boundary-to-cycle — HISTORY click contract (collapsed CR group 
       plans: [plan],
     });
 
+    // ADDED 2026-10 (approved by the orchestrator, user ruling 2026-10-07):
+    // this idle fixture (closed plan only) now lands on the Roadmap, so the
+    // History it inspects is opened explicitly first.
+    await clickTab("Workflow");
+
     // Confirm the CR group starts COLLAPSED (lens groups collapse by
     // default — CR-CRU-020 §S1.2) before we ever click the badge.
     const crGroupBefore = Array.from(
