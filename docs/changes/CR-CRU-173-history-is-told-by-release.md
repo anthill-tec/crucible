@@ -46,6 +46,20 @@ plan first (CR-CRU-172 §S2, re-confirmed 2026-10-08). Gap analysis settles the 
 posting agent's liveness vs. the run's own heartbeat) and the AC; it is this CR's first cycle,
 because History reads the same gates.
 
+### §S0b — a cycle's change record never crowds its title
+
+**Reported 2026-10-08 (user, same screenshot).** A cycle carrying a recorded change (CR-CRU-165:
+`reason · cause · spec`, e.g. a cycle added with `cycle-add --reason`) renders the record on the
+cycle's OWN line (`cycleChangeRecord` inside `CycleLine`), so the label truncates to `"a sealed run
+leaves no ru…"` and `"v…"` and the line's fields are pushed aside. CR-CRU-165 drew it from the spec
+alone; no frame covers it.
+
+**User ruling 2026-10-08:** the record goes on its own dim, indented line BENEATH the cycle line, and
+wraps rather than truncates; the cycle line keeps its full title, kind badge, timer and `→ Runs`.
+Same rule in Now's plan section and History's cycle rows (both `CycleRow` and `LensCycleRow`), and for
+a skipped cycle's record. A storyboard frame of this layout is drawn at gap analysis and approved
+before RED (it is the design this step implements to).
+
 ### §S1 — History lists releases, each holding its workflow and then its waves
 
 History lists the project's releases, latest first. A release row states its state (in progress /
