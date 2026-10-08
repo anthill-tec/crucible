@@ -2482,3 +2482,19 @@ body {
   color: var(--ink-faint);
   margin: 0 0 -9px;
 }
+
+/* F23 — a cycle's recorded change sits BENEATH its cycle line, never beside
+   it: its own dim line (app-card-meta ink), indented to the label (the
+   13px row's 1.2em glyph + the line's 8px gap; History rows with a drill-
+   down toggle add its 1em glyph + gap), wrapping over as many lines as it
+   needs so the cycle line's label, timer and → Runs stay untouched. */
+.app-cycle-change-record {
+  display: block;
+  margin: 0 0 4px calc(13px * 1.2 + 8px);
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-cycle-row:has(> .app-cycle-line > .app-cycle-toggle) > .app-cycle-change-record {
+  margin-left: calc(13px + 8px + 13px * 1.2 + 8px);
+}

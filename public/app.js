@@ -6161,16 +6161,16 @@
 
     // §S2/§S1 — every skipped cycle, and every cycle a recorded change
     // touched, carries its record on its row; an ordinary cycle carries none.
+    // F23 — the record is its OWN dim line BENEATH the cycle line (a sibling
+    // after `CycleLine`, never a child of it), indented to the label and
+    // wrapping, so its length never crowds the line's label, timer or badge.
     const cycleChangeRecord = (cycle) =>
       cycle.status === "skipped" || cycle.changeKind !== undefined
-        ? [
-            " · ",
-            span(
-              { "data-testid": "cycle-change-record", class: "app-card-meta app-cycle-change-record" },
-              changeRecordText(cycle),
-            ),
-          ]
-        : [];
+        ? div(
+            { "data-testid": "cycle-change-record", class: "app-card-meta app-cycle-change-record" },
+            changeRecordText(cycle),
+          )
+        : null;
 
     // §S3 — the plan's summary line: `<n> skipped` when any cycle is (no
     // element at all at zero), and an aborted plan's own record.
@@ -6242,8 +6242,8 @@
           // affordance, AFTER the timer, on every row whose cycle could have
           // runs (a separate node — never rebinding). ONE shared predicate.
           ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
-          ...cycleChangeRecord(cycle),
         ),
+        cycleChangeRecord(cycle),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
     };
@@ -6615,7 +6615,6 @@
           // on every row whose cycle could have runs. The SAME shared
           // predicate as `CycleRow`, called identically.
           ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
-          ...cycleChangeRecord(cycle),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
@@ -6627,6 +6626,7 @@
                   : ""
             : null,
         ),
+        cycleChangeRecord(cycle),
         // A done cycle is a CLOSED span wrapping its linked runs; the active
         // cycle keeps collecting its runs live (open span, §S3). Both sit
         // behind the row's own toggle (§S2.1/§S2.2 drill-down).
