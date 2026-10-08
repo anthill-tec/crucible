@@ -73,7 +73,9 @@ def _load_module(path, cache_key):
 def _run_main(module, argv):
     """Drive the REAL argparse dispatch of a client's `main()`."""
     stdout, stderr = io.StringIO(), io.StringIO()
-    with mock.patch.object(sys, "argv", ["client.py"] + argv):
+    # os.environ is restored on exit: arduino's main() exports $AGENT_ID from --agent for its
+    # children, which would otherwise leak into every later test in this process.
+    with mock.patch.object(sys, "argv", ["client.py"] + argv), mock.patch.dict(os.environ):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
                 module.main()

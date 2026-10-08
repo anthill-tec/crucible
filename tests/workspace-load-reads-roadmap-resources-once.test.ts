@@ -44,6 +44,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { installEventSource, restoreEventSource } from "./helpers/stream-workspace-harness";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -141,12 +142,14 @@ async function mountApp(key: string): Promise<void> {
     throw new Error(`workspace-load-reads-roadmap-resources-once.test.ts: unexpected fetch url ${url}`);
   }) as typeof fetch;
 
-  (globalThis as unknown as { EventSource: unknown }).EventSource = class extends FakeEventSource {
-    constructor(url: string) {
-      super(url);
-      liveSource = this;
-    }
-  };
+  installEventSource(
+    class extends FakeEventSource {
+      constructor(url: string) {
+        super(url);
+        liveSource = this;
+      }
+    },
+  );
 
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
@@ -165,6 +168,7 @@ async function settle(ticks = 8): Promise<void> {
 
 afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  restoreEventSource();
 });
 
 const RESOURCE_PATTERNS: Record<string, RegExp> = {

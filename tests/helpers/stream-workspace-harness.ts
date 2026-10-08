@@ -56,6 +56,35 @@ export class FakeEventSource {
   }
 }
 
+// What `globalThis.EventSource` was before a fake replaced it, so the fake can
+// be taken away again. `bun test` runs every file in ONE process, and
+// `GlobalRegistrator.unregister()` restores only the globals happy-dom set.
+// happy-dom has no EventSource, so a fake left behind makes every later
+// mount take the stream branch on a source that never errors: that page never
+// polls, and a change only the poll can deliver never lands.
+let replacedEventSource: { present: boolean; value: unknown } | null = null;
+
+/** Install a fake as `globalThis.EventSource`, remembering what it replaced
+ *  (on the first install only, so a re-mount never remembers a fake). Pair
+ *  with `restoreEventSource()` after each test. */
+export function installEventSource(fake: unknown): void {
+  const g = globalThis as { EventSource?: unknown };
+  if (replacedEventSource === null) {
+    replacedEventSource = { present: "EventSource" in g, value: g.EventSource };
+  }
+  g.EventSource = fake;
+}
+
+/** Put back whatever `installEventSource` replaced; a no-op when nothing was
+ *  installed. */
+export function restoreEventSource(): void {
+  if (replacedEventSource === null) return;
+  const g = globalThis as { EventSource?: unknown };
+  if (replacedEventSource.present) g.EventSource = replacedEventSource.value;
+  else delete g.EventSource;
+  replacedEventSource = null;
+}
+
 export interface Mounted {
   /** Every URL the page fetched, in order. */
   readonly fetchLog: string[];
@@ -122,12 +151,14 @@ export async function mountWorkspace(keys: string[]): Promise<Mounted> {
     throw new Error(`stream-workspace-harness: unexpected fetch url ${url}`);
   }) as typeof fetch;
 
-  (globalThis as unknown as { EventSource: unknown }).EventSource = class extends FakeEventSource {
-    constructor(url: string) {
-      super(url);
-      live = this;
-    }
-  };
+  installEventSource(
+    class extends FakeEventSource {
+      constructor(url: string) {
+        super(url);
+        live = this;
+      }
+    },
+  );
 
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
@@ -150,6 +181,7 @@ export async function settle(ticks = 10): Promise<void> {
 
 export async function unmount(): Promise<void> {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  restoreEventSource();
 }
 
 /** Every resource a workspace reads, by the URL shape that reads it. */

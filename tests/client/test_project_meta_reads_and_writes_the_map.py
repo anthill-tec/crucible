@@ -75,7 +75,9 @@ def _run_main(module, argv):
     """Invoke `module.main()` with `sys.argv` patched -> (code, stdout, stderr)."""
     full_argv = ["client"] + argv
     out, err = io.StringIO(), io.StringIO()
-    with mock.patch.object(sys, "argv", full_argv), \
+    # os.environ is restored on exit: arduino's main() exports $AGENT_ID from --agent for its
+    # children, which would otherwise leak into every later test in this process.
+    with mock.patch.object(sys, "argv", full_argv), mock.patch.dict(os.environ), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             module.main()
