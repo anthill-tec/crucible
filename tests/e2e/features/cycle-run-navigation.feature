@@ -32,6 +32,7 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
     And the plan is closed with merge commit "crb00001"
     And 20 filler passing runs are ingested on that project
     When I open the workspace for that project
+    And I click the "Workflow" workspace tab
     And I expand the cr group for "CR-CRB-1"
     And I click the cycle-to-runs badge for cycle "c1 nav" in the cr group for "CR-CRB-1"
     Then the "Runs" tab is selected
@@ -104,6 +105,7 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
     And cycle 1 of that plan is marked done
     And the plan is closed with merge commit "crb00005"
     When I open the workspace for that project
+    And I click the "Workflow" workspace tab
     And I expand the cr group for "CR-CRB-5"
     Then the history cycle line for that cycle measures at least 90% of its row's width
     And clicking the history cycle line for that cycle at each measured x-offset opens then closes its linked runs

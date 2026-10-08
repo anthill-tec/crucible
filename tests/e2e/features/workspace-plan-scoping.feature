@@ -58,6 +58,7 @@ Feature: CR-CRU-026 §S0 equivalence — cold-load vs navigation parity, and the
     Then the Workflow tab shows the cr root for "CR-WS-2" within 2 seconds
     When I navigate home via the ← projects chip
     And I click the projects-row badge for "WS Empty Project"
+    And I click the "Workflow" workspace tab
     Then the Workflow tab shows the CR-011 empty state with none of the previous project's plan content
 
   Scenario: §S0 equivalence — the home timeline's marker vocabulary is identical between cold load and a home→workspace→home in-app round-trip

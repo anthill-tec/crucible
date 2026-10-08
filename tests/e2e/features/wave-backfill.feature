@@ -36,8 +36,10 @@ Feature: CR-CRU-031 §S4 — the wave backfill folds a wave-less plan into its c
     And cycle 1 of that plan is marked done
     And the plan is closed with merge commit "wbaaa02"
     When I open the workspace for that project
+    And I click the "Workflow" workspace tab
     Then the history lens shows a phantom unnumbered wave band holding "CR-WB-1", separate from the wave "42" band holding "CR-WB-2"
     When the wave-less plan's wave is backfilled to "42" via the plans PATCH endpoint
     And I open the workspace for that project
+    And I click the "Workflow" workspace tab
     Then the history lens shows a single wave "42" band holding both "CR-WB-1" and "CR-WB-2"
     And the history lens shows no phantom unnumbered wave band
