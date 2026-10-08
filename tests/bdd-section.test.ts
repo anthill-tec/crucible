@@ -639,8 +639,11 @@ describe("CR-CRU-145 §S4 (migrated) — the populated INDEX's dimming means liv
     const mounted = document.querySelector<HTMLElement>(".app-center");
     expect(mounted).not.toBeNull();
     expect(classTokens(mounted!)).not.toContain("greyed");
-    expect(tabButton("Workflow")).toBeDefined();
-    expect(classTokens(tabButton("Workflow")!)).toContain("on");
+    // RE-PINNED 2026-10 (approved by the orchestrator, user ruling
+    // 2026-10-07): the pane stays on the landing tab, which for this idle
+    // fixture (no open plan, no gate in flight) is now Roadmap (was: Workflow).
+    expect(tabButton("Roadmap")).toBeDefined();
+    expect(classTokens(tabButton("Roadmap")!)).toContain("on");
   });
 });
 

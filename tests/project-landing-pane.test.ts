@@ -348,12 +348,12 @@ describe("opening a busy project", () => {
     await mountApp({
       pathname: `/p/${busyKey}`,
       projects: [project({ key: busyKey, name: "Busy Open Plan Project" })],
-      plans: [openPlan(busyKey, "CR-LAND-1", 501)],
+      plans: [openPlan(busyKey, "LAND-PLAN-1", 501)],
     });
     expect(tabIsOn("Workflow")).toBe(true);
     expect(tabIsOn("Roadmap")).toBe(false);
     const header = document.querySelector('[data-testid="workflow-active-header"]');
-    expect(textOf(header)).toBe("Active workflow — CR-LAND-1");
+    expect(textOf(header)).toBe("Active workflow — LAND-PLAN-1");
     expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
 
     // The pin: an idle twin of the same fixture lands on Roadmap instead.
@@ -405,7 +405,7 @@ describe("a URL that already names a tab", () => {
     await mountApp({
       pathname: `/p/${busyKey}/roadmap`,
       projects: [project({ key: busyKey, name: "Busy Roadmap Route Project" })],
-      plans: [openPlan(busyKey, "CR-LAND-2", 502)],
+      plans: [openPlan(busyKey, "LAND-PLAN-2", 502)],
     });
     expect(tabIsOn("Roadmap")).toBe(true);
     expect(location.pathname).toBe(`/p/${busyKey}/roadmap`);
@@ -442,7 +442,7 @@ describe("a URL that already names a tab", () => {
     await mountApp({
       pathname: `/p/${busyKey}/run/${busyFx.detail.id}`,
       projects: [project({ key: busyKey, name: "Busy Run Deep Link Project" })],
-      plans: [openPlan(busyKey, "CR-LAND-3", 503)],
+      plans: [openPlan(busyKey, "LAND-PLAN-3", 503)],
       events: [busyFx.brief],
       eventDetails: { [busyFx.detail.id]: busyFx.detail },
     });
