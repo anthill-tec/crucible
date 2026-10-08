@@ -327,7 +327,7 @@ describe("Projects manager — edit-in-place form groups (F12 redraw, CR-CRU-174
 
     // The order-enforcement footnote, verbatim, after all three rows.
     const idxFootnote = text.indexOf(
-      "each must be longer than the one before; blank = the board default (60 s · 300 s · 3600 s)",
+      "each must be longer than the one before; leave a field empty to keep its current value (board defaults: 60 s · 300 s · 3600 s)",
     );
     expect(idxFootnote).toBeGreaterThan(idxDropped);
 
