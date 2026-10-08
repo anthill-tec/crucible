@@ -370,6 +370,103 @@ describe("a schema migration retires version-less in-flight gate snapshots a lat
   });
 });
 
+// ── same-moment ordering: a gate stamped at the SAME timestamp as the
+// snapshot counts as later only when it was stored after it ─────────────
+
+const SAME_MOMENT_PROJECT = "p-gate-retire-same-moment";
+const SAME_MOMENT_SNAPSHOT_ID = "g-same-moment-interim";
+const SAME_MOMENT_GATE_ID = "g-same-moment-gate";
+
+/**
+ * A store holding ONE project with a version-less in-flight snapshot and an
+ * ordinary gate stamped at the very same moment, inserted in the given
+ * order — insertion order is what decides each row's rowid.
+ */
+function makeSameMomentStore(dir: string, snapshotFirst: boolean): string {
+  const dbPath = path.join(dir, "crucible.db");
+  Store.open(dbPath);
+  const db = new Database(dbPath);
+  try {
+    db.query(
+      `INSERT INTO projects (key, name, type, sut_root, created_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run(SAME_MOMENT_PROJECT, "Same moment", "backend", "/tmp/p-gate-retire-same-moment", 1000);
+    const snapshot: GateFixtureRow = {
+      id: SAME_MOMENT_SNAPSHOT_ID,
+      projectKey: SAME_MOMENT_PROJECT,
+      timestamp: BASE,
+      version: null,
+      inFlight: true,
+      retiredAt: null,
+    };
+    const gate: GateFixtureRow = {
+      id: SAME_MOMENT_GATE_ID,
+      projectKey: SAME_MOMENT_PROJECT,
+      timestamp: BASE,
+      version: null,
+      inFlight: false,
+      retiredAt: null,
+    };
+    for (const row of snapshotFirst ? [snapshot, gate] : [gate, snapshot]) insertGate(db, row);
+    db.exec(`PRAGMA user_version = ${PRE_RETIREMENT_VERSION}`);
+  } finally {
+    db.close();
+  }
+  return dbPath;
+}
+
+function rowidOf(dbPath: string, id: string): number {
+  const db = new Database(dbPath);
+  try {
+    const row = db.query<{ rowid: number }, [string]>(`SELECT rowid FROM gates WHERE id = ?`).get(id);
+    if (row === null) throw new Error(`no gate row ${id}`);
+    return row.rowid;
+  } finally {
+    db.close();
+  }
+}
+
+describe("a gate stamped at the same moment as a version-less in-flight snapshot", () => {
+  test("supersedes the snapshot when it was stored after it, so the snapshot is retired", () => {
+    const dir = tmpDir();
+    const dbPath = makeSameMomentStore(dir, true);
+
+    // Preconditions — same timestamp, the gate stored after the snapshot,
+    // and the snapshot starts live.
+    expect(rowidOf(dbPath, SAME_MOMENT_GATE_ID)).toBeGreaterThan(rowidOf(dbPath, SAME_MOMENT_SNAPSHOT_ID));
+    const before = storedGates(dbPath);
+    expect(before.get(SAME_MOMENT_SNAPSHOT_ID)?.retiredAt).toBeNull();
+
+    Store.open(dbPath);
+
+    const after = storedGates(dbPath);
+    const row = after.get(SAME_MOMENT_SNAPSHOT_ID);
+    expect(row, `${SAME_MOMENT_SNAPSHOT_ID} vanished`).toBeDefined();
+    // THE PIN — the same-moment gate stored after it superseded it.
+    expect(row!.retiredAt, `${SAME_MOMENT_SNAPSHOT_ID} was not retired`).not.toBeNull();
+    expect(row!.payload).toBe(before.get(SAME_MOMENT_SNAPSHOT_ID)!.payload);
+    // The superseding gate was never in flight, so it is not a candidate.
+    expect(after.get(SAME_MOMENT_GATE_ID)?.retiredAt).toBeNull();
+  });
+
+  test("does not supersede the snapshot when it was stored before it, so the snapshot stays live", () => {
+    const dir = tmpDir();
+    const dbPath = makeSameMomentStore(dir, false);
+
+    // Preconditions — same timestamp, the gate stored BEFORE the snapshot,
+    // and the snapshot starts live.
+    expect(rowidOf(dbPath, SAME_MOMENT_GATE_ID)).toBeLessThan(rowidOf(dbPath, SAME_MOMENT_SNAPSHOT_ID));
+    expect(storedGates(dbPath).get(SAME_MOMENT_SNAPSHOT_ID)?.retiredAt).toBeNull();
+
+    Store.open(dbPath);
+
+    // THE PIN — nothing in its project comes after it, so it is still a run
+    // in progress.
+    const after = storedGates(dbPath);
+    expect(after.get(SAME_MOMENT_SNAPSHOT_ID)?.retiredAt).toBeNull();
+    expect(after.get(SAME_MOMENT_GATE_ID)?.retiredAt).toBeNull();
+  });
+});
+
 describe("after the migration, the project's events read no longer answers the retired snapshots", () => {
   const deps: V2Deps = { version: "test-rehearsal", healthPayload: () => ({}) };
 
