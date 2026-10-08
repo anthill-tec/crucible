@@ -622,8 +622,10 @@ describe("a project that turns busy or idle while it is open", () => {
     expect(document.querySelector('[data-testid="workflow-active-header"]')).toBeNull();
     // §S2/AC3 2026-10-08 re-pin (approved) — nothing is running at all (no open
     // plan, no gate event whatsoever), so Now reads the exact AC3 empty-state
-    // line, never the retired "no open plan" filler.
-    expect(textOf(document.querySelector('[data-testid="workspace-body"]'))).toBe(
+    // line, never the retired "no open plan" filler. Read on Now's own
+    // container (orchestrator-approved 2026-10-08) — `workspace-body` also
+    // holds History and the Project pane.
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).toBe(
       "Nothing running \u2192 Roadmap",
     );
     expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();

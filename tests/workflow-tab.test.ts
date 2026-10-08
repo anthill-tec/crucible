@@ -507,9 +507,11 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
 
     await openWorkflowTab();
 
-    const body = document.querySelector('[data-testid="workspace-body"]');
-    expect(body).not.toBeNull();
-    expect((body!.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
+    // Scoped to Now's own container (orchestrator-approved 2026-10-08) —
+    // `workspace-body` also holds History and the Project pane.
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(nowPane).not.toBeNull();
+    expect((nowPane!.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
     // bound: no cycle rows render when there is nothing to show.
     expect(document.querySelectorAll('[data-testid="cycle-row"]').length).toBe(0);
   });

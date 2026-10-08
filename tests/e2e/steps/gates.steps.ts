@@ -127,7 +127,10 @@ Step(
   "the Workflow tab mounts no gate pane for the sealed gate, and reads exactly {string}",
   async ({ page }, text: string) => {
     await expect(page.getByTestId("gate-pane")).toHaveCount(0);
-    await expect(page.getByTestId("workspace-body")).toHaveText(text);
+    // Read on Now's own container (orchestrator-approved 2026-10-08) —
+    // workspace-body also holds History (the wave header above) and the
+    // Project pane.
+    await expect(page.getByTestId("workflow-now")).toHaveText(text);
   },
 );
 

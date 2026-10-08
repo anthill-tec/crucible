@@ -37,9 +37,11 @@ Step(
 );
 
 // ── §S2/AC3 — the exact empty-state line, full-text, never a substring
-// match (a runaway suffix must fail this). ───────────────────────────────
+// match (a runaway suffix must fail this). Read on Now's own container
+// (orchestrator-approved 2026-10-08) — workspace-body also holds History and
+// the Project pane. ─────────────────────────────────────────────────────────
 Step("the Workflow tab reads exactly {string}", async ({ page }, text: string) => {
-  await expect(page.getByTestId("workspace-body")).toHaveText(text);
+  await expect(page.getByTestId("workflow-now")).toHaveText(text);
 });
 
 // ── §S2/AC3 — the "→ Roadmap" link embedded in the empty-state line

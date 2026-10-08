@@ -485,8 +485,10 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
     });
     await openWorkflowTab();
 
-    const body = document.querySelector('[data-testid="workspace-body"]');
-    expect(textOf(body)).toBe("Nothing running \u2192 Roadmap");
+    // Read on Now's own container (orchestrator-approved 2026-10-08) -- the
+    // whole workspace-body also holds History and the Project pane.
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(textOf(nowPane)).toBe("Nothing running \u2192 Roadmap");
     expect(tabIsOn("Workflow")).toBe(true);
 
     const link = findByText(document, 'a, button, span, [role="button"]', "\u2192 Roadmap");
@@ -557,8 +559,10 @@ describe("§S2/AC4 — \"running\" is the project's NEWEST gate event, never \"a
     expect(tabIsOn("Workflow")).toBe(false);
 
     await openWorkflowTab();
-    const body = document.querySelector('[data-testid="workspace-body"]');
-    expect(textOf(body)).toBe("Nothing running \u2192 Roadmap");
+    // Read on Now's own container (orchestrator-approved 2026-10-08) -- the
+    // whole workspace-body also holds History and the Project pane.
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(textOf(nowPane)).toBe("Nothing running \u2192 Roadmap");
     expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
   });
 

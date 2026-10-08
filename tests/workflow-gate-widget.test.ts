@@ -348,8 +348,11 @@ describe("§S4 Workflow tab — gate widget at the boundary (all wave-3 plans cl
     // Nothing else is running either (the plan is closed), so the Now
     // content is exactly the AC3 empty-state line — never the retired
     // CR-011 "no open plan" filler and never the removed CR-013 placeholder.
+    // Scoped to Now's own container (orchestrator-approved 2026-10-08) —
+    // `workspace-body` also holds History and the Project pane.
     const body = document.querySelector('[data-testid="workspace-body"]');
-    expect((body?.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect((nowPane?.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
     expect((body?.textContent ?? "").toLowerCase()).not.toContain("no open plan");
     expect(textOf(body)).not.toContain("gate reporting lands in CR-013");
   });
@@ -642,16 +645,34 @@ describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-fl
     return textOf(group!.querySelector('[data-testid="wave-header"]'));
   }
 
-  // AC4 — the second reader. An in-flight gate is not a verdict, so it is
-  // not a boundary: the primary zone falls back to `WorkflowActive` and
-  // nothing gate-shaped mounts for it.
-  test("with the newest scoped gate in flight and no open plan, the Workflow primary zone mounts NO gate widget for it — the identical UNMARKED gate does mount one", async () => {
-    // Anti-vacuity twin FIRST: same board, same ladder, no mark — today's
-    // (correct) behaviour, which this narrowing must not disturb.
-    const unmarked = gateEvent({
-      id: "evt-117-boundary-unmarked",
-      projectKey: "wf-117-boundary-unmarked",
-      timestamp: 1_757_506_000_000,
+  // AC4 — the second reader, RE-PINNED for CR-CRU-172 §S2/AC3 (approved by
+  // the orchestrator — user rulings 2026-10-07/08; F22 reverses CR-CRU-117
+  // §S1's rule for this zone). The project's NEWEST gate still in flight is a
+  // release workflow RUNNING, so Now shows it in F21's gate view; the same
+  // snapshot followed by a seal of the run is not running, so nothing
+  // gate-shaped mounts and Now reads its empty line.
+  test("with the newest scoped gate in flight and no open plan, Now shows F21's gate view for it — the identical snapshot FOLLOWED BY a seal shows no gate view", async () => {
+    const inFlightFor = (key: string, timestamp: number): GateEventFixture =>
+      gateEvent({
+        id: `evt-117-boundary-inflight-${key}`,
+        projectKey: key,
+        timestamp,
+        context: { wave: "6" },
+        gate: {
+          intent: "wave 6 no-mistakes gate (in flight)",
+          outcome: "checks-passed",
+          steps: nineRowInFlightLadder(),
+          inFlight: true,
+        },
+      });
+
+    // Anti-vacuity twin FIRST: the same snapshot, then a later seal of the
+    // run — the newest gate is sealed, so nothing is running.
+    const sealedKey = "wf-117-boundary-sealed";
+    const sealed = gateEvent({
+      id: "evt-117-boundary-seal",
+      projectKey: sealedKey,
+      timestamp: 1_757_506_100_000,
       context: { wave: "6" },
       gate: {
         intent: "wave 6 no-mistakes gate",
@@ -659,44 +680,31 @@ describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-fl
         steps: nineRowInFlightLadder(),
       },
     });
-    await mountBoundary("wf-117-boundary-unmarked", [unmarked]);
-    const sealPane = document.querySelector<HTMLElement>('[data-testid="gate-pane"]');
-    expect(sealPane).not.toBeNull();
-    expect(textOf(sealPane!.querySelector('[data-testid="gate-outcome-banner"]'))).toContain(
-      "checks-passed",
+    await mountBoundary(sealedKey, [inFlightFor(sealedKey, 1_757_506_000_000), sealed]);
+    // Counted rather than `toBeNull()`-ed: bun prints the whole matched
+    // element on a null-assertion failure, and a happy-dom node serialises
+    // to ~1100 lines, which buries every other failure in the same run log.
+    expect(document.querySelectorAll('[data-testid="gate-pane"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-testid="gate-view-header"]').length).toBe(0);
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).toBe(
+      "Nothing running \u2192 Roadmap",
     );
 
-    // The pin: the SAME event carrying the in-flight mark is not a boundary.
-    const inFlight = gateEvent({
-      id: "evt-117-boundary-inflight",
-      projectKey: "wf-117-boundary-inflight",
-      timestamp: 1_757_506_100_000,
-      context: { wave: "6" },
-      gate: {
-        intent: "wave 6 no-mistakes gate (in flight)",
-        outcome: "checks-passed",
-        steps: nineRowInFlightLadder(),
-        inFlight: true,
-      },
-    });
+    // The pin: the in-flight snapshot is the NEWEST gate — the run is going.
+    const inFlightKey = "wf-117-boundary-inflight";
+    const inFlight = inFlightFor(inFlightKey, 1_757_506_100_000);
     expect(Object.prototype.hasOwnProperty.call(inFlight.gate, "inFlight")).toBe(true);
-    await mountBoundary("wf-117-boundary-inflight", [inFlight]);
+    await mountBoundary(inFlightKey, [inFlight]);
 
-    // No gate widget, and nothing gate-shaped anywhere in the Workflow
-    // tab's primary zone. Counted rather than `toBeNull()`-ed: bun prints
-    // the whole matched element on a null-assertion failure, and a happy-dom
-    // node serialises to ~1100 lines, which buries every other failure in
-    // the same run log.
-    expect(document.querySelectorAll('[data-testid="gate-pane"]').length).toBe(0);
-    const cols = document.querySelector<HTMLElement>(".app-workflow-cols");
-    expect(cols).not.toBeNull();
-    expect(cols!.querySelectorAll('[data-testid="gate-outcome-banner"]').length).toBe(0);
-    expect(cols!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(0);
-
-    // The zone falls back to `WorkflowActive`, which owns it while nothing
-    // has sealed — its no-open-plan filler is what renders instead.
+    const panes = document.querySelectorAll<HTMLElement>('[data-testid="gate-pane"]');
+    expect(panes.length).toBe(1);
+    expect(panes[0]!.querySelectorAll('[data-testid="gate-view-header"]').length).toBe(1);
+    expect(panes[0]!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(9);
     const body = document.querySelector('[data-testid="workspace-body"]');
-    expect((body?.textContent ?? "").toLowerCase()).toContain("no open plan");
+    expect((body?.textContent ?? "").toLowerCase()).not.toContain("no open plan");
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).not.toBe(
+      "Nothing running \u2192 Roadmap",
+    );
   });
 
   // AC5 — the false-permanent-gate sequence, end to end: an in-flight gate
