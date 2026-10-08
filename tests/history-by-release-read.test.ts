@@ -307,24 +307,24 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       // ── the queue: every CR this fixture touches, with its WAVE and (where
       //    declared) its QUEUE-DECLARED release ─────────────────────────────
       seedQueue(store, key, [
-        { cr: "CR-HIST-410", wave: "4" },
-        { cr: "CR-HIST-411", wave: "4" },
-        { cr: "CR-HIST-412", wave: "4" },
-        { cr: "CR-HIST-420", wave: "5" },
-        { cr: "CR-HIST-421", wave: "5" },
-        { cr: "CR-HIST-430", wave: "6" },
-        { cr: "CR-HIST-431", wave: "6" },
-        { cr: "CR-HIST-432", wave: "6" },
+        { cr: "HIST-410", wave: "4" },
+        { cr: "HIST-411", wave: "4" },
+        { cr: "HIST-412", wave: "4" },
+        { cr: "HIST-420", wave: "5" },
+        { cr: "HIST-421", wave: "5" },
+        { cr: "HIST-430", wave: "6" },
+        { cr: "HIST-431", wave: "6" },
+        { cr: "HIST-432", wave: "6" },
         // CR-CRU-173 §S2's own example (0.2.0's crs names a CR the queue
         // files under a different release): wave 6, but queue-declared 0.3.0.
-        { cr: "CR-HIST-499", wave: "6", release: "0.3.0" },
-        { cr: "CR-HIST-800", wave: "8", release: "0.3.0" },
-        { cr: "CR-HIST-801", wave: "8", release: "0.3.0" },
-        { cr: "CR-HIST-700", wave: "7", release: "0.2.2" },
-        { cr: "CR-HIST-701", wave: "7", release: "0.2.2" },
-        { cr: "CR-HIST-702", wave: "7", release: "0.2.2" },
-        { cr: "CR-HIST-703", wave: "7", release: "0.2.2" },
-        { cr: "CR-HIST-900", wave: "9", release: "0.5.0" },
+        { cr: "HIST-499", wave: "6", release: "0.3.0" },
+        { cr: "HIST-800", wave: "8", release: "0.3.0" },
+        { cr: "HIST-801", wave: "8", release: "0.3.0" },
+        { cr: "HIST-700", wave: "7", release: "0.2.2" },
+        { cr: "HIST-701", wave: "7", release: "0.2.2" },
+        { cr: "HIST-702", wave: "7", release: "0.2.2" },
+        { cr: "HIST-703", wave: "7", release: "0.2.2" },
+        { cr: "HIST-900", wave: "9", release: "0.5.0" },
       ]);
 
       // ── targets declared for every unshipped release, 0.4.0 included ─────
@@ -334,16 +334,16 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       proposeRelease(store, key, agent, "0.5.0", 1_810_000_000);
 
       // ── 0.2.2: ALL four CRs merged, nothing shipped -> "ship not recorded" ─
-      mergeCr(store, key, "CR-HIST-700", "merge700a");
-      mergeCr(store, key, "CR-HIST-701", "merge701a");
-      mergeCr(store, key, "CR-HIST-702", "merge702a");
-      mergeCr(store, key, "CR-HIST-703", "merge703a");
+      mergeCr(store, key, "HIST-700", "merge700a");
+      mergeCr(store, key, "HIST-701", "merge701a");
+      mergeCr(store, key, "HIST-702", "merge702a");
+      mergeCr(store, key, "HIST-703", "merge703a");
       fileVerificationRun(store, key, agent, "0.2.2");
       fileVerificationRun(store, key, agent, "0.2.2");
 
       // ── 0.5.0: ONE CR with an OPEN (never closed) plan — "a plan" alone
       //    qualifies the release, and nothing merged keeps it "in progress" ──
-      fileCr(store, key, "CR-HIST-900");
+      fileCr(store, key, "HIST-900");
 
       // ── 0.2.0's three gate runs, seal-bounded (no runId — pre-CR-162 era),
       //    every snapshot naming wave 6 (the last wave before this release,
@@ -402,23 +402,23 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
         label: "0.2.0",
         commit: "aaa0002b",
         crs: [
-          "CR-HIST-410",
-          "CR-HIST-411",
-          "CR-HIST-412",
-          "CR-HIST-420",
-          "CR-HIST-421",
-          "CR-HIST-430",
-          "CR-HIST-431",
-          "CR-HIST-432",
-          "CR-HIST-499",
+          "HIST-410",
+          "HIST-411",
+          "HIST-412",
+          "HIST-420",
+          "HIST-421",
+          "HIST-430",
+          "HIST-431",
+          "HIST-432",
+          "HIST-499",
         ],
         packages: [{ registry: "npm", name: "@fixture/crucible-history", version: "0.2.0" }],
       });
 
       // ── 0.3.0: one merged CR (keeps it "in progress", not "ship not
-      //    recorded", since CR-HIST-499/801 stay pending), one runId-grouped
+      //    recorded", since HIST-499/801 stay pending), one runId-grouped
       //    gate run naming the release directly by version ───────────────────
-      mergeCr(store, key, "CR-HIST-800", "merge8000001");
+      mergeCr(store, key, "HIST-800", "merge8000001");
       postGateAt(
         store,
         key,
@@ -519,16 +519,16 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const shipped = releaseOf(response, "0.2.0");
       const unshipped = releaseOf(response, "0.3.0");
 
-      // 0.2.0's record names CR-HIST-499 even though the queue files it
+      // 0.2.0's record names HIST-499 even though the queue files it
       // under 0.3.0 — the record wins for the SHIPPED release.
-      expect(waveOf(shipped, "6")?.crs).toContain("CR-HIST-499");
+      expect(waveOf(shipped, "6")?.crs).toContain("HIST-499");
       // 0.3.0 (unshipped) takes its CRs from the queue, which also names it.
-      expect(waveOf(unshipped, "8")?.crs).toContain("CR-HIST-800");
-      expect(waveOf(unshipped, "8")?.crs).toContain("CR-HIST-801");
+      expect(waveOf(unshipped, "8")?.crs).toContain("HIST-800");
+      expect(waveOf(unshipped, "8")?.crs).toContain("HIST-801");
 
       // Honestly double-counted: present under BOTH releases.
-      const in020 = shipped.waves.flatMap((w) => w.crs).includes("CR-HIST-499");
-      const in030 = unshipped.waves.flatMap((w) => w.crs).includes("CR-HIST-499");
+      const in020 = shipped.waves.flatMap((w) => w.crs).includes("HIST-499");
+      const in030 = unshipped.waves.flatMap((w) => w.crs).includes("HIST-499");
       expect(in020).toBe(true);
       expect(in030).toBe(true);
     });
@@ -537,15 +537,15 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const shipped = releaseOf(response, "0.2.0");
       expect(shipped.waves.map((w) => w.wave)).toEqual(["6", "5", "4"]);
       expect(waveOf(shipped, "6")?.crs.sort()).toEqual(
-        ["CR-HIST-430", "CR-HIST-431", "CR-HIST-432", "CR-HIST-499"].sort(),
+        ["HIST-430", "HIST-431", "HIST-432", "HIST-499"].sort(),
       );
-      expect(waveOf(shipped, "5")?.crs.sort()).toEqual(["CR-HIST-420", "CR-HIST-421"].sort());
-      expect(waveOf(shipped, "4")?.crs.sort()).toEqual(["CR-HIST-410", "CR-HIST-411", "CR-HIST-412"].sort());
+      expect(waveOf(shipped, "5")?.crs.sort()).toEqual(["HIST-420", "HIST-421"].sort());
+      expect(waveOf(shipped, "4")?.crs.sort()).toEqual(["HIST-410", "HIST-411", "HIST-412"].sort());
 
       // Wave 6 ALSO appears under 0.3.0 — same number, only ITS OWN cr.
       const unshipped = releaseOf(response, "0.3.0");
       expect(unshipped.waves.map((w) => w.wave)).toEqual(["8", "6"]);
-      expect(waveOf(unshipped, "6")?.crs).toEqual(["CR-HIST-499"]);
+      expect(waveOf(unshipped, "6")?.crs).toEqual(["HIST-499"]);
     });
 
     test("gate snapshots carrying NO runId group seal-bounded, newest run first: a bare passed seal, a cancelled-at-review seal, each its own one-snapshot run", () => {
@@ -650,9 +650,9 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const day = Date.UTC(2026, 7, 19, 0, 0, 0);
 
       seedQueue(store, key, [
-        { cr: "CR-HIST-601", wave: "1" },
-        { cr: "CR-HIST-602", wave: "1" },
-        { cr: "CR-HIST-611", wave: "2" },
+        { cr: "HIST-601", wave: "1" },
+        { cr: "HIST-602", wave: "1" },
+        { cr: "HIST-611", wave: "2" },
       ]);
 
       postGateAt(
@@ -666,7 +666,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       shipReleaseAt(store, key, agent, day + 9 * 3_600_000, {
         label: "0.6.0",
         commit: "six0a",
-        crs: ["CR-HIST-601", "CR-HIST-602"],
+        crs: ["HIST-601", "HIST-602"],
       });
 
       postGateAt(
@@ -680,7 +680,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       shipReleaseAt(store, key, agent, day + 16 * 3_600_000, {
         label: "0.6.1",
         commit: "six1a",
-        crs: ["CR-HIST-611"],
+        crs: ["HIST-611"],
       });
 
       setSystemTime();
@@ -709,19 +709,19 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const agent = "fixture-orchestrator";
 
       seedQueue(store, key, [
-        { cr: "CR-HIST-621", wave: "1" },
-        { cr: "CR-HIST-631", wave: "2" },
+        { cr: "HIST-621", wave: "1" },
+        { cr: "HIST-631", wave: "2" },
       ]);
 
       shipReleaseAt(store, key, agent, Date.UTC(2026, 7, 19, 10, 0, 0), {
         label: "0.6.2",
         commit: "six2a",
-        crs: ["CR-HIST-621"],
+        crs: ["HIST-621"],
       });
       shipReleaseAt(store, key, agent, Date.UTC(2026, 7, 20, 10, 0, 0), {
         label: "0.6.3",
         commit: "six3a",
-        crs: ["CR-HIST-631"],
+        crs: ["HIST-631"],
       });
 
       setSystemTime();

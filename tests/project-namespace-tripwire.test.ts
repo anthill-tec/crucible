@@ -355,7 +355,6 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-DT": "roadmap-drill-through fixtures — the rows and plans a landing chooses between",
   "CR-EXPLICIT": "CR-CRU-140 §S3's explicit-body-context milestone fixture — the `cr` a caller states and gets back",
   "CR-GW": "workflow gate-widget fixture",
-  "CR-HIST": "CR-CRU-173 §S2 history-by-release read fixtures — releases, waves and gate runs on a synthetic board",
   "CR-NEW": "§S5's synthetic newly-planned rows (AC4's remedy)",
   "CR-NEXTPTR": "CR-CRU-098 fixtures for the ported next resolver/route tests (tests/next-resolver.test.ts, tests/next-route.test.ts)",
   "CR-NT": "f13 fidelity fixture — a no-title CR",
