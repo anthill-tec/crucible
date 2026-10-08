@@ -426,12 +426,16 @@ describe("Projects manager — edit-in-place liveness + retention PATCH argv (§
 
 // ─────────────────────────────────────────────────────────────────────────
 // Post-save view text — reuses the F12-verbatim contract already pinned in
-// tests/projects-manager.test.ts (its liveness and retention-cap tests):
-// "(defaults)" drops once an
-// override exists, "retention N runs" tracks the new value.
+// tests/projects-manager.test.ts (its liveness and retention-cap tests).
+//
+// RE-PIN (CR-CRU-174 §S3, separate commit, approved by the orchestrator —
+// user ruling): F12's redraw drops the "(defaults)" marker entirely (never
+// shown, override or not) and reads the card as "agents: stale after …" /
+// "keeps the last N runs". Both tests below are migrated to the new
+// wording — every other assertion in this file is unchanged.
 // ─────────────────────────────────────────────────────────────────────────
 describe("Projects manager — edit-in-place liveness + retention view-text flip (§S2 gap)", () => {
-  test("after a liveness save, the row view drops '(defaults)' and shows the override value", async () => {
+  test("after a liveness save, the row view keeps no defaults marker and shows the override worded as 'stale after' (re-pinned CR-CRU-174 §S3)", async () => {
     const key = "mgr-editparams-viewflip-liveness-1";
     await mountApp({
       pathname: "/manage",
@@ -439,7 +443,7 @@ describe("Projects manager — edit-in-place liveness + retention view-text flip
     });
 
     const beforeText = managerRow(key).textContent ?? "";
-    expect(beforeText.toLowerCase()).toContain("default");
+    expect(beforeText.toLowerCase()).not.toContain("default");
 
     const { t1, save } = await openEdit(key);
     setValue(t1, "90");
@@ -447,11 +451,11 @@ describe("Projects manager — edit-in-place liveness + retention view-text flip
     await settle();
 
     const afterText = managerRow(key).textContent ?? "";
-    expect(afterText).toMatch(/T1[^0-9]{0,6}90s/);
+    expect(afterText).toMatch(/stale after[^0-9]{0,6}90s/i);
     expect(afterText.toLowerCase()).not.toContain("default");
   });
 
-  test("after a retention save, the row view shows the new 'N runs' value, never the old one", async () => {
+  test("after a retention save, the row view shows the new 'keeps the last N runs' value, never the old one (re-pinned CR-CRU-174 §S3)", async () => {
     const key = "mgr-editparams-viewflip-retention-1";
     await mountApp({
       pathname: "/manage",
@@ -459,7 +463,7 @@ describe("Projects manager — edit-in-place liveness + retention view-text flip
     });
 
     const beforeText = managerRow(key).textContent ?? "";
-    expect(beforeText).toMatch(/100\s*runs?/i);
+    expect(beforeText).toMatch(/keeps the last 100 runs/i);
 
     const { retention, save } = await openEdit(key);
     setValue(retention, "30");
@@ -467,8 +471,8 @@ describe("Projects manager — edit-in-place liveness + retention view-text flip
     await settle();
 
     const afterText = managerRow(key).textContent ?? "";
-    expect(afterText).toMatch(/30\s*runs?/i);
-    expect(afterText).not.toMatch(/100\s*runs?/i);
+    expect(afterText).toMatch(/keeps the last 30 runs/i);
+    expect(afterText).not.toMatch(/keeps the last 100 runs/i);
   });
 });
 
