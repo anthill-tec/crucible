@@ -138,7 +138,7 @@ interface GateEventFixture {
 // snapshot, exactly the shape `GET /api/v2/agents` answers (src/types.ts
 // `LiveAgent`): `liveness` is the server-computed "online" | "stale" |
 // "tombstoned" the app already reads for agent cards (`agent.liveness ===
-// "online"`, public/app.js:963).
+// "online"` in public/app.js `AgentRow`).
 interface AgentFixture {
   agentId: string;
   projectKey?: string;
