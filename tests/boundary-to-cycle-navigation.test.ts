@@ -270,7 +270,7 @@ async function clickBoundaryBadgeAndAssertNavigateThenBlink(
 
     // (a) — the one-rule tab swap landed back on Workflow.
     expect(isActiveTab("Workflow")).toBe(true);
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-now"]')).not.toBeNull();
 
     const target = document.querySelector<HTMLElement>(targetSelector);
     expect(target).not.toBeNull();

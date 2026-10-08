@@ -580,7 +580,7 @@ describe("§S6 History lens — wave state gains `gated` (a passed/checks-passed
 // (`gate.inFlight`), so it reaches both readers with zero server change.
 //
 // Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
-//   - `boundaryGate` (public/app.js) is the SECOND reader that treats
+//   - boundaryGate (then in public/app.js; since retired) was the SECOND reader that treats
 //     a gate as a verdict: given a routed project whose scoped plans are all
 //     closed, it reduces the scoped `kind:"gate"` events to the LATEST by
 //     timestamp and hands it to `GateWidget`, which mounts the outcome

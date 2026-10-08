@@ -18,8 +18,9 @@
 //
 // G4 also rules which gate a multi-sealed-gate wave's row summarises: "the
 // wave's latest sealed gate, the same 'latest wins' rule as the Workflow gate
-// widget (`boundaryGate`)" — `boundaryGate` (public/app.js) explicitly drops
-// any `gate.inFlight === true` event before applying 'latest wins'. This file
+// widget (`boundaryGate`)" — boundaryGate (then in public/app.js; since
+// retired) explicitly dropped any `gate.inFlight === true` event before
+// applying 'latest wins'. This file
 // pins both halves: latest-among-several, and in-flight-is-never-a-candidate.
 //
 // Harness: same production-shell-in-happy-dom pattern as
