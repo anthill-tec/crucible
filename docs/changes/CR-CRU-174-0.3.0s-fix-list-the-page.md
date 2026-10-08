@@ -117,7 +117,7 @@ cards (no click behaviour) take a pointer cursor or a hover state; the switch's 
 As F12's redraw: each project card's facts on their own lines (a long path or key wraps); the add
 row stacks; no horizontal scroll at any viewport the responsive model covers. The edit form groups
 **Project** (name, type, SUT root), **Agent liveness** ("Shown as stale after", "Tombstoned after",
-"Removed after", each in seconds with what it does, in that order, blank = the board default) and
+"Removed after", each in seconds with what it does, in that order; a field left empty keeps its current value — footnote reworded 2026-10-08, user ruling) and
 **Run history** ("Keep the last N runs"); the card's summary reads the same words; T1/T2/T3 appear
 nowhere on the page. The server refuses a liveness patch whose effective thresholds are not strictly
 increasing (stale < tombstoned < removed, after merging with the project's existing override and
