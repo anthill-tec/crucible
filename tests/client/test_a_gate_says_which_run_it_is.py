@@ -82,7 +82,7 @@ class AnInterimGateCarriesTheRunsIdentityTest(unittest.TestCase):
             gate.get("run"), {"id": "run-ident-1", "branch": "feature/run-ident",
                               "head": "feed001"},
             "an interim gate must carry gate.run with the snapshot's own "
-            "run.id, run.branch and run.head, verbatim: so CR-CRU-172's F21 "
+            "run.id, run.branch and run.head, verbatim: so F21's "
             "run line and the server's runId lift have data to read even "
             "while the run is still going; got gate=" + repr(gate))
         self.assertEqual(

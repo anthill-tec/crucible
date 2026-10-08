@@ -531,7 +531,7 @@ class ANineRowLadderStillRunningReachesTheBoardTest(_GateRunStreamTestBase):
             "an in-flight gate carries the run's --release as the event's "
             "top-level `version`, exactly as the seal does through "
             "`post_gate(..., release)`: the stale retention reason "
-            "(`LIVE_GATE`) CR-CRU-129 removed no longer applies, and a "
+            "(`LIVE_GATE`) is gone and no longer applies, and a "
             "delivered release can only retire its interim snapshots with "
             "its seal (`stampGatesRetired`) if they carry the release to "
             "begin with; got " + repr(interim[0]))
