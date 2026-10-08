@@ -1,7 +1,7 @@
 # CR-CRU-173 — History is told by release
 
-**Type** feature · **Points** 21 (re-scored 8 → 21 at gap analysis 2026-10-08, user ruling) · **Wave** 7 (0.3.0) ·
-**Depends on** CR-CRU-172, CR-CRU-164, CR-CRU-166 · **Status** PENDING — filed 2026-10-08 (user ruling:
+**Type** feature · **Points** 13 (re-scored 8 → 21 at gap analysis, then split 2026-10-08 by user ruling: §S0/§S0b → CR-CRU-176 (8), §S1/§S2 stay here (13)) · **Wave** 7 (0.3.0) ·
+**Depends on** CR-CRU-176, CR-CRU-172, CR-CRU-164, CR-CRU-166 · **Status** PENDING — filed 2026-10-08 (user ruling:
 0.3.0, after CR-CRU-172)
 
 ## Problem
@@ -29,53 +29,6 @@ it: row order and nesting, folding, the wording of each row. Where this spec and
 wins and the disagreement is raised with the orchestrator.
 
 ## Steps
-
-### §S0 — a gate is running only while the run that posts it is alive
-
-**Reported 2026-10-08 (user, screenshot of Now after CR-CRU-172 cycle 625).** Now showed `GATE ·
-no-mistakes checks-passed · in flight` from an old run. That instance was 0.2.0's orphaned snapshots,
-retired by CR-CRU-172's v20 migration; but the hole remains: a no-mistakes run that dies without
-sealing leaves an in-flight snapshot as the project's newest gate, and CR-CRU-172's `runningGate`
-(newest gate in flight) then shows it in Now — and lands the project on Workflow — forever.
-
-**User ruling 2026-10-08:** liveness decides. A gate counts as running only while the agent that
-posted its newest snapshot is still live under the project's liveness thresholds (the same rule the
-agent cards use); once that agent is stale or gone, the gate is not running — Now drops it, and the
-landing tab follows. When a CR and a genuinely running gate are both live, Now keeps showing both,
-plan first (CR-CRU-172 §S2, re-confirmed 2026-10-08). Gap analysis settles the exact signal (the
-posting agent's liveness vs. the run's own heartbeat) and the AC; it is this CR's first cycle,
-because History reads the same gates.
-
-**Settled at gap analysis (user ruling 2026-10-08, "run-scoped identity").** Today every snapshot is
-posted under the orchestrator's id (`vidushi`), which stays live all session, so "the posting agent
-is live" would keep a dead run in Now. Instead:
-- `gate-run` and `gate-respond` (`drive_axi_run`, all five clients) post the run's snapshots under a
-  **run identity** of their own — the caller's id with a `·gate` suffix — opened through the existing
-  owned-identity bracket (`gated_run`: created by the run, heartbeated, removed on every exit), and
-  heartbeated on the poll loop's cadence (well inside the project's stale threshold) for as long as
-  the verb drives the run. The caller's own registration is untouched.
-- On the page, a gate is **running** when the project's newest gate is in flight AND either its
-  posting identity is online (the run is being driven) or its ladder has a step `awaiting_approval`
-  (no-mistakes is held for a decision — a release task in progress with no process alive). A held
-  run shows in Now as F21's gate view with `awaiting your decision` naming the step, until a
-  `gate-respond` or a seal moves it.
-- A run that dies mid-step (crash, kill, power cut) leaves an in-flight, not-held snapshot whose
-  identity goes stale: within the stale threshold Now drops it and the landing rule follows.
-- One selector (`runningGate`) still decides Now and the landing tab.
-
-### §S0b — a cycle's change record never crowds its title
-
-**Reported 2026-10-08 (user, same screenshot).** A cycle carrying a recorded change (CR-CRU-165:
-`reason · cause · spec`, e.g. a cycle added with `cycle-add --reason`) renders the record on the
-cycle's OWN line (`cycleChangeRecord` inside `CycleLine`), so the label truncates to `"a sealed run
-leaves no ru…"` and `"v…"` and the line's fields are pushed aside. CR-CRU-165 drew it from the spec
-alone; no frame covers it.
-
-**User ruling 2026-10-08:** the record goes on its own dim, indented line BENEATH the cycle line, and
-wraps rather than truncates; the cycle line keeps its full title, kind badge, timer and `→ Runs`.
-Same rule in Now's plan section and History's cycle rows (both `CycleRow` and `LensCycleRow`), and for
-a skipped cycle's record. **Design: storyboard F23** ("A cycle's recorded change sits beneath it,
-never beside it", APPROVED 2026-10-08) — implement to it.
 
 ### §S1 — History lists releases, each holding its workflow and then its waves
 
@@ -138,18 +91,6 @@ wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release
       rounds and duration derived from its snapshots; `→ gate` opens the gate view; its
       verification line opens the Runs tab filtered to the release; its packages are listed —
       asserted on the server and on the page.
-- [ ] **§S0 — a run is driven or held, or it is not running.** `gate-run`/`gate-respond` in each of
-      the five clients post every snapshot under the run identity (`<caller>·gate`), heartbeat it
-      while driving and remove it on every exit (seal, held, refused, interrupt), leaving the
-      caller's own registration intact — asserted per client against a recording board. On the
-      page: newest gate in flight + identity online → running; + a step `awaiting_approval` with
-      the identity gone → running, `awaiting your decision`; + identity stale and not held → not
-      running (Now `Nothing running → Roadmap`, landing on the Roadmap) — asserted with fixed
-      fixtures.
-- [ ] **§S0b — F23.** A cycle with a recorded change (or a skipped one) renders the record as its
-      own line beneath the cycle line in Now and in History; the cycle line's label, kind badge,
-      timer and `→ Runs` are unchanged and the label is not truncated by the record — asserted on
-      the page and, at 1280×800 and 390×844, in a real browser.
 - [ ] On a copy of the dev store, 0.2.0 shows three gate runs (the passed one with one document fix
       round, pushed 4cda68f), 70 CRs, shipped 09-16, and waves 6, 5 and 4 with only 0.2.0's CRs;
       0.2.2 shows wave 7 with its 4 CRs and "ship not recorded" — asserted on the server.
@@ -161,14 +102,14 @@ wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release
 
 | # | Dim | Finding | Fix | Blocking |
 |---|---|---|---|---|
-| DRIFT-1 | 3 | "Posting agent live" is always true: snapshots post under the orchestrator's id | §S0 run identity (user ruling) | Yes |
-| DRIFT-2 | 1 | A run held `awaiting_approval` has no live process but is a release task in progress | §S0 held → running | Yes |
+| DRIFT-1 | 3 | "Posting agent live" is always true: snapshots post under the orchestrator's id | → CR-CRU-176 §S1 | — |
+| DRIFT-2 | 1 | A run held `awaiting_approval` has no live process but is a release task in progress | → CR-CRU-176 §S1 | — |
 | DRIFT-3 | 3 | Every 0.2.0 gate is retired; the events read omits retired gates, so History cannot see them | §S2 a new history read | Yes |
 | DRIFT-4 | 3 | Pre-0.3.0 gates carry no run id; "grouped by no-mistakes run" is undefined for them | §S2 seal-bounded runs | Yes |
 | DRIFT-5 | 1 | A release's CRs: record `crs` (70 for 0.2.0) vs queue `release` (66) disagree; waves 1–4 have no queue release | §S2 record wins when shipped | No |
 | DRIFT-6 | 1 | F22 merges same-day releases into one row and omits 0.4.0; the spec said neither | §S2 rules from F22 | No |
-| DRIFT-7 | 2 | §S0b had no frame | F23 drawn and approved | — |
-| DRIFT-8 | 7 | Cost: §S0 (client + page), §S0b, a new server read, the release tree, re-pins → 8 is short | re-score | — |
+| DRIFT-7 | 2 | §S0b had no frame | F23 drawn and approved → CR-CRU-176 §S2 | — |
+| DRIFT-8 | 7 | Cost: §S0 (client + page), §S0b, a new server read, the release tree, re-pins → 8 is short; 21 exceeds the board's scale (max 13) | split: CR-CRU-176 (8) + this (13), user ruling | — |
 
 **Bounded surface:** a release row's text (state, tag, commit, CR count, target and delta) is
 fixed-shape; the waves and gate runs it opens to are lists in History's own scroll (CR-CRU-172).
@@ -186,16 +127,10 @@ identity, `listReleases`, `listGateDecisionsForRuns`. **Removed:** none.
   one level down, inside their release (e.g. `workflow-history-*`, `aggregate-headers`,
   `wave-single-active`, `workflow-lens`, the e2e wave/history steps). The wave header's own text and
   the CR/cycle rows beneath it are unchanged.
-- **The change record moves beneath the cycle line** (F23): `tests/workflow-recorded-change-visibility.test.ts`
-  and any test reading the record as part of the cycle line's text — the record's text is unchanged.
-- **Gate snapshots post under the run identity:** client tests asserting a gate's posting `agentId`
-  equals the caller's id read `<caller>·gate` (the caller's registration is asserted unchanged).
 Anything outside these: stop and ask.
 
 ### Cycles
 
-1. a gate is running only while its run is driven or held for a decision (§S0)
-2. a cycle's recorded change sits beneath it, never beside it (§S0b, F23)
-3. the board answers a project's history by release (§S2)
-4. History is told by release (§S1)
-5. verify
+1. the board answers a project's history by release (§S2)
+2. History is told by release (§S1)
+3. verify
