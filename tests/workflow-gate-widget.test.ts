@@ -150,11 +150,26 @@ interface GateEventFixture {
   gate: GatePayloadFixture;
 }
 
+// CR-CRU-176 §S1/AC1 re-pin (approved by the orchestrator) — a gate is
+// running only while the identity that posted it is online (or a step is
+// held for a decision); the shape `GET /api/v2/agents` answers.
+interface AgentFixture {
+  agentId: string;
+  status?: "online" | "busy";
+  liveness: "online" | "stale" | "tombstoned";
+}
+
 interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
   events: GateEventFixture[];
   plans: PlanFixture[];
+  agents?: AgentFixture[];
+}
+
+// The posting identity of a gate fixture, live: its run is being driven.
+function liveIdentity(agentId: string): AgentFixture {
+  return { agentId, status: "online", liveness: "online" };
 }
 
 let cacheBust = 0;
@@ -172,7 +187,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
     } else if (url.includes("/api/v2/agents")) {
-      body = { ok: true, agents: [] };
+      body = { ok: true, agents: opts.agents ?? [] };
     } else if (url.includes("/api/v2/events")) {
       body = { ok: true, events: opts.events };
     } else if (url.includes("/api/v2/health")) {
@@ -396,6 +411,9 @@ describe("§S2/AC3 — ingesting a newer in-flight snapshot of the SAME run repl
       projects: [project({ key, name: "Gate Widget Latest Wins" })],
       events: [interimGate] as GateEventFixture[],
       plans: [plan],
+      // CR-CRU-176 §S1/AC1 re-pin (approved by the orchestrator) — both
+      // snapshots are the SAME run, posted by one live identity.
+      agents: [liveIdentity(interimGate.agentId)],
     };
     await mountApp(opts);
     await openWorkflowTab();
@@ -628,12 +646,17 @@ describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-fl
   // A board at the boundary: every scoped plan closed (so `boundaryGate`'s
   // own preconditions hold — no open plan, plans present), carrying exactly
   // the gates given.
-  async function mountBoundary(key: string, gates: GateEventFixture[]): Promise<void> {
+  async function mountBoundary(
+    key: string,
+    gates: GateEventFixture[],
+    agents: AgentFixture[] = [],
+  ): Promise<void> {
     await mountApp({
       pathname: `/p/${key}`,
       projects: [project({ key, name: `CR-117 ${key}` })],
       events: gates,
       plans: [closedWave6Plan(key, 6001)],
+      agents,
     });
     await openWorkflowTab();
   }
@@ -695,7 +718,9 @@ describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-fl
     const inFlightKey = "wf-117-boundary-inflight";
     const inFlight = inFlightFor(inFlightKey, 1_757_506_100_000);
     expect(Object.prototype.hasOwnProperty.call(inFlight.gate, "inFlight")).toBe(true);
-    await mountBoundary(inFlightKey, [inFlight]);
+    // CR-CRU-176 §S1/AC1 re-pin (approved by the orchestrator) — the run is
+    // being driven: its posting identity is online.
+    await mountBoundary(inFlightKey, [inFlight], [liveIdentity(inFlight.agentId)]);
 
     const panes = document.querySelectorAll<HTMLElement>('[data-testid="gate-pane"]');
     expect(panes.length).toBe(1);
