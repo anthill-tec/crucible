@@ -53,7 +53,11 @@
       selectedProject: null, // home filter pulldown (null = all projects)
       selectedAgent: null, // agent sub-row click filter (null = all)
       route: L.routeParse(location.pathname),
-      workspaceTab: "Workflow",
+      // null = the project's landing tab is not decided yet: it waits for
+      // the scope's first plans + events reads (see `settleLanding`), and
+      // until then no tab is on and no pane paints, so the page never shows
+      // Workflow and then jumps to Roadmap.
+      workspaceTab: null,
       backendUp: true,
       lastSynced: null,
       // CR-CRU-025 §S2b — the Run Timeline accordion's per-cycleId collapse
@@ -93,7 +97,9 @@
 
     // CR-CRU-014 §S3 — a cold /p/<key>/roadmap deep-link lands on the Roadmap
     // tab (mirrors how a /run/<id> deep-link lands the run overlay); every
-    // other workspace entry keeps the Workflow primary default.
+    // other workspace entry waits for the project's landing tab (Workflow
+    // when it has work running, Roadmap when it is idle; see
+    // `landingTab`).
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
     runsTabFollows(state.route);
 
@@ -152,8 +158,11 @@
       // ONE RULE (CR-CRU-016 §S1, user-approved 2026-07-16) — navigation
       // within the SAME surface (detail open/close, tab-owned pane swaps)
       // never touches the active workspace tab or the agent filter; only a
-      // surface change (home↔workspace, project→project) lands on Workflow
-      // (the CR-CRU-021 §S1 primary tab). ONE CARVED EXCEPTION (CR-CRU-079
+      // surface change (home↔workspace, project→project) lands on the
+      // project's landing tab, the role Workflow held as the CR-CRU-021 §S1
+      // primary tab: it is left undecided (null) here, because the scope's
+      // data was just cleared, and `settleLanding` decides it once the first
+      // plans + events reads land. ONE CARVED EXCEPTION (CR-CRU-079
       // §S1): the Roadmap tab is the only ROUTED tab (/p/<key>/roadmap), so
       // it FOLLOWS the route — see roadmapTabFollows — on every same-surface
       // move too; Runs/Coverage/Compile/BDD have no route segment and keep
@@ -165,7 +174,7 @@
       state.route = next;
       state.runsRelease = releaseInSearch(search);
       if (!sameSurface) {
-        state.workspaceTab = "Workflow";
+        state.workspaceTab = null;
         state.selectedAgent = null;
         scopeChanged();
       }
@@ -177,13 +186,43 @@
     // CR-CRU-079 §S1 — the route is the source of truth for the Roadmap tab
     // and the tab FOLLOWS it, on navigate() AND popstate: whenever the route
     // is (re)parsed on the workspace surface, Roadmap is active iff
-    // `route.roadmap` is set. Leaving the segment lands on Workflow (the
-    // CR-CRU-021 §S1 primary tab); a tab-strip exit then sets its own tab.
+    // `route.roadmap` is set. Leaving the segment lands on the project's
+    // landing tab (`landingTab`, in the role of the CR-CRU-021 §S1 primary
+    // tab); a tab-strip exit then sets its own tab.
     // Roadmap-specific by design — it is the only tab with a URL to follow.
     function roadmapTabFollows(route) {
       if (route.page !== "workspace") return;
       if (route.roadmap === true) state.workspaceTab = "Roadmap";
-      else if (state.workspaceTab === "Roadmap") state.workspaceTab = "Workflow";
+      else if (state.workspaceTab === "Roadmap") {
+        // Decided now from the data on screen when this scope's reads have
+        // landed; otherwise (a Back across projects) left for
+        // `settleLanding`, like any other entry.
+        state.workspaceTab = landedProject === route.projectKey ? landingTab() : null;
+      }
+    }
+
+    // The landing tab: Workflow when the routed project has work running (an
+    // open plan, or a gate in flight), Roadmap when it is idle. Read from the
+    // same scoped selectors the Workflow pane paints from, so no extra read.
+    function landingTab() {
+      const busy =
+        scopedPlans().some((p) => p.status === "open") ||
+        scopedGateEvents().some((e) => e.gate?.inFlight === true);
+      return busy ? "Workflow" : "Roadmap";
+    }
+
+    // The project whose first plans + events reads have landed since the
+    // last scope change (null = none yet).
+    let landedProject = null;
+
+    // Called once a refresh has read the routed project's events and plans.
+    // Decides the landing tab only while it is still undecided: a route that
+    // names a tab, or a tab the user picked, already decided it, and a
+    // project that turns busy or idle while it is open never moves the tab.
+    function settleLanding(projectKey) {
+      if (state.route.page !== "workspace" || state.route.projectKey !== projectKey) return;
+      landedProject = projectKey;
+      if (state.workspaceTab === null) state.workspaceTab = landingTab();
     }
 
     // The Runs tab's release filter is route state too: a workspace URL that
@@ -244,6 +283,7 @@
     // plans fetch plus the core refetch slice. SSE/poll stays the
     // steady-state refresh; navigation no longer depends on it.
     function scopeChanged() {
+      landedProject = null;
       vanX.replace(state.plans, () => []);
       vanX.replace(state.queue, () => []);
       vanX.replace(state.releases, () => []);
@@ -303,7 +343,12 @@
       const sameSurface =
         next.page === prev.page &&
         (next.page !== "workspace" || next.projectKey === prev.projectKey);
-      if (!sameSurface) scopeChanged();
+      if (!sameSurface) {
+        // Across projects (or home to a workspace) the landing tab is decided
+        // afresh, exactly as `navigate` does; same-project history keeps it.
+        state.workspaceTab = null;
+        scopeChanged();
+      }
       // CR-CRU-079 §S1 — Back/Forward across /p/<key>/roadmap re-lands the
       // pane, not just the URL.
       roadmapTabFollows(next);
@@ -392,6 +437,7 @@
         if (slices.has("events") && !scopeMoved()) {
           if (state.runsRelease !== null) await refetchReleaseRuns();
           await refetchPlans();
+          if (!scopeMoved()) settleLanding(projectKey);
           if (!scopeMoved()) await refetchRoadmap();
         }
       } finally {
@@ -1714,10 +1760,13 @@
     // gate review) — the detail header is the single navigation context and
     // NAMES where back goes: the back chip carries the ACTIVE workspace
     // tab's name (`← runs` / `← coverage` / `← compile`, the one-rule's
-    // preserved workspaceTab); home (no tabs) stays `← timeline`.
+    // preserved workspaceTab); home (no tabs) stays `← timeline`. Until a
+    // project's landing tab is decided (`settleLanding`) it names no tab.
     const backChipLabel = () =>
       state.route.page === "workspace"
-        ? `← ${String(state.workspaceTab).toLowerCase()}`
+        ? state.workspaceTab === null
+          ? "←"
+          : `← ${String(state.workspaceTab).toLowerCase()}`
         : "← timeline";
 
     // Shared detail-header content: back chip · RUN DETAIL · density chip.
@@ -2176,8 +2225,8 @@
         ),
         div(
           { class: "app-card-meta app-manager-footnote" },
-          "each must be longer than the one before; blank = the board default " +
-            `(${d.staleAfterMs / 1000} s · ${d.tombstoneAfterMs / 1000} s · ${d.pruneAfterMs / 1000} s)`,
+          "each must be longer than the one before; leave a field empty to keep its current value " +
+            `(board defaults: ${d.staleAfterMs / 1000} s · ${d.tombstoneAfterMs / 1000} s · ${d.pruneAfterMs / 1000} s)`,
         ),
         div(
           { class: "app-manager-group-head" },
@@ -6779,6 +6828,9 @@
         wsShowingDetail = true;
         return AnalyticsPane();
       }
+      // The landing tab is not decided yet (`settleLanding`): paint an empty
+      // pane rather than a guess, so no pane flashes before the right one.
+      if (state.workspaceTab === null) return div({ class: "app-center" });
       const pane =
         state.workspaceTab === "Workflow"
           ? WorkflowPanel()
