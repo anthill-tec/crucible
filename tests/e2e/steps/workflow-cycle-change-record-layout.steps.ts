@@ -96,10 +96,13 @@ Step(
     if (!lineBox || !recordBox) {
       throw new Error("the cycle line/change-record bounding box is unavailable");
     }
-    // "beneath" — the record's box starts at or after the line's own
-    // bottom edge, never overlapping it (a record still sharing the
-    // line's own row, as today, reports the SAME top as the line).
-    expect(recordBox.y).toBeGreaterThanOrEqual(lineBox.y + lineBox.height - 1);
+    // "beneath" — the record's box starts at the line's own bottom edge,
+    // allowing only F23's 2px tuck up under it (its `margin-top: -2px`),
+    // never overlapping it by more.
+    expect(recordBox.y).toBeGreaterThanOrEqual(lineBox.y + lineBox.height - 2);
+    // ...and never on the line's own row: a record sharing the row (beside
+    // the line) reports a top above the line's vertical midpoint.
+    expect(recordBox.y).toBeGreaterThan(lineBox.y + lineBox.height / 2);
   },
 );
 

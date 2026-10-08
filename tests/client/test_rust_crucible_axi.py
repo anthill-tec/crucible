@@ -655,11 +655,12 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
         self.assertGreaterEqual(len(gate_calls), 2,
                                  f"expected >=1 interim + 1 final gate POST, got {calls}")
         # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
-        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate`),
+        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate\u00b7<run>`,
+        # `<run>` the first 8 characters of the no-mistakes run id),
         # whose own lifecycle (open/heartbeat/removal) is the ONLY other
         # plumbing allowed; any other call, or a lifecycle call for any
         # other id, still fails the comparison below.
-        run_identity = "test-agent\u00b7gate"
+        run_identity = "test-agent\u00b7gate\u00b7" + "gate-axi-rust-interim-001"[:8]
         lifecycle_paths = ("/api/v2/agents/heartbeat", "/api/v2/agents/register",
                            "/api/v2/agents/unregister")
         identity_calls = [c for c in calls if c[0] in lifecycle_paths

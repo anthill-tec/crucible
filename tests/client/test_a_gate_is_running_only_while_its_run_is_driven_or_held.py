@@ -1,8 +1,8 @@
 """CR-CRU-176 §S1/AC1 — a gate is running only while the run that posts it is
 alive: `gate-run` and `gate-respond` (`drive_axi_run`, shared by all five
 clients) must post every snapshot — interim AND seal — under a RUN IDENTITY
-of their own (the caller's id with a `·gate` suffix), opened BEFORE the first
-snapshot, heartbeated on the poll loop's own cadence while the run is driven,
+of their own (the caller's id with a `·gate·<run>` suffix, `<run>` the
+no-mistakes run id's first 8 characters), opened BEFORE the first snapshot, heartbeated on the poll loop's own cadence while the run is driven,
 and removed on EVERY exit: a seal, a held (unsealed) run, a refusal, or an
 interrupt. The caller's own registration is never touched.
 
@@ -72,14 +72,16 @@ GATE_DECISIONS_PATH = "/api/v2/gate-decisions"
 
 _COUNTER = itertools.count()
 
-# A run identity is the caller's own id with this exact suffix (the spec's
-# own wording: "a run identity of their own — the caller's id with a `·gate`
-# suffix"). U+00B7 MIDDLE DOT, never a hyphen or a plain dot.
+# A run identity is the caller's own id with this exact suffix and the run it
+# drives: `<caller>·gate·<run>`, `<run>` being the first 8 characters of the
+# no-mistakes run id (re-pin approved by the orchestrator — user ruling
+# 2026-10-08: one identity per run). U+00B7 MIDDLE DOT, never a hyphen or a
+# plain dot.
 _GATE_SUFFIX = "\u00b7gate"
 
 
-def _run_identity(caller):
-    return f"{caller}{_GATE_SUFFIX}"
+def _run_identity(caller, run_id):
+    return f"{caller}{_GATE_SUFFIX}\u00b7{run_id[:8]}"
 
 
 def _fixture(run_id, branch, head, step_name, *, held=False):
@@ -259,9 +261,11 @@ class AGateRunPostsEverySnapshotUnderItsOwnRunIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.drives = {}
+        cls.run_ids = {}
         cls.cadence = {}
         for key, path in CLIENT_FILES.items():
             run_id = f"gate-identity-run-{key}-001"
+            cls.run_ids[key] = run_id
             branch = f"feature/gate-identity-{key}"
             head = "cafe1001"
             module = _load_module(path, f"gate_identity_cadence_probe_{key}_{next(_COUNTER)}")
@@ -286,7 +290,7 @@ class AGateRunPostsEverySnapshotUnderItsOwnRunIdentityTest(unittest.TestCase):
     def test_every_clients_posted_gates_carry_the_run_identity_not_the_callers(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             interim = _interim_gate_posts(drive.posts)
             seal = _seal_gate_posts(drive.posts)
             if len(interim) != 1 or len(seal) != 1:
@@ -306,7 +310,7 @@ class AGateRunPostsEverySnapshotUnderItsOwnRunIdentityTest(unittest.TestCase):
     def test_every_clients_open_the_run_identity_before_the_first_gate_post(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             hb_idx = _wire_index(
                 drive.posts,
                 lambda p, b, ident=identity: p == HEARTBEAT_PATH
@@ -336,7 +340,7 @@ class AGateRunPostsEverySnapshotUnderItsOwnRunIdentityTest(unittest.TestCase):
     def test_every_clients_heartbeat_the_run_identity_repeatedly_while_driving(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             hbs = _heartbeats_for(drive.posts, identity)
             cadence = self.cadence[key]
             run_seconds = cadence + 1.2
@@ -353,7 +357,7 @@ class AGateRunPostsEverySnapshotUnderItsOwnRunIdentityTest(unittest.TestCase):
     def test_every_clients_remove_the_run_identity_exactly_once_after_the_seal(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             removals = _removals_for(drive.posts, identity)
             seal_idx = _wire_index(
                 drive.posts, lambda p, b: p == GATES_PATH
@@ -396,8 +400,10 @@ class AHeldGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.drives = {}
+        cls.run_ids = {}
         for key, path in CLIENT_FILES.items():
             run_id = f"gate-identity-held-{key}-001"
+            cls.run_ids[key] = run_id
             branch = f"feature/gate-identity-held-{key}"
             head = "cafe1002"
             live, final = _fixture(run_id, branch, head, "review", held=True)
@@ -423,7 +429,7 @@ class AHeldGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
     def test_every_clients_remove_the_run_identity_after_a_held_exit(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             removals = _removals_for(drive.posts, identity)
             if len(removals) != 1:
                 offenders[key] = (f"a held (unsealed) run must still remove its "
@@ -445,8 +451,10 @@ class ARefusedGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.drives = {}
+        cls.run_ids = {}
         for key, path in CLIENT_FILES.items():
             run_id = f"gate-identity-refused-{key}-001"
+            cls.run_ids[key] = run_id
             branch = f"feature/gate-identity-refused-{key}"
             head = "cafe1003"
             live, _unused_final = _fixture(run_id, branch, head, "review")
@@ -468,7 +476,7 @@ class ARefusedGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
     def test_every_clients_remove_the_run_identity_after_a_refused_exit(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             removals = _removals_for(drive.posts, identity)
             if len(removals) != 1:
                 offenders[key] = (f"a refused run must still remove its run "
@@ -489,8 +497,10 @@ class AGateRespondDrivesUnderTheRunIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.drives = {}
+        cls.run_ids = {}
         for key, path in CLIENT_FILES.items():
             run_id = f"gate-identity-respond-{key}-001"
+            cls.run_ids[key] = run_id
             branch = f"feature/gate-identity-respond-{key}"
             head = "cafe1004"
             live, final = _fixture(run_id, branch, head, "fix")
@@ -502,7 +512,7 @@ class AGateRespondDrivesUnderTheRunIdentityTest(unittest.TestCase):
     def test_every_clients_posted_gates_carry_the_run_identity(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             interim = _interim_gate_posts(drive.posts)
             seal = _seal_gate_posts(drive.posts)
             if len(interim) != 1 or len(seal) != 1:
@@ -524,7 +534,7 @@ class AGateRespondDrivesUnderTheRunIdentityTest(unittest.TestCase):
     def test_every_clients_remove_the_run_identity_after_a_sealed_respond(self):
         offenders = {}
         for key, drive in self.drives.items():
-            identity = _run_identity(self.CALLER)
+            identity = _run_identity(self.CALLER, self.run_ids[key])
             removals = _removals_for(drive.posts, identity)
             if len(removals) != 1:
                 offenders[key] = (f"expected exactly one removal for the run "
@@ -564,6 +574,7 @@ class AGateRespondDrivesUnderTheRunIdentityTest(unittest.TestCase):
 AGENT = "gate-identity-signal-caller"
 PROJECT_KEY = "gate-identity-signal-key"
 PROJECT_NAME = "gate-identity-signal-firmware"
+SIGNAL_RUN_ID = "gate-identity-signal-run-1"
 
 
 def _wait_for_any_post(board, timeout=15.0):
@@ -593,7 +604,7 @@ class AnInterruptedGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
 
         self.live_file = os.path.join(self.state_dir, "live.toon")
         self.final_file = os.path.join(self.state_dir, "final.toon")
-        live, final = _fixture("gate-identity-signal-run-1",
+        live, final = _fixture(SIGNAL_RUN_ID,
                                "feature/gate-identity-signal", "cafe1005",
                                "review")
         with open(self.live_file, "w") as f:
@@ -617,7 +628,7 @@ class AnInterruptedGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
             GATE_FLEET_FAKE_RUN_SECONDS="25")
 
     def _signal_one_client(self, client_name, argv_tail, signum):
-        identity = _run_identity(AGENT)
+        identity = _run_identity(AGENT, SIGNAL_RUN_ID)
         cmd = [sys.executable, str(CLIENTS / client_name)] + argv_tail + [
             "--project-dir", self.project]
         proc = subprocess.Popen(cmd, cwd=self.project, env=self._env(),

@@ -26,7 +26,10 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
   clear of the other features sharing that instance. Results are ingested
   with tier "e2e" by the orchestrator's ingest step, not by this suite.
 
-  Scenario: at the desktop band, Now sits above History, each scrolls independently of the other, and Now never grows past half the Workflow pane's height
+  # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
+  # half-pane cap on Now is withdrawn. Now grows with its content and never
+  # scrolls; History takes the height Now leaves, with its own scroll.
+  Scenario: at the desktop band, Now sits above History, Now grows with its content and never scrolls; History scrolls on its own
     Given the viewport is 1280x800
     And a project named "W2P Overflow Project" is registered
     And a cycle plan is filed for cr "CR-W2P-1" with 40 cycles
@@ -34,8 +37,8 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
     When I open the workspace for that project
     And I click the "Workflow" workspace tab
     Then Now sits above History in document order
-    And Now's pane and History's pane each scroll independently of the other
-    And Now's pane height is at most half of the Workflow pane's height
+    And Now grows with its content and never scrolls
+    And History scrolls on its own
 
   Scenario: at the phone band, the Workflow tab renders Now and History as two full-width toggle sub-tabs, Now selected on entry, and selecting History hides Now and shows the wave list
     Given the viewport is 390x844

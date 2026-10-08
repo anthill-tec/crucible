@@ -1,6 +1,6 @@
 // CR-CRU-172 §S1/AC2 — workflow-two-panes.feature steps: the bulk-fixture
 // filing steps (many cycles for Now, many closed CR plans for History) and
-// the pane-independence / half-height / phone-sub-tab assertions. Plan
+// the Now-grows / History-scrolls / phone-sub-tab assertions. Plan
 // filing, cycle transitions and plan close reuse the SAME harness verbs
 // workflow.steps.ts and wave-backfill.steps.ts already drive (filePlan /
 // transitionCycle / closePlan — the client-equivalent POST/PATCH round
@@ -45,7 +45,7 @@ Step(
   },
 );
 
-// ── desktop — document order, scroll independence, half-height cap ──────
+// ── desktop — document order, Now grows, History scrolls ────────────────
 
 Step("Now sits above History in document order", async ({ page }) => {
   const order = await page.evaluate(() => {
@@ -57,60 +57,45 @@ Step("Now sits above History in document order", async ({ page }) => {
   expect(order).toBe(true);
 });
 
-Step(
-  "Now's pane and History's pane each scroll independently of the other",
-  async ({ page }) => {
-    const now = page.getByTestId("workflow-now");
-    const history = page.getByTestId("workflow-history");
-    await expect(now).toBeVisible();
-    await expect(history).toBeVisible();
+// Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
+// half-pane cap on Now is withdrawn. Now grows with its content and has no
+// scroll of its own — nothing in it is clipped and it is not an overflow
+// box — while History takes the height Now leaves and scrolls on its own.
+Step("Now grows with its content and never scrolls", async ({ page }) => {
+  const now = page.getByTestId("workflow-now");
+  await expect(now).toBeVisible();
+  const box = await now.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    overflowY: getComputedStyle(el).overflowY,
+  }));
+  // Nothing clipped: the box is exactly as tall as its content.
+  expect(box.scrollHeight, "Now's box clips its own content").toBe(box.clientHeight);
+  // ...and it is not a scroll box at all.
+  expect(["auto", "scroll"]).not.toContain(box.overflowY);
+});
 
-    // Non-vacuity — each pane must actually have scroll range of its OWN,
-    // else "independent" would hold trivially (nothing to scroll). Today
-    // neither `workflow-now` nor `workflow-history` is itself an overflow
-    // box (the SHARED ancestor `pane-scroll` is), so both reads below are
-    // `false` against current production.
-    const nowScrollable = await now.evaluate((el) => el.scrollHeight > el.clientHeight);
-    const historyScrollable = await history.evaluate((el) => el.scrollHeight > el.clientHeight);
-    expect(nowScrollable, "Now's own box has no scroll range of its own").toBe(true);
-    expect(historyScrollable, "History's own box has no scroll range of its own").toBe(true);
+Step("History scrolls on its own", async ({ page }) => {
+  const history = page.getByTestId("workflow-history");
+  await expect(history).toBeVisible();
+  const box = await history.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    overflowY: getComputedStyle(el).overflowY,
+  }));
+  expect(["auto", "scroll"]).toContain(box.overflowY);
+  expect(
+    box.scrollHeight,
+    "History's own box has no scroll range of its own",
+  ).toBeGreaterThan(box.clientHeight);
 
-    // Scrolling Now to its own maximum must leave History's box untouched —
-    // neither its own scrollTop nor its on-screen position moves.
-    const historyTopBefore = (await history.boundingBox())!.y;
-    await now.evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
-    });
-    const historyScrollTopAfterNow = await history.evaluate((el) => el.scrollTop);
-    const historyTopAfterNow = (await history.boundingBox())!.y;
-    expect(historyScrollTopAfterNow).toBe(0);
-    expect(historyTopAfterNow).toBe(historyTopBefore);
-
-    // …and the reverse: scrolling History must leave Now's position/scroll
-    // untouched.
-    const nowScrollTopBefore = await now.evaluate((el) => el.scrollTop);
-    const nowTopBefore = (await now.boundingBox())!.y;
-    await history.evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
-    });
-    const nowScrollTopAfterHistory = await now.evaluate((el) => el.scrollTop);
-    const nowTopAfterHistory = (await now.boundingBox())!.y;
-    expect(nowScrollTopAfterHistory).toBe(nowScrollTopBefore);
-    expect(nowTopAfterHistory).toBe(nowTopBefore);
-  },
-);
-
-Step("Now's pane height is at most half of the Workflow pane's height", async ({ page }) => {
-  // `.app-center` — the height-bounded central-pane box every workspace tab
-  // mounts into (CR-CRU-029 §S1); exactly one renders for the active tab.
-  const pane = page.locator(".app-center");
-  await expect(pane).toHaveCount(1);
-  const paneBox = await pane.boundingBox();
-  const nowBox = await page.getByTestId("workflow-now").boundingBox();
-  expect(paneBox).not.toBeNull();
-  expect(nowBox).not.toBeNull();
-  // +1px rounding tolerance only — never a meaningful slack.
-  expect(nowBox!.height).toBeLessThanOrEqual(paneBox!.height / 2 + 1);
+  // Scrolling History moves History's own content, not Now.
+  const nowTopBefore = (await page.getByTestId("workflow-now").boundingBox())!.y;
+  await history.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  expect(await history.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect((await page.getByTestId("workflow-now").boundingBox())!.y).toBe(nowTopBefore);
 });
 
 // ── phone — the sub-tab row toggle (F15d) ───────────────────────────────
