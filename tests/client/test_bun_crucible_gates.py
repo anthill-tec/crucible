@@ -663,7 +663,23 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
                               f"throttling must bound the poll-driven interim posts, got {calls}")
         # (4) the caller issues NO POST itself -- gate-run owns ALL plumbing,
         # and nothing besides /api/v2/gates should ever be hit here.
-        self.assertEqual(calls, gate_calls,
+        # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
+        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate`),
+        # whose own lifecycle (open/heartbeat/removal) is the ONLY other
+        # plumbing allowed; any other call, or a lifecycle call for any
+        # other id, still fails the comparison below.
+        run_identity = "test-agent\u00b7gate"
+        lifecycle_paths = ("/api/v2/agents/heartbeat", "/api/v2/agents/register",
+                           "/api/v2/agents/unregister")
+        identity_calls = [c for c in calls if c[0] in lifecycle_paths
+                          and isinstance(c[1], dict)
+                          and c[1].get("agentId") == run_identity]
+        self.assertTrue(
+            any(c[0] == "/api/v2/agents/heartbeat" for c in identity_calls),
+            f"the run identity {run_identity!r} must be opened/heartbeated; "
+            f"got {calls}")
+        other_calls = [c for c in calls if c not in identity_calls]
+        self.assertEqual(other_calls, gate_calls,
                           "gate-run owns ALL Crucible plumbing -- the caller "
                           "must not have to issue any POST itself, and no "
                           "other endpoint should be hit")

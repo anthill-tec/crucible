@@ -246,6 +246,7 @@ class _FakeOps:
     def __init__(self):
         self.post_gate_calls = []
         self.emit_calls = []
+        self.post_calls = []
 
     def agent_id(self, _args):
         return "cr163-direct-call-test-agent"
@@ -264,6 +265,17 @@ class _FakeOps:
 
     def context(self, project_dir, agent_id=None):
         return {"projectDir": project_dir, "agentId": agent_id}
+
+    # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the real
+    # `ClientOps` contract `drive_axi_run` now also uses to open, heartbeat
+    # and remove the run identity its snapshots post under. Recorded, so the
+    # run identity's lifecycle calls stay observable.
+    def post(self, path, payload):
+        self.post_calls.append((path, copy.deepcopy(payload)))
+        return {"ok": True, "changed": True}
+
+    def project_key(self, _project_dir):
+        return "direct-call-test-key"
 
 
 class _DirectArgs:

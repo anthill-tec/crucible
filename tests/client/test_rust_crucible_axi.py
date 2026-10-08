@@ -654,7 +654,23 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
         gate_calls = [c for c in calls if c[0] == "/api/v2/gates"]
         self.assertGreaterEqual(len(gate_calls), 2,
                                  f"expected >=1 interim + 1 final gate POST, got {calls}")
-        self.assertEqual(calls, gate_calls,
+        # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
+        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate`),
+        # whose own lifecycle (open/heartbeat/removal) is the ONLY other
+        # plumbing allowed; any other call, or a lifecycle call for any
+        # other id, still fails the comparison below.
+        run_identity = "test-agent\u00b7gate"
+        lifecycle_paths = ("/api/v2/agents/heartbeat", "/api/v2/agents/register",
+                           "/api/v2/agents/unregister")
+        identity_calls = [c for c in calls if c[0] in lifecycle_paths
+                          and isinstance(c[1], dict)
+                          and c[1].get("agentId") == run_identity]
+        self.assertTrue(
+            any(c[0] == "/api/v2/agents/heartbeat" for c in identity_calls),
+            f"the run identity {run_identity!r} must be opened/heartbeated; "
+            f"got {calls}")
+        other_calls = [c for c in calls if c not in identity_calls]
+        self.assertEqual(other_calls, gate_calls,
                           "gate-run owns ALL Crucible plumbing -- no other endpoint "
                           "should ever be hit")
 
