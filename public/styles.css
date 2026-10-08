@@ -2472,3 +2472,13 @@ body {
   flex: 1 1 0;
   max-height: none;
 }
+/* F22 — on desktop each pane carries its title, `Now` / `History`, above its
+   own scrolling box and outside it (the storyboard's `m-h` heading). The phone
+   band renders none: the sub-tab rows are the titles there. */
+.app-workflow-pane-title {
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin: 0 0 -9px;
+}

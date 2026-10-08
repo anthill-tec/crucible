@@ -6765,8 +6765,8 @@
         events,
       });
       return div(
-        // §S6 #5 — no standalone "History" title row; each wave's combined
-        // `History — Wave <n> · …` header line carries the section naming.
+        // The pane's `History` title sits ABOVE this box, outside it
+        // (WorkflowPaneTitle); each wave's header line names its wave.
         { "data-testid": "workflow-history", class: "app-workflow-history" },
         lens.waves.length === 0
           ? div({ class: "app-empty" }, "no workflow history yet")
@@ -6819,6 +6819,20 @@
           )
         : "";
 
+    // F22 — on desktop each pane carries its title, `Now` / `History`, ABOVE
+    // its own scrolling box and outside it. On the phone band the sub-tab rows
+    // are the titles, so none renders there.
+    const WorkflowPaneTitle = (name) =>
+      isPhoneBand()
+        ? ""
+        : div(
+            {
+              "data-testid": `workflow-${name.toLowerCase()}-title`,
+              class: "app-workflow-pane-title",
+            },
+            name,
+          );
+
     const WorkflowFeed = () => {
       const subtab = van.state("Now");
       return div(
@@ -6832,10 +6846,12 @@
         paneRunway(
           () => WorkflowBackToRoadmap(),
           () => WorkflowSubTabs(subtab),
+          () => WorkflowPaneTitle("Now"),
           div(
             { class: "app-workflow-cols" },
             () => WorkflowNow(),
           ),
+          () => WorkflowPaneTitle("History"),
           // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
           () => WorkflowHistory(),
         ),
