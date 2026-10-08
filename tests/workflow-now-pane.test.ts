@@ -666,3 +666,73 @@ describe("§S3/AC5 — the run drill-in (shared gateBodyContent) carries the run
     expect(document.querySelector('[data-testid="gate-push-line"]')).toBeNull();
   });
 });
+
+// ── §S1/F21 — the run line sits INSIDE the outcome banner's own box, in
+//    BOTH places gateBodyContent renders (Now's gate view and the run
+//    drill-in share the one function) ───────────────────────────────────
+
+describe("F21 — the run line renders INSIDE the outcome banner's box, not as a sibling line beneath it", () => {
+  test("Now's gate view AND the run drill-in both nest gate-run-line inside gate-outcome-banner, exactly once each", async () => {
+    const key = "now-pane-run-line-in-banner";
+    const now = Date.now();
+    const eventId = "evt-now-run-line-in-banner-1";
+    const brief = gateEvent({
+      id: eventId,
+      projectKey: key,
+      timestamp: now,
+      version: "0.9.0",
+      gate: {
+        intent: "release 0.9.0 no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [{ name: "intent", status: "passed" }],
+        run: { id: "run-banner-nest-1", branch: "release/0.9.0", head: "deadbee0" },
+        inFlight: true,
+      },
+    });
+
+    // ── Now's gate view (F21 badge: "also Now's view of a running release
+    // workflow") ────────────────────────────────────────────────────────
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Now Pane Run Line In Banner" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+    });
+    await openWorkflowTab();
+    await settle();
+
+    const nowPane = document.querySelector('[data-testid="gate-pane"]');
+    expect(nowPane).not.toBeNull();
+    const nowBanner = nowPane!.querySelector('[data-testid="gate-outcome-banner"]');
+    expect(nowBanner).not.toBeNull();
+
+    // bound — exactly one run line renders at all (never a stray duplicate
+    // once GREEN moves it inside the banner).
+    const nowRunLines = nowPane!.querySelectorAll('[data-testid="gate-run-line"]');
+    expect(nowRunLines.length).toBe(1);
+    // THE PIN — the run line is a DESCENDANT of the banner box, not its
+    // sibling (today's layout: gateBodyContent returns the banner and the
+    // run line as two array entries at the SAME level, so the banner never
+    // contains it).
+    expect(nowBanner!.contains(nowRunLines[0]!)).toBe(true);
+    expect(textOf(nowRunLines[0]!)).toContain("run-banner-nest-1");
+
+    // ── the run drill-in (F8½) — the SAME gateBodyContent function ──────
+    await mountApp({
+      pathname: `/p/${key}/run/${eventId}`,
+      projects: [project({ key, name: "Now Pane Run Line In Banner" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+    });
+    await settle();
+
+    const drillBanner = document.querySelector('[data-testid="gate-outcome-banner"]');
+    expect(drillBanner).not.toBeNull();
+    const drillRunLines = document.querySelectorAll('[data-testid="gate-run-line"]');
+    expect(drillRunLines.length).toBe(1);
+    expect(drillBanner!.contains(drillRunLines[0]!)).toBe(true);
+    expect(textOf(drillRunLines[0]!)).toContain("run-banner-nest-1");
+  });
+});
