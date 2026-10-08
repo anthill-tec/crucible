@@ -30,6 +30,22 @@ wins and the disagreement is raised with the orchestrator.
 
 ## Steps
 
+### §S0 — a gate is running only while the run that posts it is alive
+
+**Reported 2026-10-08 (user, screenshot of Now after CR-CRU-172 cycle 625).** Now showed `GATE ·
+no-mistakes checks-passed · in flight` from an old run. That instance was 0.2.0's orphaned snapshots,
+retired by CR-CRU-172's v20 migration; but the hole remains: a no-mistakes run that dies without
+sealing leaves an in-flight snapshot as the project's newest gate, and CR-CRU-172's `runningGate`
+(newest gate in flight) then shows it in Now — and lands the project on Workflow — forever.
+
+**User ruling 2026-10-08:** liveness decides. A gate counts as running only while the agent that
+posted its newest snapshot is still live under the project's liveness thresholds (the same rule the
+agent cards use); once that agent is stale or gone, the gate is not running — Now drops it, and the
+landing tab follows. When a CR and a genuinely running gate are both live, Now keeps showing both,
+plan first (CR-CRU-172 §S2, re-confirmed 2026-10-08). Gap analysis settles the exact signal (the
+posting agent's liveness vs. the run's own heartbeat) and the AC; it is this CR's first cycle,
+because History reads the same gates.
+
 ### §S1 — History lists releases, each holding its workflow and then its waves
 
 History lists the project's releases, latest first. A release row states its state (in progress /
