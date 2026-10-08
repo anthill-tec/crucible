@@ -118,18 +118,16 @@ Step("the wave header for wave {string} reads {string}", async ({ page }, wave: 
   await expect(header).not.toContainText("awaiting review");
 });
 
-// ── §S4 — the Workflow-tab's contextual gate widget replaces the CR-011
-// static placeholder in place (same `gate-pane` testid) once the wave's
-// plans are all closed and a gate event exists — populated with the SAME
-// outcome-banner/step-row body the §S3 timeline drill-in uses. ──────────
+// ── §S2/S3/AC5 (F22, re-pinned — approved by the orchestrator, user
+// rulings 2026-10-07/08) — a SEALED gate at the wave/release boundary no
+// longer populates a Workflow-tab gate pane; that widget is retired. With
+// every plan closed and nothing else running, Now reads exactly the AC3
+// empty-state line instead. ────────────────────────────────────────────
 Step(
-  "the Workflow tab's gate pane is populated with the outcome banner and at least one step row",
-  async ({ page }) => {
-    const pane = page.getByTestId("gate-pane");
-    await expect(pane).toBeVisible();
-    await expect(pane).not.toContainText("gate reporting lands in CR-013");
-    await expect(pane.getByTestId("gate-outcome-banner")).toBeVisible();
-    await expect(pane.getByTestId("gate-step-row").first()).toBeVisible();
+  "the Workflow tab mounts no gate pane for the sealed gate, and reads exactly {string}",
+  async ({ page }, text: string) => {
+    await expect(page.getByTestId("gate-pane")).toHaveCount(0);
+    await expect(page.getByTestId("workspace-body")).toHaveText(text);
   },
 );
 

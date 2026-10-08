@@ -618,8 +618,11 @@ describe("a project that turns busy or idle while it is open", () => {
     // The plan's closing is on the page: the Workflow pane now shows its
     // empty state, not the old plan's header.
     expect(document.querySelector('[data-testid="workflow-active-header"]')).toBeNull();
-    expect(textOf(document.querySelector('[data-testid="workspace-body"]')).toLowerCase()).toContain(
-      "no open plan",
+    // §S2/AC3 2026-10-08 re-pin (approved) — nothing is running at all (no open
+    // plan, no gate event whatsoever), so Now reads the exact AC3 empty-state
+    // line, never the retired "no open plan" filler.
+    expect(textOf(document.querySelector('[data-testid="workspace-body"]'))).toBe(
+      "Nothing running \u2192 Roadmap",
     );
     expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
   });
