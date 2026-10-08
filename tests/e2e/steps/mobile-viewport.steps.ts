@@ -451,18 +451,23 @@ Step(
   async ({ page }) => {
     const band = page.getByTestId("roadmap-progress");
     await expect(band).toBeVisible();
-    const box = await band.boundingBox();
-    expect(box).not.toBeNull();
-    // \"\u2265 44px\" is the CR's own touch-floor wording (this file's existing
-    // AC3/AC4 44px floor, reused as the LOWER bound). \"one line\" is the
-    // CR's own adjective for the COLLAPSED form (vs. the desktop band's
-    // thumbnail-plus-chips block), asserted as an UPPER bound double the
-    // floor \u2014 generous enough for real padding/line-height on a single row,
-    // tight enough that a band which rendered its full desktop content
-    // (thumbnail + remaining/committed + P50/P80 chip + health chip, each
-    // on its own row) could not pass by accident.
-    expect(box!.height).toBeGreaterThanOrEqual(44);
-    expect(box!.height).toBeLessThanOrEqual(88);
+    // ADDED 2026-10 (approved by the orchestrator): the band can be re-rendered
+    // under the measurement (a route move or a data frame rebuilds the
+    // Roadmap body), so a band replaced mid-measure is measured again.
+    await expect(async () => {
+      const box = await band.boundingBox();
+      expect(box).not.toBeNull();
+      // \"\u2265 44px\" is the CR's own touch-floor wording (this file's existing
+      // AC3/AC4 44px floor, reused as the LOWER bound). \"one line\" is the
+      // CR's own adjective for the COLLAPSED form (vs. the desktop band's
+      // thumbnail-plus-chips block), asserted as an UPPER bound double the
+      // floor \u2014 generous enough for real padding/line-height on a single row,
+      // tight enough that a band which rendered its full desktop content
+      // (thumbnail + remaining/committed + P50/P80 chip + health chip, each
+      // on its own row) could not pass by accident.
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeLessThanOrEqual(88);
+    }).toPass();
   },
 );
 
