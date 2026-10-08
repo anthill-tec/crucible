@@ -81,6 +81,19 @@ with the orchestrator.
 - **F12 · "Redrawn for CR-CRU-171 issues 6 + 7"** (APPROVED 2026-10-08) — issues 6 and 7.
 - **F14¾ / F16** — the release band, whose remaining-of-total text issue 2 changes.
 
+## Tests this CR knowingly re-pins (measured 2026-10-08, gap analysis)
+
+These assert what the user's rulings replace; RED re-pins them in their own commit, marked approved,
+keeping every other assertion:
+
+- the liveness and retention wording: `tests/manager-settings-labels.test.ts`,
+  `tests/manager-edit-params.test.ts`, `tests/projects-manager.test.ts` (and any test pinning the
+  card's `liveness T1 … / T2 … / T3 …` summary);
+- the landing tab: `tests/roadmap-first-tab.test.ts` ("cold /p/<key> still lands on Workflow",
+  CR-CRU-021 §S1 AC2 — superseded by the user's ruling of 2026-10-07 for a project with nothing
+  running), and every test that opens a project with no open plan and expects the Workflow pane
+  without choosing it — RED counts them first and reports the list before re-pinning.
+
 ## Steps
 
 ### §S1 — the release band reads remaining of the release's total (issue 2)
