@@ -1141,28 +1141,30 @@ def cmd_test(args, tier=None):
     # ghosts. CR-CRU-056: the removal fires ONLY for an identity this run
     # created; a caller who registered BEFORE the run keeps its registration
     # and its cycle binding. Omitted --agent: no lifecycle calls at all.
-    identity = None
+    # The bracket is the shared `gated_run`; the command, environment and log
+    # path are built ahead of it, which touches nothing on the board.
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
     # CR-CRU-017 §S4 — the RUN lifecycle rides INSIDE the identity bracket: the
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
-    try:
-        cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
-        env = os.environ.copy()
-        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
-        # Capture output whenever an ingest may be needed: bun's JUnit reporter
-        # writes NOTHING when collection crashes, and the failure detail only
-        # exists on stdout/stderr.
-        log_path = getattr(args, "log", None)
-        if args.agent and not log_path:
-            log_path = os.path.join(reports_dir, "run.log")
-        narrator = None
+    cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
+    env = os.environ.copy()
+    print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
+    # Capture output whenever an ingest may be needed: bun's JUnit reporter
+    # writes NOTHING when collection crashes, and the failure detail only
+    # exists on stdout/stderr.
+    log_path = getattr(args, "log", None)
+    if args.agent and not log_path:
+        log_path = os.path.join(reports_dir, "run.log")
+    narrator = None
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         if args.agent:
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated test run starting")
             # CR-CRU-094 §S3 — PRE-FLIGHT, while `--cycle` can still be
             # supplied: ask the board whether this agent is bound and say so
             # on both channels if it is not. Best-effort — a failed lookup
@@ -1246,8 +1248,6 @@ def cmd_test(args, tier=None):
                                                            result.returncode, tail)],
                   "[crucible] ERROR: no JUnit XML produced — ingested as compile")
         return rc
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def cmd_regression(args, verb="regression", tier="regression", script=None,
@@ -1286,46 +1286,47 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
     # Gate-run lifecycle bracket (CR-CRU-021 §S5): identical to cmd_test —
     # opening heartbeat (binding when --cycle is given), silent removal after
     # the final ingest, try/finally, and (CR-CRU-056) removal ONLY of an
-    # identity this run created.
-    identity = None
+    # identity this run created — the shared `gated_run`, entered once the
+    # command is built, as `cmd_test` does.
     # §S1 — the release this run is filed under, exactly as `cmd_test` reads it.
     release = getattr(args, "release", None)
     # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
     report_env = {}
-    try:
-        if script:
-            # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
-            # builder returns both the command and the environment overlay the
-            # target's DECLARATION asked the report path to be carried in.
-            cmd, report_env = _bun_run_script_cmd(
-                bun, script, junit_path, coverage_on, coverage_dir,
-                _declared_report_mechanism(package_dir, script), passthrough)
-            # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
-            # discipline, for the same reason: the client picks WHERE the
-            # report lands (its reports dir) and the declaration states HOW the
-            # target is told, so nothing is appended to an argv the runner
-            # never agreed to accept.
-            if raw_report:
-                report_env[raw_report["variable"]] = raw_report["path"]
-            env.update(report_env)
-        else:
-            passthrough = ()
-            cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
-        # §S3 — the echo names the invocation INCLUDING the overlay this client
-        # supplied, so what is printed is what actually ran.
-        invocation = _render_invocation(cmd, report_env, passthrough)
-        print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
-        # §S2c — capture the run output (failure detail lives only there).
-        log_path = getattr(args, "log", None)
-        if args.agent and not log_path:
-            log_path = os.path.join(reports_dir, "run.log")
-        narrator = None
+    if script:
+        # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
+        # builder returns both the command and the environment overlay the
+        # target's DECLARATION asked the report path to be carried in.
+        cmd, report_env = _bun_run_script_cmd(
+            bun, script, junit_path, coverage_on, coverage_dir,
+            _declared_report_mechanism(package_dir, script), passthrough)
+        # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
+        # discipline, for the same reason: the client picks WHERE the
+        # report lands (its reports dir) and the declaration states HOW the
+        # target is told, so nothing is appended to an argv the runner
+        # never agreed to accept.
+        if raw_report:
+            report_env[raw_report["variable"]] = raw_report["path"]
+        env.update(report_env)
+    else:
+        passthrough = ()
+        cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
+    # §S3 — the echo names the invocation INCLUDING the overlay this client
+    # supplied, so what is printed is what actually ran.
+    invocation = _render_invocation(cmd, report_env, passthrough)
+    print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
+    # §S2c — capture the run output (failure detail lives only there).
+    log_path = getattr(args, "log", None)
+    if args.agent and not log_path:
+        log_path = os.path.join(reports_dir, "run.log")
+    narrator = None
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         if args.agent:
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the same pre-flight attribution check cmd_test
             # makes, before this (far longer) sweep burns its minutes.
             preflight_warnings = _axi().preflight_cycle_warnings(
@@ -1351,6 +1352,12 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
+
+        # An unfiled run (no --agent — reachable only through an
+        # optional-agent caller such as a declared tier verb) files nothing,
+        # exactly as `cmd_test`: no ingest, no abort, the runner's own code.
+        if not args.agent:
+            return result.returncode
 
         # CR-CRU-015 §S2 — the report that MATTERS is the one this run will
         # ingest: the raw report the board decodes when the target declares
@@ -1443,8 +1450,6 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                          help_steps=help_steps, warnings=run_warnings,
                          run_id=run_id)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def cmd_auto_ingest(args):

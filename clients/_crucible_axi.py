@@ -6436,6 +6436,27 @@ def close_gate_identity(project_dir, identity, ops, remove_fn=None):
           file=sys.stderr)
 
 
+@contextlib.contextmanager
+def gated_run(project_dir, agent_id, cycle_id, message, *, open_fn, close_fn):
+    """The gated-run identity bracket, written once for every client: with an
+    `agent_id`, `open_fn` opens the run's identity (bound to `cycle_id` when
+    given) and the `with` body receives it — the same object the run's
+    narration observes — and `close_fn` closes it on every exit, removing it
+    ONLY when this run created it (`close_gate_identity`). Without an agent
+    nothing is opened, the body receives None, and nothing is posted.
+
+    `open_fn` / `close_fn` are the CLIENT's own `_open_gate_identity` /
+    `_close_gate_identity` delegators, so the bracket's two board touches stay
+    the patchable seams in the client module, exactly as before."""
+    identity = None
+    try:
+        if agent_id:
+            identity = open_fn(project_dir, agent_id, cycle_id, message)
+        yield identity
+    finally:
+        close_fn(project_dir, identity)
+
+
 def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
     """POST a gate event. `context` is OMITTED entirely when falsy — never a
     fabricated empty dict.

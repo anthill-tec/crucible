@@ -919,6 +919,16 @@ def _run_surefire_tier(args, goal_extra, label):
     """Shared body for `unit` and `module`: mvn clean test [...], then ingest
     surefire. On no-reports, compile fallback. Surefire only, NEVER coverage."""
     project_dir = _resolve_project_dir(args.project_dir)
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          f"gated {label} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _surefire_tier_run(args, goal_extra, label, project_dir, identity)
+
+
+def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
+    """`_run_surefire_tier`'s run body, inside its gated-identity bracket."""
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     reports_dir = _run_reports_dir(args, project_dir)
@@ -936,7 +946,8 @@ def _run_surefire_tier(args, goal_extra, label):
         # BEFORE maven is spawned so the board shows it running.
         narrator = _narrator(project_dir, args.agent,
                              _xml_total_for(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir))
+                                            ("surefire",), reports_dir),
+                             identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
                                           context=_run_context(),
                                           release=release)
@@ -1124,6 +1135,16 @@ def _run_failsafe_tier(args, goals, label):
     produced by this one run; on no reports at all the run is a build failure
     and takes the compile fallback, like every other tier verb here."""
     project_dir = _resolve_project_dir(args.project_dir)
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          f"gated {label} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _failsafe_tier_run(args, goals, label, project_dir, identity)
+
+
+def _failsafe_tier_run(args, goals, label, project_dir, identity):
+    """`_run_failsafe_tier`'s run body, inside its gated-identity bracket."""
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     reports_dir = _run_reports_dir(args, project_dir)
@@ -1141,7 +1162,8 @@ def _run_failsafe_tier(args, goals, label):
         # The shared run path, as `_run_surefire_tier` walks it.
         narrator = _narrator(project_dir, args.agent,
                              _xml_total_for(maven_dir, module,
-                                            ("failsafe", "surefire"), reports_dir))
+                                            ("failsafe", "surefire"), reports_dir),
+                             identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
                                           context=_run_context(),
                                           release=release)
@@ -1309,13 +1331,13 @@ def cmd_regression(args, verb="regression"):
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
-    identity = None
-    try:
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
             # makes, before this (far longer) reactor sweep burns its minutes.
             preflight_warnings = _axi().preflight_cycle_warnings(
@@ -1323,8 +1345,6 @@ def cmd_regression(args, verb="regression"):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
         return _regression_run(args, identity, verb, preflight_warnings)
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def _regression_run(args, identity=None, verb="regression",
@@ -1444,6 +1464,16 @@ def cmd_test(args, tier=None):
     (the run's own; every module writes there) and ingest via the junit-dir
     path."""
     project_dir = _resolve_project_dir(args.project_dir)
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _test_run(args, tier, project_dir, identity)
+
+
+def _test_run(args, tier, project_dir, identity):
+    """`cmd_test`'s run body, inside its gated-identity bracket."""
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     extra = [f"-Dtest={args.test}"] if getattr(args, "test", None) else []
@@ -1468,7 +1498,8 @@ def cmd_test(args, tier=None):
         # The shared run path, as `_run_surefire_tier` walks it.
         narrator = _narrator(project_dir, args.agent,
                              _xml_total_for(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir))
+                                            ("surefire",), reports_dir),
+                             identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
                                           release=release)
@@ -2159,6 +2190,7 @@ def _add_declared_tier_args(p):
     siblings already take (`--agent`, maven's own flags, `--log`), so the
     instruction a refusal gives can actually be typed (AC14b)."""
     p.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
+    _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
     _add_mvn_flags(p)
     _add_log_arg(p)
@@ -2311,25 +2343,26 @@ def main():
         dict(unit=tier_verb(
                  cmd_unit,
                  "Runs `mvn clean test -Dtest=<pattern>` and ingests surefire.",
-                 (_add_unit_tier_args, _add_run_release_arg, _add_mvn_flags,
-                  _add_log_arg, _add_reports_arg)),
+                 (_add_unit_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
+                  _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              module=tier_verb(
                  cmd_module,
                  "Runs `mvn clean test [-pl <module> -am]` — maven's own "
                  "reactor scoping — and ingests surefire.",
-                 (_add_module_tier_args, _add_run_release_arg, _add_mvn_flags,
-                  _add_log_arg, _add_reports_arg)),
+                 (_add_module_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
+                  _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              integration=tier_verb(
                  cmd_integration,
                  "Runs `mvn clean integration-test` — the failsafe half of "
                  "maven's own lifecycle — and ingests failsafe+surefire.",
-                 (_add_integration_tier_args, _add_run_release_arg, _add_mvn_flags,
-                  _add_log_arg, _add_reports_arg)),
+                 (_add_integration_tier_args, _add_gate_cycle_arg,
+                  _add_run_release_arg, _add_mvn_flags, _add_log_arg,
+                  _add_reports_arg)),
              e2e=tier_verb(
                  cmd_e2e,
                  "Runs failsafe IT / @QuarkusIntegrationTest. No coverage.",
-                 (_add_e2e_tier_args, _add_run_release_arg, _add_mvn_flags,
-                  _add_log_arg, _add_reports_arg)),
+                 (_add_e2e_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
+                  _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full reactor `mvn clean verify` with JaCoCo "
@@ -2405,6 +2438,7 @@ def main():
     te.add_argument("--test", help="Surefire -Dtest pattern, e.g. FooTest or FooTest#method")
     te.add_argument("--agent", help="If set, ingest surefire (bound agents are "
                                     "server-stamped with their registered cycle)")
+    _add_gate_cycle_arg(te)
     _add_run_release_arg(te)
     _add_mvn_flags(te)
     _add_project_args(te)

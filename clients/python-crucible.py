@@ -753,8 +753,23 @@ def cmd_test(args, tier=None, verb="test"):
     §S6 ruling 1 — python's declaration surface IS this invocation, so a tier
     verb whose `--start-dir`/`--pattern` the caller stated runs THIS body under
     that tier, and `verb` names the envelope the run belongs to (the tier the
-    caller invoked), exactly as the gate verbs elsewhere pass theirs."""
+    caller invoked), exactly as the gate verbs elsewhere pass theirs.
+
+    `--cycle` binds the run the way `cmd_regression` binds its own: an
+    opening heartbeat DECLARES the run's identity under the cycle, and the
+    closing anti-ghost cleanup fires ONLY for an identity this run created.
+    Without `--agent` nothing is opened, so nothing is posted."""
     project_dir = _resolve_project_dir(args.project_dir)
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _test_run(args, tier, verb, project_dir, identity)
+
+
+def _test_run(args, tier, verb, project_dir, identity):
+    """`cmd_test`'s run body, inside its gated-identity bracket."""
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
@@ -779,7 +794,7 @@ def cmd_test(args, tier=None, verb="test"):
     if args.agent:
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE xmlrunner is spawned so the board shows it running.
-        narrator = _narrator(project_dir, args.agent)
+        narrator = _narrator(project_dir, args.agent, identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
                                           release=release)
@@ -850,13 +865,13 @@ def cmd_regression(args, verb="regression"):
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
-    identity = None
-    try:
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
             # makes, before this (far longer) sweep burns its minutes.
             preflight_warnings = _axi().preflight_cycle_warnings(
@@ -864,8 +879,6 @@ def cmd_regression(args, verb="regression"):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
         return _regression_run(args, verb, preflight_warnings, identity)
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def _regression_run(args, verb="regression", preflight_warnings=(), identity=None):
@@ -1671,6 +1684,7 @@ def main():
                    help="Dotted test target(s), e.g. tests.test_mcp_server or "
                         "tests.test_mcp_server.Cls.test_x. Omit to discover.")
     t.add_argument("--agent", help="If set, ingest the result after the run")
+    _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
     _add_discover_args(t)
     _add_python_arg(t)

@@ -75,6 +75,16 @@ class RecordingBoard:
         self._refuse_ingest_run_id = None
         self._refuse_ingest_remaining = 0
         self._refuse_ingest_status = 409
+        # CR-CRU-171 \u00a7S2 \u2014 a scripted refusal of `/api/v2/runs/start` itself,
+        # so a RED test can drive the client's existing `ReleaseRunRefused`
+        # hard-stop (a release run that the board declines to open \u2014 an
+        # undeclared release, or a release beside a cycle) against ANY
+        # client/verb via a real subprocess, without needing a bespoke
+        # in-process fake per stack. Default off, like the two above: every
+        # pre-existing drive that never calls `refuse_next_start` sees the
+        # unchanged always-opens board.
+        self._refuse_start_remaining = 0
+        self._refuse_start_error = "run refused"
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -121,6 +131,14 @@ class RecordingBoard:
                 with board._lock:
                     board.events.append((time.time(), "POST", self.path, body))
                 if self.path == START:
+                    refuse, error = False, None
+                    with board._lock:
+                        if board._refuse_start_remaining > 0:
+                            board._refuse_start_remaining -= 1
+                            refuse, error = True, board._refuse_start_error
+                    if refuse:
+                        self._reply({"ok": False, "error": error})
+                        return
                     with board._lock:
                         board._run_seq += 1
                         run_id = f"run-live-{board._run_seq}"
@@ -198,6 +216,20 @@ class RecordingBoard:
         with self._lock:
             self._refuse_abort_remaining = times
             self._refuse_abort_status = status
+
+    def refuse_next_start(self, times=1, error="run refused"):
+        """CR-CRU-171 \u00a7S2 \u2014 script the next `times` `POST /api/v2/runs/start`
+        calls to answer `{ok: False, error}` (HTTP 200, the same shape the
+        real server's `resolveReleaseAttach` 400 produces once `_post` decodes
+        it) instead of opening a run \u2014 the board REFUSING to open the run at
+        all, so a RED test can drive the client's existing `ReleaseRunRefused`
+        hard-stop (CR-CRU-164 \u00a7S1: an undeclared release, or a release beside
+        a cycle) for ANY client/verb via a real subprocess. The call is still
+        recorded in `posts()` exactly as a successful one would be, and no
+        `runId` is ever handed out for a refused call."""
+        with self._lock:
+            self._refuse_start_remaining = times
+            self._refuse_start_error = error
 
     def refuse_ingest_for(self, run_id, times=1, status=409):
         """CR-CRU-170 \u00a7S2 \u2014 script the next `times` ingest POSTs (any of
