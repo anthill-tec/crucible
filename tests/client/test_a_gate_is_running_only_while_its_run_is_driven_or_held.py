@@ -68,6 +68,7 @@ from tests.client.live_run_harness import (
 GATES_PATH = "/api/v2/gates"
 HEARTBEAT_PATH = "/api/v2/agents/heartbeat"
 UNREGISTER_PATH = "/api/v2/agents/unregister"
+GATE_DECISIONS_PATH = "/api/v2/gate-decisions"
 
 _COUNTER = itertools.count()
 
@@ -532,12 +533,25 @@ class AGateRespondDrivesUnderTheRunIdentityTest(unittest.TestCase):
         self.assertEqual(offenders, {}, repr(offenders))
 
     def test_every_clients_never_touch_the_callers_own_registration(self):
+        """Gate snapshots and lifecycle calls never name the caller's bare id.
+        The ONE exception is the recorded decision: a decision is made by the
+        CALLER, not by the run, so `/api/v2/gate-decisions` keeps
+        `agentId = <caller>` (orchestrator ruling, CR-CRU-176 cycle 631)."""
         offenders = {}
         for key, drive in self.drives.items():
-            caller_posts = _any_post_for(drive.posts, self.CALLER)
+            caller_posts = [(path, p) for path, p in
+                            _any_post_for(drive.posts, self.CALLER)
+                            if path != GATE_DECISIONS_PATH]
             if caller_posts:
                 offenders[key] = (f"no POST may name the caller's bare id "
                                   f"{self.CALLER!r} directly; got {caller_posts!r}")
+                continue
+            decisions = [p for path, p in drive.posts
+                         if path == GATE_DECISIONS_PATH]
+            if [p.get("agentId") for p in decisions] != [self.CALLER]:
+                offenders[key] = (f"the recorded decision must stay the "
+                                  f"caller's ({self.CALLER!r}); got "
+                                  f"{decisions!r}")
         self.assertEqual(offenders, {}, repr(offenders))
 
 
