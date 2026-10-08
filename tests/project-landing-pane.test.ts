@@ -418,11 +418,13 @@ describe("opening a busy project", () => {
     expect(tabIsOn("Workflow")).toBe(true);
     expect(tabIsOn("Roadmap")).toBe(false);
     expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
-    // No open plan either, so the Workflow pane's own empty state renders —
-    // asserted so the twin's "Workflow" is provably the SAME pane, not a
-    // stray Roadmap leak painted under the wrong tab name.
+    // §S2/AC3 migration — a gate in flight is something REAL running, so
+    // Now shows its F21 gate view, never the retired "no open plan" filler
+    // and never the "nothing running" line (something genuinely is).
     const body = document.querySelector('[data-testid="workspace-body"]');
-    expect(textOf(body).toLowerCase()).toContain("no open plan");
+    expect(document.querySelector('[data-testid="gate-pane"]')).not.toBeNull();
+    expect(textOf(body).toLowerCase()).not.toContain("no open plan");
+    expect(textOf(body)).not.toBe("Nothing running \u2192 Roadmap");
 
     // The pin: an idle twin (no plan, no gate at all) lands on Roadmap.
     const idleKey = "landing-idle-gateinflight-twin-1";
