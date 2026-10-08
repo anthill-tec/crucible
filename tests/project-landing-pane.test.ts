@@ -461,6 +461,89 @@ describe("opening a busy project", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// §S1/AC1 (CR-CRU-176) — landing follows the SAME "running" rule as Now: an
+// in-flight gate alone is no longer enough to land on Workflow — its
+// posting identity must be online, or a ladder step held for a decision.
+//
+// RED today: `landingTab()` (public/app.js) treats ANY in-flight gate as
+// busy regardless of `state.agents`, so a stale/absent identity with no
+// held step still lands on Workflow below, and the held-banner text does
+// not exist.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("§S1/AC1 — landing follows a gate's run identity, not merely 'in flight'", () => {
+  function heldInFlightGate(key: string, id: string, timestamp: number, agentId: string): GateEventFixture {
+    return {
+      id,
+      projectKey: key,
+      agentId,
+      kind: "gate",
+      codec: "no-mistakes",
+      timestamp,
+      context: { wave: "1" },
+      gate: {
+        intent: "wave 1 no-mistakes gate (held)",
+        outcome: "checks-passed",
+        steps: [
+          { name: "intent", status: "passed" },
+          { name: "review", status: "awaiting_approval" },
+        ],
+        run: { id: `run-${id}` },
+        inFlight: true,
+      },
+    };
+  }
+
+  test("a gate in flight with its posting identity STALE and no held step lands on the Roadmap pane, not Workflow", async () => {
+    const key = "landing-ac1-stale-no-hold-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Landing Stale No Hold" })],
+      events: [inFlightGate(key, "evt-landing-ac1-stale-1", now)],
+      agents: [agentFixture("orchestrator-landing-1", "stale")],
+    });
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
+  });
+
+  test("a gate in flight with its posting identity ABSENT (never seen) and no held step lands on the Roadmap pane, same as a stale one", async () => {
+    const key = "landing-ac1-absent-no-hold-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Landing Absent No Hold" })],
+      events: [inFlightGate(key, "evt-landing-ac1-absent-1", now)],
+      // No `agents` fixture — the identity was never seen at all.
+    });
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
+  });
+
+  test("a held run (ladder step awaiting_approval) with its posting identity STALE still lands on the Workflow pane, naming the held step as 'awaiting your decision'", async () => {
+    const key = "landing-ac1-held-stale-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Landing Held Stale" })],
+      events: [heldInFlightGate(key, "evt-landing-ac1-held-1", now, "orchestrator-landing-held-1")],
+      agents: [agentFixture("orchestrator-landing-held-1", "stale")],
+    });
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(false);
+    const gatePane = document.querySelector('[data-testid="gate-pane"]');
+    expect(gatePane).not.toBeNull();
+    const banner = gatePane!.querySelector('[data-testid="gate-outcome-banner"]');
+    expect(banner).not.toBeNull();
+    expect(textOf(banner)).toContain("awaiting your decision");
+    expect(textOf(banner)).toContain("review");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // A URL naming a tab keeps opening that tab regardless of idle/busy state —
 // each paired with a pin so the "unaffected" half cannot pass vacuously.
 // ─────────────────────────────────────────────────────────────────────────

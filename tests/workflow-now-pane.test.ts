@@ -627,6 +627,249 @@ describe("§S2/AC4 — \"running\" is the project's NEWEST gate event, never \"a
   });
 });
 
+// ── §S1/AC1 (CR-CRU-176) — a gate is running only while its run is driven or
+//    held for a decision: the newest in-flight gate alone is no longer
+//    enough. "Running" now needs EITHER the posting identity online (the run
+//    is being driven) OR a ladder step `awaiting_approval` (held for a
+//    decision) — otherwise the run has died mid-step and Now drops it.
+//
+// RED today: `runningGate()` (public/app.js) returns the newest in-flight
+// gate unconditionally — it reads neither `state.agents` nor any step's
+// `status` — so every "stale identity, no held step" scenario below still
+// shows the gate view and lands on Workflow, and the held-banner text this
+// CR adds ("awaiting your decision") exists nowhere in `gateBodyContent`.
+describe("§S1/AC1 — a gate is running only while its run is driven or held for a decision", () => {
+  function heldGateEvent(key: string, id: string, timestamp: number, agentId: string): GateEventFixture {
+    return gateEvent({
+      id,
+      projectKey: key,
+      agentId,
+      timestamp,
+      gate: {
+        intent: "release no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [
+          { name: "intent", status: "passed" },
+          { name: "review", status: "awaiting_approval" },
+        ],
+        run: { id: "run-ac1-held-1" },
+        inFlight: true,
+      },
+    });
+  }
+
+  test("a gate's run identity decides whether it is running: ONLINE → the gate view in Now and the Workflow tab; the otherwise-identical run with its identity STALE and no held step → NOT running, 'Nothing running → Roadmap', the Roadmap tab", async () => {
+    const key = "now-pane-ac1-online";
+    const now = Date.now();
+    const eventId = "evt-ac1-online-1";
+    const brief = gateEvent({
+      id: eventId,
+      projectKey: key,
+      agentId: "ac1-caller-1\u00b7gate",
+      timestamp: now,
+      gate: {
+        intent: "release no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [{ name: "intent", status: "passed" }],
+        run: { id: "run-ac1-online-1" },
+        inFlight: true,
+      },
+    });
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Online Identity" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+      agents: [agentFixture("ac1-caller-1\u00b7gate", "online")],
+    });
+
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(false);
+    expect(document.querySelector('[data-testid="gate-pane"]')).not.toBeNull();
+    const body = document.querySelector('[data-testid="workspace-body"]');
+    expect(textOf(body)).not.toBe("Nothing running \u2192 Roadmap");
+
+    // THE PIN — an otherwise-identical run (same shape, different id) whose
+    // identity is STALE and whose ladder holds no `awaiting_approval` step is
+    // NOT running: this half alone fails against today's production, which
+    // reads only `gate.inFlight`, never `state.agents`.
+    const staleKey = "now-pane-ac1-stale-no-hold";
+    const staleEventId = "evt-ac1-stale-1";
+    const staleBrief = gateEvent({
+      id: staleEventId,
+      projectKey: staleKey,
+      agentId: "ac1-caller-2\u00b7gate",
+      timestamp: now,
+      gate: {
+        intent: "release no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [
+          { name: "intent", status: "passed" },
+          { name: "review", status: "running" },
+        ],
+        run: { id: "run-ac1-stale-1" },
+        inFlight: true,
+      },
+    });
+
+    await mountApp({
+      pathname: `/p/${staleKey}`,
+      projects: [project({ key: staleKey, name: "AC1 Stale No Hold" })],
+      events: [staleBrief],
+      eventDetails: { [staleEventId]: { ...staleBrief, decisions: [] } },
+      plans: [],
+      agents: [agentFixture("ac1-caller-2\u00b7gate", "stale")],
+    });
+
+    // Landing — nothing is running on arrival.
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    await openWorkflowTab();
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(textOf(nowPane)).toBe("Nothing running \u2192 Roadmap");
+    expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
+  });
+
+  test("the newest gate in flight with its posting identity ABSENT (never seen) and no held step is NOT running, same as a stale one", async () => {
+    const key = "now-pane-ac1-absent-no-hold";
+    const now = Date.now();
+    const eventId = "evt-ac1-absent-1";
+    const brief = gateEvent({
+      id: eventId,
+      projectKey: key,
+      agentId: "ac1-caller-3\u00b7gate",
+      timestamp: now,
+      gate: {
+        intent: "release no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [{ name: "intent", status: "passed" }],
+        run: { id: "run-ac1-absent-1" },
+        inFlight: true,
+      },
+    });
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Absent No Hold" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+      // No `agents` fixture at all — the identity was NEVER seen (a crash
+      // before its first heartbeat), distinct from the stale case above.
+    });
+
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    await openWorkflowTab();
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).toBe(
+      "Nothing running \u2192 Roadmap",
+    );
+  });
+
+  test("a held run (ladder step awaiting_approval) with its posting identity STALE is still running: Now shows the gate view, naming the held step as 'awaiting your decision'", async () => {
+    const key = "now-pane-ac1-held";
+    const now = Date.now();
+    const eventId = "evt-ac1-held-1";
+    const brief = heldGateEvent(key, eventId, now, "ac1-caller-4\u00b7gate");
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Held For Decision" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+      agents: [agentFixture("ac1-caller-4\u00b7gate", "stale")],
+    });
+
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(false);
+
+    const banner = document.querySelector('[data-testid="gate-outcome-banner"]');
+    expect(banner).not.toBeNull();
+    // POSITIVE — the spec's exact phrase, naming the step actually held
+    // ("review"), never a different step on the same ladder ("intent").
+    expect(textOf(banner)).toContain("awaiting your decision");
+    expect(textOf(banner)).toContain("review");
+    const bannerWords = textOf(banner).toLowerCase();
+    const reviewIdx = bannerWords.indexOf("review");
+    const intentIdx = bannerWords.lastIndexOf("intent");
+    // bound — "review" names the HELD step specifically; the completed
+    // "intent" step is not what the decision-awaiting text points at.
+    expect(reviewIdx).toBeGreaterThan(-1);
+    if (intentIdx !== -1) expect(reviewIdx).not.toBe(intentIdx);
+  });
+
+  test("a held run with its posting identity ABSENT is still running, same as the stale case", async () => {
+    const key = "now-pane-ac1-held-absent";
+    const now = Date.now();
+    const eventId = "evt-ac1-held-absent-1";
+    const brief = heldGateEvent(key, eventId, now, "ac1-caller-5\u00b7gate");
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Held Absent Identity" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+      // No `agents` fixture — the identity was never seen, same as a dead run.
+    });
+
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(document.querySelector('[data-testid="gate-pane"]')).not.toBeNull();
+    const banner = document.querySelector('[data-testid="gate-outcome-banner"]');
+    expect(textOf(banner)).toContain("awaiting your decision");
+  });
+
+  test("an open plan AND a live gate (posting identity online) render TOGETHER in Now, the plan BEFORE the gate view — plan + live gate is unchanged by this cycle", async () => {
+    const key = "now-pane-ac1-plan-and-live-gate";
+    const now = Date.now();
+    const plan: PlanFixture = {
+      planId: 9101,
+      cr: "AC1-PLAN-1",
+      projectKey: key,
+      status: "open",
+      cycles: [{ id: 1, label: "C1", status: "active" }],
+    };
+    const eventId = "evt-ac1-plan-gate-1";
+    const brief = gateEvent({
+      id: eventId,
+      projectKey: key,
+      agentId: "ac1-caller-6\u00b7gate",
+      timestamp: now,
+      gate: {
+        intent: "release no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [{ name: "intent", status: "passed" }],
+        run: { id: "run-ac1-plan-gate-1" },
+        inFlight: true,
+      },
+    });
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "AC1 Plan And Live Gate" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [plan],
+      agents: [agentFixture("ac1-caller-6\u00b7gate", "online")],
+    });
+    await openWorkflowTab();
+    await settle();
+
+    const active = document.querySelector('[data-testid="workflow-active"]');
+    expect(active).not.toBeNull();
+    expect(textOf(active)).toContain("AC1-PLAN-1");
+    const header = document.querySelector('[data-testid="gate-view-header"]');
+    expect(header).not.toBeNull();
+    expect(!!(active!.compareDocumentPosition(header!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(
+      true,
+    );
+  });
+});
+
 // ── §S3/AC5 — the drill-in's shared gateBodyContent: run line always, push
 //    line only for a SEALED gate ──────────────────────────────────────────
 
