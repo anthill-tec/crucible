@@ -2938,7 +2938,65 @@
     // `pane-section-title` handle: the pane's two named sections (Project,
     // Vitals) are unchanged.
     const dayLabel = (day) => `${Number(day.slice(5, 7))}/${day.slice(8, 10)}`;
-    const VelocityCard = () => {
+    // F18 · 1b — the card reads per day (as above) or per week, through a
+    // day | week switch on the card. The choice is a persisted preference,
+    // stored like the density mode and the rail flag: ONE key, a closed value
+    // set, an `includes` guard (anything else means "day"), and a storage
+    // accessor that throws costs the preference, never the boot. It changes
+    // this card only — the phone foot strip, the release band and the forecast
+    // read `velocityFigure()`, which stays per day. The week view is computed
+    // here from the velocity answer already read; it makes no request.
+    const VELOCITY_VIEW_STORAGE_KEY = "crucible.velocity.view";
+    const VELOCITY_VIEWS = ["day", "week"];
+    let storedVelocityView = null;
+    try {
+      storedVelocityView = window.localStorage.getItem(VELOCITY_VIEW_STORAGE_KEY);
+    } catch {
+      storedVelocityView = null;
+    }
+    const velocityView = van.state(
+      VELOCITY_VIEWS.includes(storedVelocityView) ? storedVelocityView : "day",
+    );
+    const chooseVelocityView = (view) => {
+      velocityView.val = view;
+      try {
+        window.localStorage.setItem(VELOCITY_VIEW_STORAGE_KEY, view);
+      } catch {
+        // A full or disabled store loses the preference, not the switch.
+      }
+    };
+    // The switch's options bind `aria-pressed` and their class to the view, so
+    // a flip updates them in place (the card itself is not rebuilt).
+    const VelocityViewToggle = () =>
+      span(
+        { "data-testid": "velocity-view-toggle", class: "app-velocity-toggle", role: "group" },
+        VELOCITY_VIEWS.map((view) =>
+          button(
+            {
+              "data-testid": `velocity-view-${view}`,
+              type: "button",
+              class: () => (velocityView.val === view ? "app-velocity-view on" : "app-velocity-view"),
+              "aria-pressed": () => String(velocityView.val === view),
+              onclick: () => chooseVelocityView(view),
+            },
+            view,
+          ),
+        ),
+      );
+    // Weeks count from the release's first day, not the calendar: one block
+    // per 7 days from `days[0]`; the last block may hold fewer than 7.
+    const velocityWeeks = (days) => {
+      const weeks = [];
+      for (let i = 0; i < days.length; i += 7) {
+        const block = days.slice(i, i + 7);
+        weeks.push({
+          first: block[0].day,
+          length: block.length,
+          points: block.reduce((sum, d) => sum + d.points, 0),
+        });
+      }
+      return weeks;
+    };    const VelocityCard = () => {
       const v = velocityData.val;
       const heading = div({ class: "app-pane-section-title" }, "Velocity");
       if (v === null) {
@@ -2963,6 +3021,18 @@
         days.length === 0
           ? `${v.release} · not started`
           : `${v.release} so far · ${v.sampleDays} day${v.sampleDays === 1 ? "" : "s"} · ${fmtPoints(merged)} pts`;
+      // Per week = the points merged since the start ÷ the weeks since
+      // (days ÷ 7), always shown to one decimal.
+      const weeksSince = v.sampleDays / 7;
+      const weekRate = days.length > 0 && v.sampleDays > 0 ? merged / weeksSince : null;
+      const weeks = velocityWeeks(days);
+      const weekTop = Math.max(1, weekRate ?? 0, ...weeks.map((w) => w.points));
+      const weekCovers =
+        days.length === 0
+          ? `${v.release} · not started`
+          : `${v.release} so far · ${weeksSince.toFixed(1)} weeks · ${fmtPoints(merged)} pts`;
+      const lastWeek = weeks[weeks.length - 1];
+      const isWeek = () => velocityView.val === "week";
       const flow = v.flow ?? {};
       const flowText =
         typeof flow.execMsPerCycle === "number" && typeof flow.gateMsPerCycle === "number"
@@ -2975,37 +3045,77 @@
         heading,
         div(
           { "data-testid": "project-velocity", class: "app-card app-velocity-card" },
-          div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / day"),
-          div({ class: "app-card-meta" }, covers),
+          div(
+            { class: "app-velocity-head" },
+            () =>
+              isWeek()
+                ? div(
+                    { class: "app-velocity-value" },
+                    b(weekRate === null ? "—" : weekRate.toFixed(1)),
+                    " pts / week",
+                  )
+                : div({ class: "app-velocity-value" }, b(velocityFigure()), " pts / day"),
+            VelocityViewToggle(),
+          ),
+          () => div({ class: "app-card-meta" }, isWeek() ? weekCovers : covers),
           days.length === 0
             ? null
-            : div(
-                {
-                  "data-testid": "velocity-bars",
-                  class: "app-velocity-bars",
-                  role: "img",
-                  "aria-label": `story points of ${v.release} merged per day since it started`,
-                },
-                days.map((d) =>
-                  div({
-                    class: "app-velocity-bar",
-                    title: `${d.day} · ${d.points} pts`,
-                    style: `height:${Math.round((d.points / top) * 100)}%;`,
-                  }),
+            : () =>
+                isWeek()
+                  ? div(
+                      {
+                        "data-testid": "velocity-bars",
+                        class: "app-velocity-bars app-velocity-bars-week",
+                        role: "img",
+                        "aria-label": `story points of ${v.release} merged per week since it started`,
+                      },
+                      weeks.map((w, i) =>
+                        div({
+                          class: "app-velocity-bar",
+                          "data-hollow-week": String(w.length < 7),
+                          title: `wk ${i + 1} from ${w.first} · ${w.points} pts`,
+                          style: `height:${Math.round((w.points / weekTop) * 100)}%;`,
+                        }),
+                      ),
+                      weekRate === null
+                        ? null
+                        : div({
+                            class: "app-velocity-mean",
+                            style: `bottom:${Math.round((weekRate / weekTop) * 100)}%;`,
+                          }),
+                    )
+                  : div(
+                      {
+                        "data-testid": "velocity-bars",
+                        class: "app-velocity-bars",
+                        role: "img",
+                        "aria-label": `story points of ${v.release} merged per day since it started`,
+                      },
+                      days.map((d) =>
+                        div({
+                          class: "app-velocity-bar",
+                          title: `${d.day} · ${d.points} pts`,
+                          style: `height:${Math.round((d.points / top) * 100)}%;`,
+                        }),
+                      ),
+                      typeof rate === "number"
+                        ? div({
+                            class: "app-velocity-mean",
+                            style: `bottom:${Math.round((rate / top) * 100)}%;`,
+                          })
+                        : null,
+                    ),
+          days.length === 0
+            ? null
+            : () =>
+                div(
+                  { class: "app-card-meta" },
+                  isWeek()
+                    ? `wk 1 from ${dayLabel(days[0].day)} … wk ${weeks.length} so far (${lastWeek.length} day${
+                        lastWeek.length === 1 ? "" : "s"
+                      }) · dashed = the rate`
+                    : `${dayLabel(days[0].day)} … ${dayLabel(days[days.length - 1].day)} · dashed = the rate · today counts`,
                 ),
-                typeof rate === "number"
-                  ? div({
-                      class: "app-velocity-mean",
-                      style: `bottom:${Math.round((rate / top) * 100)}%;`,
-                    })
-                  : null,
-              ),
-          days.length === 0
-            ? null
-            : div(
-                { class: "app-card-meta" },
-                `${dayLabel(days[0].day)} … ${dayLabel(days[days.length - 1].day)} · dashed = the rate · today counts`,
-              ),
           div({ "data-testid": "velocity-flow", class: "app-card-meta app-velocity-flow" }, flowText),
         ),
       );

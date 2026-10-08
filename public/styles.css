@@ -2116,7 +2116,27 @@ body {
    analytics pane (storyboard F16 + F14¾, DN-crucible-analytics §10). Colours
    are the theme's own tokens; the chart reads the same tokens at draw time.
    APPENDED, like the blocks above, so existing citations shift by none. */
-.app-velocity-card { gap: 3px; }
+/* F18 · 1b "the card is not a button" — a scoped override of the shared
+   `.app-card` pointer (agent rows keep theirs); only the day | week switch's
+   two options are clickable. */
+.app-velocity-card { gap: 3px; cursor: default; }
+.app-velocity-head { display: flex; align-items: center; gap: 6px; }
+.app-velocity-toggle {
+  margin-left: auto;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.app-velocity-view {
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font: 8.5px/1.6 var(--mono);
+  cursor: pointer;
+}
+.app-velocity-view.on { background: var(--ember); color: #111; }
 .app-velocity-value { font: 400 12px var(--mono); color: var(--ink); }
 .app-velocity-value b { font-size: 14px; }
 .app-velocity-bars {
@@ -2139,6 +2159,17 @@ body {
   left: 0;
   right: 0;
   border-top: 1px dashed var(--ember);
+}
+/* F18 · 1b — per week, the few bars span the card, as the frame draws them. */
+.app-velocity-bars-week { gap: 8px; }
+.app-velocity-bars-week .app-velocity-bar { max-width: none; }
+/* F18 · 1b — the trailing partial week is drawn hollow: a faint fill inside
+   a dashed outline. */
+.app-velocity-bar[data-hollow-week="true"] {
+  opacity: 1;
+  background: rgba(74, 222, 128, 0.27);
+  outline: 1px dashed var(--pass);
+  outline-offset: -1px;
 }
 .app-velocity-flow {
   margin-top: 4px;
