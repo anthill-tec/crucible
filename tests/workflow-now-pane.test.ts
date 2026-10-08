@@ -736,3 +736,81 @@ describe("F21 — the run line renders INSIDE the outcome banner's box, not as a
     expect(textOf(drillRunLines[0]!)).toContain("run-banner-nest-1");
   });
 });
+
+// ── §S1/AC2 — each pane carries its own title, OUTSIDE its scrolling box,
+// on the desktop band (storyboard F22: "Now … its own scroll" / "History …
+// its own scroll", each drawn with its own `m-h` heading ABOVE the box) ────
+//
+// RED-agent-defined decision (the spec names the CONTENT — "Now" and
+// "History", nothing else — not the testid): the title carries its own
+// testid, `workflow-now-title` / `workflow-history-title`, distinct from the
+// existing `workflow-now` / `workflow-history` box testids, because the AC
+// requires the title to sit OUTSIDE the box it names — reusing the box's own
+// testid for both could never express that distinction.
+//
+// Current-code fact verified against public/app.js on this branch: neither
+// testid is rendered anywhere — `WorkflowFeed` mounts `WorkflowNow()` and
+// `WorkflowHistory()` directly with no heading between them (the module
+// comment at `WorkflowHistory` reads "no standalone 'History' title row").
+// Every assertion below is therefore genuine RED: no such element exists
+// today, under any testid.
+describe("§S1/AC2 — Now's and History's titles render outside their own scrolling boxes (desktop band)", () => {
+  test("a title reading exactly 'Now' sits above and outside Now's box; a title reading exactly 'History' sits above and outside History's box; Now's own box text is unchanged", async () => {
+    const key = "now-pane-titles-desktop";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Pane Titles Desktop" })],
+      events: [],
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    const nowBox = document.querySelector('[data-testid="workflow-now"]');
+    const historyBox = document.querySelector('[data-testid="workflow-history"]');
+    expect(nowBox).not.toBeNull();
+    expect(historyBox).not.toBeNull();
+    // AC3's own pin, unmoved by this cycle's title addition.
+    expect(textOf(nowBox)).toBe("Nothing running \u2192 Roadmap");
+
+    const nowTitle = findByText(document, '[data-testid="workflow-now-title"]', "Now");
+    const historyTitle = findByText(document, '[data-testid="workflow-history-title"]', "History");
+    expect(nowTitle, "no element reading exactly 'Now' renders under workflow-now-title").toBeDefined();
+    expect(
+      historyTitle,
+      "no element reading exactly 'History' renders under workflow-history-title",
+    ).toBeDefined();
+
+    // OUTSIDE — a title nested INSIDE its own box would not be above it.
+    expect(nowBox!.contains(nowTitle!)).toBe(false);
+    expect(historyBox!.contains(historyTitle!)).toBe(false);
+
+    // ABOVE — the title precedes its own box in document order.
+    expect(
+      Boolean(nowTitle!.compareDocumentPosition(nowBox!) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+    expect(
+      Boolean(
+        historyTitle!.compareDocumentPosition(historyBox!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+  });
+
+  test("each title renders exactly once, never duplicated across a poll re-render", async () => {
+    const key = "now-pane-titles-no-duplicate";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Pane Titles No Duplicate" })],
+      events: [],
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    expect(document.querySelectorAll('[data-testid="workflow-now-title"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-history-title"]').length).toBe(1);
+
+    await waitForPollTick();
+
+    expect(document.querySelectorAll('[data-testid="workflow-now-title"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-history-title"]').length).toBe(1);
+  }, POLL_TEST_TIMEOUT_MS);
+});

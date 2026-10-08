@@ -165,3 +165,48 @@ Step("the History pane is visible", async ({ page }) => {
 Step("the History pane is not visible", async ({ page }) => {
   await expect(page.getByTestId("workflow-history")).not.toBeVisible();
 });
+
+// §S1/AC2 — the desktop title, outside its own box: RED-agent-defined
+// testids `workflow-now-title` / `workflow-history-title` (same decision as
+// workflow-now-pane.test.ts's happy-dom desktop assertion) — distinct from
+// the existing `workflow-now` / `workflow-history` box testids, because the
+// AC requires the title to sit OUTSIDE the box it names.
+Step(
+  "a title reading {string} renders above and outside {string} pane",
+  async ({ page }, text: string, pane: string) => {
+    const paneTestid = `workflow-${pane.toLowerCase()}`;
+    const titleTestid = `${paneTestid}-title`;
+
+    const title = page.getByTestId(titleTestid);
+    await expect(title).toBeVisible();
+    await expect(title).toHaveText(text);
+
+    const box = page.getByTestId(paneTestid);
+    await expect(box).toBeVisible();
+
+    const relation = await page.evaluate(
+      ({ titleSel, boxSel }) => {
+        const t = document.querySelector(titleSel);
+        const b = document.querySelector(boxSel);
+        if (t === null || b === null) return null;
+        return {
+          // OUTSIDE — the title is not a descendant of its own box.
+          contained: b.contains(t),
+          // ABOVE — the title precedes its own box in document order.
+          titleBeforeBox: Boolean(t.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING),
+        };
+      },
+      { titleSel: `[data-testid="${titleTestid}"]`, boxSel: `[data-testid="${paneTestid}"]` },
+    );
+    expect(relation).not.toBeNull();
+    expect(relation!.contained).toBe(false);
+    expect(relation!.titleBeforeBox).toBe(true);
+  },
+);
+
+// §S1/AC2 — on the phone band the sub-tab rows ARE the titles, so no
+// separate title element renders above either pane.
+Step("the Workflow tab shows no title above either pane", async ({ page }) => {
+  await expect(page.getByTestId("workflow-now-title")).toHaveCount(0);
+  await expect(page.getByTestId("workflow-history-title")).toHaveCount(0);
+});

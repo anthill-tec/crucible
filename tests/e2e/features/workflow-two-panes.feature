@@ -54,3 +54,14 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
     And the Now pane is not visible
     And the History pane is visible
     And the history lens shows a cr group for "CR-W2P-H1" with rollup "1 cycles ✓"
+
+  Scenario: a title renders above and outside each pane on the desktop band, and no title renders above either pane on the phone band — the sub-tab rows are the titles there
+    Given the viewport is 1280x800
+    And a project named "W2P Pane Titles Project" is registered
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then a title reading "Now" renders above and outside "Now" pane
+    And a title reading "History" renders above and outside "History" pane
+
+    When the viewport is 390x844
+    Then the Workflow tab shows no title above either pane
