@@ -461,6 +461,51 @@ export async function backfillPlanWave(
   return (await res.json()) as { ok: boolean; changed: boolean; plan: { wave?: string } };
 }
 
+export interface AppendCycleResponse {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+  cr: string;
+}
+
+/**
+ * POST …/plans/<planId>/cycles {label, kind, reason, cause, specRef} —
+ * CR-CRU-165 §S1's cycle-add verb: appending a non-FIX cycle (or any
+ * insert) to a filed plan is a recorded plan change, ORCHESTRATOR-only
+ * (`requireOrchestrator`, src/v2.ts). `agentId` must already carry role
+ * ORCHESTRATOR (roadmap-graph.steps.ts's "an orchestrator {string} is
+ * registered on that project" step) — unlike `filePlan`/`transitionCycle`,
+ * this helper sends NO registration of its own: `HARNESS_AGENT_ID` carries
+ * role "report" (`ensureRegistered`) and can never pass `requireOrchestrator`.
+ */
+export async function appendCycle(
+  request: APIRequestContext,
+  projectKey: string,
+  planId: number,
+  agentId: string,
+  input: {
+    label: string;
+    kind?: string;
+    reason: string;
+    cause: "spec-design" | "gap-analysis";
+    specRef: string;
+  },
+): Promise<AppendCycleResponse> {
+  const res = await request.post(`/api/v2/projects/${projectKey}/plans/${planId}/cycles`, {
+    data: {
+      agentId,
+      label: input.label,
+      kind: input.kind ?? "red-green",
+      reason: input.reason,
+      cause: input.cause,
+      specRef: input.specRef,
+    },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as AppendCycleResponse;
+}
+
 export interface CompileIngestResponse {
   event: string;
   errors: number;
