@@ -322,6 +322,9 @@ describe("F23 — a cycle's recorded change sits beneath its line, never beside 
     );
     const unrecordedLine = lineOf(unrecordedRow);
     assertRecordBeneathLine(unrecordedRow, unrecordedLine, "reason unrecorded");
+    // Held as a string: the remount below destroys this mount's nodes.
+    const unrecordedLineText = (unrecordedLine.textContent ?? "").trim();
+    expect(unrecordedLineText.length).toBeGreaterThan(0);
 
     const recordedKey = "f23-now-skip-recorded";
     await mountApp({
@@ -370,7 +373,7 @@ describe("F23 — a cycle's recorded change sits beneath its line, never beside 
     // The line's own text (glyph, label, kind badge, timer, `→ Runs`) never
     // changes with the record's length — a one-word fallback or a
     // paragraph-long reason render the SAME line.
-    expect((recordedLine.textContent ?? "").trim()).toBe((unrecordedLine.textContent ?? "").trim());
+    expect((recordedLine.textContent ?? "").trim()).toBe(unrecordedLineText);
   });
 });
 
@@ -478,6 +481,9 @@ describe("F23 — a cycle's recorded change sits beneath its line, never beside 
     const unrecordedRow = findCycleRow(unrecordedGroup, 9071);
     const unrecordedLine = lineOf(unrecordedRow);
     assertRecordBeneathLine(unrecordedRow, unrecordedLine, "reason unrecorded");
+    // Held as a string: the remount below destroys this mount's nodes.
+    const unrecordedLineText = (unrecordedLine.textContent ?? "").trim();
+    expect(unrecordedLineText.length).toBeGreaterThan(0);
 
     const recordedKey = "f23-hist-skip-recorded";
     await mountApp({
@@ -522,6 +528,6 @@ describe("F23 — a cycle's recorded change sits beneath its line, never beside 
         "docs/changes/spec-f23-fixture.md §S7",
       ),
     );
-    expect((recordedLine.textContent ?? "").trim()).toBe((unrecordedLine.textContent ?? "").trim());
+    expect((recordedLine.textContent ?? "").trim()).toBe(unrecordedLineText);
   });
 });
