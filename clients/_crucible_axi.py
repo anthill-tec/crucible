@@ -6708,6 +6708,20 @@ def cmd_gate_report(args, project_dir, ops):
 _GATE_POLL_CADENCE_S = 2.0
 _GATE_POLL_TICK_S = 0.4
 
+# A driven gate run posts its snapshots under a RUN IDENTITY of its own: the
+# caller's id with this suffix (U+00B7 MIDDLE DOT). The identity is opened
+# before the first snapshot, heartbeated on the poll cadence above and removed
+# on every exit, so the page can tell a run being driven from one that died
+# mid-step; the caller's own registration is never touched.
+GATE_RUN_IDENTITY_SUFFIX = "\u00b7gate"
+GATE_RUN_DRIVING_MESSAGE = "driving the no-mistakes run"
+
+
+def gate_run_identity(agent_id):
+    """The run identity a driven gate run posts under, or None without a
+    caller (nothing is opened then, and the snapshots post as before)."""
+    return f"{agent_id}{GATE_RUN_IDENTITY_SUFFIX}" if agent_id else None
+
 # CR-CRU-117 §S2 — the axi step states that are RESOLVED: the row is finished
 # and will not change again. Every other state a row can be in — `pending`,
 # `running`, `fixing`, and each awaiting-a-decision state the tool has or
@@ -6796,7 +6810,7 @@ def poll_axi_snapshot(no_mistakes_path):
 
 
 def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
-                      context, ops, release=None):
+                      context, ops, release=None, heartbeat=None):
     """§S8/CR-CRU-117 §S2 — poll `axi status` while `proc` is alive and POST one
     INTERIM gate per DISTINCT ladder. Returns True when at least one interim
     gate reached the board: the fact the envelope states and the sealing
@@ -6811,7 +6825,11 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
     Every interim POST carries the run's `release`, exactly as the seal does
     (`post_gate(..., release)`): every snapshot of the run names its release,
     so a delivered release retires them all with its seal
-    (`stampGatesRetired`, `src/store.ts`)."""
+    (`stampGatesRetired`, `src/store.ts`).
+
+    `heartbeat(message)`, when given, touches the run identity the snapshots
+    post under once per poll, so the identity stays live on the board for as
+    long as this loop drives the run (`drive_axi_run`)."""
     last_poll = None
     last_ladder = None
     posted_interim = False
@@ -6819,6 +6837,8 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
         now = time.monotonic()
         if last_poll is None or (now - last_poll) >= _GATE_POLL_CADENCE_S:
             last_poll = now
+            if heartbeat is not None:
+                heartbeat(GATE_RUN_DRIVING_MESSAGE)
             decoded = poll_axi_snapshot(no_mistakes_path)
             if decoded is not None and axi_snapshot_in_flight(decoded):
                 ladder = axi_ladder_identity(decoded)
@@ -6969,7 +6989,50 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
     `refusal` means the tool turned the call down, so this exit seals nothing
     and reports that instead; `fields` are added to the envelope (and to the
     legacy line, in order); `ok` False fails an exit that would otherwise
-    pass. With no `on_final`, the exit is exactly the seal-or-held one."""
+    pass. With no `on_final`, the exit is exactly the seal-or-held one.
+
+    Every snapshot, interim and seal, posts under the run identity
+    (`gate_run_identity`), opened BEFORE the first snapshot through the shared
+    owned-identity bracket (`gated_run`), heartbeated on the poll loop's cadence
+    and removed on every exit: a seal, a held run, a refusal or an interrupt
+    (SIGINT/SIGTERM, trapped for the drive and exited on 128+signum). The
+    caller's own id still names the envelope and any decision `on_final`
+    records: a decision is the caller's, not the run's."""
+    run_identity = gate_run_identity(agent_id)
+    try:
+        with abandon_trap(run_identity), gated_run(
+                project_dir, run_identity, None,
+                f"{verb}: {GATE_RUN_DRIVING_MESSAGE}",
+                open_fn=lambda pd, aid, cyc, msg: open_gate_identity(
+                    pd, aid, cyc, msg, ops),
+                close_fn=lambda pd, ident: close_gate_identity(pd, ident, ops),
+        ) as identity:
+            heartbeat = (narration_poster(ops.post, ops.project_key(project_dir),
+                                          run_identity, identity)
+                         if identity is not None else None)
+            return _drive_axi_run(verb, run_argv, intent, project_dir, agent_id,
+                                  run_identity or agent_id, ops, heartbeat,
+                                  release=release, skip=skip,
+                                  skip_source=skip_source, on_final=on_final)
+    except RunAbandoned as abandoned:
+        signame = signal.Signals(abandoned.signum).name
+        print(f"{verb}: INTERRUPTED: {signame} stopped the drive; the run "
+              f"identity was closed and nothing was sealed", file=sys.stderr)
+        ops.emit(verb, False,
+                 dict(gate_run_result_fields(None, None, release, False, False,
+                                             skip, skip_source),
+                      signal=signame),
+                 ops.context(project_dir, agent_id=agent_id), [],
+                 f"{verb}: ok=False sealed=nothing — {signame} interrupted "
+                 f"the drive")
+        return 128 + abandoned.signum
+
+
+def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, poster_id,
+                   ops, heartbeat, *, release, skip, skip_source, on_final):
+    """`drive_axi_run`'s body, inside the run-identity bracket: every gate it
+    posts is posted as `poster_id` (the run identity), while `agent_id` (the
+    caller) still names the envelope."""
     axi_verb = " ".join(run_argv[1:3])
     context = fleet_context()
     try:
@@ -6988,7 +7051,8 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
     # which gate this exit put on the board and the sealing decision cannot see
     # the loop.
     posted_interim = stream_axi_ladder(proc, run_argv[0], intent, project_dir,
-                                       agent_id, context, ops, release)
+                                       poster_id, context, ops, release,
+                                       heartbeat=heartbeat)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout.
@@ -7062,7 +7126,7 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
                  legacy + extra_legacy)
         return 1
 
-    resp = ops.post_gate(project_dir, agent_id, final_gate, context or None,
+    resp = ops.post_gate(project_dir, poster_id, final_gate, context or None,
                          release)
     ok = resp.get("ok", False)
     overall = bool(ok and proc.returncode == 0 and extra_ok)

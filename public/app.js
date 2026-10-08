@@ -1548,6 +1548,16 @@
     // — as the green seal that never happened.
     const gateInFlight = (g) => g?.inFlight === true;
     const gateInFlightClause = (g) => (gateInFlight(g) ? " · in flight" : "");
+    // The step an in-flight run is held at for a decision, or null.
+    const gateHeldStep = (g) =>
+      gateInFlight(g)
+        ? ((g.steps ?? []).find((s) => s.status === "awaiting_approval") ?? null)
+        : null;
+    // F21's held banner: ` · <step> awaiting your decision`, naming the step.
+    const gateHeldClause = (g) => {
+      const held = gateHeldStep(g);
+      return held === null ? "" : ` · ${held.name} awaiting your decision`;
+    };
     // The class stem an in-flight gate takes INSTEAD of pass/fail/cancel: it is
     // not a verdict, so it may not borrow a verdict's colour.
     const gateClassStem = (g) => (gateInFlight(g) ? "inflight" : gateOutcomeClass(g?.outcome));
@@ -6337,7 +6347,7 @@
           // CR-CRU-117 §S1 — the drill-in banner is the same claim in bigger
           // type, so it carries the same qualification: an in-flight ladder is
           // shown as one, never as the verdict its `checks-passed` would read.
-          `no-mistakes ${g.outcome}${gateInFlightClause(g)}`,
+          `no-mistakes ${g.outcome}${gateInFlightClause(g)}${gateHeldClause(g)}`,
           gateRunLine(g),
         ),
         steps.map((s) =>
@@ -6453,13 +6463,28 @@
     // on the board, sealed by a later event. The one selector for "running" —
     // the landing tab and Now both read it. Null when nothing is running; a
     // sealed newest gate belongs to History, so it mounts nothing here.
+    // In flight is not enough on its own: the run must be DRIVEN (the identity
+    // that posted the snapshot is online, by the same liveness the agent cards
+    // read) or HELD for a decision (a ladder step `awaiting_approval`, with no
+    // process alive). A run that died mid-step is neither, so it is not running.
     const runningGate = () => {
       const newest = scopedGateEvents().reduce(
         (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
         null,
       );
-      return newest !== null && gateInFlight(newest.gate) ? newest : null;
+      if (newest === null || !gateInFlight(newest.gate)) return null;
+      return gateRunDriven(newest) || gateHeldStep(newest.gate) !== null ? newest : null;
     };
+
+    // The gate's run is being driven: its posting identity is online on the
+    // agents slice (a row from another project never counts).
+    const gateRunDriven = (event) =>
+      state.agents.some(
+        (a) =>
+          a.agentId === event.agentId &&
+          (a.projectKey === undefined || a.projectKey === event.projectKey) &&
+          a.liveness === "online",
+      );
 
     // F21's header: `Gate · release <X> · no-mistakes`, the release segment
     // omitted when the snapshot names none.
