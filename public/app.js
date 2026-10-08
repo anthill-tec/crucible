@@ -4634,6 +4634,9 @@
       const fc = held.forecast;
       const dated = forecastDated(fc);
       const unpointed = bd.unpointed ?? [];
+      // The band's total is the release's live total; an older board that
+      // answers no `totalPoints` falls back to the start total.
+      const total = typeof bd.totalPoints === "number" ? bd.totalPoints : bd.committedPoints;
       // The band is where the chart's pane is one tap away: fetch uPlot now, so
       // the pane draws at once. A failed warm-up is not an error here — the
       // pane's own draw retries the load and states its failure in the chart box.
@@ -4658,7 +4661,7 @@
           b(version),
           " · ",
           b(fmtPoints(burndownRemaining(bd, fc))),
-          ` of ${fmtPoints(bd.committedPoints)} pts left`,
+          ` of ${fmtPoints(total)} pts left`,
         ),
         span({ class: "app-roadmap-progress-text" }, `${velocityFigure()} pts / day`),
         span(
