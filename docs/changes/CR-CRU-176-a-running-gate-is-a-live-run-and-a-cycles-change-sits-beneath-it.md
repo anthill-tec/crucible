@@ -73,7 +73,7 @@ never beside it", APPROVED 2026-10-08) — implement to it.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a run is driven or held, or it is not running.** `gate-run`/`gate-respond` in each of
+- [x] **AC1 — a run is driven or held, or it is not running.** `gate-run`/`gate-respond` in each of
       the five clients post every snapshot under the run identity (`<caller>·gate`), heartbeat it
       while driving and remove it on every exit (seal, held, refused, interrupt), leaving the
       caller's own registration intact — asserted per client against a recording board. On the
@@ -81,7 +81,7 @@ never beside it", APPROVED 2026-10-08) — implement to it.
       the identity gone → running, `awaiting your decision`; + identity stale and not held → not
       running (Now `Nothing running → Roadmap`, landing on the Roadmap) — asserted with fixed
       fixtures.
-- [ ] **AC2 — F23.** A cycle with a recorded change (or a skipped one) renders the record as its
+- [x] **AC2 — F23.** A cycle with a recorded change (or a skipped one) renders the record as its
       own line beneath the cycle line in Now and in History; the cycle line's label, kind badge,
       timer and `→ Runs` are unchanged and the label is not truncated by the record — asserted on
       the page and, at 1280×800 and 390×844, in a real browser.
