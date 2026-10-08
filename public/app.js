@@ -6815,9 +6815,9 @@
             "← roadmap",
           );
 
-    // F22 \u2014 the Workflow tab is two panes: Now above History, each its own
-    // vertical scroll (styles.css `.app-workflow-panes`), Now capped at half
-    // the pane. On the phone band they become two sub-tabs whose rows are the
+    // F22 \u2014 the Workflow tab is two panes: Now above History (styles.css
+    // `.app-workflow-panes`), Now growing with its content and never
+    // scrolling, History taking the rest with its own scroll. On the phone band they become two sub-tabs whose rows are the
     // toggles (F15d), Now selected on entry: the sub-tab is held per mount, so
     // every entry to the tab starts on Now, and the class on the pane-scroll
     // box shows the selected pane and hides the other.
