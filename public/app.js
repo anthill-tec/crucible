@@ -1863,24 +1863,26 @@
     };
     const MANAGER_RETENTION_DEFAULT = 100;
 
-    const fmtLivenessMs = (ms) =>
-      ms >= 3600000 && ms % 3600000 === 0 ? `${ms / 3600000}h` : `${Math.round(ms / 1000)}s`;
+    // F12's short durations: whole hours as h, whole minutes as m, seconds
+    // otherwise (100s · 5m · 1h). The edit form stays in seconds.
+    const fmtLivenessMs = (ms) => {
+      const s = Math.round(ms / 1000);
+      if (s >= 3600 && s % 3600 === 0) return `${s / 3600}h`;
+      if (s >= 60 && s % 60 === 0) return `${s / 60}m`;
+      return `${s}s`;
+    };
 
-    // "liveness T1 60s / T2 300s / T3 1h (defaults)" — the "(defaults)"
-    // label ONLY when the project carries no override at all; any override
-    // renders the merged values with no defaults label (F12 editing row).
+    // The card's agents line, "agents: stale after 100s · tombstoned after 5m
+    // · removed after 1h": the EFFECTIVE thresholds (defaults merged with any
+    // override), named by what happens to the agent, with no defaults marker
+    // in either state (F12's redraw).
     function livenessLabel(project) {
-      const overrides = project.liveness ?? {};
-      const hasOverride =
-        typeof overrides.staleAfterMs === "number" ||
-        typeof overrides.tombstoneAfterMs === "number" ||
-        typeof overrides.pruneAfterMs === "number";
-      const v = { ...MANAGER_LIVENESS_DEFAULTS, ...overrides };
-      const core =
-        `liveness T1 ${fmtLivenessMs(v.staleAfterMs)}` +
-        ` / T2 ${fmtLivenessMs(v.tombstoneAfterMs)}` +
-        ` / T3 ${fmtLivenessMs(v.pruneAfterMs)}`;
-      return hasOverride ? core : `${core} (defaults)`;
+      const v = { ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) };
+      return (
+        `agents: stale after ${fmtLivenessMs(v.staleAfterMs)}` +
+        ` · tombstoned after ${fmtLivenessMs(v.tombstoneAfterMs)}` +
+        ` · removed after ${fmtLivenessMs(v.pruneAfterMs)}`
+      );
     }
 
     // CR-CRU-012 §S2 (cycle 28) — archive/unarchive UI state, shared across
@@ -1979,14 +1981,23 @@
                 )
               : "",
         ),
+        // F12's redraw: each fact on its OWN line; a long path or key wraps
+        // instead of widening the drawer.
+        div(
+          { class: "app-card-meta app-manager-params app-manager-wrap" },
+          `sutRoot ${project.sutRoot ?? ""}`,
+        ),
+        div({ class: "app-card-meta app-manager-params" }, livenessLabel(project)),
         div(
           { class: "app-card-meta app-manager-params" },
-          `sutRoot: ${project.sutRoot ?? ""} · ${livenessLabel(project)}` +
-            ` · retention ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
-            // §S4 (CR-CRU-008) — surface the danger state ONLY when enabled;
-            // the default (absent/false) posture stays silent.
-            (project.allowRunDeletion === true ? " · run deletion: enabled" : "") +
-            ` · key ${project.key} (immutable)`,
+          // §S4 (CR-CRU-008) — the run-deletion gate reads on|off in the
+          // card's run-history line, in either state.
+          `keeps the last ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
+            ` · agents may delete runs: ${project.allowRunDeletion === true ? "on" : "off"}`,
+        ),
+        div(
+          { class: "app-card-meta app-manager-params app-manager-key app-manager-wrap" },
+          `key ${project.key} (immutable)`,
         ),
       );
 
@@ -2067,84 +2078,127 @@
         editing.val = false;
         refetch();
       };
+      // F12's redraw: a caption, the field in seconds (or runs) and, beside
+      // it, what the setting does. The label still WRAPS its field (the
+      // association the labels tests pin); `display: contents` lets the
+      // caption and the field sit in the row's grid columns.
+      const settingRow = (testid, caption, control, unit, explain) =>
+        div(
+          { class: "app-manager-setting" },
+          label(
+            { "data-testid": `${testid}-label`, class: "app-manager-edit-label app-manager-setting-label" },
+            span({ class: "app-manager-setting-caption" }, caption),
+            span({ class: "app-manager-setting-value" }, control, span({ class: "app-manager-unit" }, unit)),
+          ),
+          span({ class: "app-card-meta app-manager-setting-explain" }, explain),
+        );
+      const numberInput = (testid, st) =>
+        input({
+          "data-testid": testid,
+          type: "number",
+          value: st,
+          oninput: (e) => (st.val = e.target.value),
+        });
+      const d = MANAGER_LIVENESS_DEFAULTS;
       return div(
         { class: "app-manager-edit-form" },
-        label(
-          { "data-testid": "manager-edit-name-label", class: "app-manager-edit-label" },
-          "Name",
-          input({
-            "data-testid": "manager-edit-name",
-            value: name,
-            oninput: (e) => (name.val = e.target.value),
-          }),
+        div(
+          { class: "app-manager-row-head" },
+          div({ class: "app-card-name" }, project.name || project.key),
+          span({ class: "app-type-badge" }, project.type),
+          span({ class: "app-chip on app-manager-editing" }, "editing…"),
         ),
-        label(
-          { "data-testid": "manager-edit-type-label", class: "app-manager-edit-label" },
-          "Type",
-          select(
+        div({ class: "app-manager-group-head" }, "Project"),
+        div(
+          { class: "app-manager-project-grid" },
+          label(
+            { "data-testid": "manager-edit-name-label", class: "app-manager-edit-label" },
+            "Name",
+            input({
+              "data-testid": "manager-edit-name",
+              value: name,
+              oninput: (e) => (name.val = e.target.value),
+            }),
+          ),
+          label(
+            { "data-testid": "manager-edit-type-label", class: "app-manager-edit-label" },
+            "Type",
+            select(
+              {
+                "data-testid": "manager-edit-type",
+                onchange: (e) => (type.val = e.target.value),
+              },
+              option({ value: "backend", selected: project.type === "backend" }, "backend"),
+              option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+            ),
+          ),
+          label(
             {
-              "data-testid": "manager-edit-type",
-              onchange: (e) => (type.val = e.target.value),
+              "data-testid": "manager-edit-sutroot-label",
+              class: "app-manager-edit-label app-manager-span-all",
             },
-            option({ value: "backend", selected: project.type === "backend" }, "backend"),
-            option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+            "SUT root",
+            input({
+              "data-testid": "manager-edit-sutroot",
+              value: sutRoot,
+              oninput: (e) => (sutRoot.val = e.target.value),
+            }),
           ),
         ),
-        label(
-          { "data-testid": "manager-edit-sutroot-label", class: "app-manager-edit-label" },
-          "SUT root",
-          input({
-            "data-testid": "manager-edit-sutroot",
-            value: sutRoot,
-            oninput: (e) => (sutRoot.val = e.target.value),
-          }),
+        div(
+          { class: "app-manager-group-head" },
+          "Agent liveness ",
+          span(
+            { class: "app-card-meta" },
+            "— how long an agent may stay silent; any call it makes counts as a heartbeat",
+          ),
         ),
-        label(
-          { "data-testid": "manager-edit-t1-label", class: "app-manager-edit-label" },
-          "Stale after (T1, seconds)",
-          input({
-            "data-testid": "manager-edit-t1",
-            type: "number",
-            value: t1,
-            oninput: (e) => (t1.val = e.target.value),
-          }),
+        settingRow(
+          "manager-edit-t1",
+          "Shown as stale after",
+          numberInput("manager-edit-t1", t1),
+          "s",
+          "its card turns amber",
         ),
-        label(
-          { "data-testid": "manager-edit-t2-label", class: "app-manager-edit-label" },
-          "Tombstone after (T2, seconds)",
-          input({
-            "data-testid": "manager-edit-t2",
-            type: "number",
-            value: t2,
-            oninput: (e) => (t2.val = e.target.value),
-          }),
+        settingRow(
+          "manager-edit-t2",
+          "Tombstoned after",
+          numberInput("manager-edit-t2", t2),
+          "s",
+          ["greyed; its open runs are aborted ", span({ class: "app-manager-em" }, "agent died")],
         ),
-        label(
-          { "data-testid": "manager-edit-t3-label", class: "app-manager-edit-label" },
-          "Prune after (T3, seconds)",
-          input({
-            "data-testid": "manager-edit-t3",
-            type: "number",
-            value: t3,
-            oninput: (e) => (t3.val = e.target.value),
-          }),
+        settingRow(
+          "manager-edit-t3",
+          "Removed after",
+          numberInput("manager-edit-t3", t3),
+          "s",
+          "dropped from the agents list",
         ),
-        label(
-          { "data-testid": "manager-edit-retention-label", class: "app-manager-edit-label" },
-          "Retention (runs shown in the timeline window)",
-          input({
-            "data-testid": "manager-edit-retention",
-            type: "number",
-            value: retention,
-            oninput: (e) => (retention.val = e.target.value),
-          }),
+        div(
+          { class: "app-card-meta app-manager-footnote" },
+          "each must be longer than the one before; blank = the board default " +
+            `(${d.staleAfterMs / 1000} s · ${d.tombstoneAfterMs / 1000} s · ${d.pruneAfterMs / 1000} s)`,
+        ),
+        div(
+          { class: "app-manager-group-head" },
+          "Run history ",
+          span({ class: "app-card-meta" }, "— this one is about events, not agents"),
+        ),
+        settingRow(
+          "manager-edit-retention",
+          "Keep the last",
+          numberInput("manager-edit-retention", retention),
+          "runs",
+          "older runs are evicted; the Runs timeline shows up to this many",
         ),
         // §S4 (CR-CRU-008) — the guarded-deletion DANGER toggle: enabling it
         // lets agents delete runs (with per-call user approval), so it wears
         // the destructive styling.
         label(
-          { "data-testid": "manager-edit-allow-deletion-label", class: "app-manager-edit-label" },
-          "Allow agents to delete runs (guarded — per-call approval)",
+          {
+            "data-testid": "manager-edit-allow-deletion-label",
+            class: "app-manager-edit-label app-manager-danger-label",
+          },
           input({
             "data-testid": "manager-edit-allow-deletion",
             type: "checkbox",
@@ -2152,21 +2206,26 @@
             checked: allowDeletion,
             onchange: (e) => (allowDeletion.val = e.target.checked),
           }),
+          " allow agents to delete runs ",
+          span({ class: "app-card-meta" }, "(guarded · per-call approval)"),
         ),
-        button(
-          {
-            "data-testid": "manager-edit-save",
-            class: "app-chip on",
-            // CR-CRU-122 §S4 — no second PATCH while the first is in flight.
-            disabled: savePending,
-            onclick: save,
-          },
-          () => (savePending.val ? Spinner() : ""),
-          "save",
-        ),
-        button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
-          { class: "app-card-meta app-manager-params" },
+          { class: "app-manager-actions" },
+          button(
+            {
+              "data-testid": "manager-edit-save",
+              class: "app-chip on",
+              // CR-CRU-122 §S4 — no second PATCH while the first is in flight.
+              disabled: savePending,
+              onclick: save,
+            },
+            () => (savePending.val ? Spinner() : ""),
+            "save",
+          ),
+          button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
+        ),
+        div(
+          { class: "app-card-meta app-manager-params app-manager-key app-manager-wrap" },
           `key ${project.key} (immutable)`,
         ),
       );
@@ -2320,21 +2379,29 @@
       return div(
         { "data-testid": "manager-add-form", class: "app-manager-add" },
         span({ class: "app-rail-title" }, "+ Add project"),
-        input({
-          "data-testid": "manager-add-name",
-          placeholder: "name",
-          oninput: (e) => (name.val = e.target.value),
-        }),
-        select(
-          { "data-testid": "manager-add-type", onchange: (e) => (type.val = e.target.value) },
-          option({ value: "backend" }, "backend"),
-          option({ value: "frontend" }, "frontend"),
+        // F12's redraw: the row stacks — name and type together, sutRoot
+        // on its own line beneath them.
+        div(
+          { class: "app-manager-add-line app-manager-add-name-type" },
+          input({
+            "data-testid": "manager-add-name",
+            placeholder: "name",
+            oninput: (e) => (name.val = e.target.value),
+          }),
+          select(
+            { "data-testid": "manager-add-type", onchange: (e) => (type.val = e.target.value) },
+            option({ value: "backend" }, "backend"),
+            option({ value: "frontend" }, "frontend"),
+          ),
         ),
-        input({
-          "data-testid": "manager-add-sutroot",
-          placeholder: "sutRoot",
-          oninput: (e) => (sutRoot.val = e.target.value),
-        }),
+        div(
+          { class: "app-manager-add-line" },
+          input({
+            "data-testid": "manager-add-sutroot",
+            placeholder: "sutRoot",
+            oninput: (e) => (sutRoot.val = e.target.value),
+          }),
+        ),
         button(
           {
             "data-testid": "manager-add-submit",
@@ -2371,8 +2438,11 @@
             button({ class: "app-chip", onclick: () => closeManager() }, "← home"),
             span({ class: "app-rail-title" }, "Projects manager · /manage"),
           ),
+          // The manager's OWN content box: the shared pane-scroll class would
+          // pull in the workspace panes' `> *` width floor and push the
+          // drawer sideways.
           div(
-            { class: "app-pane-content" },
+            { class: "app-manager-content" },
             () => div([...state.projects].map(ManagerProjectRow)),
             ManagerAddForm(),
             ManagerArchivedFold,
