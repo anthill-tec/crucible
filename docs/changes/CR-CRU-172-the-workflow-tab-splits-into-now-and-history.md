@@ -104,37 +104,37 @@ nothing is deleted; a snapshot with no later gate (a run genuinely still going) 
 
 ## Acceptance criteria
 
-- [ ] **AC1 — gate identity.** A gate posted by `gate-run` or `gate-respond` carries `gate.run`
+- [x] **AC1 — gate identity.** A gate posted by `gate-run` or `gate-respond` carries `gate.run`
       with the snapshot's id, branch and head (interim and seal), and every interim POST carries the
       run's `--release` as `version` — asserted through the shared builder AND per client (each of
       bun, python, mvn, rust, arduino) against a recording board; the server answers that gate's
       `runId`, and a decision recorded for the run is returned with it (`GET /api/v2/events/<id>`).
       A snapshot without `run.branch`/`run.head` posts the gate without those keys.
-- [ ] **AC2 — two panes.** The Workflow tab renders Now above History, each scrolling on its own,
+- [x] **AC2 — two panes.** The Workflow tab renders Now above History, each scrolling on its own,
       Now no taller than half the pane (desktop, 1280×800, with a plan of many cycles), and on a phone
       (390×844) two sub-tabs where Now is selected on entry and History shows the wave list — asserted
       in a real browser. On desktop the titles `Now` and `History` sit above their boxes, outside
       them (Now's own text stays exactly what AC3 pins).
-- [ ] **AC3 — what Now shows**, each on the page with fixed fixtures: an open plan → its cycles; the
+- [x] **AC3 — what Now shows**, each on the page with fixed fixtures: an open plan → its cycles; the
       newest gate in flight → F21's gate view naming its release, run id, branch and head, its step
       ladder, its recorded decisions, and no push line; an open plan AND a running gate → both, plan
       first; nothing running → exactly `Nothing running → Roadmap`, and clicking `→ Roadmap` selects
       the Roadmap tab.
-- [ ] **AC4 — "running" is the newest gate.** A project whose in-flight snapshots are followed by
+- [x] **AC4 — "running" is the newest gate.** A project whose in-flight snapshots are followed by
       a seal of the same run is NOT running: Now reads `Nothing running → Roadmap` and the project
       lands on the Roadmap (CR-CRU-174's rule); with the seal absent it is running and lands on
       Workflow — asserted on the page with fixed fixtures.
-- [ ] **AC5 — the bare card is gone.** With every plan closed and a sealed gate on the board, the
+- [x] **AC5 — the bare card is gone.** With every plan closed and a sealed gate on the board, the
       Workflow tab renders no gate widget and no `gate-pane`; the run drill-in of that gate still
       renders its body, with the run line and the push line — asserted on the page.
-- [ ] **AC7 — the orphans are retired.** Opening a v19 store whose project holds in-flight,
+- [x] **AC7 — the orphans are retired.** Opening a v19 store whose project holds in-flight,
       version-less snapshots followed by a later (retired) seal migrates it to v20 with those
       snapshots retired and every other gate untouched (a version-less in-flight snapshot with no
       later gate stays live; a versioned one is untouched); a second open changes nothing; the backup
       is written — asserted on a fixture store. On a plain copy of this board's store, after the
       migration Now reads `Nothing running → Roadmap` and the Crucible project lands on the Roadmap
       when no plan is open — asserted in VERIFY.
-- [ ] **AC6 — documents.** PRD-crucible-v2 and DN-model-b-language describe the Workflow tab as Now
+- [x] **AC6 — documents.** PRD-crucible-v2 and DN-model-b-language describe the Workflow tab as Now
       and History per F22 — asserted by reading the amended paragraphs (no "beside the no-mistakes
       gate pane" remains).
 
