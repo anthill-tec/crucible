@@ -3,7 +3,8 @@
 **Author:** Antony John
 **Co-author:** claude (orchestrator — crucible)
 **Date:** 2026-07-16 · **amended 2026-09-24** (CR-CRU-022 gap analysis + user rulings) ·
-**amended 2026-09-27** (velocity follows the flow — CR-CRU-161, user rulings)
+**amended 2026-09-27** (velocity follows the flow — CR-CRU-161, user rulings) ·
+**amended 2026-10-08** (the release band reads remaining of the release's live total — CR-CRU-174 §S1)
 **Status:** LOCKED 2026-07-16; **AMENDED and APPROVED 2026-09-24** — the SCRUM model below supersedes
 the size-weighted, per-wave, snapshot-based model this note first locked. Ships **0.3.0**.
 **Consumed by:** [PRD-crucible-v2.md](PRD-crucible-v2.md) (design input) · CR-CRU-022 (implementation) ·
@@ -183,7 +184,7 @@ Against the **release's declared target** (CR-CRU-091): `P80 ≤ target` → `ah
 | Endpoint | Returns |
 |---|---|
 | `GET /api/v2/projects/<key>/analytics/velocity?release=<label>` | `{release, startTs, pointsPerDay?, days:[{day, points}], sampleDays, flow:{execMsPerCycle, gateMsPerCycle, sampleCycles}}` (amended 2026-10-07; the flow is project-level) |
-| `GET …/analytics/burndown?release=<label>` | `{release, committedPoints, target?, ideal?:[…], points:[{ts, remaining, event, cr, verb, delta}], unpointed:[cr]}` |
+| `GET …/analytics/burndown?release=<label>` | `{release, committedPoints, totalPoints, target?, ideal?:[…], points:[{ts, remaining, event, cr, verb, delta}], unpointed:[cr]}` (amended 2026-10-08: `totalPoints` is the release's live total — the current points of its live CRs, merged and pending, voided and superseded excluded; `committedPoints` stays the start total the ideal line starts from) |
 | `GET …/analytics/forecast?release=<label>` | `{release, remainingPoints, p50Ts?, p80Ts?, scheduleHealth?, sampleDays, status, unpointed?:[cr]}` (amended 2026-10-07) |
 
 Plus: `points` on queue entries (set via `cr-plan --points`); the declaration journal. JSON only, like
@@ -197,7 +198,10 @@ existing plan/queue ticks.
   and a secondary *flow* line with the exec/gate split (project-level). Every tab; with no release in
   focus it says so.
 - **Release band** in the **header of zone 3**, above the release-scoped table (testid
-  `roadmap-progress`): a burndown thumbnail, `remaining of committed pts`, velocity, the P50/P80 chip,
+  `roadmap-progress`): a burndown thumbnail, `<release> · <remaining> of <total> pts left` (amended
+  2026-10-08: `<total>` is the release's live total, `totalPoints`, so a CR added, voided, superseded,
+  moved out or re-pointed moves it; the chart's ideal line still starts from the start total,
+  `committedPoints`), velocity, the P50/P80 chip,
   and the schedule-health chip when a target is declared, plus (amended 2026-10-07) a
   `verified · N runs ↗` chip (`roadmap-verified-chip`, singular `1 run`) when runs are filed under the
   focused release — it opens the Runs tab filtered to that release (`?release=`); none at 0. Tap
