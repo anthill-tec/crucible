@@ -672,7 +672,7 @@ describe("Manager UI — allowRunDeletion edit-in-place toggle (§S4)", () => {
     expect(patchCalls[0]!.body).toEqual({ allowRunDeletion: true });
   });
 
-  test("after enabling + saving, the row view surfaces the enabled state ('run deletion: enabled'); a fresh row shows no such text", async () => {
+  test("after enabling + saving, the row view reads 'agents may delete runs: on'; a fresh row reads 'agents may delete runs: off'", async () => {
     const key = "mgr-allow-del-viewflip-1";
     await mountApp({
       pathname: "/manage",
@@ -680,7 +680,7 @@ describe("Manager UI — allowRunDeletion edit-in-place toggle (§S4)", () => {
     });
 
     const beforeText = (managerRow(key).textContent ?? "").toLowerCase();
-    expect(beforeText).not.toMatch(/run deletion:\s*enabled/);
+    expect(beforeText).toMatch(/agents may delete runs:\s*off/);
 
     const { toggle, save } = await openEditAllowDeletion(key);
     toggle.click();
@@ -688,7 +688,7 @@ describe("Manager UI — allowRunDeletion edit-in-place toggle (§S4)", () => {
     await settle();
 
     const afterText = (managerRow(key).textContent ?? "").toLowerCase();
-    expect(afterText).toMatch(/run deletion:\s*enabled/);
+    expect(afterText).toMatch(/agents may delete runs:\s*on/);
   });
 
   test("the project key remains read-only through the new toggle too — no input anywhere in the manager is bound to it", async () => {

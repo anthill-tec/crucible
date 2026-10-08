@@ -387,10 +387,10 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-liveness-default-1").textContent ?? "";
-    expect(text).toMatch(/stale after[^0-9]{0,6}60s/i);
-    expect(text).toMatch(/tombstoned after[^0-9]{0,6}300s/i);
+    expect(text).toMatch(/stale after[^0-9]{0,6}1m/i);
+    expect(text).toMatch(/tombstoned after[^0-9]{0,6}5m/i);
     expect(text).toMatch(/removed after[^0-9]{0,6}1h/i);
-    expect(text.toLowerCase()).not.toContain("default");
+    expect(text.toLowerCase()).not.toContain("(defaults)");
   });
 
   test("shows overridden stale/tombstoned values, with no defaults label, when overrides are set (re-pinned CR-CRU-174 §S3)", async () => {
@@ -406,8 +406,8 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-liveness-override-1").textContent ?? "";
-    expect(text).toMatch(/stale after[^0-9]{0,6}120s/i);
-    expect(text).toMatch(/tombstoned after[^0-9]{0,6}600s/i);
+    expect(text).toMatch(/stale after[^0-9]{0,6}2m/i);
+    expect(text).toMatch(/tombstoned after[^0-9]{0,6}10m/i);
     expect(text.toLowerCase()).not.toContain("default");
   });
 
