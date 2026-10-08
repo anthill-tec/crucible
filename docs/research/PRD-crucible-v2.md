@@ -429,11 +429,15 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   table, pushed commit/PR — a no-mistakes push is categorically distinct from an
   ordinary push, which never reaches Crucible). The timeline renders a full-width
   wave-boundary card; the drill-in mirrors the axi structure. The workspace gains
-  a dedicated **Workflow tab** (Runs · Workflow · Coverage · Compile · BDD): live
-  section = the open plan as a **per-CR todo view** (active cycle expanded with
-  its live runs) beside the **no-mistakes gate pane**; the Wave → [Track] → CR →
-  Cycle history lens below. Wave states: `running → lanes complete · awaiting
-  review → gated → superseded`. (CR-CRU-011 + CR-CRU-013.)
+  a dedicated **Workflow tab** (Runs · Workflow · Coverage · Compile · BDD) in two
+  panes, each its own scroll (storyboard F22): **Now** above — what is running,
+  and only that: the open plan as a **per-CR todo view** (active cycle expanded
+  with its live runs), the running no-mistakes gate in F21's gate view (plan first
+  when both run), or the single line `Nothing running → Roadmap` — and the **History**
+  pane below, the Wave → [Track] → CR → Cycle history lens. On a phone the
+  two panes are sub-tabs, Now selected on entry. Wave states: `running → lanes
+  complete · awaiting review → gated → superseded`. (CR-CRU-011 + CR-CRU-013;
+  Now and History, CR-CRU-172.)
   **Milestones (locked round 24):** gap-analysis / design-review / stage-flip
   entries are workflow events on the **project workspace timeline ONLY** — the
   home collective feed stays a cross-project run feed (a compact gate entry is

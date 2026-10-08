@@ -6318,7 +6318,8 @@
 
     // CR-CRU-013 §S4 — shared no-mistakes gate rendering body (ONE form,
     // reused by both the §S3 timeline drill-in GateBody AND Now's gate view
-    // below): outcome banner → the run line (F21) → one step-row per
+    // below): outcome banner, carrying the run line (F21) inside its own box
+    // under its text → one step-row per
     // submitted step → one fix-row per submitted fix → the push/PR line, only
     // when the gate pushed something (an in-flight run has pushed nothing) →
     // (§S2, frame F21) the run's recorded decisions, beneath the step rows,
@@ -6337,8 +6338,8 @@
           // type, so it carries the same qualification: an in-flight ladder is
           // shown as one, never as the verdict its `checks-passed` would read.
           `no-mistakes ${g.outcome}${gateInFlightClause(g)}`,
+          gateRunLine(g),
         ),
-        gateRunLine(g),
         steps.map((s) =>
           div(
             { "data-testid": "gate-step-row", class: "app-gate-step-row app-tree-line" },
@@ -6789,11 +6790,48 @@
             "← roadmap",
           );
 
-    const WorkflowFeed = () =>
-      div(
-        { "data-testid": "pane-scroll", class: "app-pane-content" },
+    // F22 \u2014 the Workflow tab is two panes: Now above History, each its own
+    // vertical scroll (styles.css `.app-workflow-panes`), Now capped at half
+    // the pane. On the phone band they become two sub-tabs whose rows are the
+    // toggles (F15d), Now selected on entry: the sub-tab is held per mount, so
+    // every entry to the tab starts on Now, and the class on the pane-scroll
+    // box shows the selected pane and hides the other.
+    const WorkflowSubTab = (selected, name) =>
+      button(
+        {
+          "data-testid": "workflow-subtab",
+          role: "tab",
+          "aria-selected": () => String(selected.val === name),
+          class: () => `app-workflow-subtab${selected.val === name ? " on" : ""}`,
+          onclick: () => {
+            selected.val = name;
+          },
+        },
+        name,
+      );
+
+    const WorkflowSubTabs = (selected) =>
+      isPhoneBand()
+        ? div(
+            { "data-testid": "workflow-subtabs", class: "app-workflow-subtabs", role: "tablist" },
+            WorkflowSubTab(selected, "Now"),
+            WorkflowSubTab(selected, "History"),
+          )
+        : "";
+
+    const WorkflowFeed = () => {
+      const subtab = van.state("Now");
+      return div(
+        {
+          "data-testid": "pane-scroll",
+          class: () =>
+            `app-pane-content app-workflow-panes${
+              isPhoneBand() ? ` app-workflow-show-${subtab.val.toLowerCase()}` : ""
+            }`,
+        },
         paneRunway(
           () => WorkflowBackToRoadmap(),
+          () => WorkflowSubTabs(subtab),
           div(
             { class: "app-workflow-cols" },
             () => WorkflowNow(),
@@ -6802,6 +6840,7 @@
           () => WorkflowHistory(),
         ),
       );
+    };
 
     const WorkflowPanel = () =>
       div({ class: greyed("app-center") }, WorkflowFeed());
