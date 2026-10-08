@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { FakeEventSource } from "./helpers/stream-workspace-harness";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -201,19 +202,35 @@ interface MountOpts {
   plans?: PlanFixture[];
   events?: EventFixture[];
   eventDetails?: Record<string, RunDetailFixture>;
+  /** Install a scriptable stream (happy-dom has no EventSource) so a test
+   *  can drive the page's normal refresh path with a stream frame. The
+   *  fixture lists above are read at fetch time, so a test reassigns them
+   *  before dispatching the frame. */
+  withStream?: boolean;
+}
+
+interface Mounted {
+  /** Every URL the page fetched, in order. */
+  readonly fetchLog: string[];
+  /** The page's one live stream (only with `withStream`). */
+  stream(): FakeEventSource;
 }
 
 let cacheBust = 0;
+let installedEventSource = false;
 
-async function mountApp(opts: MountOpts): Promise<void> {
+async function mountApp(opts: MountOpts): Promise<Mounted> {
   const pathname = opts.pathname ?? "/";
   const search = opts.search ?? "";
+  const fetchLog: string[] = [];
+  let live: FakeEventSource | null = null;
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   await GlobalRegistrator.register({ url: `http://localhost${pathname}${search}` });
   document.body.innerHTML = '<div id="app"></div>';
 
   const globalWithFetch = globalThis as unknown as { fetch: typeof fetch };
   const scriptedFetch = (async (url: string) => {
+    fetchLog.push(url);
     let body: unknown;
     const eventDetailMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     const isEventsListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
@@ -248,6 +265,16 @@ async function mountApp(opts: MountOpts): Promise<void> {
   }) as typeof fetch;
   globalWithFetch.fetch = scriptedFetch;
 
+  if (opts.withStream === true) {
+    installedEventSource = true;
+    (globalThis as unknown as { EventSource: unknown }).EventSource = class extends FakeEventSource {
+      constructor(url: string) {
+        super(url);
+        live = this;
+      }
+    };
+  }
+
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
 
@@ -257,6 +284,16 @@ async function mountApp(opts: MountOpts): Promise<void> {
   (0, eval)(APP_JS_SRC);
 
   await settle();
+
+  return {
+    fetchLog,
+    stream: () => {
+      if (live === null) {
+        throw new Error("project-landing-pane.test.ts mountApp: no stream — mount with `withStream: true`");
+      }
+      return live;
+    },
+  };
 }
 
 /** Real macrotask ticks — see tests/helpers/dom-settle.ts header for why a
@@ -271,6 +308,10 @@ async function settle(ticks = 8): Promise<void> {
 
 afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  if (installedEventSource) {
+    delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+    installedEventSource = false;
+  }
 });
 
 function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
@@ -500,5 +541,111 @@ describe("a URL that already names a tab", () => {
     expect(tabIsOn("Roadmap")).toBe(true);
     expect(tabIsOn("Runs")).toBe(false);
     expect(tabIsOn("Workflow")).toBe(false);
+  });
+});
+
+// "Busy" here means the project has an open plan or a gate in flight.
+// "Idle" means it has neither. The landing rule picks a tab only on the way
+// in. Once a project is open, turning busy or idle never moves the user's
+// tab. Each test drives the page's normal refresh path: a stream "events"
+// frame triggers a re-read of the events list and plans. A fetch-log check
+// first confirms that the re-read actually happened, so the "tab stayed
+// put" assertion cannot pass just because nothing was refreshed.
+// ─────────────────────────────────────────────────────────────────────────
+
+function readsOf(fetchLog: readonly string[], pattern: RegExp): number {
+  return fetchLog.filter((url) => pattern.test(url)).length;
+}
+
+const PLANS_READ = /\/api\/v2\/projects\/[^/?]+\/plans/;
+const EVENTS_LIST_READ = /\/api\/v2\/events(\?|$)/;
+
+describe("a project that turns busy or idle while it is open", () => {
+  test("an idle project opened on the Roadmap keeps the Roadmap tab when an open plan arrives through a refresh", async () => {
+    const key = "landing-turns-busy-plan-1";
+    const opts: MountOpts = {
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Turns Busy Plan Project" })],
+      withStream: true,
+    };
+    const mounted = await mountApp(opts);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    const plansReadsBefore = readsOf(mounted.fetchLog, PLANS_READ);
+    opts.plans = [openPlan(key, "LAND-PLAN-ARRIVES", 601)];
+    mounted.stream().open();
+    mounted.stream().dispatch("events", key);
+    await settle();
+
+    // The refresh re-read the plans and saw the open plan.
+    expect(readsOf(mounted.fetchLog, PLANS_READ)).toBeGreaterThan(plansReadsBefore);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(location.pathname).toBe(`/p/${key}`);
+
+    // The new plan is on the page: opening Workflow by hand shows it.
+    tabButton("Workflow")!.click();
+    await settle();
+    expect(textOf(document.querySelector('[data-testid="workflow-active-header"]'))).toBe(
+      "Active workflow \u2014 LAND-PLAN-ARRIVES",
+    );
+  });
+
+  test("a busy project opened on Workflow keeps the Workflow tab when its plan closes through a refresh", async () => {
+    const key = "landing-turns-idle-plan-1";
+    const opts: MountOpts = {
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Turns Idle Plan Project" })],
+      plans: [openPlan(key, "LAND-PLAN-CLOSES", 602)],
+      withStream: true,
+    };
+    const mounted = await mountApp(opts);
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(textOf(document.querySelector('[data-testid="workflow-active-header"]'))).toBe(
+      "Active workflow \u2014 LAND-PLAN-CLOSES",
+    );
+
+    const plansReadsBefore = readsOf(mounted.fetchLog, PLANS_READ);
+    opts.plans = [{ ...openPlan(key, "LAND-PLAN-CLOSES", 602), status: "closed" }];
+    mounted.stream().open();
+    mounted.stream().dispatch("events", key);
+    await settle();
+
+    expect(readsOf(mounted.fetchLog, PLANS_READ)).toBeGreaterThan(plansReadsBefore);
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(false);
+    // The plan's closing is on the page: the Workflow pane now shows its
+    // empty state, not the old plan's header.
+    expect(document.querySelector('[data-testid="workflow-active-header"]')).toBeNull();
+    expect(textOf(document.querySelector('[data-testid="workspace-body"]')).toLowerCase()).toContain(
+      "no open plan",
+    );
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
+  });
+
+  test("an idle project opened on the Roadmap keeps the Roadmap tab when a gate in flight appears through a refresh", async () => {
+    const key = "landing-turns-busy-gate-1";
+    const opts: MountOpts = {
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Turns Busy Gate Project" })],
+      withStream: true,
+    };
+    const mounted = await mountApp(opts);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    const eventsReadsBefore = readsOf(mounted.fetchLog, EVENTS_LIST_READ);
+    opts.events = [inFlightGate(key, "evt-landing-gate-arrives-1", Date.now())];
+    mounted.stream().open();
+    mounted.stream().dispatch("events", key);
+    await settle();
+
+    // The refresh re-read the events list, which now holds a gate in flight.
+    expect(readsOf(mounted.fetchLog, EVENTS_LIST_READ)).toBeGreaterThan(eventsReadsBefore);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(location.pathname).toBe(`/p/${key}`);
   });
 });
