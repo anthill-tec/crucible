@@ -15,6 +15,7 @@ Feature: the Velocity card and the Vitals cards show no pointer cursor, only the
     And an online agent "cadence-cursor-agent" with message "building" is registered on that project
     And a CR queue registering cr "CR-CADENCE-002" titled "cursor contract fixture" in wave "1" is posted for that project
     And velocity reads for that project are mocked with a day or week switch fixture
+    And a green regression run with 50% coverage is ingested for agent "cadence-cursor-agent"
     When I open the workspace for that project
     Then the Velocity card shows no pointer cursor
     And the cycle health card shows no pointer cursor
