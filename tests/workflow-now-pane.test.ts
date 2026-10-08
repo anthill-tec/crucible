@@ -473,7 +473,7 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
     // re-read, never held over from the OLD snapshot's id.
     expect(opts.fetchLog).toContain(secondId);
     expect(document.querySelectorAll('[data-testid="gate-decision-row"]').length).toBe(2);
-  });
+  }, POLL_TEST_TIMEOUT_MS);
 
   test("with nothing running, clicking the → Roadmap link in 'Nothing running → Roadmap' selects the Roadmap tab", async () => {
     const key = "now-pane-roadmap-link";

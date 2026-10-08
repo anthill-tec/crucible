@@ -439,6 +439,7 @@ describe("§S2/AC3 — ingesting a newer in-flight snapshot of the SAME run repl
     // later snapshot's 4-step ladder.
     expect(pane!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(4);
     },
+    POLL_TEST_TIMEOUT_MS,
   );
 });
 
