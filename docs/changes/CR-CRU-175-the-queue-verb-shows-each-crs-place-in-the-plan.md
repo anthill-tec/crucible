@@ -16,25 +16,41 @@ agents build). The verb is the gap.
 
 ## Steps
 
-### §S1 — `queue` rows carry seq, release, points and dependencies
+### §S0 — it stays an AXI verb answering TOON
 
-Every row of the `queue` verb (all five clients — it is the shared `cmd_queue`) gains `release`,
-`seq`, `points` (null when unpointed) and `dependsOn` (the CR ids, `-`-free and comma-joined in the
-table cell, empty when none), keeping the table uniform (every key on every row, null rather than
-omitted). The existing six columns keep their names, order and meaning; the new ones follow them.
+`queue` keeps the fleet's AXI contract (CR-CRU-030, CR-CRU-046): one TOON envelope on stdout
+(`axi: verb, ok, …, help[], context, warnings[]`), the rows as a uniform TOON table (every row the
+same key-set, primitive values only, null rather than an omitted key), a `count`, the stderr human
+line, and the §S10 projection rules — the default columns stay the minimal set consumers already
+read, `--fields a,b,c` ADDS columns to that set (never replaces it), and `--full` prints every column
+and untruncated text. Nothing here is a new endpoint or a new format; the client reads the board
+through its existing queue read.
 
-### §S2 — the order the queue already implies is visible
+### §S1 — the queue's place-in-plan columns, asked for by `--fields`
+
+`queue` (all five clients — it is the shared `cmd_queue`) can add `release`, `seq`, `points` (null
+when unpointed) and `dependsOn` to its rows through `--fields` (and `--full`); the default six
+columns (`cr`, `wave`, `status`, `planId`, `title`, `lifecycle`) are unchanged in name, order and
+meaning, so the release ceremony and every other consumer read the same table. `dependsOn` is a
+single primitive cell, as a TOON table requires — the CR ids joined the way the fleet's other verbs
+render a list in a table (settled at gap analysis), empty when none.
+
+### §S2 — the order the queue implies is visible
 
 Rows are listed in the board's order (by `seq`), so reading the table top to bottom is reading the
-plan; and a row whose dependency sits after it carries a `warning` column naming it (empty
-otherwise), the same "before its dependency" fact the roadmap table shows.
+plan; with the place-in-plan columns asked for, a row placed before one of its dependencies carries
+a `warning` cell naming it (empty otherwise), and the envelope's `warnings[]` carries one structured
+`{code, detail}` per such row — the same "before its dependency" fact the roadmap table shows, on
+both channels.
 
 ## Acceptance criteria
 
-- [ ] `queue` (each client) prints `release`, `seq`, `points` and `dependsOn` on every row after the
-      six existing columns, uniform, null when absent — asserted per client against a recording
-      board; every existing consumer of the verb's output (the release ceremony, tests) still reads
-      it — asserted by the existing suites.
-- [ ] Rows come in `seq` order, and a row placed before one of its dependencies names it in
-      `warning` — asserted on fixed fixtures, including the shape of today's CR-CRU-171 incident
-      (pending CRs sent above merged ones).
+- [ ] `queue` answers one TOON envelope per the AXI contract; by default its table is exactly
+      today's six columns; `--fields release,seq,points,dependsOn` (and `--full`) add those columns
+      after them on every row, uniform, primitive, null when absent — asserted per client against a
+      recording board, and by decoding the output with the official TOON decoder (CR-CRU-046's
+      round-trip); the release ceremony and the existing suites still read the default table.
+- [ ] Rows come in `seq` order; with the place-in-plan columns asked for, a row placed before one of
+      its dependencies names it in its `warning` cell and in one `warnings[]` entry — asserted on fixed
+      fixtures, including the shape of the CR-CRU-171 sequencing incident (pending CRs sent above
+      merged ones).
