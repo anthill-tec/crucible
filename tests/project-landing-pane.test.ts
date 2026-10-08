@@ -83,6 +83,7 @@ interface GateEventFixture {
     intent: string;
     outcome: "checks-passed" | "passed" | "failed" | "cancelled";
     steps: GateStepFixture[];
+    run?: { id: string; branch?: string; head?: string };
     inFlight?: boolean;
   };
 }
@@ -160,6 +161,7 @@ function inFlightGate(key: string, id: string, timestamp: number): GateEventFixt
         { name: "intent", status: "passed" },
         { name: "review", status: "running" },
       ],
+      run: { id: `run-${id}` },
       inFlight: true,
     },
   };
@@ -195,6 +197,21 @@ function runFixtures(eventId: string, projectKey: string, now: number): { detail
   return { detail, brief };
 }
 
+// CR-CRU-176 §S1/AC1 — the posting identity's liveness, exactly the shape
+// `GET /api/v2/agents` answers (src/types.ts `LiveAgent`): `liveness` is the
+// server-computed "online" | "stale" | "tombstoned" the app already reads
+// for agent cards (`agent.liveness === "online"`, public/app.js:963).
+interface AgentFixture {
+  agentId: string;
+  projectKey?: string;
+  status?: "online" | "busy";
+  liveness: "online" | "stale" | "tombstoned";
+}
+
+function agentFixture(agentId: string, liveness: AgentFixture["liveness"]): AgentFixture {
+  return { agentId, status: "online", liveness };
+}
+
 interface MountOpts {
   pathname?: string;
   search?: string;
@@ -202,6 +219,7 @@ interface MountOpts {
   plans?: PlanFixture[];
   events?: EventFixture[];
   eventDetails?: Record<string, RunDetailFixture>;
+  agents?: AgentFixture[];
   /** Install a scriptable stream (happy-dom has no EventSource) so a test
    *  can drive the page's normal refresh path with a stream frame. The
    *  fixture lists above are read at fetch time, so a test reassigns them
@@ -252,7 +270,7 @@ async function mountApp(opts: MountOpts): Promise<Mounted> {
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
     } else if (url.includes("/api/v2/agents")) {
-      body = { ok: true, agents: [] };
+      body = { ok: true, agents: opts.agents ?? [] };
     } else if (url.includes("/api/v2/events")) {
       body = { ok: true, events: opts.events ?? [] };
     } else if (url.includes("/api/v2/health")) {
@@ -414,6 +432,11 @@ describe("opening a busy project", () => {
       pathname: `/p/${busyKey}`,
       projects: [project({ key: busyKey, name: "Busy Gate In Flight Project" })],
       events: [inFlightGate(busyKey, "evt-landing-gate-1", now)],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — a gate is running
+      // only while its posting identity is online (or a step is held); this
+      // fixture keeps the same meaning by giving `inFlightGate`'s identity
+      // ("orchestrator-landing-1") a live heartbeat.
+      agents: [agentFixture("orchestrator-landing-1", "online")],
     });
     expect(tabIsOn("Workflow")).toBe(true);
     expect(tabIsOn("Roadmap")).toBe(false);

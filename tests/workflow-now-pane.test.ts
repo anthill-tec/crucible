@@ -134,6 +134,18 @@ interface GateEventFixture {
   decisions?: GateDecisionFixture[];
 }
 
+// CR-CRU-176 §S1/AC1 — the liveness of the AGENT that posted a gate's newest
+// snapshot, exactly the shape `GET /api/v2/agents` answers (src/types.ts
+// `LiveAgent`): `liveness` is the server-computed "online" | "stale" |
+// "tombstoned" the app already reads for agent cards (`agent.liveness ===
+// "online"`, public/app.js:963).
+interface AgentFixture {
+  agentId: string;
+  projectKey?: string;
+  status?: "online" | "busy";
+  liveness: "online" | "stale" | "tombstoned";
+}
+
 interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
@@ -141,6 +153,7 @@ interface MountOpts {
   plans: PlanFixture[];
   eventDetails?: Record<string, GateEventFixture>;
   fetchLog?: string[];
+  agents?: AgentFixture[];
 }
 
 let cacheBust = 0;
@@ -156,6 +169,14 @@ function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectF
     lastActivity: now,
     ...overrides,
   };
+}
+
+// The run identity's liveness fixture: `online` (the run is being driven),
+// `stale` (the identity went quiet — a dead/killed run) or `tombstoned`
+// (long gone). Defaults carry no `role` and no other agent-card concerns —
+// only the ONE field §S1's `runningGate` reads.
+function agentFixture(agentId: string, liveness: AgentFixture["liveness"]): AgentFixture {
+  return { agentId, status: "online", liveness };
 }
 
 function gateEvent(
@@ -199,7 +220,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
     } else if (url.includes("/api/v2/agents")) {
-      body = { ok: true, agents: [] };
+      body = { ok: true, agents: opts.agents ?? [] };
     } else if (url.includes("/api/v2/events")) {
       body = { ok: true, events: opts.events };
     } else if (url.includes("/api/v2/health")) {
@@ -290,6 +311,11 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
       events: [brief],
       eventDetails: { [eventId]: { ...brief, decisions: [] } },
       plans: [],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — a gate is
+      // running only while the identity that posted it is online; this
+      // fixture's gate is kept "running" by giving its posting identity
+      // (brief.agentId) a live heartbeat, unchanged meaning otherwise.
+      agents: [agentFixture(brief.agentId, "online")],
     });
     await openWorkflowTab();
     await settle();
@@ -340,6 +366,10 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
       events: [brief],
       eventDetails: { [eventId]: { ...brief, decisions: [] } },
       plans: [],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — same reasoning
+      // as the sibling test above: the gate stays "running" by giving its
+      // posting identity a live heartbeat.
+      agents: [agentFixture(brief.agentId, "online")],
     });
     await openWorkflowTab();
     await settle();
@@ -382,6 +412,9 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
       events: [brief],
       eventDetails: { [eventId]: { ...brief, decisions: [] } },
       plans: [plan],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — the gate half of
+      // "plan AND gate together" stays running only with a live identity.
+      agents: [agentFixture(brief.agentId, "online")],
     });
     await openWorkflowTab();
     await settle();
@@ -439,6 +472,10 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
       eventDetails: { [firstId]: { ...firstBrief, decisions: firstDecisions } },
       plans: [],
       fetchLog: [],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — both snapshots
+      // below are posted by the SAME run, so one live identity covers
+      // both; the test keeps asserting the redecide behaviour, unchanged.
+      agents: [agentFixture(firstBrief.agentId, "online")],
     };
     await mountApp(opts);
     await openWorkflowTab();
@@ -574,6 +611,10 @@ describe("§S2/AC4 — \"running\" is the project's NEWEST gate event, never \"a
       projects: [project({ key, name: "AC4 Unsealed Run" })],
       events: runSnapshots(key, "run-ac4-unsealed-1", now, false),
       plans: [],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — `runSnapshots`'s
+      // events all carry the default `gateEvent()` agentId ("orchestrator-1");
+      // the newest (unsealed) one stays running with that identity online.
+      agents: [agentFixture("orchestrator-1", "online")],
     });
 
     expect(tabIsOn("Workflow")).toBe(true);
@@ -698,6 +739,10 @@ describe("F21 — the run line renders INSIDE the outcome banner's box, not as a
       events: [brief],
       eventDetails: { [eventId]: { ...brief, decisions: [] } },
       plans: [],
+      // CR-CRU-176 §S1/AC1 re-pin (approved in advance) — Now's gate view
+      // (this half only — the drill-in below reads one event directly and
+      // is unaffected) stays running with its posting identity online.
+      agents: [agentFixture(brief.agentId, "online")],
     });
     await openWorkflowTab();
     await settle();
