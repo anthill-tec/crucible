@@ -302,7 +302,9 @@ class _FiveClientGateFindingsParityHarness(unittest.TestCase):
         full_argv = [str(script_path)] + argv
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with mock.patch.object(sys, "argv", full_argv), \
+        # os.environ is restored on exit: arduino's main() exports $AGENT_ID from --agent for its
+        # children, which would otherwise leak into every later test in this process.
+        with mock.patch.object(sys, "argv", full_argv), mock.patch.dict(os.environ), \
              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
                 module.main()

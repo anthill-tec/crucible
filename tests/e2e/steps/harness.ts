@@ -724,19 +724,28 @@ export interface GatePayload {
   fixes?: Array<{ id: string; file: string; description: string }>;
   push?: { commit: string; remote: string };
   pr?: string;
+  // CR-CRU-172 §S0/AC1 — the run identity every gate_from_axi builder adds
+  // (interim and seal). Optional, test-authored for the e2e drive.
+  run?: { id: string; branch?: string; head?: string };
+  // CR-CRU-117 §S1 mark — a snapshot of a run still going, not a verdict.
+  inFlight?: boolean;
 }
 
 export interface EventPostResponse {
   event: string;
 }
 
-/** POST /api/v2/gates — §S1 gate event ingest. */
+/** POST /api/v2/gates — §S1 gate event ingest. CR-CRU-172 §S0/AC1 —
+ *  `version` is an optional TOP-LEVEL sibling of `gate` (the release the
+ *  gate gates), exactly as `src/v2.ts` reads it (`body.version`), never
+ *  nested inside the gate payload. */
 export async function postGate(
   request: APIRequestContext,
   projectKey: string,
   agentId: string,
   gate: GatePayload,
   context?: Record<string, unknown>,
+  version?: string,
 ): Promise<EventPostResponse> {
   // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
   await ensureRegistered(request, projectKey, agentId);
@@ -746,6 +755,7 @@ export async function postGate(
       agentId,
       gate,
       ...(context !== undefined ? { context } : {}),
+      ...(version !== undefined ? { version } : {}),
     },
   });
   expect(res.ok()).toBe(true);

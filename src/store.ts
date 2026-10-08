@@ -2942,7 +2942,52 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return BOUNDARY_COLUMNS.every(({ column }) => cols.has(column));
     },
   },
+  {
+    description:
+      "gates: a run's in-flight snapshots that carry no release and that a LATER gate in the same project superseded are retired — a sealed run leaves no running snapshot behind. Their retirement stamp is the only column written; nothing is deleted",
+    apply(db) {
+      // A store with no gates table has no snapshot to retire; the table is
+      // created later in its CURRENT shape.
+      if (!tableExists(db, "gates")) return;
+      // An UPDATE of one column and nothing else, so every row's id, payload
+      // and version are byte-identical afterwards. IDEMPOTENT by the
+      // `retired_at IS NULL` predicate: a row a previous pass retired is no
+      // longer a candidate.
+      db.query(
+        `UPDATE gates SET retired_at = ?
+          WHERE rowid IN (SELECT rowid FROM gates AS g WHERE ${SUPERSEDED_ORPHAN_SNAPSHOT})`,
+      ).run(Date.now());
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "gates")) return true;
+      // The data half, as every backfill above states it: no superseded
+      // version-less snapshot may still be live.
+      return (
+        db
+          .query<{ n: number }, []>(
+            `SELECT COUNT(*) AS n FROM gates AS g WHERE ${SUPERSEDED_ORPHAN_SNAPSHOT}`,
+          )
+          .get()!.n === 0
+      );
+    },
+  },
 ];
+
+/**
+ * A LIVE gate row `g` that is marked in flight, names no release (neither the
+ * `version` column nor the payload's own `version`), and has a LATER gate in
+ * the same project — by timestamp, then rowid — retired or not. A snapshot a
+ * later gate superseded is not a run in progress; one with no later gate is.
+ */
+const SUPERSEDED_ORPHAN_SNAPSHOT = `g.retired_at IS NULL
+  AND g.version IS NULL
+  AND json_valid(g.payload)
+  AND json_extract(g.payload, '$.gate.inFlight') = 1
+  AND json_extract(g.payload, '$.version') IS NULL
+  AND EXISTS (SELECT 1 FROM gates AS later
+               WHERE later.project_key = g.project_key
+                 AND (later.timestamp > g.timestamp
+                      OR (later.timestamp = g.timestamp AND later.rowid > g.rowid)))`;
 
 /** The stored commit-boundary columns, each with its literal additive DDL. */
 const BOUNDARY_COLUMNS: ReadonlyArray<{ column: keyof BoundaryColumns; ddl: string }> = [

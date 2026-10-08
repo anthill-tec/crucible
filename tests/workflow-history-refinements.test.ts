@@ -453,7 +453,9 @@ describe("§S1.3 executing-CR exclusion — open plan lives only in Active; clos
     expect(crAAfter.getAttribute("data-status")).toBe("closed");
 
     // Active no longer lists the now-closed CR.
-    expect((active().textContent ?? "")).not.toContain("CR-EXC-A");
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(nowPane).not.toBeNull();
+    expect((nowPane!.textContent ?? "")).not.toContain("CR-EXC-A");
   }, POLL_TEST_TIMEOUT_MS);
 });
 

@@ -1008,8 +1008,32 @@ body {
   align-items: flex-start;
 }
 .app-workflow-active { flex: 1 1 auto; min-width: 0; }
+/* Now (F22): what is running, stacked: the plan first, then the running
+   gate's view; or the single `Nothing running -> Roadmap` line. */
+.app-workflow-now {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.app-workflow-now-empty {
+  display: block;
+  color: var(--ink-faint);
+  font: 12px var(--mono);
+  padding: 8px 2px;
+}
+.app-now-roadmap {
+  color: var(--heat);
+  border-color: var(--heat);
+}
+.app-gate-run-line {
+  color: var(--ink-faint);
+  font: 11px var(--mono);
+  margin: 4px 0 6px;
+}
 .app-gate-pane {
-  flex: 0 0 220px;
+  flex: 0 0 auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-1);
@@ -2373,4 +2397,88 @@ body {
   }
   .app-roadmap-progress > * { flex: 0 0 auto; }
   .app-burn-thumb { width: 52px; }
+}
+
+/* F22 — the Workflow tab is two panes, Now above History, each scrolling on
+   its own so the running work never scrolls away. The pane-scroll box keeps
+   the horizontal axis (the 660px floor's overflow) and hands the vertical
+   axis to the two panes: its runway fills it as a column instead of
+   reserving extra scroll room. Now takes the height its content needs up to
+   half the pane, then scrolls; History fills the rest and scrolls. On the
+   desktop band (where the 660px floor lives) a pane's width never drops below
+   its widest unbreakable content, so a too-wide row still widens the
+   pane-scroll box and scrolls there, not inside a pane; below it the floor is
+   lifted and the panes reflow to the band (DN decision 5).
+   APPENDED, like the blocks above, so existing citations shift by none. */
+.app-center > .app-workflow-panes {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+.app-workflow-panes > .app-pane-runway {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.app-workflow-panes > .app-pane-runway > * { flex: 0 0 auto; }
+.app-workflow-panes > .app-pane-runway > .app-workflow-cols {
+  max-height: 50%;
+  min-height: 0;
+  align-items: stretch;
+}
+.app-workflow-panes .app-workflow-now,
+.app-workflow-panes .app-workflow-history { overflow-y: auto; }
+@media (width >= 1025px) {
+  .app-workflow-panes .app-workflow-now,
+  .app-workflow-panes .app-workflow-history { min-width: min-content; }
+}
+.app-workflow-panes > .app-pane-runway > .app-workflow-history {
+  flex: 1 1 0;
+  min-height: 0;
+}
+/* The phone band: two sub-tabs, Now | History, each a full-width row that is
+   its own toggle (F15d) and clears the 44px touch floor; the selected pane
+   fills the tab and the other is hidden. */
+.app-workflow-subtabs {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.app-workflow-subtab {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font: 600 11px var(--mono);
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.app-workflow-subtab + .app-workflow-subtab { border-top: 1px solid var(--line); }
+.app-workflow-subtab.on {
+  background: rgba(255, 122, 26, 0.07);
+  color: var(--ember);
+}
+.app-workflow-show-now > .app-pane-runway > .app-workflow-history,
+.app-workflow-show-history > .app-pane-runway > .app-workflow-cols { display: none; }
+.app-workflow-show-now > .app-pane-runway > .app-workflow-cols {
+  flex: 1 1 0;
+  max-height: none;
+}
+/* F22 — on desktop each pane carries its title, `Now` / `History`, above its
+   own scrolling box and outside it (the storyboard's `m-h` heading). The phone
+   band renders none: the sub-tab rows are the titles there. */
+.app-workflow-pane-title {
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin: 0 0 -9px;
 }

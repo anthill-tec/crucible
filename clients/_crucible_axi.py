@@ -2369,7 +2369,15 @@ def gate_from_axi(decoded, intent, final):
     at all: there is no honest value to put there, and its absence is the one
     fact the caller branches on before posting. Returning a gate rather than
     raising keeps the step ladder (the evidence of WHERE the run stopped)
-    available to a caller that must report the hold."""
+    available to a caller that must report the hold.
+
+    Every gate — interim and seal alike — names the run that produced it as
+    `run: {id, branch, head}`, read from the snapshot's own `run.id`,
+    `run.branch` and `run.head`. Each key is taken only when the snapshot
+    carries it as a non-empty value and is omitted otherwise, never invented;
+    a snapshot naming none of them gives a gate with no `run` key at all. The
+    server lifts `gate.run.id` to the event's `runId`, which is how a recorded
+    decision joins the gate it answers."""
     run = decoded.get("run") if isinstance(decoded, dict) else None
     run = run or {}
     axi_steps = run.get("steps") or []
@@ -2396,6 +2404,10 @@ def gate_from_axi(decoded, intent, final):
     gate["steps"] = steps
     if not final:
         gate["inFlight"] = True
+    identity = {key: run[key] for key in ("id", "branch", "head")
+                if run.get(key)}
+    if identity:
+        gate["run"] = identity
     head = run.get("head")
     if final and head:
         gate["push"] = {"commit": head}
@@ -6784,7 +6796,7 @@ def poll_axi_snapshot(no_mistakes_path):
 
 
 def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
-                      context, ops):
+                      context, ops, release=None):
     """§S8/CR-CRU-117 §S2 — poll `axi status` while `proc` is alive and POST one
     INTERIM gate per DISTINCT ladder. Returns True when at least one interim
     gate reached the board: the fact the envelope states and the sealing
@@ -6796,10 +6808,10 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
     one ladder is not interrogated five times a second. The LADDER then decides
     whether the answer is worth putting on the board.
 
-    The interim POST carries NO release: a version-stamped gate is
-    retention-protected (`LIVE_GATE`, `src/store.ts`), so stamping every
-    snapshot would leave a run's worth of unprunable gates behind for one
-    release — and the seal restates the release anyway."""
+    Every interim POST carries the run's `release`, exactly as the seal does
+    (`post_gate(..., release)`): every snapshot of the run names its release,
+    so a delivered release retires them all with its seal
+    (`stampGatesRetired`, `src/store.ts`)."""
     last_poll = None
     last_ladder = None
     posted_interim = False
@@ -6812,7 +6824,8 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
                 ladder = axi_ladder_identity(decoded)
                 if ladder != last_ladder:
                     gate, _ = gate_from_axi(decoded, intent, final=False)
-                    ops.post_gate(project_dir, agent_id, gate, context or None)
+                    ops.post_gate(project_dir, agent_id, gate, context or None,
+                                  release)
                     last_ladder = ladder
                     posted_interim = True
         time.sleep(_GATE_POLL_TICK_S)
@@ -6975,7 +6988,7 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
     # which gate this exit put on the board and the sealing decision cannot see
     # the loop.
     posted_interim = stream_axi_ladder(proc, run_argv[0], intent, project_dir,
-                                       agent_id, context, ops)
+                                       agent_id, context, ops, release)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout.
@@ -7014,10 +7027,9 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
                  f"{refusal}{extra_legacy}")
         return 1
 
-    # Only the SEAL carries the release: a version-stamped gate is retention-
-    # protected until its release records, so stamping every interim snapshot
-    # of the poll loop above would leave a run's worth of unprunable gates
-    # behind for one release — and the seal restates the release anyway.
+    # The seal carries the run's release, as every interim snapshot posted
+    # above already did: a delivered release retires them all with this seal
+    # (`stampGatesRetired`).
     final_gate, _ = gate_from_axi(final_decoded, intent, final=True)
     outcome = final_gate.get("outcome")
 

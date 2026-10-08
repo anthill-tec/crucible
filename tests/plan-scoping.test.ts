@@ -380,8 +380,15 @@ describe("§S1+§S2 — navigating to a plan-less workspace clears the previous 
     await settle();
 
     expect(planCallCount(keyB)).toBe(1);
-    // CR-011 empty state, testid sweep — neither of A's sections survive.
-    expect(workflowActiveText()).toContain("no open plan");
+    // Empty state, testid sweep — neither of A's sections survive.
+    // CR-CRU-172 §S2/AC3 re-pin (approved by the orchestrator — user rulings
+    // 2026-10-07/08): the CR-011 filler is retired; with nothing running Now
+    // reads exactly `Nothing running → Roadmap`, on its own container.
+    expect(
+      (document.querySelector('[data-testid="workflow-now"]')?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("Nothing running \u2192 Roadmap");
     expect(renderedCrs()).not.toContain("CR-EMPTY-A-OPEN");
     expect(renderedCrs()).not.toContain("CR-EMPTY-A-CLOSED");
     expect(document.querySelectorAll('[data-testid="wave-group"]').length).toBe(0);

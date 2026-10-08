@@ -94,6 +94,11 @@ interface GatePayloadFixture {
   push?: { commit: string; remote: string };
   pr?: string;
   run?: { id: string };
+  // CR-CRU-117 §S1 mark, reused here (re-pinned for §S2/AC3, approved) —
+  // Now's gate view shows the project's NEWEST gate only while it is still
+  // in flight; this file's Workflow-pane half now fixtures an in-flight run
+  // rather than a sealed one at the old wave/release boundary.
+  inFlight?: boolean;
 }
 interface GateDecisionFixture {
   id: string;
@@ -443,30 +448,38 @@ describe("gate drill-in — the DECISIONS section beneath the step rows", () => 
 
 // ── §S2/F21 — the Workflow-tab gate widget's DECISIONS section ─────────────
 
-describe("Workflow-tab gate widget — the DECISIONS section, sourced off a per-event detail fetch the BRIEF list cannot supply", () => {
-  test("at the wave boundary, a gate with NO recorded decisions shows no DECISIONS section in the widget; the SAME gate, once it carries decisions, then shows the same DECISIONS rows the drill-in shows, fetched via the single-event detail route (never read off the brief list, which carries no `decisions` key at all)", async () => {
+describe("Now's gate view (\u00a7S2/AC3) \u2014 the DECISIONS section, sourced off a per-event detail fetch the BRIEF list cannot supply", () => {
+  test("an in-flight gate with NO recorded decisions shows no DECISIONS section in Now's gate view; the SAME run, once it carries decisions, then shows the same DECISIONS rows the drill-in shows, fetched via the single-event detail route (never read off the brief list, which carries no `decisions` key at all)", async () => {
     const key = "gate-decisions-widget";
 
-    // ── Part 1 — no decisions recorded yet: no section at all ──────────
+    // \u2500\u2500 Part 1 \u2014 no decisions recorded yet: no section at all \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     const bareEventId = "evt-no-decisions-widget-1";
     const bareNow = Date.now();
-    const barePlan: PlanFixture = {
-      planId: 702,
-      cr: "wave 3 release work",
-      projectKey: key,
-      status: "closed",
-      wave: "3",
-      merge: { commit: "cafe002" },
-      cycles: [{ id: 2, label: "C1", status: "done" }],
+    const bareGatePayload = {
+      intent: "release no-mistakes gate (in flight)",
+      outcome: "checks-passed" as const,
+      steps: defaultGateSteps(),
+      run: { id: "run-decision-trail-bare" },
+      inFlight: true,
     };
-    const bareListFixture = gateEvent({ id: bareEventId, projectKey: key, timestamp: bareNow });
-    const bareDetailFixture = gateEvent({ id: bareEventId, projectKey: key, timestamp: bareNow });
+    const bareListFixture = gateEvent({
+      id: bareEventId,
+      projectKey: key,
+      timestamp: bareNow,
+      gate: bareGatePayload,
+    });
+    const bareDetailFixture = gateEvent({
+      id: bareEventId,
+      projectKey: key,
+      timestamp: bareNow,
+      gate: bareGatePayload,
+    });
 
     await mountApp({
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Gate Decisions Widget" })],
       events: [bareListFixture],
-      plans: [barePlan],
+      plans: [],
       eventDetails: { [bareEventId]: bareDetailFixture },
     });
     await openWorkflowTab();
@@ -477,28 +490,27 @@ describe("Workflow-tab gate widget — the DECISIONS section, sourced off a per-
     expect(barePane!.querySelectorAll('[data-testid="gate-step-row"]').length).toBeGreaterThan(0);
     expect(barePane!.querySelector('[data-testid="gate-decisions-section"]')).toBeNull();
 
-    // ── Part 2 — the same wave, now gated by a run carrying decisions ──
+    // \u2500\u2500 Part 2 \u2014 the same run, now carrying decisions \u2500\u2500
     const eventId = "evt-decisions-widget-1";
     const now = Date.now();
     const decisions = decisionTrailFixture(now);
-    const plan: PlanFixture = {
-      planId: 701,
-      cr: "wave 3 release work",
-      projectKey: key,
-      status: "closed",
-      wave: "3",
-      merge: { commit: "cafe001" },
-      cycles: [{ id: 1, label: "C1", status: "done" }],
+    const gatePayload = {
+      intent: "release no-mistakes gate (in flight)",
+      outcome: "checks-passed" as const,
+      steps: defaultGateSteps(),
+      run: { id: "run-decision-trail-1" },
+      inFlight: true,
     };
     // The LIST item — exactly what `GET /api/v2/events` really answers: no
     // `decisions` key anywhere on it.
-    const listFixture = gateEvent({ id: eventId, projectKey: key, timestamp: now });
+    const listFixture = gateEvent({ id: eventId, projectKey: key, timestamp: now, gate: gatePayload });
     // The DETAIL item — exactly what `GET /api/v2/events/:id` really
     // answers for this same gate: the `decisions` array, posting order.
     const detailFixture = gateEvent({
       id: eventId,
       projectKey: key,
       timestamp: now,
+      gate: gatePayload,
       runId: "run-decision-trail-1",
       decisions,
     });
@@ -508,7 +520,7 @@ describe("Workflow-tab gate widget — the DECISIONS section, sourced off a per-
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Gate Decisions Widget" })],
       events: [listFixture],
-      plans: [plan],
+      plans: [],
       eventDetails: { [eventId]: detailFixture },
       fetchLog,
     });
@@ -574,21 +586,9 @@ async function waitForPollTick(): Promise<void> {
   await settle();
 }
 
-function closedWavePlan(key: string, planId: number): PlanFixture {
-  return {
-    planId,
-    cr: "wave 3 release work",
-    projectKey: key,
-    status: "closed",
-    wave: "3",
-    merge: { commit: "cafe003" },
-    cycles: [{ id: planId, label: "C1", status: "done" }],
-  };
-}
-
-describe("Workflow-tab gate widget — one detail read per gate, and a failed read degrades to the bare step ladder", () => {
+describe("Now's gate view (§S2/AC3) — one detail read per gate, and a failed read degrades to the bare step ladder", () => {
   test(
-    "across repeated poll re-renders of the SAME boundary gate (each visibly re-rendering the widget), the gate's single-event detail read is issued exactly once, and its DECISIONS rows stay on screen",
+    "across repeated poll re-renders of the SAME in-flight run (each visibly re-rendering the gate view), the gate's single-event detail read is issued exactly once, and its DECISIONS rows stay on screen",
     async () => {
       const key = "gate-decisions-widget-fetch-once";
       const eventId = "evt-decisions-widget-fetch-once";
@@ -604,6 +604,7 @@ describe("Workflow-tab gate widget — one detail read per gate, and a failed re
             outcome,
             steps: defaultGateSteps(),
             run: { id: "run-decision-trail-1" },
+            inFlight: true,
           },
         });
       const events: GateEventFixture[] = [listGate("checks-passed")];
@@ -613,12 +614,19 @@ describe("Workflow-tab gate widget — one detail read per gate, and a failed re
         pathname: `/p/${key}`,
         projects: [project({ key, name: "Gate Decisions Fetch Once" })],
         events,
-        plans: [closedWavePlan(key, 711)],
+        plans: [],
         eventDetails: {
           [eventId]: gateEvent({
             id: eventId,
             projectKey: key,
             timestamp: now,
+            gate: {
+              intent: "wave 3 no-mistakes gate",
+              outcome: "checks-passed",
+              steps: defaultGateSteps(),
+              run: { id: "run-decision-trail-1" },
+              inFlight: true,
+            },
             runId: "run-decision-trail-1",
             decisions,
           }),
@@ -673,8 +681,21 @@ describe("Workflow-tab gate widget — one detail read per gate, and a failed re
       await mountApp({
         pathname: `/p/${key}`,
         projects: [project({ key, name: "Gate Decisions Fetch Fails" })],
-        events: [gateEvent({ id: eventId, projectKey: key, timestamp: Date.now() })],
-        plans: [closedWavePlan(key, 712)],
+        events: [
+          gateEvent({
+            id: eventId,
+            projectKey: key,
+            timestamp: Date.now(),
+            gate: {
+              intent: "wave 3 no-mistakes gate",
+              outcome: "checks-passed",
+              steps: defaultGateSteps(),
+              run: { id: "run-decision-trail-fails" },
+              inFlight: true,
+            },
+          }),
+        ],
+        plans: [],
         eventDetails: {},
         fetchLog,
       });

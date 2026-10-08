@@ -47,6 +47,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { installEventSource, restoreEventSource } from "./helpers/stream-workspace-harness";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"), "utf8");
@@ -232,14 +233,16 @@ async function mountApp(opts: MountOpts = {}): Promise<void> {
     if (url.includes("/api/v2/health")) return okResponse({ ok: true, version: "2.0.0-test", counts: { events: 0 } });
     throw new Error(`roadmap-release-verified-runs-chip.test.ts mountApp: unexpected fetch url ${url}`);
   };
-  const scriptedGlobals = globalThis as unknown as { fetch: typeof fetch; EventSource: unknown };
+  const scriptedGlobals = globalThis as unknown as { fetch: typeof fetch };
   scriptedGlobals.fetch = scriptedFetch as unknown as typeof fetch;
-  scriptedGlobals.EventSource = class extends FakeEventSource {
-    constructor() {
-      super();
-      liveStream = this;
-    }
-  };
+  installEventSource(
+    class extends FakeEventSource {
+      constructor() {
+        super();
+        liveStream = this;
+      }
+    },
+  );
 
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
@@ -254,6 +257,7 @@ async function mountApp(opts: MountOpts = {}): Promise<void> {
 
 afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  restoreEventSource();
 });
 
 function text(el: Element | null): string {

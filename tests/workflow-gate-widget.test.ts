@@ -317,7 +317,7 @@ describe("§S4 Workflow tab — the live plan and the gate widget are mutually e
 //    live-plan zone (including its own empty-state filler) entirely ───────
 
 describe("§S4 Workflow tab — gate widget at the boundary (all wave-3 plans closed, gate live)", () => {
-  test("all of wave 3's plans closed (no CR active) + a gate event for wave 3 → the gate-pane shows the outcome + one step-row per submitted step; the 'no open plan' filler text is gone", async () => {
+  test("a sealed gate mounts no gate pane on the Workflow tab (F22 \u2014 approved 2026-10-08): all of wave 3's plans closed (no CR active) + a SEALED (non in-flight) gate event for wave 3 \u2192 NO gate-pane mounts at all (the sealed-gate widget is retired; a sealed gate now belongs to History, not Now) \u2014 the Workflow tab reads exactly `Nothing running \u2192 Roadmap`", async () => {
     const key = "wf-gatewidget-boundary";
     const now = Date.now();
     const plan: PlanFixture = {
@@ -339,32 +339,31 @@ describe("§S4 Workflow tab — gate widget at the boundary (all wave-3 plans cl
     });
     await openWorkflowTab();
 
-    const pane = document.querySelector<HTMLElement>('[data-testid="gate-pane"]');
-    expect(pane).not.toBeNull();
+    // THE PIN (F22/AC5): a sealed gate at the boundary mounts nothing
+    // gate-shaped on the Workflow tab anymore.
+    expect(document.querySelector('[data-testid="gate-pane"]')).toBeNull();
+    expect(document.querySelectorAll('[data-testid="gate-outcome-banner"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(0);
 
-    const banner = pane!.querySelector('[data-testid="gate-outcome-banner"]');
-    expect(banner).not.toBeNull();
-    expect(textOf(banner)).toContain("passed");
-
-    const stepRows = pane!.querySelectorAll('[data-testid="gate-step-row"]');
-    expect(stepRows.length).toBe(4);
-
-    // Mutually exclusive: the pre-existing "no open plan" filler must not
-    // coexist with a live gate widget.
+    // Nothing else is running either (the plan is closed), so the Now
+    // content is exactly the AC3 empty-state line — never the retired
+    // CR-011 "no open plan" filler and never the removed CR-013 placeholder.
+    // Scoped to Now's own container (orchestrator-approved 2026-10-08) —
+    // `workspace-body` also holds History and the Project pane.
     const body = document.querySelector('[data-testid="workspace-body"]');
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect((nowPane?.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
     expect((body?.textContent ?? "").toLowerCase()).not.toContain("no open plan");
-
-    // The removed CR-011 placeholder text must never resurface either.
-    expect(textOf(pane)).not.toContain("gate reporting lands in CR-013");
+    expect(textOf(body)).not.toContain("gate reporting lands in CR-013");
   });
 });
 
 // ── §S4 AC145 — a second wave-3 gate REPLACES the pane content (latest
 //    wins), over the poll/SSE cadence, no reload ──────────────────────────
 
-describe("§S4 AC145 — ingesting a second wave-3 gate replaces the pane content, latest wins, no reload", () => {
+describe("§S2/AC3 — ingesting a newer in-flight snapshot of the SAME run replaces the gate view's ladder, latest wins, no reload (migrated from §S4 AC145's sealed-gate variant, retired by F22)", () => {
   test(
-    "interim checks-passed gate renders first; a later passed gate for the same wave fully replaces the ladder — the #app root node identity is unchanged (no reload)",
+    "an in-flight checks-passed snapshot renders first; a later in-flight snapshot of the SAME run fully replaces the ladder — the #app root node identity is unchanged (no reload)",
     async () => {
     const key = "wf-gatewidget-latest";
     const now = Date.now();
@@ -388,6 +387,7 @@ describe("§S4 AC145 — ingesting a second wave-3 gate replaces the pane conten
           { name: "intent", status: "passed" },
           { name: "review", status: "passed" },
         ],
+        inFlight: true,
       },
     });
 
@@ -410,22 +410,23 @@ describe("§S4 AC145 — ingesting a second wave-3 gate replaces the pane conten
     );
     expect(pane!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(2);
 
-    // A second, later wave-3 gate arrives (simulating the SSE/poll cadence
-    // this suite already uses elsewhere — happy-dom has no real
-    // EventSource, so the documented poll fallback is what actually
+    // A second, later in-flight snapshot of the SAME run arrives (simulating
+    // the SSE/poll cadence this suite already uses elsewhere — happy-dom has
+    // no real EventSource, so the documented poll fallback is what actually
     // re-renders; the #app identity check below stands in for "no reload").
-    const finalGate = gateEvent({
+    // It is STILL in flight — AC4's seal-stops-it case is pinned separately.
+    const laterGate = gateEvent({
       id: "evt-gw-final",
       projectKey: key,
       timestamp: now + 5000,
       gate: {
-        intent: "wave 3 no-mistakes gate (final)",
-        outcome: "passed",
+        intent: "wave 3 no-mistakes gate (interim)",
+        outcome: "checks-passed",
         steps: defaultGateSteps(),
-        push: { commit: "fff9999", remote: "origin/main" },
+        inFlight: true,
       },
     });
-    opts.events.push(finalGate);
+    opts.events.push(laterGate);
     await waitForPollTick();
 
     const appRootAfter = document.getElementById("app");
@@ -434,12 +435,8 @@ describe("§S4 AC145 — ingesting a second wave-3 gate replaces the pane conten
 
     pane = document.querySelector<HTMLElement>('[data-testid="gate-pane"]');
     expect(pane).not.toBeNull();
-    expect(textOf(pane!.querySelector('[data-testid="gate-outcome-banner"]'))).toContain("passed");
-    expect(textOf(pane!.querySelector('[data-testid="gate-outcome-banner"]'))).not.toContain(
-      "checks-passed",
-    );
     // Latest wins — the interim's 2-step ladder is gone, replaced by the
-    // final gate's 4-step ladder.
+    // later snapshot's 4-step ladder.
     expect(pane!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(4);
     },
     POLL_TEST_TIMEOUT_MS,
@@ -583,7 +580,7 @@ describe("§S6 History lens — wave state gains `gated` (a passed/checks-passed
 // (`gate.inFlight`), so it reaches both readers with zero server change.
 //
 // Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
-//   - `boundaryGate` (public/app.js) is the SECOND reader that treats
+//   - boundaryGate (then in public/app.js; since retired) was the SECOND reader that treats
 //     a gate as a verdict: given a routed project whose scoped plans are all
 //     closed, it reduces the scoped `kind:"gate"` events to the LATEST by
 //     timestamp and hands it to `GateWidget`, which mounts the outcome
@@ -649,16 +646,34 @@ describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-fl
     return textOf(group!.querySelector('[data-testid="wave-header"]'));
   }
 
-  // AC4 — the second reader. An in-flight gate is not a verdict, so it is
-  // not a boundary: the primary zone falls back to `WorkflowActive` and
-  // nothing gate-shaped mounts for it.
-  test("with the newest scoped gate in flight and no open plan, the Workflow primary zone mounts NO gate widget for it — the identical UNMARKED gate does mount one", async () => {
-    // Anti-vacuity twin FIRST: same board, same ladder, no mark — today's
-    // (correct) behaviour, which this narrowing must not disturb.
-    const unmarked = gateEvent({
-      id: "evt-117-boundary-unmarked",
-      projectKey: "wf-117-boundary-unmarked",
-      timestamp: 1_757_506_000_000,
+  // AC4 — the second reader, RE-PINNED for CR-CRU-172 §S2/AC3 (approved by
+  // the orchestrator — user rulings 2026-10-07/08; F22 reverses CR-CRU-117
+  // §S1's rule for this zone). The project's NEWEST gate still in flight is a
+  // release workflow RUNNING, so Now shows it in F21's gate view; the same
+  // snapshot followed by a seal of the run is not running, so nothing
+  // gate-shaped mounts and Now reads its empty line.
+  test("with the newest scoped gate in flight and no open plan, Now shows F21's gate view for it — the identical snapshot FOLLOWED BY a seal shows no gate view", async () => {
+    const inFlightFor = (key: string, timestamp: number): GateEventFixture =>
+      gateEvent({
+        id: `evt-117-boundary-inflight-${key}`,
+        projectKey: key,
+        timestamp,
+        context: { wave: "6" },
+        gate: {
+          intent: "wave 6 no-mistakes gate (in flight)",
+          outcome: "checks-passed",
+          steps: nineRowInFlightLadder(),
+          inFlight: true,
+        },
+      });
+
+    // Anti-vacuity twin FIRST: the same snapshot, then a later seal of the
+    // run — the newest gate is sealed, so nothing is running.
+    const sealedKey = "wf-117-boundary-sealed";
+    const sealed = gateEvent({
+      id: "evt-117-boundary-seal",
+      projectKey: sealedKey,
+      timestamp: 1_757_506_100_000,
       context: { wave: "6" },
       gate: {
         intent: "wave 6 no-mistakes gate",
@@ -666,44 +681,31 @@ describe("CR-CRU-117 §S1 — `boundaryGate` and the wave header ignore an in-fl
         steps: nineRowInFlightLadder(),
       },
     });
-    await mountBoundary("wf-117-boundary-unmarked", [unmarked]);
-    const sealPane = document.querySelector<HTMLElement>('[data-testid="gate-pane"]');
-    expect(sealPane).not.toBeNull();
-    expect(textOf(sealPane!.querySelector('[data-testid="gate-outcome-banner"]'))).toContain(
-      "checks-passed",
+    await mountBoundary(sealedKey, [inFlightFor(sealedKey, 1_757_506_000_000), sealed]);
+    // Counted rather than `toBeNull()`-ed: bun prints the whole matched
+    // element on a null-assertion failure, and a happy-dom node serialises
+    // to ~1100 lines, which buries every other failure in the same run log.
+    expect(document.querySelectorAll('[data-testid="gate-pane"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-testid="gate-view-header"]').length).toBe(0);
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).toBe(
+      "Nothing running \u2192 Roadmap",
     );
 
-    // The pin: the SAME event carrying the in-flight mark is not a boundary.
-    const inFlight = gateEvent({
-      id: "evt-117-boundary-inflight",
-      projectKey: "wf-117-boundary-inflight",
-      timestamp: 1_757_506_100_000,
-      context: { wave: "6" },
-      gate: {
-        intent: "wave 6 no-mistakes gate (in flight)",
-        outcome: "checks-passed",
-        steps: nineRowInFlightLadder(),
-        inFlight: true,
-      },
-    });
+    // The pin: the in-flight snapshot is the NEWEST gate — the run is going.
+    const inFlightKey = "wf-117-boundary-inflight";
+    const inFlight = inFlightFor(inFlightKey, 1_757_506_100_000);
     expect(Object.prototype.hasOwnProperty.call(inFlight.gate, "inFlight")).toBe(true);
-    await mountBoundary("wf-117-boundary-inflight", [inFlight]);
+    await mountBoundary(inFlightKey, [inFlight]);
 
-    // No gate widget, and nothing gate-shaped anywhere in the Workflow
-    // tab's primary zone. Counted rather than `toBeNull()`-ed: bun prints
-    // the whole matched element on a null-assertion failure, and a happy-dom
-    // node serialises to ~1100 lines, which buries every other failure in
-    // the same run log.
-    expect(document.querySelectorAll('[data-testid="gate-pane"]').length).toBe(0);
-    const cols = document.querySelector<HTMLElement>(".app-workflow-cols");
-    expect(cols).not.toBeNull();
-    expect(cols!.querySelectorAll('[data-testid="gate-outcome-banner"]').length).toBe(0);
-    expect(cols!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(0);
-
-    // The zone falls back to `WorkflowActive`, which owns it while nothing
-    // has sealed — its no-open-plan filler is what renders instead.
+    const panes = document.querySelectorAll<HTMLElement>('[data-testid="gate-pane"]');
+    expect(panes.length).toBe(1);
+    expect(panes[0]!.querySelectorAll('[data-testid="gate-view-header"]').length).toBe(1);
+    expect(panes[0]!.querySelectorAll('[data-testid="gate-step-row"]').length).toBe(9);
     const body = document.querySelector('[data-testid="workspace-body"]');
-    expect((body?.textContent ?? "").toLowerCase()).toContain("no open plan");
+    expect((body?.textContent ?? "").toLowerCase()).not.toContain("no open plan");
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).not.toBe(
+      "Nothing running \u2192 Roadmap",
+    );
   });
 
   // AC5 — the false-permanent-gate sequence, end to end: an in-flight gate

@@ -1,8 +1,9 @@
 // CR-CRU-117 §S1 — THE THIRD GATE READER: the timeline's own gate cards.
 //
 // Two readers were repaired in cycle 408 — `workflowLens`'s wave gating
-// (`public/app-logic.mjs`) and `boundaryGate` (`public/app.js`) — and both
-// EXCLUDE an in-flight gate from the verdict they derive. The feed's cards are
+// (`public/app-logic.mjs`) and the Workflow tab's boundary-gate selector,
+// boundaryGate (since retired from public/app.js) — and both EXCLUDED an
+// in-flight gate from the verdict they derive. The feed's cards are
 // the third reader, and they were left rendering one:
 //
 //   * `runFeed` dispatches every `kind === "gate"` row to `GateCardRow`

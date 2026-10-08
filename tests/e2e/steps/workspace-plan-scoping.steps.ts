@@ -52,9 +52,10 @@ Step(
 Step(
   "the Workflow tab shows the CR-011 empty state with none of the previous project's plan content",
   async ({ page }) => {
-    await expect(page.getByTestId("workflow-active")).toContainText(
-      "no open plan — file one via POST /api/v2/projects/<key>/plans",
-    );
+    // CR-CRU-172 §S2/AC3 re-pin (approved by the orchestrator — user rulings
+    // 2026-10-07/08): the CR-011 filler is retired; with nothing running Now
+    // reads exactly `Nothing running → Roadmap`, on its own container.
+    await expect(page.getByTestId("workflow-now")).toHaveText("Nothing running → Roadmap");
     // Defense-in-depth sweep (AC: "the previous project's active-plan
     // section and history groups are absent") — zero CR roots in EITHER
     // the active section or the history lens.

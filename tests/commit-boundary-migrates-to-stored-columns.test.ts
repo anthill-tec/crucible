@@ -27,7 +27,7 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store, SCHEMA_VERSION } from "../src/store.ts";
+import { Store, SCHEMA_VERSION, MIGRATIONS } from "../src/store.ts";
 import type { ChangeRecord, CommitBoundary, Plan, RunSchema } from "../src/types.ts";
 
 const t0 = 1_700_000_000_000;
@@ -73,6 +73,21 @@ function siblings(dir: string, pattern: RegExp): string[] {
 }
 
 const PRE_UPGRADE_RE = /\.pre-upgrade-\d+$/;
+
+/**
+ * The ONE chain body this file owns, found by what it declares — never by
+ * index and never by the chain's length, both of which every later step is
+ * free to move (the tests/gate-retirement.test.ts pattern).
+ */
+function boundaryStep(): (typeof MIGRATIONS)[number] {
+  const owned = MIGRATIONS.filter((step) => (step.description ?? "").includes("boundary_branch"));
+  if (owned.length !== 1) {
+    throw new Error(
+      `expected exactly ONE commit-boundary body in the ${MIGRATIONS.length}-step migration chain, found ${owned.length}`,
+    );
+  }
+  return owned[0]!;
+}
 
 function closeStore(store: Store): void {
   (store as unknown as { db: Database }).db.close();
@@ -248,12 +263,17 @@ describe("the migration chain: schema v18 -> v19 (CR-CRU-169 §S1)", () => {
 
     const migrated = Store.open(fixture.dbPath);
 
-    expect(userVersion(fixture.dbPath)).toBe(PRE_BOUNDARY_VERSION + 1);
+    // This file's own step is the v18 -> v19 rung; the open migrates the store
+    // on to the chain's end, wherever later steps put it.
+    const step = boundaryStep();
+    expect(step.from).toBe(PRE_BOUNDARY_VERSION);
+    expect(step.to).toBe(PRE_BOUNDARY_VERSION + 1);
+    expect(userVersion(fixture.dbPath)).toBe(SCHEMA_VERSION);
     expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
     expect(SCHEMA_VERSION).toBeGreaterThan(PRE_BOUNDARY_VERSION);
     expect(migrated.migration).not.toBeNull();
     expect(migrated.migration?.from).toBe(PRE_BOUNDARY_VERSION);
-    expect(migrated.migration?.to).toBe(PRE_BOUNDARY_VERSION + 1);
+    expect(migrated.migration?.to).toBe(SCHEMA_VERSION);
     expect(siblings(fixture.dir, PRE_UPGRADE_RE).length).toBeGreaterThan(0);
   });
 

@@ -495,7 +495,7 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
     POLL_TEST_TIMEOUT_MS,
   );
 
-  test("with NO open plan, the active section renders an empty-state naming the plan API", async () => {
+  test("with NO open plan and no gate event at all, the Workflow tab reads exactly `Nothing running \u2192 Roadmap` (re-pinned 2026-10-08, \u00a7S2 \u2014 the CR-011 plan-API filler text is retired)", async () => {
     const key = "wf-empty-1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -507,9 +507,11 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
 
     await openWorkflowTab();
 
-    const body = document.querySelector('[data-testid="workspace-body"]');
-    expect(body).not.toBeNull();
-    expect((body!.textContent ?? "").toLowerCase()).toContain("no open plan");
+    // Scoped to Now's own container (orchestrator-approved 2026-10-08) —
+    // `workspace-body` also holds History and the Project pane.
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(nowPane).not.toBeNull();
+    expect((nowPane!.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
     // bound: no cycle rows render when there is nothing to show.
     expect(document.querySelectorAll('[data-testid="cycle-row"]').length).toBe(0);
   });
