@@ -30,7 +30,9 @@
 //   - `[data-testid="cr-group"]` (`data-cr`, `data-status`) — one per CR.
 //   - `[data-testid="cr-merge-commit"]` — on a closed CR group.
 //   - `[data-testid="cr-rollup"]` — cycles done/total.
-//   - `[data-testid="cr-agent-runtime"]` — one per participating agent.
+//   - `[data-testid="cr-agent-runtime"]` — RETIRED by CR-CRU-179 §S2
+//     (user ruling 2026-10-09): the agents block never renders; see the
+//     SANCTIONED RE-TARGET below ("§S3 history lens — group rollups").
 //   - `[data-testid="lens-cycle-row"]` (`data-status`) — a cycle sub-item
 //     under a CR group (declared OR inferred).
 //   - `[data-testid="cycle-span-closed"]` — a done cycle's closed span,
@@ -834,17 +836,20 @@ describe("§S3 history lens — group rollups", () => {
     // negative pin — the hidden CR-020 compatibility span is retired.
     expect(crGroup!.querySelectorAll(".app-hidden-data").length).toBe(0);
 
-    // SANCTIONED RE-TARGET (CR-CRU-021 §S4) — per-agent runtime rows now
-    // render only once the group's own header toggle is expanded.
+    // SANCTIONED RE-TARGET (CR-CRU-179 §S2, user ruling 2026-10-09, approved
+    // in advance): the agents block (`cr-agent-runtime` / `cr-agents-pill`)
+    // is REMOVED outright — this test's SUBJECT (a participating agent's
+    // runtime surfacing at all) no longer has a place to surface; expanding
+    // the group's own header toggle renders cycle rows ONLY, never a
+    // per-agent runtime row, for the exact same "agent-a" participant this
+    // fixture names. Who ran what stays on the Runs tab (CR-CRU-179 §S2's
+    // own words) — out of scope for the Workflow lens this file drives.
     groupToggle!.click();
     await settle();
 
-    const agentRuntime = crGroup!.querySelector('[data-testid="cr-agent-runtime"]');
-    expect(agentRuntime).not.toBeNull();
-    const runtimeText = agentRuntime!.textContent ?? "";
-    expect(runtimeText).toContain("agent-a");
-    // pin presence of a runtime figure, not its exact ms value.
-    expect(runtimeText).toMatch(/\d/);
+    expect(crGroup!.querySelector('[data-testid="cr-agent-runtime"]')).toBeNull();
+    expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+    expect(crGroup!.textContent ?? "").not.toContain("agent-a");
   });
 });
 
