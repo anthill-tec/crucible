@@ -25,8 +25,17 @@ Feature: CR-CRU-031 §S4 — the wave backfill folds a wave-less plan into its c
   "CR-WB-…" to stay clear of the other features. Results are ingested with
   tier "e2e" by the orchestrator's ingest step, not by this suite.
 
+  CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): neither
+  CR-WB-1 nor CR-WB-2 ever names a release (no queue entry, no release
+  record), so once GREEN nests History under a release row, this scenario
+  seeds one for its plans to fall into (the orphan-placement rule's lowest-
+  unshipped-release fallback) — what the scenario asserts about the wave
+  band is unchanged.
+
   Scenario: AC4 a wave-less plan and a wave-42 plan render as two separate History bands; backfilling the wave-less plan's wave via the §S1 PATCH endpoint folds it into the single wave-42 band
     Given a project named "WB Wave Backfill Project" is registered
+    And an orchestrator "WB Orchestrator" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan with no wave is filed for cr "CR-WB-1" with a cycle labelled "c1 red-green"
     And the wave-less plan's cycle 1 is activated
     And the wave-less plan's cycle 1 is marked done

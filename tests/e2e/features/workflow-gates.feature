@@ -27,6 +27,8 @@ Feature: CR-CRU-013 gate + milestone events — E2E round trip (AC150)
 
   Scenario: AC150 filing a plan, posting a gap-analysis milestone, closing its cycle + the plan, then ingesting a passed gate renders the workspace milestone entry + boundary gate card, the home compact gate entry with zero milestones, the gated wave header, and the Workflow tab mounts no gate pane for it
     Given a project named "GT Wave Project" is registered
+    And an orchestrator "gt-orch-1" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-GT-1" with a cycle labelled "c1 red-green" in wave "5"
     And cycle 1 of that plan is activated
     And a gap-analysis milestone "CR-GT-1 gap-analysis" is posted for that cr in wave "5"

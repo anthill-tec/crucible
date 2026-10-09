@@ -24,6 +24,8 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
 
   Scenario: §S1 clicking a HISTORY done cycle row's "→ Runs" badge lands on the Runs tab with its declared boundary scrolled into view and blinking, fading after 10s
     Given a project named "CRB Forward Project" is registered
+    And an orchestrator "crb-orch-1" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-CRB-1" with a cycle labelled "c1 nav"
     And cycle 1 of that plan is activated
     And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb1-red"
@@ -41,6 +43,8 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
 
   Scenario: §S2 clicking a declared boundary's "⚑ Cycle" badge switches to Workflow, auto-expands the collapsed CR group, and blinks the exact history cycle row (never a second indicator on re-click)
     Given a project named "CRB Backward Project" is registered
+    And an orchestrator "crb-orch-2" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-CRB-2" with a cycle labelled "c1 auto"
     And cycle 1 of that plan is activated
     And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb2-red"
@@ -82,6 +86,8 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
 
   Scenario: CR-CRU-146 §S2 — a toggleable history cycle line carries the pointer cursor over its empty space, honestly signalling it opens; the active section's open-span line, which has no toggle, does not
     Given a project named "CRB Cursor Project" is registered
+    And an orchestrator "crb-orch-4" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-CRB-4A" with a cycle labelled "c1 cursor active"
     And cycle 1 of that plan is activated
     When I open the workspace for that project
@@ -98,6 +104,8 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
 
   Scenario: CR-CRU-146 — pixel hit-test: a history cycle line's toggle fires at every measured x-offset across the row, the line spans at least 90% of the row's width, and clicking the "→ Runs" badge leaves that open/closed state unchanged
     Given a project named "CRB Hit Test Project" is registered
+    And an orchestrator "crb-orch-5" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-CRB-5" with a cycle labelled "c1 hit test"
     And cycle 1 of that plan is activated
     And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb5-red"

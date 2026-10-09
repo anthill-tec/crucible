@@ -47,6 +47,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -180,7 +181,11 @@ async function mountApp(opts: MountOpts): Promise<void> {
     let body: unknown;
     const eventMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     const isListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
-    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+    if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
+      // CR-CRU-173 \u00a7S1 re-pin (approved in advance) \u2014 see
+      // tests/helpers/history-stub.ts.
+      body = singleReleaseHistoryStub(opts.plans);
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (eventMatch !== null && !isListEndpoint) {
       const id = decodeURIComponent(eventMatch[1]!);
@@ -385,6 +390,10 @@ describe("CR-CRU-166 §S1 AC2 — the History row carries no summary line when t
     expect(summaryLineOf(neverGated)).toBeNull();
     expect(neverGated.querySelector('[data-testid="gate-decision-summary"]')).toBeNull();
 
+    // Wave 7 is not the release's open (latest) wave, so History folds it to
+    // its header line (F22, user ruling 2026-10-09): open it before reading it.
+    waveHeaderOf(waveGroup("7")).click();
+    await settle();
     expect(textOf(summaryLineOf(waveGroup("7")))).toBe(
       "4 decisions · fixed 3 + 1 added · declined 16 · 1 approved with a reason",
     );

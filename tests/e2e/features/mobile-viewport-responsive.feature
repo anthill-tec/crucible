@@ -185,6 +185,8 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
   # every child, before each tap.
   Scenario: CR-CRU-146 — at the phone band a history cycle line spans at least 90% of its row, and a tap on its own empty space opens its linked runs and a second tap closes them
     Given a project named "MOB Cycle Line Project" is registered
+    And an orchestrator "mob-orch-146" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-MOB-146" with a cycle labelled "c1 phone line"
     And cycle 1 of that plan is activated
     And a fail(2/5) run linked to that cycle is ingested for agent "mob-cycleline-red"

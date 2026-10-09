@@ -66,6 +66,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 // CR-CRU-120 Integration AC / §S4 shape pin — the repo's ONE source-scanning
 // walk (tests/helpers/source-scan.ts), reused rather than re-derived: a second
 // hand-rolled comment/string stripper is the CR-CRU-096 defect shape.
@@ -168,7 +169,12 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
-    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+    if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
+      // nests its waves under a release, read from GET …/history; this
+      // fixture's plans fall in one release (tests/helpers/history-stub.ts).
+      body = singleReleaseHistoryStub(opts.plans ?? []);
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (url.includes("/api/v2/events") && /[?&]cycleId=/.test(url)) {
       // §S2 — the anchored fetch under test. Recorded so tests can assert

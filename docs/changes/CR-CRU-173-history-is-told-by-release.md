@@ -51,21 +51,34 @@ The board answers the history in this shape from what it already holds — no ne
 records, each CR's release and wave in the queue, plan close times, gate snapshots grouped by their
 no-mistakes run (a run's outcome, the step it stopped at, its fix rounds and its duration are
 derived from its snapshots), gate decisions and release-stamped runs. A gate belongs to the release
-it names; one that named none belongs to the release of the wave it gated. A wave whose CRs went to
+it names; one that named none belongs to the release of the wave it gated; one that names
+neither belongs to the first release that shipped at or after it, else the lowest unshipped
+release (user ruling 2026-10-08: 0.2.0's 09-09 gate names neither). A wave whose CRs went to
 more than one release (this board's past: wave 7 → 0.2.2 and 0.3.0; wave 6 → 0.2.0 and 0.2.1;
 wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release's CRs only.
 
 **Settled at gap analysis (from the board's data and F22, which wins):**
-- **Which releases.** Every release record of the project that has history — shipped, or holding a
-  merged CR, a plan or a gate. A release with none of these (today 0.4.0) is future work, not
-  history, and is not listed (F22 lists none).
+- **Every piece of work falls in a release (user ruling 2026-10-09).** A release is a milestone on
+  the project's timeline, and every wave and CR falls into the release that SUCCEEDS it on that
+  timeline — there is no CR outside a release and no project without one. So History lists every
+  release that holds work (CRs from its record or the queue, plans, gates), including future ones:
+  a release planned but not yet started (today 0.4.0, 3 CRs queued) is listed with state **planned**.
+  States: **shipped** (its record has a ship date), **in progress** (unshipped, some of its work
+  started — a plan filed, a CR merged or a gate run), **ship not recorded** (unshipped, every CR
+  merged), **planned** (unshipped, nothing started). A release with no work at all is not listed.
+- **Placing work no release names.** A CR, wave or runs-only (inferred) wave that neither a release
+  record nor the queue's `release` names belongs to the first release that shipped at or after it
+  (by its plan's close time, else its first run), else the lowest unshipped release — the same
+  timeline rule as a gate that names nothing. Nothing is left outside History.
 - **A release's CRs.** A shipped release's record names its CRs (`crs`, CR-CRU-080 provenance) and
   that list wins: 0.2.0's 70 include 3 wave-4 CRs and CR-CRU-090, which the queue files under 0.1.3
   (it then appears under both, honestly). An unshipped release takes its CRs from the queue's
   `release` (0.3.0's 35+). CRs with neither (waves 1–4 before releases were declared) follow the
   record that names them (0.1.0's 60).
-- **Releases shipped the same day share one row** (F22: `release 0.1.2 · 0.1.1 · 0.1.0 · shipped
-  08-19 · 61 CRs · wave 4`), opening to each one's workflow.
+- **One row per release** (user ruling 2026-10-08, at cycle 636). The same-day merge first drawn
+  in F22 (`release 0.1.2 · 0.1.1 · 0.1.0`) cannot be stated as a rule — 0.2.0 and 0.2.1 also shipped
+  the same day and F22 drew them apart — so every release is its own row, latest first; F22 is
+  amended.
 - **Gate runs.** Snapshots group by their no-mistakes `runId` (CR-CRU-172 §S0 posts it). Older
   snapshots carry none: a run is then the snapshots up to and including the next seal (a gate not
   in flight). A run's outcome is its seal's; its stop step the first step not `passed`/`skipped`;
@@ -83,15 +96,15 @@ wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release
 
 (AC wording below is the gap-analysed set, 2026-10-08.)
 
-- [ ] History lists releases latest first; a release opens to its release workflow and then its
+- [x] History lists releases latest first; a release opens to its release workflow and then its
       waves, latest first, each opening to CRs and cycles as today; the open release and its open
       wave start expanded, every other release folded — asserted on the page with fixed fixtures and
       in a real browser.
-- [ ] A release's gate runs are listed one row per no-mistakes run with outcome, stop step, fix
+- [x] A release's gate runs are listed one row per no-mistakes run with outcome, stop step, fix
       rounds and duration derived from its snapshots; `→ gate` opens the gate view; its
       verification line opens the Runs tab filtered to the release; its packages are listed —
       asserted on the server and on the page.
-- [ ] On a copy of the dev store, 0.2.0 shows three gate runs (the passed one with one document fix
+- [x] On a copy of the dev store, 0.2.0 shows three gate runs (the passed one with one document fix
       round, pushed 4cda68f), 70 CRs, shipped 09-16, and waves 6, 5 and 4 with only 0.2.0's CRs;
       0.2.2 shows wave 7 with its 4 CRs and "ship not recorded" — asserted on the server.
 
@@ -134,3 +147,25 @@ Anything outside these: stop and ask.
 1. the board answers a project's history by release (§S2)
 2. History is told by release (§S1)
 3. verify
+4. (cycle 639, the history verb — skipped 2026-10-09: moved to CR-CRU-175 §S4 so both scores stay true)
+
+### Ruling at cycle 637 (2026-10-09) — the tests it re-pins (approved)
+
+- `tests/workflow-lens.test.ts` "§S3 history lens — inferred fallback (no plan)": its runs-only wave
+  is placed in the release that succeeds it on the timeline (the fixture gains a release); the wave's
+  own rendering assertions are unchanged.
+- `tests/e2e/steps/wave-backfill.steps.ts` (CR-CRU-031's unnumbered-wave scenario): the scenario
+  seeds a release for its plans to fall into; what it asserts about the wave band is unchanged.
+- Any other test whose fixture has work but no release record: the fixture gains a release; its
+  assertions are unchanged.
+
+### Rulings after cycle 637 (2026-10-09, user)
+
+- **The `history` verb moves to CR-CRU-175** (its §S4): CR-CRU-173 was already at the board's 13 cap
+  and could not record the verb's ~3 points; CR-CRU-175 is re-scored 3 → 5 and depends on this CR.
+- **Waves fold as F22 draws them**: inside a release only its open wave starts expanded, every other
+  wave one line until opened (GREEN 637 left them all expanded; the frame wins). Tests that count CR
+  groups across waves open the wave they read — an approved fixture/step change, assertions unchanged.
+- **Withdrawn work belongs to no release**: a queued CR that is VOID or SUPERSEDED and never had a
+  plan is not placed in any release (accepted from GREEN 637; otherwise CR-CRU-082 would put 0.2.2
+  "in progress").

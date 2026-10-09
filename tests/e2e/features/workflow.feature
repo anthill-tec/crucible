@@ -16,6 +16,8 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
 
   Scenario: F13 filing a plan, running its cycle to done, and closing the plan with a merge commit renders the closed plan tree in the Workflow tab's history lens
     Given a project named "WF Lifecycle Project" is registered
+    And an orchestrator "wf-orch-1" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-WF-1" with a cycle labelled "c1 red-green"
     And cycle 1 of that plan is activated
     And an online agent "agent-wf1" with message "filing the plan" is registered on that project
