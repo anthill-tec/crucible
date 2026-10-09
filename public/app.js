@@ -6853,8 +6853,8 @@
       const held = historyReleases.val;
       const releases = held !== null && held.projectKey === state.route.projectKey ? held.releases : null;
       return div(
-        // The pane's `History` title sits ABOVE this box, outside it
-        // (WorkflowPaneTitle); each release row names its release.
+        // The pane's `History` header bar sits ABOVE this box, outside it
+        // (WorkflowPaneHeader); each release row names its release.
         { "data-testid": "workflow-history", class: "app-workflow-history" },
         releases === null
           ? ""
@@ -7155,19 +7155,59 @@
           )
         : "";
 
-    // F22 — on desktop each pane carries its title, `Now` / `History`, ABOVE
-    // its own scrolling box and outside it. On the phone band the sub-tab rows
-    // are the titles, so none renders there.
-    const WorkflowPaneTitle = (name) =>
-      isPhoneBand()
-        ? ""
-        : div(
-            {
-              "data-testid": `workflow-${name.toLowerCase()}-title`,
-              class: "app-workflow-pane-title",
-            },
-            name,
-          );
+    // F24·B — each pane's header bar, ABOVE its own box and outside it: the
+    // pane's mark (Now's live dot, History's clock glyph), its name (kept
+    // under the F22 title testid, shown uppercase by style) and one line
+    // saying what it holds, a sibling of the name.
+    const WorkflowPaneHeader = (name, mark, line) => {
+      const key = name.toLowerCase();
+      return div(
+        { "data-testid": `workflow-${key}-header`, class: "app-workflow-pane-header" },
+        mark,
+        span({ "data-testid": `workflow-${key}-title`, class: "app-workflow-pane-title" }, name),
+        span(
+          { "data-testid": `workflow-${key}-subtitle`, class: "app-workflow-pane-subtitle" },
+          `· ${line}`,
+        ),
+      );
+    };
+
+    // Now's live dot: lit while Now holds an open plan or a running gate (the
+    // same reads Now paints from), dim while Now reads `Nothing running`.
+    const WorkflowNowDot = () =>
+      span({
+        "data-testid": "workflow-now-dot",
+        class: "app-workflow-now-dot",
+        "data-live": () =>
+          String(scopedPlans().some((p) => p.status === "open") || runningGate() !== null),
+      });
+
+    // F24·B — on desktop the two panes are one card split in two: Now on a
+    // raised band under its header bar, a hatched divider, then History's
+    // header bar and its own scrolling box. On the phone band the sub-tab
+    // rows are the titles, so neither header bar nor the divider renders
+    // there; the selected pane shows as its own card (styles.css).
+    const WorkflowSplitCard = () =>
+      div(
+        { "data-testid": "workflow-panes-card", class: "app-workflow-card" },
+        div(
+          { "data-testid": "workflow-now-band", class: "app-workflow-now-band" },
+          WorkflowPaneHeader("Now", WorkflowNowDot(), "what is running"),
+          div({ class: "app-workflow-cols" }, () => WorkflowNow()),
+        ),
+        div({
+          "data-testid": "workflow-panes-divider",
+          class: "app-workflow-panes-divider",
+          "aria-hidden": "true",
+        }),
+        WorkflowPaneHeader(
+          "History",
+          span({ class: "app-workflow-history-glyph", "aria-hidden": "true" }, "◷"),
+          "only what is past",
+        ),
+        // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
+        () => WorkflowHistory(),
+      );
 
     const WorkflowFeed = () => {
       const subtab = van.state("Now");
@@ -7182,14 +7222,12 @@
         paneRunway(
           () => WorkflowBackToRoadmap(),
           () => WorkflowSubTabs(subtab),
-          () => WorkflowPaneTitle("Now"),
-          div(
-            { class: "app-workflow-cols" },
-            () => WorkflowNow(),
-          ),
-          () => WorkflowPaneTitle("History"),
+          () =>
+            isPhoneBand()
+              ? div({ class: "app-workflow-cols" }, () => WorkflowNow())
+              : WorkflowSplitCard(),
           // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
-          () => WorkflowHistory(),
+          () => (isPhoneBand() ? WorkflowHistory() : ""),
         ),
       );
     };

@@ -154,6 +154,15 @@ interface MountOpts {
   eventDetails?: Record<string, GateEventFixture>;
   fetchLog?: string[];
   agents?: AgentFixture[];
+  // CR-CRU-178 §S1 — force the `--band` token `readPhoneBand()` reads
+  // (public/app.js), bypassing CSS media-query evaluation entirely: this
+  // harness never loads public/styles.css, so without an override
+  // `getComputedStyle(document.documentElement).getPropertyValue("--band")`
+  // is always "" (not "phone"), i.e. every existing mount is implicitly
+  // desktop band. Setting it as an INLINE style on `document.documentElement`
+  // (the `:root` element itself) out-prioritizes any stylesheet rule by CSS
+  // cascade, so this is sound whether or not media queries are evaluated.
+  band?: "desktop" | "tablet" | "phone";
 }
 
 let cacheBust = 0;
@@ -202,6 +211,9 @@ async function mountApp(opts: MountOpts): Promise<void> {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
   document.body.innerHTML = '<div id="app"></div>';
+  if (opts.band !== undefined) {
+    document.documentElement.style.setProperty("--band", opts.band);
+  }
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
@@ -1101,4 +1113,315 @@ describe("§S1/AC2 — Now's and History's titles render outside their own scrol
     expect(document.querySelectorAll('[data-testid="workflow-now-title"]').length).toBe(1);
     expect(document.querySelectorAll('[data-testid="workflow-history-title"]').length).toBe(1);
   }, POLL_TEST_TIMEOUT_MS);
+});
+
+// ── CR-CRU-178 \u00a7S1 \u2014 "Now and History read as two panes" (F24, option B,
+// APPROVED 2026-10-09). Spec:
+// docs/changes/CR-CRU-178-now-and-history-read-as-two-panes.md. Storyboard
+// F24 (.lavish/crucible-v2-design.html), option B, is the approved design
+// this file drives against; where it disagrees with the spec prose the frame
+// wins. Its literal markup is the source of the subtitle wording pinned
+// below \u2014 the description span's OWN text node is "\u00b7 what is running" /
+// "\u00b7 only what is past" (the frame embeds the middot INSIDE the text, not
+// as a CSS pseudo-element), and of the composition: one card
+// (`background:var(--bg-1)`) holding Now's raised band (`background:var(--bg-2)`,
+// header bar then content), a hatched divider, then History's header bar
+// then content.
+//
+// Current-code facts verified against public/app.js on this branch: NEITHER
+// a header bar, NOR a divider, NOR a live dot, NOR a split card exists
+// anywhere today \u2014 `WorkflowFeed` mounts `WorkflowPaneTitle("Now")` /
+// `WorkflowPaneTitle("History")` (the small CR-CRU-172 \u00a7S1 titles) directly
+// against `WorkflowNow()` / `WorkflowHistory()`, with nothing between them
+// and no wrapping card. Every assertion below is therefore genuine RED.
+//
+// RED-agent-defined testids (the spec names the CONTENT and the frame names
+// the COMPOSITION, neither names a testid beyond the two the gap analysis
+// keeps \u2014 `workflow-now-title` / `workflow-history-title`, spec-given, and
+// their siblings `workflow-now-subtitle` / `workflow-history-subtitle`, also
+// spec-given):
+//   - `workflow-panes-card` \u2014 the ONE card holding both panes (AC1 "one
+//     card"), needed so the header bars, the divider and both boxes can be
+//     asserted as nesting inside a SINGLE shared container rather than two.
+//   - `workflow-now-band` \u2014 Now's raised-background band, wrapping its
+//     header bar AND its content box (F24\u00b7B: the raised background spans
+//     both, not the header alone) \u2014 needed because `background-color` is
+//     not an inherited CSS property: only the element that actually carries
+//     `background:var(--bg-2)` reads back that color from `getComputedStyle`,
+//     so AC1's "Now's band has a different background" needs its own testid
+//     to query (asserted by computed style in the e2e layer; this file only
+//     pins that the band exists and nests the header bar + box it names).
+//   - `workflow-now-header` / `workflow-history-header` \u2014 the header BAR
+//     container (dot/glyph + name + subtitle), distinct from the name
+//     element alone, needed because AC1 requires "a header bar on each" as
+//     an independently assertable unit (present on desktop, absent on the
+//     phone band) \u2014 the existing title/subtitle testids alone cannot
+//     express "is there a BAR wrapping them".
+//   - `workflow-now-dot` \u2014 the live dot inside Now's header bar, exposing
+//     its lit/dim state as `data-live="true"|"false"` \u2014 a plain behavioural
+//     attribute, decoupled from the exact CSS (color, glow) the e2e layer
+//     measures separately by computed style.
+//   - `workflow-panes-divider` \u2014 the hatched divider between Now and
+//     History, needed because the spec gives it no testid and AC1 requires
+//     it independently assertable (present on desktop, absent on the phone
+//     band).
+describe("CR-CRU-178 \u00a7S1/AC1 \u2014 a header bar (name + subtitle) renders above each pane, inside the one split card, on the desktop band \u2014 and gates off entirely on the phone band", () => {
+  test("Now's header bar names 'Now' with its 'what is running' line and sits inside Now's raised band; History's header bar names 'History' with its 'only what is past' line; both sit outside their own box and inside the one split card (desktop); on the phone band neither header bar renders \u2014 the sub-tab rows are the titles", async () => {
+    const key = "two-panes-headers-desktop";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Two Panes Headers Desktop" })],
+      events: [],
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    const card = document.querySelector('[data-testid="workflow-panes-card"]');
+    expect(card, "no workflow-panes-card renders").not.toBeNull();
+
+    const nowBand = document.querySelector('[data-testid="workflow-now-band"]');
+    expect(nowBand, "no workflow-now-band renders").not.toBeNull();
+
+    const nowHeader = document.querySelector('[data-testid="workflow-now-header"]');
+    const historyHeader = document.querySelector('[data-testid="workflow-history-header"]');
+    expect(nowHeader, "no workflow-now-header renders").not.toBeNull();
+    expect(historyHeader, "no workflow-history-header renders").not.toBeNull();
+
+    const nowBox = document.querySelector('[data-testid="workflow-now"]');
+    const historyBox = document.querySelector('[data-testid="workflow-history"]');
+    expect(nowBox).not.toBeNull();
+    expect(historyBox).not.toBeNull();
+
+    // OUTSIDE \u2014 a header bar nested INSIDE its own box would not be above it.
+    expect(nowBox!.contains(nowHeader!)).toBe(false);
+    expect(historyBox!.contains(historyHeader!)).toBe(false);
+
+    // ABOVE \u2014 the header bar precedes its own box in document order.
+    expect(
+      Boolean(nowHeader!.compareDocumentPosition(nowBox!) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+    expect(
+      Boolean(
+        historyHeader!.compareDocumentPosition(historyBox!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+
+    // Now's band wraps its OWN header bar and its OWN box (F24\u00b7B: the raised
+    // background spans both, not the header alone).
+    expect(nowBand!.contains(nowHeader!)).toBe(true);
+    expect(nowBand!.contains(nowBox!)).toBe(true);
+
+    // INSIDE the one card \u2014 both panes and their bars nest under the SAME
+    // split card, not two separate containers.
+    expect(card!.contains(nowBand!)).toBe(true);
+    expect(card!.contains(historyHeader!)).toBe(true);
+    expect(card!.contains(historyBox!)).toBe(true);
+
+    // The name elements keep their EXISTING testid and exact text (gap
+    // analysis: "none of them needs a re-pin").
+    const nowTitle = findByText(nowHeader!, '[data-testid="workflow-now-title"]', "Now");
+    const historyTitle = findByText(
+      historyHeader!,
+      '[data-testid="workflow-history-title"]',
+      "History",
+    );
+    expect(nowTitle, "no 'Now' title renders inside workflow-now-header").toBeDefined();
+    expect(
+      historyTitle,
+      "no 'History' title renders inside workflow-history-header",
+    ).toBeDefined();
+
+    // The subtitle \u2014 a SIBLING of the title (settled ruling), F24\u00b7B's literal
+    // wording (frame wins).
+    const nowSubtitle = nowHeader!.querySelector('[data-testid="workflow-now-subtitle"]');
+    const historySubtitle = historyHeader!.querySelector(
+      '[data-testid="workflow-history-subtitle"]',
+    );
+    expect(nowSubtitle, "no workflow-now-subtitle renders").not.toBeNull();
+    expect(historySubtitle, "no workflow-history-subtitle renders").not.toBeNull();
+    expect(textOf(nowSubtitle)).toBe("\u00b7 what is running");
+    expect(textOf(historySubtitle)).toBe("\u00b7 only what is past");
+    // Siblings, not nested one inside the other.
+    expect(nowTitle!.contains(nowSubtitle!)).toBe(false);
+    expect(nowSubtitle!.contains(nowTitle!)).toBe(false);
+
+    // AC1's own pin, unmoved by this cycle's header-bar wrapping.
+    expect(textOf(nowBox)).toBe("Nothing running \u2192 Roadmap");
+
+    // \u2500\u2500 the phone band (settled ruling): no header bar renders at all \u2500\u2500
+    const phoneKey = "two-panes-headers-phone";
+    await mountApp({
+      pathname: `/p/${phoneKey}`,
+      projects: [project({ key: phoneKey, name: "Two Panes Headers Phone" })],
+      events: [],
+      plans: [],
+      band: "phone",
+    });
+    await openWorkflowTab();
+
+    // The sub-tabs render instead (F15d, unchanged by this cycle) \u2014 the
+    // sub-tab ROWS are the titles there, per the settled ruling.
+    expect(document.querySelectorAll('[data-testid="workflow-subtab"]').length).toBe(2);
+
+    expect(document.querySelector('[data-testid="workflow-panes-card"]')).toBeNull();
+    expect(document.querySelector('[data-testid="workflow-now-band"]')).toBeNull();
+    expect(document.querySelector('[data-testid="workflow-now-header"]')).toBeNull();
+    expect(document.querySelector('[data-testid="workflow-history-header"]')).toBeNull();
+  });
+
+  test("each header bar and Now's band render exactly once, never duplicated across a poll re-render", async () => {
+    const key = "two-panes-headers-no-duplicate";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Two Panes Headers No Duplicate" })],
+      events: [],
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    expect(document.querySelectorAll('[data-testid="workflow-panes-card"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-now-band"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-now-header"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-history-header"]').length).toBe(1);
+
+    await waitForPollTick();
+
+    expect(document.querySelectorAll('[data-testid="workflow-panes-card"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-now-band"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-now-header"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="workflow-history-header"]').length).toBe(1);
+  }, POLL_TEST_TIMEOUT_MS);
+});
+
+// \u2500\u2500 \u00a7S1/"Settled at gap analysis" \u2014 the live dot is lit ONLY while Now holds
+// an open plan or a running gate, dim when Now reads "Nothing running \u2192
+// Roadmap" \u2500\u2500
+describe("CR-CRU-178 \u00a7S1/AC1 \u2014 the live dot in Now's header bar is lit only while something runs", () => {
+  test('an open plan with no running gate: the dot is lit (data-live="true")', async () => {
+    const key = "two-panes-dot-open-plan";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Dot Open Plan" })],
+      events: [],
+      plans: [
+        {
+          planId: 1,
+          cr: "CR-DOT-OPEN-1",
+          projectKey: key,
+          status: "open",
+          wave: "1",
+          cycles: [{ id: 1, label: "cycle 1", status: "active" }],
+        },
+      ],
+    });
+    await openWorkflowTab();
+
+    // bound \u2014 the open-plan branch really is what's rendering.
+    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+
+    const dot = document.querySelector('[data-testid="workflow-now-dot"]');
+    expect(dot, "no workflow-now-dot renders").not.toBeNull();
+    expect(dot!.getAttribute("data-live")).toBe("true");
+  });
+
+  test('a running gate with no open plan: the dot is lit (data-live="true")', async () => {
+    const key = "two-panes-dot-running-gate";
+    const now = Date.now();
+    const eventId = "evt-two-panes-dot-gate-1";
+    const brief = gateEvent({
+      id: eventId,
+      projectKey: key,
+      agentId: "two-panes-dot-caller-1\u00b7gate",
+      timestamp: now,
+      gate: {
+        intent: "release no-mistakes gate",
+        outcome: "checks-passed",
+        steps: [{ name: "intent", status: "passed" }],
+        run: { id: "run-two-panes-dot-1" },
+        inFlight: true,
+      },
+    });
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Dot Running Gate" })],
+      events: [brief],
+      eventDetails: { [eventId]: { ...brief, decisions: [] } },
+      plans: [],
+      agents: [agentFixture("two-panes-dot-caller-1\u00b7gate", "online")],
+    });
+
+    // bound \u2014 the running-gate branch really is what's rendering.
+    expect(document.querySelector('[data-testid="gate-pane"]')).not.toBeNull();
+
+    const dot = document.querySelector('[data-testid="workflow-now-dot"]');
+    expect(dot, "no workflow-now-dot renders").not.toBeNull();
+    expect(dot!.getAttribute("data-live")).toBe("true");
+  });
+
+  test('nothing running (Now reads exactly "Nothing running \u2192 Roadmap"): the dot is dim (data-live="false")', async () => {
+    const key = "two-panes-dot-nothing-running";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Dot Nothing Running" })],
+      events: [],
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    // bound \u2014 nothing else is rendering in Now.
+    expect(textOf(document.querySelector('[data-testid="workflow-now"]'))).toBe(
+      "Nothing running \u2192 Roadmap",
+    );
+
+    const dot = document.querySelector('[data-testid="workflow-now-dot"]');
+    expect(dot, "no workflow-now-dot renders").not.toBeNull();
+    expect(dot!.getAttribute("data-live")).toBe("false");
+  });
+});
+
+describe("CR-CRU-178 \u00a7S1/AC1 \u2014 the hatched divider sits between Now and History on the desktop band, and gates off entirely on the phone band", () => {
+  test("desktop band: the divider sits between Now's box and History's header bar, inside the one split card; on the phone band no divider renders", async () => {
+    const key = "two-panes-divider-desktop";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Divider Desktop" })],
+      events: [],
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    const divider = document.querySelector('[data-testid="workflow-panes-divider"]');
+    expect(divider, "no workflow-panes-divider renders on the desktop band").not.toBeNull();
+
+    const card = document.querySelector('[data-testid="workflow-panes-card"]');
+    expect(card!.contains(divider!)).toBe(true);
+
+    const nowBox = document.querySelector('[data-testid="workflow-now"]');
+    const historyHeader = document.querySelector('[data-testid="workflow-history-header"]');
+    // BETWEEN \u2014 the divider follows Now's box and precedes History's header
+    // bar in document order (F24\u00b7B: "Now \u2026 a hatched divider \u2026 History").
+    expect(
+      Boolean(nowBox!.compareDocumentPosition(divider!) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+    expect(
+      Boolean(
+        divider!.compareDocumentPosition(historyHeader!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+
+    // \u2500\u2500 the phone band (settled ruling): no divider renders at all \u2500\u2500
+    const phoneKey = "two-panes-divider-phone";
+    await mountApp({
+      pathname: `/p/${phoneKey}`,
+      projects: [project({ key: phoneKey, name: "Divider Phone" })],
+      events: [],
+      plans: [],
+      band: "phone",
+    });
+    await openWorkflowTab();
+
+    expect(document.querySelectorAll('[data-testid="workflow-subtab"]').length).toBe(2);
+    expect(document.querySelector('[data-testid="workflow-panes-divider"]')).toBeNull();
+  });
 });

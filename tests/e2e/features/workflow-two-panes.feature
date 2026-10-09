@@ -72,3 +72,61 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
 
     When the viewport is 390x844
     Then the Workflow tab shows no title above either pane
+
+  # CR-CRU-178 §S1 — "Now and History read as two panes" (F24, option B,
+  # APPROVED 2026-10-09): one card holding both, Now on a raised band under
+  # its own header bar (live dot · NOW · "what is running"), a hatched
+  # divider, History beneath under its own header bar (clock glyph ·
+  # HISTORY · "only what is past"), the bar pinned while History's list
+  # scrolls. The frame wins; agents raise disagreements. Spec:
+  # docs/changes/CR-CRU-178-now-and-history-read-as-two-panes.md.
+  #
+  # Today NEITHER a header bar NOR a divider NOR a live dot NOR a split
+  # card exists anywhere — WorkflowFeed mounts the small CR-CRU-172 §S1
+  # titles directly against WorkflowNow()/WorkflowHistory(), with nothing
+  # between them and no wrapping card (verified against public/app.js on
+  # this branch). Every assertion below is therefore genuine RED.
+  Scenario: at the desktop band, Now and History render inside one split card with a header bar on each, Now's band background differs from History's area, a divider is visible between them, and History's header bar stays visible while its list scrolls
+    Given the viewport is 1280x800
+    And a project named "W2P Split Card Project" is registered
+    And an orchestrator "w2p-orch-3" is registered on that project
+    And a release "0.173.639" is proposed for that project
+    And a cycle plan is filed for cr "CR-W2P-3" with 40 cycles
+    And 32 closed CR plans are filed and merged under wave "1" for a long History
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then Now and History render inside one split card
+    And the "Now" header bar names "Now" with the line "what is running"
+    And the "History" header bar names "History" with the line "only what is past"
+    And Now's band background differs from History's area background
+    And a divider is visible between Now's box and History's header bar
+    And History's header bar stays visible while its list scrolls
+
+    When the viewport is 390x844
+    Then the Workflow tab shows no header bar above either pane
+    And no divider renders between Now and History
+    And the selected Now pane shows as a card on the raised band
+
+    When I select the "History" sub-tab
+    Then the selected History pane shows as a card on the card's base
+
+  Scenario: the live dot in Now's header bar is lit while an open plan or a running gate is in Now, and dim when nothing is running
+    Given the viewport is 1280x800
+    And a project named "W2P Dot State Project" is registered
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then the live dot in Now's header bar is dim
+
+    When a cycle plan is filed for cr "CR-W2P-DOT-1" with a cycle labelled "dot cycle"
+    And cycle 1 of that plan is activated
+    And I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then the live dot in Now's header bar is lit
+
+    When cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "w2pdot01"
+    And an in-flight no-mistakes gate is ingested via the API for release "9.9.8" with run id "run-w2p-dot-1"
+    And I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then the live dot in Now's header bar is lit
+

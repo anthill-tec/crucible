@@ -40,15 +40,15 @@ view while its list scrolls (it sits outside History's scroll box, as today's ti
 
 ## Acceptance criteria
 
-- [ ] At 1280×800 the Workflow tab shows one card whose Now band has a different background from
+- [x] At 1280×800 the Workflow tab shows one card whose Now band has a different background from
       History's area, a visible divider between them, and a header bar on each (`NOW` with the dot,
       `HISTORY` with the clock glyph, each with its line of text); the dot is lit while an open plan or
       a running gate is in Now and dim when nothing runs; History's header bar stays visible while its
       list scrolls; Now's text (e.g. `Nothing running → Roadmap`) is unchanged — asserted in a real
       browser by computed style and geometry, and the dot's two states on the page.
-- [ ] At 390×844 the sub-tabs are the titles: no header bar, no divider; the selected pane shows in
+- [x] At 390×844 the sub-tabs are the titles: no header bar, no divider; the selected pane shows in
       the card styling — asserted in a real browser.
-- [ ] CR-CRU-176's layout rules hold (Now never scrolls, History ≥160 px with its own scroll, the pane
+- [x] CR-CRU-176's layout rules hold (Now never scrolls, History ≥160 px with its own scroll, the pane
       scrolls as a whole) and the phone sub-tabs work as before — asserted by the existing scenarios.
 
 ## Gap analysis (2026-10-09)
