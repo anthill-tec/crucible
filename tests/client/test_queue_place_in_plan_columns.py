@@ -359,7 +359,7 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
         self.assertEqual(
             list(row1.keys()),
             ["cr", "wave", "status", "planId", "title", "lifecycle",
-             "release", "seq", "points", "dependsOn"],
+             "release", "seq", "points", "dependsOn", "warning"],
             f"the four requested columns must land AFTER the six default "
             f"ones, in release/seq/points/dependsOn order; got "
             f"{list(row1.keys())!r}")
@@ -395,7 +395,7 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
         self.assertEqual(
             list(row.keys()),
             ["cr", "wave", "status", "planId", "title", "lifecycle",
-             "release", "seq", "points", "dependsOn"],
+             "release", "seq", "points", "dependsOn", "warning"],
             f"--full must carry every column including the four "
             f"place-in-plan ones; got {list(row.keys())!r}")
         self.assertEqual(row["release"], "9.9.9", f"got {row!r}")
@@ -421,7 +421,7 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
         self.assertEqual(
             list(row.keys()),
             ["cr", "wave", "status", "planId", "title", "lifecycle",
-             "points", "release"],
+             "points", "release", "warning"],
             f"--fields ADDS exactly the requested columns, in the "
             f"REQUESTED order, after the six default ones -- never all "
             f"four, never reordered to the canonical release/seq/points/"
