@@ -133,8 +133,8 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
             AXI_MODULE_PATH, "cr175_c1_build_queue_rows_pure")
 
     def test_full_row_gains_release_seq_points_dependson_after_the_six_existing_keys(self):
-        entry = _entry("CR-PLACE-1", wave="4", status="PENDING",
-                        title="needs scheduling", depends_on=["CR-PLACE-0"],
+        entry = _entry("PLACE-1", wave="4", status="PENDING",
+                        title="needs scheduling", depends_on=["PLACE-0"],
                         release="9.9.9", seq=11, points=5)
 
         row = self.axi.build_queue_rows([entry])[0]
@@ -150,12 +150,12 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
         self.assertEqual(row["seq"], 11, f"got {row!r}")
         self.assertEqual(row["points"], 5, f"got {row!r}")
         self.assertEqual(
-            row["dependsOn"], "CR-PLACE-0",
+            row["dependsOn"], "PLACE-0",
             f"a single dependency must publish as its bare id, a scalar "
             f"cell; got {row!r}")
 
     def test_release_is_null_when_the_entry_declares_no_release(self):
-        entry = _entry("CR-PLACE-2", seq=4)
+        entry = _entry("PLACE-2", seq=4)
         self.assertNotIn("release", entry, "fixture bug: entry must carry "
                                            "no release key at all")
 
@@ -165,7 +165,7 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
         self.assertIsNone(row["release"], f"got {row!r}")
 
     def test_points_is_null_when_the_cr_was_never_pointed(self):
-        entry = _entry("CR-PLACE-3", seq=5)
+        entry = _entry("PLACE-3", seq=5)
         self.assertNotIn("points", entry, "fixture bug: entry must carry "
                                           "no points key at all")
 
@@ -177,14 +177,14 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
                            f"never 0 or an invented default; got {row!r}")
 
     def test_points_is_the_declared_integer_when_pointed(self):
-        entry = _entry("CR-PLACE-4", seq=6, points=8)
+        entry = _entry("PLACE-4", seq=6, points=8)
 
         row = self.axi.build_queue_rows([entry])[0]
 
         self.assertEqual(row["points"], 8, f"got {row!r}")
 
     def test_dependson_is_space_joined_ids_with_multiple_dependencies(self):
-        entry = _entry("CR-PLACE-5", seq=7, depends_on=["CR-A", "CR-B"])
+        entry = _entry("PLACE-5", seq=7, depends_on=["CR-A", "CR-B"])
 
         row = self.axi.build_queue_rows([entry])[0]
 
@@ -194,7 +194,7 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
             f"-- space-separated ids; got {row!r}")
 
     def test_dependson_is_empty_string_never_null_when_the_entry_has_no_dependencies(self):
-        entry = _entry("CR-PLACE-6", seq=8, depends_on=[])
+        entry = _entry("PLACE-6", seq=8, depends_on=[])
 
         row = self.axi.build_queue_rows([entry])[0]
 
@@ -205,7 +205,7 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
             f"string -- never null and never an omitted key; got {row!r}")
 
     def test_the_six_existing_keys_keep_their_today_values_while_the_row_also_gains_the_new_ones(self):
-        entry = _entry("CR-PLACE-7", wave="2", status="IN_PROGRESS",
+        entry = _entry("PLACE-7", wave="2", status="IN_PROGRESS",
                         plan_id=42, title="already tracked", seq=9,
                         depends_on=["CR-X"], release="1.0.0", points=3)
 
@@ -214,7 +214,7 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
         self.assertEqual(
             (row["cr"], row["wave"], row["status"], row["planId"],
              row["title"], row["lifecycle"]),
-            ("CR-PLACE-7", "2", "IN_PROGRESS", 42, "already tracked", None),
+            ("PLACE-7", "2", "IN_PROGRESS", 42, "already tracked", None),
             f"the existing six keys must keep their TODAY values, "
             f"untouched by the four new columns; got {row!r}")
         self.assertIn("release", row, f"got {row!r}")
@@ -229,9 +229,9 @@ class BuildQueueRowsCarriesPlaceInPlanColumnsTest(unittest.TestCase):
 
     def test_rows_stay_a_uniform_ten_key_set_whether_or_not_an_entry_carries_the_optional_fields(self):
         entries = [
-            _entry("CR-PLACE-8", seq=1, release="3.0.0", points=2,
-                   depends_on=["CR-PLACE-7-DEP"]),
-            _entry("CR-PLACE-9", seq=2),
+            _entry("PLACE-8", seq=1, release="3.0.0", points=2,
+                   depends_on=["PLACE-7-DEP"]),
+            _entry("PLACE-9", seq=2),
         ]
 
         rows = self.axi.build_queue_rows(entries)
@@ -327,11 +327,11 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
 
     def test_default_stays_six_columns_while_fields_request_adds_the_place_in_plan_extras(self):
         entries = [
-            _entry("CR-FIELDS-1", wave="4", status="PENDING",
+            _entry("FIELDS-1", wave="4", status="PENDING",
                    title="wants its place in the plan shown",
-                   depends_on=["CR-FIELDS-0"], release="9.9.9", seq=11,
+                   depends_on=["FIELDS-0"], release="9.9.9", seq=11,
                    points=5),
-            _entry("CR-FIELDS-2", wave="4", status="PENDING", seq=12),
+            _entry("FIELDS-2", wave="4", status="PENDING", seq=12),
         ]
 
         code_default, axi_default, _out, err_default = self.drive(entries)
@@ -370,7 +370,7 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
         self.assertEqual(row1["release"], "9.9.9", f"got {row1!r}")
         self.assertEqual(row1["seq"], 11, f"got {row1!r}")
         self.assertEqual(row1["points"], 5, f"got {row1!r}")
-        self.assertEqual(row1["dependsOn"], "CR-FIELDS-0", f"got {row1!r}")
+        self.assertEqual(row1["dependsOn"], "FIELDS-0", f"got {row1!r}")
         self.assertIsNone(row2["release"], f"got {row2!r}")
         self.assertIsNone(row2["points"], f"got {row2!r}")
         self.assertEqual(
@@ -380,8 +380,8 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
 
     def test_full_flag_adds_the_same_four_place_in_plan_columns(self):
         entries = [
-            _entry("CR-FULL-1", wave="5", status="PENDING",
-                   title="checked with --full", depends_on=["CR-FULL-0"],
+            _entry("FULL-1", wave="5", status="PENDING",
+                   title="checked with --full", depends_on=["FULL-0"],
                    release="9.9.9", seq=21, points=2),
         ]
 
@@ -401,12 +401,12 @@ class QueueFieldsAddPlaceInPlanColumnsTest(_QueueFieldsHarness):
         self.assertEqual(row["release"], "9.9.9", f"got {row!r}")
         self.assertEqual(row["seq"], 21, f"got {row!r}")
         self.assertEqual(row["points"], 2, f"got {row!r}")
-        self.assertEqual(row["dependsOn"], "CR-FULL-0", f"got {row!r}")
+        self.assertEqual(row["dependsOn"], "FULL-0", f"got {row!r}")
 
     def test_fields_request_adds_only_the_requested_subset_in_the_requested_order(self):
         entries = [
-            _entry("CR-SUBSET-1", wave="6", status="PENDING",
-                   depends_on=["CR-SUBSET-0"], release="2.0.0", seq=31,
+            _entry("SUBSET-1", wave="6", status="PENDING",
+                   depends_on=["SUBSET-0"], release="2.0.0", seq=31,
                    points=13),
         ]
 
