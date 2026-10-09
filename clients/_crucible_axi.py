@@ -2619,6 +2619,175 @@ def cmd_landings(args, project_dir, ops):
          f"landings: ok=True closed={len(rows)}")
     return 0
 
+# ── CR-CRU-175 §S4 — `history`: a project's releases through its client ──────
+
+HISTORY_VERB = "history"
+# The seven columns every `history` table shows (§S4, DRIFT-6: `pending` is
+# CR-CRU-177's `pendingCount`); `--fields` ADDS the five below after them in
+# the requested order and `--full` adds all five.
+HISTORY_BASE_FIELDS = ("release", "state", "shippedAt", "tag", "crs",
+                       "pending", "target")
+HISTORY_EXTRA_FIELDS = ("waves", "gateRuns", "lastGate", "verified",
+                        "packages")
+
+
+def history_path(project_key):
+    """§S4 — the history read (CR-CRU-173/177): `GET …/projects/<key>/history`."""
+    return f"/api/v2/projects/{project_key}/history"
+
+
+def add_history_args(parser):
+    """§S4 — the `history` verb's flags, registered here so the five clients
+    cannot drift into five flag surfaces. A read verb: no `--agent`."""
+    parser.add_argument(
+        "--fields",
+        help="Comma-separated EXTRA columns to add to the default "
+             "release,state,shippedAt,tag,crs,pending,target set — waves, "
+             "gateRuns, lastGate, verified, packages.")
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Print every column, untruncated.")
+    parser.add_argument(
+        "--release",
+        help="Narrow to one release (its label) and list its gate runs as "
+             "the table.")
+    add_status_format_arg(parser)
+
+
+def _history_workflow(release):
+    """The release's one workflow entry (the read publishes exactly one), or
+    an empty dict when it carries none."""
+    workflows = release.get("workflows") or []
+    first = workflows[0] if workflows else None
+    return first if isinstance(first, dict) else {}
+
+
+def _history_label(release):
+    """The release's single label, or None when it carries none."""
+    labels = release.get("labels") or []
+    return labels[0] if labels else None
+
+
+def _history_last_gate(gate_runs):
+    """`<outcome> · <stopStep>` of the newest gate run (the read lists them
+    newest first), just `<outcome>` without a stop step; None with none."""
+    if not gate_runs:
+        return None
+    last = gate_runs[0]
+    stop = last.get("stopStep")
+    return f"{last.get('outcome')} · {stop}" if stop else last.get("outcome")
+
+
+def build_history_rows(releases):
+    """CR-CRU-175 §S4 (PURE) — one uniform, primitive row per release in the
+    read's order (never re-sorted), carrying every column: the default seven,
+    then `waves` (`wave:count` pairs space-separated, count = the wave's
+    completed CRs), `gateRuns` (count), `lastGate`, `verified` (verification
+    run count) and `packages` (`registry:name:version`, comma-separated, ""
+    when none). An undeclared value is null, never an omitted key."""
+    rows = []
+    for release in releases or []:
+        workflow = _history_workflow(release)
+        gate_runs = workflow.get("gateRuns") or []
+        rows.append({
+            "release": _history_label(release),
+            "state": release.get("state"),
+            "shippedAt": release.get("shippedAt"),
+            "tag": release.get("tag"),
+            "crs": release.get("crCount"),
+            "pending": release.get("pendingCount"),
+            "target": release.get("targetAt"),
+            "waves": " ".join(f"{w.get('wave')}:{len(w.get('crs') or [])}"
+                              for w in release.get("waves") or []),
+            "gateRuns": len(gate_runs),
+            "lastGate": _history_last_gate(gate_runs),
+            "verified": workflow.get("verificationRuns"),
+            "packages": ",".join(
+                f"{p.get('registry')}:{p.get('name')}:{p.get('version')}"
+                for p in workflow.get("packages") or []),
+        })
+    return rows
+
+
+def select_history_fields(rows, extra_fields, full=False):
+    """§S4 (PURE) — project the history rows onto the default seven columns
+    plus the requested extras (all five with `full`), in the read's order.
+    Without `full` a long text cell is truncated (`truncate_field`)."""
+    requested = list(HISTORY_EXTRA_FIELDS) if full else list(extra_fields or [])
+    keys = list(HISTORY_BASE_FIELDS)
+    for f in requested:
+        if f not in keys:
+            keys.append(f)
+    return [{k: truncate_field(r.get(k), full=full) for k in keys} for r in rows]
+
+
+def build_history_gate_rows(release):
+    """§S4 (PURE) — the release's gate runs as uniform, primitive rows, in
+    the read's order: outcome, stopStep, fixRounds, duration (ms),
+    pushedCommit, eventId, retired — null when the run carries none."""
+    gate_runs = _history_workflow(release).get("gateRuns") or []
+    return [{"outcome": g.get("outcome"), "stopStep": g.get("stopStep"),
+             "fixRounds": g.get("fixRounds"), "duration": g.get("durationMs"),
+             "pushedCommit": g.get("pushedCommit"),
+             "eventId": g.get("eventId"), "retired": g.get("retired")}
+            for g in gate_runs]
+
+
+def _history_refusal(emit, ops, project_dir, error, help_steps):
+    """§S4 — the `history` refusal: ok:false, the error naming the bad
+    input, a non-empty `help[]`, no rows; exit 1."""
+    emit(HISTORY_VERB, False, {"error": error, "help": help_steps},
+         ops.context(project_dir), [],
+         f"history: ok=False error={error}")
+    return 1
+
+
+def cmd_history(args, project_dir, ops):
+    """CR-CRU-175 §S4 — a project's releases through its client (read-only,
+    no --agent): ONE read, `GET …/history`, answered as one envelope whose
+    `history` table is the default seven columns (plus `--fields` extras,
+    or every column with `--full`), or — with `--release <label>` — that
+    release's gate runs. An unknown project (a non-ok read) or an unknown
+    release is a refusal with `help[]`, exit 1. `--format` picks the
+    encoding exactly as for `status` (§S8)."""
+    emit = _status_emitter(args, ops)
+    resp = ops.get(history_path(ops.project_key(project_dir))) or {}
+    if not resp.get("ok"):
+        return _history_refusal(
+            emit, ops, project_dir,
+            f"could not read the project's history: {resp.get('error')}",
+            server_failure_help(resp) or [
+                "check CRUCIBLE_PROJECT_KEY in the project's .env names a "
+                "project the board holds",
+                f"check the Crucible server is running / reachable at "
+                f"{ops.base_url}"])
+    releases = resp.get("releases") or []
+    label = getattr(args, "release", None)
+    if label:
+        release = next((r for r in releases if _history_label(r) == label),
+                       None)
+        if release is None:
+            return _history_refusal(
+                emit, ops, project_dir,
+                f"unknown release: {label}",
+                ["history — lists every release label the project holds"])
+        rows = build_history_gate_rows(release)
+        emit(HISTORY_VERB, True,
+             {HISTORY_VERB: rows, "count": len(rows), "help": ["history"]},
+             ops.context(project_dir), [],
+             f"history: ok=True release={label} gateRuns={len(rows)}")
+        return 0
+    full = bool(getattr(args, "full", False))
+    rows = select_history_fields(
+        build_history_rows(releases),
+        _queue_field_list(getattr(args, "fields", None)), full=full)
+    emit(HISTORY_VERB, True,
+         {HISTORY_VERB: rows, "count": len(rows),
+          "help": ["history --release <label>"]},
+         ops.context(project_dir), [],
+         f"history: ok=True releases={len(rows)}")
+    return 0
+
 
 # ── §S4 — `project-meta`: a project's metadata map, read and written ─────────
 

@@ -1106,6 +1106,14 @@ def cmd_landings(args):
     per --format. Delegates to the shared implementation."""
     return _axi().cmd_landings(args, _project_dir(args), _ops())
 
+
+def cmd_history(args):
+    """CR-CRU-175 §S4 — a project's releases through its client (read-only,
+    no --agent): GET …/history as one TOON-AXI table — the default seven
+    columns, --fields/--full extras, or --release <label>'s gate runs.
+    Delegates to the shared implementation."""
+    return _axi().cmd_history(args, _project_dir(args), _ops())
+
 def cmd_project_meta(args):
     """§S4 — a project's metadata map: a read (GET …/metadata, no
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
@@ -1597,6 +1605,15 @@ def main():
                              "writes one JSON object.")
     _axi().add_status_format_arg(lv)
     lv.set_defaults(func=cmd_landings)
+
+    # CR-CRU-175 §S4 — a project's release history READ verb (no --agent)
+    hv = sub.add_parser("history", parents=[common],
+                        help="A project's releases, their states, waves, gate runs "
+                             "and verification (GET …/history) as a TOON-AXI table; "
+                             "--release <label> lists that release's gate runs. "
+                             "Read-only; --format json writes one JSON object.")
+    _axi().add_history_args(hv)
+    hv.set_defaults(func=cmd_history)
 
     # §S4 — the project metadata map: read, or write with --set/--unset.
     # Not `common`'s child: its `--agent` is required only for a write, so the
