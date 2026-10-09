@@ -45,13 +45,13 @@ row `<n> CRs completed · <p> pending` (the pending part omitted at 0) and the w
 
 ## Acceptance criteria
 
-- [ ] `/history` omits an unshipped release with no completed CR (only queued or in-flight CRs) and
+- [x] `/history` omits an unshipped release with no completed CR (only queued or in-flight CRs) and
       never answers `planned`; a release with one completed CR is listed, and a shipped release with no
       CRs is listed — asserted on the server with fixed fixtures.
-- [ ] A listed release's waves carry only completed CRs plus a pending count; a wave whose CRs are
+- [x] A listed release's waves carry only completed CRs plus a pending count; a wave whose CRs are
       all pending is not listed; the page draws `wave <n> · <m> merged · <p> pending` and no rows for
       pending CRs — asserted on the server and on the page.
-- [ ] On a copy of the dev store: 0.4.0 is absent; 0.3.0 is listed with its merged CRs only (33 at
+- [x] On a copy of the dev store: 0.4.0 is absent; 0.3.0 is listed with its merged CRs only (33 at
       gap analysis; more as 0.3.0 merges) and a pending count (CR-CRU-175 and this CR at gap analysis);
       0.2.2, 0.2.0, 0.2.1 and 0.1.x (0.1.1 with 0 CRs included) unchanged from CR-CRU-173 — asserted
       by VERIFY.
