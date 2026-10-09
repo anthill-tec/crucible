@@ -6789,31 +6789,50 @@
 
     // The wave's latest sealed gate (`waveLatestSealedGate`) carries its
     // decision-summary line beneath the header — the header's own wording
-    // is unchanged.
-    const WaveGroup = (wave, events) =>
-      div(
+    // is unchanged. A wave folds as F22 draws it: folded, it is its header
+    // line alone, and a tap on that line opens it to the decisions line and
+    // its CRs. `key` is its own fold key, `expanded` whether it starts open.
+    const WaveGroup = (wave, events, key, expanded) => {
+      const open = () => lensOpen(key) !== expanded;
+      return div(
         {
           "data-testid": "wave-group",
           "data-wave": wave.wave,
           "data-source": wave.source,
+          "data-open": () => String(open()),
           class: "app-wave-group",
         },
-        WaveHeader(wave),
-        GateDecisionSummaryLine(
-          L.waveLatestSealedGate(events, wave.wave),
-          "wave-decision-summary",
-          "app-wave-decision-summary",
+        div(
+          {
+            "data-testid": "history-wave-toggle",
+            class: "app-history-wave-line app-lens-toggle",
+            onclick: () => lensToggle(key),
+          },
+          span({ class: "app-toggle-glyph" }, () => (open() ? "▾" : "▸")),
+          WaveHeader(wave),
         ),
-        wave.tracks !== null
-          ? wave.tracks.map((t) =>
-              div(
-                { "data-testid": "track-group", "data-track": t.track, class: "app-track-group" },
-                t.crs.map(LensCrGroup),
-              ),
-            )
-          : null,
-        wave.crs.map(LensCrGroup),
+        () =>
+          open()
+            ? div(
+                { class: "app-history-wave-body" },
+                GateDecisionSummaryLine(
+                  L.waveLatestSealedGate(events, wave.wave),
+                  "wave-decision-summary",
+                  "app-wave-decision-summary",
+                ),
+                wave.tracks !== null
+                  ? wave.tracks.map((t) =>
+                      div(
+                        { "data-testid": "track-group", "data-track": t.track, class: "app-track-group" },
+                        t.crs.map(LensCrGroup),
+                      ),
+                    )
+                  : null,
+                wave.crs.map(LensCrGroup),
+              )
+            : "",
       );
+    };
 
     // CR-CRU-020 §S1.4 (corrected at the 2026-07-16 gate review) — the
     // Workflow view renders plan/cycle structure ONLY: no ungrouped run
@@ -6845,7 +6864,9 @@
     };
 
     // The open release is the newest one: it starts expanded and every other
-    // release starts folded, until its row is tapped.
+    // release starts folded, until its row is tapped. Inside it only its open
+    // wave — the latest — starts expanded; every other wave, in it or in a
+    // release opened later, is one line until tapped (F22).
     const HistoryRelease = (release, newest, lens, events, plans) => {
       const label = release.labels[0] ?? "";
       const key = lensKey("release", label);
@@ -6876,7 +6897,9 @@
                 historyWaveOrder(release.waves, lens)
                   .map((wave) => historyWave(wave, lens, plans))
                   .filter((wave) => wave.crs.length > 0 || wave.tracks !== null)
-                  .map((wave) => WaveGroup(wave, events)),
+                  .map((wave, i) =>
+                    WaveGroup(wave, events, lensKey("wave", `${label}:${wave.wave}`), newest && i === 0),
+                  ),
               )
             : "",
       );

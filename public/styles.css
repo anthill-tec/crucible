@@ -2505,6 +2505,7 @@ body {
 .app-history-release-line { color: var(--ink); }
 .app-history-release[data-open="true"] > .app-history-release-line { color: var(--ember); }
 .app-history-release-body { padding-left: 14px; }
+.app-history-wave-line { display: flex; align-items: baseline; gap: 2px; }
 .app-history-workflow { margin: 2px 0 6px; }
 .app-history-workflow-body { padding-left: 14px; }
 .app-history-gate-run-line {

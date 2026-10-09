@@ -471,6 +471,114 @@ describe("CR-CRU-173 §S1/AC1 — History's release tree: order, folding and exp
   });
 });
 
+// ── AC1 — a release's waves fold as F22 draws them ───────────────────────
+// F22's rule: "the open release and its open wave expanded" — inside the
+// open release only its latest wave starts expanded; every other wave (in it,
+// or in a release opened later) is one line, its header, until opened.
+
+describe("History — a release's waves fold: only the open release's open wave starts expanded", () => {
+  function foldFixture(key: string): { plans: PlanFixture[]; history: HistoryReleaseWire[] } {
+    return {
+      plans: [
+        plan({ planId: 1, cr: "HIST-91", projectKey: key, wave: "9" }),
+        plan({ planId: 2, cr: "HIST-81", projectKey: key, wave: "8" }),
+        plan({ planId: 3, cr: "HIST-71", projectKey: key, wave: "7" }),
+        plan({ planId: 4, cr: "HIST-61", projectKey: key, wave: "6" }),
+      ],
+      history: [
+        {
+          labels: ["0.5.0"],
+          state: "in progress",
+          crCount: 3,
+          waves: [
+            { wave: "9", crs: ["HIST-91"] },
+            { wave: "8", crs: ["HIST-81"] },
+            { wave: "7", crs: ["HIST-71"] },
+          ],
+          workflows: [{ label: "0.5.0", gateRuns: [], verificationRuns: 0 }],
+        },
+        {
+          labels: ["0.4.0"],
+          state: "shipped",
+          shippedAt: 1_758_000_000,
+          crCount: 1,
+          waves: [{ wave: "6", crs: ["HIST-61"] }],
+          workflows: [{ label: "0.4.0", gateRuns: [], verificationRuns: 0 }],
+        },
+      ],
+    };
+  }
+  function waveOf(row: HTMLElement, wave: string): HTMLElement {
+    const el = row.querySelector<HTMLElement>(`[data-testid="wave-group"][data-wave="${wave}"]`);
+    expect(el).not.toBeNull();
+    return el!;
+  }
+  function crGroupsOf(wave: HTMLElement): string[] {
+    return Array.from(wave.querySelectorAll<HTMLElement>('[data-testid="cr-group"]')).map((g) => g.getAttribute("data-cr") ?? "");
+  }
+
+  test("HIST-1: in the open release, the open (latest) wave renders its CR groups and every older wave renders only its header line", async () => {
+    const key = "hist-fold-open";
+    const { plans, history } = foldFixture(key);
+    await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fold Open" })], plans, history });
+    await openWorkflowTab();
+
+    const row = releaseRow("0.5.0");
+    expect(row.getAttribute("data-open")).toBe("true");
+    const open = waveOf(row, "9");
+    expect(open.getAttribute("data-open")).toBe("true");
+    expect(crGroupsOf(open)).toEqual(["HIST-91"]);
+
+    for (const [wave, cr] of [["8", "HIST-81"], ["7", "HIST-71"]] as const) {
+      const folded = waveOf(row, wave);
+      expect(folded.getAttribute("data-open")).toBe("false");
+      expect(folded.querySelector('[data-testid="wave-header"]')).not.toBeNull();
+      expect(crGroupsOf(folded)).toEqual([]);
+      expect(row.querySelector(`[data-testid="cr-group"][data-cr="${cr}"]`)).toBeNull();
+    }
+  });
+
+  test("HIST-2: clicking a folded wave's header opens it — its CR groups appear; clicking again folds it back to its header line", async () => {
+    const key = "hist-fold-click";
+    const { plans, history } = foldFixture(key);
+    await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fold Click" })], plans, history });
+    await openWorkflowTab();
+
+    waveOf(releaseRow("0.5.0"), "8").querySelector<HTMLElement>('[data-testid="wave-header"]')!.click();
+    await settle();
+    let wave8 = waveOf(releaseRow("0.5.0"), "8");
+    expect(wave8.getAttribute("data-open")).toBe("true");
+    expect(crGroupsOf(wave8)).toEqual(["HIST-81"]);
+    // Opening one wave leaves the others as they were.
+    expect(crGroupsOf(waveOf(releaseRow("0.5.0"), "9"))).toEqual(["HIST-91"]);
+    expect(crGroupsOf(waveOf(releaseRow("0.5.0"), "7"))).toEqual([]);
+
+    wave8.querySelector<HTMLElement>('[data-testid="wave-header"]')!.click();
+    await settle();
+    wave8 = waveOf(releaseRow("0.5.0"), "8");
+    expect(wave8.getAttribute("data-open")).toBe("false");
+    expect(crGroupsOf(wave8)).toEqual([]);
+  });
+
+  test("HIST-3: a release opened by its row shows every one of its waves as one line until that wave is opened", async () => {
+    const key = "hist-fold-older";
+    const { plans, history } = foldFixture(key);
+    await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fold Older" })], plans, history });
+    await openWorkflowTab();
+
+    await clickToggle(releaseRow("0.4.0"));
+    let wave6 = waveOf(releaseRow("0.4.0"), "6");
+    expect(wave6.getAttribute("data-open")).toBe("false");
+    expect(crGroupsOf(wave6)).toEqual([]);
+
+    wave6.querySelector<HTMLElement>('[data-testid="wave-header"]')!.click();
+    await settle();
+    wave6 = waveOf(releaseRow("0.4.0"), "6");
+    expect(wave6.getAttribute("data-open")).toBe("true");
+    expect(crGroupsOf(wave6)).toEqual(["HIST-61"]);
+  });
+});
+
 // ── AC2 (page half) — a release's workflow: gate runs, → gate, verification, packages, not started ──
 
 describe("CR-CRU-173 §S1/AC2 (page half) — a release's workflow", () => {
