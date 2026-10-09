@@ -51,7 +51,9 @@ The board answers the history in this shape from what it already holds — no ne
 records, each CR's release and wave in the queue, plan close times, gate snapshots grouped by their
 no-mistakes run (a run's outcome, the step it stopped at, its fix rounds and its duration are
 derived from its snapshots), gate decisions and release-stamped runs. A gate belongs to the release
-it names; one that named none belongs to the release of the wave it gated. A wave whose CRs went to
+it names; one that named none belongs to the release of the wave it gated; one that names
+neither belongs to the first release that shipped at or after it, else the lowest unshipped
+release (user ruling 2026-10-08: 0.2.0's 09-09 gate names neither). A wave whose CRs went to
 more than one release (this board's past: wave 7 → 0.2.2 and 0.3.0; wave 6 → 0.2.0 and 0.2.1;
 wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release's CRs only.
 
@@ -64,8 +66,10 @@ wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release
   (it then appears under both, honestly). An unshipped release takes its CRs from the queue's
   `release` (0.3.0's 35+). CRs with neither (waves 1–4 before releases were declared) follow the
   record that names them (0.1.0's 60).
-- **Releases shipped the same day share one row** (F22: `release 0.1.2 · 0.1.1 · 0.1.0 · shipped
-  08-19 · 61 CRs · wave 4`), opening to each one's workflow.
+- **One row per release** (user ruling 2026-10-08, at cycle 636). The same-day merge first drawn
+  in F22 (`release 0.1.2 · 0.1.1 · 0.1.0`) cannot be stated as a rule — 0.2.0 and 0.2.1 also shipped
+  the same day and F22 drew them apart — so every release is its own row, latest first; F22 is
+  amended.
 - **Gate runs.** Snapshots group by their no-mistakes `runId` (CR-CRU-172 §S0 posts it). Older
   snapshots carry none: a run is then the snapshots up to and including the next seal (a gate not
   in flight). A run's outcome is its seal's; its stop step the first step not `passed`/`skipped`;
