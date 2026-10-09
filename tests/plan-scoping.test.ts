@@ -55,6 +55,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -177,6 +178,16 @@ async function mountApp(opts: MountOpts): Promise<void> {
   plansGates = new Map();
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+    const historyMatch = /\/api\/v2\/projects\/([^/?]+)\/history/.exec(url);
+    if (historyMatch !== null) {
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
+      // nests its waves under a release, read from GET …/history; this
+      // fixture's plans fall in one release (tests/helpers/history-stub.ts).
+      // The read answers the routed project's own work only.
+      const historyKey = decodeURIComponent(historyMatch[1]!);
+      const body = singleReleaseHistoryStub((plansByKey[historyKey] ?? []).filter((p) => p.projectKey === historyKey));
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }
     const plansMatch = /\/api\/v2\/projects\/([^/?]+)\/plans/.exec(url);
     if (plansMatch !== null) {
       const key = decodeURIComponent(plansMatch[1]!);

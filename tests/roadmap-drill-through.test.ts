@@ -49,6 +49,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -274,6 +275,12 @@ async function mountApp(opts: MountOpts): Promise<void> {
     }
     if (/\/api\/v2\/projects\/[^/?]+\/queue/.test(url)) {
       return okResponse({ ok: true, entries: opts.queue });
+    }
+    if (/\/api\/v2\/projects\/[^/?]+\/history/.test(url)) {
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
+      // nests its waves under a release, read from GET …/history; this
+      // fixture's plans fall in one release (tests/helpers/history-stub.ts).
+      return okResponse(singleReleaseHistoryStub(opts.plans ?? []));
     }
     if (/\/api\/v2\/projects\/[^/?]+\/plans/.test(url)) {
       return okResponse({ ok: true, plans: opts.plans });

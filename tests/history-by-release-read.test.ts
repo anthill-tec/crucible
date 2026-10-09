@@ -1174,7 +1174,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect(row052.map((r) => r.eventId)).toEqual([afterAllShips]);
       expect(row052[0]!.outcome).toBe("failed");
       expect(row052[0]!.stopStep).toBe("test");
-      expect(workflowOf(releaseOf(body, "0.53.0"), "0.53.0").gateRuns).toEqual([]);
+      expect(body.releases.some((r) => r.labels.includes("0.53.0"))).toBe(false);
     });
   });
 });

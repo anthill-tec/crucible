@@ -32,6 +32,8 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
   Scenario: at the desktop band, Now sits above History, Now grows with its content and never scrolls; History scrolls on its own
     Given the viewport is 1280x800
     And a project named "W2P Overflow Project" is registered
+    And an orchestrator "w2p-orch-1" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-W2P-1" with 40 cycles
     And 32 closed CR plans are filed and merged under wave "1" for a long History
     When I open the workspace for that project
@@ -43,6 +45,8 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
   Scenario: at the phone band, the Workflow tab renders Now and History as two full-width toggle sub-tabs, Now selected on entry, and selecting History hides Now and shows the wave list
     Given the viewport is 390x844
     And a project named "W2P Phone Project" is registered
+    And an orchestrator "w2p-orch-2" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-W2P-2" with a cycle labelled "c1 phone"
     And 3 closed CR plans are filed and merged under wave "1" for a long History
     When I open the workspace for that project
