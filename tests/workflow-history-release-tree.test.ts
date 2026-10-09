@@ -953,12 +953,13 @@ describe("CR-CRU-173 §S1 — Now and the History title are unaffected by the re
 
 // ── CR-CRU-177 — "History shows only the past": the page half of \u00a7S1/\u00a7S2 ──
 //
-// RED's call on the exact wave-line format (NOT pinned by any CR or F22
-// verbatim text — the storyboard's own wording, "wave 7 \u00b7 30 merged \u00b7 1
-// pending", is reused literally, appended to the EXISTING `[data-testid=
-// "wave-header"]` line after its current "History \u2014 Wave <n>" title and
-// lane-chip/state segment, so the existing wave-header tests above (which
-// never pin its exact text) keep passing unmodified).
+// The wave line's counts (orchestrator ruling 2026-10-09, cycle 642 GREEN,
+// re-pinning RED's first call, which put them INSIDE the wave header): they
+// sit in a SIBLING `[data-testid="wave-counts"]` element right after
+// `[data-testid="wave-header"]`, inside the same toggle line, reading
+// `· <m> merged · <p> pending` (pending part omitted at 0) — the header
+// already names the wave, so the number is not repeated, and the header's
+// own exact text (pinned by tests/f13-fidelity.test.ts) stays untouched.
 //
 // The "no row for a pending CR" half of the pin needs NO new page logic at
 // all: `historyWave()` (public/app.js) already builds its CR list purely
@@ -1019,7 +1020,7 @@ describe("CR-CRU-177 \u00a7S1/\u00a7S2 (page half) — the release row and wave 
     expect(text).not.toContain("pending");
   });
 
-  test("an open wave's header line reads 'wave <n> · <m> merged · <p> pending' alongside its existing title", async () => {
+  test("an open wave's line reads '· <m> merged · <p> pending' in a sibling right after its existing header (orchestrator re-pin 2026-10-09: the header keeps its exact text and already names the wave)", async () => {
     const key = "hist-cru177-wave-line";
     await mountApp({
       pathname: `/p/${key}`,
@@ -1040,7 +1041,11 @@ describe("CR-CRU-177 \u00a7S1/\u00a7S2 (page half) — the release row and wave 
 
     const header = releaseRow("0.3.0").querySelector('[data-testid="wave-group"][data-wave="8"] [data-testid="wave-header"]');
     expect(header).not.toBeNull();
-    expect(textOf(header)).toContain("wave 8 · 1 merged · 1 pending");
+    expect(textOf(header)).not.toContain("merged");
+    const counts = header!.nextElementSibling;
+    expect(counts?.getAttribute("data-testid")).toBe("wave-counts");
+    expect(textOf(counts)).toContain("· 1 merged · 1 pending");
+    expect(textOf(counts)).not.toContain("wave 8");
   });
 
   test("a wave whose CRs are ALL pending (wire sends pendingCount with an empty crs list) renders NO wave-group row at all — folded into the release's own pendingCount only", async () => {

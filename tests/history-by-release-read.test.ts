@@ -1124,6 +1124,10 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       ]);
       proposeRelease(store, key, agent, "0.9.8", 1_860_000_000);
       proposeRelease(store, key, agent, "0.9.9", 1_865_000_000);
+      // CR-CRU-177: this test is about orphan PLACEMENT, not listing — 0.9.9
+      // needs a completed CR of its own to stay listed (orchestrator ruling
+      // 2026-10-09), so its "no wave 24 here" assertion stays observable.
+      mergeCr(store, key, "HIST-990", "nine90a");
 
       shipReleaseAt(store, key, agent, day + 1 * HOUR, {
         label: "0.9.6",
