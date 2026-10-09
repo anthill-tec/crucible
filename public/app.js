@@ -6716,7 +6716,7 @@
             : null,
           span({ class: "app-cr-name" }, node.cr),
           node.source === "unplanned"
-            ? " · no plan filed"
+            ? null
             : node.rollup.total > 0 && node.rollup.done === node.rollup.total
               ? ` · ${node.rollup.total} cycles ✓`
               : ` · ${node.rollup.done}/${node.rollup.total} cycles`,
@@ -6810,6 +6810,7 @@
           },
           span({ class: "app-toggle-glyph" }, () => (open() ? "▾" : "▸")),
           WaveHeader(wave),
+          span({ "data-testid": "wave-counts", class: "app-card-meta" }, ` ${historyWaveCounts(wave)}`),
         ),
         () =>
           open()
@@ -6916,7 +6917,8 @@
       }
       if (release.tag !== undefined) parts.push(`tag ${release.tag}`);
       if (release.commit !== undefined) parts.push(release.commit.slice(0, 7));
-      parts.push(`${release.crCount} ${release.crCount === 1 ? "CR" : "CRs"}`);
+      parts.push(`${release.crCount} ${release.crCount === 1 ? "CR" : "CRs"} completed`);
+      if ((release.pendingCount ?? 0) > 0) parts.push(`${release.pendingCount} pending`);
       const target = historyTarget(release);
       if (target !== "") parts.push(target);
       if (!open && release.waves.length > 0) {
@@ -7097,8 +7099,16 @@
         state: drawn?.state ?? null,
         tracks: tracks.length > 0 ? tracks : null,
         crs: [...crs, ...untracked],
+        merged: wire.crs.length,
+        pendingCount: wire.pendingCount ?? 0,
       };
     };
+
+    // A History wave's counts beside its header, which already names the
+    // wave: `· <m> merged · <p> pending`, the pending part omitted at
+    // 0. Only its completed CRs are rows; the pending ones are this count.
+    const historyWaveCounts = (wave) =>
+      `· ${wave.merged} merged${wave.pendingCount > 0 ? ` · ${wave.pendingCount} pending` : ""}`;
 
     // CR-CRU-021 §S6 #10 — NO `Workflow — <project>` rail-title above the
     // active header: the F13 header structure is the pane's whole top.

@@ -65,3 +65,37 @@ Feature: History lists releases, each holding its release workflow and then its 
     When I tap the release "0.3.0" row's toggle
     Then the release "0.3.0" row is open
     And the release "0.3.0" row's wave "8" holds cr "CR-WHRT-P1"
+
+  # CR-CRU-177 "History shows only the past" (cycle 642). Today's build
+  # still lists a queued-only release as `planned` (cycle-637 ruling) and
+  # draws a pending CR as a `source==="unplanned"` "no plan filed" row
+  # (DRIFT-3/DRIFT-1 of CR-CRU-177's gap analysis) \u2014 every Then step below
+  # fails against today's build, not from a typo.
+  Scenario: at the desktop band, a planned-only release never appears in History and a release's pending CR counts but never gets a row of its own
+    Given the viewport is 1280x800
+    And a project named "WHRT Pending Project" is registered
+    And an orchestrator "whrt-orch-3" is registered on that project
+    And a release "0.6.0" is proposed for that project
+    And a release "0.7.0" is proposed for that project
+    # CR-CRU-116 \u00a7S1/\u00a7S2 \u2014 waves open in ascending order project-wide; this
+    # queued-only CR's wave sits ABOVE every wave this scenario actually
+    # files a plan into (11), so it never blocks them from opening.
+    And a cr-plan declaring cr "CR-WHRT-Q1" titled "WHRT queued-only CR" into wave "99" of release "0.7.0" is posted for that project
+    And a cr-plan declaring cr "CR-WHRT-M1" titled "WHRT first merged CR" into wave "11" of release "0.6.0" is posted for that project
+    And a cr-plan declaring cr "CR-WHRT-M2" titled "WHRT second merged CR" into wave "11" of release "0.6.0" is posted for that project
+    And a cr-plan declaring cr "CR-WHRT-P1" titled "WHRT pending sibling CR" into wave "11" of release "0.6.0" is posted for that project
+    And a cycle plan is filed for cr "CR-WHRT-M1" with a cycle labelled "c1" in wave "11"
+    And cycle 1 of that plan is activated
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "whrtm0001"
+    And a cycle plan is filed for cr "CR-WHRT-M2" with a cycle labelled "c1" in wave "11"
+    And cycle 1 of that plan is activated
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "whrtm0002"
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then the history release tree lists releases in order "0.6.0"
+    And the release "0.6.0" row reads 2 CRs completed and 1 pending
+    And the release "0.6.0" row's wave "11" holds cr "CR-WHRT-M1"
+    And the release "0.6.0" row's wave "11" holds cr "CR-WHRT-M2"
+    And the release "0.6.0" row's wave "11" has no row at all for cr "CR-WHRT-P1"

@@ -114,3 +114,31 @@ Step("the release {string} row is open", async ({ page }, label: string) => {
   const row = releaseRow(page, label);
   await expect(row).toHaveAttribute("data-open", "true");
 });
+
+// CR-CRU-177 \u00a7S2 (page half, cycle 642) \u2014 RED's own call on the exact
+// wording (not pinned verbatim by F22; tests/workflow-history-release-tree.test.ts
+// documents the same choice at its own CR-CRU-177 describe block): the
+// release row's text holds `<n> CRs completed \u00b7 <p> pending`.
+Step(
+  "the release {string} row reads {int} CRs completed and {int} pending",
+  async ({ page }, label: string, completed: number, pending: number) => {
+    const row = releaseRow(page, label);
+    await expect(row).toContainText(`${completed} CRs completed \u00b7 ${pending} pending`);
+  },
+);
+
+// A pending CR (CR-CRU-177 \u00a7S2: the wire's `crs` list never names it) gets
+// no `[data-testid="cr-group"]` row anywhere \u2014 not even the old `source===
+// "unplanned"` "no plan filed" row DRIFT-3 of the gap analysis flags for
+// removal, which today's build still draws for a queued-only CR.
+Step(
+  "the release {string} row's wave {string} has no row at all for cr {string}",
+  async ({ page }, label: string, wave: string, cr: string) => {
+    const row = releaseRow(page, label);
+    const group = waveGroupIn(row, wave);
+    await expect(group).toBeVisible();
+    if (!(await isOpen(group))) await group.getByTestId("wave-header").click();
+    await expect(group.locator(`[data-testid="cr-group"][data-cr="${cr}"]`)).toHaveCount(0);
+    await expect(group).not.toContainText("no plan filed");
+  },
+);

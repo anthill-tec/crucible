@@ -37,13 +37,14 @@
 //
 //   HistoryRelease = {
 //     labels: string[]            // always exactly one label (one row per release)
-//     state: "shipped" | "in progress" | "ship not recorded" | "planned"
+//     state: "shipped" | "in progress" | "ship not recorded"   // CR-CRU-177: "planned" withdrawn
 //     shippedAt?: number          // epoch SECONDS, present iff shipped
 //     tag?: string                // "v<label>", present iff shipped
 //     commit?: string             // present iff shipped
 //     targetAt?: number           // epoch SECONDS, present iff a target is declared
-//     crCount: number             // the release's own CRs
-//     waves: { wave: string; crs: string[] }[]   // latest-first
+//     crCount: number             // CR-CRU-177: the release's own COMPLETED CRs only
+//     pendingCount: number        // CR-CRU-177: the rest of the release's own CRs (0 when none)
+//     waves: { wave: string; crs: string[]; pendingCount: number }[]   // latest-first, crs COMPLETED only
 //     workflows: {                // exactly one entry: the release's own workflow
 //       label: string;
 //       gateRuns: HistoryGateRun[];
@@ -65,16 +66,56 @@
 //   while at least one of its CRs has no closed+merged plan, and "ship not
 //   recorded" once every one of its CRs does.
 //
-//   USER RULING 2026-10-09 (cycle 637) — "planned" and "nothing left outside
-//   History": every release that HOLDS WORK is listed, including a future
-//   one with only queued CRs and nothing started — state "planned" (a
-//   release with NO work at all stays excluded, unchanged). A CR, release-
-//   less wave or runs-only inferred wave that no release record and no
-//   queue `release` names lands under the first release that shipped at or
-//   after it (a CR/wave: its plan's close time; a runs-only wave: its first
-//   run's time), else the lowest unshipped release — the same timeline rule
-//   §S2 already applies to a gate naming neither a release nor a wave.
-//   Nothing is left outside History.
+//   USER RULING 2026-10-09 (cycle 637, SUPERSEDED by CR-CRU-177 below) —
+//   "planned" and "nothing left outside History": every release that HOLDS
+//   WORK is listed, including a future one with only queued CRs and nothing
+//   started — state "planned". Kept here for context only; the tests that
+//   pinned it are re-pinned below (CR-CRU-177).
+//
+//   A CR, release-less wave or runs-only inferred wave that no release
+//   record and no queue `release` names lands under the first release that
+//   shipped at or after it (a CR/wave: its plan's close time; a runs-only
+//   wave: its first run's time), else the lowest unshipped release — the
+//   same timeline rule §S2 already applies to a gate naming neither a
+//   release nor a wave. This placement rule itself is untouched by
+//   CR-CRU-177 (the released-CR-completeness rule below applies AFTER a CR
+//   or run has been placed).
+//
+// ── CR-CRU-177 — "History shows only the past" (cycle 642, RED) ───────────
+//
+//   This CR revises the cycle-637 ruling above, PATCHING §S1/§S2 only:
+//
+//   §S1 — an unshipped release is listed only when it has shipped OR holds
+//   history of its own: at least one COMPLETED CR (merged: a closed plan
+//   with a merge commit, or named by a shipped release record), or — RED's
+//   call, stated here rather than guessed at, since the spec's "nothing
+//   completed" sentence governs CR completion and the spec's closing clause
+//   keeps "gate runs … as built" — at least one gate run attributed to it.
+//   A release with ONLY queued or filed-but-never-merged ("in-flight") CRs
+//   and no gate run of its own holds no history and is NOT listed; the
+//   `planned` state is WITHDRAWN outright (never answered, not even for a
+//   release that would have qualified for it under cycle 637). A shipped
+//   release is listed even when its record names no CRs at all (0.1.1).
+//
+//   §S2 — `crCount` (release row) and each wave's `crs` hold COMPLETED CRs
+//   only (the same completion test as §S1); the release row and each wave
+//   gain `pendingCount` — the release's/wave's CRs that are NOT completed —
+//   present always, 0 when none. A wave whose CRs are ALL pending carries no
+//   row of its own (only folded into the release's own pendingCount).
+//
+//   Tests this CR re-pins (one separate commit, test(CR-CRU-177): History's
+//   planned and pending pins follow only-the-past): the "planned"-state
+//   describe block below (now: not listed, no state answers 'planned'); the
+//   crCount/crs assertions that counted a pending CR (now: completed only,
+//   pendingCount asserted beside); the "withdrawn work" describe block's
+//   crCount/crs assertions (same reason). Every OTHER describe block whose
+//   release held nothing but a gate run or an open (never-merged) plan — and
+//   whose test is actually ABOUT something else (gate placement, a decision
+//   summary) — keeps that release listed by giving it one completed CR in
+//   the fixture, so the test's own assertions stand unchanged; only the
+//   fixture and its comments move. (Orchestrator ruling 2026-10-09: keep
+//   each test's purpose — flip to absent only where listing/state IS the
+//   point; otherwise give the release a completed CR.)
 //
 // This file drives the REAL production server (startServer). GET …/history
 // matches no branch in handleV2 (verified by reading src/v2.ts directly —
@@ -124,16 +165,18 @@ interface HistoryWorkflowWire {
 interface HistoryWaveWire {
   wave: string;
   crs: string[];
+  pendingCount: number;
 }
 
 interface HistoryReleaseWire {
   labels: string[];
-  state: "shipped" | "in progress" | "ship not recorded" | "planned";
+  state: "shipped" | "in progress" | "ship not recorded";
   shippedAt?: number;
   tag?: string;
   commit?: string;
   targetAt?: number;
   crCount: number;
+  pendingCount: number;
   waves: HistoryWaveWire[];
   workflows: HistoryWorkflowWire[];
 }
@@ -350,6 +393,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
         { cr: "HIST-702", wave: "7", release: "0.2.2" },
         { cr: "HIST-703", wave: "7", release: "0.2.2" },
         { cr: "HIST-900", wave: "9", release: "0.5.0" },
+        { cr: "HIST-901", wave: "9", release: "0.5.0" },
       ]);
 
       // ── targets declared for every unshipped release, 0.4.0 included ─────
@@ -366,9 +410,11 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       fileVerificationRun(store, key, agent, "0.2.2");
       fileVerificationRun(store, key, agent, "0.2.2");
 
-      // ── 0.5.0: ONE CR with an OPEN (never closed) plan — "a plan" alone
-      //    qualifies the release, and nothing merged keeps it "in progress" ──
-      fileCr(store, key, "HIST-900");
+      // ── 0.5.0: ONE merged (completed) CR keeps the release listed per
+      //    CR-CRU-177 §S1 (a gate run alone — see below — would also keep it
+      //    listed, RED's call; this merge additionally proves pendingCount);
+      //    HIST-901 stays queued/pending, which keeps it "in progress" ──────
+      mergeCr(store, key, "HIST-900", "ninehundreda");
 
       // ── 0.2.0's three gate runs, seal-bounded (no runId — pre-CR-162 era),
       //    every snapshot naming wave 6 (the last wave before this release,
@@ -517,6 +563,9 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect(row.tag).toBe("v0.2.0");
       expect(row.commit).toBe("aaa0002b");
       expect(row.crCount).toBe(9);
+      // CR-CRU-177 \u00a7S2: every CR a shipped record names is, by definition,
+      // completed \u2014 a shipped release never carries a pending CR.
+      expect(row.pendingCount).toBe(0);
       expect(workflowOf(row, "0.2.0").packages).toEqual([
         { registry: "npm", name: "@fixture/crucible-history", version: "0.2.0" },
       ]);
@@ -529,27 +578,34 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect("commit" in row).toBe(false);
       expect("shippedAt" in row).toBe(false);
       expect(row.crCount).toBe(4);
+      expect(row.pendingCount).toBe(0);
       const wf = workflowOf(row, "0.2.2");
       expect(wf.gateRuns).toEqual([]);
       expect("packages" in wf).toBe(false);
     });
 
-    test("an unshipped release with pending (unmerged) CRs reads 'in progress'", () => {
+    test("an unshipped release with pending (unmerged) CRs reads 'in progress', and CR-CRU-177 \u00a7S2's crCount/pendingCount count the completed CR and the rest, separately (HIST-800 merged; HIST-499 completed via 0.2.0's shipped record; HIST-801 still queued/pending)", () => {
       const row = releaseOf(response, "0.3.0");
       expect(row.state).toBe("in progress");
       expect(row.targetAt).toBe(1_800_000_000);
+      expect(row.crCount).toBe(2);
+      expect(row.pendingCount).toBe(1);
     });
 
-    test("a shipped release's record `crs` wins over the queue's `release` field; the CR it names which the queue files under a DIFFERENT (also-listed) release appears under BOTH, each keeping only that release's own CRs", () => {
+    test("a shipped release's record `crs` wins over the queue's `release` field; the CR it names which the queue files under a DIFFERENT (also-listed) release appears under BOTH, each keeping only that release's own COMPLETED CRs (CR-CRU-177 re-pin: a pending CR is counted, never listed)", () => {
       const shipped = releaseOf(response, "0.2.0");
       const unshipped = releaseOf(response, "0.3.0");
 
       // 0.2.0's record names HIST-499 even though the queue files it
       // under 0.3.0 — the record wins for the SHIPPED release.
       expect(waveOf(shipped, "6")?.crs).toContain("HIST-499");
-      // 0.3.0 (unshipped) takes its CRs from the queue, which also names it.
-      expect(waveOf(unshipped, "8")?.crs).toContain("HIST-800");
-      expect(waveOf(unshipped, "8")?.crs).toContain("HIST-801");
+      // 0.3.0 (unshipped) takes its merged CR from the queue, which also
+      // names it — HIST-800 is merged (completed); HIST-801 is still
+      // queued/pending, so it holds no `crs` entry of its own, only the
+      // wave's pendingCount (CR-CRU-177 §S2).
+      expect(waveOf(unshipped, "8")?.crs).toEqual(["HIST-800"]);
+      expect(waveOf(unshipped, "8")?.crs).not.toContain("HIST-801");
+      expect(waveOf(unshipped, "8")?.pendingCount).toBe(1);
 
       // Honestly double-counted: present under BOTH releases.
       const in020 = shipped.waves.flatMap((w) => w.crs).includes("HIST-499");
@@ -636,6 +692,9 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect(runs[0]!.outcome).toBe("passed");
       expect(runs[0]!.runId).toBeUndefined();
       expect(row.state).toBe("in progress");
+      // CR-CRU-177 \u00a7S2: HIST-900 merged (completed), HIST-901 still queued.
+      expect(row.crCount).toBe(1);
+      expect(row.pendingCount).toBe(1);
     });
 
     test("verification is the count of runs filed under the release (CR-CRU-164) — zero when none were, a real count when some were", () => {
@@ -721,7 +780,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect(row0.state).toBe("shipped");
       expect(row1.crCount).toBe(1);
       expect(row0.crCount).toBe(2);
-      expect(row1.waves).toEqual([{ wave: "2", crs: ["HIST-611"] }]);
+      expect(row1.waves).toEqual([{ wave: "2", crs: ["HIST-611"], pendingCount: 0 }]);
       expect(row0.waves.map((w) => w.wave)).toEqual(["1"]);
       expect(waveOf(row0, "1")?.crs.sort()).toEqual(["HIST-601", "HIST-602"]);
 
@@ -788,11 +847,16 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       seedQueue(store, key, [
         { cr: "HIST-690", wave: "1" },
         { cr: "HIST-700", wave: "2" },
+        { cr: "HIST-880", wave: "10", release: "0.8.0" },
         { cr: "HIST-900", wave: "3", release: "0.9.0" },
       ]);
       proposeRelease(store, key, agent, "0.8.0", 1_830_000_000);
       proposeRelease(store, key, agent, "0.9.0", 1_840_000_000);
-      fileCr(store, key, "HIST-900"); // an open plan: 0.9.0 has history of its own
+      // CR-CRU-177: this test is about GATE PLACEMENT, not listing \u2014 both
+      // 0.8.0 and 0.9.0 need a completed CR of their own to stay listed
+      // (orchestrator ruling 2026-10-09), so their gateRuns stay observable.
+      mergeCr(store, key, "HIST-880", "eighty880a");
+      mergeCr(store, key, "HIST-900", "ninehundreda");
 
       shipReleaseAt(store, key, agent, day + 1 * HOUR, {
         label: "0.6.9",
@@ -853,6 +917,11 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const agent = "fixture-orchestrator";
 
       proposeRelease(store, key, agent, "0.9.9", 1_820_000_000);
+      // CR-CRU-177: this test is about the decisionSummary shape, not
+      // listing \u2014 0.9.9 needs a completed CR of its own to stay listed
+      // (orchestrator ruling 2026-10-09).
+      seedQueue(store, key, [{ cr: "HIST-699", wave: "50", release: "0.9.9" }]);
+      mergeCr(store, key, "HIST-699", "nine699a");
       store.recordGateEvent(
         key,
         agent,
@@ -898,6 +967,9 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const agent = "fixture-orchestrator";
 
       proposeRelease(store, key, agent, "0.9.8", 1_820_000_000);
+      // CR-CRU-177: ditto \u2014 0.9.8 needs a completed CR to stay listed.
+      seedQueue(store, key, [{ cr: "HIST-698", wave: "50", release: "0.9.8" }]);
+      mergeCr(store, key, "HIST-698", "nine698a");
       store.recordGateEvent(
         key,
         agent,
@@ -932,7 +1004,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       setSystemTime();
     });
 
-    test("an unshipped release with queued CRs and NOTHING started reads 'planned' and IS listed (the flip of '0.4.0 with nothing is absent'); a sibling release with one CR's plan merely FILED (never merged) reads 'in progress', not 'planned'", async () => {
+    test("CR-CRU-177 re-pin: an unshipped release holding ONLY queued CRs and NOTHING started is NOT listed at all \u2014 the flip of the cycle-637 'planned' ruling; a sibling release whose one CR's plan was merely FILED (never merged) is ALSO not listed \u2014 an open plan is still only 'in-flight', not completed, so it earns the release no row either, and no state anywhere in the response ever reads 'planned'", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = seedProject(handle.store, "history-planned-vs-in-progress");
       const store = handle.store;
@@ -947,25 +1019,64 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       ]);
       proposeRelease(store, key, agent, "0.9.4", 1_850_000_000);
       proposeRelease(store, key, agent, "0.9.6", 1_852_000_000);
-      fileCr(store, key, "HIST-950"); // opened, NEVER merged \u2014 "a plan" alone starts the work
+      fileCr(store, key, "HIST-950"); // opened, NEVER merged \u2014 still only in-flight, not completed
 
       const res = await getHistory(handle, key);
       expect(res.status).toBe(200);
       const body = (await res.json()) as HistoryResponse;
 
-      const planned = releaseOf(body, "0.9.4");
-      expect(planned.state).toBe("planned");
-      expect(planned.crCount).toBe(3);
-      expect("shippedAt" in planned).toBe(false);
-      expect("tag" in planned).toBe(false);
-      expect("commit" in planned).toBe(false);
-      expect(planned.targetAt).toBe(1_850_000_000);
-      expect(workflowOf(planned, "0.9.4").gateRuns).toEqual([]);
-      expect(workflowOf(planned, "0.9.4").verificationRuns).toBe(0);
+      expect(body.releases.some((r) => r.labels.includes("0.9.4"))).toBe(false);
+      expect(body.releases.some((r) => r.labels.includes("0.9.6"))).toBe(false);
+      expect(body.releases.every((r) => (r.state as string) !== "planned")).toBe(true);
+    });
 
-      const inProgress = releaseOf(body, "0.9.6");
-      expect(inProgress.state).toBe("in progress");
-      expect(inProgress.crCount).toBe(2);
+    test("CR-CRU-177: an unshipped release with exactly ONE completed CR alongside queued siblings IS listed, state 'in progress', crCount counting the completed CR only and pendingCount counting the rest", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-one-completed-cr-lists-release");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+
+      seedQueue(store, key, [
+        { cr: "HIST-943", wave: "20", release: "0.9.3" },
+        { cr: "HIST-944", wave: "20", release: "0.9.3" },
+        { cr: "HIST-945", wave: "20", release: "0.9.3" },
+      ]);
+      proposeRelease(store, key, agent, "0.9.3", 1_849_000_000);
+      mergeCr(store, key, "HIST-943", "nine43a");
+
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const row = releaseOf(body, "0.9.3");
+      expect(row.state).toBe("in progress");
+      expect(row.crCount).toBe(1);
+      expect(row.pendingCount).toBe(2);
+      expect(waveOf(row, "20")?.crs).toEqual(["HIST-943"]);
+      expect(waveOf(row, "20")?.pendingCount).toBe(2);
+    });
+
+    test("CR-CRU-177: a shipped release whose record names NO CRs at all is still listed (0.1.1 at gap analysis) \u2014 a shipped release is past regardless of its CR count", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-shipped-no-crs-still-listed");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+
+      shipReleaseAt(store, key, agent, Date.UTC(2026, 0, 15, 12, 0, 0), {
+        label: "0.1.1",
+        commit: "onepointonea",
+        crs: [],
+      });
+
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const row = releaseOf(body, "0.1.1");
+      expect(row.state).toBe("shipped");
+      expect(row.crCount).toBe(0);
+      expect(row.pendingCount).toBe(0);
+      expect(row.waves).toEqual([]);
     });
 
     test("a declared target release with NO queued CRs and nothing else is STILL not listed at all (user ruling 2026-10-09: a release with no work stays excluded)", async () => {
@@ -1013,6 +1124,10 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       ]);
       proposeRelease(store, key, agent, "0.9.8", 1_860_000_000);
       proposeRelease(store, key, agent, "0.9.9", 1_865_000_000);
+      // CR-CRU-177: this test is about orphan PLACEMENT, not listing — 0.9.9
+      // needs a completed CR of its own to stay listed (orchestrator ruling
+      // 2026-10-09), so its "no wave 24 here" assertion stays observable.
+      mergeCr(store, key, "HIST-990", "nine90a");
 
       shipReleaseAt(store, key, agent, day + 1 * HOUR, {
         label: "0.9.6",
@@ -1150,6 +1265,12 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
 
       proposeRelease(store, key, agent, "0.52.0", 1_870_000_000);
       proposeRelease(store, key, agent, "0.53.0", 1_875_000_000);
+      // CR-CRU-177: this test is about gate PLACEMENT, not listing \u2014 0.52.0
+      // needs a completed CR of its own to stay listed (orchestrator ruling
+      // 2026-10-09); 0.53.0 stays CR-less and gate-less on purpose, proving
+      // it is NOT where the fallback gate lands.
+      seedQueue(store, key, [{ cr: "HIST-520", wave: "40", release: "0.52.0" }]);
+      mergeCr(store, key, "HIST-520", "fivetwenty0a");
       // wave "100": same story, sealed AFTER every ship -> lowest unshipped.
       const afterAllShips = postGateAt(
         store,
@@ -1189,20 +1310,21 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       handle = undefined;
     });
 
-    test("a VOID or SUPERSEDED planless CR filed under a release is neither counted nor listed there; one that HAD a plan stays; a release holding only withdrawn work is not listed", async () => {
+    test("CR-CRU-177 re-pin: a VOID or SUPERSEDED planless CR filed under a release is neither counted nor listed there; one that HAD a plan stays attributed but, never merged, counts as PENDING not completed; a release holding only withdrawn work is not listed", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = seedProject(handle.store, "history-withdrawn-filed-under-release");
       const store = handle.store;
       const agent = "fixture-orchestrator";
 
       seedQueue(store, key, [
-        { cr: "HIST-611", wave: "31", release: "0.9.1" }, // live, queued
+        { cr: "HIST-611", wave: "31", release: "0.9.1" }, // live, merged (completed) \u2014 CR-CRU-177 needs this to keep 0.9.1 listed
         { cr: "HIST-612", wave: "31", release: "0.9.1" }, // VOID, never planned
-        { cr: "HIST-613", wave: "31", release: "0.9.1" }, // SUPERSEDED, but had a plan
+        { cr: "HIST-613", wave: "31", release: "0.9.1" }, // SUPERSEDED, but had a plan \u2014 never merged, so still pending
         { cr: "HIST-614", wave: "32", release: "0.9.2" }, // VOID, never planned: 0.9.2's only CR
       ]);
       proposeRelease(store, key, agent, "0.9.1", 1_853_000_000);
       proposeRelease(store, key, agent, "0.9.2", 1_854_000_000);
+      mergeCr(store, key, "HIST-611", "six110a");
       fileCr(store, key, "HIST-613");
       expect(store.setQueueLifecycle(key, "HIST-612", { state: "VOID", reason: "not happening" })).toEqual({ changed: true });
       expect(store.setQueueLifecycle(key, "HIST-613", { state: "SUPERSEDED", by: "HIST-611" })).toEqual({ changed: true });
@@ -1213,8 +1335,11 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const body = (await res.json()) as HistoryResponse;
 
       const row = releaseOf(body, "0.9.1");
-      expect(row.crCount).toBe(2);
-      expect(waveOf(row, "31")?.crs).toEqual(["HIST-611", "HIST-613"]);
+      expect(row.crCount).toBe(1);
+      expect(row.pendingCount).toBe(1);
+      expect(waveOf(row, "31")?.crs).toEqual(["HIST-611"]);
+      expect(waveOf(row, "31")?.crs).not.toContain("HIST-613");
+      expect(waveOf(row, "31")?.pendingCount).toBe(1);
 
       expect(body.releases.some((r) => r.labels.includes("0.9.2"))).toBe(false);
       const listed = body.releases.flatMap((r) => r.waves.flatMap((w) => w.crs));
@@ -1251,6 +1376,14 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       ]);
       proposeRelease(store, key, agent, "0.62.4", 1_880_000_000);
       proposeRelease(store, key, agent, "0.62.6", 1_885_000_000);
+      // CR-CRU-177: this test is about gate PLACEMENT, not listing \u2014 both
+      // 0.62.4 (which also gets `afterShips` attributed by timeline
+      // fallback, and would stay listed on that alone) and 0.62.6 (which
+      // gets no gate at all, so it needs its OWN completed CR to stay
+      // listed and prove the negative gateRuns==[] check) gain a completed
+      // CR (orchestrator ruling 2026-10-09).
+      mergeCr(store, key, "HIST-623", "six230a");
+      mergeCr(store, key, "HIST-624", "six240a");
 
       shipReleaseAt(store, key, agent, day + 1 * HOUR, {
         label: "0.62.1",

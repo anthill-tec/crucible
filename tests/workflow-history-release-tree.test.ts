@@ -124,6 +124,10 @@ interface HistoryWorkflowWire {
 interface HistoryWaveWire {
   wave: string;
   crs: string[];
+  // CR-CRU-177 \u00a7S2: optional here (RED's call) so the many EXISTING
+  // fixtures above need no churn; absent reads as 0, matching the server's
+  // always-present \"0 when none\" contract (tests/history-by-release-read.test.ts).
+  pendingCount?: number;
 }
 interface HistoryReleaseWire {
   labels: string[];
@@ -133,6 +137,7 @@ interface HistoryReleaseWire {
   commit?: string;
   targetAt?: number;
   crCount: number;
+  pendingCount?: number; // CR-CRU-177 \u00a7S2 \u2014 see HistoryWaveWire's note
   waves: HistoryWaveWire[];
   workflows: HistoryWorkflowWire[];
 }
@@ -584,7 +589,10 @@ describe("History — a release's waves fold: only the open release's open wave 
     await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fold Header" })], plans, history });
     await openWorkflowTab();
 
-    expect(textOf(releaseToggle(releaseRow("0.5.0")))).toBe("▾ 🚀 release 0.5.0 · in progress · 3 CRs");
+    // CR-CRU-177 \u00a7S2 re-pin: the CR count segment now reads "completed"
+    // (pendingCount 0 here \u2014 the fixture's 3 CRs all have plans \u2014 omits
+    // the " \u00b7 N pending" suffix).
+    expect(textOf(releaseToggle(releaseRow("0.5.0")))).toBe("▾ 🚀 release 0.5.0 · in progress · 3 CRs completed");
     expect(textOf(releaseToggle(releaseRow("0.4.0")))).toContain(" · wave 6");
   });
 
@@ -940,5 +948,164 @@ describe("CR-CRU-173 §S1 — Now and the History title are unaffected by the re
     // An empty /history answer renders no release rows at all — never a
     // crash, never a stray placeholder reading as a real release.
     expect(document.querySelectorAll('[data-testid="history-release"]').length).toBe(0);
+  });
+});
+
+// ── CR-CRU-177 — "History shows only the past": the page half of \u00a7S1/\u00a7S2 ──
+//
+// The wave line's counts (orchestrator ruling 2026-10-09, cycle 642 GREEN,
+// re-pinning RED's first call, which put them INSIDE the wave header): they
+// sit in a SIBLING `[data-testid="wave-counts"]` element right after
+// `[data-testid="wave-header"]`, inside the same toggle line, reading
+// `· <m> merged · <p> pending` (pending part omitted at 0) — the header
+// already names the wave, so the number is not repeated, and the header's
+// own exact text (pinned by tests/f13-fidelity.test.ts) stays untouched.
+//
+// The "no row for a pending CR" half of the pin needs NO new page logic at
+// all: `historyWave()` (public/app.js) already builds its CR list purely
+// from `wire.crs`, and CR-CRU-177 \u00a7S2 moves the pending-CR filtering onto
+// the SERVER (`crs` now holds completed CRs only) — a pending CR is simply
+// never IN the wire payload the page receives, so it can render no row
+// without the page itself changing. The test below still pins this
+// end-to-end (a real regression guard, not a no-op): it feeds the page a
+// wire shape that matches the NEW server contract and asserts the DOM
+// has no trace of the pending CR anywhere, including the OLD "no plan
+// filed" wording DRIFT-3 flags — proving the removal holds even once GREEN
+// lands pendingCount/wave-line rendering alongside it.
+describe("CR-CRU-177 \u00a7S1/\u00a7S2 (page half) — the release row and wave line read completed/pending counts; a pending CR renders no row", () => {
+  test("the release row reads '<n> CRs completed · <p> pending' when the wire's pendingCount is non-zero", async () => {
+    const key = "hist-cru177-release-pending";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CRU-177 Release Pending" })],
+      history: [
+        {
+          labels: ["0.3.0"],
+          state: "in progress",
+          crCount: 2,
+          pendingCount: 1,
+          waves: [{ wave: "8", crs: ["HIST-CRU177-800"], pendingCount: 0 }],
+          workflows: [{ label: "0.3.0", gateRuns: [], verificationRuns: 0 }],
+        },
+      ],
+    });
+    await openWorkflowTab();
+
+    expect(textOf(releaseToggle(releaseRow("0.3.0")))).toContain("2 CRs completed · 1 pending");
+  });
+
+  test("the release row reads '<n> CRs completed' with NO pending segment at all when the wire's pendingCount is 0", async () => {
+    const key = "hist-cru177-release-no-pending";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CRU-177 Release No Pending" })],
+      history: [
+        {
+          labels: ["0.2.0"],
+          state: "shipped",
+          shippedAt: 1_758_000_000,
+          tag: "v0.2.0",
+          commit: "eb6e33f0",
+          crCount: 4,
+          pendingCount: 0,
+          waves: [{ wave: "6", crs: ["HIST-CRU177-600"], pendingCount: 0 }],
+          workflows: [{ label: "0.2.0", gateRuns: [], verificationRuns: 0 }],
+        },
+      ],
+    });
+    await openWorkflowTab();
+
+    const text = textOf(releaseToggle(releaseRow("0.2.0")));
+    expect(text).toContain("4 CRs completed");
+    expect(text).not.toContain("pending");
+  });
+
+  test("an open wave's line reads '· <m> merged · <p> pending' in a sibling right after its existing header (orchestrator re-pin 2026-10-09: the header keeps its exact text and already names the wave)", async () => {
+    const key = "hist-cru177-wave-line";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CRU-177 Wave Line" })],
+      plans: [plan({ planId: 1, cr: "HIST-CRU177-801", projectKey: key, wave: "8" })],
+      history: [
+        {
+          labels: ["0.3.0"],
+          state: "in progress",
+          crCount: 1,
+          pendingCount: 1,
+          waves: [{ wave: "8", crs: ["HIST-CRU177-801"], pendingCount: 1 }],
+          workflows: [{ label: "0.3.0", gateRuns: [], verificationRuns: 0 }],
+        },
+      ],
+    });
+    await openWorkflowTab();
+
+    const header = releaseRow("0.3.0").querySelector('[data-testid="wave-group"][data-wave="8"] [data-testid="wave-header"]');
+    expect(header).not.toBeNull();
+    expect(textOf(header)).not.toContain("merged");
+    const counts = header!.nextElementSibling;
+    expect(counts?.getAttribute("data-testid")).toBe("wave-counts");
+    expect(textOf(counts)).toContain("· 1 merged · 1 pending");
+    expect(textOf(counts)).not.toContain("wave 8");
+  });
+
+  test("a wave whose CRs are ALL pending (wire sends pendingCount with an empty crs list) renders NO wave-group row at all — folded into the release's own pendingCount only", async () => {
+    const key = "hist-cru177-wave-all-pending";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CRU-177 Wave All Pending" })],
+      history: [
+        {
+          labels: ["0.3.0"],
+          state: "in progress",
+          crCount: 0,
+          pendingCount: 2,
+          waves: [],
+          workflows: [{ label: "0.3.0", gateRuns: [], verificationRuns: 0 }],
+        },
+      ],
+    });
+    await openWorkflowTab();
+
+    const row = releaseRow("0.3.0");
+    expect(row.querySelectorAll('[data-testid="wave-group"]').length).toBe(0);
+    expect(textOf(releaseToggle(row))).toContain("0 CRs completed · 2 pending");
+  });
+
+  test("a pending CR (the wire's `crs` no longer names it, per CR-CRU-177 \u00a7S2) renders no row ANYWHERE in History — not even the old 'no plan filed' row DRIFT-3 flagged for removal", async () => {
+    const key = "hist-cru177-no-pending-row";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CRU-177 No Pending Row" })],
+      // A real plan DOES exist for the pending CR (HIST-CRU177-802), proving
+      // the row's absence is driven by the wire's `crs` list, not by a
+      // missing plan (which is what produced the OLD 'no plan filed' text).
+      plans: [
+        plan({ planId: 1, cr: "HIST-CRU177-801", projectKey: key, wave: "8" }),
+        plan({ planId: 2, cr: "HIST-CRU177-802", projectKey: key, wave: "8", status: "open", merge: undefined }),
+      ],
+      history: [
+        {
+          labels: ["0.3.0"],
+          state: "in progress",
+          crCount: 1,
+          pendingCount: 1,
+          // HIST-CRU177-802 (pending, filed but unmerged) is absent here —
+          // the new server contract never sends it.
+          waves: [{ wave: "8", crs: ["HIST-CRU177-801"], pendingCount: 1 }],
+          workflows: [{ label: "0.3.0", gateRuns: [], verificationRuns: 0 }],
+        },
+      ],
+    });
+    await openWorkflowTab();
+
+    const row = releaseRow("0.3.0");
+    expect(row.querySelector('[data-testid="cr-group"][data-cr="HIST-CRU177-801"]')).not.toBeNull();
+    expect(row.querySelector('[data-testid="cr-group"][data-cr="HIST-CRU177-802"]')).toBeNull();
+    expect(textOf(row)).not.toContain("no plan filed");
+    // The row-absence half of this test already holds against UNMODIFIED
+    // page code (documented above) \u2014 this assertion is what makes the test
+    // genuinely RED: the release row must also surface the pending CR as a
+    // COUNT, not drop it silently.
+    expect(textOf(releaseToggle(row))).toContain("1 pending");
   });
 });
