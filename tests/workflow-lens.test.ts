@@ -48,7 +48,7 @@ import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
 import type { LensRunLike } from "../public/app-logic.mjs";
 import { settleDom } from "./helpers/dom-settle";
-import { singleReleaseHistoryStub } from "./helpers/history-stub";
+import { singleReleaseHistoryStub, type HistoryStubResponse } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -123,6 +123,13 @@ interface MountOpts {
   events: EventFixture[];
   plans: PlanFixture[];
   agents?: AgentFixture[];
+  // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved) - an
+  // explicit /history stub, for the one fixture ("inferred fallback", no
+  // plan at all) `singleReleaseHistoryStub(opts.plans)` cannot answer: a
+  // runs-only inferred wave is placed by its first run's time, not by a
+  // plan. Every other fixture in this file omits it and keeps the
+  // plan-derived stub, unchanged.
+  history?: HistoryStubResponse;
 }
 
 let cacheBust = 0;
@@ -136,13 +143,13 @@ async function mountApp(opts: MountOpts): Promise<void> {
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
     if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
-      // CR-CRU-173 \u00a7S1 re-pin (approved in advance) \u2014 see
-      // tests/helpers/history-stub.ts. KNOWN GAP: the "inferred fallback (no
-      // plan)" describe block below carries no plan at all, so this stub
-      // (and no correct GREEN /history implementation this RED agent can
-      // find) can give it a release to nest under \u2014 left unmodified,
-      // documented there.
-      body = singleReleaseHistoryStub(opts.plans);
+      // CR-CRU-173 \u00a7S1 re-pin (approved in advance) - see
+      // tests/helpers/history-stub.ts. Cycle 637 (user ruling 2026-10-09)
+      // resolved the former "inferred fallback (no plan)" KNOWN GAP: a
+      // runs-only inferred wave is placed by its first run's time, so that
+      // one fixture now supplies its own explicit `history` stub below
+      // instead of the plan-derived one.
+      body = opts.history ?? singleReleaseHistoryStub(opts.plans);
     } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (url.includes("/api/v2/projects")) {
@@ -582,19 +589,19 @@ describe("§S3 history lens — wave boundary states", () => {
 
 // ── INFERRED FALLBACK — no plan: Wave/CR/Cycle from context + agent stem ──
 
-// CR-CRU-173 §S1 (NOT re-pinned, flagged instead — see tests/helpers/
-// history-stub.ts's "KNOWN GAP" note): this whole describe block mounts a
-// fixture with NO plan, NO queue entry and NO release record at all — the
-// "inferred" wave/CR tree `workflowLens` builds purely from events'
-// `context.wave`. GET …/history (src/v2.ts `projectHistory`, cycle 636)
-// only ever rows a release that HAS a release/proposal record, so once
-// GREEN nests History under it, this fixture's waves belong to no release
-// row at all and the assertions below will fail — not for CR-CRU-173's new
-// reason (a defect its page introduces) but because its own premise ("no
-// plan, no queue, no release" yet still expecting a place in History) is
-// incompatible with a release-first read. Left UNTOUCHED rather than
-// guessed at; reported to the orchestrator for GREEN/VERIFY to retarget or
-// retire.
+// CR-CRU-173 §S1 re-pin, cycle 637 (user ruling 2026-10-09, approved — see
+// "Ruling at cycle 637" in the CR doc): this whole describe block mounts a
+// fixture with NO plan and NO queue entry — the "inferred" wave/CR tree
+// `workflowLens` builds purely from events' `context.wave`. The former
+// "KNOWN GAP" (tests/helpers/history-stub.ts: a release-first /history read
+// has nothing to hang a plan-less fixture's waves off) is resolved by the
+// ruling: a runs-only inferred wave that no release record and no queue
+// `release` names is placed by its FIRST RUN's time — the same timeline
+// fallback a gate naming neither a release nor a wave already gets. The
+// fixture below gains an explicit `history` stub (one release wrapping both
+// waves, since no release ships mid-fixture to split them) so GREEN's page
+// has a release to nest these already-inferred waves under; none of the
+// wave/CR/cycle rendering assertions themselves move.
 describe("§S3 history lens — inferred fallback (no plan)", () => {
   test("without any plan, a fixture with 2 waves × 2 CRs × 2 cycles (context.wave + agent stems + context.cycle labels) renders the inferred tree; runs lacking linkage land in an ungrouped tail with its count asserted", async () => {
     const key = "lens-fallback-1";
@@ -660,6 +667,27 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
       projects: [project({ key, name: "Fallback Project" })],
       events,
       plans: [],
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): this
+      // runs-only inferred wave fixture names no release anywhere (no plan,
+      // no queue entry), so it is placed by its first run's time — both
+      // waves' first runs fall inside this fixture's own window, so a
+      // single release wraps them both, exactly as `singleReleaseHistoryStub`
+      // already wraps every OTHER fixture's plan-declared waves together.
+      history: {
+        ok: true,
+        releases: [
+          {
+            labels: ["0.7.0-test"],
+            state: "in progress",
+            crCount: 4,
+            waves: [
+              { wave: "1", crs: ["CR-F-1", "CR-F-2"] },
+              { wave: "2", crs: ["CR-G-1", "CR-G-2"] },
+            ],
+            workflows: [{ label: "0.7.0-test", gateRuns: [], verificationRuns: 0 }],
+          },
+        ],
+      },
     });
     await openWorkflowTab();
 

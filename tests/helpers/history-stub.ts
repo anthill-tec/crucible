@@ -26,15 +26,15 @@
 // of these pre-existing fixtures relied on a folded top level, so nothing
 // they already assert moves except its nesting depth.
 //
-// KNOWN GAP (left unfixed, flagged rather than guessed per RED convention):
-// a fixture with NO plans at all — the "inferred fallback" wave/CR tree
-// `workflowLens` builds purely from events' `context.wave` — has no plan,
-// queue or release record to hang a release row off at all, so this stub
-// (and, as far as this RED agent can tell, no CORRECT GREEN implementation
-// of the real `/history` read) can represent it under any release. See
-// tests/workflow-lens.test.ts's "§S3 history lens — inferred fallback (no
-// plan)" describe block, left UNTOUCHED by this CR's re-pin for exactly
-// that reason.
+// FORMER KNOWN GAP, RESOLVED at cycle 637 (user ruling 2026-10-09): a
+// fixture with NO plans at all — the "inferred fallback" wave/CR tree
+// `workflowLens` builds purely from events' `context.wave` — had no plan,
+// queue or release record to hang a release row off at all. The ruling
+// places a runs-only inferred wave by its FIRST RUN's time, so that one
+// fixture (tests/workflow-lens.test.ts's "§S3 history lens — inferred
+// fallback (no plan)" describe block) now supplies its own explicit
+// `history` stub directly to `mountApp` instead of calling this function
+// (which stays plan-driven, unchanged, for every other fixture).
 export interface HistoryStubPlan {
   cr: string;
   wave?: string;
