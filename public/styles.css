@@ -2517,3 +2517,98 @@ body {
 .app-history-gate-link { margin-left: auto; font-size: 0.85em; }
 .app-history-verification { margin: 2px 0; }
 .app-history-packages { color: var(--ink-faint); }
+
+/* F24·B (CR-CRU-178) — Now and History are one card split in two: Now on a
+   raised band (--bg-2) under its header bar, a hatched divider, then
+   History's header bar and its own scrolling box on the card's base (--bg-1).
+   The header bars replace F22's small titles; History's sits outside its
+   scroll box, so it stays put while the list scrolls. The CR-CRU-176 layout
+   holds inside the card: Now grows and never scrolls, History takes the rest
+   with its 160px floor, and the pane scrolls as a whole when Now is taller.
+   No overflow clip on the card, so a too-wide row still widens the pane. */
+.app-workflow-panes > .app-pane-runway > .app-workflow-card {
+  flex: 1 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+@media (width >= 1025px) {
+  .app-workflow-card { min-width: min-content; }
+}
+.app-workflow-card > * { flex: 0 0 auto; }
+.app-workflow-now-band {
+  background: var(--bg-2);
+  border-radius: 9px 9px 0 0;
+}
+.app-workflow-now-band > .app-workflow-cols {
+  align-items: stretch;
+  padding: 8px 12px;
+}
+.app-workflow-card > .app-workflow-history {
+  flex: 1 1 0;
+  min-height: 160px;
+  padding: 8px 12px;
+}
+.app-workflow-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  font: 600 10px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--ink-dim);
+}
+.app-workflow-pane-header > .app-workflow-pane-title {
+  flex: 0 0 auto;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+/* The bar is one line: its description truncates, never wraps the bar. */
+.app-workflow-pane-subtitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+.app-workflow-now-dot {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  box-shadow: none;
+}
+.app-workflow-now-dot[data-live="true"] {
+  background: var(--pass);
+  box-shadow: 0 0 6px var(--pass);
+}
+.app-workflow-history-glyph { flex: 0 0 auto; color: var(--ink-faint); }
+.app-workflow-panes-divider {
+  height: 6px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 12px);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+/* The phone band: the sub-tab rows are the titles; the selected pane shows
+   as its card, the same contrast carried over — Now on the raised band,
+   History on the card's base. */
+.app-workflow-show-now > .app-pane-runway > .app-workflow-cols,
+.app-workflow-show-history > .app-pane-runway > .app-workflow-history {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.app-workflow-show-now > .app-pane-runway > .app-workflow-cols { background: var(--bg-2); }
+.app-workflow-show-history > .app-pane-runway > .app-workflow-history { background: var(--bg-1); }
