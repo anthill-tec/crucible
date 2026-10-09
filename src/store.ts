@@ -5278,6 +5278,43 @@ export class Store {
   }
 
   /**
+   * How many runs are filed under each release, in ONE grouped read off the
+   * `release` column, aborted runs included: the count `listEventsForRelease`
+   * would answer per label, for every label at once. A release with no run filed under it has
+   * no entry; archived projects are excluded.
+   */
+  countRunsByRelease(projectKey: string): Map<string, number> {
+    const rows = this.db
+      .query<{ release: string; n: number }, [string]>(
+        `SELECT release, COUNT(*) AS n FROM events
+          WHERE project_key = ? AND release IS NOT NULL
+            AND ${Store.NOT_ARCHIVED_SUBQUERY}
+          GROUP BY release`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.release, row.n]));
+  }
+
+  /**
+   * Every gate snapshot of a project, oldest first, RETIRED ONES INCLUDED:
+   * the history read's source, and the one read that returns a retired gate
+   * beside the live ones (the feed leaves them out; `getEvent` serves one at
+   * a time). One statement over the gate table, whatever the number of
+   * releases it is later grouped under; archived projects are excluded.
+   */
+  listGatesWithRetired(projectKey: string): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string]>(
+        `${GATE_ROWS} WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp ASC, rowid ASC`,
+      )
+      .all(projectKey);
+    return rows
+      .sort((a, b) => Store.newestFirst(b, a))
+      .map((row) => Store.toEvent(row));
+  }
+
+  /**
    * Every release label the project's roadmap has declared: the release a
    * queued CR is planned into, a live release proposal, and a recorded
    * release. Deduplicated and in version order. A run may be filed only

@@ -22,6 +22,7 @@ import {
 } from "./hints.ts";
 import {
   compareContainers,
+  compareVersionLabels,
   declaredTracks,
   gateDecisionRunKey,
   invalidSuiteTreeNode,
@@ -2503,6 +2504,321 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
   return reply(req, url, { ok: true, releases: store.listReleases(key).map(releaseBrief) });
 }
 
+/** One no-mistakes run of a release's gate, derived from its snapshots. */
+interface HistoryGateRun {
+  runId?: string;
+  outcome: string;
+  stopStep?: string;
+  fixRounds: number;
+  durationMs: number;
+  pushedCommit?: string;
+  eventId: string;
+  retired: boolean;
+  decisionSummary?: DecisionSummary;
+}
+
+/** One release label's workflow: its gate runs, its verification, what it shipped. */
+interface HistoryWorkflow {
+  label: string;
+  gateRuns: HistoryGateRun[];
+  verificationRuns: number;
+  packages?: PackageRef[];
+}
+
+/** One history row: one release, its single label and its single workflow. */
+interface HistoryRelease {
+  labels: string[];
+  state: "shipped" | "in progress" | "ship not recorded";
+  shippedAt?: number;
+  tag?: string;
+  commit?: string;
+  targetAt?: number;
+  crCount: number;
+  waves: { wave: string; crs: string[] }[];
+  workflows: HistoryWorkflow[];
+}
+
+/** A release record as the history read holds it while composing the rows. */
+interface HistoryLabel {
+  label: string;
+  record: RunEvent;
+  /** Epoch SECONDS; present exactly when the release shipped. */
+  shippedAt?: number;
+  crs: string[];
+}
+
+/**
+ * GET …/projects/<key>/history — the project's history told by release.
+ * Existence is validated the `handleProjectReleases` way. Every source is ONE
+ * statement — the release records, the queue, the plans, every gate snapshot
+ * (retired ones included: this is the one read that returns them), the gate
+ * decisions of the runs found, and the run count per release — grouped here
+ * in memory, never re-read per release.
+ *
+ * Which releases: every release record that has history — shipped, or holding
+ * a merged CR, a plan or a gate. A shipped release's CRs are its record's
+ * `crs`; an unshipped one's are the queue entries declaring it. One row per
+ * release — releases shipped the same day are separate rows — newest
+ * version first.
+ */
+function handleProjectHistory(store: Store, key: string, req: Request, url: URL): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return reply(req, url, { ok: true, releases: projectHistory(store, key) });
+}
+
+function projectHistory(store: Store, key: string): HistoryRelease[] {
+  const queue = store.listQueue(key);
+  const waveOfCr = new Map(queue.map((entry) => [entry.cr, entry.wave]));
+  const queuedUnder = new Map<string, string[]>();
+  for (const entry of queue) {
+    if (entry.release === undefined) continue;
+    queuedUnder.set(entry.release, [...(queuedUnder.get(entry.release) ?? []), entry.cr]);
+  }
+
+  // The release records, settled ones first; within each read the first
+  // (newest) record of a label wins. A release SHIPPED when its record carries
+  // the date it shipped: a settled record holding no date is a ship that was
+  // never recorded, told as unshipped rather than dated by its ingest instant.
+  const labels = new Map<string, HistoryLabel>();
+  for (const record of [...store.listReleases(key), ...store.listReleaseProposals(key)]) {
+    if (record.label === undefined || labels.has(record.label)) continue;
+    const shippedAt = record.deliveredAt ?? record.releasedAt;
+    const crs = shippedAt !== undefined && record.crs !== undefined ? record.crs : queuedUnder.get(record.label);
+    labels.set(record.label, {
+      label: record.label,
+      record,
+      ...(shippedAt !== undefined ? { shippedAt } : {}),
+      crs: [...new Set(crs ?? [])],
+    });
+  }
+
+  const plans = store.listPlans(key);
+  const planned = new Set(plans.map((plan) => plan.cr));
+  const merged = new Set(
+    plans.filter((plan) => plan.status === "closed" && plan.merge !== undefined).map((plan) => plan.cr),
+  );
+
+  const gateRuns = historyGateRuns(store, key, labels, waveOfCr);
+  const verification = store.countRunsByRelease(key);
+
+  const held = [...labels.values()].filter(
+    (entry) =>
+      entry.shippedAt !== undefined ||
+      entry.crs.some((cr) => merged.has(cr) || planned.has(cr)) ||
+      (gateRuns.get(entry.label)?.length ?? 0) > 0,
+  );
+
+  return held
+    .sort((a, b) => compareVersionLabels(b.label, a.label))
+    .map((entry) => historyRow(entry, waveOfCr, merged, gateRuns, verification));
+}
+
+/** One release's row of the history. */
+function historyRow(
+  entry: HistoryLabel,
+  waveOfCr: Map<string, string>,
+  merged: Set<string>,
+  gateRuns: Map<string, HistoryGateRun[]>,
+  verification: Map<string, number>,
+): HistoryRelease {
+  const crs = entry.crs;
+  const waves = new Map<string, string[]>();
+  for (const cr of crs) {
+    const wave = waveOfCr.get(cr);
+    if (wave === undefined) continue;
+    waves.set(wave, [...(waves.get(wave) ?? []), cr]);
+  }
+  const shipped = entry.shippedAt !== undefined;
+  const state: HistoryRelease["state"] = shipped
+    ? "shipped"
+    : crs.length > 0 && crs.every((cr) => merged.has(cr))
+      ? "ship not recorded"
+      : "in progress";
+  return {
+    labels: [entry.label],
+    state,
+    ...(shipped ? { shippedAt: entry.shippedAt, tag: `v${entry.label}` } : {}),
+    ...(shipped && entry.record.commit !== undefined ? { commit: entry.record.commit } : {}),
+    ...(entry.record.targetAt !== undefined ? { targetAt: entry.record.targetAt } : {}),
+    crCount: crs.length,
+    waves: [...waves.entries()]
+      .sort(([a], [b]) => compareVersionLabels(b, a))
+      .map(([wave, waveCrs]) => ({ wave, crs: waveCrs })),
+    workflows: [
+      {
+        label: entry.label,
+        gateRuns: gateRuns.get(entry.label) ?? [],
+        verificationRuns: verification.get(entry.label) ?? 0,
+        ...(entry.record.packages !== undefined ? { packages: entry.record.packages } : {}),
+      },
+    ],
+  };
+}
+
+/**
+ * Every gate run of the project, keyed by the release label it belongs to,
+ * newest run first. Snapshots carrying a `runId` group by it; the rest are
+ * seal-bounded — each run is the snapshots up to and including the next one
+ * not in flight. A run belongs to the release its snapshots name; one naming
+ * none belongs to the release of the wave it gated; one naming neither
+ * belongs to the next release to ship.
+ */
+function historyGateRuns(
+  store: Store,
+  key: string,
+  labels: Map<string, HistoryLabel>,
+  waveOfCr: Map<string, string>,
+): Map<string, HistoryGateRun[]> {
+  const byRunId = new Map<string, RunEvent[]>();
+  const groups: RunEvent[][] = [];
+  let open: RunEvent[] = [];
+  for (const snapshot of store.listGatesWithRetired(key)) {
+    if (snapshot.runId !== undefined) {
+      const group = byRunId.get(snapshot.runId);
+      if (group === undefined) {
+        const created = [snapshot];
+        byRunId.set(snapshot.runId, created);
+        groups.push(created);
+      } else {
+        group.push(snapshot);
+      }
+      continue;
+    }
+    open.push(snapshot);
+    if (isSealedGate(snapshot)) {
+      groups.push(open);
+      open = [];
+    }
+  }
+  if (open.length > 0) groups.push(open);
+
+  const decisions = store.listGateDecisionsForRuns(
+    [...byRunId.keys()].map((runId) => ({ projectKey: key, runId })),
+  );
+  const releaseOfWave = waveReleases(labels, waveOfCr);
+
+  const runs = new Map<string, { at: number; run: HistoryGateRun }[]>();
+  for (const group of groups) {
+    const seal = [...group].reverse().find(isSealedGate) ?? group[group.length - 1]!;
+    const label = gateRunRelease(group, seal, labels, releaseOfWave);
+    if (label === undefined) continue;
+    const newest = group[group.length - 1]!;
+    const runId = group[0]!.runId;
+    const runDecisions =
+      runId !== undefined && isSealedGate(seal) ? decisions.get(gateDecisionRunKey(key, runId)) : undefined;
+    const stopStep = gateStepStates(seal.gate).find(
+      (step) => step.status !== "passed" && step.status !== "skipped",
+    )?.name;
+    const pushedCommit = gatePushedCommit(seal.gate);
+    const outcome = (seal.gate as { outcome?: unknown } | null | undefined)?.outcome;
+    const run: HistoryGateRun = {
+      ...(runId !== undefined ? { runId } : {}),
+      outcome: typeof outcome === "string" ? outcome : "unknown",
+      ...(stopStep !== undefined ? { stopStep } : {}),
+      fixRounds: gateFixRounds(group),
+      durationMs: seal.timestamp - group[0]!.timestamp,
+      ...(pushedCommit !== undefined ? { pushedCommit } : {}),
+      eventId: newest.id,
+      retired: seal.retiredAt !== undefined,
+      ...(runDecisions !== undefined && runDecisions.length > 0
+        ? { decisionSummary: decisionSummary(seal.gate, runDecisions) }
+        : {}),
+    };
+    runs.set(label, [...(runs.get(label) ?? []), { at: newest.timestamp, run }]);
+  }
+  return new Map(
+    [...runs.entries()].map(([label, list]) => [
+      label,
+      list.sort((a, b) => b.at - a.at).map((entry) => entry.run),
+    ]),
+  );
+}
+
+/**
+ * The release a gate run belongs to: the newest version its snapshots name;
+ * else, by the wave its snapshots name, the first of that wave's releases
+ * still to ship when the run sealed (shipped ones in ship order, then the
+ * unshipped in version order), falling back to the last of them; else, naming
+ * neither, the first release that shipped at or after the run sealed, or the
+ * lowest unshipped release.
+ */
+function gateRunRelease(
+  group: RunEvent[],
+  seal: RunEvent,
+  labels: Map<string, HistoryLabel>,
+  releaseOfWave: Map<string, HistoryLabel[]>,
+): string | undefined {
+  const newestFirst = [...group].reverse();
+  const version = newestFirst.find((snapshot) => snapshot.version !== undefined)?.version;
+  if (version !== undefined) return labels.has(version) ? version : undefined;
+  const wave = newestFirst.find((snapshot) => snapshot.context?.wave !== undefined)?.context?.wave;
+  const stillToShip = (entry: HistoryLabel): boolean =>
+    entry.shippedAt === undefined || entry.shippedAt * 1000 >= seal.timestamp;
+  if (wave === undefined) {
+    return [...labels.values()].sort(compareShipOrder).find(stillToShip)?.label;
+  }
+  const candidates = releaseOfWave.get(wave) ?? [];
+  return (candidates.find(stillToShip) ?? candidates[candidates.length - 1])?.label;
+}
+
+/** Shipped releases in ship order, then the unshipped ones by version. */
+function compareShipOrder(a: HistoryLabel, b: HistoryLabel): number {
+  if (a.shippedAt !== undefined && b.shippedAt !== undefined) return a.shippedAt - b.shippedAt;
+  if (a.shippedAt !== undefined) return -1;
+  if (b.shippedAt !== undefined) return 1;
+  return compareVersionLabels(a.label, b.label);
+}
+
+/** Each wave's releases: shipped ones in ship order, then the unshipped by version. */
+function waveReleases(
+  labels: Map<string, HistoryLabel>,
+  waveOfCr: Map<string, string>,
+): Map<string, HistoryLabel[]> {
+  const byWave = new Map<string, HistoryLabel[]>();
+  for (const entry of labels.values()) {
+    const waves = new Set(
+      entry.crs.map((cr) => waveOfCr.get(cr)).filter((wave): wave is string => wave !== undefined),
+    );
+    for (const wave of waves) byWave.set(wave, [...(byWave.get(wave) ?? []), entry]);
+  }
+  for (const list of byWave.values()) list.sort(compareShipOrder);
+  return byWave;
+}
+
+/** A gate object's steps with their names and statuses. */
+function gateStepStates(gate: unknown): { name: string; status?: unknown }[] {
+  return gateSteps(gate) as { name: string; status?: unknown }[];
+}
+
+/** The times a step ENTERED `fixing` across a run's snapshots, in order. */
+function gateFixRounds(group: RunEvent[]): number {
+  let rounds = 0;
+  let previous = new Map<string, unknown>();
+  for (const snapshot of group) {
+    const current = new Map<string, unknown>();
+    for (const step of gateStepStates(snapshot.gate)) {
+      if (step.status === "fixing" && previous.get(step.name) !== "fixing") rounds += 1;
+      current.set(step.name, step.status);
+    }
+    previous = current;
+  }
+  return rounds;
+}
+
+/** The commit a gate pushed (`push.commit`), when it names one. */
+function gatePushedCommit(gate: unknown): string | undefined {
+  if (typeof gate !== "object" || gate === null) return undefined;
+  const push = (gate as { push?: unknown }).push;
+  if (typeof push !== "object" || push === null) return undefined;
+  const commit = (push as { commit?: unknown }).commit;
+  return typeof commit === "string" && commit.length > 0 ? commit : undefined;
+}
+
 /**
  * CR-CRU-129 §S3 — GET …/projects/<key>/milestones?type=<type>: the project's
  * milestone RECORDS of one type, newest-first.
@@ -4653,6 +4969,10 @@ export function handleV2(
     // CR-CRU-074 §S3 — the project's recorded releases, newest-first.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "releases") {
       return handleProjectReleases(store, segments[0]!, req, url);
+    }
+    // The project's history told by release, retired gates included.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "history") {
+      return handleProjectHistory(store, segments[0]!, req, url);
     }
     // CR-CRU-129 §S3 — the project's milestone RECORDS of one type. Beside
     // `releases` because it is the same read generalised: `releases` answers
