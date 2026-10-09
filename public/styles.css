@@ -2518,11 +2518,11 @@ body {
 .app-history-verification { margin: 2px 0; }
 .app-history-packages { color: var(--ink-faint); }
 
-/* F24·B (CR-CRU-178) — Now and History are one card split in two: Now on a
+/* F24·B — Now and History are one card split in two: Now on a
    raised band (--bg-2) under its header bar, a hatched divider, then
    History's header bar and its own scrolling box on the card's base (--bg-1).
    The header bars replace F22's small titles; History's sits outside its
-   scroll box, so it stays put while the list scrolls. The CR-CRU-176 layout
+   scroll box, so it stays put while the list scrolls. The pane's layout
    holds inside the card: Now grows and never scrolls, History takes the rest
    with its 160px floor, and the pane scrolls as a whole when Now is taller.
    No overflow clip on the card, so a too-wide row still widens the pane. */

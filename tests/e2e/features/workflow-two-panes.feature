@@ -105,6 +105,10 @@ Feature: the Workflow tab is two independently scrolling panes on desktop, and t
     When the viewport is 390x844
     Then the Workflow tab shows no header bar above either pane
     And no divider renders between Now and History
+    And the selected Now pane shows as a card on the raised band
+
+    When I select the "History" sub-tab
+    Then the selected History pane shows as a card on the card's base
 
   Scenario: the live dot in Now's header bar is lit while an open plan or a running gate is in Now, and dim when nothing is running
     Given the viewport is 1280x800

@@ -5,7 +5,7 @@
 // workflow.steps.ts and wave-backfill.steps.ts already drive (filePlan /
 // transitionCycle / closePlan — the client-equivalent POST/PATCH round
 // trip), never a bespoke seeding path.
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { Step } from "./world.ts";
 import { filePlan, transitionCycle, closePlan } from "./harness.ts";
 
@@ -358,4 +358,80 @@ Step("the Workflow tab shows no header bar above either pane", async ({ page }) 
 
 Step("no divider renders between Now and History", async ({ page }) => {
   await expect(page.getByTestId("workflow-panes-divider")).toHaveCount(0);
+});
+
+// AC2 — on the phone band the selected pane shows in the card's styling,
+// the desktop card's contrast carried over: Now on the raised band
+// (`--bg-2`), History on the card's base (`--bg-1`), each framed by the
+// card's border (`--line`) and rounded corner. The card is the pane's box or
+// its nearest framed ancestor inside the Workflow pane; the expected colours
+// are resolved by the browser from the page's own tokens (a probe element),
+// so the assertion compares the same computed form `getComputedStyle` returns.
+const selectedPaneCard = async (page: Page, paneTestid: string, backgroundToken: string) =>
+  page.evaluate(
+    ({ paneSel, token }) => {
+      const pane = document.querySelector(paneSel);
+      const scroll = document.querySelector('[data-testid="pane-scroll"]');
+      if (pane === null || scroll === null) return null;
+      let card: Element | null = pane;
+      // A framed box is one whose border is DRAWN: a declared style with a 0px
+      // width frames nothing.
+      while (card !== null && card !== scroll && parseFloat(getComputedStyle(card).borderTopWidth) === 0) {
+        card = card.parentElement;
+      }
+      const probe = document.createElement("div");
+      probe.style.backgroundColor = `var(${token})`;
+      probe.style.borderTopColor = "var(--line)";
+      document.body.appendChild(probe);
+      const expected = {
+        background: getComputedStyle(probe).backgroundColor,
+        border: getComputedStyle(probe).borderTopColor,
+      };
+      probe.remove();
+      if (card === null || card === scroll) return { framed: false, expected };
+      const style = getComputedStyle(card);
+      return {
+        framed: true,
+        expected,
+        found: `${card.tagName.toLowerCase()}.${card.className} ${style.borderTopStyle} ${style.borderTopWidth}`,
+        background: style.backgroundColor,
+        borderColor: style.borderTopColor,
+        borderWidth: parseFloat(style.borderTopWidth),
+        radius: parseFloat(style.borderTopLeftRadius),
+      };
+    },
+    { paneSel: `[data-testid="${paneTestid}"]`, token: backgroundToken },
+  );
+
+const expectSelectedPaneCard = async (
+  page: Page,
+  pane: string,
+  backgroundToken: string,
+  surface: string,
+) => {
+  const paneTestid = `workflow-${pane.toLowerCase()}`;
+  await expect(page.getByTestId("workflow-subtab").filter({ hasText: pane })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByTestId(paneTestid)).toBeVisible();
+  const card = await selectedPaneCard(page, paneTestid, backgroundToken);
+  expect(card, `the ${pane} pane or the Workflow pane is missing`).not.toBeNull();
+  expect(card!.framed, `the selected ${pane} pane is framed by no card border`).toBe(true);
+  expect(card!.borderWidth, `the ${pane} card's border is not drawn: ${card!.found}`).toBeGreaterThanOrEqual(1);
+  expect(card!.borderColor, `the ${pane} card's border is not the card's line`).toBe(
+    card!.expected.border,
+  );
+  expect(card!.radius, `the ${pane} card has no rounded corner`).toBeGreaterThan(0);
+  expect(card!.background, `the selected ${pane} pane is not on ${surface}`).toBe(
+    card!.expected.background,
+  );
+};
+
+Step("the selected Now pane shows as a card on the raised band", async ({ page }) => {
+  await expectSelectedPaneCard(page, "Now", "--bg-2", "the raised band");
+});
+
+Step("the selected History pane shows as a card on the card's base", async ({ page }) => {
+  await expectSelectedPaneCard(page, "History", "--bg-1", "the card's base");
 });
