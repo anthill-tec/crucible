@@ -15,9 +15,11 @@ merges as built and verified.
 
 ## Design (approved — implement to it)
 
-Storyboard **F22** (History pane), amended by this CR at gap analysis: the `release 0.4.0 · planned`
-row added 2026-10-09 is removed; the open release's wave line reads as F22 originally drew it
-(`wave 7 · 30 merged · 1 pending`). The frame wins; agents raise disagreements.
+Storyboard **F22** (History pane), amended 2026-10-09 at filing (user request): the `release 0.4.0 ·
+planned` row is removed; History's caption reads "only what is past: a release appears once one of
+its CRs is completed"; the open release's row reads `30 CRs completed · 1 pending` and its wave line
+`wave 7 · 30 merged · 1 pending`, with rows for completed CRs only. The frame wins; agents raise
+disagreements.
 
 ## Steps
 
