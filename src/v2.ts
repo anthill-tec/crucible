@@ -2528,13 +2528,16 @@ interface HistoryWorkflow {
 /** One history row: one release, its single label and its single workflow. */
 interface HistoryRelease {
   labels: string[];
-  state: "shipped" | "in progress" | "ship not recorded" | "planned";
+  state: "shipped" | "in progress" | "ship not recorded";
   shippedAt?: number;
   tag?: string;
   commit?: string;
   targetAt?: number;
+  /** The release's completed CRs; `pendingCount` the rest of its CRs. */
   crCount: number;
-  waves: { wave: string; crs: string[] }[];
+  pendingCount: number;
+  /** Each wave's completed CRs, and how many of its CRs are not completed yet. */
+  waves: { wave: string; crs: string[]; pendingCount: number }[];
   workflows: HistoryWorkflow[];
 }
 
@@ -2556,12 +2559,14 @@ interface HistoryLabel {
  * decisions of the runs found, and the run count per release — grouped here
  * in memory, never re-read per release.
  *
- * Which releases: every release that holds work — shipped, or holding a CR
- * or a gate, future ones included (a release with no work is not listed). A
- * shipped release's CRs are its record's `crs`; an unshipped one's are the
- * queue entries declaring it. Work no release names falls in the release that
- * succeeds it on the timeline. One row per release — releases shipped the
- * same day are separate rows — newest version first.
+ * Which releases: only what is past — a release that shipped, or one at
+ * least one of whose CRs is completed (merged: a closed plan with a merge
+ * commit, or named by a shipped release record). A shipped release's CRs are
+ * its record's `crs`; an unshipped one's are the queue entries declaring it.
+ * Work no release names falls in the release that succeeds it on the
+ * timeline. A row lists its completed CRs and counts the rest as pending. One
+ * row per release — releases shipped the same day are separate rows — newest
+ * version first.
  */
 function handleProjectHistory(store: Store, key: string, req: Request, url: URL): Response {
   if (!UUID_RE.test(key)) {
@@ -2611,23 +2616,28 @@ function projectHistory(store: Store, key: string): HistoryRelease[] {
     if (!labels.has(label)) labels.set(label, { label, crs: [...new Set(crs)] });
   }
 
-  const merged = new Set(
+  // A CR is completed once merged — a closed plan with a merge commit — or
+  // once a shipped release record names it.
+  const completed = new Set(
     plans.filter((plan) => plan.status === "closed" && plan.merge !== undefined).map((plan) => plan.cr),
   );
+  for (const entry of labels.values()) {
+    if (entry.shippedAt === undefined) continue;
+    for (const cr of entry.record?.crs ?? []) completed.add(cr);
+  }
 
   placeUnnamedCrs(labels, [...new Set([...queuedWork.map((entry) => entry.cr), ...planned])], plans);
 
   const gateRuns = historyGateRuns(store, key, labels, waveOfCr);
   const verification = store.countRunsByRelease(key);
 
-  const held = [...labels.values()].filter(
-    (entry) =>
-      entry.shippedAt !== undefined || entry.crs.length > 0 || (gateRuns.get(entry.label)?.length ?? 0) > 0,
+  const past = [...labels.values()].filter(
+    (entry) => entry.shippedAt !== undefined || entry.crs.some((cr) => completed.has(cr)),
   );
 
-  return held
+  return past
     .sort((a, b) => compareVersionLabels(b.label, a.label))
-    .map((entry) => historyRow(entry, waveOfCr, planned, merged, gateRuns, verification));
+    .map((entry) => historyRow(entry, waveOfCr, completed, gateRuns, verification));
 }
 
 /**
@@ -2666,32 +2676,35 @@ function timelineRelease(timeline: HistoryLabel[], at: number | undefined): Hist
   );
 }
 
-/** One release's row of the history. */
+/**
+ * One release's row of the history: its completed CRs, by wave, and a count
+ * of the rest. A wave with no completed CR is not listed.
+ */
 function historyRow(
   entry: HistoryLabel,
   waveOfCr: Map<string, string>,
-  planned: Set<string>,
-  merged: Set<string>,
+  completed: Set<string>,
   gateRuns: Map<string, HistoryGateRun[]>,
   verification: Map<string, number>,
 ): HistoryRelease {
   const crs = entry.crs;
-  const waves = new Map<string, string[]>();
+  const done = crs.filter((cr) => completed.has(cr));
+  const waves = new Map<string, { crs: string[]; pendingCount: number }>();
   for (const cr of crs) {
     const wave = waveOfCr.get(cr);
     if (wave === undefined) continue;
-    waves.set(wave, [...(waves.get(wave) ?? []), cr]);
+    const held = waves.get(wave) ?? { crs: [], pendingCount: 0 };
+    if (completed.has(cr)) held.crs.push(cr);
+    else held.pendingCount += 1;
+    waves.set(wave, held);
   }
   const shipped = entry.shippedAt !== undefined;
   const runs = gateRuns.get(entry.label) ?? [];
-  const started = runs.length > 0 || crs.some((cr) => planned.has(cr) || merged.has(cr));
   const state: HistoryRelease["state"] = shipped
     ? "shipped"
-    : !started
-      ? "planned"
-      : crs.length > 0 && crs.every((cr) => merged.has(cr))
-        ? "ship not recorded"
-        : "in progress";
+    : crs.length > 0 && done.length === crs.length
+      ? "ship not recorded"
+      : "in progress";
   const record = entry.record;
   return {
     labels: [entry.label],
@@ -2699,10 +2712,12 @@ function historyRow(
     ...(shipped ? { shippedAt: entry.shippedAt, tag: `v${entry.label}` } : {}),
     ...(shipped && record?.commit !== undefined ? { commit: record.commit } : {}),
     ...(record?.targetAt !== undefined ? { targetAt: record.targetAt } : {}),
-    crCount: crs.length,
+    crCount: done.length,
+    pendingCount: crs.length - done.length,
     waves: [...waves.entries()]
+      .filter(([, held]) => held.crs.length > 0)
       .sort(([a], [b]) => compareVersionLabels(b, a))
-      .map(([wave, waveCrs]) => ({ wave, crs: waveCrs })),
+      .map(([wave, held]) => ({ wave, crs: held.crs, pendingCount: held.pendingCount })),
     workflows: [
       {
         label: entry.label,
