@@ -807,13 +807,27 @@ export async function postGate(
   return (await res.json()) as EventPostResponse;
 }
 
-/** POST /api/v2/milestones — §S4b/§S4c milestone event ingest. */
+/** POST /api/v2/milestones — §S4b/§S4c milestone event ingest. CR-CRU-173
+ *  §S1 (e2e) — widened with the CR-CRU-080/CR-CRU-084 "release" ceremony
+ *  fields (`crs`, `releasedAt`, `packages`) `src/v2.ts` `handleMilestones`
+ *  already reads straight off the body (verified by reading it — see
+ *  CR-CRU-173's own tests/history-by-release-read.test.ts's `shipReleaseAt`
+ *  for the store-level sibling of this same shape), additive and optional so
+ *  every existing caller (gates.steps.ts's gap-analysis milestone) is
+ *  unaffected. */
 export async function postMilestone(
   request: APIRequestContext,
   projectKey: string,
   agentId: string,
   type: string,
-  opts?: { label?: string; context?: Record<string, unknown>; commit?: string },
+  opts?: {
+    label?: string;
+    context?: Record<string, unknown>;
+    commit?: string;
+    crs?: string[];
+    releasedAt?: number;
+    packages?: Array<{ registry: string; name: string; version: string }>;
+  },
 ): Promise<EventPostResponse> {
   // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
   await ensureRegistered(request, projectKey, agentId);
@@ -825,6 +839,9 @@ export async function postMilestone(
       ...(opts?.label !== undefined ? { label: opts.label } : {}),
       ...(opts?.context !== undefined ? { context: opts.context } : {}),
       ...(opts?.commit !== undefined ? { commit: opts.commit } : {}),
+      ...(opts?.crs !== undefined ? { crs: opts.crs } : {}),
+      ...(opts?.releasedAt !== undefined ? { releasedAt: opts.releasedAt } : {}),
+      ...(opts?.packages !== undefined ? { packages: opts.packages } : {}),
     },
   });
   expect(res.ok()).toBe(true);
