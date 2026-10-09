@@ -880,11 +880,45 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
     axi = axi_object(verb, False if refused else ok, result_fields, context,
                      list(warnings) + refused)
     if fmt == AXI_FORMAT_JSON:
-        sys.stdout.write(json.dumps(axi, ensure_ascii=False) + "\n")
+        envelope = json.dumps(axi, ensure_ascii=False) + "\n"
     else:
-        sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+        envelope = _toon().encode({"axi": axi}) + "\n"
+    write_to_pipe("stdout", envelope)
     if legacy_line is not None:
-        print(legacy_line, file=sys.stderr)
+        write_to_pipe("stderr", legacy_line + "\n")
+
+
+def write_to_pipe(name, text):
+    """CR-CRU-175 \u00a7S3 \u2014 write `text` to `sys.<name>` ("stdout" or
+    "stderr") and flush it NOW, so a reader that has already gone (`| head`)
+    surfaces here as a `BrokenPipeError` rather than in the interpreter's own
+    exit flush (which would replace the real exit code with its 120). A closed
+    pipe is not the run: the stream is silenced (`silence_closed_pipe`) and
+    the client carries on. Returns False when the pipe was found closed."""
+    stream = getattr(sys, name)
+    try:
+        stream.write(text)
+        stream.flush()
+    except BrokenPipeError:
+        silence_closed_pipe(name)
+        return False
+    return True
+
+
+def silence_closed_pipe(name):
+    """CR-CRU-175 \u00a7S3 \u2014 the reader of `sys.<name>` is gone: point the
+    stream's file descriptor at the null device, so every later write and the
+    interpreter's exit flush (the bytes still buffered included) land nowhere
+    instead of raising `BrokenPipeError` again. A stream with no real file
+    descriptor is replaced by a null-device stream instead."""
+    stream = getattr(sys, name)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, stream.fileno())
+    except (AttributeError, OSError, ValueError):
+        setattr(sys, name, open(os.devnull, "w"))  # kept open: it IS sys.<name> now
+    finally:
+        os.close(devnull)
 
 
 def resolve_single_plan(plans, cr=None, open_only=False):
@@ -6446,11 +6480,14 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
         ))
         stream = proc.stdout
         assert stream is not None  # stdout=PIPE always yields a stream
+        echo = True
         try:
             for line in stream:
                 lines.append(line)
-                sys.stderr.write(line)
-                sys.stderr.flush()
+                # CR-CRU-175 \u00a7S3 \u2014 a closed stderr ends the echo, never
+                # the run: the capture and the log keep going.
+                if echo:
+                    echo = write_to_pipe("stderr", line)
                 if log is not None:
                     log.write(line)
                     log.flush()
