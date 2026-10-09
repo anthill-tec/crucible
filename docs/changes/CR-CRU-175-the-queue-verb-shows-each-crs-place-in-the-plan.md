@@ -1,6 +1,6 @@
 # CR-CRU-175 — the queue verb shows each CR's place in the plan
 
-**Type** fix · **Points** 3 (provisional, 2026-10-09: 2, +§S3 by user ruling; set at gap analysis) · **Wave** 7 (0.3.0) · **Depends on** none ·
+**Type** fix · **Points** 5 (provisional, 2026-10-09: 2, +§S3 and +§S4 by user rulings; set at gap analysis) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-173 ·
 **Status** PENDING — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-173)
 
 ## Problem
@@ -57,6 +57,19 @@ files it as usual (its output is not the run), or — if the client cannot conti
 through `abort_run` with a reason naming the closed pipe. Either way no run is left open by a closed
 pipe, and the board never shows a run that nothing is driving.
 
+### §S4 — an agent reads a project's history through its client (moved from CR-CRU-173 §S3, 2026-10-09)
+
+**User ruling 2026-10-09.** No client verb exposed the history read, so an agent could not see a
+project's releases, their states, waves, gate runs or verification — only the page could. Every
+client gains a `history` verb over `GET /api/v2/projects/<key>/history`, following the fleet's AXI
+contract (CR-CRU-030/046): one TOON envelope on stdout, a uniform primitive table, a `count`, the
+stderr human line, `help[]`, `context`, `warnings[]`. Default columns: `release`, `state`,
+`shippedAt`, `tag`, `crs` (count), `target`; `--fields` ADDS `waves` (e.g. `8:3`, wave:count pairs
+joined as the fleet's other verbs join a list cell), `gateRuns` (count), `lastGate` (outcome · stop
+step), `verified` (run count), `packages`; `--full` prints every column untruncated. `--release
+<label>` narrows to one release and lists its gate runs as the table (outcome, stopStep, fixRounds,
+duration, pushedCommit, eventId, retired). A read verb: no `--agent` required.
+
 ## Acceptance criteria
 
 - [ ] `queue` answers one TOON envelope per the AXI contract; by default its table is exactly
@@ -72,3 +85,9 @@ pipe, and the board never shows a run that nothing is driving.
       board: it either completes and files, or is closed through `abort_run` naming the closed pipe —
       asserted per client (bun, python, mvn, rust, arduino) against a recording board, for stdout and
       for stderr.
+- [ ] **The `history` verb (§S4).** In each of the five clients (bun, python, mvn, rust, arduino —
+      the shared implementation called from each, the caller count asserted), `history` answers one
+      TOON envelope whose default table is exactly the six columns above, uniform and primitive, in
+      the read's order; `--fields` adds the listed columns; `--release <label>` lists that release's
+      gate runs; an unknown project or release is a refusal with `help[]` — asserted against a
+      recording board and by decoding with the official TOON decoder.

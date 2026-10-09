@@ -92,19 +92,6 @@ wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release
   CR ids; the page joins those ids to the plans it already holds for the CR and cycle rows.
 - **Tag** is `v<label>` with the record's commit, shown when the release shipped.
 
-### §S3 — an agent reads the same history through its client
-
-**User ruling 2026-10-09.** No client verb exposed the history read, so an agent could not see a
-project's releases, their states, waves, gate runs or verification — only the page could. Every
-client gains a `history` verb over `GET /api/v2/projects/<key>/history`, following the fleet's AXI
-contract (CR-CRU-030/046): one TOON envelope on stdout, a uniform primitive table, a `count`, the
-stderr human line, `help[]`, `context`, `warnings[]`. Default columns: `release`, `state`,
-`shippedAt`, `tag`, `crs` (count), `target`; `--fields` ADDS `waves` (e.g. `8:3`, wave:count pairs
-joined as the fleet's other verbs join a list cell), `gateRuns` (count), `lastGate` (outcome · stop
-step), `verified` (run count), `packages`; `--full` prints every column untruncated. `--release
-<label>` narrows to one release and lists its gate runs as the table (outcome, stopStep, fixRounds,
-duration, pushedCommit, eventId, retired). A read verb: no `--agent` required.
-
 ## Acceptance criteria
 
 (AC wording below is the gap-analysed set, 2026-10-08.)
@@ -159,8 +146,8 @@ Anything outside these: stop and ask.
 
 1. the board answers a project's history by release (§S2)
 2. History is told by release (§S1)
-3. an agent reads the same history through its client (§S3, AC4) — added 2026-10-09
-4. verify
+3. verify
+4. (cycle 639, the history verb — skipped 2026-10-09: moved to CR-CRU-175 §S4 so both scores stay true)
 
 ### Ruling at cycle 637 (2026-10-09) — the tests it re-pins (approved)
 
@@ -171,9 +158,14 @@ Anything outside these: stop and ask.
   seeds a release for its plans to fall into; what it asserts about the wave band is unchanged.
 - Any other test whose fixture has work but no release record: the fixture gains a release; its
   assertions are unchanged.
-- [ ] **AC4 — the `history` verb.** In each of the five clients (bun, python, mvn, rust, arduino —
-      the shared implementation called from each, the caller count asserted), `history` answers one
-      TOON envelope whose default table is exactly the six columns above, uniform and primitive, in
-      the read's order; `--fields` adds the listed columns; `--release <label>` lists that release's
-      gate runs; an unknown project or release is a refusal with `help[]` — asserted against a
-      recording board and by decoding with the official TOON decoder.
+
+### Rulings after cycle 637 (2026-10-09, user)
+
+- **The `history` verb moves to CR-CRU-175** (its §S4): CR-CRU-173 was already at the board's 13 cap
+  and could not record the verb's ~3 points; CR-CRU-175 is re-scored 3 → 5 and depends on this CR.
+- **Waves fold as F22 draws them**: inside a release only its open wave starts expanded, every other
+  wave one line until opened (GREEN 637 left them all expanded; the frame wins). Tests that count CR
+  groups across waves open the wave they read — an approved fixture/step change, assertions unchanged.
+- **Withdrawn work belongs to no release**: a queued CR that is VOID or SUPERSEDED and never had a
+  plan is not placed in any release (accepted from GREEN 637; otherwise CR-CRU-082 would put 0.2.2
+  "in progress").
