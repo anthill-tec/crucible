@@ -57,7 +57,7 @@ A `release.yml` workflow dispatch (rehearsal-only, no publish) on the fixed head
 
 ## How it is worked
 
-On a `bugfix/CR-CRU-180-…` branch cut from `release/0.3.0`, merged back into `release/0.3.0` (git flow:
-release fixes go on the release branch and reach develop at finish). Cycles: fix the python hermeticity
+Directly on `release/0.3.0`, one commit per fix (git flow: release fixes go on the release branch and
+reach develop at finish; user ruling 2026-10-10 — no separate bugfix branch). Cycles: fix the python hermeticity
 (2); fix the gate-run interrupt on a slow runner (3); fix the e2e drive on a clean runner (1); fix the
 WebKit tap (4, RED first); verify with a CI dispatch.
