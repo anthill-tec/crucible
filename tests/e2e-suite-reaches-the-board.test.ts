@@ -399,6 +399,20 @@ function ingested(run: Drive): StoredEvent {
   return event;
 }
 
+/** CR-CRU-018 — how many engines run the phone feature in THIS drive: two
+ *  (chromium-mobile + webkit-iphone) whenever a WebKit engine exists for the
+ *  run (CI's native install, or the Docker endpoint), else one. The SAME
+ *  predicate that gates webkit-iphone in playwright.config.ts, read from the
+ *  SAME environment the spawned drive inherits. */
+function phoneEngineCount(): number {
+  return webkitEngineAvailable({
+    isCI: Boolean(process.env.CI),
+    wsEndpoint: process.env.PW_TEST_CONNECT_WS_ENDPOINT,
+  })
+    ? 2
+    : 1;
+}
+
 function nodeNamed(event: StoredEvent, name: string): StoredSuite | undefined {
   return (event.tree ?? []).find((node) => node.name === name);
 }
@@ -485,12 +499,7 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
       // multiset: every declared scenario once, plus one more copy of each
       // phone scenario per extra engine, and nothing else.
       const expected = new Map(run.declared.map((scenario) => [scenario.node, 1]));
-      const phoneEngines = webkitEngineAvailable({
-        isCI: Boolean(process.env.CI),
-        wsEndpoint: process.env.PW_TEST_CONNECT_WS_ENDPOINT,
-      })
-        ? 2
-        : 1;
+      const phoneEngines = phoneEngineCount();
       for (const scenario of parseFeatureFile(PHONE_FEATURE_FILE)) {
         expected.set(scenario.node, phoneEngines);
       }
@@ -522,7 +531,17 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
       expect(declaredSteps).toBeGreaterThan(run.declared.length);
       expect(event.summary?.total).not.toBe(run.declared.length);
       expect(event.summary?.total).toBeGreaterThan(run.declared.length);
-      expect(event.summary?.total).toBeLessThanOrEqual(declaredSteps);
+      // The ceiling is every step the drive EXECUTES: each declared step once,
+      // plus the phone feature's steps once more per extra engine — on a run
+      // with a WebKit engine (CI's native install) webkit-iphone runs the phone
+      // feature a second time, and its steps are real steps of this run (the
+      // first test's node multiset counts those same second copies).
+      const phoneSteps = parseFeatureFile(PHONE_FEATURE_FILE).reduce(
+        (sum, scenario) => sum + scenario.steps.length,
+        0,
+      );
+      const executedSteps = declaredSteps + phoneSteps * (phoneEngineCount() - 1);
+      expect(event.summary?.total).toBeLessThanOrEqual(executedSteps);
     },
     DRIVE_BUDGET_MS,
   );
