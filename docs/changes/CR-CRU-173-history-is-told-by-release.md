@@ -96,15 +96,15 @@ wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release
 
 (AC wording below is the gap-analysed set, 2026-10-08.)
 
-- [ ] History lists releases latest first; a release opens to its release workflow and then its
+- [x] History lists releases latest first; a release opens to its release workflow and then its
       waves, latest first, each opening to CRs and cycles as today; the open release and its open
       wave start expanded, every other release folded — asserted on the page with fixed fixtures and
       in a real browser.
-- [ ] A release's gate runs are listed one row per no-mistakes run with outcome, stop step, fix
+- [x] A release's gate runs are listed one row per no-mistakes run with outcome, stop step, fix
       rounds and duration derived from its snapshots; `→ gate` opens the gate view; its
       verification line opens the Runs tab filtered to the release; its packages are listed —
       asserted on the server and on the page.
-- [ ] On a copy of the dev store, 0.2.0 shows three gate runs (the passed one with one document fix
+- [x] On a copy of the dev store, 0.2.0 shows three gate runs (the passed one with one document fix
       round, pushed 4cda68f), 70 CRs, shipped 09-16, and waves 6, 5 and 4 with only 0.2.0's CRs;
       0.2.2 shows wave 7 with its 4 CRs and "ship not recorded" — asserted on the server.
 
