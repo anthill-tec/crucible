@@ -2560,6 +2560,7 @@ def main():
                         help="Read the registered CR queue (GET …/queue) plus the "
                              "cr-merged milestone ids as a TOON-AXI table. Read-only.")
     _add_project_args(qv)
+    _axi().add_queue_view_args(qv)
     qv.set_defaults(func=cmd_queue)
 
     # §S9 — the closed plans' landing commits READ verb (no --agent)

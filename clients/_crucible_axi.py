@@ -2712,11 +2712,96 @@ def build_queue_rows(entries):
     when it has none) and `lifecycle` (the entry's `lifecycle.state` string —
     `VOID` or `SUPERSEDED` — when a lifecycle object is present, null for a
     live entry). A null column keeps the table uniform; it is never an
-    omitted key and never an invented state."""
+    omitted key and never an invented state.
+
+    CR-CRU-175 \u00a7S1 \u2014 then the four place-in-plan columns the read already
+    publishes: `release` and `points` (null when undeclared), `seq`, and
+    `dependsOn` as ONE primitive cell \u2014 the ids space-separated, "" (never
+    null) when the entry has none. `cmd_queue` projects the default table
+    back onto the first six (`QUEUE_BASE_FIELDS`)."""
     return [{"cr": e.get("cr"), "wave": e.get("wave"),
              "status": e.get("status"), "planId": e.get("planId"),
-             "title": e.get("title"), "lifecycle": _lifecycle_state(e)}
+             "title": e.get("title"), "lifecycle": _lifecycle_state(e),
+             "release": e.get("release"), "seq": e.get("seq"),
+             "points": e.get("points"),
+             "dependsOn": " ".join(e.get("dependsOn") or [])}
             for e in entries or []]
+
+
+# CR-CRU-175 \u00a7S0/\u00a7S1 \u2014 the `queue` table's projection (the \u00a7S10 rule
+# `select_status_fields` follows): the six columns every consumer already reads
+# are the default; `--fields` ADDS columns after them in the requested order
+# and `--full` adds every place-in-plan column. Asking for ANY place-in-plan
+# column also adds the `warning` column, always last and always present (""
+# when the row is in order) \u2014 a column that came and went with the data would
+# be a trap for its reader (orchestrator ruling, cycle 647).
+QUEUE_BASE_FIELDS = ("cr", "wave", "status", "planId", "title", "lifecycle")
+QUEUE_PLACE_FIELDS = ("release", "seq", "points", "dependsOn")
+QUEUE_WARNING_FIELD = "warning"
+BEFORE_ITS_DEPENDENCY = "before-its-dependency"
+
+
+def add_queue_view_args(parser):
+    """CR-CRU-175 \u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags,
+    registered here so the five clients cannot drift into five flag
+    surfaces."""
+    parser.add_argument(
+        "--fields",
+        help="Comma-separated EXTRA columns to add to the default "
+             "cr,wave,status,planId,title,lifecycle set \u2014 release, seq, "
+             "points, dependsOn (any of them also adds `warning`).")
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Print every column: the default set, the place-in-plan "
+             "columns and `warning`.")
+
+
+def queue_late_dependencies(rows):
+    """CR-CRU-175 \u00a7S2 (PURE) \u2014 per row, the dependencies the published order
+    places AFTER it (the roadmap page's `roadmapLateDeps` rule). A dependency
+    absent from the table is not an inversion: it is unqueued or not in view.
+    The rows are read in the order given, never re-sorted."""
+    position = {row.get("cr"): at for at, row in enumerate(rows)}
+    late = []
+    for at, row in enumerate(rows):
+        deps = (row.get("dependsOn") or "").split()
+        late.append([d for d in deps if position.get(d, -1) > at])
+    return late
+
+
+def select_queue_fields(rows, extra_fields, full=False):
+    """CR-CRU-175 \u00a7S0\u2013\u00a7S2 (PURE) \u2014 project the widened queue rows onto the
+    default six columns plus the requested extras (every place-in-plan column
+    with `full`), in the published order. When any place-in-plan column is
+    asked for, each row gains a last `warning` cell naming the dependencies
+    placed after it ("" otherwise). Returns `(rows, warnings)`: one
+    structured `before-its-dependency` warning per offending row."""
+    requested = list(QUEUE_PLACE_FIELDS) if full else list(extra_fields or [])
+    keys: list[str] = list(QUEUE_BASE_FIELDS)
+    for f in requested:
+        if f not in keys and f != QUEUE_WARNING_FIELD:
+            keys.append(f)
+    projected = [{k: r.get(k) for k in keys} for r in rows]
+    if not any(f in QUEUE_PLACE_FIELDS or f == QUEUE_WARNING_FIELD
+               for f in requested):
+        return projected, []
+    warnings = []
+    for row, late in zip(projected, queue_late_dependencies(rows)):
+        named = " ".join(late)
+        row[QUEUE_WARNING_FIELD] = (f"before its dependency {named}"
+                                    if late else "")
+        if late:
+            warnings.append({
+                "code": BEFORE_ITS_DEPENDENCY,
+                "detail": (f"{row.get('cr')} is placed before its "
+                           f"dependency {named}"),
+            })
+    return projected, warnings
+
+
+def _queue_field_list(fields):
+    """The `--fields` value as a list of column names (empty when absent)."""
+    return [f.strip() for f in (fields or "").split(",") if f.strip()]
 
 
 def _lifecycle_state(entry):
@@ -2764,7 +2849,11 @@ def cmd_queue(args, project_dir, ops):
 
     resp = ops.get(f"/api/v2/projects/{key}/queue")
     if resp.get("ok"):
-        rows = build_queue_rows(resp.get("entries"))
+        rows, order_warnings = select_queue_fields(
+            build_queue_rows(resp.get("entries")),
+            _queue_field_list(getattr(args, "fields", None)),
+            full=bool(getattr(args, "full", False)))
+        warnings.extend(order_warnings)
     else:
         rows = []
         warnings.append({
