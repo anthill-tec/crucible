@@ -37,7 +37,7 @@
 //
 //   HistoryRelease = {
 //     labels: string[]            // always exactly one label (one row per release)
-//     state: "shipped" | "in progress" | "ship not recorded"
+//     state: "shipped" | "in progress" | "ship not recorded" | "planned"
 //     shippedAt?: number          // epoch SECONDS, present iff shipped
 //     tag?: string                // "v<label>", present iff shipped
 //     commit?: string             // present iff shipped
@@ -64,6 +64,17 @@
 //   file's rule, stated once here: an unshipped release reads "in progress"
 //   while at least one of its CRs has no closed+merged plan, and "ship not
 //   recorded" once every one of its CRs does.
+//
+//   USER RULING 2026-10-09 (cycle 637) — "planned" and "nothing left outside
+//   History": every release that HOLDS WORK is listed, including a future
+//   one with only queued CRs and nothing started — state "planned" (a
+//   release with NO work at all stays excluded, unchanged). A CR, release-
+//   less wave or runs-only inferred wave that no release record and no
+//   queue `release` names lands under the first release that shipped at or
+//   after it (a CR/wave: its plan's close time; a runs-only wave: its first
+//   run's time), else the lowest unshipped release — the same timeline rule
+//   §S2 already applies to a gate naming neither a release nor a wave.
+//   Nothing is left outside History.
 //
 // This file drives the REAL production server (startServer). GET …/history
 // matches no branch in handleV2 (verified by reading src/v2.ts directly —
@@ -117,7 +128,7 @@ interface HistoryWaveWire {
 
 interface HistoryReleaseWire {
   labels: string[];
-  state: "shipped" | "in progress" | "ship not recorded";
+  state: "shipped" | "in progress" | "ship not recorded" | "planned";
   shippedAt?: number;
   tag?: string;
   commit?: string;
@@ -180,6 +191,18 @@ function mergeCr(store: Store, key: string, cr: string, commit: string): void {
   if ("error" in done) throw new Error(`CR-CRU-173 fixture: done refused for ${cr}: ${done.error}`);
   const closed = store.closePlan(key, planId, { commit });
   if ("error" in closed) throw new Error(`CR-CRU-173 fixture: close refused for ${cr}: ${closed.error}`);
+}
+
+/**
+ * File, seal and close a plan with a merge commit AT A SPECIFIC INSTANT —
+ * `store.closePlan` stamps `closedAt` from `Date.now()`, so this is the
+ * "a plan closed at <time>" fact the cycle-637 orphan-placement ruling reads
+ * (a CR no release names lands under the release that ships at or after its
+ * plan's CLOSE time).
+ */
+function mergeCrAt(store: Store, key: string, cr: string, commit: string, atMs: number): void {
+  setSystemTime(atMs);
+  mergeCr(store, key, cr, commit);
 }
 
 function postGateAt(
@@ -893,6 +916,265 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       const run = workflowOf(row, "0.9.8").gateRuns[0]!;
 
       expect("decisionSummary" in run).toBe(false);
+    });
+  });
+
+  // \u2500\u2500 user ruling 2026-10-09 (cycle 637): every release that holds work is
+  //    listed \u2014 including a future one with only queued CRs, state "planned";
+  //    a release with NO work at all stays excluded \u2500\u2500
+
+  describe("release states: planned, in progress, and still-excluded-when-empty (user ruling 2026-10-09)", () => {
+    let handle: ServerHandle | undefined;
+
+    afterEach(() => {
+      handle?.stop();
+      handle = undefined;
+      setSystemTime();
+    });
+
+    test("an unshipped release with queued CRs and NOTHING started reads 'planned' and IS listed (the flip of '0.4.0 with nothing is absent'); a sibling release with one CR's plan merely FILED (never merged) reads 'in progress', not 'planned'", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-planned-vs-in-progress");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+
+      seedQueue(store, key, [
+        { cr: "HIST-940", wave: "20", release: "0.9.4" },
+        { cr: "HIST-941", wave: "20", release: "0.9.4" },
+        { cr: "HIST-942", wave: "20", release: "0.9.4" },
+        { cr: "HIST-950", wave: "21", release: "0.9.6" },
+        { cr: "HIST-951", wave: "21", release: "0.9.6" },
+      ]);
+      proposeRelease(store, key, agent, "0.9.4", 1_850_000_000);
+      proposeRelease(store, key, agent, "0.9.6", 1_852_000_000);
+      fileCr(store, key, "HIST-950"); // opened, NEVER merged \u2014 "a plan" alone starts the work
+
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const planned = releaseOf(body, "0.9.4");
+      expect(planned.state).toBe("planned");
+      expect(planned.crCount).toBe(3);
+      expect("shippedAt" in planned).toBe(false);
+      expect("tag" in planned).toBe(false);
+      expect("commit" in planned).toBe(false);
+      expect(planned.targetAt).toBe(1_850_000_000);
+      expect(workflowOf(planned, "0.9.4").gateRuns).toEqual([]);
+      expect(workflowOf(planned, "0.9.4").verificationRuns).toBe(0);
+
+      const inProgress = releaseOf(body, "0.9.6");
+      expect(inProgress.state).toBe("in progress");
+      expect(inProgress.crCount).toBe(2);
+    });
+
+    test("a declared target release with NO queued CRs and nothing else is STILL not listed at all (user ruling 2026-10-09: a release with no work stays excluded)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-no-work-still-excluded");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+
+      proposeRelease(store, key, agent, "0.9.5", 1_851_000_000);
+
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+      expect(body.releases).toEqual([]);
+      expect(body.releases.some((r) => r.labels.includes("0.9.5"))).toBe(false);
+    });
+  });
+
+  // \u2500\u2500 placing a CR no release names: by its plan's CLOSE time, against the
+  //    ship timeline (user ruling 2026-10-09) \u2500\u2500
+
+  describe("placing a CR no release record and no queue release names (user ruling 2026-10-09)", () => {
+    let handle: ServerHandle | undefined;
+
+    afterEach(() => {
+      handle?.stop();
+      handle = undefined;
+      setSystemTime();
+    });
+
+    test("an orphan CR's plan closed between two ships lands under the LATER-shipping release; one closed after EVERY ship lands under the LOWEST unshipped release", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-orphan-cr-placement");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+      const day = Date.UTC(2026, 8, 20, 0, 0, 0);
+      const HOUR = 3_600_000;
+
+      seedQueue(store, key, [
+        { cr: "HIST-960", wave: "22" },
+        { cr: "HIST-970", wave: "23" },
+        { cr: "HIST-980", wave: "24" }, // orphan: no release anywhere
+        { cr: "HIST-981", wave: "24" }, // orphan: no release anywhere
+        { cr: "HIST-990", wave: "25", release: "0.9.9" },
+      ]);
+      proposeRelease(store, key, agent, "0.9.8", 1_860_000_000);
+      proposeRelease(store, key, agent, "0.9.9", 1_865_000_000);
+
+      shipReleaseAt(store, key, agent, day + 1 * HOUR, {
+        label: "0.9.6",
+        commit: "nine60a",
+        crs: ["HIST-960"],
+      });
+      // closes AFTER 0.9.6 ships, BEFORE 0.9.7 ships -> lands under 0.9.7.
+      mergeCrAt(store, key, "HIST-980", "orphan980a", day + 2 * HOUR);
+      shipReleaseAt(store, key, agent, day + 3 * HOUR, {
+        label: "0.9.7",
+        commit: "nine70a",
+        crs: ["HIST-970"],
+      });
+      // closes AFTER every ship -> lands under the LOWEST unshipped release
+      // (0.9.8, not 0.9.9).
+      mergeCrAt(store, key, "HIST-981", "orphan981a", day + 4 * HOUR);
+
+      setSystemTime();
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const row097 = releaseOf(body, "0.9.7");
+      expect(row097.crCount).toBe(2);
+      expect(waveOf(row097, "24")?.crs).toEqual(["HIST-980"]);
+      expect(waveOf(row097, "23")?.crs).toEqual(["HIST-970"]);
+
+      const row096 = releaseOf(body, "0.9.6");
+      expect(waveOf(row096, "24")).toBeUndefined();
+      expect(row096.crCount).toBe(1);
+
+      const row098 = releaseOf(body, "0.9.8");
+      expect(row098.crCount).toBe(1);
+      expect(waveOf(row098, "24")?.crs).toEqual(["HIST-981"]);
+
+      const row099 = releaseOf(body, "0.9.9");
+      expect(waveOf(row099, "24")).toBeUndefined();
+    });
+
+    test("a release-less wave (several CRs, none naming any release) is placed as a WHOLE, all its CRs landing under the SAME release", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-release-less-wave");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+      const day = Date.UTC(2026, 8, 21, 0, 0, 0);
+      const HOUR = 3_600_000;
+      const MIN = 60_000;
+
+      seedQueue(store, key, [
+        { cr: "HIST-460", wave: "7" },
+        { cr: "HIST-470", wave: "7" },
+        { cr: "HIST-480", wave: "26" }, // orphan wave member 1
+        { cr: "HIST-481", wave: "26" }, // orphan wave member 2
+        { cr: "HIST-482", wave: "26" }, // orphan wave member 3
+      ]);
+
+      shipReleaseAt(store, key, agent, day + 1 * HOUR, {
+        label: "0.46.0",
+        commit: "fourtysix0a",
+        crs: ["HIST-460"],
+      });
+      mergeCrAt(store, key, "HIST-480", "orphan480a", day + 2 * HOUR);
+      mergeCrAt(store, key, "HIST-481", "orphan481a", day + 2 * HOUR + 1 * MIN);
+      mergeCrAt(store, key, "HIST-482", "orphan482a", day + 2 * HOUR + 2 * MIN);
+      shipReleaseAt(store, key, agent, day + 3 * HOUR, {
+        label: "0.47.0",
+        commit: "fourtyseven0a",
+        crs: ["HIST-470"],
+      });
+
+      setSystemTime();
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const next = releaseOf(body, "0.47.0");
+      expect(waveOf(next, "26")?.crs.sort()).toEqual(["HIST-480", "HIST-481", "HIST-482"]);
+      expect(next.crCount).toBe(4);
+
+      const prev = releaseOf(body, "0.46.0");
+      expect(waveOf(prev, "26")).toBeUndefined();
+      expect(prev.crCount).toBe(1);
+    });
+  });
+
+  // \u2500\u2500 a runs-only inferred wave: no plan, no queue entry \u2500 its RUNS carry a
+  //    wave that itself names no release; placed by its first run's time, the
+  //    SAME timeline fallback a gate naming neither release nor wave already
+  //    gets (user ruling 2026-10-09) \u2500\u2500
+
+  describe("a runs-only inferred wave whose wave itself names no release (user ruling 2026-10-09)", () => {
+    let handle: ServerHandle | undefined;
+
+    afterEach(() => {
+      handle?.stop();
+      handle = undefined;
+      setSystemTime();
+    });
+
+    test("a gate run naming a wave NO queue entry ever assigns to any release is NOT dropped \u2014 it lands under the first release that shipped at or after it, else the lowest unshipped release, by the run's OWN time", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-runs-only-wave-no-release");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+      const day = Date.UTC(2026, 9, 1, 0, 0, 0);
+      const HOUR = 3_600_000;
+
+      seedQueue(store, key, [
+        { cr: "HIST-500", wave: "27" },
+        { cr: "HIST-510", wave: "28" },
+      ]);
+
+      shipReleaseAt(store, key, agent, day + 1 * HOUR, {
+        label: "0.50.0",
+        commit: "five0a",
+        crs: ["HIST-500"],
+      });
+      // wave "99": no queue entry EVER names it, so releaseOfWave resolves
+      // nothing for it \u2014 today's code silently DROPS this run from every
+      // release's gateRuns. It must instead fall back to the ship timeline,
+      // by ITS OWN timestamp: sealed after 0.50.0 shipped, before 0.51.0 did.
+      const betweenShips = postGateAt(
+        store,
+        key,
+        agent,
+        day + 2 * HOUR,
+        { intent: "wave 99 no-mistakes gate", outcome: "passed", steps: [{ name: "review", status: "passed" }] },
+        { context: { wave: "99" } },
+      );
+      shipReleaseAt(store, key, agent, day + 3 * HOUR, {
+        label: "0.51.0",
+        commit: "five1a",
+        crs: ["HIST-510"],
+      });
+
+      proposeRelease(store, key, agent, "0.52.0", 1_870_000_000);
+      proposeRelease(store, key, agent, "0.53.0", 1_875_000_000);
+      // wave "100": same story, sealed AFTER every ship -> lowest unshipped.
+      const afterAllShips = postGateAt(
+        store,
+        key,
+        agent,
+        day + 4 * HOUR,
+        { intent: "wave 100 no-mistakes gate", outcome: "failed", steps: [{ name: "test", status: "failed" }] },
+        { context: { wave: "100" } },
+      );
+
+      setSystemTime();
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const row051 = workflowOf(releaseOf(body, "0.51.0"), "0.51.0").gateRuns;
+      expect(row051.map((r) => r.eventId)).toEqual([betweenShips]);
+      expect(row051[0]!.outcome).toBe("passed");
+      expect(workflowOf(releaseOf(body, "0.50.0"), "0.50.0").gateRuns).toEqual([]);
+
+      const row052 = workflowOf(releaseOf(body, "0.52.0"), "0.52.0").gateRuns;
+      expect(row052.map((r) => r.eventId)).toEqual([afterAllShips]);
+      expect(row052[0]!.outcome).toBe("failed");
+      expect(row052[0]!.stopStep).toBe("test");
+      expect(workflowOf(releaseOf(body, "0.53.0"), "0.53.0").gateRuns).toEqual([]);
     });
   });
 });
