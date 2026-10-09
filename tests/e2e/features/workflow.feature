@@ -38,14 +38,14 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     # SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the merge-commit pill dropped
     # the `@` separator — it now reads `merged <sha>` (was: `merged @ <sha>`).
     And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged abc1234"
-    # SANCTIONED RE-TARGET (CR-CRU-021 §S4 — e2e sweep, newly uncovered while
-    # fixing the merge-commit pill above): the collapsed CR-group header now
-    # carries ZERO agentId-bearing elements — per-agent runtime rows render
-    # only once the group is expanded (an aggregate "N agents" pill stands
-    # in for them while collapsed). Moved this assertion to after the
-    # expand step below (was: asserted while still collapsed).
+    # SANCTIONED RE-TARGET (CR-CRU-179 §S2, user ruling 2026-10-09, approved
+    # in advance): the whole agents block (the aggregate "N agents" pill AND
+    # the per-agent runtime rows CR-CRU-021 §S4 placed behind expansion) is
+    # REMOVED — "History repeats `1 agent · vidushi · 0ms` under every CR …
+    # it carries no information. Remove it." Expanding the group now proves
+    # the runtime for "agent-wf1" is ABSENT, not present (step renamed).
     When I expand the cr group for "CR-WF-1"
-    And the cr group for "CR-WF-1" shows the runtime for agent "agent-wf1"
+    And the cr group for "CR-WF-1" shows no runtime for agent "agent-wf1"
     And I expand cycle "c1 red-green" in the cr group for "CR-WF-1"
     Then the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
 

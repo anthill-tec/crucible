@@ -1227,11 +1227,10 @@
 
     // CR-CRU-044 §S2 / CR-CRU-057 §S2 — an event is tinted by a STORED role,
     // never by the shape of its agentId. A LIVE agent's declaration wins (it is
-    // resolved off the `state.agents` slice by agentId, the same lookup
-    // CrAgentRuntime uses); once that agent unregisters its record is gone, so
-    // classification falls through to the role stamped onto the EVENT itself
-    // at ingest time (§S1), which outlives the agent. Neither present -> the
-    // event is simply unclassified.
+    // resolved off the `state.agents` slice by agentId); once that agent
+    // unregisters its record is gone, so classification falls through to the
+    // role stamped onto the EVENT itself at ingest time (§S1), which outlives
+    // the agent. Neither present -> the event is simply unclassified.
     const eventRoleDecl = (e) => {
       const live = state.agents.find((a) => a.agentId === e.agentId)?.role;
       if (live !== undefined && live !== null) return { role: live, inferred: false };
@@ -6087,22 +6086,90 @@
     // CR-CRU-025 §S2 — the inverse of `revealDeclaredMarker`: after the
     // one-rule tab swap to Workflow, the target cycle row re-renders
     // asynchronously (and, in History, only once its collapsed cr-group has
-    // been expanded). Retry (real timers, never the 10s blink delay) until the
-    // ACTIVE `cycle-row` OR the HISTORY `lens-cycle-row` for `cycleId` mounts,
-    // then scroll it into view and blink it through the SAME shared util.
-    const revealCycleRow = (cycleId, attempts = 0) => {
-      const row = document.querySelector(
-        `[data-testid="cycle-row"][data-cycle-id="${cycleId}"], ` +
-          `[data-testid="lens-cycle-row"][data-cycle-id="${cycleId}"]`,
-      );
-      if (row !== null) {
+    // been expanded). Wait until the ACTIVE `cycle-row` OR the HISTORY
+    // `lens-cycle-row` for `cycleId` mounts, then scroll it into view and
+    // blink it through the SAME shared util.
+    // CR-CRU-179 §S1 — for a closed CR (`cr` set) each try also unfolds the
+    // History release and wave that hold it (`unfoldHistoryTo`), level by
+    // level as each one draws. A MutationObserver lands the row in the same
+    // frame it mounts, whether that follows a tab swap, a route to another
+    // project (its plans and History are read after the move) or an unfold;
+    // the retry chain (real timers, never the 10s blink delay) backs it up
+    // and bounds the wait at REVEAL_CYCLE_ROW_MS. A newer jump supersedes one
+    // still waiting, so only the last one lands.
+    const REVEAL_CYCLE_ROW_MS = 5000;
+    let revealCycleRowJob = 0;
+    const revealCycleRow = (cycleId, cr = null) => {
+      revealCycleRowJob += 1;
+      const job = revealCycleRowJob;
+      const unfolded = new Set();
+      const deadline = Date.now() + REVEAL_CYCLE_ROW_MS;
+      let observer = null;
+      let done = false;
+      const finish = () => {
+        done = true;
+        if (observer !== null) observer.disconnect();
+      };
+      const tryLand = () => {
+        if (done) return true;
+        if (job !== revealCycleRowJob) {
+          finish();
+          return true;
+        }
+        const row = document.querySelector(
+          `[data-testid="cycle-row"][data-cycle-id="${cycleId}"], ` +
+            `[data-testid="lens-cycle-row"][data-cycle-id="${cycleId}"]`,
+        );
+        if (row === null) {
+          if (cr !== null) unfoldHistoryTo(cr, unfolded);
+          return false;
+        }
+        finish();
         row.scrollIntoView();
         locateBlink(row);
-        return;
-      }
-      if (attempts < 30) {
-        setTimeout(() => revealCycleRow(cycleId, attempts + 1), 5);
-      }
+        return true;
+      };
+      const retry = () => {
+        if (tryLand()) return;
+        if (Date.now() < deadline) setTimeout(retry, 1);
+        else finish();
+      };
+      if (tryLand()) return;
+      observer = new MutationObserver(() => {
+        tryLand();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(retry, 1);
+    };
+
+    // The cycle jump's unfold: opens the History release and wave whose CR
+    // ids (the held `/history` read) name `cr`, then the CR group itself. A
+    // release or wave is toggled only while it draws folded, and at most once
+    // per jump (`unfolded`), so a frame that has not yet repainted never folds
+    // it back.
+    const unfoldHistoryTo = (cr, unfolded) => {
+      lensOpenOn(lensKey("cr", cr));
+      const held = historyReleases.val;
+      if (held === null || held.projectKey !== state.route.projectKey) return;
+      const release = held.releases.find((r) => (r.waves ?? []).some((w) => (w.crs ?? []).includes(cr)));
+      if (release === undefined) return;
+      const label = release.labels[0] ?? "";
+      const wave = release.waves.find((w) => (w.crs ?? []).includes(cr));
+      const releaseEl = Array.from(document.querySelectorAll('[data-testid="history-release"]')).find(
+        (el) => el.getAttribute("data-release") === label,
+      );
+      if (releaseEl === undefined) return;
+      const unfold = (el, key) => {
+        if (el.getAttribute("data-open") === "false" && !unfolded.has(key)) {
+          unfolded.add(key);
+          lensToggle(key);
+        }
+      };
+      unfold(releaseEl, lensKey("release", label));
+      const waveEl = Array.from(releaseEl.querySelectorAll('[data-testid="wave-group"]')).find(
+        (el) => el.getAttribute("data-wave") === wave.wave,
+      );
+      if (waveEl !== undefined) unfold(waveEl, lensKey("wave", `${label}:${wave.wave}`));
     };
 
     // CR-CRU-079 §S2 — the drill-through's landing scroll, the same retry
@@ -6126,7 +6193,10 @@
     // stopPropagation keeps the click off C3's future accordion body) flips the
     // workspace tab to Workflow (the one-rule swap, inverse of §S1), expands
     // the containing COLLAPSED history cr-group when the plan is closed, then
-    // scrolls+blinks the exact cycle row matched by cycleId.
+    // scrolls+blinks the exact cycle row matched by cycleId. From any other
+    // surface (All Projects) or project it routes to the plan's own project
+    // first, and it opens the History release and wave that hold a closed CR,
+    // not only its group.
     const BoundaryToCycleBadge = (cycle, plan) => {
       const cycleId = cycle.id;
       const isHistory = plan.status === "closed";
@@ -6137,11 +6207,11 @@
           title: "Jump to this cycle in Workflow",
           onclick: (ev) => {
             ev.stopPropagation();
-            state.workspaceTab = "Workflow";
-            if (isHistory) {
-              lensOpenOn(lensKey("cr", plan.cr));
+            if (state.route.page !== "workspace" || state.route.projectKey !== plan.projectKey) {
+              navigate(`/p/${encodeURIComponent(plan.projectKey)}`);
             }
-            revealCycleRow(cycleId);
+            state.workspaceTab = "Workflow";
+            revealCycleRow(cycleId, isHistory ? plan.cr : null);
           },
         },
         "⚑ Cycle",
@@ -6597,17 +6667,6 @@
     // Grouping is pure (app-logic workflowLens); this is the render layer.
     // Rows are text-color only; chips/badges are the boxed elements.
 
-    // Participating-agent runtime (§S2 surface): the server-computed
-    // runtime_ms off the agents slice, sealed or ticking as the row is.
-    const CrAgentRuntime = (agentId) => {
-      const agent = state.agents.find((a) => a.agentId === agentId);
-      return div(
-        { "data-testid": "cr-agent-runtime", class: "app-card-meta" },
-        span({ class: "app-agent-id" }, agentId),
-        ` · ${fmtDuration(agent?.runtime_ms ?? 0)}`,
-      );
-    };
-
     // CR-CRU-020 §S2.1 — history cycle rows own a DISTINCT toggle level for
     // their linked runs (collapsed by default); done + active rows are the
     // expandable ones. Inferred cycles carry no id — key on cr + label.
@@ -6738,29 +6797,10 @@
                 node.cycles.map((c) => LensCycleRow(c, node.cr)),
               )
             : "",
-        // CR-CRU-021 §S4 — the collapsed header carries ZERO agentId-bearing
-        // elements; participating agents surface as an aggregate `N agents`
-        // pill in the header REGION, and per-agent runtime rows render only
-        // behind the group's expansion (CR-011's information survives, one
-        // level down). CR-CRU-020 §S2 (C3) fleet-registered semantics are
-        // unchanged: a raw run agentId with no fleet record never fabricates
-        // a 0ms row and is excluded from the pill count. Zero registered
-        // participants → no pill at all (never `0 agents`).
-        () => {
-          if (!lensOpen(key)) return "";
-          const registered = node.agents.filter((id) =>
-            state.agents.some((a) => a.agentId === id),
-          );
-          if (registered.length === 0) return "";
-          return div(
-            { class: "app-cr-agents" },
-            span(
-              { "data-testid": "cr-agents-pill", class: "app-pill app-card-meta" },
-              `${registered.length} agent${registered.length === 1 ? "" : "s"}`,
-            ),
-            registered.map(CrAgentRuntime),
-          );
-        },
+        // CR-CRU-179 §S2 — no agents block: the group carries no `N agents`
+        // pill and no per-agent runtime rows (they named only agents still
+        // registered, with their current session's runtime). Who ran what
+        // stays on the Runs tab and each cycle's `→ Runs`.
       );
     };
 

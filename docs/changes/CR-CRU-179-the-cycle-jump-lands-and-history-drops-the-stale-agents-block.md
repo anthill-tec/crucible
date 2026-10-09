@@ -37,10 +37,10 @@ Who ran what stays on the Runs tab and each cycle's `→ Runs`.
 
 ## Acceptance criteria
 
-- [ ] `⚑ Cycle` on a closed CR's cycle marker lands on that cycle's row — from the project's Runs tab
+- [x] `⚑ Cycle` on a closed CR's cycle marker lands on that cycle's row — from the project's Runs tab
       and from the All Projects view — with the row's release, wave and CR group opened; and on an
       active cycle's marker it lands on the row in Now — asserted on the page and in a real browser.
-- [ ] An expanded History CR group renders no agents pill and no agent runtime rows; nothing else in
+- [x] An expanded History CR group renders no agents pill and no agent runtime rows; nothing else in
       the group changes — asserted on the page.
 
 ## Gap analysis (2026-10-09)

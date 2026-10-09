@@ -8,7 +8,7 @@
 // assertions are new here.
 import { expect, type Locator, type Page } from "@playwright/test";
 import { Step } from "./world.ts";
-import { ingestParsed } from "./harness.ts";
+import { closePlan, filePlan, ingestParsed, transitionCycle } from "./harness.ts";
 
 function crGroup(page: Page, cr: string): Locator {
   return page
@@ -189,6 +189,50 @@ Step(
 
 Step("exactly one element blinks across the workspace", async ({ page }) => {
   await expect(page.locator(".app-locate-blink")).toHaveCount(1);
+});
+
+// ── the jump lands through folded History and from All Projects ─────────────
+// A second CR worked to a close in a NEWER release, so the release holding
+// "that cycle" is no longer the newest and History draws it (and its waves)
+// folded. Deliberately leaves `world.planId`/`world.cycleId` pointing at the
+// cycle the scenario jumps to.
+Step(
+  "a newer cr {string} is planned, worked and closed in wave {string} with merge commit {string}",
+  async ({ request, world }, cr: string, wave: string, commit: string) => {
+    const projectKey = world.projectKey as string;
+    const plan = await filePlan(request, projectKey, cr, ["c1 newer"], wave);
+    const cycleId = plan.cycles[0]!.id;
+    await transitionCycle(request, projectKey, plan.planId, cycleId, "active");
+    await transitionCycle(request, projectKey, plan.planId, cycleId, "done");
+    await closePlan(request, projectKey, plan.planId, commit);
+  },
+);
+
+Step(
+  "I click the {string} badge on the All Projects timeline's declared marker for that cycle",
+  async ({ page, world }, label: string) => {
+    const marker = page
+      .getByTestId("timeline")
+      .locator(`[data-testid="declared-marker"][data-cycle-id="${world.cycleId as number}"]`);
+    await expect(marker).toBeVisible();
+    const badge = marker.getByTestId("boundary-to-cycle");
+    await expect(badge).toHaveText(label);
+    await badge.click();
+  },
+);
+
+Step(
+  "the release {string} row's wave {string} is open",
+  async ({ page }, release: string, wave: string) => {
+    const group = page
+      .locator(`[data-testid="history-release"][data-release="${release}"]`)
+      .locator(`[data-testid="wave-group"][data-wave="${wave}"]`);
+    await expect(group).toHaveAttribute("data-open", "true");
+  },
+);
+
+Step("the history cycle row for that cycle sits inside the viewport", async ({ page, world }) => {
+  await expect(historyCycleRow(page, world.cycleId as number)).toBeInViewport();
 });
 
 // ── §S2b — Run Timeline accordion ───────────────────────────────────────────

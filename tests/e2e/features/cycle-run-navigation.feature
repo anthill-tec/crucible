@@ -63,6 +63,54 @@ Feature: CR-CRU-025 cycle ↔ run-boundary navigation — bidirectional, with lo
     And the history cycle row for that cycle is scrolled into view and blinking
     And exactly one element blinks across the workspace
 
+  Scenario: clicking "⚑ Cycle" on a closed cycle whose release and wave History draws folded opens the release, the wave and the cr group, and lands on the blinking cycle row
+    Given the viewport is 1280x800
+    And a project named "CRB Folded History Project" is registered
+    And an orchestrator "crb-orch-6" is registered on that project
+    And a release "0.3.0" is proposed for that project
+    And a release "0.4.0" is proposed for that project
+    And a cr-plan declaring cr "CR-CRB-6A" titled "CRB folded older CR" into wave "8" of release "0.3.0" is posted for that project
+    And a cr-plan declaring cr "CR-CRB-6B" titled "CRB newer CR" into wave "9" of release "0.4.0" is posted for that project
+    And a cycle plan is filed for cr "CR-CRB-6A" with a cycle labelled "c1 folded" in wave "8"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb6-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "agent-crb6-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "crb00006"
+    And a newer cr "CR-CRB-6B" is planned, worked and closed in wave "9" with merge commit "crb00007"
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    Then the release "0.4.0" row is open and the release "0.3.0" row is folded
+    When I click the "Runs" workspace tab
+    And I click the "⚑ Cycle" badge on the declared marker for that cycle
+    Then the "Workflow" tab is selected
+    And the release "0.3.0" row is open
+    And the release "0.3.0" row's wave "8" is open
+    And the cr group for "CR-CRB-6A" is auto-expanded showing its cycle rows
+    And the history cycle row for that cycle is scrolled into view and blinking
+    And the history cycle row for that cycle sits inside the viewport
+
+  Scenario: clicking "⚑ Cycle" on a closed cycle's marker in the All Projects view routes to that cycle's project, lands on Workflow and blinks the cycle row
+    Given the viewport is 1280x800
+    And a project named "CRB All Projects Project" is registered
+    And an orchestrator "crb-orch-7" is registered on that project
+    And a release "0.5.0" is proposed for that project
+    And a cr-plan declaring cr "CR-CRB-7" titled "CRB all projects CR" into wave "12" of release "0.5.0" is posted for that project
+    And a cycle plan is filed for cr "CR-CRB-7" with a cycle labelled "c1 all projects" in wave "12"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-crb7-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "agent-crb7-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "crb00008"
+    When I open the home page
+    And I click the "⚑ Cycle" badge on the All Projects timeline's declared marker for that cycle
+    Then the URL path ends with that project's workspace path
+    And the "Workflow" tab is selected
+    And the release "0.5.0" row's wave "12" is open
+    And the cr group for "CR-CRB-7" is auto-expanded showing its cycle rows
+    And the history cycle row for that cycle is scrolled into view and blinking
+    And the history cycle row for that cycle sits inside the viewport
+
   Scenario: §S2b the Run Timeline accordion — a declared marker's body click hides its linked run cards behind a collapsed cue, and a second click restores them
     Given a project named "CRB Accordion Project" is registered
     And a cycle plan is filed for cr "CR-CRB-3" with a cycle labelled "c1 acc"
