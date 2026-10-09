@@ -73,20 +73,20 @@ duration, pushedCommit, eventId, retired). A read verb: no `--agent` required.
 
 ## Acceptance criteria
 
-- [ ] `queue` answers one TOON envelope per the AXI contract; by default its table is exactly
+- [x] `queue` answers one TOON envelope per the AXI contract; by default its table is exactly
       today's six columns; `--fields release,seq,points,dependsOn` (and `--full`) add those columns
       after them on every row, uniform, primitive, null when absent — asserted per client against a
       recording board, and by decoding the output with the official TOON decoder (CR-CRU-046's
       round-trip); the release ceremony and the existing suites still read the default table.
-- [ ] Rows come in the board's published order (wave, release, seq — `listQueue`'s order, never re-sorted); with the place-in-plan columns asked for, a row placed before one of
+- [x] Rows come in the board's published order (wave, release, seq — `listQueue`'s order, never re-sorted); with the place-in-plan columns asked for, a row placed before one of
       its dependencies names it in its `warning` cell and in one `warnings[]` entry — asserted on fixed
       fixtures, including the shape of the CR-CRU-171 sequencing incident (pending CRs sent above
       merged ones).
-- [ ] A client run whose stdout is closed early (e.g. piped to `head -1`) leaves no open run on the
+- [x] A client run whose stdout is closed early (e.g. piped to `head -1`) leaves no open run on the
       board: it either completes and files, or is closed through `abort_run` naming the closed pipe —
       asserted per client (bun, python, mvn, rust, arduino) against a recording board, for stdout and
       for stderr.
-- [ ] **The `history` verb (§S4).** In each of the five clients (bun, python, mvn, rust, arduino —
+- [x] **The `history` verb (§S4).** In each of the five clients (bun, python, mvn, rust, arduino —
       the shared implementation called from each, the caller count asserted), `history` answers one
       TOON envelope whose default table is exactly the seven columns above, uniform and primitive, in
       the read's order; `--fields` adds the listed columns; `--release <label>` lists that release's

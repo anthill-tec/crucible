@@ -880,11 +880,45 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
     axi = axi_object(verb, False if refused else ok, result_fields, context,
                      list(warnings) + refused)
     if fmt == AXI_FORMAT_JSON:
-        sys.stdout.write(json.dumps(axi, ensure_ascii=False) + "\n")
+        envelope = json.dumps(axi, ensure_ascii=False) + "\n"
     else:
-        sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+        envelope = _toon().encode({"axi": axi}) + "\n"
+    write_to_pipe("stdout", envelope)
     if legacy_line is not None:
-        print(legacy_line, file=sys.stderr)
+        write_to_pipe("stderr", legacy_line + "\n")
+
+
+def write_to_pipe(name, text):
+    """\u00a7S3 \u2014 write `text` to `sys.<name>` ("stdout" or
+    "stderr") and flush it NOW, so a reader that has already gone (`| head`)
+    surfaces here as a `BrokenPipeError` rather than in the interpreter's own
+    exit flush (which would replace the real exit code with its 120). A closed
+    pipe is not the run: the stream is silenced (`silence_closed_pipe`) and
+    the client carries on. Returns False when the pipe was found closed."""
+    stream = getattr(sys, name)
+    try:
+        stream.write(text)
+        stream.flush()
+    except BrokenPipeError:
+        silence_closed_pipe(name)
+        return False
+    return True
+
+
+def silence_closed_pipe(name):
+    """\u00a7S3 \u2014 the reader of `sys.<name>` is gone: point the
+    stream's file descriptor at the null device, so every later write and the
+    interpreter's exit flush (the bytes still buffered included) land nowhere
+    instead of raising `BrokenPipeError` again. A stream with no real file
+    descriptor is replaced by a null-device stream instead."""
+    stream = getattr(sys, name)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, stream.fileno())
+    except (AttributeError, OSError, ValueError):
+        setattr(sys, name, open(os.devnull, "w"))  # kept open: it IS sys.<name> now
+    finally:
+        os.close(devnull)
 
 
 def resolve_single_plan(plans, cr=None, open_only=False):
@@ -2585,6 +2619,175 @@ def cmd_landings(args, project_dir, ops):
          f"landings: ok=True closed={len(rows)}")
     return 0
 
+# ── §S4 — `history`: a project's releases through its client ─────────────────
+
+HISTORY_VERB = "history"
+# The seven columns every `history` table shows (§S4, DRIFT-6: `pending` is
+# the read's `pendingCount`); `--fields` ADDS the five below after them in
+# the requested order and `--full` adds all five.
+HISTORY_BASE_FIELDS = ("release", "state", "shippedAt", "tag", "crs",
+                       "pending", "target")
+HISTORY_EXTRA_FIELDS = ("waves", "gateRuns", "lastGate", "verified",
+                        "packages")
+
+
+def history_path(project_key):
+    """§S4 — the project's release-history read: `GET …/projects/<key>/history`."""
+    return f"/api/v2/projects/{project_key}/history"
+
+
+def add_history_args(parser):
+    """§S4 — the `history` verb's flags, registered here so the five clients
+    cannot drift into five flag surfaces. A read verb: no `--agent`."""
+    parser.add_argument(
+        "--fields",
+        help="Comma-separated EXTRA columns to add to the default "
+             "release,state,shippedAt,tag,crs,pending,target set — waves, "
+             "gateRuns, lastGate, verified, packages.")
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Print every column, untruncated.")
+    parser.add_argument(
+        "--release",
+        help="Narrow to one release (its label) and list its gate runs as "
+             "the table.")
+    add_status_format_arg(parser)
+
+
+def _history_workflow(release):
+    """The release's one workflow entry (the read publishes exactly one), or
+    an empty dict when it carries none."""
+    workflows = release.get("workflows") or []
+    first = workflows[0] if workflows else None
+    return first if isinstance(first, dict) else {}
+
+
+def _history_label(release):
+    """The release's single label, or None when it carries none."""
+    labels = release.get("labels") or []
+    return labels[0] if labels else None
+
+
+def _history_last_gate(gate_runs):
+    """`<outcome> · <stopStep>` of the newest gate run (the read lists them
+    newest first), just `<outcome>` without a stop step; None with none."""
+    if not gate_runs:
+        return None
+    last = gate_runs[0]
+    stop = last.get("stopStep")
+    return f"{last.get('outcome')} · {stop}" if stop else last.get("outcome")
+
+
+def build_history_rows(releases):
+    """§S4 (PURE) — one uniform, primitive row per release in the
+    read's order (never re-sorted), carrying every column: the default seven,
+    then `waves` (`wave:count` pairs space-separated, count = the wave's
+    completed CRs), `gateRuns` (count), `lastGate`, `verified` (verification
+    run count) and `packages` (`registry:name:version`, comma-separated, ""
+    when none). An undeclared value is null, never an omitted key."""
+    rows = []
+    for release in releases or []:
+        workflow = _history_workflow(release)
+        gate_runs = workflow.get("gateRuns") or []
+        rows.append({
+            "release": _history_label(release),
+            "state": release.get("state"),
+            "shippedAt": release.get("shippedAt"),
+            "tag": release.get("tag"),
+            "crs": release.get("crCount"),
+            "pending": release.get("pendingCount"),
+            "target": release.get("targetAt"),
+            "waves": " ".join(f"{w.get('wave')}:{len(w.get('crs') or [])}"
+                              for w in release.get("waves") or []),
+            "gateRuns": len(gate_runs),
+            "lastGate": _history_last_gate(gate_runs),
+            "verified": workflow.get("verificationRuns"),
+            "packages": ",".join(
+                f"{p.get('registry')}:{p.get('name')}:{p.get('version')}"
+                for p in workflow.get("packages") or []),
+        })
+    return rows
+
+
+def select_history_fields(rows, extra_fields, full=False):
+    """§S4 (PURE) — project the history rows onto the default seven columns
+    plus the requested extras (all five with `full`), in the read's order.
+    Without `full` a long text cell is truncated (`truncate_field`)."""
+    requested = list(HISTORY_EXTRA_FIELDS) if full else list(extra_fields or [])
+    keys = list(HISTORY_BASE_FIELDS)
+    for f in requested:
+        if f not in keys:
+            keys.append(f)
+    return [{k: truncate_field(r.get(k), full=full) for k in keys} for r in rows]
+
+
+def build_history_gate_rows(release):
+    """§S4 (PURE) — the release's gate runs as uniform, primitive rows, in
+    the read's order: outcome, stopStep, fixRounds, duration (ms),
+    pushedCommit, eventId, retired — null when the run carries none."""
+    gate_runs = _history_workflow(release).get("gateRuns") or []
+    return [{"outcome": g.get("outcome"), "stopStep": g.get("stopStep"),
+             "fixRounds": g.get("fixRounds"), "duration": g.get("durationMs"),
+             "pushedCommit": g.get("pushedCommit"),
+             "eventId": g.get("eventId"), "retired": g.get("retired")}
+            for g in gate_runs]
+
+
+def _history_refusal(emit, ops, project_dir, error, help_steps):
+    """§S4 — the `history` refusal: ok:false, the error naming the bad
+    input, a non-empty `help[]`, no rows; exit 1."""
+    emit(HISTORY_VERB, False, {"error": error, "help": help_steps},
+         ops.context(project_dir), [],
+         f"history: ok=False error={error}")
+    return 1
+
+
+def cmd_history(args, project_dir, ops):
+    """§S4 — a project's releases through its client (read-only,
+    no --agent): ONE read, `GET …/history`, answered as one envelope whose
+    `history` table is the default seven columns (plus `--fields` extras,
+    or every column with `--full`), or — with `--release <label>` — that
+    release's gate runs. An unknown project (a non-ok read) or an unknown
+    release is a refusal with `help[]`, exit 1. `--format` picks the
+    encoding exactly as for `status` (§S8)."""
+    emit = _status_emitter(args, ops)
+    resp = ops.get(history_path(ops.project_key(project_dir))) or {}
+    if not resp.get("ok"):
+        return _history_refusal(
+            emit, ops, project_dir,
+            f"could not read the project's history: {resp.get('error')}",
+            server_failure_help(resp) or [
+                "check CRUCIBLE_PROJECT_KEY in the project's .env names a "
+                "project the board holds",
+                f"check the Crucible server is running / reachable at "
+                f"{ops.base_url}"])
+    releases = resp.get("releases") or []
+    label = getattr(args, "release", None)
+    if label:
+        release = next((r for r in releases if _history_label(r) == label),
+                       None)
+        if release is None:
+            return _history_refusal(
+                emit, ops, project_dir,
+                f"unknown release: {label}",
+                ["history — lists every release label the project holds"])
+        rows = build_history_gate_rows(release)
+        emit(HISTORY_VERB, True,
+             {HISTORY_VERB: rows, "count": len(rows), "help": ["history"]},
+             ops.context(project_dir), [],
+             f"history: ok=True release={label} gateRuns={len(rows)}")
+        return 0
+    full = bool(getattr(args, "full", False))
+    rows = select_history_fields(
+        build_history_rows(releases),
+        _queue_field_list(getattr(args, "fields", None)), full=full)
+    emit(HISTORY_VERB, True,
+         {HISTORY_VERB: rows, "count": len(rows),
+          "help": ["history --release <label>"]},
+         ops.context(project_dir), [],
+         f"history: ok=True releases={len(rows)}")
+    return 0
+
 
 # ── §S4 — `project-meta`: a project's metadata map, read and written ─────────
 
@@ -2712,11 +2915,96 @@ def build_queue_rows(entries):
     when it has none) and `lifecycle` (the entry's `lifecycle.state` string —
     `VOID` or `SUPERSEDED` — when a lifecycle object is present, null for a
     live entry). A null column keeps the table uniform; it is never an
-    omitted key and never an invented state."""
+    omitted key and never an invented state.
+
+    \u00a7S1 \u2014 then the four place-in-plan columns the read already
+    publishes: `release` and `points` (null when undeclared), `seq`, and
+    `dependsOn` as ONE primitive cell \u2014 the ids space-separated, "" (never
+    null) when the entry has none. `cmd_queue` projects the default table
+    back onto the first six (`QUEUE_BASE_FIELDS`)."""
     return [{"cr": e.get("cr"), "wave": e.get("wave"),
              "status": e.get("status"), "planId": e.get("planId"),
-             "title": e.get("title"), "lifecycle": _lifecycle_state(e)}
+             "title": e.get("title"), "lifecycle": _lifecycle_state(e),
+             "release": e.get("release"), "seq": e.get("seq"),
+             "points": e.get("points"),
+             "dependsOn": " ".join(e.get("dependsOn") or [])}
             for e in entries or []]
+
+
+# \u00a7S0/\u00a7S1 \u2014 the `queue` table's projection (the \u00a7S10 rule
+# `select_status_fields` follows): the six columns every consumer already reads
+# are the default; `--fields` ADDS columns after them in the requested order
+# and `--full` adds every place-in-plan column. Asking for ANY place-in-plan
+# column also adds the `warning` column, always last and always present (""
+# when the row is in order) \u2014 a column that came and went with the data would
+# be a trap for its reader (orchestrator ruling, cycle 647).
+QUEUE_BASE_FIELDS = ("cr", "wave", "status", "planId", "title", "lifecycle")
+QUEUE_PLACE_FIELDS = ("release", "seq", "points", "dependsOn")
+QUEUE_WARNING_FIELD = "warning"
+BEFORE_ITS_DEPENDENCY = "before-its-dependency"
+
+
+def add_queue_view_args(parser):
+    """\u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags,
+    registered here so the five clients cannot drift into five flag
+    surfaces."""
+    parser.add_argument(
+        "--fields",
+        help="Comma-separated EXTRA columns to add to the default "
+             "cr,wave,status,planId,title,lifecycle set \u2014 release, seq, "
+             "points, dependsOn (any of them also adds `warning`).")
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Print every column: the default set, the place-in-plan "
+             "columns and `warning`.")
+
+
+def queue_late_dependencies(rows):
+    """\u00a7S2 (PURE) \u2014 per row, the dependencies the published order
+    places AFTER it (the roadmap page's `roadmapLateDeps` rule). A dependency
+    absent from the table is not an inversion: it is unqueued or not in view.
+    The rows are read in the order given, never re-sorted."""
+    position = {row.get("cr"): at for at, row in enumerate(rows)}
+    late = []
+    for at, row in enumerate(rows):
+        deps = (row.get("dependsOn") or "").split()
+        late.append([d for d in deps if position.get(d, -1) > at])
+    return late
+
+
+def select_queue_fields(rows, extra_fields, full=False):
+    """\u00a7S0\u2013\u00a7S2 (PURE) \u2014 project the widened queue rows onto the
+    default six columns plus the requested extras (every place-in-plan column
+    with `full`), in the published order. When any place-in-plan column is
+    asked for, each row gains a last `warning` cell naming the dependencies
+    placed after it ("" otherwise). Returns `(rows, warnings)`: one
+    structured `before-its-dependency` warning per offending row."""
+    requested = list(QUEUE_PLACE_FIELDS) if full else list(extra_fields or [])
+    keys: list[str] = list(QUEUE_BASE_FIELDS)
+    for f in requested:
+        if f not in keys and f != QUEUE_WARNING_FIELD:
+            keys.append(f)
+    projected = [{k: r.get(k) for k in keys} for r in rows]
+    if not any(f in QUEUE_PLACE_FIELDS or f == QUEUE_WARNING_FIELD
+               for f in requested):
+        return projected, []
+    warnings = []
+    for row, late in zip(projected, queue_late_dependencies(rows)):
+        named = " ".join(late)
+        row[QUEUE_WARNING_FIELD] = (f"before its dependency {named}"
+                                    if late else "")
+        if late:
+            warnings.append({
+                "code": BEFORE_ITS_DEPENDENCY,
+                "detail": (f"{row.get('cr')} is placed before its "
+                           f"dependency {named}"),
+            })
+    return projected, warnings
+
+
+def _queue_field_list(fields):
+    """The `--fields` value as a list of column names (empty when absent)."""
+    return [f.strip() for f in (fields or "").split(",") if f.strip()]
 
 
 def _lifecycle_state(entry):
@@ -2764,7 +3052,11 @@ def cmd_queue(args, project_dir, ops):
 
     resp = ops.get(f"/api/v2/projects/{key}/queue")
     if resp.get("ok"):
-        rows = build_queue_rows(resp.get("entries"))
+        rows, order_warnings = select_queue_fields(
+            build_queue_rows(resp.get("entries")),
+            _queue_field_list(getattr(args, "fields", None)),
+            full=bool(getattr(args, "full", False)))
+        warnings.extend(order_warnings)
     else:
         rows = []
         warnings.append({
@@ -6357,11 +6649,14 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
         ))
         stream = proc.stdout
         assert stream is not None  # stdout=PIPE always yields a stream
+        echo = True
         try:
             for line in stream:
                 lines.append(line)
-                sys.stderr.write(line)
-                sys.stderr.flush()
+                # \u00a7S3 \u2014 a closed stderr ends the echo, never
+                # the run: the capture and the log keep going.
+                if echo:
+                    echo = write_to_pipe("stderr", line)
                 if log is not None:
                     log.write(line)
                     log.flush()
@@ -7109,9 +7404,10 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
                                        poster_for=run.poster_for)
 
     out, _err = proc.communicate()
-    # Proxy role: relay the axi detail to the caller's OWN stdout.
+    # Proxy role: relay the axi detail to the caller's OWN stdout. A closed
+    # stdout silences the relay, never the run: the seal below still happens.
     if out:
-        sys.stdout.write(out)
+        write_to_pipe("stdout", out)
 
     final_snap = (out or "").strip()
     final_decoded = _decode_axi_snapshot(final_snap) if final_snap else None
