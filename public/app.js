@@ -6887,7 +6887,7 @@
           span({ class: "app-toggle-glyph" }, () => (open() ? "▾" : "▸")),
           " 🚀 ",
           b({ class: "app-history-release-name" }, `release ${label}`),
-          span({ class: "app-card-meta" }, ` · ${historyReleaseSummary(release)}`),
+          span({ class: "app-card-meta" }, () => ` · ${historyReleaseSummary(release, open())}`),
         ),
         () =>
           open()
@@ -6906,8 +6906,9 @@
     };
 
     // A release row's one line: its state (and when it shipped), tag,
-    // commit, CR count, target and how far off, and the waves it holds.
-    const historyReleaseSummary = (release) => {
+    // commit, CR count, target and how far off, and, while it is folded, the
+    // waves it holds (an open release shows its waves below its line, F22).
+    const historyReleaseSummary = (release, open) => {
       const parts = [release.state];
       if (release.shippedAt !== undefined) {
         const at = release.shippedAt * 1000;
@@ -6918,7 +6919,7 @@
       parts.push(`${release.crCount} ${release.crCount === 1 ? "CR" : "CRs"}`);
       const target = historyTarget(release);
       if (target !== "") parts.push(target);
-      if (release.waves.length > 0) {
+      if (!open && release.waves.length > 0) {
         const waves = release.waves.map((w) => w.wave).filter((w) => w !== "");
         if (waves.length > 0) parts.push(`${waves.length === 1 ? "wave" : "waves"} ${waves.join(", ")}`);
       }

@@ -1177,4 +1177,124 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect(body.releases.some((r) => r.labels.includes("0.53.0"))).toBe(false);
     });
   });
+
+  // -- withdrawn work: a queued CR declared VOID or SUPERSEDED that never had
+  //    a plan belongs to no release, wherever the queue files it ------------
+
+  describe("withdrawn work that never had a plan belongs to no release, even one the queue files it under", () => {
+    let handle: ServerHandle | undefined;
+
+    afterEach(() => {
+      handle?.stop();
+      handle = undefined;
+    });
+
+    test("a VOID or SUPERSEDED planless CR filed under a release is neither counted nor listed there; one that HAD a plan stays; a release holding only withdrawn work is not listed", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-withdrawn-filed-under-release");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+
+      seedQueue(store, key, [
+        { cr: "HIST-611", wave: "31", release: "0.9.1" }, // live, queued
+        { cr: "HIST-612", wave: "31", release: "0.9.1" }, // VOID, never planned
+        { cr: "HIST-613", wave: "31", release: "0.9.1" }, // SUPERSEDED, but had a plan
+        { cr: "HIST-614", wave: "32", release: "0.9.2" }, // VOID, never planned: 0.9.2's only CR
+      ]);
+      proposeRelease(store, key, agent, "0.9.1", 1_853_000_000);
+      proposeRelease(store, key, agent, "0.9.2", 1_854_000_000);
+      fileCr(store, key, "HIST-613");
+      expect(store.setQueueLifecycle(key, "HIST-612", { state: "VOID", reason: "not happening" })).toEqual({ changed: true });
+      expect(store.setQueueLifecycle(key, "HIST-613", { state: "SUPERSEDED", by: "HIST-611" })).toEqual({ changed: true });
+      expect(store.setQueueLifecycle(key, "HIST-614", { state: "VOID", reason: "not happening" })).toEqual({ changed: true });
+
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const row = releaseOf(body, "0.9.1");
+      expect(row.crCount).toBe(2);
+      expect(waveOf(row, "31")?.crs).toEqual(["HIST-611", "HIST-613"]);
+
+      expect(body.releases.some((r) => r.labels.includes("0.9.2"))).toBe(false);
+      const listed = body.releases.flatMap((r) => r.waves.flatMap((w) => w.crs));
+      expect(listed).not.toContain("HIST-612");
+      expect(listed).not.toContain("HIST-614");
+    });
+  });
+
+  // -- a gate naming a version no release record carries falls back by the
+  //    timeline rule ---------------------------------------------------------
+
+  describe("a gate naming a version that has no release record", () => {
+    let handle: ServerHandle | undefined;
+
+    afterEach(() => {
+      handle?.stop();
+      handle = undefined;
+      setSystemTime();
+    });
+
+    test("belongs to the first release that shipped at or after it; one sealed after every ship belongs to the lowest unshipped release; the version it names gets no row of its own", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-gate-version-without-record");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+      const day = Date.UTC(2026, 9, 2, 0, 0, 0);
+      const HOUR = 3_600_000;
+
+      seedQueue(store, key, [
+        { cr: "HIST-621", wave: "33" },
+        { cr: "HIST-622", wave: "34" },
+        { cr: "HIST-623", wave: "35", release: "0.62.4" },
+        { cr: "HIST-624", wave: "36", release: "0.62.6" },
+      ]);
+      proposeRelease(store, key, agent, "0.62.4", 1_880_000_000);
+      proposeRelease(store, key, agent, "0.62.6", 1_885_000_000);
+
+      shipReleaseAt(store, key, agent, day + 1 * HOUR, {
+        label: "0.62.1",
+        commit: "six21a",
+        crs: ["HIST-621"],
+      });
+      // names 0.62.15, which no record carries; sealed after 0.62.1 shipped,
+      // before 0.62.2 did: it belongs to 0.62.2.
+      const betweenShips = postGateAt(
+        store,
+        key,
+        agent,
+        day + 2 * HOUR,
+        { intent: "release gate", outcome: "passed", steps: [{ name: "review", status: "passed" }] },
+        { version: "0.62.15" },
+      );
+      shipReleaseAt(store, key, agent, day + 3 * HOUR, {
+        label: "0.62.2",
+        commit: "six22a",
+        crs: ["HIST-622"],
+      });
+      // names 0.62.25, which no record carries; sealed after every ship: it
+      // belongs to the lowest unshipped release, 0.62.4 (not 0.62.6).
+      const afterShips = postGateAt(
+        store,
+        key,
+        agent,
+        day + 4 * HOUR,
+        { intent: "release gate", outcome: "failed", steps: [{ name: "test", status: "failed" }] },
+        { version: "0.62.25" },
+      );
+
+      setSystemTime();
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      expect(workflowOf(releaseOf(body, "0.62.2"), "0.62.2").gateRuns.map((r) => r.eventId)).toEqual([betweenShips]);
+      expect(workflowOf(releaseOf(body, "0.62.1"), "0.62.1").gateRuns).toEqual([]);
+      const lowest = workflowOf(releaseOf(body, "0.62.4"), "0.62.4").gateRuns;
+      expect(lowest.map((r) => r.eventId)).toEqual([afterShips]);
+      expect(lowest[0]!.stopStep).toBe("test");
+      expect(workflowOf(releaseOf(body, "0.62.6"), "0.62.6").gateRuns).toEqual([]);
+      expect(body.releases.some((r) => r.labels.includes("0.62.15") || r.labels.includes("0.62.25"))).toBe(false);
+    });
+  });
 });

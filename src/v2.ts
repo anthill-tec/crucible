@@ -2580,8 +2580,12 @@ function projectHistory(store: Store, key: string): HistoryRelease[] {
   // "" wave the page bands it under).
   const waveOfCr = new Map<string, string>(plans.map((plan) => [plan.cr, plan.wave ?? ""]));
   for (const entry of queue) waveOfCr.set(entry.cr, entry.wave);
+  const planned = new Set(plans.map((plan) => plan.cr));
+  // A queued CR declared VOID or SUPERSEDED that no plan ever took up is no
+  // work of its own: it belongs to no release, wherever the queue files it.
+  const queuedWork = queue.filter((entry) => !isDeadCr(entry) || planned.has(entry.cr));
   const queuedUnder = new Map<string, string[]>();
-  for (const entry of queue) {
+  for (const entry of queuedWork) {
     if (entry.release === undefined) continue;
     queuedUnder.set(entry.release, [...(queuedUnder.get(entry.release) ?? []), entry.cr]);
   }
@@ -2607,14 +2611,10 @@ function projectHistory(store: Store, key: string): HistoryRelease[] {
     if (!labels.has(label)) labels.set(label, { label, crs: [...new Set(crs)] });
   }
 
-  const planned = new Set(plans.map((plan) => plan.cr));
   const merged = new Set(
     plans.filter((plan) => plan.status === "closed" && plan.merge !== undefined).map((plan) => plan.cr),
   );
 
-  // A queued CR declared VOID or SUPERSEDED that no plan ever took up is no
-  // work of its own: it is not placed.
-  const queuedWork = queue.filter((entry) => !isDeadCr(entry) || planned.has(entry.cr));
   placeUnnamedCrs(labels, [...new Set([...queuedWork.map((entry) => entry.cr), ...planned])], plans);
 
   const gateRuns = historyGateRuns(store, key, labels, waveOfCr);

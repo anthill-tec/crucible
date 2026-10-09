@@ -577,6 +577,30 @@ describe("History — a release's waves fold: only the open release's open wave 
     expect(wave6.getAttribute("data-open")).toBe("true");
     expect(crGroupsOf(wave6)).toEqual(["HIST-61"]);
   });
+
+  test("HIST-4: an open release's header line carries no wave list (its waves show below it); a folded release's header line names its waves", async () => {
+    const key = "hist-fold-header-waves";
+    const { plans, history } = foldFixture(key);
+    await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fold Header" })], plans, history });
+    await openWorkflowTab();
+
+    expect(textOf(releaseToggle(releaseRow("0.5.0")))).toBe("▾ 🚀 release 0.5.0 · in progress · 3 CRs");
+    expect(textOf(releaseToggle(releaseRow("0.4.0")))).toContain(" · wave 6");
+  });
+
+  test("HIST-5: folding the open release brings its wave list back to its header line; opening a folded one takes the list away", async () => {
+    const key = "hist-fold-header-toggle";
+    const { plans, history } = foldFixture(key);
+    await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fold Header Toggle" })], plans, history });
+    await openWorkflowTab();
+
+    await clickToggle(releaseRow("0.5.0"));
+    expect(textOf(releaseToggle(releaseRow("0.5.0")))).toContain(" · waves 9, 8, 7");
+
+    await clickToggle(releaseRow("0.4.0"));
+    expect(releaseRow("0.4.0").getAttribute("data-open")).toBe("true");
+    expect(textOf(releaseToggle(releaseRow("0.4.0")))).not.toContain("wave");
+  });
 });
 
 // ── AC2 (page half) — a release's workflow: gate runs, → gate, verification, packages, not started ──
