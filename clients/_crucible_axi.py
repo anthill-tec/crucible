@@ -889,7 +889,7 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
 
 
 def write_to_pipe(name, text):
-    """CR-CRU-175 \u00a7S3 \u2014 write `text` to `sys.<name>` ("stdout" or
+    """\u00a7S3 \u2014 write `text` to `sys.<name>` ("stdout" or
     "stderr") and flush it NOW, so a reader that has already gone (`| head`)
     surfaces here as a `BrokenPipeError` rather than in the interpreter's own
     exit flush (which would replace the real exit code with its 120). A closed
@@ -906,7 +906,7 @@ def write_to_pipe(name, text):
 
 
 def silence_closed_pipe(name):
-    """CR-CRU-175 \u00a7S3 \u2014 the reader of `sys.<name>` is gone: point the
+    """\u00a7S3 \u2014 the reader of `sys.<name>` is gone: point the
     stream's file descriptor at the null device, so every later write and the
     interpreter's exit flush (the bytes still buffered included) land nowhere
     instead of raising `BrokenPipeError` again. A stream with no real file
@@ -2619,11 +2619,11 @@ def cmd_landings(args, project_dir, ops):
          f"landings: ok=True closed={len(rows)}")
     return 0
 
-# ── CR-CRU-175 §S4 — `history`: a project's releases through its client ──────
+# ── §S4 — `history`: a project's releases through its client ─────────────────
 
 HISTORY_VERB = "history"
 # The seven columns every `history` table shows (§S4, DRIFT-6: `pending` is
-# CR-CRU-177's `pendingCount`); `--fields` ADDS the five below after them in
+# the read's `pendingCount`); `--fields` ADDS the five below after them in
 # the requested order and `--full` adds all five.
 HISTORY_BASE_FIELDS = ("release", "state", "shippedAt", "tag", "crs",
                        "pending", "target")
@@ -2632,7 +2632,7 @@ HISTORY_EXTRA_FIELDS = ("waves", "gateRuns", "lastGate", "verified",
 
 
 def history_path(project_key):
-    """§S4 — the history read (CR-CRU-173/177): `GET …/projects/<key>/history`."""
+    """§S4 — the project's release-history read: `GET …/projects/<key>/history`."""
     return f"/api/v2/projects/{project_key}/history"
 
 
@@ -2679,7 +2679,7 @@ def _history_last_gate(gate_runs):
 
 
 def build_history_rows(releases):
-    """CR-CRU-175 §S4 (PURE) — one uniform, primitive row per release in the
+    """§S4 (PURE) — one uniform, primitive row per release in the
     read's order (never re-sorted), carrying every column: the default seven,
     then `waves` (`wave:count` pairs space-separated, count = the wave's
     completed CRs), `gateRuns` (count), `lastGate`, `verified` (verification
@@ -2743,7 +2743,7 @@ def _history_refusal(emit, ops, project_dir, error, help_steps):
 
 
 def cmd_history(args, project_dir, ops):
-    """CR-CRU-175 §S4 — a project's releases through its client (read-only,
+    """§S4 — a project's releases through its client (read-only,
     no --agent): ONE read, `GET …/history`, answered as one envelope whose
     `history` table is the default seven columns (plus `--fields` extras,
     or every column with `--full`), or — with `--release <label>` — that
@@ -2917,7 +2917,7 @@ def build_queue_rows(entries):
     live entry). A null column keeps the table uniform; it is never an
     omitted key and never an invented state.
 
-    CR-CRU-175 \u00a7S1 \u2014 then the four place-in-plan columns the read already
+    \u00a7S1 \u2014 then the four place-in-plan columns the read already
     publishes: `release` and `points` (null when undeclared), `seq`, and
     `dependsOn` as ONE primitive cell \u2014 the ids space-separated, "" (never
     null) when the entry has none. `cmd_queue` projects the default table
@@ -2931,7 +2931,7 @@ def build_queue_rows(entries):
             for e in entries or []]
 
 
-# CR-CRU-175 \u00a7S0/\u00a7S1 \u2014 the `queue` table's projection (the \u00a7S10 rule
+# \u00a7S0/\u00a7S1 \u2014 the `queue` table's projection (the \u00a7S10 rule
 # `select_status_fields` follows): the six columns every consumer already reads
 # are the default; `--fields` ADDS columns after them in the requested order
 # and `--full` adds every place-in-plan column. Asking for ANY place-in-plan
@@ -2945,7 +2945,7 @@ BEFORE_ITS_DEPENDENCY = "before-its-dependency"
 
 
 def add_queue_view_args(parser):
-    """CR-CRU-175 \u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags,
+    """\u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags,
     registered here so the five clients cannot drift into five flag
     surfaces."""
     parser.add_argument(
@@ -2960,7 +2960,7 @@ def add_queue_view_args(parser):
 
 
 def queue_late_dependencies(rows):
-    """CR-CRU-175 \u00a7S2 (PURE) \u2014 per row, the dependencies the published order
+    """\u00a7S2 (PURE) \u2014 per row, the dependencies the published order
     places AFTER it (the roadmap page's `roadmapLateDeps` rule). A dependency
     absent from the table is not an inversion: it is unqueued or not in view.
     The rows are read in the order given, never re-sorted."""
@@ -2973,7 +2973,7 @@ def queue_late_dependencies(rows):
 
 
 def select_queue_fields(rows, extra_fields, full=False):
-    """CR-CRU-175 \u00a7S0\u2013\u00a7S2 (PURE) \u2014 project the widened queue rows onto the
+    """\u00a7S0\u2013\u00a7S2 (PURE) \u2014 project the widened queue rows onto the
     default six columns plus the requested extras (every place-in-plan column
     with `full`), in the published order. When any place-in-plan column is
     asked for, each row gains a last `warning` cell naming the dependencies
@@ -6653,7 +6653,7 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
         try:
             for line in stream:
                 lines.append(line)
-                # CR-CRU-175 \u00a7S3 \u2014 a closed stderr ends the echo, never
+                # \u00a7S3 \u2014 a closed stderr ends the echo, never
                 # the run: the capture and the log keep going.
                 if echo:
                     echo = write_to_pipe("stderr", line)
@@ -7404,9 +7404,10 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
                                        poster_for=run.poster_for)
 
     out, _err = proc.communicate()
-    # Proxy role: relay the axi detail to the caller's OWN stdout.
+    # Proxy role: relay the axi detail to the caller's OWN stdout. A closed
+    # stdout silences the relay, never the run: the seal below still happens.
     if out:
-        sys.stdout.write(out)
+        write_to_pipe("stdout", out)
 
     final_snap = (out or "").strip()
     final_decoded = _decode_axi_snapshot(final_snap) if final_snap else None
