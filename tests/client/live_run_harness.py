@@ -85,6 +85,13 @@ class RecordingBoard:
         # unchanged always-opens board.
         self._refuse_start_remaining = 0
         self._refuse_start_error = "run refused"
+        # CR-CRU-180 \u00a7S1 \u2014 a scripted HELD answer, so a RED test can land a
+        # signal while the client is still waiting on one POST's answer (the
+        # window a slow runner widens: the board has RECORDED the call, the
+        # client has not yet READ its reply). Default off, like the scripted
+        # refusals above.
+        self._hold_path = None
+        self._hold_released = threading.Event()
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -130,6 +137,11 @@ class RecordingBoard:
                 body = self._body()
                 with board._lock:
                     board.events.append((time.time(), "POST", self.path, body))
+                    held = board._hold_path == self.path
+                    if held:
+                        board._hold_path = None
+                if held:
+                    board._hold_released.wait(timeout=30)
                 if self.path == START:
                     refuse, error = False, None
                     with board._lock:
@@ -188,6 +200,7 @@ class RecordingBoard:
         self._thread.start()
 
     def close(self):
+        self._hold_released.set()
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join(timeout=5)
@@ -241,6 +254,19 @@ class RecordingBoard:
             self._refuse_ingest_run_id = run_id
             self._refuse_ingest_remaining = times
             self._refuse_ingest_status = status
+
+    def hold_next_reply(self, path):
+        """CR-CRU-180 \u00a7S1 \u2014 record the next `POST path` as usual but withhold
+        its answer until `release_held()` (or `close()`), so the client stays
+        blocked on that call for exactly as long as the test needs. Only the
+        NEXT such call is held; every other request is answered at once."""
+        with self._lock:
+            self._hold_released.clear()
+            self._hold_path = path
+
+    def release_held(self):
+        """CR-CRU-180 \u00a7S1 \u2014 answer the call `hold_next_reply` withheld."""
+        self._hold_released.set()
 
     def received_at(self, post_index):
         with self._lock:
