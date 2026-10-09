@@ -399,7 +399,7 @@ function ingested(run: Drive): StoredEvent {
   return event;
 }
 
-/** CR-CRU-018 — how many engines run the phone feature in THIS drive: two
+/** How many engines run the phone feature in THIS drive: two
  *  (chromium-mobile + webkit-iphone) whenever a WebKit engine exists for the
  *  run (CI's native install, or the Docker endpoint), else one. The SAME
  *  predicate that gates webkit-iphone in playwright.config.ts, read from the

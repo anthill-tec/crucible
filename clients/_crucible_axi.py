@@ -6524,7 +6524,7 @@ class AbandonTrap:
     """The live state of one `abandon_trap`: its signal handler, and `held()`,
     the span a trapped signal must not cut in half.
 
-    CR-CRU-180 \u00a7S1 \u2014 a step that creates something on the board and only
+    A step that creates something on the board and only
     learns it did from the board's ANSWER (the run identity's opening
     heartbeat) cannot be abandoned between the two: the board already holds
     the row, the client has no record of it, and the closing bracket removes
@@ -7073,7 +7073,7 @@ class DrivenRunIdentity:
     when this drive created it (`close_gate_identity`) and is inert when none
     was opened \u2014 a drive refused before any snapshot opens no identity.
 
-    CR-CRU-180 \u00a7S1 \u2014 the opening runs inside the drive's `AbandonTrap.held()`
+    The opening runs inside the drive's `AbandonTrap.held()`
     (`trap`): a SIGINT/SIGTERM landing after the board has created the
     identity but before its answer is read would otherwise leave `close()`
     nothing to remove. The signal is raised once the identity is recorded."""
