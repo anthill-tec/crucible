@@ -58,9 +58,18 @@ more than one release (this board's past: wave 7 → 0.2.2 and 0.3.0; wave 6 →
 wave 5 → 0.2.0 and 0.1.3) appears under each of its releases with that release's CRs only.
 
 **Settled at gap analysis (from the board's data and F22, which wins):**
-- **Which releases.** Every release record of the project that has history — shipped, or holding a
-  merged CR, a plan or a gate. A release with none of these (today 0.4.0) is future work, not
-  history, and is not listed (F22 lists none).
+- **Every piece of work falls in a release (user ruling 2026-10-09).** A release is a milestone on
+  the project's timeline, and every wave and CR falls into the release that SUCCEEDS it on that
+  timeline — there is no CR outside a release and no project without one. So History lists every
+  release that holds work (CRs from its record or the queue, plans, gates), including future ones:
+  a release planned but not yet started (today 0.4.0, 3 CRs queued) is listed with state **planned**.
+  States: **shipped** (its record has a ship date), **in progress** (unshipped, some of its work
+  started — a plan filed, a CR merged or a gate run), **ship not recorded** (unshipped, every CR
+  merged), **planned** (unshipped, nothing started). A release with no work at all is not listed.
+- **Placing work no release names.** A CR, wave or runs-only (inferred) wave that neither a release
+  record nor the queue's `release` names belongs to the first release that shipped at or after it
+  (by its plan's close time, else its first run), else the lowest unshipped release — the same
+  timeline rule as a gate that names nothing. Nothing is left outside History.
 - **A release's CRs.** A shipped release's record names its CRs (`crs`, CR-CRU-080 provenance) and
   that list wins: 0.2.0's 70 include 3 wave-4 CRs and CR-CRU-090, which the queue files under 0.1.3
   (it then appears under both, honestly). An unshipped release takes its CRs from the queue's
@@ -138,3 +147,13 @@ Anything outside these: stop and ask.
 1. the board answers a project's history by release (§S2)
 2. History is told by release (§S1)
 3. verify
+
+### Ruling at cycle 637 (2026-10-09) — the tests it re-pins (approved)
+
+- `tests/workflow-lens.test.ts` "§S3 history lens — inferred fallback (no plan)": its runs-only wave
+  is placed in the release that succeeds it on the timeline (the fixture gains a release); the wave's
+  own rendering assertions are unchanged.
+- `tests/e2e/steps/wave-backfill.steps.ts` (CR-CRU-031's unnumbered-wave scenario): the scenario
+  seeds a release for its plans to fall into; what it asserts about the wave band is unchanged.
+- Any other test whose fixture has work but no release record: the fixture gains a release; its
+  assertions are unchanged.
