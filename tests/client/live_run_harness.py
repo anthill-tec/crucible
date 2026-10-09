@@ -590,6 +590,52 @@ def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30):
     return reached, proc.returncode, stdout, _read(stderr_path)
 
 
+def drive_and_close_stderr(cmd, cwd, env, scratch, timeout=30):
+    """CR-CRU-175 \u00a7S3 \u2014 run `cmd`, wait until its blocked runner's marker has
+    reached the client's REAL stderr PIPE (the client's own "run started"
+    line and the runner's first lines already reached it \u2014 the run is
+    genuinely open and in flight), then close THIS PROCESS'S READ END of that
+    pipe WITHOUT reading any further \u2014 exactly what the reader of
+    `cmd | head -N` leaves behind once it has its N lines \u2014 and only then
+    release the runner, so every further echo the client's `run_streamed`
+    attempts lands on an already-dead pipe.
+
+    Returns `(reached, returncode, stdout, pre_close_lines)`: `stdout` is
+    read from the UNTOUCHED stdout pipe (never closed here \u2014 this driver is
+    the stderr half of \u00a7S3's pair), and `pre_close_lines` is everything read
+    on stderr before it was closed (so a failed `reached` can explain
+    itself)."""
+    marker = "LIVE_RUN_PIPE_CLOSE_MARKER"
+    # A fresh release file per drive: an earlier drive's release must never
+    # unblock this one's runner before the pipe is closed.
+    release = _fresh_release_path(scratch)
+    env = dict(env, FAKE_RELEASE_FILE=release, FAKE_MARKER_LINE=marker,
+               FAKE_BLOCK_AFTER_INDEX="1")
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    assert proc.stderr is not None  # stderr=PIPE always yields a stream
+    lines = []
+    reached = False
+    try:
+        for line in proc.stderr:
+            lines.append(line)
+            if marker in line:
+                reached = True
+                break
+    finally:
+        proc.stderr.close()
+        # `communicate()` below must not try to read the pipe we just closed.
+        proc.stderr = None
+        with open(release, "w") as f:
+            f.write("go")
+    try:
+        stdout, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, _ = proc.communicate()
+    return reached, proc.returncode, stdout, lines
+
+
 def new_scratch(prefix):
     return tempfile.mkdtemp(prefix=prefix)
 
