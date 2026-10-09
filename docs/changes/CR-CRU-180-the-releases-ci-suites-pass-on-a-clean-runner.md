@@ -48,11 +48,11 @@ A `release.yml` workflow dispatch (rehearsal-only, no publish) on the fixed head
 
 ## Acceptance criteria
 
-- [ ] Each of the four failures has a stated cause and a fix at that cause; no test is skipped, deleted,
+- [x] Each of the four failures has a stated cause and a fix at that cause; no test is skipped, deleted,
       retried or has an assertion weakened — asserted by VERIFY reading the diffs.
-- [ ] The python client suite passes with no `crucible.toml` at the repo root (as on a clean runner) —
+- [x] The python client suite passes with no `crucible.toml` at the repo root (as on a clean runner) —
       asserted locally by running it with that file moved aside, through the client.
-- [ ] A `release.yml` dispatch on the fixed head is green end to end (all jobs succeed, webkit included)
+- [x] A `release.yml` dispatch on the fixed head is green end to end (all jobs succeed, webkit included)
       — the run id is recorded in VERIFY's report.
 
 ## How it is worked
