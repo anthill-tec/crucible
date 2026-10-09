@@ -48,6 +48,7 @@ import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
 import type { LensRunLike } from "../public/app-logic.mjs";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -134,7 +135,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
-    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+    if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
+      // CR-CRU-173 \u00a7S1 re-pin (approved in advance) \u2014 see
+      // tests/helpers/history-stub.ts. KNOWN GAP: the "inferred fallback (no
+      // plan)" describe block below carries no plan at all, so this stub
+      // (and no correct GREEN /history implementation this RED agent can
+      // find) can give it a release to nest under \u2014 left unmodified,
+      // documented there.
+      body = singleReleaseHistoryStub(opts.plans);
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
@@ -573,6 +582,19 @@ describe("§S3 history lens — wave boundary states", () => {
 
 // ── INFERRED FALLBACK — no plan: Wave/CR/Cycle from context + agent stem ──
 
+// CR-CRU-173 §S1 (NOT re-pinned, flagged instead — see tests/helpers/
+// history-stub.ts's "KNOWN GAP" note): this whole describe block mounts a
+// fixture with NO plan, NO queue entry and NO release record at all — the
+// "inferred" wave/CR tree `workflowLens` builds purely from events'
+// `context.wave`. GET …/history (src/v2.ts `projectHistory`, cycle 636)
+// only ever rows a release that HAS a release/proposal record, so once
+// GREEN nests History under it, this fixture's waves belong to no release
+// row at all and the assertions below will fail — not for CR-CRU-173's new
+// reason (a defect its page introduces) but because its own premise ("no
+// plan, no queue, no release" yet still expecting a place in History) is
+// incompatible with a release-first read. Left UNTOUCHED rather than
+// guessed at; reported to the orchestrator for GREEN/VERIFY to retarget or
+// retire.
 describe("§S3 history lens — inferred fallback (no plan)", () => {
   test("without any plan, a fixture with 2 waves × 2 CRs × 2 cycles (context.wave + agent stems + context.cycle labels) renders the inferred tree; runs lacking linkage land in an ungrouped tail with its count asserted", async () => {
     const key = "lens-fallback-1";
