@@ -116,6 +116,10 @@
     // The Runs tab's filtered feed: `{projectKey, release, events}` as the
     // by-release read answered it, or null while unfiltered or unread.
     const releaseRuns = van.state(null);
+    // The Workflow tab's History, told by release: `{projectKey, releases}` as
+    // the history read answered it, or null while unread. Replaced only when
+    // its JSON changed, so a frame changing nothing redraws nothing.
+    const historyReleases = van.state(null);
     const setIfChanged = (holder, value) => {
       if (JSON.stringify(holder.val) !== JSON.stringify(value)) holder.val = value;
     };
@@ -295,6 +299,7 @@
       velocityData.val = null;
       releaseAnalytics.val = null;
       releaseRuns.val = null;
+      historyReleases.val = null;
       // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
       // deterministic and collide across projects, so a leftover open drill
       // path would render a row pre-unfolded on the newly-navigated project.
@@ -436,7 +441,11 @@
         if (slices.has("events") && !scopeMoved()) {
           if (state.runsRelease !== null) await refetchReleaseRuns();
           await refetchPlans();
+          // History re-reads on the frames that refresh its plans while the
+          // tab is open; the tab's opening reads it (below), the landing too.
+          const onWorkflow = state.workspaceTab === "Workflow";
           if (!scopeMoved()) settleLanding(projectKey);
+          if (!scopeMoved() && onWorkflow) await refetchHistory();
           if (!scopeMoved()) await refetchRoadmap();
         }
       } finally {
@@ -537,6 +546,31 @@
       if (state.route.projectKey !== projectKey || state.runsRelease !== release) return;
       setIfChanged(releaseRuns, { projectKey, release, events: Array.isArray(body.events) ? body.events : [] });
     }
+
+    // The Workflow tab's History: the project's releases, each with its
+    // release workflow and the ids of its waves' CRs, read while the tab is
+    // open on the same frames that refresh its plans. A failed read keeps the
+    // last answer for the SAME project.
+    async function refetchHistory() {
+      const projectKey = state.route.projectKey;
+      if (state.route.page !== "workspace") return;
+      let body;
+      try {
+        body = await getJson(`/api/v2/projects/${encodeURIComponent(projectKey)}/history`);
+      } catch {
+        return;
+      }
+      if (state.route.projectKey !== projectKey) return;
+      setIfChanged(historyReleases, {
+        projectKey,
+        releases: Array.isArray(body.releases) ? body.releases : [],
+      });
+    }
+    // Whichever way the Workflow tab opens — its tab, the landing, a jump
+    // from another tab — History is read as it opens.
+    van.derive(() => {
+      if (state.route.page === "workspace" && state.workspaceTab === "Workflow") void refetchHistory();
+    });
 
     // CR-CRU-011 §S3 — the Workflow tab's plan slice (the C1 project-scoped
     // route). Fetched on every refetch tick while a workspace is open, so the
@@ -6681,9 +6715,11 @@
               ]
             : null,
           span({ class: "app-cr-name" }, node.cr),
-          node.rollup.total > 0 && node.rollup.done === node.rollup.total
-            ? ` · ${node.rollup.total} cycles ✓`
-            : ` · ${node.rollup.done}/${node.rollup.total} cycles`,
+          node.source === "unplanned"
+            ? " · no plan filed"
+            : node.rollup.total > 0 && node.rollup.done === node.rollup.total
+              ? ` · ${node.rollup.total} cycles ✓`
+              : ` · ${node.rollup.done}/${node.rollup.total} cycles`,
           node.merge !== undefined
             ? [
                 " · ",
@@ -6783,20 +6819,261 @@
     // Workflow view renders plan/cycle structure ONLY: no ungrouped run
     // listing of any form. Unlinked runs remain fully visible on the Runs
     // timeline (the never-hidden rule lives there).
+    // History told by release: the release rows the history read answered,
+    // latest first, each opening to its release workflow (on top: it came
+    // last) and then to the waves that led up to it, each wave holding only
+    // that release's CRs and opening to their cycles as the lens draws them.
     const WorkflowHistory = () => {
       const events = state.events.filter((e) => e.projectKey === state.route.projectKey);
+      const plans = scopedPlans();
       const lens = L.workflowLens({
-        plans: scopedPlans(), // CR-CRU-026 §S2 — same guard as Active
+        plans, // CR-CRU-026 §S2 — same guard as Active
         events,
       });
+      const held = historyReleases.val;
+      const releases = held !== null && held.projectKey === state.route.projectKey ? held.releases : null;
       return div(
         // The pane's `History` title sits ABOVE this box, outside it
-        // (WorkflowPaneTitle); each wave's header line names its wave.
+        // (WorkflowPaneTitle); each release row names its release.
         { "data-testid": "workflow-history", class: "app-workflow-history" },
-        lens.waves.length === 0
-          ? div({ class: "app-empty" }, "no workflow history yet")
-          : lens.waves.map((wave) => WaveGroup(wave, events)),
+        releases === null
+          ? ""
+          : releases.length === 0
+            ? div({ class: "app-empty" }, "no workflow history yet")
+            : releases.map((release, i) => HistoryRelease(release, i === 0, lens, events, plans)),
       );
+    };
+
+    // The open release is the newest one: it starts expanded and every other
+    // release starts folded, until its row is tapped.
+    const HistoryRelease = (release, newest, lens, events, plans) => {
+      const label = release.labels[0] ?? "";
+      const key = lensKey("release", label);
+      const open = () => lensOpen(key) !== newest;
+      return div(
+        {
+          "data-testid": "history-release",
+          "data-release": label,
+          "data-open": () => String(open()),
+          class: "app-history-release",
+        },
+        div(
+          {
+            "data-testid": "history-release-toggle",
+            class: "app-history-release-line app-lens-toggle",
+            onclick: () => lensToggle(key),
+          },
+          span({ class: "app-toggle-glyph" }, () => (open() ? "▾" : "▸")),
+          " 🚀 ",
+          b({ class: "app-history-release-name" }, `release ${label}`),
+          span({ class: "app-card-meta" }, ` · ${historyReleaseSummary(release)}`),
+        ),
+        () =>
+          open()
+            ? div(
+                { class: "app-history-release-body" },
+                HistoryReleaseWorkflow(release),
+                historyWaveOrder(release.waves, lens)
+                  .map((wave) => historyWave(wave, lens, plans))
+                  .filter((wave) => wave.crs.length > 0 || wave.tracks !== null)
+                  .map((wave) => WaveGroup(wave, events)),
+              )
+            : "",
+      );
+    };
+
+    // A release row's one line: its state (and when it shipped), tag,
+    // commit, CR count, target and how far off, and the waves it holds.
+    const historyReleaseSummary = (release) => {
+      const parts = [release.state];
+      if (release.shippedAt !== undefined) {
+        const at = release.shippedAt * 1000;
+        parts[0] = `shipped ${shortDay(at)} ${L.clockTime(at, at)}`;
+      }
+      if (release.tag !== undefined) parts.push(`tag ${release.tag}`);
+      if (release.commit !== undefined) parts.push(release.commit.slice(0, 7));
+      parts.push(`${release.crCount} ${release.crCount === 1 ? "CR" : "CRs"}`);
+      const target = historyTarget(release);
+      if (target !== "") parts.push(target);
+      if (release.waves.length > 0) {
+        const waves = release.waves.map((w) => w.wave).filter((w) => w !== "");
+        if (waves.length > 0) parts.push(`${waves.length === 1 ? "wave" : "waves"} ${waves.join(", ")}`);
+      }
+      const gated = (release.workflows ?? []).some((wf) => (wf.gateRuns ?? []).length > 0);
+      if (!gated && (release.state === "shipped" || release.state === "ship not recorded")) {
+        parts.push("no gate recorded");
+      }
+      return parts.join(" · ");
+    };
+
+    // The release's target and how far off: a shipped release by the days
+    // between its target and its ship, an unshipped one behind once past it.
+    const historyTarget = (release) => {
+      if (release.targetAt === undefined) return "";
+      const day = L.formatReleaseDate(release.targetAt).slice(5);
+      if (day === "") return "";
+      if (release.shippedAt !== undefined) {
+        const days = Math.round((release.shippedAt - release.targetAt) / 86400);
+        if (days === 0) return `target ${day}, on target`;
+        return `target ${day}, ${days > 0 ? "+" : "−"}${Math.abs(days)} ${Math.abs(days) === 1 ? "day" : "days"}`;
+      }
+      return release.targetAt < Date.now() / 1000 ? `target ${day} (behind)` : `target ${day}`;
+    };
+
+    // A release's workflow: its gate runs, its verification and what it
+    // shipped — or, for one not shipped with none of them yet, that it has
+    // not started.
+    const HistoryReleaseWorkflow = (release) => {
+      const workflows = release.workflows ?? [];
+      const started =
+        release.state === "shipped" ||
+        release.state === "ship not recorded" ||
+        workflows.some(
+          (wf) => (wf.gateRuns ?? []).length > 0 || (wf.verificationRuns ?? 0) > 0 || wf.packages !== undefined,
+        );
+      return div(
+        { "data-testid": "history-release-workflow", class: "app-history-workflow" },
+        started
+          ? [
+              div({ class: "app-card-meta" }, "release workflow"),
+              ...workflows.map((wf) =>
+                div(
+                  { class: "app-history-workflow-body" },
+                  (wf.gateRuns ?? []).map(HistoryGateRun),
+                  HistoryVerificationLine(wf),
+                  wf.packages !== undefined ? HistoryPackages(wf.packages) : null,
+                ),
+              ),
+            ]
+          : div(
+              { "data-testid": "history-workflow-not-started", class: "app-card-meta" },
+              "release workflow · not started — it runs after the last wave: gate · verification · ship",
+            ),
+      );
+    };
+
+    // One no-mistakes run of the release's gate: its outcome, the step that
+    // stopped it, its fix rounds and duration, and `→ gate` to its drill-in;
+    // its decisions line beneath (the same words the gate card uses).
+    const HistoryGateRun = (run) => {
+      const decisions = L.gateDecisionSummaryText(run.decisionSummary);
+      return div(
+        {
+          "data-testid": "history-gate-run",
+          "data-event-id": run.eventId,
+          "data-outcome": run.outcome,
+          class: "app-history-gate-run",
+        },
+        div(
+          { class: "app-history-gate-run-line" },
+          span({ "data-testid": "history-gate-run-outcome" }, `🛡 gate ${run.outcome}`),
+          run.stopStep !== undefined
+            ? [" · ", span({ "data-testid": "history-gate-run-stop-step" }, `stopped at ${run.stopStep}`)]
+            : null,
+          " · ",
+          span(
+            { "data-testid": "history-gate-run-fix-rounds", class: "app-card-meta" },
+            `${run.fixRounds} fix ${run.fixRounds === 1 ? "round" : "rounds"}`,
+          ),
+          " · ",
+          span({ "data-testid": "history-gate-run-duration", class: "app-card-meta" }, fmtDuration(run.durationMs)),
+          run.pushedCommit !== undefined
+            ? span({ class: "app-card-meta" }, ` · pushed ${run.pushedCommit.slice(0, 7)}`)
+            : null,
+          " ",
+          button(
+            {
+              "data-testid": "history-gate-run-link",
+              class: "app-chip app-history-gate-link",
+              onclick: (e) => {
+                e.stopPropagation();
+                openDrillin(run.eventId);
+              },
+            },
+            "→ gate",
+          ),
+        ),
+        decisions !== null
+          ? div(
+              {
+                "data-testid": "history-gate-run-decisions",
+                class: "app-card-meta app-decision-summary",
+                onclick: () => openDrillin(run.eventId),
+              },
+              decisions,
+            )
+          : null,
+      );
+    };
+
+    // The release's verification: the runs filed under it, opening the Runs
+    // tab filtered to it — or that none were filed.
+    const HistoryVerificationLine = (wf) => {
+      const count = wf.verificationRuns ?? 0;
+      if (count === 0) {
+        return div(
+          { "data-testid": "history-verification-line", class: "app-card-meta" },
+          "verified · no runs filed under the release",
+        );
+      }
+      return button(
+        {
+          "data-testid": "history-verification-line",
+          class: "app-chip app-history-verification",
+          title: `open the runs filed under ${wf.label}`,
+          onclick: () => navigate(workspacePath(""), `?release=${encodeURIComponent(wf.label)}`),
+        },
+        `verified · ${count} ${count === 1 ? "run" : "runs"} filed under the release ↗`,
+      );
+    };
+
+    // What the release shipped: the packages its record names.
+    const HistoryPackages = (packages) =>
+      div(
+        { "data-testid": "history-workflow-packages", class: "app-history-packages" },
+        "📦 shipped · ",
+        packages.length === 0
+          ? span({ class: "app-card-meta" }, "no packages recorded")
+          : packages.flatMap((pkg, i) => [
+              i > 0 ? " · " : null,
+              span({ "data-testid": "history-package", class: "app-flow-package" }, `${pkg.registry} · ${pkg.name} ${pkg.version}`),
+            ]),
+      );
+
+    // A release's waves latest first, in the order the lens draws waves; a
+    // wave the lens does not draw (no plan of it here) follows, in the order
+    // the history read gave it.
+    const historyWaveOrder = (waves, lens) => {
+      const at = new Map(lens.waves.map((w, i) => [w.wave, i]));
+      return waves
+        .map((wave, i) => ({ wave, rank: at.get(wave.wave) ?? lens.waves.length + i }))
+        .sort((a, b) => a.rank - b.rank)
+        .map((entry) => entry.wave);
+    };
+
+    // One of the release's waves as the lens draws it, holding only the CRs
+    // the release names; a CR no plan tracks still has its line, while a live
+    // CR stays in Now alone. A wave left with no CR line draws nothing.
+    const historyWave = (wire, lens, plans) => {
+      const ids = new Set(wire.crs);
+      const drawn = lens.waves.find((w) => w.wave === wire.wave);
+      const keep = (nodes) => nodes.filter((node) => ids.has(node.cr));
+      const tracks =
+        drawn?.tracks != null
+          ? drawn.tracks.map((t) => ({ ...t, crs: keep(t.crs) })).filter((t) => t.crs.length > 0)
+          : [];
+      const crs = drawn !== undefined ? keep(drawn.crs) : [];
+      const shown = new Set([...crs, ...tracks.flatMap((t) => t.crs)].map((node) => node.cr));
+      const untracked = wire.crs
+        .filter((cr) => !shown.has(cr) && !plans.some((plan) => plan.cr === cr))
+        .map((cr) => ({ cr, source: "unplanned", cycles: [], rollup: { done: 0, total: 0 }, agents: [] }));
+      return {
+        wave: wire.wave,
+        source: drawn?.source ?? "declared",
+        state: drawn?.state ?? null,
+        tracks: tracks.length > 0 ? tracks : null,
+        crs: [...crs, ...untracked],
+      };
     };
 
     // CR-CRU-021 §S6 #10 — NO `Workflow — <project>` rail-title above the

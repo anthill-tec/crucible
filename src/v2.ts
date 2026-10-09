@@ -38,7 +38,7 @@ import {
   waveOverflowMessage,
   waveSeqBase,
 } from "./store.ts";
-import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
+import { AGENT_ROLES, IDENTITY_SOURCES, isDeadCr } from "./types.ts";
 import type {
   LiveAgent,
   MilestoneDateFilter,
@@ -2528,7 +2528,7 @@ interface HistoryWorkflow {
 /** One history row: one release, its single label and its single workflow. */
 interface HistoryRelease {
   labels: string[];
-  state: "shipped" | "in progress" | "ship not recorded";
+  state: "shipped" | "in progress" | "ship not recorded" | "planned";
   shippedAt?: number;
   tag?: string;
   commit?: string;
@@ -2541,7 +2541,8 @@ interface HistoryRelease {
 /** A release record as the history read holds it while composing the rows. */
 interface HistoryLabel {
   label: string;
-  record: RunEvent;
+  /** Absent for a release only the queue names. */
+  record?: RunEvent;
   /** Epoch SECONDS; present exactly when the release shipped. */
   shippedAt?: number;
   crs: string[];
@@ -2555,11 +2556,12 @@ interface HistoryLabel {
  * decisions of the runs found, and the run count per release — grouped here
  * in memory, never re-read per release.
  *
- * Which releases: every release record that has history — shipped, or holding
- * a merged CR, a plan or a gate. A shipped release's CRs are its record's
- * `crs`; an unshipped one's are the queue entries declaring it. One row per
- * release — releases shipped the same day are separate rows — newest
- * version first.
+ * Which releases: every release that holds work — shipped, or holding a CR
+ * or a gate, future ones included (a release with no work is not listed). A
+ * shipped release's CRs are its record's `crs`; an unshipped one's are the
+ * queue entries declaring it. Work no release names falls in the release that
+ * succeeds it on the timeline. One row per release — releases shipped the
+ * same day are separate rows — newest version first.
  */
 function handleProjectHistory(store: Store, key: string, req: Request, url: URL): Response {
   if (!UUID_RE.test(key)) {
@@ -2573,7 +2575,11 @@ function handleProjectHistory(store: Store, key: string, req: Request, url: URL)
 
 function projectHistory(store: Store, key: string): HistoryRelease[] {
   const queue = store.listQueue(key);
-  const waveOfCr = new Map(queue.map((entry) => [entry.cr, entry.wave]));
+  const plans = store.listPlans(key);
+  // A CR's wave: its queue entry's, else its plan's (a wave-less plan is the
+  // "" wave the page bands it under).
+  const waveOfCr = new Map<string, string>(plans.map((plan) => [plan.cr, plan.wave ?? ""]));
+  for (const entry of queue) waveOfCr.set(entry.cr, entry.wave);
   const queuedUnder = new Map<string, string[]>();
   for (const entry of queue) {
     if (entry.release === undefined) continue;
@@ -2596,32 +2602,75 @@ function projectHistory(store: Store, key: string): HistoryRelease[] {
       crs: [...new Set(crs ?? [])],
     });
   }
+  // A release only the queue names holds that work all the same.
+  for (const [label, crs] of queuedUnder) {
+    if (!labels.has(label)) labels.set(label, { label, crs: [...new Set(crs)] });
+  }
 
-  const plans = store.listPlans(key);
   const planned = new Set(plans.map((plan) => plan.cr));
   const merged = new Set(
     plans.filter((plan) => plan.status === "closed" && plan.merge !== undefined).map((plan) => plan.cr),
   );
+
+  // A queued CR declared VOID or SUPERSEDED that no plan ever took up is no
+  // work of its own: it is not placed.
+  const queuedWork = queue.filter((entry) => !isDeadCr(entry) || planned.has(entry.cr));
+  placeUnnamedCrs(labels, [...new Set([...queuedWork.map((entry) => entry.cr), ...planned])], plans);
 
   const gateRuns = historyGateRuns(store, key, labels, waveOfCr);
   const verification = store.countRunsByRelease(key);
 
   const held = [...labels.values()].filter(
     (entry) =>
-      entry.shippedAt !== undefined ||
-      entry.crs.some((cr) => merged.has(cr) || planned.has(cr)) ||
-      (gateRuns.get(entry.label)?.length ?? 0) > 0,
+      entry.shippedAt !== undefined || entry.crs.length > 0 || (gateRuns.get(entry.label)?.length ?? 0) > 0,
   );
 
   return held
     .sort((a, b) => compareVersionLabels(b.label, a.label))
-    .map((entry) => historyRow(entry, waveOfCr, merged, gateRuns, verification));
+    .map((entry) => historyRow(entry, waveOfCr, planned, merged, gateRuns, verification));
+}
+
+/**
+ * Every CR no release holds falls in the release that succeeds it on the
+ * timeline — by its plan's close time, else the first time its work ran (a
+ * cycle activated) — and a CR whose work has no time yet in the lowest
+ * unshipped release.
+ */
+function placeUnnamedCrs(labels: Map<string, HistoryLabel>, crs: string[], plans: Plan[]): void {
+  const held = new Set([...labels.values()].flatMap((entry) => entry.crs));
+  const timeline = [...labels.values()].sort(compareShipOrder);
+  for (const cr of crs) {
+    if (held.has(cr)) continue;
+    const own = plans.filter((plan) => plan.cr === cr);
+    const closedAt = own
+      .filter((plan) => plan.status === "closed" && plan.closedAt !== undefined)
+      .map((plan) => plan.closedAt!);
+    const activatedAt = own.flatMap((plan) =>
+      plan.cycles.map((cycle) => cycle.activatedAt).filter((at): at is number => at !== undefined),
+    );
+    const at = closedAt.length > 0 ? Math.max(...closedAt) : activatedAt.length > 0 ? Math.min(...activatedAt) : undefined;
+    const entry = timelineRelease(timeline, at);
+    if (entry !== undefined) entry.crs.push(cr);
+  }
+}
+
+/**
+ * The release that succeeds a moment (epoch MILLISECONDS) on the timeline:
+ * the first that shipped at or after it, else the lowest unshipped one. A
+ * moment not known yet falls in the lowest unshipped release. `timeline` is in
+ * ship order (`compareShipOrder`).
+ */
+function timelineRelease(timeline: HistoryLabel[], at: number | undefined): HistoryLabel | undefined {
+  return timeline.find(
+    (entry) => entry.shippedAt === undefined || (at !== undefined && entry.shippedAt * 1000 >= at),
+  );
 }
 
 /** One release's row of the history. */
 function historyRow(
   entry: HistoryLabel,
   waveOfCr: Map<string, string>,
+  planned: Set<string>,
   merged: Set<string>,
   gateRuns: Map<string, HistoryGateRun[]>,
   verification: Map<string, number>,
@@ -2634,17 +2683,22 @@ function historyRow(
     waves.set(wave, [...(waves.get(wave) ?? []), cr]);
   }
   const shipped = entry.shippedAt !== undefined;
+  const runs = gateRuns.get(entry.label) ?? [];
+  const started = runs.length > 0 || crs.some((cr) => planned.has(cr) || merged.has(cr));
   const state: HistoryRelease["state"] = shipped
     ? "shipped"
-    : crs.length > 0 && crs.every((cr) => merged.has(cr))
-      ? "ship not recorded"
-      : "in progress";
+    : !started
+      ? "planned"
+      : crs.length > 0 && crs.every((cr) => merged.has(cr))
+        ? "ship not recorded"
+        : "in progress";
+  const record = entry.record;
   return {
     labels: [entry.label],
     state,
     ...(shipped ? { shippedAt: entry.shippedAt, tag: `v${entry.label}` } : {}),
-    ...(shipped && entry.record.commit !== undefined ? { commit: entry.record.commit } : {}),
-    ...(entry.record.targetAt !== undefined ? { targetAt: entry.record.targetAt } : {}),
+    ...(shipped && record?.commit !== undefined ? { commit: record.commit } : {}),
+    ...(record?.targetAt !== undefined ? { targetAt: record.targetAt } : {}),
     crCount: crs.length,
     waves: [...waves.entries()]
       .sort(([a], [b]) => compareVersionLabels(b, a))
@@ -2652,9 +2706,9 @@ function historyRow(
     workflows: [
       {
         label: entry.label,
-        gateRuns: gateRuns.get(entry.label) ?? [],
+        gateRuns: runs,
         verificationRuns: verification.get(entry.label) ?? 0,
-        ...(entry.record.packages !== undefined ? { packages: entry.record.packages } : {}),
+        ...(record?.packages !== undefined ? { packages: record.packages } : {}),
       },
     ],
   };
@@ -2743,9 +2797,9 @@ function historyGateRuns(
  * The release a gate run belongs to: the newest version its snapshots name;
  * else, by the wave its snapshots name, the first of that wave's releases
  * still to ship when the run sealed (shipped ones in ship order, then the
- * unshipped in version order), falling back to the last of them; else, naming
- * neither, the first release that shipped at or after the run sealed, or the
- * lowest unshipped release.
+ * unshipped in version order), falling back to the last of them; else,
+ * gating a wave no release holds or naming neither, the first release that
+ * shipped at or after the run sealed, or the lowest unshipped release.
  */
 function gateRunRelease(
   group: RunEvent[],
@@ -2755,15 +2809,15 @@ function gateRunRelease(
 ): string | undefined {
   const newestFirst = [...group].reverse();
   const version = newestFirst.find((snapshot) => snapshot.version !== undefined)?.version;
-  if (version !== undefined) return labels.has(version) ? version : undefined;
+  if (version !== undefined && labels.has(version)) return version;
   const wave = newestFirst.find((snapshot) => snapshot.context?.wave !== undefined)?.context?.wave;
-  const stillToShip = (entry: HistoryLabel): boolean =>
-    entry.shippedAt === undefined || entry.shippedAt * 1000 >= seal.timestamp;
-  if (wave === undefined) {
-    return [...labels.values()].sort(compareShipOrder).find(stillToShip)?.label;
+  const candidates = wave !== undefined ? (releaseOfWave.get(wave) ?? []) : [];
+  if (candidates.length > 0) {
+    const stillToShip = (entry: HistoryLabel): boolean =>
+      entry.shippedAt === undefined || entry.shippedAt * 1000 >= seal.timestamp;
+    return (candidates.find(stillToShip) ?? candidates[candidates.length - 1])!.label;
   }
-  const candidates = releaseOfWave.get(wave) ?? [];
-  return (candidates.find(stillToShip) ?? candidates[candidates.length - 1])?.label;
+  return timelineRelease([...labels.values()].sort(compareShipOrder), seal.timestamp)?.label;
 }
 
 /** Shipped releases in ship order, then the unshipped ones by version. */

@@ -2497,3 +2497,22 @@ body {
 .app-cycle-row:has(> .app-cycle-line > .app-cycle-toggle) > .app-cycle-change-record {
   margin-left: calc(13px + 8px + 13px * 1.2 + 8px);
 }
+
+/* History told by release (F22): a release row is one line until opened;
+   opened, its release workflow sits on top, indented one step, and its
+   waves beneath it, indented the same step. */
+.app-history-release { margin-top: 5px; }
+.app-history-release-line { color: var(--ink); }
+.app-history-release[data-open="true"] > .app-history-release-line { color: var(--ember); }
+.app-history-release-body { padding-left: 14px; }
+.app-history-workflow { margin: 2px 0 6px; }
+.app-history-workflow-body { padding-left: 14px; }
+.app-history-gate-run-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  align-items: baseline;
+}
+.app-history-gate-link { margin-left: auto; font-size: 0.85em; }
+.app-history-verification { margin: 2px 0; }
+.app-history-packages { color: var(--ink-faint); }
