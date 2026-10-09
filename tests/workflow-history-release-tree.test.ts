@@ -388,6 +388,10 @@ describe("CR-CRU-173 §S1/AC1 — History's release tree: order, folding and exp
     folded = releaseRow("0.4.0");
     expect(folded.getAttribute("data-open")).toBe("true");
     expect(folded.querySelector('[data-testid="wave-group"][data-wave="8"]')).not.toBeNull();
+    // A release opened by its row folds its waves (F22, user ruling
+    // 2026-10-09): open wave 8 before reading its CR group.
+    folded.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="8"] [data-testid="wave-header"]')!.click();
+    await settle();
     expect(folded.querySelector('[data-testid="cr-group"][data-cr="HIST-RT-800"]')).not.toBeNull();
 
     await clickToggle(folded);
@@ -773,6 +777,10 @@ describe("CR-CRU-173 §S2 (page consumer) — a wave split across two releases",
     const older = releaseRow("0.2.2");
     const olderWave = older.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="7"]');
     expect(olderWave).not.toBeNull();
+    // A release opened by its row folds its waves (F22, user ruling
+    // 2026-10-09): open this copy of wave 7 before reading it.
+    olderWave!.querySelector<HTMLElement>('[data-testid="wave-header"]')!.click();
+    await settle();
     expect(Array.from(olderWave!.querySelectorAll<HTMLElement>('[data-testid="cr-group"]')).map((g) => g.getAttribute("data-cr"))).toEqual(
       ["HIST-RT-SPLIT-B1"],
     );

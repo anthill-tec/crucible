@@ -71,6 +71,9 @@ Step(
     const row = releaseRow(page, label);
     const group = waveGroupIn(row, wave);
     await expect(group).toBeVisible();
+    // History folds every wave but the open release's open one (F22, user
+    // ruling 2026-10-09): open the wave this step reads when it is folded.
+    if (!(await isOpen(group))) await group.getByTestId("wave-header").click();
     await expect(group.locator(`[data-testid="cr-group"][data-cr="${cr}"]`)).toBeVisible();
   },
 );

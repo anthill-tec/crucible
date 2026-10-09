@@ -390,6 +390,10 @@ describe("CR-CRU-166 §S1 AC2 — the History row carries no summary line when t
     expect(summaryLineOf(neverGated)).toBeNull();
     expect(neverGated.querySelector('[data-testid="gate-decision-summary"]')).toBeNull();
 
+    // Wave 7 is not the release's open (latest) wave, so History folds it to
+    // its header line (F22, user ruling 2026-10-09): open it before reading it.
+    waveHeaderOf(waveGroup("7")).click();
+    await settle();
     expect(textOf(summaryLineOf(waveGroup("7")))).toBe(
       "4 decisions · fixed 3 + 1 added · declined 16 · 1 approved with a reason",
     );

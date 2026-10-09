@@ -700,6 +700,10 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
     expect(waveIds).toEqual(["1", "2"]);
 
     const wave1 = Array.from(waveGroups).find((g) => g.getAttribute("data-wave") === "1")!;
+    // Wave 1 is not the release's open (latest) wave, so History folds it to
+    // its header line (F22, user ruling 2026-10-09): open it before reading it.
+    wave1.querySelector<HTMLElement>('[data-testid="wave-header"]')!.click();
+    await settle();
     const crGroups = wave1.querySelectorAll<HTMLElement>('[data-testid="cr-group"]');
     expect(crGroups.length).toBe(2);
     const crIds = Array.from(crGroups).map((g) => g.getAttribute("data-cr")).sort();
