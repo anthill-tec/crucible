@@ -204,7 +204,8 @@ class BuildQueueRowsCarriesTitleAndLifecycleTest(unittest.TestCase):
             f"untouched by the two new columns; got {row!r}")
         remaining = list(row.keys())[4:]
         self.assertEqual(
-            remaining, ["title", "lifecycle"],
+            remaining, ["title", "lifecycle", "release", "seq", "points",
+                        "dependsOn"],
             f"title and lifecycle must land AFTER the existing four keys, "
             f"in that order (title then lifecycle); got "
             f"{list(row.keys())!r}")
@@ -228,7 +229,8 @@ class BuildQueueRowsCarriesTitleAndLifecycleTest(unittest.TestCase):
         self.assertEqual(
             key_sets[0],
             frozenset({"cr", "wave", "status", "planId", "title",
-                      "lifecycle"}),
+                      "lifecycle", "release", "seq", "points",
+                      "dependsOn"}),
             f"the uniform key set must be exactly cr/wave/status/planId/"
             f"title/lifecycle; got {sorted(key_sets[0])!r}")
 
