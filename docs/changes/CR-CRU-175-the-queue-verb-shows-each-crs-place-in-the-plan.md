@@ -1,6 +1,6 @@
 # CR-CRU-175 — the queue verb shows each CR's place in the plan
 
-**Type** fix · **Points** 5 (provisional, 2026-10-09: 2, +§S3 and +§S4 by user rulings; set at gap analysis) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-173 ·
+**Type** fix · **Points** 8 (re-scored 5 → 8 at gap analysis 2026-10-09, user ruling) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-173, CR-CRU-177 ·
 **Status** PENDING — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-173)
 
 ## Problem
@@ -64,7 +64,8 @@ project's releases, their states, waves, gate runs or verification — only the 
 client gains a `history` verb over `GET /api/v2/projects/<key>/history`, following the fleet's AXI
 contract (CR-CRU-030/046): one TOON envelope on stdout, a uniform primitive table, a `count`, the
 stderr human line, `help[]`, `context`, `warnings[]`. Default columns: `release`, `state`,
-`shippedAt`, `tag`, `crs` (count), `target`; `--fields` ADDS `waves` (e.g. `8:3`, wave:count pairs
+`shippedAt`, `tag`, `crs` (completed count), `pending` (CR-CRU-177's `pendingCount`), `target`
+(user ruling at gap analysis 2026-10-09: the pending count every History row shows); `--fields` ADDS `waves` (e.g. `8:3`, wave:count pairs
 joined as the fleet's other verbs join a list cell), `gateRuns` (count), `lastGate` (outcome · stop
 step), `verified` (run count), `packages`; `--full` prints every column untruncated. `--release
 <label>` narrows to one release and lists its gate runs as the table (outcome, stopStep, fixRounds,
@@ -77,7 +78,7 @@ duration, pushedCommit, eventId, retired). A read verb: no `--agent` required.
       after them on every row, uniform, primitive, null when absent — asserted per client against a
       recording board, and by decoding the output with the official TOON decoder (CR-CRU-046's
       round-trip); the release ceremony and the existing suites still read the default table.
-- [ ] Rows come in `seq` order; with the place-in-plan columns asked for, a row placed before one of
+- [ ] Rows come in the board's published order (wave, release, seq — `listQueue`'s order, never re-sorted); with the place-in-plan columns asked for, a row placed before one of
       its dependencies names it in its `warning` cell and in one `warnings[]` entry — asserted on fixed
       fixtures, including the shape of the CR-CRU-171 sequencing incident (pending CRs sent above
       merged ones).
@@ -87,7 +88,34 @@ duration, pushedCommit, eventId, retired). A read verb: no `--agent` required.
       for stderr.
 - [ ] **The `history` verb (§S4).** In each of the five clients (bun, python, mvn, rust, arduino —
       the shared implementation called from each, the caller count asserted), `history` answers one
-      TOON envelope whose default table is exactly the six columns above, uniform and primitive, in
+      TOON envelope whose default table is exactly the seven columns above, uniform and primitive, in
       the read's order; `--fields` adds the listed columns; `--release <label>` lists that release's
       gate runs; an unknown project or release is a refusal with `help[]` — asserted against a
       recording board and by decoding with the official TOON decoder.
+
+## Gap analysis (2026-10-09)
+
+**Baseline:** develop `65fd2a1` = CR-CRU-178's gated tree (bun 3326/0, python 2341/0 at its gate; e2e
+1180/0 at its VERIFY).
+
+| # | Dim | Finding | Fix | Blocking |
+|---|---|---|---|---|
+| DRIFT-1 | 4 | The queue read (`GET …/queue`, `listQueue`) already publishes `seq`, `release`, `points` (from the declaration journal), `dependsOn` and `lifecycle` on every entry — §S1/§S2 are client-only | `build_queue_rows` widens; `queue` gains `--fields`/`--full` (no server change) | No |
+| DRIFT-2 | 2 | §S2 said "seq order"; the board's ONE order is `listQueue`'s published order (wave, release, seq — CR-CRU-095 AC18: never re-derived) | rows in published order, never re-sorted | No |
+| DRIFT-3 | 4 | "before its dependency" is computed only on the page (`lateDeps` in the roadmap table, app.js) | the client computes it from the same rule: a dependency that appears LATER in the published order; `warning` cell `before its dependency CR-…` + one `{code: "before-its-dependency", detail}` per row | No |
+| DRIFT-4 | 1 | §S1 left the `dependsOn` cell format open; no list-in-cell convention exists in the client tables | space-separated ids (`CR-CRU-172 CR-CRU-164`), empty string when none — a primitive cell TOON need not quote | No |
+| DRIFT-5 | 3 | §S3's death point: `run_streamed` echoes every runner line to `sys.stderr`; a closed pipe raises `BrokenPipeError` there, the `except BaseException` kills the runner and re-raises, the run stays open; the final envelope write to `sys.stdout` raises it again | the echo stops on `BrokenPipeError` (the log and the capture keep going, the run completes and files); the envelope/legacy writes swallow a closed pipe; a client that still cannot continue closes its run through `abort_run` naming the closed pipe | No |
+| DRIFT-6 | 1 | §S4 predates CR-CRU-177's `pendingCount` and its withdrawn `planned` state | default columns gain `pending` (user ruling); no `planned` | No |
+| DRIFT-7 | 7 | Cost: 2 + 2 + 3 ≈ 7 | 5 → 8 (user ruling); 0.3.0's committed total +3 | — |
+
+**Consumed:** `build_queue_rows`, `cmd_queue`, `select_status_fields`-style projection, `truncate_field`
+(`--full`), `emit`, `run_streamed`, `abort_run`, `GET …/history` (CR-CRU-173/177). **Per-client:**
+each of the five clients registers its own `queue` parser (add `--fields`/`--full`) and needs a
+`history` parser calling the shared `cmd_history` — the caller count is the AC's.
+
+### Cycles
+
+1. the queue verb shows each CR's place in the plan (§S0–§S2, AC1–AC2)
+2. a client whose output pipe closes still closes its run (§S3, AC3)
+3. an agent reads a project's history through its client (§S4, AC4)
+4. verify
