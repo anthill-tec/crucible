@@ -11,8 +11,8 @@
 //   A shipped release's record `crs` wins over the queue's `release` field;
 //   an unshipped release takes its CRs from the queue's `release`; a CR two
 //   releases both name appears under BOTH, honestly.
-//   Releases shipped the SAME CALENDAR DAY share one row, each keeping its
-//   own workflow.
+//   One row per release (user ruling 2026-10-08): releases shipped the same
+//   day are separate rows, each with its own CRs and waves.
 //   A release's waves are latest-first, each carrying only that release's
 //   own CR ids; a wave split across releases appears under each.
 //   Gate runs: grouped by `runId` when snapshots carry one, otherwise
@@ -21,7 +21,9 @@
 //   passed/skipped, fix rounds the times a step entered `fixing`, duration
 //   first snapshot -> seal. RETIRED gates ARE returned here — the one read
 //   that returns them. A gate naming no release belongs to the release of
-//   the wave it gated (its snapshots' `context.wave`).
+//   the wave it gated (its snapshots' `context.wave`); one naming neither
+//   belongs to the first release that shipped at or after it, else the
+//   lowest unshipped release (user ruling 2026-10-08).
 //   Verification is the count of runs filed under the release (CR-CRU-164).
 //
 // ── Decisions this file makes, binding for GREEN (the spec leaves the wire
@@ -34,16 +36,16 @@
 //   reading src/v2.ts directly).
 //
 //   HistoryRelease = {
-//     labels: string[]            // newest-first; >1 only on a same-day merge
+//     labels: string[]            // always exactly one label (one row per release)
 //     state: "shipped" | "in progress" | "ship not recorded"
 //     shippedAt?: number          // epoch SECONDS, present iff shipped
-//     tag?: string                // "v<highest label>", present iff shipped
+//     tag?: string                // "v<label>", present iff shipped
 //     commit?: string             // present iff shipped
 //     targetAt?: number           // epoch SECONDS, present iff a target is declared
-//     crCount: number             // combined across every label in the row
+//     crCount: number             // the release's own CRs
 //     waves: { wave: string; crs: string[] }[]   // latest-first
-//     workflows: {                // one entry per underlying label — "each
-//       label: string;            // keeping its own workflow"
+//     workflows: {                // exactly one entry: the release's own workflow
+//       label: string;
 //       gateRuns: HistoryGateRun[];
 //       verificationRuns: number;
 //       packages?: PackageRef[];
@@ -631,9 +633,10 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
   });
 
-  // ── same-day shipping merges rows; different-day shipping never does ─────
+  // ── one row per release: same-day shipping never merges rows (user ruling
+  //    2026-10-08), nor does different-day shipping ─────────────────────────
 
-  describe("releases shipped the same calendar day share one row", () => {
+  describe("one row per release", () => {
     let handle: ServerHandle | undefined;
 
     afterEach(() => {
@@ -642,7 +645,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       setSystemTime();
     });
 
-    test("two releases shipped on the SAME UTC calendar day, at different times, share ONE row — newest label first, CR count combined, each keeping its OWN workflow (gate runs, verification)", async () => {
+    test("releases shipped the same day are separate rows, each with its own CRs and waves", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = seedProject(handle.store, "history-same-day-merge");
       const store = handle.store;
@@ -688,14 +691,21 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as HistoryResponse;
 
-      expect(body.releases.length).toBe(1);
-      const row = body.releases[0]!;
-      expect(row.labels).toEqual(["0.6.1", "0.6.0"]);
-      expect(row.crCount).toBe(3);
-      expect(row.state).toBe("shipped");
+      expect(body.releases.map((r) => r.labels)).toEqual([["0.6.1"], ["0.6.0"]]);
+      const row1 = releaseOf(body, "0.6.1");
+      const row0 = releaseOf(body, "0.6.0");
+      expect(row1.state).toBe("shipped");
+      expect(row0.state).toBe("shipped");
+      expect(row1.crCount).toBe(1);
+      expect(row0.crCount).toBe(2);
+      expect(row1.waves).toEqual([{ wave: "2", crs: ["HIST-611"] }]);
+      expect(row0.waves.map((w) => w.wave)).toEqual(["1"]);
+      expect(waveOf(row0, "1")?.crs.sort()).toEqual(["HIST-601", "HIST-602"]);
 
-      const wf0 = workflowOf(row, "0.6.0");
-      const wf1 = workflowOf(row, "0.6.1");
+      expect(row1.workflows.map((w) => w.label)).toEqual(["0.6.1"]);
+      expect(row0.workflows.map((w) => w.label)).toEqual(["0.6.0"]);
+      const wf0 = workflowOf(row0, "0.6.0");
+      const wf1 = workflowOf(row1, "0.6.1");
       expect(wf0.gateRuns.length).toBe(1);
       expect(wf0.gateRuns[0]!.outcome).toBe("failed");
       expect(wf1.gateRuns.length).toBe(1);
@@ -730,6 +740,76 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
 
       expect(body.releases.length).toBe(2);
       expect(body.releases.map((r) => r.labels)).toEqual([["0.6.3"], ["0.6.2"]]);
+    });
+  });
+
+  // ── a gate naming neither a release nor a wave (user ruling 2026-10-08) ──────
+
+  describe("a gate naming neither a release nor a wave", () => {
+    let handle: ServerHandle | undefined;
+
+    afterEach(() => {
+      handle?.stop();
+      handle = undefined;
+      setSystemTime();
+    });
+
+    test("belongs to the first release that shipped at or after it; one sealed after every ship belongs to the lowest unshipped release", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = seedProject(handle.store, "history-unnamed-gate");
+      const store = handle.store;
+      const agent = "fixture-orchestrator";
+      const day = Date.UTC(2026, 8, 9, 0, 0, 0);
+      const HOUR = 3_600_000;
+
+      seedQueue(store, key, [
+        { cr: "HIST-690", wave: "1" },
+        { cr: "HIST-700", wave: "2" },
+        { cr: "HIST-900", wave: "3", release: "0.9.0" },
+      ]);
+      proposeRelease(store, key, agent, "0.8.0", 1_830_000_000);
+      proposeRelease(store, key, agent, "0.9.0", 1_840_000_000);
+      fileCr(store, key, "HIST-900"); // an open plan: 0.9.0 has history of its own
+
+      shipReleaseAt(store, key, agent, day + 1 * HOUR, {
+        label: "0.6.9",
+        commit: "six9a",
+        crs: ["HIST-690"],
+      });
+      // version-less, wave-less, run-less, sealed — AFTER 0.6.9 shipped,
+      // BEFORE 0.7.0 did: it belongs to 0.7.0.
+      const beforeShip = postGateAt(store, key, agent, day + 2 * HOUR, {
+        intent: "release gate",
+        outcome: "passed",
+        steps: [{ name: "review", status: "passed" }],
+      });
+      shipReleaseAt(store, key, agent, day + 3 * HOUR, {
+        label: "0.7.0",
+        commit: "seven0a",
+        crs: ["HIST-700"],
+      });
+      // the same kind of gate AFTER every ship: the lowest unshipped release.
+      const afterShips = postGateAt(store, key, agent, day + 4 * HOUR, {
+        intent: "release gate",
+        outcome: "failed",
+        steps: [{ name: "test", status: "failed" }],
+      });
+
+      setSystemTime();
+      const res = await getHistory(handle, key);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HistoryResponse;
+
+      const r070 = workflowOf(releaseOf(body, "0.7.0"), "0.7.0").gateRuns;
+      expect(r070.map((r) => r.eventId)).toEqual([beforeShip]);
+      expect(r070[0]!.outcome).toBe("passed");
+      expect(workflowOf(releaseOf(body, "0.6.9"), "0.6.9").gateRuns).toEqual([]);
+
+      const r080 = workflowOf(releaseOf(body, "0.8.0"), "0.8.0").gateRuns;
+      expect(r080.map((r) => r.eventId)).toEqual([afterShips]);
+      expect(r080[0]!.outcome).toBe("failed");
+      expect(r080[0]!.stopStep).toBe("test");
+      expect(workflowOf(releaseOf(body, "0.9.0"), "0.9.0").gateRuns).toEqual([]);
     });
   });
 
