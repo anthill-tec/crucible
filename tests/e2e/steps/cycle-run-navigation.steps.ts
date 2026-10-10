@@ -71,20 +71,40 @@ async function measureEmptySpaceCursor(page: Page, cycleId: number): Promise<str
 // every inter-child gap, and the trailing edge are all candidates — at the
 // line's vertical centre. Viewport coordinates, as `elementFromPoint` and
 // `page.mouse`/`page.touchscreen` take them.
+// A gap that borders the line's nested `→ Runs` affordance is never a
+// candidate: WebKit (like Safari under a real finger) adjusts a tap's click to
+// a clickable node near the touch, so a tap a few px beside the badge clicks
+// the badge although `elementFromPoint` names the line (measured, CR-CRU-180:
+// touchstart/touchend on the line, click on the badge). Chromium's touch
+// dispatch never adjusts, so only the engine-neutral point is the empty space
+// away from it.
 async function findWidestGap(page: Page, cycleId: number): Promise<{ x: number; y: number }> {
   const line = cycleLine(page, cycleId);
   await expect(line).toBeVisible();
   return line.evaluate((el) => {
     const rect = el.getBoundingClientRect();
-    const children = Array.from(el.children) as HTMLElement[];
-    const rects = children.map((c) => c.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+    const badge = el.querySelector('[data-testid="cycle-to-runs"]');
+    const children = (Array.from(el.children) as HTMLElement[])
+      .map((c) => ({
+        r: c.getBoundingClientRect(),
+        nested: badge !== null && c.contains(badge),
+      }))
+      .sort((a, b) => a.r.left - b.r.left);
     const gaps: Array<{ start: number; end: number }> = [];
     let occupiedUpTo = rect.left;
-    for (const r of rects) {
-      if (r.left > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: r.left });
-      occupiedUpTo = Math.max(occupiedUpTo, r.right);
+    let leftIsNested = false;
+    for (const { r, nested } of children) {
+      if (r.left > occupiedUpTo && !leftIsNested && !nested) {
+        gaps.push({ start: occupiedUpTo, end: r.left });
+      }
+      if (r.right > occupiedUpTo) {
+        occupiedUpTo = r.right;
+        leftIsNested = nested;
+      }
     }
-    if (rect.right > occupiedUpTo) gaps.push({ start: occupiedUpTo, end: rect.right });
+    if (rect.right > occupiedUpTo && !leftIsNested) {
+      gaps.push({ start: occupiedUpTo, end: rect.right });
+    }
     const widest = gaps.reduce(
       (best, g) => (g.end - g.start > best.end - best.start ? g : best),
       { start: rect.left, end: rect.left },

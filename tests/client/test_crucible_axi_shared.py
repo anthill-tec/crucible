@@ -1848,6 +1848,17 @@ class CmdStatusOpenPlansOnlyContractTest(unittest.TestCase):
         self.axi = _load_axi_module()
         self.toon = _load_toon_module()
         self.tmpdir = tempfile.mkdtemp(prefix="crucible-axi-cmd-status-")
+        # Hermetic configuration (CR-CRU-180): `cmd_status` carries the limit
+        # disclosures of whatever `crucible.toml` the chain reads. Unbound,
+        # that chain ends at the CHECKOUT's own untracked file -- present on a
+        # developer's machine, absent on a clean runner, where the envelope
+        # gains a `limit-configuration` warning. Bind the project dir the verb
+        # is handed, as every client's boot path does, and give it the shipped
+        # declarations, so the project's own file is the one that decides.
+        shutil.copyfile(AXI_MODULE_PATH.parent / "crucible.toml",
+                        os.path.join(self.tmpdir, "crucible.toml"))
+        self.axi.bind_project_dir(self.tmpdir)
+        self.addCleanup(self.axi.bind_project_dir, None)
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)

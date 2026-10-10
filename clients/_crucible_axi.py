@@ -6520,36 +6520,71 @@ class RunAbandoned(Exception):
         self.signum = signum
 
 
+class AbandonTrap:
+    """The live state of one `abandon_trap`: its signal handler, and `held()`,
+    the span a trapped signal must not cut in half.
+
+    A step that creates something on the board and only
+    learns it did from the board's ANSWER (the run identity's opening
+    heartbeat) cannot be abandoned between the two: the board already holds
+    the row, the client has no record of it, and the closing bracket removes
+    nothing. A slow runner widens exactly that gap. Inside `held()` a signal
+    is noted, not raised; it is raised as `RunAbandoned` the moment the span
+    ends, once the step has recorded what it created. An untrapped run never
+    installs the handler, so `held()` is then inert."""
+
+    def __init__(self):
+        self._holding = 0
+        self._pending = None
+
+    def handle(self, signum, _frame):
+        if self._holding:
+            if self._pending is None:
+                self._pending = signum
+            return
+        raise RunAbandoned(signum)
+
+    @contextlib.contextmanager
+    def held(self):
+        self._holding += 1
+        try:
+            yield
+        finally:
+            self._holding -= 1
+            if not self._holding and self._pending is not None:
+                signum, self._pending = self._pending, None
+                raise RunAbandoned(signum)
+
+
 @contextlib.contextmanager
 def abandon_trap(run_id):
     """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run, turning
     the signal into a `RunAbandoned` the verb can report on. Outside a wrapped
     run (`run_id` None) this is inert and the default disposition stands \u2014
-    there is nothing open to disclose.
+    there is nothing open to disclose. Yields the `AbandonTrap`, whose
+    `held()` defers the signal across a step that must not be cut in half.
 
     The previous handlers are always restored, so the trap can never outlive
     the run it guards. A non-main thread cannot install handlers at all
     (`ValueError`); that is not a reason to fail a test run, so the wrap simply
     proceeds untrapped. The runner itself is reaped by `run_streamed`, which
     kills it before the exception propagates."""
+    trap = AbandonTrap()
     if run_id is None:
-        yield
+        yield trap
         return
-
-    def _handler(signum, _frame):
-        raise RunAbandoned(signum)
 
     previous = {}
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, _handler)
+            previous[sig] = signal.signal(sig, trap.handle)
     except ValueError:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-        yield
+        yield trap
         return
     try:
-        yield
+        yield trap
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
@@ -7036,13 +7071,19 @@ class DrivenRunIdentity:
     snapshot is posted. Every later snapshot of the drive posts under the same
     identity. `heartbeat(message)` touches it once opened; `close()` removes it
     when this drive created it (`close_gate_identity`) and is inert when none
-    was opened \u2014 a drive refused before any snapshot opens no identity."""
+    was opened \u2014 a drive refused before any snapshot opens no identity.
 
-    def __init__(self, verb, agent_id, project_dir, ops):
+    The opening runs inside the drive's `AbandonTrap.held()`
+    (`trap`): a SIGINT/SIGTERM landing after the board has created the
+    identity but before its answer is read would otherwise leave `close()`
+    nothing to remove. The signal is raised once the identity is recorded."""
+
+    def __init__(self, verb, agent_id, project_dir, ops, trap):
         self.verb = verb
         self.caller = agent_id
         self.project_dir = project_dir
         self.ops = ops
+        self.trap = trap
         self.name = None
         self._identity = None
         self._beat = None
@@ -7051,13 +7092,14 @@ class DrivenRunIdentity:
         if self.name is None and self.caller:
             name = gate_run_identity(self.caller, axi_run_id(decoded))
             if name is not None:
-                self._identity = open_gate_identity(
-                    self.project_dir, name, None,
-                    f"{self.verb}: {GATE_RUN_DRIVING_MESSAGE}", self.ops)
-                self._beat = narration_poster(
-                    self.ops.post, self.ops.project_key(self.project_dir),
-                    name, self._identity)
-                self.name = name
+                with self.trap.held():
+                    self._identity = open_gate_identity(
+                        self.project_dir, name, None,
+                        f"{self.verb}: {GATE_RUN_DRIVING_MESSAGE}", self.ops)
+                    self._beat = narration_poster(
+                        self.ops.post, self.ops.project_key(self.project_dir),
+                        name, self._identity)
+                    self.name = name
         return self.name or self.caller
 
     def heartbeat(self, message):
@@ -7352,9 +7394,9 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
     (refused before any snapshot) opens none. The caller's own id still names
     the envelope and any decision `on_final` records: a decision is the
     caller's, not the run's."""
-    run = DrivenRunIdentity(verb, agent_id, project_dir, ops)
     try:
-        with abandon_trap(agent_id):
+        with abandon_trap(agent_id) as trap:
+            run = DrivenRunIdentity(verb, agent_id, project_dir, ops, trap)
             try:
                 return _drive_axi_run(verb, run_argv, intent, project_dir,
                                       agent_id, run, ops, release=release,

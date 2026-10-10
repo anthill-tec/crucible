@@ -679,6 +679,67 @@ class AnInterruptedGateRunStillRemovesItsRunIdentityTest(unittest.TestCase):
             lambda: ["gate-run", "--intent", "interrupt the run identity",
                      "--agent", AGENT])
 
+    def test_every_clients_gate_run_removes_its_run_identity_when_interrupted_while_opening_it(self):
+        """CR-CRU-180 \u00a7S1 (diagnosis 3) \u2014 the window a slow runner widens:
+        the board has RECORDED the run identity's opening heartbeat (so the
+        identity exists on the board) but the client has not yet READ the
+        answer when the signal lands. The interrupt must not orphan the
+        identity the board already holds: the drive finishes opening it, then
+        abandons and removes it. The board withholds that one answer until the
+        signal has been sent, so the window is hit on every host."""
+        identity = _run_identity(AGENT, SIGNAL_RUN_ID)
+        argv_tail = ["gate-run", "--intent", "interrupt the opening",
+                     "--agent", AGENT]
+        for key, path in CLIENT_FILES.items():
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(client=key, signal=signal.Signals(signum).name):
+                    self.board.close()
+                    self.board = RecordingBoard()
+                    install_project(self.project, self.board.url, PROJECT_KEY,
+                                    PROJECT_NAME)
+                    self.board.hold_next_reply(HEARTBEAT_PATH)
+                    cmd = [sys.executable, str(CLIENTS / path.name)] + argv_tail + [
+                        "--project-dir", self.project]
+                    proc = subprocess.Popen(cmd, cwd=self.project, env=self._env(),
+                                            stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, text=True)
+                    try:
+                        self.assertTrue(
+                            _wait_for_any_post(self.board),
+                            f"{key}: the run never reached the board at all")
+                        first_path, first_body = self.board.posts()[0]
+                        self.assertEqual(
+                            (first_path, first_body.get("agentId")),
+                            (HEARTBEAT_PATH, identity),
+                            f"{key}: the first POST must be the run identity's "
+                            f"opening heartbeat; got {self.board.posts()!r}")
+                        proc.send_signal(signum)
+                        self.board.release_held()
+                        try:
+                            _out, err = proc.communicate(timeout=20)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            _out, err = proc.communicate(timeout=10)
+                    finally:
+                        if proc.poll() is None:
+                            proc.kill()
+                            proc.wait()
+                    removals = _removals_for(self.board.posts(), identity)
+                    self.assertEqual(
+                        len(removals), 1,
+                        f"{key}: a {signal.Signals(signum).name} landing while "
+                        f"the run identity's opening heartbeat was in flight "
+                        f"must still remove {identity!r}; got {len(removals)} "
+                        f"removal(s); exit={proc.returncode}; stderr={err!r}; "
+                        f"all posts={self.board.posts()!r}")
+                    self.assertIs(removals[0].get("silent"), True,
+                                  f"{key}: removal must be silent=True; "
+                                  f"got {removals[0]!r}")
+                    self.assertEqual(
+                        proc.returncode, 128 + signum,
+                        f"{key}: the interrupted drive exits on 128+signum; "
+                        f"got {proc.returncode}; stderr={err!r}")
+
 
 if __name__ == "__main__":
     unittest.main()
