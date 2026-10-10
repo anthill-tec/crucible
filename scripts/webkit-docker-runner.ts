@@ -128,6 +128,12 @@ export function dockerRunArgs(opts: { image: string; port: number; playwrightVer
     opts.image,
     "/bin/sh",
     "-c",
-    `npx -y playwright@${opts.playwrightVersion} run-server --port ${String(opts.port)} --host 0.0.0.0`,
+    // The pinned image ships no DejaVu, so its `monospace` falls back to a
+    // narrower face than GitHub's runner renders. Font-dependent layouts (a
+    // label that wraps under DejaVu Sans Mono and not under the fallback) then
+    // pass here and fail in CI; installing the runner's font first makes a
+    // local WebKit run lay out as CI does.
+    "apt-get update -qq && apt-get install -y -qq --no-install-recommends fonts-dejavu-core >/dev/null && " +
+      `npx -y playwright@${opts.playwrightVersion} run-server --port ${String(opts.port)} --host 0.0.0.0`,
   ];
 }

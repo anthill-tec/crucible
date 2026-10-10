@@ -108,7 +108,9 @@ async function main(): Promise<number> {
   const containerId = started.stdout.trim();
 
   try {
-    const ready = await waitForServer(port, 30_000);
+    // The container installs CI's font before run-server listens (see
+    // dockerRunArgs), so allow for the package download.
+    const ready = await waitForServer(port, 120_000);
     if (!ready) {
       const logs = spawnSync("docker", ["logs", CONTAINER_NAME], { encoding: "utf8" });
       fail(
