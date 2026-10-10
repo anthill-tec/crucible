@@ -171,6 +171,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-151](CR-CRU-151-a-run-says-which-stack-produced-it.md) | a run says which stack produced it, and the board keeps it | fix | PENDING | 112 | 8 (0.4.0) |
 | [CR-CRU-153](CR-CRU-153-the-arduino-stacks-compile-errors-are-decoded.md) | the arduino stack's compile errors are decoded | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | PENDING | 151 | 8 (0.4.0) |
+| [CR-CRU-181](CR-CRU-181-the-client-says-what-really-happened-to-a-gate-decision.md) | the client says what really happened to a gate decision and a release | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-182](CR-CRU-182-a-phone-tap-on-a-history-cycle-line-opens-its-runs.md) | a phone tap on a history cycle line opens its runs, not `→ Runs` | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-183](CR-CRU-183-finish-refuses-a-release-with-no-notes.md) | `finish` refuses a release with no notes, and its report skips voided CRs | fix | PENDING | — | 8 (0.4.0) |
 
 ## Deferred — post-0.2.0
 
