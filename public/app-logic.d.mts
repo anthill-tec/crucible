@@ -498,7 +498,6 @@ export interface LensCrNode<E extends LensRunLike> {
   specRef?: string;
   cycles: Array<LensCycleNode<E>>;
   rollup: { done: number; total: number };
-  agents: string[];
 }
 
 export interface LensWaveNode<E extends LensRunLike> {

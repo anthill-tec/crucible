@@ -7132,7 +7132,7 @@
       const shown = new Set([...crs, ...tracks.flatMap((t) => t.crs)].map((node) => node.cr));
       const untracked = wire.crs
         .filter((cr) => !shown.has(cr) && !plans.some((plan) => plan.cr === cr))
-        .map((cr) => ({ cr, source: "unplanned", cycles: [], rollup: { done: 0, total: 0 }, agents: [] }));
+        .map((cr) => ({ cr, source: "unplanned", cycles: [], rollup: { done: 0, total: 0 } }));
       return {
         wave: wire.wave,
         source: drawn?.source ?? "declared",

@@ -898,7 +898,6 @@ export function workflowLens({ plans, events }) {
     }
     return waves.get(label);
   };
-  const crAgents = (crRuns) => [...new Set(crRuns.map((r) => r.agentId))];
 
   // Declared: one CR node per plan.
   for (const plan of plans ?? []) {
@@ -936,7 +935,6 @@ export function workflowLens({ plans, events }) {
         done: cycles.filter((c) => c.status === "done").length,
         total: cycles.length,
       },
-      agents: crAgents(cycles.flatMap((c) => c.runs)),
     };
     const wave = waveNode(plan.wave ?? "");
     wave.source = "declared";
@@ -981,7 +979,6 @@ export function workflowLens({ plans, events }) {
         done: cycles.filter((c) => c.status === "done").length,
         total: cycles.length,
       },
-      agents: crAgents(cycles.flatMap((c) => c.runs)),
     });
   }
 
