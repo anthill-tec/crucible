@@ -14,7 +14,8 @@
     "bin/",
     "src/",
     "src/crucible.toml",
-    "public/"
+    "public/",
+    "CHANGELOG.md"
   ],
   "bin": {
     "crucible-server": "bin/crucible-server.mjs"

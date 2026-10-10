@@ -29,6 +29,7 @@ run anywhere else:
 scripts/release.sh checkpoint            # optional: re-run the rehearsal a push already ran
 scripts/release.sh set-version X.Y.Z     # housekeeping: align the committed package.json,
                                          # commit. NOT the version authority (see below)
+# write the release notes: CHANGELOG.md [Unreleased] -> [X.Y.Z] - YYYY-MM-DD, commit
 scripts/release.sh finish     X.Y.Z      # preflight guards -> git flow finish -> tag X.Y.Z
                                          # (bare, no `v`) -> push master + develop + tags
 ```
@@ -315,7 +316,24 @@ tag you are about to cut (and gets `finish`'s manifest preflight out of the way)
 **2. Rehearse** (see above) — push the branch; each push rehearses. `scripts/release.sh checkpoint`
 only re-runs a rehearsal.
 
-**3. Finish.**
+**3. Write the release notes.** They are a release task, not an afterthought. They live in
+`CHANGELOG.md` at the repo root, in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+form: one `## [X.Y.Z] - YYYY-MM-DD` section per release, grouped as `Added`, `Changed`,
+`Deprecated`, `Removed`, `Fixed` and `Security`, with an `Upgrading` note first whenever an
+operator has to act (a store migration, a retired setting). On the release branch, move what
+`## [Unreleased]` gathered under the new version's heading (or write the section from the
+release's CRs), add its compare link at the foot of the file, and commit. A push rehearses it
+like any other commit.
+
+The notes have one source and three readers:
+
+| Reader | How it gets the notes |
+|--------|-----------------------|
+| GitHub Release | `create-release` takes the tag's `CHANGELOG.md` section as the release body. A tag with no section still gets a release (it fires the publishes), with GitHub's generated notes and a warning. |
+| PyPI | `[project.urls]` `Changelog` (this file) and `Release Notes` (the GitHub Releases page), the well-known labels of PEP 753, shown in the project sidebar. |
+| npm | `CHANGELOG.md` is in `package.json`'s `files`, so it ships inside the tarball. npm 7 and later no longer include it on their own. |
+
+**4. Finish.**
 
 ```bash
 scripts/release.sh finish X.Y.Z
@@ -338,7 +356,7 @@ Only then does it run `git flow <release\|hotfix> finish -m "Release X.Y.Z" X.Y.
 Add `--dry-run` to any subcommand to see what it would do, or `--verbose` for the
 underlying commands.
 
-**4. Approve the release in CI.** The push to `master` drives:
+**5. Approve the release in CI.** The push to `master` drives:
 
 1. `create-release` — runs only on `github.event_name == 'push' && github.ref == 'refs/heads/master'`, and `needs:` `build` plus the three suite jobs (`test-bun`, `test-python`, `test-e2e`), the same list every publishing job carries, so a red suite skips it and nothing below fires. It looks for a `[0-9]+.[0-9]+.[0-9]+` tag at `HEAD` and creates the GitHub Release for it (idempotent — a re-run on an existing Release is a no-op). Using `RELEASE_PAT` here is what makes the next step happen at all.
 2. `release: published` fires, triggering the two publish jobs.

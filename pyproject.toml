@@ -21,6 +21,13 @@ classifiers = [
   "Operating System :: POSIX",
 ]
 
+[project.urls]
+Homepage = "https://github.com/anthill-tec/crucible"
+Source = "https://github.com/anthill-tec/crucible"
+Changelog = "https://github.com/anthill-tec/crucible/blob/master/CHANGELOG.md"
+"Release Notes" = "https://github.com/anthill-tec/crucible/releases"
+Issues = "https://github.com/anthill-tec/crucible/issues"
+
 [project.optional-dependencies]
 # The toolchain `python-crucible.py` DRIVES, declared in exactly one place
 # (CR-CRU-063 §S2/AC8 — never restated in release.yml, which consumes the

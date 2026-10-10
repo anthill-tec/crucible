@@ -302,7 +302,24 @@ jobs:
             echo "release exists for $TAG — nothing to do"
             exit 0
           fi
-          gh release create "$TAG" --generate-notes
+          # The release notes are the tag's own CHANGELOG.md section (Keep a
+          # Changelog: `## [X.Y.Z] - YYYY-MM-DD` up to the next `## [`), written
+          # on the release branch before `finish`. A tag with no section still
+          # gets a release (it is what fires the publishes), with GitHub's
+          # generated notes and a warning naming the missing section.
+          NOTES="$(mktemp)"
+          awk -v tag="$TAG" '
+            index($0, "## [" tag "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { next }
+            on { print }
+          ' CHANGELOG.md > "$NOTES" 2>/dev/null || true
+          if grep -q '[^[:space:]]' "$NOTES"; then
+            gh release create "$TAG" --title "$TAG" --notes-file "$NOTES"
+          else
+            echo "::warning::CHANGELOG.md has no [$TAG] section — the release carries GitHub's generated notes instead"
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
 
   publish-pypi:
     # CR-CRU-062 §S4 — the gate: build PLUS all three suites. Extends the
