@@ -26,7 +26,7 @@ Run from the `release/X.Y.Z` (or `hotfix/X.Y.Z`) branch — `scripts/release.sh`
 run anywhere else:
 
 ```bash
-scripts/release.sh checkpoint            # optional: TestPyPI rehearsal, repeat as needed
+scripts/release.sh checkpoint            # optional: re-run the rehearsal a push already ran
 scripts/release.sh set-version X.Y.Z     # housekeeping: align the committed package.json,
                                          # commit. NOT the version authority (see below)
 scripts/release.sh finish     X.Y.Z      # preflight guards -> git flow finish -> tag X.Y.Z
@@ -166,7 +166,7 @@ unavailable and the human gate is then "you decide when to cut the tag". Measure
 2026-08-13 on this repo while it was private: the setting did not exist. It was made
 public, which also unblocked `npm publish --provenance` (see below).
 
-> Note: a required reviewer on `testpypi` makes every rehearsal dispatch pause for a click.
+> Note: a required reviewer on `testpypi` makes every rehearsal (push or dispatch) pause for a click.
 > Leave it unprotected unless you want that.
 
 ### `RELEASE_PAT`
@@ -249,23 +249,28 @@ This bit the 0.1.0 cut (package.json had no `repository` field); hotfix 0.1.1 ad
 
 ## TestPyPI rehearsal loop
 
-Before cutting anything real, rehearse from the release branch:
+**Every push to a `release/**` or `hotfix/**` branch is the rehearsal.** `release.yml` runs
+on that push and, because the ref is a release candidate, it runs `publish-testpypi` and
+`dry-run-npm` (an `npm pack --dry-run` that shows the exact tarball file list) after the
+suites. Nobody has to dispatch anything: pushing the release branch (the gate's push step
+does it) rehearses it.
 
 ```bash
 scripts/release.sh checkpoint
 ```
 
-This runs `gh workflow run release.yml --ref <current branch>` — a `workflow_dispatch`,
-which is **rehearsal-only**: it triggers `publish-testpypi` and `dry-run-npm` (an
-`npm pack --dry-run` that shows the exact tarball file list) and nothing else.
-`create-release`, `publish-pypi` and `publish-npm` are all gated off for a dispatch, so a
-checkpoint can never publish to production. A rehearsal is still a publish, though, so
+`checkpoint` runs `gh workflow run release.yml --ref <current branch>` — a
+`workflow_dispatch` that **re-runs** the same rehearsal on the head the push already
+rehearsed. Use it only to repeat one (say, after a flaky runner); do not run it right after
+a push, or the same commit is rehearsed twice at once. A dispatch is **rehearsal-only**:
+`create-release`, `publish-pypi` and `publish-npm` are gated off for it, so a checkpoint
+can never publish to production. A rehearsal is still a publish, though, so
 `publish-testpypi` `needs:` `build` plus the three suite jobs (`test-bun`, `test-python`,
-`test-e2e`): on a red tree it is skipped and uploads nothing.
+`test-e2e`): on a red tree it is skipped and uploads nothing. A re-run of one commit
+uploads the same version, which `skip-existing` covers.
 
-Repeat it as often as you like. Each green checkpoint uploads a fresh dev build, so you see
-the real sdist/wheel, the real metadata, and the real install path before committing to a
-tag.
+Each green push uploads a fresh dev build, so you see the real sdist/wheel, the real
+metadata, and the real install path before committing to a tag.
 
 **Why an untagged branch is uploadable.** PyPI and TestPyPI both reject PEP 440 local
 versions (anything with a `+` segment), and hatch-vcs's default `local_scheme` produces
@@ -274,6 +279,15 @@ exactly that on an untagged commit (`0.1.0.dev3+g1a2b3c4`). `pyproject.toml` set
 `X.Y.Z.devN` instead — which is what makes a rehearsal possible with no release-candidate
 tag and no throwaway tags polluting the history. `publish-testpypi` still asserts the
 absence of a `+` segment before uploading, as a backstop.
+
+**Why the rehearsal is versioned as the release it rehearses.** `pyproject.toml` also sets
+`version_scheme = "release-branch-semver"`, so the `X.Y.Z` in `X.Y.Z.devN` follows the
+branch, not the last tag plus one patch. On `release/0.3.0` with `0.2.2` the last tag, the
+rehearsal uploads `0.3.0.devN` (the default scheme would say `0.2.3.devN`, a version that
+will never ship). A branch that does not match the last tag's minor version — a
+`release/X.Y.0` branch, or `develop` — bumps the minor; a `hotfix/X.Y.Z` branch on the
+`X.Y` line bumps the patch. The tag `finish` cuts is still the only release version: on the
+tagged commit the version is exactly `X.Y.Z`.
 
 ---
 
@@ -298,7 +312,8 @@ version comes from here — the Python version is hatch-vcs tag-derived, and the
 is set from the tag by `publish-npm`. This keeps the committed manifest consistent with the
 tag you are about to cut (and gets `finish`'s manifest preflight out of the way).
 
-**2. Rehearse** (see above) — `scripts/release.sh checkpoint` — until you are happy.
+**2. Rehearse** (see above) — push the branch; each push rehearses. `scripts/release.sh checkpoint`
+only re-runs a rehearsal.
 
 **3. Finish.**
 
