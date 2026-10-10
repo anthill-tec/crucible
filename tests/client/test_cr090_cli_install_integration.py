@@ -145,7 +145,7 @@ def _fast_provision_server_stage(target_dir, force):
     the resolved executable the install ran), and `cli.py` adds that field to
     the printed row CONDITIONALLY. A stub that omitted it left the four rows
     carrying identical keys, which is the only condition under which
-    `toon.py:289` `_extract_tabular_fields` emits the TABULAR form -- so this
+    `_extract_tabular_fields` (toon.py) emits the TABULAR form -- so this
     fixture printed an envelope shape a real install has never produced, and
     every assertion made against it was made against the stub rather than
     against what an operator sees. That is this CR's own defect one layer

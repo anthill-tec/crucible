@@ -12,11 +12,11 @@
 // capability is load-bearing for its AC rather than convenient:
 //   • a MUTABLE fixture the scripted fetch reads LIVE, so a real poll tick can
 //     replace `state.queue`/`state.plans`/`state.releases` the way the running
-//     app replaces them (AC31 — the house technique of
-//     tests/inpane-liveness.test.ts:387-399, which exists because happy-dom
-//     has no EventSource, so `startPolling()`'s `setInterval(refetch, 5000)`
-//     is the reachable half of the identical refetch path SSE's `onmessage`
-//     calls);
+//     app replaces them (AC31 — the house technique of the poll-tick test
+//     driven by `waitForPollTick` in tests/inpane-liveness.test.ts, which
+//     exists because happy-dom has no EventSource, so `startPolling()`'s
+//     `setInterval(refetch, 5000)` is the reachable half of the identical
+//     refetch path SSE's `onmessage` calls);
 //   • WORKSPACE TAB clicks, to leave the Roadmap pane and come back (AC32);
 //   • the strip's measured box model AND zones 2/3 in one mount, because
 //     selection crosses zones (AC17) and durability spans the strip and the
@@ -32,7 +32,7 @@
 //   • AC17 — FAILS. There is no selection state on the surface at all: neither
 //     `[data-testid="roadmap-row"]` nor `[data-testid="roadmap-node"]`
 //     publishes `data-selected`, and a click only ever runs `roadmapDrillIn`
-//     (public/app.js:2629). Selecting a row highlights nothing, in either
+//     (public/app.js). Selecting a row highlights nothing, in either
 //     direction.
 //   • AC18 — FAILS. No row or node is MARKED as the drill-through source:
 //     `data-drill-source` and `[data-testid="roadmap-drill-source"]` do not
@@ -51,12 +51,10 @@
 //     release ledger the strip above it also has nothing to draw from.
 //   • AC31, AC32 — REGRESSION LOCKS, expected to pass on arrival. C2 hoisted
 //     the page window and C3 the focused release out of the render tree
-//     (`roadmapStripOffsets`/`roadmapStripRev` at public/app.js:2924-2925,
-//     `roadmapFocusVersions`/`roadmapFocusRev` at :2936-2937 — *citation
-//     repaired 2026-08-29 by reading the target: this said :2811-2838, which
-//     the ~1200 lines this CR moved through public/app.js left pointing at
-//     zone 2's delivered-summary prose*) for exactly this reason, and §S8 was
-//     written to make that a stated contract rather than an implementation
+//     (`roadmapStripOffsets`/`roadmapStripRev` and
+//     `roadmapFocusVersions`/`roadmapFocusRev` in public/app.js) for exactly
+//     this reason, and §S8 was written to make that a stated contract rather
+//     than an implementation
 //     habit CR-CRU-079 AC5 would inherit by luck. Nothing here re-implements
 //     them; these tests are what makes a later mount-local regression fail
 //     loudly, and they are the ACs CR-CRU-079 will build on.
@@ -81,7 +79,7 @@ const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (`src/v2.ts`) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -90,7 +88,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (`src/v2.ts`) — what `GET …/release-proposals`
  *  publishes. `targetAt` is OPTIONAL and epoch SECONDS. */
 interface ProposalFixture {
   label: string;
@@ -99,7 +97,7 @@ interface ProposalFixture {
   waves: string[];
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes,
+/** `QueueEntry` (`src/types.ts`) — what `GET …/queue` publishes,
  *  `ORDER BY seq`. */
 interface QueueFixture {
   cr: string;
@@ -154,10 +152,10 @@ const PROPOSED_020: ProposalFixture = {
  *
  * CR-CRU-096 §S5/AC9 — a WAVE box rolls its merged members up and draws no row
  * for them, so CR-SEL-U declares no wave (`wave: ""`, the wire's own way of
- * declaring none, `src/types.ts:392`) and is drawn by the `wave: null` group,
- * which AC18a leaves untrimmed. AC17's subject is one selection rendered
- * twice, so what matters is that the entry HAS both renderings — not which
- * container draws the node.
+ * declaring none, the `wave` field of `QueueEntry` in `src/types.ts`) and is
+ * drawn by the `wave: null` group, which AC18a leaves untrimmed. AC17's
+ * subject is one selection rendered twice, so what matters is that the entry
+ * HAS both renderings — not which container draws the node.
  */
 const SELECT_QUEUE: QueueFixture[] = [
   { cr: "CR-SEL-P", title: "CR-SEL-P — planned, not started", wave: "5", dependsOn: [], status: "PENDING", seq: 10, release: "0.2.0" },
@@ -392,9 +390,10 @@ async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-/** public/app.js:373 — `startPolling()` is `setInterval(refetch, 5000)`, and
- *  happy-dom has no EventSource, so this is the reachable half of the very
- *  refetch path an SSE `onmessage` frame calls. */
+/** `startPolling` in public/app.js — `startPolling()` is
+ *  `setInterval(refetch, 5000)`, and happy-dom has no EventSource, so this is
+ *  the reachable half of the very refetch path an SSE `onmessage` frame
+ *  calls. */
 const POLL_INTERVAL_MS = 5000;
 const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
 const POLL_TEST_TIMEOUT_MS = 20_000;

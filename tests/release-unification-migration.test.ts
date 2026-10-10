@@ -328,8 +328,8 @@ function ageToPreUnification(db: Database, at: number): void {
 /**
  * A READ-ONLY replica of the live store, or the STATED reason there is none.
  *
- * The repo's idiom for a live subject (`liveBoardQueue`,
- * tests/queue-release-membership-mandatory.test.ts:278-308): the reason is
+ * The repo's idiom for a live subject (`liveBoardQueue` in
+ * tests/queue-release-membership-mandatory.test.ts): the reason is
  * returned, the case STATES it and returns, and what is lost is the proof's
  * REACH — a real population grown over months — never the proof, which the
  * synthetic population always runs.
@@ -467,16 +467,18 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
   // ── AC — the step exists, and it ENDS the chain ─────────────────────────
 
   test(
-    "exactly ONE migration step declares the release unification, and it is the END of the chain " +
-      "this build writes",
+    "exactly ONE migration step declares the release unification, at version 13, following its " +
+      "predecessor in the chain",
     () => {
       const step = unificationStep();
 
       // The chain's positions ARE the version numbers (CR-CRU-071 §S1), so a
       // step that does not end the chain means this build writes a version it
-      // does not produce. C1 ended the chain at 12; this one ends it at 13.
-      expect(step.to).toBe(SCHEMA_VERSION);
-      expect(step.from).toBe(SCHEMA_VERSION - 1);
+      // does not produce. C1 ended the chain at 12 and this step took it to
+      // 13; later steps may follow it, so the pin is its own rung, not the end.
+      expect(step.to).toBe(13);
+      expect(step.to).toBe(step.from + 1);
+      expect(migrationChain()[step.from]).toBe(step);
       expect(SCHEMA_VERSION).toBe(migrationChain().length);
       // …and it is a step BEYOND §S1's, never a rewrite of it: the two are
       // separate rungs, so a board already migrated by C1 is not re-migrated.

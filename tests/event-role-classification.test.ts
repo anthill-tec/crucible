@@ -14,8 +14,8 @@
 // unregistration.
 //
 // This file is §S2 at the CLIENT: the UI's classification entry point —
-// `eventRole(e)`, a local function in public/app.js (defined once at
-// app.js:694, called from all three EventCard render sites) via
+// `eventRole(e)`, a local function in public/app.js (defined once as
+// `eventRole` (public/app.js), called from all three EventCard render sites) via
 // `L.agentRole({ agentId, role })` — must read the EVENT's own stored
 // `role` for the historical/unregistered-agent case (no matching
 // `state.agents` record), never fall back to phaseRole(agentId) id-shape
@@ -23,7 +23,7 @@
 // assertion that proves that deletion is safe (an id-shape that WOULD
 // have parsed classifies null when nothing declares a role for it).
 //
-// RED phase: `eventRole` (public/app.js:694-698) currently derives `role`
+// RED phase: `eventRole` (public/app.js) currently derives `role`
 // SOLELY from `state.agents.find((a) => a.agentId === e.agentId)?.role` —
 // a LIVE agent-record lookup. It never reads `e.role` at all, and
 // `agentRole`'s absent-role branch still falls back to

@@ -17,7 +17,8 @@
 //   CR-PLAN     error : "release 0.9.0 has no live proposal — it is not a
 //                        plannable target"
 //
-// `requireLiveProposal` (src/v2.ts) is called by `handleCrPlan` and
+// `requireLiveProposal` (since absorbed into `declareMembership` in
+// src/v2.ts) is called by `handleCrPlan` and
 // `handleWaveSequence` and NEVER by `handleQueuePost`, so the same
 // orchestrator, on the same board, can store membership in a release nobody
 // proposed through one door and be refused through the other. CR-CRU-091 §S8's

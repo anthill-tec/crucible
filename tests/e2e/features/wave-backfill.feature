@@ -15,18 +15,27 @@ Feature: CR-CRU-031 §S4 — the wave backfill folds a wave-less plan into its c
   house style (Gherkin + playwright-bdd), mirroring
   tests/e2e/features/workflow-gates.feature's AC150 round trip.
 
-  This feature sorts alphabetically BEFORE workflow.feature/
-  workflow-gates.feature/workspace-*.feature ("wave-backfill" < "workflow"
-  since 'a' < 'o') but AFTER shell-storyboard.feature ("shell" < "wave"),
-  so its F1 empty-DB precondition already holds. The History lens scopes
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment). The History lens scopes
   plans to the CURRENT project (CR-CRU-026 §S1/§S2), so this scenario's own
   project is unaffected by any other feature's plans sharing the same
   server/db instance. Every project/cr name below is namespaced "WB " /
   "CR-WB-…" to stay clear of the other features. Results are ingested with
   tier "e2e" by the orchestrator's ingest step, not by this suite.
 
+  CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): neither
+  CR-WB-1 nor CR-WB-2 ever names a release (no queue entry, no release
+  record), so once GREEN nests History under a release row, this scenario
+  seeds one for its plans to fall into (the orphan-placement rule's lowest-
+  unshipped-release fallback) — what the scenario asserts about the wave
+  band is unchanged.
+
   Scenario: AC4 a wave-less plan and a wave-42 plan render as two separate History bands; backfilling the wave-less plan's wave via the §S1 PATCH endpoint folds it into the single wave-42 band
     Given a project named "WB Wave Backfill Project" is registered
+    And an orchestrator "WB Orchestrator" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan with no wave is filed for cr "CR-WB-1" with a cycle labelled "c1 red-green"
     And the wave-less plan's cycle 1 is activated
     And the wave-less plan's cycle 1 is marked done
@@ -36,8 +45,10 @@ Feature: CR-CRU-031 §S4 — the wave backfill folds a wave-less plan into its c
     And cycle 1 of that plan is marked done
     And the plan is closed with merge commit "wbaaa02"
     When I open the workspace for that project
+    And I click the "Workflow" workspace tab
     Then the history lens shows a phantom unnumbered wave band holding "CR-WB-1", separate from the wave "42" band holding "CR-WB-2"
     When the wave-less plan's wave is backfilled to "42" via the plans PATCH endpoint
     And I open the workspace for that project
+    And I click the "Workflow" workspace tab
     Then the history lens shows a single wave "42" band holding both "CR-WB-1" and "CR-WB-2"
     And the history lens shows no phantom unnumbered wave band

@@ -24,8 +24,8 @@ successor `test_cr046_official_toon_roundtrip.py` -- which deliberately did NOT
 skip a missing module: the raise itself is the RED signal). `bun-crucible.py`
 also does not
 yet reference `_crucible_axi` anywhere (confirmed by reading the source --
-`_emit_axi`/`_axi_context` are still standalone local functions at
-~L1099/~L1079), so the wiring tests below fail too, and will keep failing
+`_emit_axi`/`_axi_context` are still standalone local functions of
+bun-crucible.py), so the wiring tests below fail too, and will keep failing
 until bun-crucible.py's `_axi_context` is made to DELEGATE to (produce
 identical output to) the shared module's `axi_context`, and its `_emit_axi`
 similarly delegates to `emit_axi`.
@@ -798,11 +798,13 @@ class StatusContractDocTest(unittest.TestCase):
 #     no_report_help(verb, artifact, remedy=None)        -> list[str]
 #     no_report_warning(verb, artifact, exit_code, output) -> dict
 #
-# Shape follows `gate_step_abort_help` / `gate_step_abort_warning` (:722-740):
+# Shape follows `gate_step_abort_help` / `gate_step_abort_warning`:
 # PURE, no I/O, `help[]` ends with "status", warning is {code, detail}.
 #
-# These are also the FIRST assertions rust's `_no_junit_help` (:360) and mvn's
-# inline `no-test-reports` warning (`_emit_compile_fallback_axi` :894-909) have
+# These are also the FIRST assertions rust's `_no_junit_help` (in
+# rust-crucible.py until the C1 re-point onto `no_report_help`) and mvn's
+# inline `no-test-reports` warning (`_emit_compile_fallback_axi` in
+# mvn-crucible.py) have
 # ever had -- CR-CRU-064's Risk note measured both as currently UNGUARDED --
 # so both artifact flavours ("junit.xml", "surefire reports") are asserted
 # here: the C1 re-point must not silently change what those two clients emit.
@@ -1813,6 +1815,329 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
             if token.startswith("cycle") and "-" in token:
                 return token
         return stderr_text.strip()
+
+
+# ---------------------------------------------------------------------------
+# §S3/§S4/§S5 (the status open-plans change) — `cmd_status` reads ONLY the open plans, and takes
+# `lastClosedCr`/`filed` from the server's response verbatim.
+# ---------------------------------------------------------------------------
+
+
+class CmdStatusOpenPlansOnlyContractTest(unittest.TestCase):
+    """AC4/AC5/AC6 — `cmd_status` exercised DIRECTLY through a hand-built
+    `ClientOps` whose every transport but `get` is a tripwire (the same idiom
+    `PlanFileCr127RepeatableCycleKindTest._ops` above uses for
+    `cmd_plan_file`). `cmd_status` is a thin per-client delegator to this ONE
+    shared implementation (`test_cr054_verb_surface_lift.py` already pins
+    that), so this is where the §S3/§S4/§S5 contract is proved with full
+    control over the `GET …/plans` response shape.
+
+    RED (confirmed by reading `cmd_status` in clients/_crucible_axi.py):
+    today it GETs `ops.plans_path(project_dir)` UNFILTERED (no `status=open`
+    query at all), computes `lastClosedCr` itself via `last_closed_cr(plans)`
+    instead of reading the response's own `lastClosedCr`, never reads or
+    emits a `filed` key, and always emits the SAME `HELP_STEPS["status"]`
+    (`["cycle-activate <id>"]`) on an empty queue whatever the reason — so
+    every assertion below that depends on the NEW behaviour fails against the
+    current body. `count == len(rows)` and the non-empty `ok`/`plans` shape
+    already pass today (`select_status_fields` never drops a row) — noted as
+    characterization where it applies, not new RED.
+    """
+
+    def setUp(self):
+        self.axi = _load_axi_module()
+        self.toon = _load_toon_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="crucible-axi-cmd-status-")
+        # Hermetic configuration (CR-CRU-180): `cmd_status` carries the limit
+        # disclosures of whatever `crucible.toml` the chain reads. Unbound,
+        # that chain ends at the CHECKOUT's own untracked file -- present on a
+        # developer's machine, absent on a clean runner, where the envelope
+        # gains a `limit-configuration` warning. Bind the project dir the verb
+        # is handed, as every client's boot path does, and give it the shipped
+        # declarations, so the project's own file is the one that decides.
+        shutil.copyfile(AXI_MODULE_PATH.parent / "crucible.toml",
+                        os.path.join(self.tmpdir, "crucible.toml"))
+        self.axi.bind_project_dir(self.tmpdir)
+        self.addCleanup(self.axi.bind_project_dir, None)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _unreachable(*_args, **_kwargs):
+        raise AssertionError(
+            "cmd_status must not touch this client callable — it reads the "
+            "plans board ONLY, nothing else")
+
+    def _ops(self, get_fn, base_url="http://127.0.0.1:0"):
+        return self.axi.ClientOps(
+            get=get_fn, post=self._unreachable, patch=self._unreachable,
+            emit=self.axi.emit_axi,
+            context=lambda project_dir, **kw: dict({"projectKey": "pk"}, **kw),
+            agent_id=self.axi.require_agent_id,
+            project_key=lambda project_dir: "pk",
+            plans_path=lambda project_dir: "/api/v2/projects/pk/plans",
+            open_plans=self._unreachable, resolve_plan=self._unreachable,
+            post_gate=self._unreachable, post_milestone=self._unreachable,
+            base_url=base_url)
+
+    def _run(self, get_fn):
+        ops = self._ops(get_fn)
+        args = argparse.Namespace(fields=None)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = self.axi.cmd_status(args, self.tmpdir, ops)
+        return code, out.getvalue(), err.getvalue()
+
+    def _decode(self, stdout_text):
+        decoded = self.toon.decode(stdout_text)
+        self.assertIn("axi", decoded,
+                      f"stdout must decode to a TOON envelope with a "
+                      f"top-level 'axi' key; got {stdout_text!r}")
+        return decoded["axi"]
+
+    def test_ac4_issues_exactly_one_read_to_the_status_open_filtered_path(self):
+        """AC4 — 'cmd_status issues exactly one read, GET …/plans?status=open'."""
+        calls = []
+
+        def get_fn(path):
+            calls.append(path)
+            return {"ok": True, "plans": [], "lastClosedCr": None, "filed": 0}
+
+        code, out, _err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertEqual(
+            len(calls), 1,
+            f"cmd_status must issue EXACTLY one plans read; got {calls!r}")
+        self.assertEqual(
+            calls[0], "/api/v2/projects/pk/plans?status=open",
+            f"the one read must carry the status=open filter (§S3); "
+            f"got {calls[0]!r}")
+
+    def test_ac4_rows_count_last_closed_cr_and_filed_come_from_the_response_verbatim(self):
+        """AC4 — rows are the response's plans, in order; count is len(rows);
+        `lastClosedCr`/`filed` are PASSED THROUGH, never recomputed. The
+        plans carry NO `closedAt` at all (so the OLD client-side
+        `last_closed_cr` computation would answer None) while the response's
+        own `lastClosedCr` is a value only the server could have published —
+        proving the client takes the field from the response rather than
+        deriving it from the rows it just received."""
+        plans = [
+            {"planId": "plan-1", "cr": "CR-T-010", "wave": "2",
+             "status": "open", "cycles": []},
+            {"planId": "plan-2", "cr": "CR-T-011", "wave": "3",
+             "status": "open", "cycles": []},
+        ]
+
+        def get_fn(path):
+            return {"ok": True, "plans": plans,
+                    "lastClosedCr": "CR-T-PUBLISHED", "filed": 42}
+
+        code, out, _err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode(out)
+        rows = axi.get("plans")
+        self.assertEqual(
+            [r.get("cr") for r in rows], ["CR-T-010", "CR-T-011"],
+            f"rows must be the response's plans, IN ORDER; got {rows!r}")
+        self.assertEqual(axi.get("count"), 2)
+        self.assertEqual(
+            axi.get("lastClosedCr"), "CR-T-PUBLISHED",
+            f"lastClosedCr must be the RESPONSE's value, not one recomputed "
+            f"from plans that carry no closedAt at all; got {axi!r}")
+        self.assertEqual(
+            axi.get("filed"), 42,
+            f"filed must be the response's value verbatim; got {axi!r}")
+
+    def test_ac5_work_in_flight_state(self):
+        plans = [{"planId": "plan-1", "cr": "CR-T-020", "wave": "4",
+                  "status": "open", "cycles": []}]
+
+        def get_fn(path):
+            return {"ok": True, "plans": plans,
+                    "lastClosedCr": "CR-T-019", "filed": 6}
+
+        code, out, _err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("warnings"), [])
+        self.assertEqual(len(axi.get("plans")), 1)
+        self.assertEqual(axi.get("count"), 1)
+        self.assertEqual(axi.get("filed"), 6)
+        self.assertEqual(axi.get("lastClosedCr"), "CR-T-019")
+        self.assertEqual(
+            axi.get("help"), ["cycle-activate <id>"],
+            f"AC5 'work in flight' help is unchanged from today; got {axi!r}")
+
+    def test_ac5_none_open_on_a_board_with_closed_history(self):
+        def get_fn(path):
+            return {"ok": True, "plans": [],
+                    "lastClosedCr": "CR-T-030", "filed": 7}
+
+        code, out, _err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("warnings"), [])
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(
+            axi.get("filed"), 7,
+            "filed>0 is the signal that this board has history, unlike "
+            "'never filed'")
+        self.assertEqual(axi.get("lastClosedCr"), "CR-T-030")
+        self.assertEqual(
+            axi.get("help"),
+            ["next", "plan-file --cr <cr> --cycle <label>"],
+            f"AC5 'none open' help names next then plan-file, NOT "
+            f"cycle-activate; got {axi!r}")
+
+    def test_ac5_none_open_on_an_aborted_only_board_last_closed_cr_is_null(self):
+        def get_fn(path):
+            return {"ok": True, "plans": [], "lastClosedCr": None, "filed": 9}
+
+        code, out, _err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(
+            axi.get("filed"), 9,
+            "aborted plans still count as filed -- filed>0 tells this apart "
+            "from 'never filed' even though nothing ever closed")
+        self.assertIsNone(
+            axi.get("lastClosedCr"),
+            "an aborted-only board has closedAt on no plan at all")
+        self.assertEqual(
+            axi.get("help"),
+            ["next", "plan-file --cr <cr> --cycle <label>"])
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_ac5_never_filed_state(self):
+        def get_fn(path):
+            return {"ok": True, "plans": [], "lastClosedCr": None, "filed": 0}
+
+        code, out, _err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 0)
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertEqual(
+            axi.get("help"), ["plan-file --cr <cr> --cycle <label>"],
+            f"AC5 'never filed' help is plan-file ONLY -- distinct from "
+            f"'none open's next+plan-file pair; got {axi!r}")
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_ac6_unavailable_degrade_is_unchanged_except_for_an_added_filed_null(self):
+        """AC6 — 'today's status-unavailable degrade, byte for byte, except
+        for one added field, filed: null'."""
+
+        def get_fn(path):
+            return {"ok": False, "error": "ECONNREFUSED"}
+
+        code, out, err = self._run(get_fn)
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode(out)
+        self.assertEqual(axi.get("verb"), "status")
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertIn(
+            "filed", axi,
+            f"AC6 adds ONE field to today's degrade — filed must be "
+            f"present, as an explicit null (the number is unknown, not "
+            f"zero); got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("filed"))
+        self.assertEqual(
+            axi.get("help"),
+            ["check the Crucible server is running / reachable at "
+             "http://127.0.0.1:0"])
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertEqual(codes, ["status-unavailable"])
+        detail = axi["warnings"][0].get("detail")
+        self.assertEqual(
+            detail,
+            "could not reach the Crucible server to read the board: "
+            "ECONNREFUSED")
+        self.assertIn(
+            "[crucible] status: board unavailable — ECONNREFUSED", err)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class SharedRunReportsDirTableTest(unittest.TestCase):
+    """CR-CRU-155 \u00a7S1/\u00a7S2 -- a direct table test of the shared
+    `run_reports_dir`/`reports_dir_is_agents_own` (clients/_crucible_axi.py),
+    the ONE rule every client's `_run_reports_dir` delegates to: an explicit
+    `--reports` wins over everything else, an absolute result passes through
+    unchanged, and a run with no agent id keeps today's shared default."""
+
+    def setUp(self):
+        self.axi = _load_axi_module()
+
+    def test_reports_dir_is_agents_own_table(self):
+        cases = [
+            # (reports_arg, agent_id, expected)
+            (None, "agent-x", True),
+            ("", "agent-x", True),
+            ("explicit/dir", "agent-x", False),
+            (None, None, False),
+            (None, "", False),
+        ]
+        for reports_arg, agent_id, expected in cases:
+            with self.subTest(reports_arg=reports_arg, agent_id=agent_id):
+                self.assertEqual(
+                    self.axi.reports_dir_is_agents_own(reports_arg, agent_id),
+                    expected,
+                    f"reports_dir_is_agents_own({reports_arg!r}, {agent_id!r}) "
+                    f"must be {expected!r}",
+                )
+
+    def test_run_reports_dir_table(self):
+        base_dir = "/base/project"
+        cases = [
+            # (reports_arg, agent_id, expected, label)
+            (None, None, os.path.join(base_dir, "test-reports"),
+             "no --reports and no agent keeps today's shared default"),
+            (None, "agent-x", os.path.join(base_dir, "test-reports", "agent-x"),
+             "no --reports with an agent uses the agent's OWN directory"),
+            ("custom/dir", "agent-x", os.path.join(base_dir, "custom/dir"),
+             "an explicit --reports WINS over the agent's own directory"),
+            ("custom/dir", None, os.path.join(base_dir, "custom/dir"),
+             "an explicit --reports is used as given with no agent too"),
+            ("/abs/explicit", "agent-x", "/abs/explicit",
+             "an ABSOLUTE explicit --reports passes through verbatim, "
+             "never re-nested under base_dir or the agent id"),
+            ("/abs/explicit", None, "/abs/explicit",
+             "an absolute --reports passes through with no agent too"),
+        ]
+        for reports_arg, agent_id, expected, label in cases:
+            with self.subTest(reports_arg=reports_arg, agent_id=agent_id):
+                got = self.axi.run_reports_dir(base_dir, reports_arg, agent_id)
+                self.assertEqual(
+                    os.path.normpath(got), os.path.normpath(expected),
+                    f"{label}: run_reports_dir({base_dir!r}, {reports_arg!r}, "
+                    f"{agent_id!r}) = {got!r}, expected {expected!r}",
+                )
+
+    def test_run_reports_dir_a_relative_explicit_reports_still_resolves_under_base_dir(self):
+        # A NEGATIVE/bound check alongside the table above: an explicit but
+        # RELATIVE --reports must resolve under base_dir, never be treated as
+        # already-absolute or left dangling relative to the CWD.
+        got = self.axi.run_reports_dir("/base/project", "my-reports", "agent-x")
+        self.assertEqual(got, os.path.join("/base/project", "my-reports"))
+        self.assertNotIn(
+            "agent-x", got,
+            "an explicit --reports must never be nested by agent id",
+        )
 
 
 if __name__ == "__main__":

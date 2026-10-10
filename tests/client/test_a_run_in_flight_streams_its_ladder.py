@@ -207,15 +207,15 @@ _SHORT_IN_FLIGHT_SNAPSHOT = (
 # The nine rows as the GATE must carry them: every name present, every status
 # mapped, `pending` REPRESENTED rather than dropped or inferred green.
 _EXPECTED_INTERIM_STEPS = [
-    {"name": "intent", "status": "passed"},
-    {"name": "rebase", "status": "passed"},
-    {"name": "review", "status": "running"},
-    {"name": "test", "status": "pending"},
-    {"name": "document", "status": "pending"},
-    {"name": "lint", "status": "pending"},
-    {"name": "push", "status": "pending"},
-    {"name": "pr", "status": "pending"},
-    {"name": "ci", "status": "pending"},
+    {"name": "intent", "status": "passed", "findings": 0},
+    {"name": "rebase", "status": "passed", "findings": 0},
+    {"name": "review", "status": "running", "findings": 0},
+    {"name": "test", "status": "pending", "findings": 0},
+    {"name": "document", "status": "pending", "findings": 0},
+    {"name": "lint", "status": "pending", "findings": 0},
+    {"name": "push", "status": "pending", "findings": 0},
+    {"name": "pr", "status": "pending", "findings": 0},
+    {"name": "ci", "status": "pending", "findings": 0},
 ]
 
 
@@ -518,7 +518,7 @@ class ANineRowLadderStillRunningReachesTheBoardTest(_GateRunStreamTestBase):
             "an unmarked interim gate is a false green on the board the moment "
             "it is posted; got " + repr(interim[0]))
 
-    def test_the_interim_gate_carries_no_version_key(self):
+    def test_the_interim_gate_carries_the_runs_release(self):
         drive = self.drive("--release", "0.2.0")
         self.assert_the_loop_polled(drive)
         interim = self.interim_posts(drive)
@@ -526,14 +526,15 @@ class ANineRowLadderStillRunningReachesTheBoardTest(_GateRunStreamTestBase):
             len(interim), 1,
             "premise: one interim gate must have reached the wire before its "
             "keys can be read; got " + repr(drive.posts))
-        self.assertNotIn(
-            "version", interim[0],
-            "an in-flight gate is NOT release-stamped, even when `--release` "
-            "was given: a gate carrying `version` is retention-protected "
-            "(LIVE_GATE, src/store.ts), so stamping every interim snapshot "
-            "would leave a run's worth of unprunable gates behind for one "
-            "release — and the SEAL restates the release anyway; got "
-            + repr(interim[0]))
+        self.assertEqual(
+            interim[0].get("version"), "0.2.0",
+            "an in-flight gate carries the run's --release as the event's "
+            "top-level `version`, exactly as the seal does through "
+            "`post_gate(..., release)`: the stale retention reason "
+            "(`LIVE_GATE`) is gone and no longer applies, and a "
+            "delivered release can only retire its interim snapshots with "
+            "its seal (`stampGatesRetired`) if they carry the release to "
+            "begin with; got " + repr(interim[0]))
 
     def test_the_envelope_names_the_interim_gate_it_posted(self):
         drive = self.drive()

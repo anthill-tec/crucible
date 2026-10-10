@@ -3,7 +3,7 @@
 See `test_bun_crucible_agent_identity_required.py`'s module docstring for the
 full defect narrative (live phantom `bun-crucible` row, the WORKFLOW_ROLE
 gap-analysis resolution, PRD-crucible-v2.md:362 / DN-model-b-language.md:53 /
-`clients/_crucible_axi.py:71-73`/`:373-375`). This file pins the identical
+`axi_context`/`fleet_context` in `clients/_crucible_axi.py`). This file pins the identical
 contract for arduino-crucible.py's own independently-copied `_agent_id()`
 (today's fallback: `or "arduino-crucible"`).
 
@@ -78,7 +78,9 @@ def _run_main(module, argv):
     full_argv = ["arduino-crucible.py"] + argv
     stdout = io.StringIO()
     stderr = io.StringIO()
-    with mock.patch.object(sys, "argv", full_argv):
+    # os.environ is restored on exit: arduino's main() exports $AGENT_ID from --agent for its
+    # children, which would otherwise leak into every later test in this process.
+    with mock.patch.object(sys, "argv", full_argv), mock.patch.dict(os.environ):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
                 module.main()

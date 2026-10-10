@@ -4,6 +4,11 @@ Feature: CR-CRU-006 shell — storyboard frames
   real server instance. Converted from tests/e2e/shell.e2e.ts (see the
   RED-agent report mapping table for the old-test → scenario mapping).
 
+  # CR-CRU-015 §S2 — the ONE scenario in this suite that needs a database
+  # nothing has seeded yet. `playwright.config.ts` selects it by this tag into
+  # a project every other scenario depends on, so the precondition is stated
+  # HERE, on the scenario that holds it, rather than inferred from file names.
+  @empty-db
   Scenario: F1 fresh forge — empty state
     Given a fresh, empty Crucible database
     When I open the home page

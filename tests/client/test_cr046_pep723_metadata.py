@@ -50,14 +50,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
-CLIENT_NAMES = [
-    "bun-crucible.py",
-    "python-crucible.py",
-    "mvn-crucible.py",
-    "rust-crucible.py",
-    "arduino-crucible.py",
-]
-
 EXPECTED_REQUIRES_PYTHON = ">=3.10"
 MAX_BLOCK_START_LINE = 60
 TOON_STUB_PIN = "toon-format>=0.1,<0.2"

@@ -7,9 +7,9 @@
 // "400 listing its id" + "closes once every cycle is terminal" shapes.
 // What CR-CRU-048 actually adds, per the ACs (verbatim):
 //   - "the message NAMES the blocking cycle id(s) AND label(s)" — today only
-//     the numeric id is named (src/store.ts:1528's template string, and the
-//     `openCycles` field is id-only) — label is NOT surfaced anywhere in the
-//     response. RED until GREEN adds it.
+//     the numeric id is named (the refusal template string in `closePlan` in
+//     src/store.ts, and the `openCycles` field is id-only) — label is NOT
+//     surfaced anywhere in the response. RED until GREEN adds it.
 //   - "the refusal message should NAME abort as the remedy" (gap-analysis,
 //     §S2) — today `hints.nonTerminalCycles` (src/hints.ts) tells the caller
 //     to transition cycles or inspect them via GET, but never mentions
@@ -147,8 +147,9 @@ async function transition(
   planId: number | string,
   cycleId: number,
   status: string,
+  extra: Record<string, unknown> = {},
 ): Promise<Response> {
-  return patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), { status });
+  return patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), { status, ...extra });
 }
 
 async function closePlan(
@@ -252,7 +253,11 @@ describe("PATCH …/plans/<planId> close guard (CR-CRU-048 §S2)", () => {
     const [c1, c2, c3] = cycleIds as [number, number, number];
     await transition(handle, key, planId, c1, "active");
     await transition(handle, key, planId, c1, "done");
-    await transition(handle, key, planId, c2, "skipped"); // pending -> skipped shortcut
+    await transition(handle, key, planId, c2, "skipped", {
+      reason: "the spec dropped this scope",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2",
+    }); // pending -> skipped shortcut
     await transition(handle, key, planId, c3, "active");
     await transition(handle, key, planId, c3, "failed");
 

@@ -3,10 +3,11 @@
 //
 // ── What is broken today ───────────────────────────────────────────────────
 //
-// `cr_merged_crs` (clients/_crucible_axi.py:1692) never asks for `cr-merged`
+// `cr_merged_crs` (clients/_crucible_axi.py) never asks for `cr-merged`
 // records. It asks `GET /api/v2/events?project=<key>&limit=QUEUE_EVENTS_LIMIT`
 // and filters the answer client-side, because that route accepts a `limit` and
-// nothing else (src/v2.ts:3748). The window counts ALL events, and on this
+// nothing else (the `/api/v2/events` branch of `handleV2` in src/v2.ts). The
+// window counts ALL events, and on this
 // project 1,957 of 2,013 rows were telemetry — so the read works by luck, and
 // when the luck runs out it returns FEWER cr ids with no error, which is how a
 // release ceremony silently loses provenance. §S3's ruling: the constant is
@@ -22,8 +23,9 @@
 //
 // SHAPE CHOICE, STATED SO GREEN MAY OVERRULE IT. `segments.length === 2` plus a
 // collection name is how EVERY project-scoped record read in src/v2.ts is
-// already declared — `releases` (src/v2.ts:3657), `release-proposals` (:3673),
-// `queue` (:3661) — and `milestones` is the collection these rows now live in.
+// already declared — `releases`, `release-proposals`,
+// `queue` (each a `segments[1]` branch of `handleV2` in src/v2.ts) — and `milestones` is the
+// collection these rows now live in.
 // Two spellings were equally idiomatic (a `?type=` filter on the flat
 // `/api/v2/events` feed was the other); this one is chosen because the feed's
 // contract IS recency-plus-limit and §S3 needs a read with no window at all.

@@ -87,17 +87,26 @@ function crGroupIn(group: Locator, cr: string): Locator {
   return group.locator(`[data-testid="cr-group"][data-cr="${cr}"]`);
 }
 
+// History folds every wave but the open release's open one to its header
+// line (F22, user ruling 2026-10-09): a step reading a band opens it first.
+async function openBand(group: Locator): Promise<void> {
+  await expect(group).toBeVisible();
+  if ((await group.getAttribute("data-open")) === "false") await group.getByTestId("wave-header").click();
+}
+
 Step(
   "the history lens shows a phantom unnumbered wave band holding {string}, separate from the wave {string} band holding {string}",
   async ({ page }, wavelessCr: string, wave: string, waveNCr: string) => {
     const phantom = waveGroup(page, "");
     await expect(phantom).toBeVisible();
+    await openBand(phantom);
     await expect(crGroupIn(phantom, wavelessCr)).toBeVisible();
     // the wave-less band must NOT also hold the wave-N plan's CR node.
     await expect(crGroupIn(phantom, waveNCr)).toHaveCount(0);
 
     const waveNBand = waveGroup(page, wave);
     await expect(waveNBand).toBeVisible();
+    await openBand(waveNBand);
     await expect(crGroupIn(waveNBand, waveNCr)).toBeVisible();
     // the wave-N band must NOT (yet) hold the wave-less plan's CR node —
     // the two bands are genuinely separate at this point in the scenario.
@@ -114,6 +123,7 @@ Step(
   async ({ page }, wave: string, crA: string, crB: string) => {
     const band = waveGroup(page, wave);
     await expect(band).toBeVisible();
+    await openBand(band);
     await expect(crGroupIn(band, crA)).toBeVisible();
     await expect(crGroupIn(band, crB)).toBeVisible();
     // exactly one band now — the fold produced a single group, not two

@@ -80,10 +80,11 @@ Step(
 
 // ── workspace tab navigation (new — no existing "click a tab" step) ────────
 
-Step("I click the {string} workspace tab", async ({ page }, label: string) => {
+Step("I click the {string} workspace tab", async ({ page, world }, label: string) => {
   const tab = page.getByTestId("workspace-tab").filter({ hasText: label });
   await expect(tab).toBeVisible();
   await tab.click();
+  world.activeTab = label; // CR-CRU-022 §S6 — the tab the test selected (pane-mount.ts)
 });
 
 // ── §S3 history lens assertions ─────────────────────────────────────────────
@@ -161,14 +162,24 @@ Step(
   },
 );
 
+// SANCTIONED RE-TARGET (CR-CRU-179 §S2, user ruling 2026-10-09, approved in
+// advance): the agents block (the aggregate pill AND every per-agent
+// runtime row) is REMOVED — expanding a CR group now renders NO
+// cr-agent-runtime element and NO cr-agents-pill element at all, for ANY
+// agent id. Step text renamed so it names what it now actually asserts.
 Step(
-  "the cr group for {string} shows the runtime for agent {string}",
+  "the cr group for {string} shows no runtime for agent {string}",
   async ({ page }, cr: string, agentId: string) => {
-    const runtime = crGroup(page, cr).getByTestId("cr-agent-runtime").filter({ hasText: agentId });
-    await expect(runtime).toBeVisible();
-    // §S2 — pin presence of a runtime figure, not its exact ms value (same
-    // discipline as tests/workflow-lens.test.ts's group-rollup assertion).
-    await expect(runtime).toContainText(/\d/);
+    const group = crGroup(page, cr);
+    // Wait for the group's reactive expansion to actually land (the SAME
+    // lensOpen(key) tick renders the cycle rows and the agents-block region
+    // together — CR-CRU-021 §S4's LensCrGroup) before asserting absence,
+    // or a `toHaveCount(0)` taken on the pre-click frame would pass for the
+    // wrong reason (nothing has rendered yet, not removed).
+    await expect(group.getByTestId("lens-cycle-row").first()).toBeVisible();
+    await expect(group.getByTestId("cr-agents-pill")).toHaveCount(0);
+    const runtime = group.getByTestId("cr-agent-runtime").filter({ hasText: agentId });
+    await expect(runtime).toHaveCount(0);
   },
 );
 

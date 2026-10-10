@@ -57,10 +57,13 @@ inventions of new behaviour: §S1's Non-goals section is explicit that this
 CR changes output STRUCTURE only, never what a verb does, so the states
 driven here are the client's own EXISTING branches, not new ones."""
 
+import http.server
+import json
 import os
 import shutil
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -152,12 +155,13 @@ def _python_project_dir_with_syntax_error():
 
 
 def _drive_with_bin_dir(client_key, verb_name, bin_dir_factory,
-                        project_dir_factory=None, extra_argv=None):
+                        project_dir_factory=None, extra_argv=None, board=None):
     """Enumerate `client_key`'s real argparse, build the closest-to-normal
     argv for `verb_name`, optionally append `extra_argv`, and drive it as a
     genuine subprocess with `bin_dir_factory()`'s fake toolchain on PATH
     (never the detector's own default unless the caller passes it) against
-    an unreachable `CRUCIBLE_URL`. Returns `(emits, axi, result)`."""
+    an unreachable `CRUCIBLE_URL` -- or `board`, when one is given. Returns
+    `(emits, axi, result)`."""
     fake_bin_dir = bin_dir_factory()
     try:
         toon_module = _load_toon_module()
@@ -171,7 +175,10 @@ def _drive_with_bin_dir(client_key, verb_name, bin_dir_factory,
             argv = build_argv(verb_name, verbs[verb_name], project_dir)
             if extra_argv:
                 argv = argv + list(extra_argv)
-            result = drive_verb(script_path, argv, project_dir, fake_bin_dir)
+            result = (drive_verb(script_path, argv, project_dir, fake_bin_dir)
+                      if board is None else
+                      drive_verb(script_path, argv, project_dir, fake_bin_dir,
+                                 board=board))
             emits, axi = classify_envelope(result.stdout, toon_module)
             return emits, axi, result
         finally:
@@ -285,14 +292,15 @@ class RustEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase
         CR-CRU-064 §S6 -- driven with an explicit `--min-free-g 1`, matching
         its `workspace-regression`/`pre-merge-gate` siblings, so this test's
         pass no longer depends on how much free disk THIS box happens to
-        have. Undriven, it inherits `rust-crucible.py:2180`'s 80 GB default
-        floor (guard at `:1331`/`cmd_docker_e2e_gate`'s `cmd_smoke_test`
-        wrapper at `:1327`) and failed on CI run 31677479804 with
-        `disk-guard-abort`; it passed here only because this box measures
-        486 GB free (measured, not assumed) -- an ambient pass a naive 'it
-        passes' assertion could not tell apart from a real one, which is
-        why the argv and the absent warning code are pinned explicitly
-        below rather than trusted implicitly."""
+        have. Undriven, it inherits the 80 GB default floor of the
+        `docker-e2e-gate` `--min-free-g` flag declared in `main` in
+        `rust-crucible.py` (enforced by the `_disk_guard` call in
+        `_smoke_test`, which `cmd_docker_e2e_gate` wraps) and failed on CI
+        run 31677479804 with `disk-guard-abort`; it passed here only because
+        this box measures 486 GB free (measured, not assumed) -- an ambient
+        pass a naive 'it passes' assertion could not tell apart from a real
+        one, which is why the argv and the absent warning code are pinned
+        explicitly below rather than trusted implicitly."""
         emits, axi, result = self._drive("docker-e2e-gate",
                                          extra_argv=["--min-free-g", "1"])
         self._assert_full_envelope("rust", "docker-e2e-gate", emits, axi, result,
@@ -720,6 +728,67 @@ _NO_REPORT_SITE_DRIVES = {
 _STARVED_DRIVE_CACHE = {}
 
 
+class _RunOpeningBoard:
+    """A loopback stand-in board for AC7's two drives: `POST
+    /api/v2/runs/start` is answered `{"ok": true}` with no runId (a server
+    that simply opened none -- the single-shot ingest, no warning); every
+    other request is refused 503, which the client reads exactly as it reads
+    the default unreachable board (`{ok: false, error}`)."""
+
+    def __enter__(self):
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def _reply(self, status, payload):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                encoded = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_POST(self):
+                if self.path == "/api/v2/runs/start":
+                    self._reply(200, {"ok": True})
+                else:
+                    self._reply(503, {"ok": False, "error": "stand-in board"})
+
+            def do_GET(self):
+                self._reply(503, {"ok": False, "error": "stand-in board"})
+
+            do_PATCH = do_POST
+
+            def log_message(self, format, *args):
+                pass
+
+        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=5)
+        return False
+
+
+# AC7's two drives, against a `_RunOpeningBoard` (never cached: the board is
+# per-drive).
+_AC7_DRIVES = {
+    "python/regression": lambda board: _drive_with_bin_dir(
+        "python", "regression", _starved_python_bin_dir,
+        extra_argv=_STARVED_PYTHON_ARGV, board=board),
+    "python/zero-discovery": lambda board: _drive_with_bin_dir(
+        "python", "regression", _build_fake_bin_dir,
+        project_dir_factory=_python_project_dir_with_empty_start_dir,
+        extra_argv=("--start-dir", _EMPTY_START_DIR), board=board),
+}
+
+
 def _starved_drive(site_key):
     """One real subprocess drive per SITE, cached at module scope for this
     process (the census's own `_get_census` idiom): the several independent
@@ -1081,7 +1150,13 @@ class ZeroDiscoveryVsNoReportWarningCodeTest(unittest.TestCase):
     the codes on their own must be enough to tell the two apart."""
 
     def _codes(self, site_key, label):
-        emits, axi, result = _starved_drive(site_key)
+        # The run's opening is answered by a stand-in that opens runs and
+        # refuses everything else -- for every other request that is the same
+        # `{ok: false, error}` the default unreachable board gives -- so the
+        # two envelopes compare on the run's own warnings, not on the run
+        # lifecycle the unreachable board could never open.
+        with _RunOpeningBoard() as board:
+            emits, axi, result = _AC7_DRIVES[site_key](board.url)
         self.assertTrue(
             emits,
             f"AC7 ({label}): needs a decodable envelope to compare warning "
@@ -1114,12 +1189,12 @@ class ZeroDiscoveryVsNoReportWarningCodeTest(unittest.TestCase):
 # CR-CRU-064's Implementation notes (C1) measured this per site: rust's
 # `regression-ingest` already threads a real captured cause through (full
 # detail); rust's `smoke-test`/`workspace-regression` inherit their child's
-# stderr (nothing captured, by design); but mvn's `_emit_compile_fallback_
-# axi` (mvn-crucible.py:894) calls `no_report_warning(verb, "surefire
-# reports", rc, "")` -- read directly at mvn-crucible.py:911 -- with a
-# HARD-CODED empty `output` string, even though `_compile_fallback`
-# (mvn-crucible.py:812) captures the real `mvn clean test-compile` build log
-# via `subprocess.run(..., capture_output=True)` one frame down and returns
+# stderr (nothing captured, by design); but mvn's `_emit_compile_fallback_axi`
+# in mvn-crucible.py calls `no_report_warning(verb, "surefire reports", rc,
+# "")` -- read directly in that function's body -- with a HARD-CODED empty
+# `output` string, even though `_compile_fallback` in mvn-crucible.py captures
+# the real `mvn clean test-compile` build log via `subprocess.run(...,
+# capture_output=True)` one frame down and returns
 # ONLY `rc` to its caller. AC2 is explicit this is a gap, not parity: "AC2
 # is not considered met at the mvn site until [the capture is threaded out
 # of `_compile_fallback`]". C3 threads that capture out; this pins the end
@@ -1159,7 +1234,7 @@ class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
     compile fallback), then on the fallback's own `mvn clean test-compile`
     invocation writes a recognisable compile-error message and exits 1."""
 
-    # `_last_non_empty_line` (clients/_crucible_axi.py:746) takes the last
+    # `_last_non_empty_line` (clients/_crucible_axi.py) takes the last
     # NON-EMPTY line of the capture -- real maven puts the `symbol:` detail
     # AFTER "cannot find symbol", so that fragment (asserted here previously)
     # sits on the fixture's MIDDLE line, never the last one. Pointing this at
@@ -1169,13 +1244,13 @@ class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
     CAUSE_FRAGMENT = "class MissingHelper"
 
     # The exact detail `no_report_warning` composes when `output` carries NO
-    # cause (clients/_crucible_axi.py:801-804) -- i.e. the text this site's
-    # detail read BEFORE C3 threaded `build_output` through. A test that only
-    # greps for CAUSE_FRAGMENT would still pass if the helper were later
-    # changed to embed the whole raw capture (CAUSE_FRAGMENT would still be
-    # in there); asserting this blank-capture form is ABSENT is what proves
-    # the real captured build output -- not some other text -- reached the
-    # detail.
+    # cause (the no-cause branch of `no_report_warning` in
+    # clients/_crucible_axi.py) -- i.e. the text this site's detail read BEFORE
+    # C3 threaded `build_output` through. A test that only greps for
+    # CAUSE_FRAGMENT would still pass if the helper were later changed to embed
+    # the whole raw capture (CAUSE_FRAGMENT would still be in there); asserting
+    # this blank-capture form is ABSENT is what proves the real captured build
+    # output -- not some other text -- reached the detail.
     BLANK_CAPTURE_TAIL = ("no runner output reached this envelope, so the "
                           "runner's own stream is the only evidence left")
 

@@ -41,8 +41,10 @@ around two commitments:
 ```
 
 - Single-user, localhost developer tool. No auth, no TLS, no multi-tenant (non-goals §7).
-  The server binds loopback (`127.0.0.1`) by default; `CRUCIBLE_HOST` opts into wider
-  exposure (the API is unauthenticated and `dataPath` ingest reads server-side files).
+  The server binds loopback (`127.0.0.1`) by default, and `[server] host` in its own
+  `crucible.toml` opts into wider exposure (the API is unauthenticated and `dataPath`
+  ingest reads server-side files). CR-CRU-139 retired `$CRUCIBLE_HOST`: the bind address
+  is configuration an operator EDITS, not an export a shell carries.
 - Server: Bun + TypeScript, zero runtime framework (Bun.serve router). Tests: `bun test`
   (this project eats its own dog food: it ingests its own runs via `bun-crucible.py`).
 - **API strategy (decided 2026-07-14, kickoff review):** the primary contract is a
@@ -132,7 +134,7 @@ One ingest call = one immutable event on the project's timeline.
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
 | `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
-| `codec` | `"junit"` \| `"nextest"` \| `"playwright"` \| `"vitest"` \| `"tap"` \| `"rustc"` \| … | v2 — which codec normalized it; drives stack-aware rendering |
+| `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
@@ -238,7 +240,15 @@ registry** translating each tool's native output into one **canonical RunSchema*
   fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare `testsuite` root,
   file-or-directory `dataPath`, inline `data`), `rustc`, `javac`, `python`, `tsc`.
 - New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
-  links), `vitest`, `tap`. Adding a stack = adding a codec; no core changes.
+  links). Adding a stack = adding a codec; no core changes.
+- **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
+  The five stacks (bun, python, maven, rust, arduino) all report test results as JUnit XML (bun
+  `--reporter=junit`, `xmlrunner`, surefire, `cargo nextest`, the native g++ harness), so `junit`
+  serves them all; `playwright` serves frontend e2e. `vitest`, `tap` and a separate `nextest` codec,
+  listed here before, are **not needed**: no supported stack emits those formats (nextest writes
+  JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
+  section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
+  and CR-CRU-153 (the arduino stack's g++ compile output).
 - Every event is stamped with `stack` + `codec` (+ tool version) so the UI renders
   stack-aware views (§4.11) and BDD becomes first-class for frontend projects.
 - Parsed path: accept summary/tree/coverage as-is (validate shape, don't recompute).
@@ -419,11 +429,15 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   table, pushed commit/PR — a no-mistakes push is categorically distinct from an
   ordinary push, which never reaches Crucible). The timeline renders a full-width
   wave-boundary card; the drill-in mirrors the axi structure. The workspace gains
-  a dedicated **Workflow tab** (Runs · Workflow · Coverage · Compile · BDD): live
-  section = the open plan as a **per-CR todo view** (active cycle expanded with
-  its live runs) beside the **no-mistakes gate pane**; the Wave → [Track] → CR →
-  Cycle history lens below. Wave states: `running → lanes complete · awaiting
-  review → gated → superseded`. (CR-CRU-011 + CR-CRU-013.)
+  a dedicated **Workflow tab** (Runs · Workflow · Coverage · Compile · BDD) in two
+  panes, each its own scroll (storyboard F22): **Now** above — what is running,
+  and only that: the open plan as a **per-CR todo view** (active cycle expanded
+  with its live runs), the running no-mistakes gate in F21's gate view (plan first
+  when both run), or the single line `Nothing running → Roadmap` — and the **History**
+  pane below, the Wave → [Track] → CR → Cycle history lens. On a phone the
+  two panes are sub-tabs, Now selected on entry. Wave states: `running → lanes
+  complete · awaiting review → gated → superseded`. (CR-CRU-011 + CR-CRU-013;
+  Now and History, CR-CRU-172.)
   **Milestones (locked round 24):** gap-analysis / design-review / stage-flip
   entries are workflow events on the **project workspace timeline ONLY** — the
   home collective feed stays a cross-project run feed (a compact gate entry is
@@ -567,9 +581,13 @@ documented file does not need a second way to say the same thing, and a second w
 second place to look when a value is not what you expected, so
 `$CRUCIBLE_DEFAULT_RETENTION`, `$CRUCIBLE_RUN_ABANDON_MS` and
 `$CRUCIBLE_PROJECT_INACTIVE_MS` are retired as overrides.
-The variables that are NOT limits are untouched: `CRUCIBLE_DB`, `CRUCIBLE_PORT` and
-`CRUCIBLE_PROJECT_KEY` answer *where am I and who am I*, which must be answerable before
-any file can be found. The `CRUCIBLE_*` prefix is reserved for Crucible's own
+The variables that are NOT limits and cannot move into a file are `CRUCIBLE_DB` and
+`CRUCIBLE_PROJECT_KEY`: they answer *where am I and who am I*, which must be answerable
+before any file can be found. CR-CRU-139 retired `$CRUCIBLE_PORT`, `$CRUCIBLE_HOST`,
+`$CRUCIBLE_URL` and `$CRUCIBLE_BASE` — a connection is configuration too, and neither
+side needs its own address to FIND its configuration: the server resolves its store
+first and reads the file beside it, and a client resolves its file from the project
+directory it was given. The `CRUCIBLE_*` prefix is reserved for Crucible's own
 configuration (§4.11). Precedence is therefore two layers, and only retention has both:
 the file, then a per-project value in the store.
 

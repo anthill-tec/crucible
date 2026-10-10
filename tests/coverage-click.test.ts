@@ -16,10 +16,10 @@
 //  (B) CLIENT — the workspace Project pane's coverage meter
 //      (public/app.js CoverageMeter(), rendered from ProjectPaneCard()) is
 //      today a static, non-interactive div (no onclick, no data-testid —
-//      confirmed by reading public/app.js:600-613). This pins the click
+//      confirmed by reading `CoverageMeter` in public/app.js). This pins the click
 //      wiring: clicking the meter navigates to `/p/<key>/run/<id>` where
 //      <id> is `project.latestCoverageEventId`, and opens the real drill-in
-//      overlay. Home project badges (`ProjectBadge`, public/app.js:282-292)
+//      overlay. Home project badges (`ProjectBadge` in public/app.js)
 //      keep their EXISTING drill-DOWN-to-workspace behaviour — a coverage
 //      meter does not render on home at all, and a badge click must never
 //      produce a `/run/<id>` route.
@@ -401,12 +401,15 @@ describe("workspace Coverage tab — gated on green-regression coverage (§S1 ad
     expect(tab!.hasAttribute("disabled")).toBe(true);
     expect(tab!.className).toMatch(/\bdisabled\b/);
 
-    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): clicking a disabled Coverage tab
-    // never switches the workspace pane — the pane stays on whatever was
-    // active, which on a cold load is now Workflow (was: Runs).
+    // RE-PINNED 2026-10 (approved by the orchestrator — user ruling
+    // 2026-10-07): clicking a disabled Coverage tab never switches the
+    // workspace pane — the pane stays on whatever was active, which for
+    // this idle fixture (no open plan, no gate in flight) is now Roadmap
+    // (was: Workflow, under the pre-ruling hard-coded default).
     tab!.click();
     await settle();
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
     expect(document.querySelector('[data-testid="workspace-runs"]')).toBeNull();
   });
 

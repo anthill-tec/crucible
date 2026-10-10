@@ -45,6 +45,11 @@ export interface Project {
    * reserved together — is `Store.acceptedMilestoneTypes`, resolved from the
    * single definition in `src/store.ts`. */
   milestoneTypes?: string[];
+  /** §S1/§S3 — the project's own flat map of non-secret string facts, keyed
+   * by environment-variable-shaped names. ABSENT when the project has none,
+   * as `milestoneTypes` is; written only through
+   * `PATCH /api/v2/projects/<key>/metadata`. */
+  metadata?: Record<string, string>;
 }
 
 /**
@@ -109,7 +114,8 @@ export interface TestLeaf {
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: {
-    message: string;
+    // Each part is optional: a runner may record a failure by its type alone.
+    message?: string;
     type?: string;
     trace?: string;
   };
@@ -119,6 +125,9 @@ export interface SuiteNode {
   name: string;
   status: "pass" | "fail" | "pending";
   children: TestLeaf[];
+  // The Playwright project (browser) a scenario ran under,
+  // from the report's `projectName`. Optional: only the playwright codec sets it.
+  browser?: string;
 }
 
 export interface CoverageAxis {
@@ -202,6 +211,12 @@ export interface RunEvent {
    * leaves NULL rather than reconstructing a binding that was never recorded.
    */
   cycleId?: number;
+  /**
+   * The release this run verifies, served from its own column. Set only by
+   * a run filed with a declared release and never beside a cycle; ABSENT on
+   * every other event, never null.
+   */
+  release?: string;
   timestamp: number;
   // CR-CRU-011 §S1 (additive) — lifecycle events only: which transition this
   // event records, and (on "unregistered") the firstSeen snapshot taken
@@ -225,6 +240,13 @@ export interface RunEvent {
    * intent. ABSENT on a versionless gate and on every non-gate kind.
    */
   version?: string;
+  /**
+   * CR-CRU-162 §G5 — the no-mistakes run id this gate snapshot belongs to,
+   * lifted from the posted gate's own `run.id` when it carries one. It is what
+   * ties a gate to its recorded decisions. ABSENT when the gate names no run
+   * (never fabricated) and on every non-gate kind.
+   */
+  runId?: string;
   /**
    * CR-CRU-073 §S1 — the release-retirement marker (epoch ms). Stamped when
    * the gate's release ships (or on insert for an already-released version);
@@ -319,6 +341,35 @@ export interface RunEvent {
   abortReason?: string;
 }
 
+/** CR-CRU-162 §G2 — the three answers `no-mistakes axi respond` accepts. */
+export type GateDecisionAction = "approve" | "fix" | "skip";
+
+/**
+ * CR-CRU-162 §G4 — a gate DECISION, its own record rather than a gate
+ * snapshot: what was answered at a gate of one no-mistakes run, by whom, under
+ * which cycle binding and when. Every optional field is ABSENT when the
+ * decision did not carry it (never an empty value fabricated in its place).
+ */
+export interface GateDecision {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  /** The no-mistakes run id — the key a gate event's `runId` joins on. */
+  runId: string;
+  step?: string;
+  action: GateDecisionAction;
+  /** The finding ids the decision selected, verbatim and in order. */
+  findings?: string[];
+  /** The ONE finding the decision added, a JSON object, verbatim. */
+  addedFinding?: Record<string, unknown>;
+  instructions?: string;
+  reason?: string;
+  timestamp: number;
+  context?: RunContext;
+  role?: AgentRole;
+  cycleId?: number;
+}
+
 // ── CR-CRU-011 §S0 — cycle plans (the orchestrator's declared todo list) ─────
 
 export type CycleKind = "red-green" | "verify" | "fix";
@@ -341,6 +392,30 @@ export interface PlanCycle {
   // active-in-server-up epochs only (restart resumes, downtime excluded).
   // Present on ACTIVE cycles; sealed rows keep `doneAt − activatedAt`.
   activeMs?: number;
+  // CR-CRU-165 (additive) - the record a plan change carries: why the filed
+  // plan changed, what fell short (cause), the spec point (specRef) and the
+  // kind of change. Absent (never null) on a cycle no recorded change touched,
+  // including every skip made before this CR (never back-filled).
+  reason?: string;
+  cause?: ChangeCause;
+  specRef?: string;
+  changeKind?: CycleChangeKind;
+}
+
+/** CR-CRU-165 - what a recorded plan change says fell short. */
+export type ChangeCause = "spec-design" | "gap-analysis";
+
+/**
+ * CR-CRU-165 - the kind of recorded change a cycle carries. `abort` marks a
+ * cycle an abort skipped, so it stays distinguishable from a cycle-skip (G3).
+ */
+export type CycleChangeKind = "insert" | "rename" | "append" | "skip" | "abort";
+
+/** CR-CRU-165 - the three fields every recorded plan change and abort carries. */
+export interface ChangeRecord {
+  reason: string;
+  cause: ChangeCause;
+  specRef: string;
 }
 
 /**
@@ -381,6 +456,11 @@ export interface Plan {
   merge?: { commit: string };
   closedAt?: number;
   commitBoundary?: CommitBoundary;
+  // CR-CRU-165 S2b (additive) - an abort's record; absent on every plan
+  // aborted before this CR (never back-filled).
+  reason?: string;
+  cause?: ChangeCause;
+  specRef?: string;
 }
 
 // ── CR-CRU-014 §S1 — the CR execution queue (project roadmap registration) ──
@@ -417,6 +497,10 @@ export interface QueueLifecycle {
   /** Why the work is not happening. Present for VOID. */
   reason?: string;
   at: number;
+  /** Who wrote the disposition (ruling 6): the same value the declaration
+   *  journal records for that write. Absent on a lifecycle written before
+   *  the ruling, and never defaulted. */
+  author?: string;
 }
 
 /**
@@ -459,4 +543,26 @@ export interface QueueEntry {
   track?: string;
   /** §S2 — the second axis, parsed from `lifecycle_json`. Absent when none. */
   lifecycle?: QueueLifecycle;
+  /**
+   * CR-CRU-022 §S1 — the cr's story points, DERIVED on read from its latest
+   * points declaration in the append-only declaration journal
+   * (`queue_declarations`). Absent when the cr was never pointed — never
+   * defaulted, and never counted as 1.
+   */
+  points?: number;
+}
+
+/**
+ * CR-CRU-022 §S3 / CR-CRU-147 §S1 — THE dead-CR predicate: a CR whose
+ * `lifecycle.state` is VOID or SUPERSEDED is not live work. It keeps its row
+ * (a void is not a deletion) but contributes nothing to any remaining total
+ * or live-work count. Written ONCE, here beside `QueueLifecycle`, so every
+ * reader — the analytics routes today, `next` and the wave card under
+ * CR-CRU-147 — draws the line identically. Takes anything carrying an
+ * optional lifecycle, so a queue entry and a journalled lifecycle `to` value
+ * are judged by the same rule.
+ */
+export function isDeadCr(entry: { lifecycle?: Pick<QueueLifecycle, "state"> | null }): boolean {
+  const state = entry.lifecycle?.state;
+  return state === "VOID" || state === "SUPERSEDED";
 }

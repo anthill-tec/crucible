@@ -30,7 +30,9 @@
 //   - `[data-testid="cr-group"]` (`data-cr`, `data-status`) — one per CR.
 //   - `[data-testid="cr-merge-commit"]` — on a closed CR group.
 //   - `[data-testid="cr-rollup"]` — cycles done/total.
-//   - `[data-testid="cr-agent-runtime"]` — one per participating agent.
+//   - `[data-testid="cr-agent-runtime"]` — RETIRED by CR-CRU-179 §S2
+//     (user ruling 2026-10-09): the agents block never renders; see the
+//     SANCTIONED RE-TARGET below ("§S3 history lens — group rollups").
 //   - `[data-testid="lens-cycle-row"]` (`data-status`) — a cycle sub-item
 //     under a CR group (declared OR inferred).
 //   - `[data-testid="cycle-span-closed"]` — a done cycle's closed span,
@@ -48,6 +50,7 @@ import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
 import type { LensRunLike } from "../public/app-logic.mjs";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub, type HistoryStubResponse } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -122,6 +125,13 @@ interface MountOpts {
   events: EventFixture[];
   plans: PlanFixture[];
   agents?: AgentFixture[];
+  // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved) - an
+  // explicit /history stub, for the one fixture ("inferred fallback", no
+  // plan at all) `singleReleaseHistoryStub(opts.plans)` cannot answer: a
+  // runs-only inferred wave is placed by its first run's time, not by a
+  // plan. Every other fixture in this file omits it and keeps the
+  // plan-derived stub, unchanged.
+  history?: HistoryStubResponse;
 }
 
 let cacheBust = 0;
@@ -134,7 +144,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
-    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+    if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
+      // CR-CRU-173 \u00a7S1 re-pin (approved in advance) - see
+      // tests/helpers/history-stub.ts. Cycle 637 (user ruling 2026-10-09)
+      // resolved the former "inferred fallback (no plan)" KNOWN GAP: a
+      // runs-only inferred wave is placed by its first run's time, so that
+      // one fixture now supplies its own explicit `history` stub below
+      // instead of the plan-derived one.
+      body = opts.history ?? singleReleaseHistoryStub(opts.plans);
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
@@ -573,6 +591,19 @@ describe("§S3 history lens — wave boundary states", () => {
 
 // ── INFERRED FALLBACK — no plan: Wave/CR/Cycle from context + agent stem ──
 
+// CR-CRU-173 §S1 re-pin, cycle 637 (user ruling 2026-10-09, approved — see
+// "Ruling at cycle 637" in the CR doc): this whole describe block mounts a
+// fixture with NO plan and NO queue entry — the "inferred" wave/CR tree
+// `workflowLens` builds purely from events' `context.wave`. The former
+// "KNOWN GAP" (tests/helpers/history-stub.ts: a release-first /history read
+// has nothing to hang a plan-less fixture's waves off) is resolved by the
+// ruling: a runs-only inferred wave that no release record and no queue
+// `release` names is placed by its FIRST RUN's time — the same timeline
+// fallback a gate naming neither a release nor a wave already gets. The
+// fixture below gains an explicit `history` stub (one release wrapping both
+// waves, since no release ships mid-fixture to split them) so GREEN's page
+// has a release to nest these already-inferred waves under; none of the
+// wave/CR/cycle rendering assertions themselves move.
 describe("§S3 history lens — inferred fallback (no plan)", () => {
   test("without any plan, a fixture with 2 waves × 2 CRs × 2 cycles (context.wave + agent stems + context.cycle labels) renders the inferred tree; runs lacking linkage land in an ungrouped tail with its count asserted", async () => {
     const key = "lens-fallback-1";
@@ -638,6 +669,27 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
       projects: [project({ key, name: "Fallback Project" })],
       events,
       plans: [],
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): this
+      // runs-only inferred wave fixture names no release anywhere (no plan,
+      // no queue entry), so it is placed by its first run's time — both
+      // waves' first runs fall inside this fixture's own window, so a
+      // single release wraps them both, exactly as `singleReleaseHistoryStub`
+      // already wraps every OTHER fixture's plan-declared waves together.
+      history: {
+        ok: true,
+        releases: [
+          {
+            labels: ["0.7.0-test"],
+            state: "in progress",
+            crCount: 4,
+            waves: [
+              { wave: "1", crs: ["CR-F-1", "CR-F-2"] },
+              { wave: "2", crs: ["CR-G-1", "CR-G-2"] },
+            ],
+            workflows: [{ label: "0.7.0-test", gateRuns: [], verificationRuns: 0 }],
+          },
+        ],
+      },
     });
     await openWorkflowTab();
 
@@ -650,6 +702,10 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
     expect(waveIds).toEqual(["1", "2"]);
 
     const wave1 = Array.from(waveGroups).find((g) => g.getAttribute("data-wave") === "1")!;
+    // Wave 1 is not the release's open (latest) wave, so History folds it to
+    // its header line (F22, user ruling 2026-10-09): open it before reading it.
+    wave1.querySelector<HTMLElement>('[data-testid="wave-header"]')!.click();
+    await settle();
     const crGroups = wave1.querySelectorAll<HTMLElement>('[data-testid="cr-group"]');
     expect(crGroups.length).toBe(2);
     const crIds = Array.from(crGroups).map((g) => g.getAttribute("data-cr")).sort();
@@ -716,8 +772,8 @@ describe("§S3 history lens — group rollups", () => {
   // headers.test.ts). This test's SUBJECT is the rollup figure + a
   // participating agent's runtime surfacing at all, not collapse timing, so
   // it now expands the group via `cr-group-toggle` before reading
-  // `cr-agent-runtime` — same click-before-read pattern already used at
-  // lines 648/650 and 280 in this file. Was: read `cr-agent-runtime`
+  // `cr-agent-runtime` — same click-before-read pattern already used by
+  // this file's hierarchy test and inferred-fallback test. Was: read `cr-agent-runtime`
   // directly off the collapsed header with no toggle click.
   test("a CR group row shows cycles done/total, and participating agents with runtimes (runtime_ms surfaces — pin presence, not exact ms)", async () => {
     const key = "lens-rollup-1";
@@ -780,17 +836,20 @@ describe("§S3 history lens — group rollups", () => {
     // negative pin — the hidden CR-020 compatibility span is retired.
     expect(crGroup!.querySelectorAll(".app-hidden-data").length).toBe(0);
 
-    // SANCTIONED RE-TARGET (CR-CRU-021 §S4) — per-agent runtime rows now
-    // render only once the group's own header toggle is expanded.
+    // SANCTIONED RE-TARGET (CR-CRU-179 §S2, user ruling 2026-10-09, approved
+    // in advance): the agents block (`cr-agent-runtime` / `cr-agents-pill`)
+    // is REMOVED outright — this test's SUBJECT (a participating agent's
+    // runtime surfacing at all) no longer has a place to surface; expanding
+    // the group's own header toggle renders cycle rows ONLY, never a
+    // per-agent runtime row, for the exact same "agent-a" participant this
+    // fixture names. Who ran what stays on the Runs tab (CR-CRU-179 §S2's
+    // own words) — out of scope for the Workflow lens this file drives.
     groupToggle!.click();
     await settle();
 
-    const agentRuntime = crGroup!.querySelector('[data-testid="cr-agent-runtime"]');
-    expect(agentRuntime).not.toBeNull();
-    const runtimeText = agentRuntime!.textContent ?? "";
-    expect(runtimeText).toContain("agent-a");
-    // pin presence of a runtime figure, not its exact ms value.
-    expect(runtimeText).toMatch(/\d/);
+    expect(crGroup!.querySelector('[data-testid="cr-agent-runtime"]')).toBeNull();
+    expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+    expect(crGroup!.textContent ?? "").not.toContain("agent-a");
   });
 });
 
@@ -805,7 +864,6 @@ describe("§S3 history lens — group rollups", () => {
 describe("§S4 #2 — no hidden `.app-hidden-data` compatibility span in the workflow pane DOM", () => {
   test("a mixed history fixture (a fully-done CR group + a partially-done CR group, both expanded) renders zero `.app-hidden-data` elements anywhere under the workflow pane", async () => {
     const key = "hidden-data-retire-1";
-    const now = Date.now();
     const planAllDone: PlanFixture = {
       planId: 741,
       cr: "CR-HD-ALL-DONE",
@@ -963,18 +1021,18 @@ describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header supp
 // rides as a key INSIDE the `gate` object the client already builds
 // (`gate.inFlight`), NOT as a top-level field beside `version` and NOT as a
 // fifth outcome-vocabulary member — because `Store.recordGateEvent(gate:
-// unknown, …)` (src/store.ts ~L2049) stores the gate object VERBATIM and
-// `handleGates` (src/v2.ts ~L1179) validates only `intent`, `outcome` and
+// unknown, …)` (src/store.ts) stores the gate object VERBATIM and
+// `handleGates` (src/v2.ts) validates only `intent`, `outcome` and
 // steps-is-an-array, so an in-gate key reaches both readers with zero
 // server change.
 //
 // Current-code facts verified on this branch (release/0.2.0, 2026-09-10):
-//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs ~L794) is
+//   - `workflowLens`'s `gatedWaveLabels` (public/app-logic.mjs) is
 //     built from EVERY `kind:"gate"` event whose `gate.outcome` is `passed`
 //     or `checks-passed`, keyed by `context.wave`. It reads nothing else off
 //     the gate — no in-flight mark exists anywhere in the codebase yet — so
 //     an interim `checks-passed` ladder gates its wave about two seconds
-//     into a run, and the Set is never subtracted from (~L977 is its only
+//     into a run, and the Set is never subtracted from (the `wave.state` assignment in `workflowLens` is its only
 //     consumer, turning membership into `{ label: "gated" }`).
 // Every assertion below pinning an in-flight gate as NON-gating is therefore
 // genuine RED. The true-positive bounds beside them hold against current
@@ -994,7 +1052,8 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
   // (`hasOwnProperty`), never by inference from step count or `push`.
   const IN_FLIGHT_KEY = "inFlight";
   // The label a wave carries when nothing has sealed it: all lanes closed,
-  // no later wave open, no qualifying gate (public/app-logic.mjs ~L979).
+  // no later wave open, no qualifying gate (`workflowLens`'s `wave.state`
+  // fallback in public/app-logic.mjs).
   const UNGATED_LABEL = "lanes complete · awaiting review";
   // `no-mistakes` v1.70.1's pipeline, in order — the nine rows `axi status`
   // always emits, unrun ones included.
@@ -1226,7 +1285,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
   });
 
   // AC6 — an in-flight gate carries NO `version`. A version-stamped gate is
-  // retention-protected (`LIVE_GATE`, src/store.ts ~L2969, keyed on
+  // retention-protected (`LIVE_GATE` in src/store.ts, keyed on
   // `json_extract(payload,'$.version') IS NOT NULL`), so stamping every
   // interim snapshot would leave a run's worth of unprunable gates behind
   // for one release — and the seal restates the release anyway.
@@ -1250,7 +1309,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
     });
 
     // Key ABSENCE, not null and not empty — `version` is a top-level sibling
-    // of `gate` (src/v2.ts ~L1216), so neither place may carry one.
+    // of `gate` (the gate-event body `handleGates` reads, src/v2.ts), so neither place may carry one.
     expect(Object.prototype.hasOwnProperty.call(interim, "version")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(interim.gate, "version")).toBe(false);
     // The same run's seal DOES state it.
@@ -1284,18 +1343,19 @@ describe("CR-CRU-117 §S1 — an in-flight gate is not a verdict (pure workflowL
 //
 // Observed live on the board 2026-09-12: `CR-CRU-122` held plan 129
 // (`aborted`) beside plan 131 (`open`), and `workflowLens`'s History filter
-// (`public/app-logic.mjs:934` — `wave.crs.filter((c) => c.status !== "open")`)
+// (in `public/app-logic.mjs` — `wave.crs.filter((c) => c.status !== "open")`)
 // excludes open plan RECORDS, not a CR that HAS an open plan. So the aborted
 // plan's node survived into History and narrated a mid-flight CR as
 // `0/2 cycles` with a ✗ failed and a ⊘ skipped cycle, while the Active panel
 // showed the very same CR running. §S1 re-keys the filter on the CR, derived
-// GLOBALLY off the raw `plans` input (the `declaredWaveLabels` precedent at
-// `:927`), and applies to INFERRED nodes too — they carry no `status` at all
-// (`:898-918`), so a status-keyed filter can never reach them.
+// GLOBALLY off the raw `plans` input (the `declaredWaveLabels` precedent in
+// the same function), and applies to INFERRED nodes too — they carry no `status` at all
+// (the inferred-fallback loop), so a status-keyed filter can never reach them.
 //
 // Typing note: `Plan.status` has included `"aborted"` since CR-CRU-024 §S6
-// (src/types.ts:346), and CR-CRU-125 widened the lens's published declaration
-// to match it (public/app-logic.d.mts:415, and `LensCrNode.status` at :458),
+// (`Plan` in src/types.ts), and CR-CRU-125 widened the lens's published
+// declaration to match it (`LensPlanLike` in public/app-logic.d.mts, and
+// `LensCrNode.status` there),
 // so the plan fixtures below pass unconverted. The remaining `events` cast is
 // the `LensRunLike` absorption this file already makes in the CR-CRU-117
 // block above.
@@ -1423,7 +1483,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
 
     expect(nodes.filter((n) => n.cr === LIVE_CR).length).toBe(0);
     // Neither wave has any remaining visible material, so neither renders
-    // (the §S2/CR-CRU-021 ghost-header rule, `public/app-logic.mjs:996-998`).
+    // (the §S2/CR-CRU-021 ghost-header rule, `visibleWaves` in `public/app-logic.mjs`).
     expect(waves.find((w) => w.wave === "5")).toBeUndefined();
     expect(waves.find((w) => w.wave === "6")).toBeUndefined();
   });
@@ -1431,7 +1491,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
   // AC3 — the anti-over-reach pin the Risk section relies on, ORDER included
   // (gap analysis DRIFT-5): the `closedAt`-bearing node first (closedAt
   // descending), then the `closedAt`-less ones in filing order via the stable
-  // sort at `public/app-logic.mjs:938`.
+  // `wave.crs.sort` in `workflowLens` (`public/app-logic.mjs`).
   test("CR-CRU-125 AC3 — a CR with an `aborted` plan and a `closed` plan and NO open plan keeps EVERY node (all three attempts here), ordered exactly as today: the `closedAt`-bearing node first, the `closedAt`-less ones in filing order", () => {
     const cr = "CR-CRU-LENS-MULTI";
     const firstAttempt: AbortAwarePlanFixture = {
@@ -1531,7 +1591,8 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
 
   // AC6 — the INFERRED variant (gap analysis DRIFT-4). An inferred node is
   // built from an UNLINKED run's `context.wave` + agent stem
-  // (`public/app-logic.mjs:882-918`) and carries NO `status` key, so today's
+  // (the inferred-fallback loop in `workflowLens`) and carries NO `status`
+  // key, so today's
   // `c.status !== "open"` keeps every one of them.
   test("CR-CRU-125 AC6 — an INFERRED node whose agent stem names a live CR is dropped from History too, while an inferred node for an unrelated CR in the same wave survives", () => {
     const key = "cru125-lens";
@@ -1545,7 +1606,7 @@ describe("CR-CRU-125 §S1 — History excludes a CR that is live (pure workflowL
     };
     // Unlinked (no `context.cycleId`) → the inferred path. The stem is the
     // agent id minus its `-RED`/`-GREEN`/`-FIX` suffix
-    // (`public/app-logic.mjs:687`), so this run's node names the live CR.
+    // (`agentStemRaw` in `public/app-logic.mjs`), so this run's node names the live CR.
     const liveCrRun = runEvent({
       id: "evt-125-inferred-live",
       projectKey: key,

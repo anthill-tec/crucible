@@ -4,13 +4,13 @@
 // Gap analysis (Implementation Notes, docs/changes/CR-CRU-013-gate-events.md,
 // 2026-07-18) found three blockers that make gate/milestone a NEW event-kind
 // family, not an extension of an existing one:
-//   - RunEvent.kind (src/types.ts ~L110) is a closed 3-value union
-//     "test"|"compile"|"lifecycle" — Store.toEvent (src/store.ts ~L895)
+//   - RunEvent.kind (`RunEvent` in src/types.ts) is a closed 3-value union
+//     "test"|"compile"|"lifecycle" — Store.toEvent (src/store.ts)
 //     collapses any other kind to "test".
 //   - There is no generic payload column — `compile` is the only free-JSON
 //     blob field.
 //   - Rollup exclusion is the single `row.kind !== "lifecycle"` check
-//     (src/store.ts ~L967) — C1 must invert this to a rollup-ELIGIBLE set
+//     (the rollup in src/store.ts, now `ROLLUP_ELIGIBLE_KINDS`) — C1 must invert this to a rollup-ELIGIBLE set
 //     {test, compile} so gate/milestone (like lifecycle) are excluded.
 //
 // This file drives the REAL production server (startServer) — POST

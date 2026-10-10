@@ -754,7 +754,7 @@ describe("CR-CRU-094 §S1/AC1 — the cycle binding rides the run as a column", 
       projectKey: key,
       agentId,
       summary: { total: 4, passed: 4, failed: 0, pending: 0, duration_ms: 80 },
-      tree: [{ name: "s", status: "pass", children: [{ name: "t1", status: "pass" }] }],
+      tree: [{ name: "s", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 20 }] }],
     });
     expect(res.status).toBe(200);
     return ((await res.json()) as RunsPostResponse).event;

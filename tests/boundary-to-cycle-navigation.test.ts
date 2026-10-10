@@ -44,6 +44,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -129,7 +130,12 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
-    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+    if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
+      // nests its waves under a release, read from GET …/history; this
+      // fixture's plans fall in one release (tests/helpers/history-stub.ts).
+      body = singleReleaseHistoryStub(opts.plans ?? []);
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
@@ -270,7 +276,7 @@ async function clickBoundaryBadgeAndAssertNavigateThenBlink(
 
     // (a) — the one-rule tab swap landed back on Workflow.
     expect(isActiveTab("Workflow")).toBe(true);
-    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-now"]')).not.toBeNull();
 
     const target = document.querySelector<HTMLElement>(targetSelector);
     expect(target).not.toBeNull();
@@ -416,6 +422,11 @@ describe("§S2 boundary-to-cycle — HISTORY click contract (collapsed CR group 
       events: [linkedRun],
       plans: [plan],
     });
+
+    // ADDED 2026-10 (approved by the orchestrator, user ruling 2026-10-07):
+    // this idle fixture (closed plan only) now lands on the Roadmap, so the
+    // History it inspects is opened explicitly first.
+    await clickTab("Workflow");
 
     // Confirm the CR group starts COLLAPSED (lens groups collapse by
     // default — CR-CRU-020 §S1.2) before we ever click the badge.

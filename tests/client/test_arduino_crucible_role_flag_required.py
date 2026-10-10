@@ -4,7 +4,8 @@ stops implying the agentId carries the role.
 
 Contract pinned verbatim from
 docs/changes/CR-CRU-044-phase-as-first-class-data.md §S3/§S4 (as corrected
-2026-07-28). `arduino-crucible.py:1198` today is FREE TEXT with no default
+2026-07-28). The `register` subparser's `--role` in `main`
+(clients/arduino-crucible.py) today is FREE TEXT with no default
 and NOT required (`r.add_argument("--role", help="role label
 (RED/GREEN/VERIFY/FIX)")`) -- of all five clients, arduino accepts an
 out-of-enum value most permissively. §S3's arduino-specific work is "add the
@@ -67,7 +68,9 @@ def _run_main(module, argv):
     """Invoke module.main() with sys.argv patched. Returns (code, stdout, stderr)."""
     full_argv = ["arduino-crucible.py"] + argv
     stdout, stderr = io.StringIO(), io.StringIO()
-    with mock.patch.object(sys, "argv", full_argv):
+    # os.environ is restored on exit: arduino's main() exports $AGENT_ID from --agent for its
+    # children, which would otherwise leak into every later test in this process.
+    with mock.patch.object(sys, "argv", full_argv), mock.patch.dict(os.environ):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
                 module.main()

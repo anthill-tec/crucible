@@ -17,6 +17,7 @@ circular; `manifest` is imported by both, so neither has to import the other.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -27,6 +28,17 @@ from pathlib import Path
 CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
 
 MANIFEST_FILENAME = "crucible-clients.json"
+
+# CR-CRU-139 §S1a — where the install RECORDS what it wrote into each
+# operator-editable file it authored. INTERNAL state, deliberately not a key in
+# `crucible-clients.json`: that document is the published consumer contract
+# (its top-level key set is pinned as an exact set), and a record of our own
+# bytes is not something any consumer of it should read. Hidden, JSON, and
+# removed by the same `--purge` that removes the files it describes.
+INSTALL_RECORD_FILENAME = ".crucible-install-record.json"
+
+# The record's one top-level key: `{"authored": {<abs path>: <sha256 hex>}}`.
+RECORD_AUTHORED_KEY = "authored"
 
 # CR-CRU-131 §S1c — the operator-editable configuration the installer LAYS DOWN
 # at `<target-dir>`, beside the manifest that declares it.
@@ -39,6 +51,34 @@ MANIFEST_FILENAME = "crucible-clients.json"
 # range: an install that only ships defaults gives the operator nothing to
 # edit, and a checkout-only file gives an installed deployment nothing to read.
 CONFIG_FILENAME = "crucible.toml"
+
+# CR-CRU-139 §S1a — the TOML vocabulary of the two configuration files this
+# module lays down, declared ONCE. `install` READS the server's declarations
+# (the listener and the range it may be probed out of) and this module WRITES
+# the resolved answer back into the files it wrote; a table or key name spelled
+# in both modules is one rename away from an installer that reads `[server]`
+# and writes `[servers]` with nothing saying so.
+SERVER_TABLE = "server"
+SERVER_HOST_KEY = "host"
+SERVER_PORT_KEY = "port"
+SERVER_PORT_RANGE_MIN_KEY = "port_range_min"
+SERVER_PORT_RANGE_MAX_KEY = "port_range_max"
+CLIENT_TABLE = "client"
+CLIENT_URL_KEY = "url"
+
+# The commented block the `[client]` table arrives as when the install writes
+# the board URL into a file whose template does not declare one. The operator's
+# file is DOCUMENTATION as much as it is configuration (the whole reason the
+# shipped templates are commented), so a table appended to it carries its own
+# sentence rather than landing as a bare key nobody can interpret.
+_CLIENT_TABLE_BLOCK = """
+# ── The BOARD this project reports to (CR-CRU-139 §S1a) ─────────────────
+#
+# The installer wrote this URL from the port it PROBED for the server it
+# provisioned here, so the board this machine's clients post to and the port
+# that machine's server listens on are one decision recorded twice. Edit it to
+# point this install at another board; a re-install never overwrites it.
+"""
 
 # CR-CRU-090 §S2 — the two candidates for the SOURCE client fleet, derived from
 # this package's own location: the repo checkout's `clients/` beside the
@@ -126,6 +166,140 @@ def lay_down_operator_config(target_dir: str) -> bool:
     whether this call WROTE it."""
     return lay_down_config(shipped_config_path(),
                            operator_config_path(target_dir))
+
+
+# ---------------------------------------------------------------------------
+# CR-CRU-139 §S1a — writing a resolved value into a file we just laid down,
+# and RECORDING that we wrote it.
+# ---------------------------------------------------------------------------
+
+
+def _toml_literal(value) -> str:
+    """`value` as a TOML scalar. Integers bare, everything else a basic string
+    with the two characters TOML's basic strings cannot carry raw escaped."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def _assigns(line: str, key: str) -> bool:
+    """Whether `line` is a live (uncommented) assignment to `key`."""
+    stripped = line.strip()
+    if stripped.startswith("#") or "=" not in stripped:
+        return False
+    return stripped.split("=", 1)[0].strip() == key
+
+
+def _table_body(lines: list[str], table: str) -> tuple[int, int] | None:
+    """The `[start, end)` line range of `table`'s body, or None when the
+    document declares no such table. The body ends at the next table header of
+    any depth, so a `[limits.retention]` below `[server]` closes it."""
+    header = f"[{table}]"
+    start = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if start is None:
+            if stripped == header:
+                start = index + 1
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            return start, index
+    return (start, len(lines)) if start is not None else None
+
+
+def apply_setting(path: str, table: str, key: str, value, block: str = "") -> bytes:
+    """Set `table`'s `key` to `value` in the TOML file at `path`; return the
+    bytes now on disk.
+
+    A LINE rewrite rather than a re-serialization, and that is the point: these
+    files are documentation as much as they are configuration — every key sits
+    under the commented paragraph explaining it — and a round-trip through a
+    TOML emitter would hand the operator back a file with every one of those
+    paragraphs gone. Only the assignment moves.
+
+    An absent key is appended to its table; an absent TABLE is appended to the
+    document, preceded by `block` (its own commented introduction) so a key an
+    operator did not write still arrives explained.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    assignment = f"{key} = {_toml_literal(value)}"
+    lines = text.split("\n")
+    body = _table_body(lines, table)
+    if body is None:
+        separator = "" if text.endswith("\n") else "\n"
+        text = f"{text}{separator}{block}[{table}]\n{assignment}\n"
+    else:
+        start, end = body
+        for index in range(start, end):
+            if _assigns(lines[index], key):
+                lines[index] = assignment
+                break
+        else:
+            insert = end
+            while insert > start and not lines[insert - 1].strip():
+                insert -= 1
+            lines.insert(insert, assignment)
+        text = "\n".join(lines)
+    Path(path).write_text(text, encoding="utf-8")
+    return text.encode("utf-8")
+
+
+def install_record_path(target_dir: str) -> str:
+    """Where the install records the bytes it authored, under `target_dir`."""
+    return os.path.join(target_dir, INSTALL_RECORD_FILENAME)
+
+
+def config_digest(data: bytes) -> str:
+    """The recording of one file's contents — a SHA-256 of the bytes.
+
+    A digest rather than a copy: the question it answers is only ever "is this
+    still exactly what we wrote?", and keeping a second copy of an operator's
+    configuration around would be a file nobody asked for and a second place
+    for it to be read from by mistake.
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
+def recorded_config_digests(target_dir: str) -> dict:
+    """What the install recorded writing, as `{<abs path>: <digest>}`.
+
+    `{}` for an install that predates the record, for a hand-placed file, and
+    for a record that cannot be read — all three mean the same thing (we cannot
+    prove we wrote this), and the caller's fall-back to the shipped template is
+    the fail-safe direction CR-CRU-131 §S1c set.
+    """
+    try:
+        with open(install_record_path(target_dir), encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    authored = record.get(RECORD_AUTHORED_KEY)
+    if not isinstance(authored, dict):
+        return {}
+    return {path: digest for path, digest in authored.items()
+            if isinstance(path, str) and isinstance(digest, str)}
+
+
+def record_configs(target_dir: str, authored: dict) -> str | None:
+    """MERGE `{<path>: <bytes>}` into the install record; return its path, or
+    None when there was nothing to record.
+
+    Merged rather than overwritten because a re-install authors only the files
+    it actually wrote this time: a run that laid nothing down must not erase the
+    provenance of what an earlier run did lay down, or `--purge` would start
+    retaining files no operator ever touched.
+    """
+    if not authored:
+        return None
+    recorded = recorded_config_digests(target_dir)
+    recorded.update({path: config_digest(data)
+                     for path, data in authored.items()})
+    path = install_record_path(target_dir)
+    Path(path).write_text(
+        json.dumps({RECORD_AUTHORED_KEY: recorded}, indent=2, sort_keys=True)
+        + "\n", encoding="utf-8")
+    return path
 
 
 def _package_version() -> str:
@@ -224,8 +398,30 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     declared, and the stage REPORTS the reason as `server_config` in its
     result so the install output states it. A missing plan (an older caller,
     or a stage double) leaves the behaviour exactly as it was.
+
+    CR-CRU-139 §S1a — the plan may also carry the RESOLVED `listener`, which
+    this stage writes into BOTH files it lays down: the port into the server's
+    `[server]` table and the same value's URL into the client's `[client]`
+    one, so one install's two files cannot disagree about which board this
+    machine talks to. Only a file this call actually LAID DOWN is written to:
+    `lay_down_config` never overwrites, and a configured listener is never
+    renumbered by a re-install.
+
+    Every file it authored is RECORDED (`record_configs`), because the write
+    above makes an installed file differ from its template forever: without the
+    recording the install's own value would be indistinguishable from an
+    operator's edit, and `uninstall --purge` would take the retention branch on
+    every machine that ever probed a port.
     """
+    listener = (server_config or {}).get("listener")
+    authored: dict = {}
     wrote_config = lay_down_operator_config(target_dir)
+    if wrote_config:
+        client_config = operator_config_path(target_dir)
+        if listener:
+            apply_setting(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
+                          listener["url"], block=_CLIENT_TABLE_BLOCK)
+        authored[client_config] = Path(client_config).read_bytes()
     server_report: dict | None = None
     if server_config is not None:
         source = server_config.get("source")
@@ -233,10 +429,15 @@ def run_manifest_stage(target_dir: str, force: bool = False,
             written = server_config["path"]
             if lay_down_config(source, written):
                 wrote_config = True
+                if listener:
+                    apply_setting(written, SERVER_TABLE, SERVER_PORT_KEY,
+                                  listener["port"])
+                authored[written] = Path(written).read_bytes()
             server_report = {"path": written, "reason": None}
         else:
             server_report = {"path": None,
                              "reason": server_config.get("reason")}
+    record_configs(target_dir, authored)
     manifest = build_manifest(
         target_dir,
         server_config=server_report["path"] if server_report else None)

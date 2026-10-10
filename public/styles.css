@@ -637,13 +637,79 @@ body {
 .app-manager-row-head { display: flex; align-items: center; gap: 6px; }
 .app-manager-row-head .app-manager-edit { margin-left: auto; }
 .app-manager-params { margin-top: 2px; }
-.app-manager-edit-form,
+/* F12's redraw: nothing wider than the drawer. The manager's own content box
+   (never the shared pane-scroll class), long paths and keys wrap, and every
+   form grid column may shrink. */
+.app-manager-content { min-width: 0; }
+.app-manager-wrap { overflow-wrap: anywhere; }
+.app-manager-key { opacity: 0.7; }
+.app-manager-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.app-manager-group-head {
+  font: 600 9.5px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+.app-manager-group-head .app-card-meta { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.app-manager-project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+}
+.app-manager-project-grid .app-manager-edit-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font: 9.5px var(--mono);
+}
+.app-manager-span-all { grid-column: 1 / -1; }
+.app-manager-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 150px) 92px minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  font: 9.5px var(--mono);
+}
+.app-manager-setting-label { display: contents; }
+.app-manager-setting-caption { min-width: 0; }
+.app-manager-setting-value { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.app-manager-setting-explain { min-width: 0; }
+.app-manager-em { font-style: italic; }
+.app-manager-footnote { margin-top: 2px; }
+.app-manager-danger-label {
+  margin-top: 6px;
+  font: 9.5px var(--mono);
+  color: var(--color-error);
+}
+.app-manager-actions { display: flex; gap: 6px; margin-top: 6px; }
+.app-manager-editing { margin-left: auto; }
 .app-manager-add {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
 }
+.app-manager-add-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px 8px;
+}
+.app-manager-add-name-type { grid-template-columns: minmax(0, 1fr) 110px; }
+.app-manager-add > .app-chip { align-self: flex-start; }
+.app-manager input,
+.app-manager select { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.app-manager-setting input { width: 100%; }
+.app-manager-project-grid input,
+.app-manager-project-grid select,
+.app-manager-add-line input,
+.app-manager-add-line select { width: 100%; }
 .app-manager-add {
   border-top: 1px dashed var(--line);
   padding-top: 10px;
@@ -760,6 +826,44 @@ body {
 .app-failure-trace { color: var(--ink-faint); margin-top: 4px; }
 /* §S3 failure-box degradation — dim reporter note when no message stored. */
 .app-failure-note { color: var(--ink-faint); font-style: italic; margin-top: 2px; }
+
+/* A playwright run's detail, read as a specification: feature headings with
+   their own counts and fold, the browser on each scenario row, the byline, and
+   a failing step's message inside its own row with the stack behind a chip. */
+.app-run-byline { margin: 0 0 6px; }
+.app-feature-group { margin-bottom: 6px; }
+.app-feature-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px var(--mono);
+  color: var(--ink);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.app-feature-heading .app-feature-name { flex: 1; }
+.app-feature-scenarios { margin-left: 14px; }
+.app-suite-browser { white-space: nowrap; }
+.app-leaf-step { flex-wrap: wrap; }
+.app-leaf-step .app-leaf-name::before { content: attr(data-glyph) " "; }
+.app-leaf-step .app-leaf-duration::after { content: attr(data-duration); }
+.app-leaf-step .app-step-failure { flex-basis: 100%; margin: 2px 0 4px 14px; cursor: default; }
+.app-stack-toggle { margin-top: 4px; padding: 0 6px; font-size: 9px; }
+.app-stack-trace { margin: 4px 0 0; white-space: pre-wrap; }
+
+/* The BDD tab's index: one row per BDD run (when · who · cycle · verdict),
+   the same flat row language as a cycle's linked runs — no card, no pill. */
+.app-bdd-index-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  cursor: pointer;
+  color: var(--ink);
+  padding: calc(var(--row-pad, 6px) / 2) 2px;
+}
+.app-bdd-index-row:hover { color: var(--heat); }
+.app-bdd-index-cycle { font: 10.5px var(--mono); color: var(--ink-dim); }
+.app-bdd-index-cycle.unbound { color: var(--ink-faint); font-style: italic; }
 /* §S3 — compile drill-in status line (always first). */
 .app-compile-status {
   display: inline-block;
@@ -823,6 +927,9 @@ body {
   border-radius: 2px;
   cursor: pointer;
 }
+/* One suite's cells, its own binding; laid out as if the cells were the
+   strip's direct children. */
+.app-heat-suite { display: contents; }
 .app-heat-fail { background: var(--fail); }
 .app-heat-pending { background: var(--heat); }
 .app-heat-pass { background: var(--pass); opacity: 0.35; }
@@ -901,8 +1008,32 @@ body {
   align-items: flex-start;
 }
 .app-workflow-active { flex: 1 1 auto; min-width: 0; }
+/* Now (F22): what is running, stacked: the plan first, then the running
+   gate's view; or the single `Nothing running -> Roadmap` line. */
+.app-workflow-now {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.app-workflow-now-empty {
+  display: block;
+  color: var(--ink-faint);
+  font: 12px var(--mono);
+  padding: 8px 2px;
+}
+.app-now-roadmap {
+  color: var(--heat);
+  border-color: var(--heat);
+}
+.app-gate-run-line {
+  color: var(--ink-faint);
+  font: 11px var(--mono);
+  margin: 4px 0 6px;
+}
 .app-gate-pane {
-  flex: 0 0 220px;
+  flex: 0 0 auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-1);
@@ -1057,6 +1188,25 @@ body {
 .app-gate-fix-id { color: var(--heat); }
 .app-gate-fix-file { color: var(--ink-faint); }
 .app-gate-fix-desc { color: var(--ink); }
+/* The decisions beneath the step ladder (frame F21): one ` · `-joined row
+   per decision, the action inked fix = heat, approve = green, skip = dim. */
+.app-gate-decisions { margin-top: 10px; }
+.app-gate-decision-row {
+  font-size: 10.5px;
+  line-height: 1.9;
+  padding: 1px 0;
+}
+.app-gate-decision-time { color: var(--ink-faint); }
+.app-gate-decision-fix { color: var(--heat); }
+.app-gate-decision-approve { color: var(--pass); }
+.app-gate-decision-skip { color: var(--ink-faint); opacity: 0.55; }
+.app-gate-decision-carried { color: var(--ink); }
+/* F21 panel d — a sealed gate's one-line decision summary, dim meta text
+   beneath the gate card's seal and beneath a History wave's header (indented
+   under it); a click opens the gate's drill-in. */
+.app-decision-summary { cursor: pointer; }
+.app-gate-decision-summary { margin-top: 2px; }
+.app-wave-decision-summary { margin: 2px 0 4px 12px; }
 .app-milestone-entry {
   color: var(--ink-faint);
   font-size: 10px;
@@ -1371,8 +1521,9 @@ body {
    square. So the side and the 2px border are the design's, the box CENTRES
    its word instead of padding out to a size, and `box-sizing: border-box`
    keeps the 52px a box figure the way the strip's own gate cell does
-   (`:1185`). The border COLOUR stays the app's `--line` token: the artifact's
-   `#4a5160` is no token of this app's, and colour is the CR's non-goal. */
+   (`.app-strip-gate`). The border COLOUR stays the app's `--line` token: the
+   artifact's `#4a5160` is no token of this app's, and colour is the CR's
+   non-goal. */
 .app-flow-terminal {
   box-sizing: border-box;
   flex: 0 0 auto;
@@ -1575,15 +1726,12 @@ body {
    removed the dispositioned PENDING row, and a node still renders for the
    loose group (AC18a, untrimmed) and for a running dispositioned CR (AC9c),
    where §S8 forbids `data-lifecycle` being the only channel. */
-.app-flow-node-lifecycle,
-.app-roadmap-lifecycle {
+.app-flow-node-lifecycle {
   font: 400 10px/1.4 var(--mono);
   color: var(--ink-faint);
 }
-.app-flow-node-lifecycle.superseded,
-.app-roadmap-lifecycle.superseded { font-style: italic; }
-.app-flow-node-lifecycle.void,
-.app-roadmap-lifecycle.void { text-decoration: line-through; }
+.app-flow-node-lifecycle.superseded { font-style: italic; }
+.app-flow-node-lifecycle.void { text-decoration: line-through; }
 /* CR-CRU-103 §S1/AC1/AC1a/AC2 — the approved artifact's own `.delivered`:
    `border:1.5px solid var(--line); border-radius:9px; background:var(--bg-2);
    padding:10px 13px; min-width:210px`, with `flex:0 0 auto` beside the
@@ -1600,7 +1748,7 @@ body {
    never a spacing bug — it was an absent box.
 
    `box-sizing: border-box` for the reason the strip's gate cell declares it
-   (`:1185`): the design's `min-width` is a figure about the BOX. */
+   (`.app-strip-gate`): the design's `min-width` is a figure about the BOX. */
 .app-flow-delivered {
   box-sizing: border-box;
   flex: 0 0 auto;
@@ -1678,7 +1826,7 @@ body {
   font: 400 12.5px/1.55 var(--sans);
   border-bottom: 1px solid var(--line);
 }
-.app-roadmap-row:last-child { border-bottom: 0; }
+.app-roadmap-row:last-of-type { border-bottom: 0; }
 .app-roadmap-head {
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
@@ -1708,8 +1856,7 @@ body {
 .app-roadmap-track { font: 400 11.5px/1.4 var(--mono); color: var(--ink-dim); }
 .app-roadmap-status,
 .app-roadmap-wave,
-.app-roadmap-track,
-.app-roadmap-lifecycle { flex: 0 0 auto; }
+.app-roadmap-track { flex: 0 0 auto; }
 /* AC22/AC23 — the row's status badge wears the SAME palette as its flowchart
    node, because node and row are one entry drawn twice and must not disagree
    about where it stands. Scoped to `.app-badge` so the column CELL, which
@@ -1735,6 +1882,69 @@ body {
   color: var(--ember);
   border-color: var(--ember);
 }
+/* F17 — a DEAD row keeps the live row's cells: its id, title and points are
+   struck through and dimmed, its depends-on chips fade, and its status badge
+   names the lifecycle (VOID reads faint and dashed, SUPERSEDED leans ember, so
+   the two differ by colour and by word). The ⓘ is drawn, not authored, so
+   the badge's own words stay exactly the state. */
+.app-roadmap-cell.dead,
+.app-roadmap-card-field.dead,
+.app-roadmap-points.dead {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+.app-roadmap-dep.faded { opacity: 0.45; }
+.app-badge.app-roadmap-status.void {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+.app-badge.app-roadmap-status.superseded {
+  color: var(--ember-dim);
+  border-color: var(--ember-dim);
+}
+.app-badge.app-roadmap-status[data-lifecycle] { cursor: help; }
+.app-badge.app-roadmap-status[data-lifecycle]::after { content: " \24D8"; }
+/* The reason's bubble: state · date · who over the full reason, wrapped.
+   It is FIXED (app.js places it under its badge when it opens), so it sits
+   above the table and can never widen a cell, a row or the pane. */
+.app-roadmap-status-tip {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font: 400 10.5px/1.5 var(--mono);
+  color: var(--ink);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-roadmap-status-tip:not(.open) {
+  /* Closed is visually hidden, never `hidden`/display:none/visibility:hidden:
+     the bubble stays in the accessibility tree, so the badge's
+     aria-describedby still announces the reason while it is closed. */
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.app-roadmap-status-tip-head {
+  display: block;
+  margin-bottom: 3px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.app-roadmap-status-tip-reason { display: block; }
 
 /* CR-CRU-078 §S7 — SELECTION and the drill-through source: the highlight has
    to be visible on BOTH renderings of one entry (AC17) and the source has to
@@ -1765,12 +1975,13 @@ body {
    no child element and PRD §4.11's locked agent sub-row enumeration ("final
    form — round 6, 2026-07-15") stands (AC7).
 
-   APPENDED at the end of the sheet, not filed beside the animation family at
-   :1007/:1096/:1119: eleven informal `styles.css:<line>` citations live in the
-   test tree, seven of them at >=1096, and an insertion up there would shift
-   every one. Appending shifts none — a free mitigation, so it is taken.
+   APPENDED at the end of the sheet, not filed beside the animation family
+   (`app-locate-blink`, `app-run-pulse`, `app-spin`): eleven informal
+   `styles.css:<line>` citations live in the test tree, seven of them at
+   >=1096, and an insertion up there would shift every one. Appending shifts
+   none — a free mitigation, so it is taken.
 
-   It sits after `.app-card`/`.app-agent-row` (both :343/:359, both 0-1-0), so
+   It sits after `.app-card`/`.app-agent-row` (both 0-1-0), so
    the source-order tie-break is what layers the shimmer over the row's flat
    `var(--bg-2)` fill without either rule needing extra specificity. */
 @keyframes app-stream-flow {
@@ -1788,3 +1999,616 @@ body {
   background-size: 55% 100%;
   animation: app-stream-flow 1.9s linear infinite;
 }
+
+/* ── CR-CRU-018 §S1 — the responsive bands (DN-crucible-responsive-model) ──
+   Three bands, named by what they are (DN decision 1):
+     phone    ≤ 640px
+     tablet   641–1024px
+     desktop  ≥ 1025px   — begins exactly where CR-CRU-023's 1024×640
+                           minimum-supported-screen guarantee ends.
+   The bands are declared ONCE, here. A custom property cannot be read inside
+   a media query, so each band's query is the single literal declaration of
+   its boundary and the band then PUBLISHES itself as the `--band` token —
+   script that needs the band reads that token (getComputedStyle) instead of
+   re-declaring a pixel value. The `--bp-*` tokens name the same two
+   boundaries for any consumer that needs the number itself. Range syntax
+   (`width < 1025px`) is used so no fractional width falls between two bands.
+
+   DN decision 2 — ONE layout axis changes per band, never a redesign:
+   desktop keeps today's `[content | pane]` grid untouched (nothing in this
+   block matches ≥1025px, so desktop is pixel-unchanged by construction);
+   below it the Project pane stacks BENEATH the content column, full width,
+   and the content keeps its single column.
+
+   APPENDED at the end of the sheet, like the block above, so the informal
+   `styles.css:<line>` citations in the test tree shift by none. */
+:root {
+  --bp-phone-max: 640px;
+  --bp-tablet-max: 1024px;
+  --band: desktop;
+}
+
+@media (width < 1025px) {
+  :root { --band: tablet; }
+
+  /* DN decision 2 — the pane stacks beneath the content column, full width.
+     The collapsed variant (CR-CRU-093's 34px sliver column) is overridden
+     too: below the desktop band there is no side column for a sliver to
+     occupy. The pane's row is sized to its content up to 40% of the body,
+     and stays its own vertical scroller beyond that — never the page's. */
+  .app-workspace-body,
+  .app-workspace-body:has(> .app-pane-collapsed) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) fit-content(40%);
+  }
+  /* A stacked collapsed pane reads as a horizontal strip, not a rotated
+     sliver — it still states what it holds (DN "what a band must not
+     change"). */
+  .app-pane-collapsed .app-pane-head { flex-direction: row; }
+  .app-rail-sliver-label { writing-mode: horizontal-tb; }
+
+  /* DN decision 5 (amended) — the CR-CRU-023 660px pane-content floor
+     (`.app-pane-content > *`, above) stays in force at ≥1025px and is
+     LIFTED here: content reflows to the band instead. Wide content still
+     scrolls inside its own `.app-pane-content` box (CR-CRU-029's dual-axis
+     contract, unchanged) — container scroll is the mechanism, page scroll
+     the defect (DN decision 6). */
+  .app-pane-content > * { min-width: 0; }
+}
+
+@media (width <= 640px) {
+  :root { --band: phone; }
+
+  /* Storyboard F15 — the projects row scrolls inside its own row rather
+     than wrapping into a tall block or widening the page (DN decision 6). */
+  .app-badge-flow {
+    flex: 1 1 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .app-badge-flow > .app-badge { flex: 0 0 auto; }
+
+  /* DN decision 12 / CR §S1 — on the phone band the in-pane drill-in
+     FILLS THE VIEWPORT with its ← back chip in the header band at the top;
+     its own scroller (and virtualization) is unchanged inside it. */
+  .app-workspace-body > .app-detail-col {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    padding: 12px;
+    background: var(--bg);
+  }
+
+  /* DN decision 9 — the project band RELOCATES to a foot strip, never
+     hides. The collapsed pane (collapsed on this band by the viewport
+     trigger, app.js — ephemerally, never via RAIL_STORAGE_KEY) drops its
+     sliver header and shows the foot strip in its place: project name,
+     live-agent count and health dot, so it still states what it holds. */
+  .app-pane-collapsed { padding: 0; overflow: hidden; }
+  .app-pane-collapsed > .app-pane-head { display: none; }
+  .app-pane-collapsed > .app-band-foot { display: flex; }
+  .app-band-foot {
+    width: 100%;
+    min-height: 44px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 0;
+    background: rgba(255, 122, 26, 0.06);
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+  }
+  .app-band-foot .app-dot { margin-right: 0; }
+  .app-band-foot-open {
+    margin-left: auto;
+    font: 600 10.5px var(--mono);
+    color: var(--ember);
+  }
+  /* Tapped open, the SAME pane becomes a sheet over the content: it fills
+     the lower 70% of the viewport and scrolls inside itself; the backdrop
+     is the complementary upper 30%, so the two never overlap and the
+     backdrop always has an exposed surface to tap. */
+  .app-band-sheet {
+    position: fixed;
+    inset: 30vh 0 0 0;
+    z-index: 46;
+    border-radius: 12px 12px 0 0;
+  }
+  .app-band-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 30vh;
+    z-index: 46;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  /* DN decision 10 / phone AC8: the roadmap's release-scoped table is a
+     stacked CARD list here (app.js renders the cards only on this band).
+     Each card is the SAME entry the desktop row draws, re-flowed: the id and
+     brief title lead, then every other column as a labelled field that
+     wraps inside the card instead of widening the page (DN decision 6). */
+  .app-roadmap-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+  .app-roadmap-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: 400 12.5px/1.55 var(--sans);
+  }
+  .app-roadmap-card.selected {
+    outline: 1px solid var(--ink-dim);
+    outline-offset: 1px;
+  }
+  .app-roadmap-card[data-drill-source="true"] { cursor: pointer; }
+  .app-roadmap-card-field {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
+  .app-roadmap-card-field.app-roadmap-title {
+    flex: 1 1 100%;
+    order: -1;
+    overflow-wrap: anywhere;
+  }
+  .app-roadmap-card-field.app-roadmap-cr { order: -2; }
+  .app-roadmap-card-label {
+    font: 600 10px/1.4 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-dim);
+  }
+
+  /* DN decision 12 / phone AC10: the run detail's heat strip ENLARGES its
+     cells on the phone band rather than showing fewer. Every cell still
+     renders (the strip wraps), so the file count is unchanged. Keyed on the
+     band, not on `pointer: coarse` alone: the desktop band keeps its 8px
+     cells whatever the input medium. */
+  .app-heat-cell {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* CR-CRU-018 §S2 / DN decision 4 — the touch floor OUTRANKS density. On
+   touch media every interactive chip, card and toggle measures ≥44px in at
+   least one dimension at comfortable, compact AND ultra: density sets
+   padding (`--row-pad`, above), the floor sets a min-height density never
+   touches, so no density can breach it. Keyed on the input medium, not the
+   band — a touch screen is a touch screen at any width — so no desktop
+   (fine-pointer) layout is affected. The virtualized drill-in tree rows are
+   deliberately NOT floored: their fixed row height drives the
+   virtualization window (DN decision 12 — virtualization unchanged). */
+@media (pointer: coarse) {
+  button.app-chip,
+  .app-rail-toggle,
+  .app-evt,
+  .app-band-foot {
+    min-height: 44px;
+  }
+  .app-rail-toggle { min-width: 44px; }
+}
+
+/* ── CR-CRU-022 §S5 — analytics: the Velocity card, the release band and the
+   analytics pane (storyboard F16 + F14¾, DN-crucible-analytics §10). Colours
+   are the theme's own tokens; the chart reads the same tokens at draw time.
+   APPENDED, like the blocks above, so existing citations shift by none. */
+/* F18 · 1b "the card is not a button" — a scoped override of the shared
+   `.app-card` pointer (agent rows keep theirs); only the day | week switch's
+   two options are clickable. */
+.app-velocity-card { gap: 3px; cursor: default; }
+.app-velocity-head { display: flex; align-items: center; gap: 6px; }
+.app-velocity-toggle {
+  margin-left: auto;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.app-velocity-view {
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font: 8.5px/1.6 var(--mono);
+  cursor: pointer;
+}
+.app-velocity-view.on { background: var(--ember); color: #111; }
+.app-velocity-value { font: 400 12px var(--mono); color: var(--ink); }
+.app-velocity-value b { font-size: 14px; }
+.app-velocity-bars {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 36px;
+  margin-top: 4px;
+}
+.app-velocity-bar {
+  flex: 1 1 0;
+  max-width: 18px;
+  min-height: 2px;
+  background: var(--pass);
+  opacity: 0.6;
+}
+.app-velocity-mean {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--ember);
+}
+/* F18 · 1b — per week, the few bars span the card, as the frame draws them. */
+.app-velocity-bars-week { gap: 8px; }
+.app-velocity-bars-week .app-velocity-bar { max-width: none; }
+/* F18 · 1b — the trailing partial week is drawn hollow: a faint fill inside
+   a dashed outline. */
+.app-velocity-bar[data-hollow-week="true"] {
+  opacity: 1;
+  background: rgba(74, 222, 128, 0.27);
+  outline: 1px dashed var(--pass);
+  outline-offset: -1px;
+}
+.app-velocity-flow {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+/* The release band — zone 3's header, one tap target over the table. */
+.app-roadmap-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 10px 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 122, 26, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 122, 26, 0.07);
+  cursor: pointer;
+}
+.app-roadmap-progress:hover,
+.app-roadmap-progress:focus-visible { border-color: var(--ember); }
+.app-roadmap-progress-text { font: 400 10.5px/1.5 var(--mono); color: var(--ink-dim); }
+.app-roadmap-progress-text b { color: var(--ink); }
+.app-roadmap-progress-chip { font-size: 10px; }
+.app-roadmap-health.ahead { color: var(--pass); border-color: var(--pass); }
+.app-roadmap-health.at-risk { color: var(--heat); border-color: var(--heat); }
+.app-roadmap-health.behind { color: var(--fail); border-color: var(--fail); }
+.app-roadmap-unpointed { color: var(--heat); }
+.app-roadmap-progress-open {
+  margin-left: auto;
+  font: 400 10px var(--mono);
+  color: var(--ink-faint);
+}
+.app-burn-thumb {
+  display: flex;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  width: 78px;
+  height: 26px;
+  border-bottom: 1px solid var(--line);
+}
+.app-burn-thumb-step {
+  flex-basis: 0;
+  min-width: 2px;
+  background: rgba(255, 122, 26, 0.35);
+  border-top: 1.5px solid var(--ember);
+}
+.app-roadmap-points {
+  flex: 0 0 auto;
+  font: 600 10.5px/1.4 var(--mono);
+  color: var(--ink);
+}
+
+/* The analytics pane (F14¾): the chart scrolls inside its OWN box. The body
+   fills the pane's content box; the chart takes whatever height the caption
+   and the forecast card leave, floored so a short pane still shows a
+   readable plot (and scrolls inside itself below that). The canvas host is
+   sized by its flex box alone, never by the plot drawn into it — app.js sizes
+   uPlot to the host's content box and follows its resizes. */
+.app-analytics-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 100%;
+}
+.app-analytics-body > :not(.app-burndown-chart) { flex: 0 0 auto; }
+.app-burndown-chart {
+  flex: 1 1 0;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.app-burndown-canvas {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  font: 400 10px var(--mono);
+  color: var(--ink-faint);
+}
+/* The chart's DOM description (app.js `burndownDescriber`): a list over the
+   canvas, invisible but for one reused tooltip. Each step is a small,
+   transparent, focusable target centred on its point. */
+.app-burndown-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.app-burndown-label { display: none; }
+.app-burndown-target {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: auto;
+  outline: none;
+}
+.app-burndown-tooltip {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 10px var(--mono);
+}
+.app-burndown-tooltip[hidden] { display: none; }
+.app-analytics-health.ahead { color: var(--pass); }
+.app-analytics-health.at-risk { color: var(--heat); }
+.app-analytics-health.behind { color: var(--fail); }
+
+/* DN decision 4 — the band is a touch target: ≥44px on touch media. */
+@media (pointer: coarse) {
+  .app-roadmap-progress { min-height: 44px; }
+}
+
+/* DN-crucible-responsive-model + CR §S5 — on the phone band the release band
+   COLLAPSES to one line at the touch floor: its items stay on one row and
+   what does not fit scrolls inside the band itself, never the page. */
+@media (width <= 640px) {
+  .app-roadmap-progress {
+    flex-wrap: nowrap;
+    min-height: 44px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .app-roadmap-progress > * { flex: 0 0 auto; }
+  .app-burn-thumb { width: 52px; }
+}
+
+/* F22 — the Workflow tab is two panes, Now above History. Now grows with its
+   content and never scrolls (no cap: the running work is never clipped);
+   History takes the height Now leaves, at least 160px, and scrolls on its
+   own. The pane-scroll box keeps the horizontal axis (the 660px floor's
+   overflow); its runway fills it as a column instead of reserving extra
+   scroll room, and never shrinks below Now plus History's floor — when Now
+   is taller than that leaves room for, the pane-scroll box scrolls as a
+   whole, Now itself still showing no scrollbar. On the
+   desktop band (where the 660px floor lives) a pane's width never drops below
+   its widest unbreakable content, so a too-wide row still widens the
+   pane-scroll box and scrolls there, not inside a pane; below it the floor is
+   lifted and the panes reflow to the band (DN decision 5).
+   APPENDED, like the blocks above, so existing citations shift by none. */
+.app-center > .app-workflow-panes {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.app-workflow-panes > .app-pane-runway {
+  flex: 1 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.app-workflow-panes > .app-pane-runway > * { flex: 0 0 auto; }
+.app-workflow-panes > .app-pane-runway > .app-workflow-cols {
+  align-items: stretch;
+}
+.app-workflow-panes .app-workflow-history { overflow-y: auto; }
+@media (width >= 1025px) {
+  .app-workflow-panes .app-workflow-now,
+  .app-workflow-panes .app-workflow-history { min-width: min-content; }
+}
+.app-workflow-panes > .app-pane-runway > .app-workflow-history {
+  flex: 1 1 0;
+  min-height: 160px;
+}
+/* The phone band: two sub-tabs, Now | History, each a full-width row that is
+   its own toggle (F15d) and clears the 44px touch floor; the selected pane
+   fills the tab and the other is hidden. */
+.app-workflow-subtabs {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.app-workflow-subtab {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font: 600 11px var(--mono);
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.app-workflow-subtab + .app-workflow-subtab { border-top: 1px solid var(--line); }
+.app-workflow-subtab.on {
+  background: rgba(255, 122, 26, 0.07);
+  color: var(--ember);
+}
+.app-workflow-show-now > .app-pane-runway > .app-workflow-history,
+.app-workflow-show-history > .app-pane-runway > .app-workflow-cols { display: none; }
+.app-workflow-show-now > .app-pane-runway > .app-workflow-cols {
+  flex: 1 0 auto;
+}
+/* F22 — on desktop each pane carries its title, `Now` / `History`, above its
+   own scrolling box and outside it (the storyboard's `m-h` heading). The phone
+   band renders none: the sub-tab rows are the titles there. */
+.app-workflow-pane-title {
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin: 0 0 -9px;
+}
+
+/* F23 — a cycle's recorded change sits BENEATH its cycle line, never beside
+   it: its own dim line (app-card-meta ink), indented to the label (the
+   13px row's 1.2em glyph + the line's 8px gap; History rows with a drill-
+   down toggle add its 1em glyph + gap), wrapping over as many lines as it
+   needs so the cycle line's label, timer and → Runs stay untouched; it
+   tucks 2px up under its line, as F23 draws it (margin: -2px 0 4px). */
+.app-cycle-change-record {
+  display: block;
+  margin: -2px 0 4px calc(13px * 1.2 + 8px);
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-cycle-row:has(> .app-cycle-line > .app-cycle-toggle) > .app-cycle-change-record {
+  margin-left: calc(13px + 8px + 13px * 1.2 + 8px);
+}
+
+/* History told by release (F22): a release row is one line until opened;
+   opened, its release workflow sits on top, indented one step, and its
+   waves beneath it, indented the same step. */
+.app-history-release { margin-top: 5px; }
+.app-history-release-line { color: var(--ink); }
+.app-history-release[data-open="true"] > .app-history-release-line { color: var(--ember); }
+.app-history-release-body { padding-left: 14px; }
+.app-history-wave-line { display: flex; align-items: baseline; gap: 2px; }
+.app-history-workflow { margin: 2px 0 6px; }
+.app-history-workflow-body { padding-left: 14px; }
+.app-history-gate-run-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  align-items: baseline;
+}
+.app-history-gate-link { margin-left: auto; font-size: 0.85em; }
+.app-history-verification { margin: 2px 0; }
+.app-history-packages { color: var(--ink-faint); }
+
+/* F24·B — Now and History are one card split in two: Now on a
+   raised band (--bg-2) under its header bar, a hatched divider, then
+   History's header bar and its own scrolling box on the card's base (--bg-1).
+   The header bars replace F22's small titles; History's sits outside its
+   scroll box, so it stays put while the list scrolls. The pane's layout
+   holds inside the card: Now grows and never scrolls, History takes the rest
+   with its 160px floor, and the pane scrolls as a whole when Now is taller.
+   No overflow clip on the card, so a too-wide row still widens the pane. */
+.app-workflow-panes > .app-pane-runway > .app-workflow-card {
+  flex: 1 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+@media (width >= 1025px) {
+  .app-workflow-card { min-width: min-content; }
+}
+.app-workflow-card > * { flex: 0 0 auto; }
+.app-workflow-now-band {
+  background: var(--bg-2);
+  border-radius: 9px 9px 0 0;
+}
+.app-workflow-now-band > .app-workflow-cols {
+  align-items: stretch;
+  padding: 8px 12px;
+}
+.app-workflow-card > .app-workflow-history {
+  flex: 1 1 0;
+  min-height: 160px;
+  padding: 8px 12px;
+}
+.app-workflow-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  font: 600 10px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--ink-dim);
+}
+.app-workflow-pane-header > .app-workflow-pane-title {
+  flex: 0 0 auto;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+/* The bar is one line: its description truncates, never wraps the bar. */
+.app-workflow-pane-subtitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+.app-workflow-now-dot {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  box-shadow: none;
+}
+.app-workflow-now-dot[data-live="true"] {
+  background: var(--pass);
+  box-shadow: 0 0 6px var(--pass);
+}
+.app-workflow-history-glyph { flex: 0 0 auto; color: var(--ink-faint); }
+.app-workflow-panes-divider {
+  height: 6px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 12px);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+/* The phone band: the sub-tab rows are the titles; the selected pane shows
+   as its card, the same contrast carried over — Now on the raised band,
+   History on the card's base. */
+.app-workflow-show-now > .app-pane-runway > .app-workflow-cols,
+.app-workflow-show-history > .app-pane-runway > .app-workflow-history {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.app-workflow-show-now > .app-pane-runway > .app-workflow-cols { background: var(--bg-2); }
+.app-workflow-show-history > .app-pane-runway > .app-workflow-history { background: var(--bg-1); }

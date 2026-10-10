@@ -15,13 +15,13 @@
 // C1 landed the storage: `queue_entries` carries `release` / `track` /
 // `lifecycle_json`, `listQueue` publishes `seq`, `listReleaseProposals` reads
 // the live proposals, and `replaceQueue` carries a declaration forward. NOTHING
-// on the wire can reach any of it. `src/v2.ts`'s project-scoped dispatch
-// (src/v2.ts:2268-2301) knows `plans`, `archive`, `stop`, `releases` and
-// `queue`, and not one of §S8's five routes exists — so a release cannot be
-// proposed, a CR cannot be planned, a wave cannot be sequenced, and a dead CR
-// can only be deleted by omission from a full replace. There is no role gate
-// either: `requireRegisteredCaller` (src/v2.ts:221-236) accepts a RED agent on
-// every mutating verb in the system.
+// on the wire can reach any of it. `src/v2.ts`'s project-scoped dispatch (the
+// `/api/v2/projects/` branch of `handleV2` in src/v2.ts) knows `plans`,
+// `archive`, `stop`, `releases` and `queue`, and not one of §S8's five routes
+// exists — so a release cannot be proposed, a CR cannot be planned, a wave
+// cannot be sequenced, and a dead CR can only be deleted by omission from a
+// full replace. There is no role gate either: `requireRegisteredCaller`
+// (src/v2.ts) accepts a RED agent on every mutating verb in the system.
 //
 // ── The seams GREEN must expose (this suite is written against them) ───────
 //
@@ -61,7 +61,7 @@ interface QueueEntryWire {
   seq: number;
   release?: string;
   track?: string;
-  lifecycle?: { state: string; by?: string; reason?: string; at: number };
+  lifecycle?: { state: string; by?: string; reason?: string; at: number; author?: string };
   [key: string]: unknown;
 }
 
@@ -494,6 +494,67 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const stored = await entryOf(key, "CR-X");
         expect(stored).toBeDefined();
         expect(stored!.lifecycle!.state).toBe("VOID");
+      },
+    );
+
+    // Ruling 6 (C4) — the lifecycle now carries WHO wrote it: `cr-void` and
+    // `cr-supersede` store the same author the declaration journal already
+    // records for that write (src/store.ts appendDeclaration), reached here
+    // through `store.listQueueDeclarations` rather than a guessed literal —
+    // `declarationAuthor` (src/v2.ts) derives it from the registered caller.
+    test(
+      "cr-supersede → the lifecycle's author is the declaration journal's author for that write",
+      async () => {
+        boot();
+        const key = await seed("s8-supersede-author");
+        await propose(key, "0.2.0");
+        await plan(key, "CR-X", "0.2.0", 5, "the superseded one");
+
+        const res = await post(lifecyclePath(key, "CR-X", "supersede"), {
+          agentId: ORCH,
+          by: "CR-Y",
+        });
+        expect(res.status).toBe(200);
+
+        const journalled = handle!.store
+          .listQueueDeclarations(key)
+          .filter((d) => d.cr === "CR-X" && d.verb === "cr-supersede");
+        expect(journalled).toHaveLength(1);
+        const journalAuthor = journalled[0]!.author;
+        expect(journalAuthor).toBeDefined();
+
+        // POSITIVE — the queue read's lifecycle.author matches the journal,
+        // never a hardcoded ORCH literal.
+        expect(res.body.entry!.lifecycle!.author).toBe(journalAuthor);
+        const storedEntry = await entryOf(key, "CR-X");
+        expect(storedEntry!.lifecycle!.author).toBe(journalAuthor);
+      },
+    );
+
+    test(
+      "cr-void → the lifecycle's author is the declaration journal's author for that write",
+      async () => {
+        boot();
+        const key = await seed("s8-void-author");
+        await propose(key, "0.2.0");
+        await plan(key, "CR-X", "0.2.0", 5, "the voided one");
+
+        const res = await post(lifecyclePath(key, "CR-X", "void"), {
+          agentId: ORCH,
+          reason: "folded into CR-CRU-078",
+        });
+        expect(res.status).toBe(200);
+
+        const journalled = handle!.store
+          .listQueueDeclarations(key)
+          .filter((d) => d.cr === "CR-X" && d.verb === "cr-void");
+        expect(journalled).toHaveLength(1);
+        const journalAuthor = journalled[0]!.author;
+        expect(journalAuthor).toBeDefined();
+
+        expect(res.body.entry!.lifecycle!.author).toBe(journalAuthor);
+        const storedEntry = await entryOf(key, "CR-X");
+        expect(storedEntry!.lifecycle!.author).toBe(journalAuthor);
       },
     );
   });
@@ -1789,9 +1850,7 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
   // ── CR-CRU-108 §S1 — the queue read publishes the tracks it stores ───────
   //
   // WHY HERE: this file owns the queue GET route's behaviour. Measured
-  // 2026-09-07, `handleQueueGet` (src/v2.ts:1833 ON DEVELOP — §S1 moved the
-  // same function to :1840 on this branch; the line cited is the one the
-  // measurement was taken at) answers
+  // 2026-09-07, `handleQueueGet` (src/v2.ts) answers
   // `{ok: true, entries: store.listQueue(key)}` and states NO track fact — so
   // every assertion below fails on a missing field, never on a 404 or a
   // crash. The rule is CR-CRU-092 §S3's, restated by AC1: the sorted distinct
@@ -1799,7 +1858,7 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
   // and blank/whitespace-only values, each echoed exactly as stored.
   //
   // PLANTED FIXTURES — and why they must be planted. `normalizeTrack`
-  // (src/store.ts:349) rewrites `track` on every validating write path
+  // (src/store.ts) rewrites `track` on every validating write path
   // (`replaceQueue`, `declareMembership`), so a blank, a padded or a legacy
   // un-normalised value CANNOT be created through the API: that is precisely
   // what makes them LEGACY data, and AC2 is about legacy data. This suite had

@@ -22,7 +22,7 @@
 //
 // Slide-over machinery finding (read public/app.js + public/styles.css
 // before writing this file): `data-testid="manage-chip"` ALREADY EXISTS on
-// the home projects row (public/app.js ProjectsRow, ~line 349) but carries
+// the home projects row (`ProjectsRow` in public/app.js) but carries
 // NO onclick handler yet — "the manager surface lands in CR-CRU-012".
 // `routeParse()` (public/app-logic.mjs) has NO knowledge of `/manage` at
 // all: parsing "/manage" today falls through to `{page:"home"}` (not "p",
@@ -34,7 +34,7 @@
 // and /roadmap overlays, when they land, are a separate contract" — i.e.
 // this cycle's GREEN phase defines its own scrim/slide-over from scratch.
 // There is also no "+ Register a project" form/modal anywhere yet (the home
-// EmptyState is a static text line, public/app.js ~line 705) — so F1's
+// EmptyState is a static text line, `EmptyState` in public/app.js) — so F1's
 // "same surface" cross-reference is aspirational and out of THIS file's
 // scope; only the manager's OWN add-project form is pinned here.
 //
@@ -50,18 +50,29 @@
 //
 // Server-side context (already GREEN on this branch, b077961 + dc67a4c):
 // POST /api/v2/projects replies `{ok:true, changed:true, project}` wired
-// through handleProjectCreate (src/v2.ts:190); PATCH /api/v2/projects/<key>
+// through handleProjectCreate (src/v2.ts); PATCH /api/v2/projects/<key>
 // replies `{ok:true, changed}` WITHOUT echoing the updated project
-// (src/v2.ts:764-836) — so the manager MUST refetch the list to observe its
-// own edit, exactly like the "without reload (SSE)" wording implies. The
-// stored `Project` shape (src/types.ts:15-24) carries `liveness` using the
-// STORE's internal key names (staleAfterMs/tombstoneAfterMs/pruneAfterMs —
+// (`handleProjectPatch` in src/v2.ts) — so the manager MUST refetch the list to
+// observe its own edit, exactly like the "without reload (SSE)" wording
+// implies. The stored `Project` shape (src/types.ts) carries `liveness`
+// using the STORE's internal key names (staleAfterMs/tombstoneAfterMs/pruneAfterMs —
 // NOT the PATCH wire names t1_ms/t2_ms/t3_ms) and OMITS `liveness`/
 // `retention` entirely (not merely null) when unset — DEFAULT_LIVENESS
 // (60s/300s/1h) and DEFAULT_RETENTION (100) are client-render-time facts
 // this file pins against, matching storyboard frame F12's mock text
 // verbatim ("liveness T1 60s / T2 300s / T3 1h (defaults)" / "retention 100
 // runs").
+//
+//
+// RE-PIN (CR-CRU-174 §S3, separate commit, approved by the orchestrator —
+// user ruling): F12 was redrawn ("Redrawn for CR-CRU-171 issues 6 + 7",
+// APPROVED 2026-10-08) to drop the "liveness T1 … / T2 … / T3 … (defaults)"
+// card summary and the bare "N runs" retention wording entirely — the card
+// now reads "agents: stale after … · tombstoned after … · removed after …"
+// and "keeps the last N runs · agents may delete runs: on|off", with NO
+// defaults marker in either state. The four tests below ("shows liveness …"
+// x2, "shows the retention cap …" x2) are migrated to the new wording —
+// every other assertion in this file is unchanged.
 //
 // RED phase: every test below is expected to FAIL against the CURRENT
 // public/app.js — there is no `/manage` route, no manager container, no
@@ -366,7 +377,7 @@ describe("Projects manager — project list rendering (§S2)", () => {
     expect(managerRow("mgr-sutroot-1").textContent ?? "").toContain("/home/dev/root-co");
   });
 
-  test("shows liveness T1/T2/T3 as the system defaults (60s/300s/1h) with a defaults label when no override is set", async () => {
+  test("shows liveness defaults (60s/300s/1h) worded as stale/tombstoned/removed, with no defaults label (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       // No `liveness` key at all — mirrors the server's own omit-when-unset
@@ -376,13 +387,13 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-liveness-default-1").textContent ?? "";
-    expect(text).toMatch(/T1[^0-9]{0,6}60s/);
-    expect(text).toMatch(/T2[^0-9]{0,6}300s/);
-    expect(text).toMatch(/T3[^0-9]{0,6}1h/);
-    expect(text.toLowerCase()).toContain("default");
+    expect(text).toMatch(/stale after[^0-9]{0,6}1m/i);
+    expect(text).toMatch(/tombstoned after[^0-9]{0,6}5m/i);
+    expect(text).toMatch(/removed after[^0-9]{0,6}1h/i);
+    expect(text.toLowerCase()).not.toContain("(defaults)");
   });
 
-  test("shows overridden liveness T1/T2 values, with NO defaults label, when overrides are set", async () => {
+  test("shows overridden stale/tombstoned values, with no defaults label, when overrides are set (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       projects: [
@@ -395,22 +406,22 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-liveness-override-1").textContent ?? "";
-    expect(text).toMatch(/T1[^0-9]{0,6}120s/);
-    expect(text).toMatch(/T2[^0-9]{0,6}600s/);
+    expect(text).toMatch(/stale after[^0-9]{0,6}2m/i);
+    expect(text).toMatch(/tombstoned after[^0-9]{0,6}10m/i);
     expect(text.toLowerCase()).not.toContain("default");
   });
 
-  test("shows the retention cap: the system default (100 runs) when unset", async () => {
+  test("shows the retention cap: the system default (100 runs) when unset (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       projects: [project({ key: "mgr-retention-default-1", name: "Retention Default Co" })],
     });
 
     const text = managerRow("mgr-retention-default-1").textContent ?? "";
-    expect(text).toMatch(/100\s*runs?/i);
+    expect(text).toMatch(/keeps the last 100 runs/i);
   });
 
-  test("shows the retention cap: the override value (200 runs) when set, never the default", async () => {
+  test("shows the retention cap: the override value (200 runs) when set, never the default (re-pinned CR-CRU-174 §S3)", async () => {
     await mountApp({
       pathname: "/manage",
       projects: [
@@ -419,9 +430,10 @@ describe("Projects manager — project list rendering (§S2)", () => {
     });
 
     const text = managerRow("mgr-retention-override-1").textContent ?? "";
-    expect(text).toMatch(/200\s*runs?/i);
-    expect(text).not.toMatch(/100\s*runs?/i);
+    expect(text).toMatch(/keeps the last 200 runs/i);
+    expect(text).not.toMatch(/keeps the last 100 runs/i);
   });
+
 
   test("renders the project key as read-only text — no input element anywhere in the manager is bound to it", async () => {
     const key = "mgr-immutable-key-777";
@@ -609,9 +621,9 @@ describe("Projects manager — edit-in-place (AC6)", () => {
     expect(patchCalls).toHaveLength(1);
     expect(patchCalls[0]!.url).toContain(`/api/v2/projects/${key}`);
     expect(patchCalls[0]!.body.name).toBe("NAI-2");
-    // bound (§S1 contract, src/v2.ts:771-773): the immutable key is NEVER
-    // part of a PATCH body — a manager that echoed it back would 400 for
-    // real against the live server.
+    // bound (§S1 contract, `handleProjectPatch` in src/v2.ts): the
+    // immutable key is NEVER part of a PATCH body — a manager that
+    // echoed it back would 400 for real against the live server.
     expect(Object.prototype.hasOwnProperty.call(patchCalls[0]!.body, "projectKey")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(patchCalls[0]!.body, "key")).toBe(false);
   });

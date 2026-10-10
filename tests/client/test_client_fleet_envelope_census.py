@@ -71,6 +71,7 @@ import http.server
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -78,9 +79,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from tests.client import cr098_next_oracle
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -177,8 +181,11 @@ JUNIT = (
     '<testcase classname="DetectorProbeTest" name="probe" time="0.001"/>'
     '</testsuite>'
 )
-for kind in ("surefire-reports", "failsafe-reports"):
-    d = os.path.join("target", kind)
+for kind in ("surefire", "failsafe"):
+    # Like the real plugins: `-D<kind>.reportsDirectory` wins over the default.
+    prefix = "-D" + kind + ".reportsDirectory="
+    d = next((a[len(prefix):] for a in sys.argv[1:] if a.startswith(prefix)),
+             os.path.join("target", kind + "-reports"))
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "TEST-DetectorProbeTest.xml"), "w") as f:
         f.write(JUNIT)
@@ -471,23 +478,192 @@ def build_argv(verb_name, subparser, project_dir):
     return argv
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# CR-CRU-139 §S2 -- the BOARD a fixture points a client at, and the INTERLOCK
+# that keeps a drive off the production board.
+# ════════════════════════════════════════════════════════════════════════════
+#
+# A client's target board stopped being an environment variable and became
+# `[client] url` in the project's own `crucible.toml`, resolved through the
+# CR-CRU-138 §S1 chain by the ONE shared resolver named below. These helpers
+# are the FIXTURE side of that, lifted into the module the client suites
+# already import their fixtures from rather than re-spelled per suite.
+#
+# THE INTERLOCK IS A SAFETY DEVICE, NOT CEREMONY -- read this before removing
+# it. A suite that used to aim `$CRUCIBLE_URL` at its own stub board and simply
+# drops the export does not fail: it silently stops steering, and the drive
+# resolves the SHIPPED default, `http://localhost:3849`. On the two-instance
+# workstation this CR serves that address belongs to the PRODUCTION install,
+# and the verbs these suites drive (`register`, `unregister`, a gate seal) are
+# WRITES -- so the failure mode is not a red test, it is somebody else's board
+# carrying this suite's rows. CR-CRU-139 C1 met the same hazard on the server
+# side and discovered it by BINDING the port. `would_resolve` cannot: it asks
+# the shared module IN PROCESS, over no socket, which board it WOULD resolve
+# for a given project directory, and a fixture that spawns only when the answer
+# is its own board can never address a packet anywhere else.
+
+#: The shared module's ONE name for this resolution -- the sibling of the
+#: `resolve_limit()` it already exports. Held here so that no suite spells it a
+#: second way, which is how one resolver becomes two.
+BOARD_RESOLVER = "resolve_base_url"
+
+#: The board the fleet has always defaulted to, and therefore what a drive
+#: lands on when nothing declares one. Named so a refusal can say what it
+#: avoided rather than only that it refused.
+SHIPPED_DEFAULT_BOARD = "http://localhost:3849"
+
+#: The `[client]` table from its header LINE to the next real TOML table-header
+#: LINE (`[name]`, `[dotted.name]` or `[[name]]` alone on its line, an end-of-line
+#: comment allowed), or to the end of the file. NOT to the first literal `[`:
+#: comments and array values carry brackets (`# [gate]`, `skip = ["pr"]`), and a
+#: strip that stopped at one would leave the table's tail behind -- or, with a
+#: commented table after `[client]`, declare that table a second time.
+_TABLE_HEADER_LINE = r"^[ \t]*\[\[?[ \t]*[A-Za-z0-9_.\-]+[ \t]*\]\]?[ \t]*(?:#[^\n]*)?$"
+_CLIENT_TABLE = re.compile(
+    r"(?ms)^[ \t]*\[[ \t]*client[ \t]*\][ \t]*(?:#[^\n]*)?$"
+    r".*?(?=" + _TABLE_HEADER_LINE + r"|\Z)")
+
+
+def declare_board(config_path, url):
+    """Declare `url` as the `[client]` board in the `crucible.toml` at
+    `config_path`, REPLACING any table already there.
+
+    Replace rather than append, deliberately: the shipped `clients/crucible.toml`
+    carries a `[client]` table of its own, and a fixture that appended a second
+    one to a COPY of that file would make its own configuration unparsable
+    (`Cannot declare ... twice`). Correct before and after that table lands,
+    which is the only kind of writer a migrating suite can use.
+    """
+    path = Path(config_path)
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    text = _CLIENT_TABLE.sub("", text).rstrip("\n")
+    path.write_text(f'{text}\n\n[client]\nurl = "{url}"\n', encoding="utf-8")
+    return path
+
+
+def declared_board(config_path):
+    """The `[client] url` a `crucible.toml` declares, or None."""
+    with open(config_path, "rb") as handle:
+        parsed = tomllib.load(handle)
+    table = parsed.get("client")
+    return table.get("url") if isinstance(table, dict) else None
+
+
+def would_resolve(axi_path, project_dir, expected):
+    """The INTERLOCK: `(ok, reason)` for "is it safe to spawn a client in
+    `project_dir`, and would it resolve the board this fixture is listening
+    on?"
+
+    Asked of the SAME shared module the drive will load -- pass the scratch
+    fleet's copy when driving one, since the install and package-data layers
+    are derived from that module's own location -- bound to the same project
+    directory, in process and over no socket. `ok` is False, with a reason a
+    failure message can print, for every case that would post somewhere else,
+    including the one that matters most: no resolver at all, and therefore the
+    shipped default.
+    """
+    module = _load_module(axi_path, "census_board_interlock")
+    resolver = getattr(module, BOARD_RESOLVER, None)
+    if not callable(resolver):
+        return False, (f"{Path(axi_path).parent.name}/_crucible_axi.py exports "
+                       f"no callable `{BOARD_RESOLVER}()`, so the fleet still "
+                       f"resolves its module constant "
+                       f"({SHIPPED_DEFAULT_BOARD})")
+    module.bind_project_dir(str(project_dir))
+    try:
+        actual = resolver()
+    except Exception as exc:  # a resolver that raises is not one to drive
+        return False, f"`{BOARD_RESOLVER}()` raised {exc!r}"
+    finally:
+        module.bind_project_dir(None)
+    if actual != expected:
+        return False, (f"`{BOARD_RESOLVER}()` answers {actual!r} for this "
+                       f"project directory, not the declared {expected!r}")
+    return True, None
+
+
+def declare_and_require_board(project_dir, board, label="a client"):
+    """Declare `board` in `project_dir`'s own `crucible.toml` and REFUSE unless
+    the shared module really resolves it -- the two halves a migrated fixture
+    always needs together, so no suite can do the first and forget the second.
+
+    Raises rather than returning a verdict, because its callers are fixtures
+    rather than assertions: a drive that was never made records nothing on any
+    board, so a silent refusal is indistinguishable from a passing test, while
+    an exception names the reason wherever it happens. `BoardInterlockCase`
+    below is the same interlock for the shape that RECORDS a refusal instead
+    (the criteria suite, whose drives are built once and asserted later).
+    """
+    if Path(project_dir).resolve() == REPO_ROOT:
+        raise RuntimeError(
+            f"refusing to declare a board at {REPO_ROOT}: that file is the "
+            f"OPERATOR's own connection, and a fixture that wrote it would "
+            f"both destroy their setting and make every later drive in this "
+            f"checkout resolve a fixture's board "
+            f"(test_no_suite_resolves_the_checkout_configuration.py).")
+    declare_board(Path(project_dir) / "crucible.toml", board)
+    resolves, reason = would_resolve(CLIENTS_DIR / "_crucible_axi.py",
+                                     project_dir, board)
+    if not resolves:
+        raise RuntimeError(
+            f"refusing to drive {label}: {reason}. A drive that does not "
+            f"resolve its own declared board lands on {SHIPPED_DEFAULT_BOARD} "
+            f"instead, which on this machine is the PRODUCTION install.")
+    return board
+
+
+class BoardInterlockCase(unittest.TestCase):
+    """The one place a drive REFUSED by `would_resolve` becomes a failure.
+
+    Without it the refusal would be indistinguishable from a passing test: a
+    drive that never happened records nothing on any board, and an assertion
+    of the form "the wrong board saw nothing" would be satisfied by the
+    silence. So every assertion about a drive goes through `driven()` first,
+    and a refused drive fails naming what the fixture declined to post to.
+    """
+
+    def driven(self, label, record):
+        if record["blocked"]:
+            self.fail(
+                f"{label} was NOT DRIVEN: the interlock refused to spawn a "
+                f"client that would post somewhere this fixture is not "
+                f"listening — {record['blocked']}. Until the board is resolved "
+                f"from configuration, a drive lands on "
+                f"{SHIPPED_DEFAULT_BOARD}, which on this machine is the "
+                f"PRODUCTION install, and these verbs are writes.")
+        return record
+
+
 def drive_verb(script_path, argv, project_dir, fake_bin_dir, timeout=20,
-               extra_env=None):
+               extra_env=None, board=_UNREACHABLE_CRUCIBLE_URL):
     """A genuine subprocess dispatch of the real client script -- never an
     in-process `module.main()` call for this half (that idiom is reserved
     for enumeration, which must never let a command actually run).
 
-    `extra_env` (CR-CRU-092 §S6) overrides the drive's environment AFTER the
-    unreachable-server defaults. The unreachable URL can only ever exercise a
-    verb's READ-FAILURE path, which is a fair census for a write verb but
-    cannot measure a READ verb's live-data principles (P2/P4/P5/P8 all need an
-    answer to narrow, count, drain or return). `next`'s section below points
-    the same `drive_verb` at a local queue STUB for those, and leaves the
-    default unreachable URL in place for its own failed-read drive -- so both
-    halves of AC13's exit-code rule are measured by one machinery."""
+    `board` (CR-CRU-139 §S2) is DECLARED in the drive's own project directory
+    rather than exported: the fleet's target is `[client] url` in the project's
+    `crucible.toml` now, and the environment channel this fixture used to aim
+    is retired. The declaration is written into the temp project root every
+    drive owns, and the INTERLOCK below refuses to spawn unless the shared
+    module really resolves it -- a drive that merely stopped steering would
+    otherwise land on the shipped default, which on this machine is the
+    production board.
+
+    `extra_env` (CR-CRU-092 §S6) overrides the drive's environment. The default
+    unreachable board can only ever exercise a verb's READ-FAILURE path, which
+    is a fair census for a write verb but cannot measure a READ verb's
+    live-data principles (P2/P4/P5/P8 all need an answer to narrow, count,
+    drain or return). `next`'s section below points the same `drive_verb` at a
+    local queue STUB with `board=`, and leaves the default unreachable one in
+    place for its own failed-read drive -- so both halves of AC13's exit-code
+    rule are measured by one machinery."""
+    declare_and_require_board(project_dir, board, Path(script_path).name)
     env = os.environ.copy()
-    env["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-    env["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL  # arduino's 2nd-choice var
+    for name in ("CRUCIBLE_URL", "CRUCIBLE_BASE"):
+        # Retired (CR-CRU-139 §S2), and POPPED rather than aimed: an ambient
+        # value in the operator's own session must not reach a drive whose
+        # board is now a file.
+        env.pop(name, None)
     env["ARDUINO_CLI"] = str(fake_bin_dir / "arduino-cli")
     env["PATH"] = str(fake_bin_dir) + os.pathsep + env.get("PATH", "")
     if extra_env:
@@ -1813,8 +1989,8 @@ def _next_entry(cr, seq, status="PENDING", wave="5", release=None, track=None,
 
 def _published_tracks(entries):
     """CR-CRU-108 §S1/AC1 — what `GET …/queue` publishes BESIDE its entries:
-    the sorted distinct non-blank TRIMMED `track` values (`declaredTracks`,
-    src/store.ts:380, called from `handleQueueGet`).
+    the sorted distinct non-blank TRIMMED `track` values (`declaredTracks`
+    (src/store.ts), called from `handleQueueGet`).
 
     The stub stands in for the SERVER, so it must state the server's fact. A
     stub that omitted `tracks` would serve a payload no live read produces,
@@ -1907,6 +2083,15 @@ class _QueueStubServer:
                 stub.requests.append(("GET", self.path))
                 if self.path.endswith("/queue"):
                     self._answer(200, stub.payload)
+                elif self.path.split("?", 1)[0].endswith("/next"):
+                    # CR-CRU-098 §S3 — `next` reads the server's decision off
+                    # `…/next`. The stub answers what the route publishes for
+                    # THIS board, taken from the frozen old-resolver record
+                    # (tests/client/cr098_next_oracle.py) rather than
+                    # recomputed here.
+                    self._answer(*cr098_next_oracle.route_answer(
+                        stub.payload["entries"], stub.payload["tracks"],
+                        cr098_next_oracle.scope_of(self.path)))
                 else:
                     self._answer(404, {"ok": False,
                                        "error": f"no stub for {self.path}"})
@@ -1930,14 +2115,15 @@ class _QueueStubServer:
         self._thread.start()
 
     def env(self):
-        """The base-URL overrides `drive_verb` needs (four clients spell it
-        `CRUCIBLE_URL`, arduino accepts `CRUCIBLE_BASE` as its second choice),
-        plus an explicitly BLANKED orchestrator env: `axi_context` reads
-        `$WORKFLOW_ROLE`/`$WORKFLOW_WAVE`, so an ambient orchestrator session
-        would otherwise colour the very `context` block P7 asserts on."""
-        return {"CRUCIBLE_URL": self.base_url,
-                "CRUCIBLE_BASE": self.base_url,
-                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+        """The explicitly BLANKED orchestrator env a stub-served drive needs:
+        `axi_context` reads `$WORKFLOW_ROLE`/`$WORKFLOW_WAVE`, so an ambient
+        orchestrator session would otherwise colour the very `context` block P7
+        asserts on.
+
+        The BOARD is no longer in here (CR-CRU-139 §S2): a drive reaches this
+        stub by `drive_verb(..., board=stub.base_url)`, which declares it in the
+        drive's own project file and checks the resolution before spawning."""
+        return {"WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
 
     def close(self):
         self._httpd.shutdown()
@@ -2024,7 +2210,7 @@ def _get_next_drives():
                     seen = len(stub.requests)
                     result = drive_verb(
                         script_path, _next_argv(project_dir, *extra_argv),
-                        project_dir, fake_bin_dir,
+                        project_dir, fake_bin_dir, board=stub.base_url,
                         extra_env={**stub.env(), **extra_env})
                     _emits, axi = classify_envelope(result.stdout, toon_module)
                     drives[(client_key, case)] = {
@@ -2564,115 +2750,16 @@ def _get_depends_drives():
     return drives
 
 
-class Cr108PublishedTrackFactTest(unittest.TestCase):
-    """CR-CRU-108 §S2 / AC5 / AC5b -- `next`'s track fact, per client, END TO
-    END.
-
-    Same machinery as the CR-CRU-092 section above (`_get_next_drives()`: one
-    real subprocess per client x case against the queue stub) -- never a
-    second harness. What is new is WHERE the fact comes from. The stub now
-    publishes `tracks` exactly as §S1's `handleQueueGet` does, and these tests
-    assert the envelope carries THAT list rather than one the client
-    re-derived from the entries beside it.
-
-    Per-client subTests throughout: a fleet failure that does not name the
-    client sends the next reader to all five.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.drives = _get_next_drives()
-
-    def _axi(self, client_key, case):
-        return (self.drives.get((client_key, case)) or {}).get("axi") or {}
-
-    def _exit(self, client_key, case):
-        result = (self.drives.get((client_key, case)) or {}).get("result")
-        return getattr(result, "returncode", None)
-
-    def test_every_client_reads_its_track_fact_off_the_published_list(self):
-        """AC5 -- `next`'s multi-track behaviour is UNCHANGED on the wire for
-        every value that classifies the same under both rules, driven per
-        client. Three fixtures, one rule -- the envelope's track fact IS the
-        payload's published `tracks`:
-
-          * `two-track` (two published lanes) -- exit 2, `ok=false`,
-            `needs=["track"]`, `tracks` EQUAL to the published list, a
-            `totalCount` matching its length, and no decision;
-          * `one-track` and `no-track` (one published lane / none) -- exit 0,
-            a decision, no `needs` and NO `tracks` key.
-
-        The CR-CRU-092 P4/P8 tests above pin the same fixtures against
-        HARDCODED values; this pins them against the PAYLOAD, which is the
-        claim §S2 actually makes."""
-        for client_key in CLIENT_FILES:
-            published = CR092_FIXTURES["two-track"]["tracks"]
-            with self.subTest(client=client_key, case="two-track"):
-                axi = self._axi(client_key, "two-track")
-                self.assertIs(axi.get("ok"), False)
-                self.assertEqual(axi.get("needs"), ["track"])
-                self.assertEqual(
-                    axi.get("tracks"), published,
-                    "AC5 -- the refusal lists the tracks the READ published")
-                self.assertEqual(axi.get("totalCount"), len(published))
-                self.assertNotIn("decision", axi)
-                self.assertEqual(self._exit(client_key, "two-track"), 2)
-            for case in ("one-track", "no-track"):
-                with self.subTest(client=client_key, case=case):
-                    self.assertLessEqual(
-                        len(CR092_FIXTURES[case]["tracks"]), 1,
-                        f"non-vacuity: the {case!r} fixture must publish at "
-                        f"most ONE lane, or it is not the single-track case")
-                    axi = self._axi(client_key, case)
-                    self.assertEqual(self._exit(client_key, case), 0)
-                    self.assertEqual(axi.get("decision"), "NEXT")
-                    self.assertNotIn(
-                        "needs", axi,
-                        "AC5 -- a single-track project takes no argument")
-                    self.assertNotIn("tracks", axi)
-
-    def test_a_whitespace_only_second_value_is_not_a_second_track_in_any_client(self):
-        """AC5b -- the ONE behaviour change, pinned as a change, in all five
-        clients. A queue declaring `"   "` beside `"2"` is multi-track to
-        `next` TODAY -- it refuses without `--track` -- and becomes
-        single-track after, because the server's rule is the one that
-        survives. The old answer was wrong: whitespace is not a lane."""
-        self.assertEqual(
-            CR092_FIXTURES["blank-second-track"]["tracks"], ["2"],
-            "non-vacuity: the published list must drop the whitespace-only "
-            "value, or this fixture is not AC5b's")
-        for client_key in CLIENT_FILES:
-            with self.subTest(client=client_key):
-                axi = self._axi(client_key, "blank-second-track")
-                self.assertEqual(
-                    self._exit(client_key, "blank-second-track"), 0,
-                    "AC5b -- one published lane, so `next` answers; exit 2 is "
-                    "the pre-cutover refusal this AC retires")
-                self.assertEqual(axi.get("decision"), "NEXT")
-                self.assertEqual(axi.get("cr"), "CR-Q108-550")
-                self.assertNotIn("needs", axi)
-                self.assertNotIn("tracks", axi)
-
-    def test_a_padded_value_collapses_into_the_track_it_pads_in_every_client(self):
-        """AC5b's second half -- `" track-2 "` beside `"track-2"` is ONE track,
-        not two, in all five clients. Identity is the TRIMMED value, so
-        preserving the padding would draw the second lane `normalizeTrack`
-        exists to prevent."""
-        self.assertEqual(
-            CR092_FIXTURES["padded-track"]["tracks"], ["track-2"],
-            "non-vacuity: the published list must collapse the padded value "
-            "into the value it pads, or this fixture is not AC5b's")
-        for client_key in CLIENT_FILES:
-            with self.subTest(client=client_key):
-                axi = self._axi(client_key, "padded-track")
-                self.assertEqual(
-                    self._exit(client_key, "padded-track"), 0,
-                    "AC5b -- a padded value and the value it pads are ONE "
-                    "lane, so this queue is single-track")
-                self.assertEqual(axi.get("decision"), "NEXT")
-                self.assertEqual(axi.get("cr"), "CR-Q108-560")
-                self.assertNotIn("needs", axi)
-                self.assertNotIn("tracks", axi)
+# Cr108PublishedTrackFactTest (3 tests, per client) — RETIRED under CR-CRU-098
+# §S4: it held every client to READING the queue's published track fact
+# (`tracks` beside `entries`) instead of re-deriving one. `next` no longer reads
+# the queue: on the server the resolver reads the declared tracks directly, so
+# an unpublished or re-derived track fact cannot arise. Its two server-side
+# behaviours are PORTED to tests/next-route.test.ts (CR-CRU-098 AC12): the
+# blank case is now enforced at WRITE time — "AC6 — a whitespace-only track
+# value is refused at WRITE time and nothing is stored, so it can never become
+# a phantom second lane; …" — and the padded case at the route — "AC6 — a
+# padded track value collapses into the track it pads: one lane, …".
 
 
 class Cr106CrDependsAxiConformanceTest(unittest.TestCase):
@@ -2980,12 +3067,14 @@ def _get_harness_isolation_drives():
             project_dir = _make_project_dir(client_key)
             try:
                 clean = drive_verb(script_path, _next_argv(project_dir),
-                                   project_dir, bin_dir, extra_env=env)
+                                   project_dir, bin_dir, extra_env=env,
+                                   board=stub.base_url)
                 planted = _plant_harness_lane_plan(project_dir)
                 sizes = {name: (Path(project_dir) / name).stat().st_size
                          for name in _HARNESS_DB_NAMES}
                 with_plan = drive_verb(script_path, _next_argv(project_dir),
-                                       project_dir, bin_dir, extra_env=env)
+                                       project_dir, bin_dir, extra_env=env,
+                                       board=stub.base_url)
             finally:
                 shutil.rmtree(project_dir, ignore_errors=True)
             drives[client_key] = {
@@ -3232,6 +3321,33 @@ class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
             f"an unreadable board has no closed plan to report -- the field "
             f"must be null, never a fabricated or stale value: {offenders!r}")
 
+    def test_every_changed_verb_reports_the_filed_key(self):
+        """§S5/AC6 (the status open-plans change) -- the unavailable degrade adds ONE field to
+        this same shape: `filed`. Measured on the exact same (client, verb)
+        census this class already builds against an unreachable server."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = self.census[client_key].get(verb) or {}
+            if "filed" not in axi:
+                offenders[f"{client_key}:{verb}"] = sorted(axi)
+        self.assertEqual(
+            offenders, {},
+            f"every client must report `filed` on BOTH registered names of "
+            f"the verb, even on the unavailable degrade; envelope keys "
+            f"seen: {offenders!r}")
+
+    def test_the_filed_key_is_an_explicit_null_on_an_unreadable_board(self):
+        """§S5 -- 'the board could not be read, so the number is
+        unknown, not zero': the degrade's `filed` must be an EXPLICIT null,
+        never a fabricated `0`."""
+        offenders = {f"{c}:{v}": self.census[c].get(v, {}).get("filed")
+                     for c, v in self._pairs()
+                     if (self.census[c].get(v) or {}).get("filed") is not None}
+        self.assertEqual(
+            offenders, {},
+            f"an unreadable board's plan count is UNKNOWN -- filed must be "
+            f"null, never 0 or a stale value: {offenders!r}")
+
     def test_no_changed_verb_envelope_still_carries_the_old_key(self):
         """AC7's clean break, measured on the wire rather than in the source: a
         response carrying BOTH keys fails the AC."""
@@ -3404,12 +3520,10 @@ class _QueueFileStubServer:
         self._thread.start()
 
     def env(self):
-        """The base-URL overrides `drive_verb` needs (arduino accepts
-        `CRUCIBLE_BASE` as its second choice), plus a blanked orchestrator env
-        so an ambient session cannot colour the `context` block."""
-        return {"CRUCIBLE_URL": self.base_url,
-                "CRUCIBLE_BASE": self.base_url,
-                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+        """A blanked orchestrator env so an ambient session cannot colour the
+        `context` block. The BOARD travels as `drive_verb(..., board=…)` now
+        (CR-CRU-139 §S2), declared in the drive's own project file."""
+        return {"WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
 
     def close(self):
         self._httpd.shutdown()
@@ -3469,15 +3583,17 @@ def _get_queue_file_drives():
                 cases = (
                     # The success path is the only one that reaches the wire,
                     # so it is the only one that needs the stub.
-                    ("success", [], stub.env()),
-                    ("unreadable", ["--from-file", str(absent_path)], None),
-                    ("malformed", ["--from-file", str(malformed_path)], None),
+                    ("success", [], stub.env(), stub.base_url),
+                    ("unreadable", ["--from-file", str(absent_path)], None,
+                     _UNREACHABLE_CRUCIBLE_URL),
+                    ("malformed", ["--from-file", str(malformed_path)], None,
+                     _UNREACHABLE_CRUCIBLE_URL),
                 )
-                for case, extra_argv, extra_env in cases:
+                for case, extra_argv, extra_env, board in cases:
                     seen = len(stub.requests)
                     result = drive_verb(script_path, base_argv + extra_argv,
                                         project_dir, fake_bin_dir,
-                                        extra_env=extra_env)
+                                        extra_env=extra_env, board=board)
                     _emits, axi = classify_envelope(result.stdout, toon_module)
                     drives[(client_key, case)] = {
                         "result": result, "axi": axi,

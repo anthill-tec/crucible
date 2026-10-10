@@ -1,7 +1,7 @@
 """CR-CRU-051 C2 RED -- propagate the run-envelope `files` (distinct test-FILE)
 count to `rust-crucible.py`. Mode 1 (new tests), preceded by the ASSESSMENT the
 C2 dispatch demanded: §S3 of docs/changes/CR-CRU-051-files-count-fleet-parity.md
-claims "rust has TWO parse sites: rust-crucible.py:762 and :1306". Both line
+claims "rust has TWO parse sites", citing them by line number. Both line
 numbers are stale (CR-054 shrank the file). Located by symbol instead, rust
 today has THREE places that turn a nextest run into a test count, not two --
 and only two of them are actually client-parsed:
@@ -18,7 +18,7 @@ and only two of them are actually client-parsed:
   python/mvn/arduino do).
 
   SITE 3 -- NOT in §S3 at all, and it changes the picture: `_ingest_junit_axi`
-  (~line 771), used by BOTH the `auto-ingest` verb (`cmd_auto_ingest`) and the
+  (in rust-crucible.py), used by BOTH the `auto-ingest` verb (`cmd_auto_ingest`) and the
   `test` verb (`cmd_test`). This POSTs `{"codec": "junit", "dataPath":
   junit_path, ...}` to /api/v2/runs -- the SERVER parses the XML
   (server-side codec=junit). rust-crucible.py never sees a single <testcase>
@@ -63,7 +63,8 @@ total=`. Every site-1/site-2 test below therefore fails now for the right
 reason (a plain `assertIn("files=", ...)` / regex-search miss, not an
 exception). The site-3 pins are BORN GREEN: `_emit_ingest_axi`'s `run` dict
 is hardcoded to exactly `{passed, failed, pending, total}`
-(clients/rust-crucible.py:321-322) and the server-parsed POST body has no
+(`_emit_ingest_axi` in clients/rust-crucible.py) and the server-parsed POST
+body has no
 client-computed `summary` at all -- there is no `files` key to accidentally
 carry today, so the pin is a forward-looking regression guard, not new
 capability. Stated explicitly per the sub-agent procedure's requirement that
@@ -285,6 +286,8 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         below rather than a crash."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True), \
              mock.patch.object(self.module, "_get", return_value=_active_cycle_plans(),
                                 create=True):
@@ -323,6 +326,8 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         `run.files` -- a future change cannot drop the guarantee on one
         surface while leaving the other looking healthy."""
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=self._fake_subprocess_run(NEXTEST_BARE)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=self._fake_subprocess_run(NEXTEST_BARE)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True), \
              mock.patch.object(self.module, "_get", return_value=_active_cycle_plans(),
@@ -389,6 +394,8 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         edit, not new capability."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=_active_cycle_plans(),
@@ -447,6 +454,8 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
 
     def _run_workspace_regression(self, xml_content):
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=self._fake_subprocess_run(xml_content)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=self._fake_subprocess_run(xml_content)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True):
             return _run_main(self.module, [
@@ -529,6 +538,8 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
         `summary` at the pre-merge-gate site."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock:
             code, out, _err = _run_main(self.module, [
@@ -552,7 +563,8 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
 # `dataPath`). No client-side testcase data exists here to count. These pins
 # guard the honest absence: emitting `files` on this path would be invented,
 # not measured. Born GREEN -- `_emit_ingest_axi`'s `run` dict
-# (clients/rust-crucible.py:321-322) is a hardcoded 4-key literal today; there
+# (`_emit_ingest_axi` in clients/rust-crucible.py) is a hardcoded 4-key
+# literal today; there
 # is no `files` key to accidentally leak. ─────────────────────────────────
 
 
@@ -598,6 +610,8 @@ class RustServerParsedSitesNeverFabricateFilesTest(unittest.TestCase):
 
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=_passthrough_or_noop_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=_passthrough_or_noop_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True,
                                               "run": {"passed": 1, "failed": 0,
@@ -628,6 +642,8 @@ class RustServerParsedSitesNeverFabricateFilesTest(unittest.TestCase):
 
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=_passthrough_or_noop_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
+                                side_effect=_passthrough_or_noop_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True,
                                               "run": {"passed": 1, "failed": 0,
@@ -657,6 +673,8 @@ class RustServerParsedSitesNeverFabricateFilesTest(unittest.TestCase):
         _write(os.path.join(nextest_dir, "junit.xml"), PASS_JUNIT_XML)
 
         with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=_passthrough_or_noop_subprocess_run), \
+             mock.patch.object(self.module._axi(), "run_streamed",
                                 side_effect=_passthrough_or_noop_subprocess_run), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True,

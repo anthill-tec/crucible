@@ -69,7 +69,7 @@ registrations/unregistrations (lifecycle events preserve runtimes), heartbeats
 | Concept | Crucible surface |
 |---|---|
 | Actors + liveness + runtimes | projects row badges (active/inactive, activity-ordered) · workspace Project pane (⌁ nested agents, ticking/sealed runtimes) |
-| Cycle / plan (live) | **Workflow tab** live section: per-CR todo view, active cycle = open span collecting runs; no-mistakes gate pane beside it |
+| Cycle / plan (live) | **Workflow tab** **Now** pane — what is running, and only that: per-CR todo view, active cycle = open span collecting runs; the running no-mistakes gate in F21's gate view; or `Nothing running → Roadmap`. **History** below it, its own scroll (on a phone, Now and History are sub-tabs) |
 | Wave → [Track] → CR → Cycle (history) | Workflow tab history lens; Track level only when a wave spans >1 lane; per-lane completion chips; wave states |
 | Runs | home collective timeline (runs only) · workspace timeline (runs + milestones + 🛡 gate boundary cards) |
 | Gate detail | drill-in with the axi-mirrored body (step ladder, findings, fixes, outcome) |

@@ -37,7 +37,7 @@
 // WHAT IS ASSERTED, AND WHY IT IS NEVER A FUNCTION NAME. Every assertion below
 // reads RENDERED rows, PUBLISHED attributes, and the ABSENCE of paging chrome.
 // "Which CRs does this wave show" is a decision, so this codebase's shape puts
-// it in the pure module (`focusedReleaseView`, public/app-logic.mjs:1154,
+// it in the pure module (`focusedReleaseView` in public/app-logic.mjs
 // already stamps each box with `active`; the trimmed row list belongs beside
 // it) and leaves the rendering in app.js. But GREEN may compute the trim
 // anywhere: nothing here names a function, a class, or a module.
@@ -50,7 +50,8 @@
 //
 // RED phase — expected to FAIL against current production, which renders
 // `box.entries.map(RoadmapFlowNode)` into a `flex-wrap: wrap` body
-// (public/app.js:2819, public/styles.css:1269-1276): ALL members as chips,
+// (`RoadmapFlowWave` in public/app.js, the `.app-flow-wave-body` rule in
+// public/styles.css): ALL members as chips,
 // merged included, no trim, and no `+N more` pointer.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
@@ -83,7 +84,7 @@ interface PackageFixture {
   version: string;
 }
 
-/** `src/v2.ts:1755-1763` (`releaseBrief`) — what `GET …/releases` publishes. */
+/** `releaseBrief` (src/v2.ts) — what `GET …/releases` publishes. */
 interface ReleaseFixture {
   version: string;
   commit?: string;
@@ -93,7 +94,7 @@ interface ReleaseFixture {
   timestamp: number;
 }
 
-/** `src/v2.ts:2045-2057` (`proposalBrief`) — what `GET …/release-proposals`
+/** `proposalBrief` (src/v2.ts) — what `GET …/release-proposals`
  *  publishes. */
 interface ProposalFixture {
   label: string;
@@ -112,7 +113,7 @@ interface LifecycleFixture {
   at: number;
 }
 
-/** `src/types.ts:389-414` (`QueueEntry`) — what `GET …/queue` publishes, in the
+/** `QueueEntry` (src/types.ts) — what `GET …/queue` publishes, in the
  *  canonical order (CR-CRU-095 §S1: release → wave → seq). The ORDER OF THIS
  *  ARRAY is the server's published order and the only order zone 2 may use
  *  (CR-CRU-091 AC18 forbids re-deriving `seq`; CR-CRU-095 deleted the last
@@ -133,7 +134,7 @@ interface QueueFixture {
 // ── Fixtures ────────────────────────────────────────────────────────────────
 //
 // One board shape, reused: 0.1.0 shipped, 0.4.0 proposed (the DEFAULT FOCUS —
-// `releaseStripFocusIndex`, public/app-logic.mjs:179, focuses the first
+// `releaseStripFocusIndex` in public/app-logic.mjs focuses the first
 // proposed gate, and 0.4.0's timestamp precedes 0.5.0's), 0.5.0 proposed but
 // not focused. Every test swaps only the FOCUSED release's wave-1 membership,
 // so each AC gets the membership it needs against a board whose focus is
@@ -283,7 +284,9 @@ const ALL_MERGED: QueueFixture[] = Array.from({ length: 4 }, (_, i) =>
 
 /** AC28's e2e mirror — `tests/e2e/features/roadmap-graph.feature:41-46` drives
  *  a wave holding EXACTLY ONE CR node, PENDING then IN_PROGRESS, and clicks
- *  it. The steps at `tests/e2e/steps/roadmap-graph.steps.ts:84,96,102` locate
+ *  it. The "renders wave … holding … CR nodes", "carries status" and
+ *  "I click the roadmap flowchart node" steps in
+ *  `tests/e2e/steps/roadmap-graph.steps.ts` locate
  *  it as `box.getByTestId("roadmap-node")` (count), then
  *  `[data-testid="roadmap-node"][data-cr=…]` with `data-status`. The trim must
  *  leave that shape intact: one actionable CR is one row, inside the box. */
@@ -465,7 +468,8 @@ function flow(): HTMLElement {
 
 /** AC18's scope: the zone, not the page. Zone 1's strip legitimately publishes
  *  `data-window-size` / `data-window-offset` and renders `◀ N earlier` /
- *  `N later ▶` (public/app.js:3055, :3116-3118) — that is its paging, and
+ *  `N later ▶` (`RoadmapStripTag` and `RoadmapStripZone` in public/app.js) —
+ *  that is its paging, and
  *  AC26 keeps it byte-identical. The prohibition is on zone 2 growing its own. */
 function zone2(): HTMLElement {
   const el = document.querySelector<HTMLElement>('[data-zone="2"]');
@@ -486,7 +490,8 @@ function waveEl(wave: string): HTMLElement {
 
 /** The wave's ROWS. Deliberately read through the node selector AC28 pins and
  *  scoped to the wave box exactly as the e2e step scopes it
- *  (`tests/e2e/steps/roadmap-graph.steps.ts:84`), so a GREEN that moved the
+ *  (the "renders wave … holding … CR nodes" step in
+ *  `tests/e2e/steps/roadmap-graph.steps.ts`), so a GREEN that moved the
  *  rows out of the box would fail here and there for the same reason. */
 const rowEls = (wave: string): HTMLElement[] =>
   Array.from(waveEl(wave).querySelectorAll<HTMLElement>('[data-testid="roadmap-node"]'));
@@ -556,7 +561,7 @@ function rowContainer(wave: string): HTMLElement {
 //
 // happy-dom has no cascade, so `getComputedStyle` cannot answer AC8's
 // arrangement or AC17's overflow. This reader is C1's `animatingSelectors`
-// (tests/roadmap-wave-header.test.ts:409) generalised from one property to
+// (tests/roadmap-wave-header.test.ts) generalised from one property to
 // any: every rule in public/styles.css that declares `prop` is collected, and
 // the LAST one whose selector the given element MATCHES wins — source order,
 // specificity ignored, which for this stylesheet's flat single-class rules is
@@ -672,7 +677,8 @@ describe("CR-CRU-096 §S5/AC8 — each shown CR renders as ONE full-width row: i
     // line as fit and wraps. One CR per full-width row is the opposite, and
     // the artifact draws it as `.crs { display:flex; flex-direction:column }`.
     // Today the container is `.app-flow-wave-body`, which declares
-    // `flex-wrap: wrap` with no direction (public/styles.css:1269-1276) — the
+    // `flex-wrap: wrap` with no direction (the `.app-flow-wave-body` rule in
+    // public/styles.css) — the
     // grid, in one declaration.
     const container = rowContainer("1");
     const wrap = declared(container, "flex-wrap");
@@ -769,7 +775,8 @@ describe("CR-CRU-096 §S5/AC11 — an IN_PROGRESS CR is present even when it fal
     expect(crs).toContain("CR-Q-9");
 
     // It is shown AS RUNNING: `data-status` and the class the stylesheet's
-    // ember + `app-run-pulse` motion hangs off (public/styles.css:1351). The
+    // ember + `app-run-pulse` motion hangs off (the `.app-flow-node.in_progress`
+    // rule in public/styles.css). The
     // rendered motion itself is Chromium's (AC27).
     const active = rowEls("1").find((row) => row.getAttribute("data-cr") === "CR-Q-9")!;
     expect(active.getAttribute("data-status")).toBe("IN_PROGRESS");
@@ -795,7 +802,8 @@ describe("CR-CRU-096 §S5/AC11 — an IN_PROGRESS CR is present even when it fal
     expect(crs).not.toContain("CR-Q-1");
 
     // And the remainder is TRUE: the scheduled CRs not drawn.
-    // Actionable = PENDING with no lifecycle (clients/_crucible_axi.py:1301);
+    // Actionable = PENDING with no lifecycle (`_is_actionable`, once in
+    // clients/_crucible_axi.py, now `isActionable` in src/next.ts);
     // no fixture here carries a lifecycle, so PENDING is actionable.
     const pendingShown = rowStatuses("1").filter((s) => s === "PENDING").length;
     expect(moreCount("1")).toBe(NINE_LAST_ACTIVE_ACTIONABLE - pendingShown);
@@ -972,14 +980,14 @@ describe("CR-CRU-096 §S5/AC18 — no `data-window-*` attribute and no `◀ earl
     // No window state, published or drawn — asserted FIRST so the reader runs
     // against a real render while the trim below is still red. Zone 1 keeps
     // its own (`data-window-size`, `data-window-offset`,
-    // `data-hidden-earlier` — public/app.js:3116-3118); zone 2 grows none.
+    // `data-hidden-earlier` — `RoadmapStripZone` in public/app.js); zone 2 grows none.
     const windowish = zoneAttrNames().filter((name) => /^data-(window|hidden|page)-/.test(name));
     expect(windowish).toEqual([]);
 
     // No pager tag. `▶` is deliberately NOT forbidden: it is IN_PROGRESS's own
-    // status mark (`▶ in progress`, public/app-logic.mjs:1015). What is
+    // status mark (`▶ in progress`, `CR_STATUS_MARK` in public/app-logic.mjs). What is
     // forbidden is the DIRECTIONAL PAGER — `◀ N earlier` / `N later ▶`
-    // (public/app.js:3055) — so the left glyph and both words are.
+    // (`RoadmapStripTag` in public/app.js) — so the left glyph and both words are.
     const zoneText = norm(zone2().textContent).toLowerCase();
     expect(zoneText).not.toContain("◀");
     expect(zoneText).not.toMatch(/\bearlier\b/);
@@ -1005,7 +1013,8 @@ describe("CR-CRU-096 AC28 — `roadmap-node`, `data-cr` and `data-status` surviv
     // The consumers this AC protects: tests/roadmap-visual-grammar.test.ts,
     // tests/roadmap-release-focus.test.ts,
     // tests/roadmap-selection-durability.test.ts, public/styles.css, and the
-    // e2e pair tests/e2e/steps/roadmap-graph.steps.ts:84,96,102 driving
+    // e2e pair tests/e2e/steps/roadmap-graph.steps.ts (its three roadmap-node
+    // steps) driving
     // tests/e2e/features/roadmap-graph.feature:41-46.
     // roadmap-graph.feature's own shape FIRST, exactly as it drives it: ONE CR
     // in the wave, PENDING, then the same CR IN_PROGRESS after a plan is
@@ -1049,7 +1058,8 @@ describe("CR-CRU-096 AC28 — `roadmap-node`, `data-cr` and `data-status` surviv
 //
 // C1 (cycle 309) made AC3 green against an UNTRIMMED wave. The trim is the
 // change that could break it, so the non-regression is asserted here rather
-// than trusted: the count is `box.entries.length` (public/app.js:2791) and the
+// than trusted: the count is `box.entries.length` (`RoadmapFlowWave` in
+// public/app.js) and the
 // rows are a window on a subset of those entries. AC3's own two-wave fixture
 // stays C1's; this is one wave, sized so the two facts cannot be confused.
 
@@ -1083,8 +1093,8 @@ describe("CR-CRU-096 AC3 (non-regression) — the trim does not change the count
 // screenshot". An attribute is not text. So the assertion is on the TEXT.
 
 describe("CR-CRU-096 AC9b/AC9c — wherever a node renders, its disposition is stated in WORDS and not as an attribute alone", () => {
-  test("a running dispositioned CR keeps its row and its badge, and the untrimmed loose group states a VOID member's disposition in text", async () => {
-    // AC9c — IN_PROGRESS ∈ the row union whatever the `lifecycle`.
+  test("a running dispositioned CR keeps its row and its badge, and the loose group draws NO VOID member at all (CR-CRU-147 ruling 2)", async () => {
+    // AC9c — IN_PROGRESS \u2208 the row union whatever the `lifecycle`.
     await mountApp({ queue: board(RUNNING_DISPOSITIONED) });
     expectFocused040();
     expect(rowCrs("1")).toEqual(["CR-A", "CR-D"]);
@@ -1112,8 +1122,17 @@ describe("CR-CRU-096 AC9b/AC9c — wherever a node renders, its disposition is s
     expect(plain.hasAttribute("data-lifecycle")).toBe(false);
     expect(plain.querySelector('[data-testid="roadmap-node-lifecycle"]')).toBeNull();
 
-    // AC9b/AC18a — the second path: a dispositioned PENDING member, which a
-    // TRIMMED wave box would not draw, is drawn by the wave-less group.
+    // AC9b/AC18a used to have the wave-less group draw a dispositioned
+    // PENDING member a TRIMMED wave box would not. CR-CRU-147 \u00a7S1 AC3,
+    // ruling 2 (2026-09-25) SUPERSEDES that reading for a DEAD member: "the
+    // Wave Card drops a VOID/SUPERSEDED member everywhere", the loose group
+    // included. CR-V is PENDING (non-running) and VOID, so it now draws no
+    // node at all — only its live sibling CR-A does. The "disposition
+    // stated in words, not just an attribute" coverage this half of the
+    // test used to carry for a DEAD member stays proved above, on CR-D
+    // (running, ruling 4) — the one path left where a dead node still
+    // renders; CR-V's badge is reachable only through zone 3's table now
+    // (\u00a7S2), which this file does not render.
     await mountApp({ queue: board(LOOSE_DISPOSITIONED) });
     expect(flow().getAttribute("data-version")).toBe("0.4.0");
     // Located by being OUTSIDE every wave box, so nothing here names the
@@ -1121,17 +1140,13 @@ describe("CR-CRU-096 AC9b/AC9c — wherever a node renders, its disposition is s
     const loose = all('[data-testid="roadmap-node"]').filter(
       (node) => node.closest('[data-testid="roadmap-wave"]') === null,
     );
-    expect(loose.map((node) => node.getAttribute("data-cr"))).toEqual(["CR-A", "CR-V"]);
-
-    const dead = loose.find((node) => node.getAttribute("data-cr") === "CR-V");
-    if (dead === undefined) throw new Error("the loose group draws no node for the VOID member");
-    expect(dead.getAttribute("data-status")).toBe("PENDING");
-    expect(dead.getAttribute("data-lifecycle")).toBe("VOID");
-    const deadBadge = dead.querySelector<HTMLElement>('[data-testid="roadmap-node-lifecycle"]');
-    expect(deadBadge, "the loose group publishes VOID as an attribute only").not.toBeNull();
-    expect(norm(deadBadge!.textContent).toLowerCase()).toContain("void");
-    expect(norm(dead.textContent).toLowerCase()).toContain("void");
-    // The two dispositions do not render as one word.
-    expect(norm(deadBadge!.textContent)).not.toBe(norm(runningBadge!.textContent));
+    expect(
+      loose.map((node) => node.getAttribute("data-cr")),
+      "CR-CRU-147 ruling 2: the loose group draws only its live member \u2014 CR-V is VOID and non-running",
+    ).toEqual(["CR-A"]);
+    expect(
+      loose.find((node) => node.getAttribute("data-cr") === "CR-V"),
+      "CR-V (VOID, PENDING, non-running) must render no node anywhere in the loose group",
+    ).toBeUndefined();
   });
 });

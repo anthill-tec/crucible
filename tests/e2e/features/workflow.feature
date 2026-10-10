@@ -6,16 +6,18 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
   lens shows the plan tree with the closed span, cycle label, merge
   commit, and the sealed agent runtime; plus a timeline scenario asserting
   suppression + the declared marker" (docs/changes/CR-CRU-011-workflow-lens.md).
-  Storyboard frame F13 (Workflow tab). This feature sorts alphabetically
-  AFTER shell-storyboard.feature ("w" > "s"), so its F1 empty-DB
-  precondition already holds by the time these scenarios seed data into
-  the shared server/db instance. Every project/cr/agent name below is
-  namespaced "WF …" to stay clear of the other features sharing that
-  instance. Results are ingested with tier "e2e" by the orchestrator's
-  ingest step, not by this suite.
+  Storyboard frame F13 (Workflow tab). This file's POSITION governs nothing:
+  shell-storyboard.feature's F1 states its empty-DB precondition with its own
+  `@empty-db` tag, in the `chromium-empty-db` project every other project
+  depends on (see playwright.config.ts's ordering comment).
+  Every project/cr/agent name below is namespaced "WF …" to stay clear of
+  the other features sharing that instance. Results are ingested with tier
+  "e2e" by the orchestrator's ingest step, not by this suite.
 
   Scenario: F13 filing a plan, running its cycle to done, and closing the plan with a merge commit renders the closed plan tree in the Workflow tab's history lens
     Given a project named "WF Lifecycle Project" is registered
+    And an orchestrator "wf-orch-1" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-WF-1" with a cycle labelled "c1 red-green"
     And cycle 1 of that plan is activated
     And an online agent "agent-wf1" with message "filing the plan" is registered on that project
@@ -36,14 +38,14 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     # SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the merge-commit pill dropped
     # the `@` separator — it now reads `merged <sha>` (was: `merged @ <sha>`).
     And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged abc1234"
-    # SANCTIONED RE-TARGET (CR-CRU-021 §S4 — e2e sweep, newly uncovered while
-    # fixing the merge-commit pill above): the collapsed CR-group header now
-    # carries ZERO agentId-bearing elements — per-agent runtime rows render
-    # only once the group is expanded (an aggregate "N agents" pill stands
-    # in for them while collapsed). Moved this assertion to after the
-    # expand step below (was: asserted while still collapsed).
+    # SANCTIONED RE-TARGET (CR-CRU-179 §S2, user ruling 2026-10-09, approved
+    # in advance): the whole agents block (the aggregate "N agents" pill AND
+    # the per-agent runtime rows CR-CRU-021 §S4 placed behind expansion) is
+    # REMOVED — "History repeats `1 agent · vidushi · 0ms` under every CR …
+    # it carries no information. Remove it." Expanding the group now proves
+    # the runtime for "agent-wf1" is ABSENT, not present (step renamed).
     When I expand the cr group for "CR-WF-1"
-    And the cr group for "CR-WF-1" shows the runtime for agent "agent-wf1"
+    And the cr group for "CR-WF-1" shows no runtime for agent "agent-wf1"
     And I expand cycle "c1 red-green" in the cr group for "CR-WF-1"
     Then the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
 

@@ -3,15 +3,21 @@
 import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
 import { configuredRetention, resolveLimit } from "./limits.ts";
+import type { CompileReport } from "./codecs/compile.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
   AgentIdentity,
   AgentRole,
+  ChangeCause,
+  ChangeRecord,
   CommitBoundary,
   Coverage,
+  CycleChangeKind,
   CycleKind,
   CycleStatus,
+  GateDecision,
+  GateDecisionAction,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -24,6 +30,7 @@ import type {
   RunEvent,
   RunSchema,
   SuiteNode,
+  TestLeaf,
   Tier,
 } from "./types.ts";
 
@@ -99,6 +106,9 @@ interface ProjectRow {
   // CR-CRU-130 §S4 — this project's DECLARED milestone vocabulary, joined in
   // from `project_milestone_types`; NULL = declared nothing.
   milestone_types?: string | null;
+  // §S1 — the project's metadata map as JSON object text, joined in from
+  // `project_metadata` (`{}` when the project holds none).
+  metadata_json?: string | null;
 }
 
 interface AgentRow {
@@ -179,6 +189,11 @@ interface EventRow {
   // at insert from `context.cycleId`. NULL on an unbound run and on every
   // pre-094 row (the retrofit reconstructs nothing).
   cycle_id: number | null;
+  // The release this run verifies, stamped at ingest from the request's own
+  // top-level `release`. NULL on a cycle's run and on every row stored before
+  // the column existed (the retrofit invents no release for history). A
+  // record table carries none: its projection serves NULL.
+  release: string | null;
 }
 
 /** CR-CRU-017 §S1 — one issued run: `runs` is the OPEN-run store, on disk. */
@@ -194,6 +209,9 @@ interface RunRow {
   settled_at: number | null;
   abort_reason: string | null;
   event_id: string | null;
+  // The release the run was opened under, so an aborted run is filed under
+  // it too. NULL when it was opened under none.
+  release: string | null;
 }
 
 /**
@@ -217,6 +235,8 @@ export interface RunRecord {
   abortReason?: string;
   /** The event that settled this run (end or abort); absent while open. */
   eventId?: string;
+  /** The release this run verifies; absent when it was opened under none. */
+  release?: string;
 }
 
 interface RollupRow {
@@ -251,6 +271,14 @@ interface PlanRow {
   status: string;
   merge_commit: string | null;
   closed_at: number | null;
+  // CR-CRU-165 S2b - an abort's record (NULL on every plan aborted before it).
+  abort_reason?: string | null;
+  abort_cause?: string | null;
+  abort_spec_ref?: string | null;
+  // The commit boundary stamped at close (NULL until a merged close).
+  boundary_branch?: string | null;
+  boundary_first_commit?: string | null;
+  boundary_last_commit?: string | null;
 }
 
 interface PlanCycleRow {
@@ -270,6 +298,26 @@ interface PlanCycleRow {
   // cycle strictly between two siblings via a fractional midpoint). Governs
   // cycles[] order AND the §S1 out-of-order guard — cycle_id no longer orders.
   seq: number;
+  // CR-CRU-165 S1/S2 - a recorded plan change (NULL on every untouched cycle).
+  change_reason: string | null;
+  change_cause: string | null;
+  change_spec_ref: string | null;
+  change_kind: string | null;
+}
+
+/** CR-CRU-165 S1/S2 - the record carried into a cycle write. */
+interface CycleChange extends ChangeRecord {
+  kind: CycleChangeKind;
+}
+
+/** CR-CRU-165 S1/S2 - a cycle's change record as published (absent when unrecorded). */
+function changeFieldsOf(row: PlanCycleRow): Pick<PlanCycle, "reason" | "cause" | "specRef" | "changeKind"> {
+  return {
+    ...(row.change_reason !== null ? { reason: row.change_reason } : {}),
+    ...(row.change_cause !== null ? { cause: row.change_cause as ChangeCause } : {}),
+    ...(row.change_spec_ref !== null ? { specRef: row.change_spec_ref } : {}),
+    ...(row.change_kind !== null ? { changeKind: row.change_kind as CycleChangeKind } : {}),
+  };
 }
 
 /** CR-CRU-014 §S1 — one stored queue_entries row. */
@@ -354,7 +402,25 @@ export interface QueuePlanInput {
   release: string;
   wave: string;
   title: string;
+  /**
+   * CR-CRU-022 §S1 — the cr's story points. ABSENT leaves the declared points
+   * alone (never a default); PRESENT is journalled when it moves them. The
+   * Fibonacci scale is refused at the route (`STORY_POINT_SCALE`).
+   */
+  points?: number;
 }
+
+/**
+ * CR-CRU-022 §S1 — the planning-poker Fibonacci scale, the ONLY values
+ * `cr-plan --points` accepts (DN-crucible-analytics §4).
+ */
+export const STORY_POINT_SCALE: readonly number[] = [1, 2, 3, 5, 8, 13];
+
+/**
+ * CR-CRU-022 §S1 — the per-CR verbs whose writes move a release's scope, and
+ * therefore the only verbs a declaration-journal row may name.
+ */
+export type DeclarationVerb = "cr-plan" | "cr-void" | "cr-supersede";
 
 /** CR-CRU-091 §S4/§S8 — one `wave-sequence` call: the WHOLE ordered list. */
 export interface WaveSequenceInput {
@@ -474,7 +540,8 @@ export const WAVE_SEQ_STRIDE = 1000;
 /**
  * §S4 / CR-CRU-095 §S1 — the leading integer of a wave cell. `wave` is TEXT
  * (the queue has always stored the cell verbatim), so this is the lane number
- * the whole codebase reads out of it (`public/app-logic.mjs:479`); a cell
+ * the whole codebase reads out of it (`numericLabelCompare` in
+ * `public/app-logic.mjs`); a cell
  * carrying no integer is lane 0. The ONE digit read: `waveSeqBase` and the
  * queue's sort key both rest on it, so a wave's seq block and its position in
  * the published order cannot disagree about which lane it is.
@@ -628,14 +695,22 @@ export interface PlanOpError {
     | "illegal-transition"
     | "locked"
     | "immutable-history"
-    | "insert-before-active";
+    | "insert-before-active"
+    // CR-CRU-165 §S1/§S2 — the plan-change refusals: an unrecorded fix
+    // append before VERIFY is done, a skip of a cycle a run was filed against,
+    // a skip of the plan's last unskipped cycle, and a change carrying no record.
+    | "verify-not-done"
+    | "run-filed"
+    | "last-unskipped"
+    | "change-record-required";
   cycleRef?: number;
 }
 
 /**
  * CR-CRU-116 §S1/§S2 — a WAVE-scope refusal: `PlanOpError`'s shape one
- * container up, narrowed to the two codes `CycleTransitionError` already
- * declares (:589-596). No third code string exists in this scope. `waveRef`
+ * container up, narrowed to the two codes the cycle-scope refusal already
+ * declares (`PlanOpError`'s `code` union). No third code string exists in
+ * this scope. `waveRef`
  * and `crRef` carry what the refusal NAMES — both read off the queue entry,
  * never off `plan.wave` — so the route builds its help[] without re-deriving
  * anything.
@@ -681,6 +756,99 @@ interface BoundaryEventRow {
   context: string;
 }
 
+/**
+ * A plan's stored commit-boundary columns: NULL where no linked run carried
+ * git context, and on every plan not closed with a merge.
+ */
+interface BoundaryColumns {
+  boundary_branch: string | null;
+  boundary_first_commit: string | null;
+  boundary_last_commit: string | null;
+}
+
+/**
+ * The plan's commit boundary, derived ONCE: branch + the earliest/latest linked
+ * commits from the `context.git` of every event, gate and milestone filed
+ * against one of `cycleIds` (in display order). Called only where a closed,
+ * merged plan's boundary is stamped onto its row — `Store.closePlan` and the
+ * migration step that backfills plans closed before the columns existed.
+ */
+function deriveBoundaryColumns(db: Database, projectKey: string, cycleIds: readonly number[]): BoundaryColumns {
+  // CR-CRU-126 §S1 — one INDEXED seek per cycle, projecting the three
+  // columns the answer needs, replacing the `SELECT *` scan of every event
+  // in the project. The wide columns (`tree`/`coverage`/`compile`/`payload`)
+  // were the dominant cost — ~37 MB marshalled per scan to read two strings.
+  //
+  // Equality on `cycle_id`, one cycle at a time, rather than one `IN (…)`
+  // over the plan's cycles: MEASURED 2026-09-12, with no ANALYZE stats (and
+  // this store runs none), the `IN` form makes SQLite fall back to
+  // `idx_events_project_timestamp` — a full project scan again — because the
+  // sort-free ordering outbids a multi-seek it has no statistics for. The
+  // equality form plans to `idx_events_project_cycle` unconditionally, and
+  // sort-free, since the index carries `timestamp` third.
+  //
+  // The membership test is the `cycle_id` COLUMN, which CR-CRU-094 §S1
+  // derives at the one row-insert seam from `context.cycleId`, so the two
+  // cannot disagree; `context IS NOT NULL` still excludes the lifecycle rows
+  // (§S2) that carry a cycle binding but no run context.
+  //
+  // CR-CRU-129 §S1 — over the record tables too: a gate carries a cycle
+  // binding and a run context (CR-CRU-056 gates parity), so it contributed
+  // to this boundary before the move and must keep contributing after it.
+  // Their seeks are equality on `cycle_id` like the one above, over tables
+  // holding a project's records rather than its telemetry. A table an older
+  // store being migrated does not hold yet has nothing to contribute.
+  const rows: BoundaryEventRow[] = [];
+  for (const table of ["events", "milestones", "gates"] as const) {
+    if (!tableExists(db, table)) continue;
+    for (const cycleId of cycleIds) {
+      for (const row of db
+        .query<BoundaryEventRow, [string, number]>(
+          `SELECT timestamp, id, context FROM ${table}
+           WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
+           ORDER BY timestamp ASC, rowid ASC`,
+        )
+        .all(projectKey, cycleId)) {
+        rows.push(row);
+      }
+    }
+  }
+  // A multi-cycle plan's runs INTERLEAVE in time, and first/last are the
+  // earliest and latest across the whole plan — so the per-cycle, per-table
+  // seeks are merged back into the one insertion order the single scan had.
+  rows.sort((left, right) =>
+    left.timestamp !== right.timestamp
+      ? left.timestamp - right.timestamp
+      : insertOrdinal(left.id) - insertOrdinal(right.id),
+  );
+  let branch: string | null = null;
+  let first: string | null = null;
+  let last: string | null = null;
+  for (const row of rows) {
+    const context = JSON.parse(row.context) as RunContext;
+    if (context.git === undefined) {
+      continue;
+    }
+    branch ??= context.git.branch;
+    first ??= context.git.commit;
+    last = context.git.commit;
+  }
+  return { boundary_branch: branch, boundary_first_commit: first, boundary_last_commit: last };
+}
+
+/**
+ * CR-CRU-129 §S1 — newest-first across the THREE tables an event can now
+ * live in, reproducing the `ORDER BY timestamp DESC, rowid DESC` each table
+ * is read in: within one millisecond the later-inserted row still comes
+ * first. The tiebreak is the store's own monotonic insert sequence, which is
+ * the tail of the id it mints (`evt-<ms>-<seq>`); an id from anywhere else
+ * ranks 0 and keeps the timestamp order it arrived in.
+ */
+function insertOrdinal(id: string): number {
+  const tail = Number(id.slice(id.lastIndexOf("-") + 1));
+  return Number.isFinite(tail) ? tail : 0;
+}
+
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
 export type TestRun = RunSchema;
 
@@ -704,6 +872,11 @@ export interface RecordEventMeta {
    * the graceful-degradation path (a single-shot ingest is unchanged).
    */
   lifecycle?: { startedAt: number; runtimeMs: number };
+  /**
+   * The release this run verifies, already checked at the route boundary
+   * (declared, and never beside a cycle). Omitting it stores NULL.
+   */
+  release?: string;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -929,6 +1102,12 @@ export interface MigrationStep {
    * always runs from the beginning.
    */
   satisfiedBy?(db: Database): boolean;
+  /**
+   * The step frees much of the file (it moves data out of a column), so the
+   * store is compacted with ONE `VACUUM` once the whole chain has committed:
+   * VACUUM cannot run inside the step's transaction.
+   */
+  readonly compactsAfter?: boolean;
 }
 
 /** CR-CRU-071 §S1 — what one boot actually migrated. */
@@ -1131,6 +1310,586 @@ function createRecordTables(db: Database): void {
 }
 
 /**
+ * CR-CRU-162 §G4 — the gate-decision record table, in its CURRENT shape. One DDL,
+ * shared by the base pass and the v15 migration step, so a fresh store and a
+ * migrated one hold the same table. A decision joins its gate through
+ * `run_id` (the no-mistakes run id); `rowid` is its posting order.
+ */
+function createGateDecisionsTable(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gate_decisions (
+      id TEXT PRIMARY KEY,
+      project_key TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      step TEXT,
+      action TEXT NOT NULL,
+      -- JSON array of the selected finding ids; NULL when none were sent.
+      findings TEXT,
+      -- The ONE added finding, a JSON object; NULL when none was sent.
+      added_finding TEXT,
+      instructions TEXT,
+      reason TEXT,
+      timestamp INTEGER NOT NULL,
+      context TEXT,
+      role TEXT,
+      cycle_id INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gate_decisions_project_run
+      ON gate_decisions (project_key, run_id);
+  `);
+}
+
+/**
+ * The tables a test or compile run's detail lives in, children before the row
+ * they hang off. Every path that removes a run removes its rows here first.
+ */
+const RUN_DETAIL_TABLES = [
+  "run_cases",
+  "run_suites",
+  "run_diagnostics",
+  "run_compiles",
+  "run_details",
+] as const;
+
+/**
+ * A run's detail as native rows, in its CURRENT shape — shared by the base
+ * pass and the migration step, so a fresh store and a migrated one agree.
+ *
+ * - `run_details`: one row per run that carries a tree (`has_tree`, so an
+ *   empty tree reads back as `[]` and an absent one stays absent) or raw
+ *   runner output (`raw`, plain text, never inside `events.payload`).
+ * - `run_suites`: a `SuiteNode` per row, at its `position` in the tree, with
+ *   its leaf counts and, for a BDD scenario, the `feature` its name opens with.
+ * - `run_cases`: a `TestLeaf` per row, at its `position` within the suite at
+ *   `suite_position`; a failure's message, type and trace are each optional.
+ * - `run_compiles` / `run_diagnostics`: a `CompileReport`'s header and its
+ *   diagnostics, each diagnostic at its `position`.
+ *
+ * `run_suites` and `run_cases` are WITHOUT ROWID: a store holds hundreds of
+ * thousands of them, and a rowid table would store each composite key a
+ * second time in its own index (measured on the dev store: 66 MB of the
+ * migrated file).
+ */
+function createRunDetailTables(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS run_details (
+      event_id TEXT PRIMARY KEY,
+      has_tree INTEGER NOT NULL,
+      raw TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS run_suites (
+      event_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      browser TEXT,
+      feature TEXT,
+      total INTEGER NOT NULL,
+      passed INTEGER NOT NULL,
+      failed INTEGER NOT NULL,
+      pending INTEGER NOT NULL,
+      PRIMARY KEY (event_id, position)
+    ) WITHOUT ROWID;
+
+    -- One suite of a run by name (and browser); the first in position order.
+    CREATE INDEX IF NOT EXISTS idx_run_suites_name
+      ON run_suites (event_id, name, browser, position);
+
+    -- The scenarios of one BDD feature of a run.
+    CREATE INDEX IF NOT EXISTS idx_run_suites_feature
+      ON run_suites (event_id, feature, position);
+
+    CREATE TABLE IF NOT EXISTS run_cases (
+      event_id TEXT NOT NULL,
+      suite_position INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      has_failure INTEGER NOT NULL,
+      failure_message TEXT,
+      failure_type TEXT,
+      failure_trace TEXT,
+      PRIMARY KEY (event_id, suite_position, position)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS run_compiles (
+      event_id TEXT PRIMARY KEY,
+      format TEXT NOT NULL,
+      error_count INTEGER NOT NULL,
+      warning_count INTEGER NOT NULL,
+      raw TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS run_diagnostics (
+      event_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      file TEXT,
+      line INTEGER,
+      col INTEGER,
+      code TEXT,
+      message TEXT NOT NULL,
+      level TEXT NOT NULL,
+      PRIMARY KEY (event_id, position)
+    );
+  `);
+}
+
+/** The separator the playwright codec joins a BDD scenario's name with. */
+const FEATURE_SEPARATOR = " › ";
+
+/** A BDD scenario's feature: its name up to the first separator; null otherwise. */
+function featureOf(suiteName: string): string | null {
+  const at = suiteName.indexOf(FEATURE_SEPARATOR);
+  return at >= 0 ? suiteName.slice(0, at) : null;
+}
+
+const TEST_STATUSES: ReadonlySet<string> = new Set(["pass", "fail", "pending"]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+/** How a refusal names a node: its path in the tree, and its name when it has one. */
+function nodeLabel(path: string, node: unknown): string {
+  const name = isPlainObject(node) ? node.name : undefined;
+  return typeof name === "string" ? `${path} "${name}"` : path;
+}
+
+function invalidLeaf(leaf: unknown, path: string): string | null {
+  if (!isPlainObject(leaf)) return `${path} is not a test leaf object`;
+  const label = nodeLabel(path, leaf);
+  if (typeof leaf.name !== "string") return `${label}: name must be a string`;
+  if (typeof leaf.status !== "string" || !TEST_STATUSES.has(leaf.status)) {
+    return `${label}: status must be one of pass, fail, pending`;
+  }
+  if (typeof leaf.duration_ms !== "number" || !Number.isFinite(leaf.duration_ms)) {
+    return `${label}: duration_ms must be a number`;
+  }
+  if (leaf.failure !== undefined) {
+    const failure = leaf.failure;
+    if (!isPlainObject(failure)) return `${label}: failure must be an object`;
+    for (const key of ["message", "type", "trace"] as const) {
+      if (!isOptionalString(failure[key])) return `${label}: failure.${key} must be a string`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The first node of `tree` that is not a `SuiteNode` (or one of its leaves not
+ * a `TestLeaf`), described by its path and name; null when every node fits.
+ * The parsed-run route refuses on it, and the store refuses to write a tree
+ * that has one.
+ */
+export function invalidSuiteTreeNode(tree: unknown): string | null {
+  if (!Array.isArray(tree)) return "tree must be an array of suites";
+  for (let i = 0; i < tree.length; i++) {
+    const suite: unknown = tree[i];
+    const path = `tree[${i}]`;
+    if (!isPlainObject(suite)) return `${path} is not a suite object`;
+    const label = nodeLabel(path, suite);
+    if (typeof suite.name !== "string") return `${label}: name must be a string`;
+    if (typeof suite.status !== "string" || !TEST_STATUSES.has(suite.status)) {
+      return `${label}: status must be one of pass, fail, pending`;
+    }
+    if (!isOptionalString(suite.browser)) return `${label}: browser must be a string`;
+    if (!Array.isArray(suite.children)) return `${label}: children must be an array of test leaves`;
+    for (let j = 0; j < suite.children.length; j++) {
+      const refusal = invalidLeaf(suite.children[j], `${label} children[${j}]`);
+      if (refusal !== null) return refusal;
+    }
+  }
+  return null;
+}
+
+/** The first part of `report` that does not fit `CompileReport`; null when it fits. */
+function invalidCompileReport(report: unknown): string | null {
+  if (!isPlainObject(report)) return "compile report must be an object";
+  if (typeof report.format !== "string") return "compile report: format must be a string";
+  if (typeof report.errorCount !== "number" || typeof report.warningCount !== "number") {
+    return "compile report: errorCount and warningCount must be numbers";
+  }
+  if (typeof report.raw !== "string") return "compile report: raw must be a string";
+  if (!Array.isArray(report.diagnostics)) return "compile report: diagnostics must be an array";
+  for (let i = 0; i < report.diagnostics.length; i++) {
+    const d: unknown = report.diagnostics[i];
+    const path = `compile report: diagnostics[${i}]`;
+    if (!isPlainObject(d)) return `${path} is not an object`;
+    if (typeof d.message !== "string") return `${path}: message must be a string`;
+    if (d.level !== "error" && d.level !== "warning") return `${path}: level must be error or warning`;
+    if (!isOptionalString(d.file) || !isOptionalString(d.code)) {
+      return `${path}: file and code must be strings`;
+    }
+    if (!isOptionalNumber(d.line) || !isOptionalNumber(d.col)) {
+      return `${path}: line and col must be numbers`;
+    }
+  }
+  return null;
+}
+
+/** A run's detail in the shape `writeRunDetailRows` files it from. */
+interface RunDetailSource {
+  id: string;
+  kind: string;
+  tree?: SuiteNode[];
+  raw?: string;
+  compile?: unknown;
+}
+
+/**
+ * Write a run's detail as native rows: its tree as suites and cases in
+ * decoded order (each suite's counts from its own leaves, a BDD scenario's
+ * feature split from its name), its raw output as plain text, and a compile
+ * report as its header and diagnostics. The ONE mapping, used by ingest and by
+ * the migration that moves a legacy row, so the two store a run identically.
+ * Its callers have already refused a tree or report that does not fit the
+ * codecs' types.
+ */
+function writeRunDetailRows(db: Database, run: RunDetailSource): void {
+  const tree = run.tree;
+  if (tree !== undefined || run.raw !== undefined) {
+    db.query(`INSERT INTO run_details (event_id, has_tree, raw) VALUES (?, ?, ?)`).run(
+      run.id,
+      tree !== undefined ? 1 : 0,
+      run.raw ?? null,
+    );
+  }
+  if (tree !== undefined) {
+    const insertSuite = db.query(
+      `INSERT INTO run_suites (event_id, position, name, status, browser, feature,
+         total, passed, failed, pending)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertCase = db.query(
+      `INSERT INTO run_cases (event_id, suite_position, position, name, status, duration_ms,
+         has_failure, failure_message, failure_type, failure_trace)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    tree.forEach((suite, suitePosition) => {
+      const count = (status: string): number =>
+        suite.children.filter((leaf) => leaf.status === status).length;
+      insertSuite.run(
+        run.id,
+        suitePosition,
+        suite.name,
+        suite.status,
+        suite.browser ?? null,
+        featureOf(suite.name),
+        suite.children.length,
+        count("pass"),
+        count("fail"),
+        count("pending"),
+      );
+      suite.children.forEach((leaf, position) => {
+        insertCase.run(
+          run.id,
+          suitePosition,
+          position,
+          leaf.name,
+          leaf.status,
+          leaf.duration_ms,
+          leaf.failure !== undefined ? 1 : 0,
+          leaf.failure?.message ?? null,
+          leaf.failure?.type ?? null,
+          leaf.failure?.trace ?? null,
+        );
+      });
+    });
+  }
+  if (run.kind === "compile" && run.compile !== undefined) {
+    const report = run.compile as CompileReport;
+    db.query(
+      `INSERT INTO run_compiles (event_id, format, error_count, warning_count, raw)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(run.id, report.format, report.errorCount, report.warningCount, report.raw);
+    const insertDiagnostic = db.query(
+      `INSERT INTO run_diagnostics (event_id, position, file, line, col, code, message, level)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    report.diagnostics.forEach((d, position) => {
+      insertDiagnostic.run(
+        run.id,
+        position,
+        d.file ?? null,
+        d.line ?? null,
+        d.col ?? null,
+        d.code ?? null,
+        d.message,
+        d.level,
+      );
+    });
+  }
+}
+
+/** An `events` row that still holds a run's detail in a legacy column. */
+const HOLDS_LEGACY_RUN_DETAIL =
+  `tree IS NOT NULL OR compile IS NOT NULL OR json_type(payload, '$.raw') IS NOT NULL`;
+
+interface LegacyRunDetailRow {
+  id: string;
+  kind: string;
+  tree: string | null;
+  compile: string | null;
+  /** `json_type` of the payload's `raw` key; null when it has none. */
+  raw_type: string | null;
+}
+
+/**
+ * The data half of the run-detail move. Every `events` row still holding its
+ * tree (`events.tree`), compile report (`events.compile`) or raw output
+ * (`payload.raw`) gets them as detail rows, and those legacy columns are
+ * emptied: `tree` and `compile` to NULL, `raw` removed from the payload, and a
+ * payload left as `{}` stored as NULL, which every payload reader already
+ * reads alike.
+ *
+ * The tree and compile report go through `writeRunDetailRows`, the mapping
+ * ingest uses, so a migrated run and a newly filed one are stored alike; they
+ * are streamed one row at a time (`iterate`), so memory is bounded by the
+ * largest single run, never by the store. The raw output is moved by SQL
+ * alone (`json_extract` into its detail row, `json_remove` out of the
+ * payload), so it never becomes a JS string at all.
+ *
+ * A legacy value the detail tables cannot hold is REFUSED (the step throws,
+ * its transaction rolls back and the boot names the backup), never dropped.
+ */
+function moveLegacyRunDetail(db: Database): void {
+  const legacyRows = db.query<LegacyRunDetailRow, []>(
+    `SELECT id, kind, tree, compile, json_type(payload, '$.raw') AS raw_type
+       FROM events WHERE ${HOLDS_LEGACY_RUN_DETAIL}`,
+  );
+  for (const row of legacyRows.iterate()) {
+    const refuse = (reason: string): never => {
+      throw new Error(`run ${row.id} (${row.kind}): its legacy detail cannot be stored as rows: ${reason}`);
+    };
+    if (row.kind !== "test" && row.kind !== "compile") refuse("only a test or compile run carries detail");
+    if (row.raw_type !== null && row.raw_type !== "text") refuse("payload.raw is not text");
+    const tree: unknown = row.tree !== null ? JSON.parse(row.tree) : undefined;
+    if (tree !== undefined) {
+      const refusal = invalidSuiteTreeNode(tree);
+      if (refusal !== null) refuse(refusal);
+    }
+    const compile: unknown = row.compile !== null ? JSON.parse(row.compile) : undefined;
+    if (compile !== undefined) {
+      if (row.kind !== "compile") refuse("only a compile run carries a compile report");
+      const refusal = invalidCompileReport(compile);
+      if (refusal !== null) refuse(refusal);
+    }
+    writeRunDetailRows(db, {
+      id: row.id,
+      kind: row.kind,
+      ...(tree !== undefined ? { tree: tree as SuiteNode[] } : {}),
+      ...(compile !== undefined ? { compile } : {}),
+    });
+  }
+  // The raw output, onto the run's detail row (which a run with a tree
+  // already has) or a new one, exactly as `writeRunDetailRows` would file it.
+  db.exec(
+    `INSERT INTO run_details (event_id, has_tree, raw)
+       SELECT id, 0, json_extract(payload, '$.raw') FROM events
+        WHERE json_type(payload, '$.raw') = 'text'
+     ON CONFLICT (event_id) DO UPDATE SET raw = excluded.raw`,
+  );
+  db.exec(
+    `UPDATE events
+        SET payload = CASE WHEN json_remove(payload, '$.raw') = '{}' THEN NULL
+                           ELSE json_remove(payload, '$.raw') END
+      WHERE json_type(payload, '$.raw') IS NOT NULL`,
+  );
+  db.exec(`UPDATE events SET tree = NULL, compile = NULL WHERE tree IS NOT NULL OR compile IS NOT NULL`);
+}
+
+/**
+ * Compact the store once a migration that freed much of it has committed, so
+ * the file does not keep the space. In WAL mode VACUUM's rewrite lands in the
+ * log, so the log is checkpointed and truncated to shrink the file itself.
+ *
+ * The migration is already committed and the store is consistent, so a
+ * failure here must not fail the boot (an `open` that throws would quarantine
+ * the live file as corrupt): it is reported, and the store stays uncompacted.
+ */
+function compactStore(db: Database, path: string): void {
+  try {
+    db.exec("VACUUM");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch (error) {
+    console.error(
+      `[crucible] the migrated store at ${path} could not be compacted (VACUUM failed); it is ` +
+        `intact but keeps its freed space until the next successful VACUUM. Cause: ${String(error)}`,
+    );
+  }
+}
+
+/** A run's detail as the rows hold it, rebuilt into the codecs' own shapes. */
+interface RunDetail {
+  tree?: SuiteNode[];
+  raw?: string;
+  compile?: CompileReport;
+}
+
+interface RunDetailsRow {
+  event_id: string;
+  has_tree: number;
+  raw: string | null;
+}
+
+interface RunSuiteRow {
+  event_id: string;
+  position: number;
+  name: string;
+  status: string;
+  browser: string | null;
+}
+
+interface RunCaseRow {
+  event_id: string;
+  suite_position: number;
+  name: string;
+  status: string;
+  duration_ms: number;
+  has_failure: number;
+  failure_message: string | null;
+  failure_type: string | null;
+  failure_trace: string | null;
+}
+
+interface RunCompileRow {
+  event_id: string;
+  format: string;
+  error_count: number;
+  warning_count: number;
+  raw: string;
+}
+
+interface RunDiagnosticRow {
+  event_id: string;
+  file: string | null;
+  line: number | null;
+  col: number | null;
+  code: string | null;
+  message: string;
+  level: string;
+}
+
+/** Ids per bulk read: well under SQLite's bound-parameter limit. */
+const RUN_DETAIL_CHUNK = 500;
+
+/** A `run_suites` row as the `SuiteNode` it was filed from, its leaves still to come. */
+function suiteNodeOf(row: RunSuiteRow): SuiteNode {
+  return {
+    name: row.name,
+    status: row.status as SuiteNode["status"],
+    children: [],
+    ...(row.browser !== null ? { browser: row.browser } : {}),
+  };
+}
+
+/** A `run_cases` row as the `TestLeaf` it was filed from; each failure field only when stored. */
+function testLeafOf(row: RunCaseRow): TestLeaf {
+  return {
+    name: row.name,
+    status: row.status as TestLeaf["status"],
+    duration_ms: row.duration_ms,
+    ...(row.has_failure === 1
+      ? {
+          failure: {
+            ...(row.failure_message !== null ? { message: row.failure_message } : {}),
+            ...(row.failure_type !== null ? { type: row.failure_type } : {}),
+            ...(row.failure_trace !== null ? { trace: row.failure_trace } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** One suite of a run as `?depth=suites` serves it: its stored counts, no leaves. */
+export interface SuiteSummary {
+  name: string;
+  status: SuiteNode["status"];
+  counts: { passed: number; failed: number; pending: number };
+  browser?: string;
+}
+
+interface RunSuiteCountsRow {
+  name: string;
+  status: string;
+  browser: string | null;
+  passed: number;
+  failed: number;
+  pending: number;
+}
+
+/**
+ * CR-CRU-162 §G5 — the no-mistakes run id a posted gate object carries at
+ * `run.id` (the shape of no-mistakes' own axi snapshot), or nothing. Only a
+ * non-empty string counts: a gate with no run, or a run with no id, has no
+ * run id, and none is invented for it.
+ */
+function gateRunId(gate: unknown): string | undefined {
+  if (typeof gate !== "object" || gate === null) return undefined;
+  const run = (gate as { run?: unknown }).run;
+  if (typeof run !== "object" || run === null) return undefined;
+  const id = (run as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+/** CR-CRU-162 §G4 — a `gate_decisions` row as SQLite returns it. */
+interface GateDecisionRow {
+  id: string;
+  project_key: string;
+  agent_id: string;
+  run_id: string;
+  step: string | null;
+  action: string;
+  findings: string | null;
+  added_finding: string | null;
+  instructions: string | null;
+  reason: string | null;
+  timestamp: number;
+  context: string | null;
+  role: string | null;
+  cycle_id: number | null;
+}
+
+/** A `gate_decisions` row as the `GateDecision` the API serves. */
+function toGateDecision(row: GateDecisionRow): GateDecision {
+  return {
+    id: row.id,
+    projectKey: row.project_key,
+    agentId: row.agent_id,
+    runId: row.run_id,
+    ...(row.step !== null ? { step: row.step } : {}),
+    action: row.action as GateDecisionAction,
+    ...(row.findings !== null ? { findings: JSON.parse(row.findings) as string[] } : {}),
+    ...(row.added_finding !== null
+      ? { addedFinding: JSON.parse(row.added_finding) as Record<string, unknown> }
+      : {}),
+    ...(row.instructions !== null ? { instructions: row.instructions } : {}),
+    ...(row.reason !== null ? { reason: row.reason } : {}),
+    timestamp: row.timestamp,
+    ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
+    ...(row.role !== null ? { role: row.role as AgentRole } : {}),
+    ...(row.cycle_id !== null ? { cycleId: row.cycle_id } : {}),
+  };
+}
+
+/** The key `Store.listGateDecisionsForRuns` groups one project's run under. */
+export function gateDecisionRunKey(projectKey: string, runId: string): string {
+  return JSON.stringify([projectKey, runId]);
+}
+
+/**
  * CR-CRU-130 §S1 — WHEN a milestone was met, from whichever spelling the
  * record carries.
  *
@@ -1182,7 +1941,7 @@ function recordProjection(table: "milestones" | "gates", kind: "milestone" | "ga
                  NULL AS pending, NULL AS duration_ms, NULL AS tree, NULL AS coverage,
                  NULL AS compile, context, NULL AS action, NULL AS first_seen, payload,
                  role, role_inferred, NULL AS started_at, NULL AS runtime_ms, NULL AS status,
-                 retired_at, cycle_id
+                 retired_at, cycle_id, NULL AS release
           FROM ${table}`;
 }
 
@@ -1217,9 +1976,11 @@ const GATE_ROWS = recordProjection("gates", "gate");
  *   NO PROVENANCE — "derived from delivery OR ITS EVIDENCE", and the reason
  *     the two columns are not enough. THE ABSENCE OF A DATE IS NOT THE ABSENCE
  *     OF A SHIP. A dateless ship is reachable in production, measured
- *     2026-09-13 at three layers: `scripts/release.sh:733` adds
- *     `--released-at` only `if [ -n "$ship_date" ]`, and `release_ship_date`
- *     (`:405`) prints nothing and exits 0 whenever git cannot resolve the sha
+ *     2026-09-13 at three layers: `emit_release_milestone` in
+ *     `scripts/release.sh` then added `--released-at` only
+ *     `if [ -n "$ship_date" ]` (it now refuses a dateless ship instead), and
+ *     `release_ship_date` prints nothing and exits 0 whenever git cannot
+ *     resolve the sha
  *     (shallow clone, unfetched tag object); all five clients declare
  *     `--released-at` optional; and the route carries `releasedAt` only when
  *     well-formed, because CR-CRU-080 §S4 deliberately left a dateless release
@@ -1368,6 +2129,11 @@ export function migrateMilestoneRecords(db: Database): MilestoneRecordMigrationR
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const drop = db.query(`DELETE FROM events WHERE id = ?`);
+    // A moved row leaves no run detail behind. The tables exist only once the
+    // store reaches the version that creates them, which is after this step.
+    const dropDetail = RUN_DETAIL_TABLES.filter((table) => tableExists(db, table)).map((table) =>
+      db.query(`DELETE FROM ${table} WHERE event_id = ?`),
+    );
 
     db.transaction(() => {
       for (const row of rows) {
@@ -1410,6 +2176,7 @@ export function migrateMilestoneRecords(db: Database): MilestoneRecordMigrationR
             );
           }
         }
+        for (const statement of dropDetail) statement.run(row.id);
         drop.run(row.id);
         if (held) alreadyPresent += 1;
         else moved += 1;
@@ -1601,6 +2368,22 @@ interface ProposalRow {
 }
 
 type MigrationBody = Omit<MigrationStep, "from" | "to">;
+
+/**
+ * CR-CRU-165 §G6 — the columns a recorded plan change and an abort are stored
+ * in, each with its literal additive DDL (an allowlist: nothing is
+ * interpolated into SQL). The base DDL in `createBaseTables` carries the same
+ * columns for a store created fresh.
+ */
+const CHANGE_RECORD_COLUMNS: ReadonlyArray<{ table: string; column: string; ddl: string }> = [
+  { table: "plan_cycles", column: "change_reason", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_reason TEXT" },
+  { table: "plan_cycles", column: "change_cause", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_cause TEXT" },
+  { table: "plan_cycles", column: "change_spec_ref", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_spec_ref TEXT" },
+  { table: "plan_cycles", column: "change_kind", ddl: "ALTER TABLE plan_cycles ADD COLUMN change_kind TEXT" },
+  { table: "plans", column: "abort_reason", ddl: "ALTER TABLE plans ADD COLUMN abort_reason TEXT" },
+  { table: "plans", column: "abort_cause", ddl: "ALTER TABLE plans ADD COLUMN abort_cause TEXT" },
+  { table: "plans", column: "abort_spec_ref", ddl: "ALTER TABLE plans ADD COLUMN abort_spec_ref TEXT" },
+];
 
 // A step whose table does not exist yet has NOTHING to retrofit: the base
 // `CREATE TABLE IF NOT EXISTS` pass writes every table in its CURRENT shape,
@@ -2055,7 +2838,211 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return owed === 0;
     },
   },
+  {
+    description:
+      "plan_cycles + plans: CR-165 §S1/§S2/§S2b — a recorded plan change (insert, rename, non-fix append, skip) carries its reason, cause and spec reference and its kind on the cycle; an abort carries its reason, cause and spec reference on the plan. History is never back-filled",
+    apply(db) {
+      // Additive columns only, NULL on every row already stored: the skips and
+      // aborts made before this CR recorded no reason, and §S3 shows them as
+      // unrecorded rather than inventing one. No UPDATE, so every existing
+      // row's original fields are byte-identical afterwards.
+      for (const { table, column, ddl } of CHANGE_RECORD_COLUMNS) {
+        if (tableExists(db, table) && !columnsOf(db, table).has(column)) db.exec(ddl);
+      }
+    },
+    satisfiedBy(db) {
+      // A table the store never had is created later in its CURRENT shape.
+      return CHANGE_RECORD_COLUMNS.every(
+        ({ table, column }) => !tableExists(db, table) || columnsOf(db, table).has(column),
+      );
+    },
+  },
+  {
+    description:
+      "gate_decisions: CR-162 §G4 — a gate decision is its own record, keyed by the no-mistakes run id. A new table only: no gate decided before this CR is back-filled",
+    apply(db) {
+      // A CREATE and nothing else: the decisions taken before this CR were
+      // never seen by the board, so there is nothing to derive and every
+      // existing row is byte-identical afterwards.
+      createGateDecisionsTable(db);
+    },
+    satisfiedBy(db) {
+      return tableExists(db, "gate_decisions");
+    },
+  },
+  {
+    description:
+      "run detail as native rows: a run's suites, cases, raw output, compile report and diagnostics get tables of their own. A CREATE only: existing rows keep their legacy columns until they are moved",
+    apply(db) {
+      // Storage only. A row already stored keeps its tree, compile and raw in
+      // the legacy columns, and every read falls back to them, so nothing is
+      // moved or rewritten here and every existing row is byte-identical.
+      createRunDetailTables(db);
+    },
+    satisfiedBy(db) {
+      return RUN_DETAIL_TABLES.every((table) => tableExists(db, table));
+    },
+  },
+  {
+    description:
+      "run detail as native rows: every run's tree, raw output and compile report moves out of the legacy events.tree / payload.raw / events.compile columns into the detail tables, and those columns are emptied. The store is compacted afterwards",
+    apply(db) {
+      // A store with no events table has no run to move; the table is created
+      // later in its CURRENT shape.
+      if (!tableExists(db, "events")) return;
+      moveLegacyRunDetail(db);
+    },
+    satisfiedBy(db) {
+      return (
+        !tableExists(db, "events") ||
+        db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM events WHERE ${HOLDS_LEGACY_RUN_DETAIL}`).get()!
+          .n === 0
+      );
+    },
+    compactsAfter: true,
+  },
+  {
+    description:
+      "events + runs: a release's verification run is filed under the release — a nullable `release` column on the run's event and on its open run row, and an index on (project_key, release, timestamp). Existing rows carry no release",
+    apply(db) {
+      // Additive ALTERs and nothing else, so every existing row is kept and
+      // reads NULL: no release is invented for a run that never declared one.
+      // A table the store never had is created later in its CURRENT shape.
+      for (const table of RELEASE_COLUMN_TABLES) {
+        if (tableExists(db, table) && !columnsOf(db, table).has("release")) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN release TEXT`);
+        }
+      }
+      if (tableExists(db, "events")) db.exec(EVENTS_RELEASE_INDEX_DDL);
+    },
+    satisfiedBy(db) {
+      return RELEASE_COLUMN_TABLES.every(
+        (table) => !tableExists(db, table) || columnsOf(db, table).has("release"),
+      );
+    },
+  },
+  {
+    description:
+      "plans: a closed plan's commit boundary is stored when it closes — nullable `boundary_branch`, `boundary_first_commit` and `boundary_last_commit` columns, backfilled for every plan already closed with a merge exactly as it was derived on read; every other plan stores none",
+    apply(db) {
+      // A store with no plans table has no plan to backfill; the table is
+      // created later in its CURRENT shape.
+      if (!tableExists(db, "plans")) return;
+      for (const { column, ddl } of BOUNDARY_COLUMNS) {
+        if (!columnsOf(db, "plans").has(column)) db.exec(ddl);
+      }
+      backfillCommitBoundaries(db);
+    },
+    satisfiedBy(db) {
+      // A store already carrying the columns was written by a build that
+      // stamps the boundary at close, so it owes no backfill. A table the
+      // store never had is created later in its CURRENT shape.
+      if (!tableExists(db, "plans")) return true;
+      const cols = columnsOf(db, "plans");
+      return BOUNDARY_COLUMNS.every(({ column }) => cols.has(column));
+    },
+  },
+  {
+    description:
+      "gates: a run's in-flight snapshots that carry no release and that a LATER gate in the same project superseded are retired — a sealed run leaves no running snapshot behind. Their retirement stamp is the only column written; nothing is deleted",
+    apply(db) {
+      // A store with no gates table has no snapshot to retire; the table is
+      // created later in its CURRENT shape.
+      if (!tableExists(db, "gates")) return;
+      // An UPDATE of one column and nothing else, so every row's id, payload
+      // and version are byte-identical afterwards. IDEMPOTENT by the
+      // `retired_at IS NULL` predicate: a row a previous pass retired is no
+      // longer a candidate.
+      db.query(
+        `UPDATE gates SET retired_at = ?
+          WHERE rowid IN (SELECT rowid FROM gates AS g WHERE ${SUPERSEDED_ORPHAN_SNAPSHOT})`,
+      ).run(Date.now());
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "gates")) return true;
+      // The data half, as every backfill above states it: no superseded
+      // version-less snapshot may still be live.
+      return (
+        db
+          .query<{ n: number }, []>(
+            `SELECT COUNT(*) AS n FROM gates AS g WHERE ${SUPERSEDED_ORPHAN_SNAPSHOT}`,
+          )
+          .get()!.n === 0
+      );
+    },
+  },
 ];
+
+/**
+ * A LIVE gate row `g` that is marked in flight, names no release (neither the
+ * `version` column nor the payload's own `version`), and has a LATER gate in
+ * the same project — by timestamp, then rowid — retired or not. A snapshot a
+ * later gate superseded is not a run in progress; one with no later gate is.
+ */
+const SUPERSEDED_ORPHAN_SNAPSHOT = `g.retired_at IS NULL
+  AND g.version IS NULL
+  AND json_valid(g.payload)
+  AND json_extract(g.payload, '$.gate.inFlight') = 1
+  AND json_extract(g.payload, '$.version') IS NULL
+  AND EXISTS (SELECT 1 FROM gates AS later
+               WHERE later.project_key = g.project_key
+                 AND (later.timestamp > g.timestamp
+                      OR (later.timestamp = g.timestamp AND later.rowid > g.rowid)))`;
+
+/** The stored commit-boundary columns, each with its literal additive DDL. */
+const BOUNDARY_COLUMNS: ReadonlyArray<{ column: keyof BoundaryColumns; ddl: string }> = [
+  { column: "boundary_branch", ddl: "ALTER TABLE plans ADD COLUMN boundary_branch TEXT" },
+  { column: "boundary_first_commit", ddl: "ALTER TABLE plans ADD COLUMN boundary_first_commit TEXT" },
+  { column: "boundary_last_commit", ddl: "ALTER TABLE plans ADD COLUMN boundary_last_commit TEXT" },
+];
+
+/**
+ * Stamp the boundary of every plan closed with a merge before the columns
+ * existed, through the one derivation `Store.closePlan` uses, over the plan's
+ * cycles in display order. Open, aborted and unmerged plans keep NULL.
+ */
+function backfillCommitBoundaries(db: Database): void {
+  const closed = db
+    .query<{ plan_id: number; project_key: string }, []>(
+      `SELECT plan_id, project_key FROM plans
+        WHERE status = 'closed' AND merge_commit IS NOT NULL AND closed_at IS NOT NULL
+        ORDER BY plan_id ASC`,
+    )
+    .all();
+  const hasCycles = tableExists(db, "plan_cycles");
+  const stamp = db.query(
+    `UPDATE plans SET boundary_branch = ?, boundary_first_commit = ?, boundary_last_commit = ?
+      WHERE plan_id = ?`,
+  );
+  for (const plan of closed) {
+    const cycleIds = hasCycles
+      ? db
+          .query<{ cycle_id: number }, [string, number]>(
+            `SELECT cycle_id FROM plan_cycles WHERE project_key = ? AND plan_id = ?
+              ORDER BY seq ASC, cycle_id ASC`,
+          )
+          .all(plan.project_key, plan.plan_id)
+          .map((cycle) => cycle.cycle_id)
+      : [];
+    const boundary = deriveBoundaryColumns(db, plan.project_key, cycleIds);
+    stamp.run(
+      boundary.boundary_branch,
+      boundary.boundary_first_commit,
+      boundary.boundary_last_commit,
+      plan.plan_id,
+    );
+  }
+}
+
+/** The two tables a run's release is stored on: its event and its open run row. */
+const RELEASE_COLUMN_TABLES = ["events", "runs"] as const;
+
+/**
+ * The by-release read's seek, composite on the `idx_events_project_cycle`
+ * terms: the filter's equality columns, then the `timestamp` it orders by.
+ */
+const EVENTS_RELEASE_INDEX_DDL = `CREATE INDEX IF NOT EXISTS idx_events_project_release
+  ON events (project_key, release, timestamp)`;
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
 export const MIGRATIONS: readonly MigrationStep[] = MIGRATION_BODIES.map((body, index) => ({
@@ -2110,6 +3097,30 @@ class PlanRegistrationRefused extends Error {
   constructor(readonly refusal: PlanOpError) {
     super(refusal.error);
   }
+}
+
+/**
+ * §S2/G4 — the outcome of an ACCEPTED test ingest, composed by the server at
+ * ingest and written onto the agent's `message` (`recordTestEvent`), in the
+ * board's tally form: `2936 ✓ 0 ✗ · ingested`.
+ */
+function ingestOutcome(summary: RunSchema["summary"]): string {
+  return `${summary.passed} ✓ ${summary.failed} ✗ · ingested`;
+}
+
+/**
+ * The outcome of an ACCEPTED compile ingest, in `ingestOutcome`'s style and
+ * written onto the agent's `message` the same way (`recordCompileEvent`):
+ * `compile · 2 errors · ingested` (`1 error` singular). A payload carrying no
+ * error count reads as none counted.
+ */
+function compileOutcome(compile: unknown): string {
+  const errorCount =
+    typeof compile === "object" && compile !== null
+      ? (compile as { errorCount?: unknown }).errorCount
+      : undefined;
+  const count = typeof errorCount === "number" ? errorCount : 0;
+  return `compile · ${count} ${count === 1 ? "error" : "errors"} · ingested`;
 }
 
 export class Store {
@@ -2246,6 +3257,7 @@ export class Store {
     // applied retrofit re-runs (AC2).
     const resume = found === 0 ? baselineVersion(this.db, chain, found) : found;
     const backupPath = path === ":memory:" ? null : writePreUpgradeBackup(this.db, path);
+    let compact = false;
     for (const step of chain) {
       if (step.from < resume) continue;
       const run = this.db.transaction(() => {
@@ -2266,6 +3278,7 @@ export class Store {
             `Cause: ${String(error)}`,
         );
       }
+      compact ||= step.compactsAfter === true;
     }
     if (readUserVersion(this.db) !== target) {
       // A baseline with nothing left to apply still has to be STAMPED (AC2).
@@ -2274,6 +3287,7 @@ export class Store {
       });
       stamp();
     }
+    if (compact) compactStore(this.db, path);
     // `from` is the version the store REPORTED before this open, not where the
     // chain resumed. A baseline moved user_version 0 -> target, so reporting
     // `resume` here printed the nonsense "migrated store schema v5 -> v5";
@@ -2359,13 +3373,16 @@ export class Store {
         -- CR-CRU-094 §S1 — the run's cycle binding, in the base schema so a
         -- brand-new store and the end of the chain agree (the retrofit never
         -- runs on a store this build created).
-        cycle_id INTEGER
+        cycle_id INTEGER,
+        -- The release this run verifies, in the base schema so a brand-new
+        -- store and the end of the chain agree.
+        release TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
         ON events (project_key, timestamp);
 
-      -- CR-CRU-126 §S1 — the cycle-scoped seek deriveCommitBoundary issues,
+      -- CR-CRU-126 §S1 — the cycle-scoped seek deriveBoundaryColumns issues,
       -- which without it re-scanned every event in the project once per closed
       -- plan. COMPOSITE on purpose, and timestamp is the third column for a
       -- measured reason: the derivation orders by it, and an index carrying
@@ -2375,6 +3392,8 @@ export class Store {
       -- one index serves BOTH the equality filter and the ordering.
       CREATE INDEX IF NOT EXISTS idx_events_project_cycle
         ON events (project_key, cycle_id, timestamp);
+
+      ${EVENTS_RELEASE_INDEX_DDL};
 
       -- CR-CRU-017 §S1 — OPEN and settled RUNS. A new table, never a retrofit:
       -- the base pass creates it whole for every store, old or new (which is
@@ -2406,7 +3425,10 @@ export class Store {
         run_state TEXT NOT NULL,
         settled_at INTEGER,
         abort_reason TEXT,
-        event_id TEXT
+        event_id TEXT,
+        -- The release the run was opened under (NULL: none), so an aborted
+        -- verification run is still filed under its release.
+        release TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_runs_open
@@ -2433,7 +3455,13 @@ export class Store {
         track TEXT,
         status TEXT NOT NULL,
         merge_commit TEXT,
-        closed_at INTEGER
+        closed_at INTEGER,
+        abort_reason TEXT,
+        abort_cause TEXT,
+        abort_spec_ref TEXT,
+        boundary_branch TEXT,
+        boundary_first_commit TEXT,
+        boundary_last_commit TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_plans_project_cr
@@ -2450,6 +3478,10 @@ export class Store {
         done_at INTEGER,
         active_ms_accumulated INTEGER,
         seq REAL,
+        change_reason TEXT,
+        change_cause TEXT,
+        change_spec_ref TEXT,
+        change_kind TEXT,
         PRIMARY KEY (project_key, cycle_id)
       );
 
@@ -2461,6 +3493,17 @@ export class Store {
       CREATE TABLE IF NOT EXISTS project_milestone_types (
         project_key TEXT PRIMARY KEY,
         types_json TEXT NOT NULL
+      );
+
+      -- §S1 — a project's metadata: one row per (project, key), so a set
+      -- is an upsert and an unset a delete. A new TABLE in the base pass, on
+      -- the project_milestone_types precedent above: no chain step, no schema
+      -- version.
+      CREATE TABLE IF NOT EXISTS project_metadata (
+        project_key TEXT NOT NULL,
+        meta_key TEXT NOT NULL,
+        meta_value TEXT NOT NULL,
+        PRIMARY KEY (project_key, meta_key)
       );
 
       -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). The table
@@ -2486,11 +3529,47 @@ export class Store {
         lifecycle_json TEXT,
         PRIMARY KEY (project_key, cr)
       );
+
+      -- CR-CRU-022 §S1 — the DECLARATION JOURNAL: one APPEND-ONLY row per
+      -- per-CR write that moves a release's scope — cr-plan (planning a cr into
+      -- a release, changing its release, setting or changing its points),
+      -- cr-void and cr-supersede. A row is never updated and never deleted.
+      -- A new TABLE, never a retrofitted column (the CR-CRU-130 §4
+      -- precedent above), so it costs no chain step and no schema version.
+      --
+      -- It is also the SINGLE source of a cr's story points: the queue read
+      -- publishes the points of the cr's LATEST row whose points is not NULL,
+      -- so no second copy exists to drift from the history. points is the
+      -- value THIS row declared (NULL when the row declares none, e.g. a
+      -- void); change_json is the verbatim {field: {from, to}} move; author is
+      -- the registered caller the route authenticated (NULL only for a direct
+      -- store write, which has no caller); at is epoch MILLISECONDS, the unit
+      -- of filed_at and lifecycle.at.
+      CREATE TABLE IF NOT EXISTS queue_declarations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_key TEXT NOT NULL,
+        cr TEXT NOT NULL,
+        verb TEXT NOT NULL,
+        change_json TEXT NOT NULL,
+        points INTEGER,
+        author TEXT,
+        at INTEGER NOT NULL
+      );
+
+      -- The latest-points seek: (project_key, cr) equality, newest id first,
+      -- so a cr's current points is one index probe, never a scan per row.
+      CREATE INDEX IF NOT EXISTS idx_queue_declarations_cr
+        ON queue_declarations (project_key, cr, id);
     `);
     // CR-CRU-129 §S1 — the two RECORD tables, written by the same base pass
     // for every store, old or new, so a brand-new store and the end of the
     // chain agree and the chain step only ever has rows to MOVE.
     createRecordTables(this.db);
+    // CR-CRU-162 §G4 — the decision record, by the same base pass for the
+    // same reason: a brand-new store and the end of the chain agree.
+    createGateDecisionsTable(this.db);
+    // A run's detail rows, by the same base pass for the same reason.
+    createRunDetailTables(this.db);
   }
 
   /**
@@ -2539,7 +3618,10 @@ export class Store {
   private static readonly PROJECT_SELECT =
     `SELECT projects.*,
             (SELECT types_json FROM project_milestone_types
-              WHERE project_key = projects.key) AS milestone_types
+              WHERE project_key = projects.key) AS milestone_types,
+            (SELECT json_group_object(meta_key, meta_value)
+               FROM (SELECT meta_key, meta_value FROM project_metadata
+                      WHERE project_key = projects.key ORDER BY meta_key)) AS metadata_json
        FROM projects`;
 
   getProject(key: string): Project | null {
@@ -2572,6 +3654,55 @@ export class Store {
    */
   acceptedMilestoneTypes(key: string): string[] {
     return milestoneVocabulary(this.getProject(key)?.milestoneTypes ?? []);
+  }
+
+  /**
+   * §S1 — a project's metadata map (`{}` when it holds none), keys sorted.
+   */
+  getProjectMetadata(key: string): Record<string, string> {
+    const rows = this.db
+      .query<{ meta_key: string; meta_value: string }, [string]>(
+        `SELECT meta_key, meta_value FROM project_metadata WHERE project_key = ? ORDER BY meta_key`,
+      )
+      .all(key);
+    const metadata: Record<string, string> = {};
+    for (const row of rows) metadata[row.meta_key] = row.meta_value;
+    return metadata;
+  }
+
+  /**
+   * §S2 — apply a metadata write in ONE transaction: each `set` key is
+   * upserted (last write wins), each `unset` key deleted (absent is a no-op).
+   * Validation lives at the route boundary, so reaching here means the write
+   * is authorised and well-formed. Answers the whole map after the write and
+   * whether any row actually changed; a change notifies the `projects` stream
+   * after the transaction commits, as every project write does.
+   */
+  applyProjectMetadata(
+    key: string,
+    change: { set: Record<string, string>; unset: string[] },
+  ): { metadata: Record<string, string>; changed: boolean } {
+    let changed = false;
+    this.db.transaction(() => {
+      for (const [metaKey, value] of Object.entries(change.set)) {
+        const result = this.db
+          .query(
+            `INSERT INTO project_metadata (project_key, meta_key, meta_value) VALUES (?, ?, ?)
+             ON CONFLICT(project_key, meta_key) DO UPDATE SET meta_value = excluded.meta_value
+             WHERE meta_value IS NOT excluded.meta_value`,
+          )
+          .run(key, metaKey, value);
+        if (result.changes > 0) changed = true;
+      }
+      for (const metaKey of change.unset) {
+        const result = this.db
+          .query(`DELETE FROM project_metadata WHERE project_key = ? AND meta_key = ?`)
+          .run(key, metaKey);
+        if (result.changes > 0) changed = true;
+      }
+    })();
+    if (changed) this.emit("projects", key);
+    return { metadata: this.getProjectMetadata(key), changed };
   }
 
   /** CR-CRU-012 §S1b — is the project currently archived? (false if unknown). */
@@ -2715,6 +3846,8 @@ export class Store {
       // the SAME `events` count: `ProjectDeleteCounts` is the CR-CRU-052 wire
       // shape and stays it, and the number still means "every event row this
       // project had" wherever the row was stored.
+      // Its runs' detail rows go first, while the runs that name them remain.
+      this.deleteProjectRunDetail(key);
       counts.events = ["events", "milestones", "gates"].reduce(
         (total, table) =>
           total + this.db.query(`DELETE FROM ${table} WHERE project_key = ?`).run(key).changes,
@@ -2729,9 +3862,13 @@ export class Store {
       // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
       // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
       this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
+      // CR-CRU-162 §G4 — and so do its gate decisions: not a reported count.
+      this.db.query(`DELETE FROM gate_decisions WHERE project_key = ?`).run(key);
       // CR-CRU-130 §S4 — and so does the vocabulary it declared, for the same
       // reason and on the same terms: not a reported count.
       this.db.query(`DELETE FROM project_milestone_types WHERE project_key = ?`).run(key);
+      // §S1 — its metadata dies with it, on the same terms: not a reported count.
+      this.db.query(`DELETE FROM project_metadata WHERE project_key = ?`).run(key);
       this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
     })();
     // Emitted only after the transaction COMMITS — a rolled-back teardown
@@ -2760,6 +3897,13 @@ export class Store {
       // its own; the seeded words it starts with are not its declaration.
       ...(row.milestone_types !== null && row.milestone_types !== undefined
         ? { milestoneTypes: JSON.parse(row.milestone_types) as string[] }
+        : {}),
+      // §S3 — key ABSENT when the project holds no metadata, as
+      // `milestoneTypes` is.
+      ...(row.metadata_json !== null &&
+      row.metadata_json !== undefined &&
+      row.metadata_json !== "{}"
+        ? { metadata: JSON.parse(row.metadata_json) as Record<string, string> }
         : {}),
     };
   }
@@ -2936,8 +4080,15 @@ export class Store {
     run: TestRun,
     meta?: RecordEventMeta,
   ): RunEvent {
+    // A tree is stored as rows of the codecs' own types; one that does not fit
+    // them is refused before anything is written, the agent row included.
+    const refusal = invalidSuiteTreeNode(run.tree);
+    if (refusal !== null) throw new Error(`run NOT stored: ${refusal}`);
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
-    this.touchAgent(projectKey, agentId);
+    // §S2/G4 — and the SERVER, which recorded the ingest, writes its outcome
+    // onto the agent: the client's last heartbeat (`ingesting…`) never
+    // outlives the run it narrated.
+    this.touchAgent(projectKey, agentId, { message: ingestOutcome(run.summary) });
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -2957,6 +4108,7 @@ export class Store {
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.name !== undefined ? { name: meta.name } : {}),
+      ...(meta?.release !== undefined ? { release: meta.release } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
       ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
@@ -2972,11 +4124,21 @@ export class Store {
   recordCompileEvent(
     projectKey: string,
     agentId: string,
-    compile: unknown,
-    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "role" | "lifecycle">,
+    compile: CompileReport,
+    meta?: Pick<
+      RecordEventMeta,
+      "tier" | "stack" | "context" | "codec" | "role" | "lifecycle" | "release"
+    >,
   ): RunEvent {
-    // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
-    this.touchAgent(projectKey, agentId);
+    // A compile report is stored as rows; a value that is not one is refused
+    // before anything is written, the agent row included.
+    const refusal = invalidCompileReport(compile);
+    if (refusal !== null) throw new Error(`compile NOT stored: ${refusal}`);
+    // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen;
+    // and, as a test ingest does, the server writes the compile outcome onto
+    // the agent, so a run that ended in a compile ingest never reads
+    // `ingesting…`.
+    this.touchAgent(projectKey, agentId, { message: compileOutcome(compile) });
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -2986,6 +4148,7 @@ export class Store {
       timestamp: Date.now(),
       compile,
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
+      ...(meta?.release !== undefined ? { release: meta.release } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
@@ -3060,6 +4223,7 @@ export class Store {
     const version = meta?.version;
     const alreadyReleased =
       version !== undefined && this.listReleases(projectKey).some((r) => r.label === version);
+    const runId = gateRunId(gate);
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -3070,6 +4234,8 @@ export class Store {
       timestamp: Date.now(),
       gate,
       ...(version !== undefined ? { version } : {}),
+      // CR-CRU-162 §G5 — the run id, lifted from the gate's own `run.id`.
+      ...(runId !== undefined ? { runId } : {}),
       ...(alreadyReleased ? { retiredAt: Date.now() } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
@@ -3077,6 +4243,114 @@ export class Store {
     };
     this.insertEvent(event);
     return event;
+  }
+
+  /**
+   * CR-CRU-162 §G4 — record one gate DECISION as its own row (never riding a
+   * gate snapshot, which retention may drop). The caller has validated the
+   * fields; the cycle binding arrives in `meta.context`, stamped by the route
+   * through the same seam a gate snapshot uses, and `cycle_id` is derived from
+   * it here exactly as the record tables derive theirs.
+   */
+  recordGateDecision(
+    projectKey: string,
+    agentId: string,
+    decision: {
+      runId: string;
+      action: GateDecisionAction;
+      step?: string;
+      findings?: string[];
+      addedFinding?: Record<string, unknown>;
+      instructions?: string;
+      reason?: string;
+    },
+    meta?: { context?: RunContext; role?: AgentRole },
+  ): GateDecision {
+    this.touchAgent(projectKey, agentId);
+    const cycleId = meta?.context?.cycleId;
+    const recorded: GateDecision = {
+      id: `dec-${Date.now()}-${++this.seq}`,
+      projectKey,
+      agentId,
+      runId: decision.runId,
+      ...(decision.step !== undefined ? { step: decision.step } : {}),
+      action: decision.action,
+      ...(decision.findings !== undefined ? { findings: decision.findings } : {}),
+      ...(decision.addedFinding !== undefined ? { addedFinding: decision.addedFinding } : {}),
+      ...(decision.instructions !== undefined ? { instructions: decision.instructions } : {}),
+      ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+      timestamp: Date.now(),
+      ...(meta?.context !== undefined ? { context: meta.context } : {}),
+      ...(meta?.role !== undefined ? { role: meta.role } : {}),
+      ...(typeof cycleId === "number" ? { cycleId } : {}),
+    };
+    this.db
+      .query(
+        `INSERT INTO gate_decisions (id, project_key, agent_id, run_id, step, action, findings,
+           added_finding, instructions, reason, timestamp, context, role, cycle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        recorded.id,
+        projectKey,
+        agentId,
+        recorded.runId,
+        recorded.step ?? null,
+        recorded.action,
+        recorded.findings !== undefined ? JSON.stringify(recorded.findings) : null,
+        recorded.addedFinding !== undefined ? JSON.stringify(recorded.addedFinding) : null,
+        recorded.instructions ?? null,
+        recorded.reason ?? null,
+        recorded.timestamp,
+        recorded.context !== undefined ? JSON.stringify(recorded.context) : null,
+        recorded.role ?? null,
+        recorded.cycleId ?? null,
+      );
+    this.emit("events", projectKey);
+    return recorded;
+  }
+
+  /**
+   * CR-CRU-162 §G5 — one run's decisions, in the order they were POSTED
+   * (`rowid`, never re-sorted by action or timestamp, which can tie).
+   */
+  listGateDecisions(projectKey: string, runId: string): GateDecision[] {
+    return this.db
+      .query<GateDecisionRow, [string, string]>(
+        `SELECT * FROM gate_decisions WHERE project_key = ? AND run_id = ? ORDER BY rowid ASC`,
+      )
+      .all(projectKey, runId)
+      .map(toGateDecision);
+  }
+
+  /**
+   * The decisions of SEVERAL runs of one project, in ONE grouped read: the run
+   * ids travel as a single JSON array parameter, so the statement is the same
+   * whatever the number of runs on the page. Grouped by run id, each group in
+   * posting order (`rowid`); a run with no decision has no entry.
+   */
+  listGateDecisionsForRuns(
+    runs: { projectKey: string; runId: string }[],
+  ): Map<string, GateDecision[]> {
+    const grouped = new Map<string, GateDecision[]>();
+    if (runs.length === 0) return grouped;
+    const pairs = JSON.stringify(runs.map((r) => [r.projectKey, r.runId]));
+    const rows = this.db
+      .query<GateDecisionRow, [string]>(
+        `SELECT * FROM gate_decisions
+          WHERE (project_key, run_id) IN (
+            SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
+          )
+          ORDER BY rowid ASC`,
+      )
+      .all(pairs);
+    for (const row of rows) {
+      const key = gateDecisionRunKey(row.project_key, row.run_id);
+      const group = grouped.get(key);
+      if (group === undefined) grouped.set(key, [toGateDecision(row)]);
+      else group.push(toGateDecision(row));
+    }
+    return grouped;
   }
 
   /**
@@ -3665,7 +4939,7 @@ export class Store {
   startRun(
     projectKey: string,
     agentId: string,
-    opts?: { tier?: Tier; stack?: string; context?: RunContext },
+    opts?: { tier?: Tier; stack?: string; context?: RunContext; release?: string },
   ): RunRecord {
     this.touchAgent(projectKey, agentId);
     const run: RunRecord = {
@@ -3677,12 +4951,13 @@ export class Store {
       ...(opts?.tier !== undefined ? { tier: opts.tier } : {}),
       ...(opts?.stack !== undefined ? { stack: opts.stack } : {}),
       ...(opts?.context !== undefined ? { context: opts.context } : {}),
+      ...(opts?.release !== undefined ? { release: opts.release } : {}),
     };
     this.db
       .query(
         `INSERT INTO runs (run_id, project_key, agent_id, started_at, tier, stack, context,
-           run_state, settled_at, abort_reason, event_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL)`,
+           run_state, settled_at, abort_reason, event_id, release)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?)`,
       )
       .run(
         run.runId,
@@ -3692,6 +4967,7 @@ export class Store {
         run.tier ?? null,
         run.stack ?? null,
         run.context !== undefined ? JSON.stringify(run.context) : null,
+        run.release ?? null,
       );
     // The dashboard's live "running…" card is driven off the same feed the
     // events stream already refreshes.
@@ -3780,6 +5056,23 @@ export class Store {
   }
 
   /**
+   * The client's own abort of an open run (POST /api/v2/runs/<runId>/abort):
+   * settled by the SAME path the sweep uses (`abortRun`), role off the agent
+   * row as the sweep reads it. The open state is re-read INSIDE the
+   * transaction, so a run that settled meanwhile (filed, swept, or aborted by
+   * a racing request) is left untouched and no second event is written —
+   * null then, and the caller answers 409.
+   */
+  abortOpenRun(runId: string, reason: string, now: number = Date.now()): RunEvent | null {
+    return this.db.transaction((): RunEvent | null => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return null;
+      const agent = this.getAgent(run.projectKey, run.agentId, now);
+      return this.abortRun(run, reason, now, agent?.role);
+    })();
+  }
+
+  /**
    * §S1 — settle an open run as ABORTED and store the event that records it,
    * in ONE transaction: the run row and its event can never disagree, and a
    * second sweep can never emit a duplicate abort.
@@ -3806,6 +5099,8 @@ export class Store {
       abortReason: reason,
       ...(run.stack !== undefined ? { stack: run.stack } : {}),
       ...(run.context !== undefined ? { context: run.context } : {}),
+      // An aborted verification run stays filed under its release.
+      ...(run.release !== undefined ? { release: run.release } : {}),
       // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
       ...(role !== undefined ? { role, roleInferred: false } : {}),
     };
@@ -3834,24 +5129,15 @@ export class Store {
       ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
       ...(row.abort_reason !== null ? { abortReason: row.abort_reason } : {}),
       ...(row.event_id !== null ? { eventId: row.event_id } : {}),
+      ...((row.release ?? null) !== null ? { release: row.release! } : {}),
     };
   }
 
-  /**
-   * CR-CRU-129 §S1 — newest-first across the THREE tables an event can now
-   * live in, reproducing the `ORDER BY timestamp DESC, rowid DESC` each table
-   * is read in: within one millisecond the later-inserted row still comes
-   * first. The tiebreak is the store's own monotonic insert sequence, which is
-   * the tail of the id it mints (`evt-<ms>-<seq>`); an id from anywhere else
-   * ranks 0 and keeps the timestamp order it arrived in.
-   */
-  private static insertOrdinal(id: string): number {
-    const tail = Number(id.slice(id.lastIndexOf("-") + 1));
-    return Number.isFinite(tail) ? tail : 0;
-  }
-
-  private static newestFirst(a: EventRow, b: EventRow): number {
-    return b.timestamp - a.timestamp || Store.insertOrdinal(b.id) - Store.insertOrdinal(a.id);
+  private static newestFirst(
+    a: Pick<EventRow, "id" | "timestamp">,
+    b: Pick<EventRow, "id" | "timestamp">,
+  ): number {
+    return b.timestamp - a.timestamp || insertOrdinal(b.id) - insertOrdinal(a.id);
   }
 
   /**
@@ -3874,10 +5160,71 @@ export class Store {
            ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
         )
         .all(...args);
-    return [...newest(`SELECT * FROM events`), ...newest(MILESTONE_ROWS), ...newest(GATE_ROWS)]
-      .sort(Store.newestFirst)
-      .slice(0, limit)
-      .map(Store.toEvent);
+    return this.toEvents(
+      [...newest(`SELECT * FROM events`), ...newest(MILESTONE_ROWS), ...newest(GATE_ROWS)]
+        .sort(Store.newestFirst)
+        .slice(0, limit),
+      false,
+    );
+  }
+
+  /**
+   * A project's newest feed row — the first of `listEvents(projectKey, ∞)` —
+   * read without the history behind it: from each of the three tables only
+   * the rows at that table's newest instant, merged the way `listEvents`
+   * merges them, so a same-instant tie resolves exactly as it does there.
+   */
+  newestEvent(projectKey: string): RunEvent | undefined {
+    const atNewest = (source: string, table: string): EventRow[] =>
+      this.db
+        .query<EventRow, [string, string]>(
+          `${source} WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL
+             AND timestamp = (SELECT MAX(timestamp) FROM ${table}
+                              WHERE project_key = ? AND retired_at IS NULL)
+           ORDER BY timestamp DESC, rowid DESC`,
+        )
+        .all(projectKey, projectKey);
+    const row = [
+      ...atNewest(`SELECT * FROM events`, "events"),
+      ...atNewest(MILESTONE_ROWS, "milestones"),
+      ...atNewest(GATE_ROWS, "gates"),
+    ].sort(Store.newestFirst)[0];
+    return row === undefined ? undefined : this.toEvents([row], false)[0];
+  }
+
+  /**
+   * A project's per-UTC-day coverage: for each day a coverage-bearing run
+   * of the feed fell on, that day's newest such run (in `listEvents`' order),
+   * newest day first. Only runs carry coverage — a record's projection never
+   * does — and only each day's newest instant is read, never the runs
+   * between.
+   */
+  listCoverageDays(projectKey: string): Array<{ id: string; timestamp: number; coverage: Coverage }> {
+    const rows = this.db
+      .query<{ id: string; timestamp: number; coverage: string }, [string]>(
+        `SELECT id, timestamp, coverage FROM (
+           SELECT id, timestamp, coverage, rowid AS seq,
+                  RANK() OVER (
+                    PARTITION BY strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch')
+                    ORDER BY timestamp DESC
+                  ) AS place
+           FROM events
+           WHERE project_key = ? AND coverage IS NOT NULL
+             AND ${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL)
+         WHERE place = 1
+         ORDER BY timestamp DESC, seq DESC`,
+      )
+      .all(projectKey)
+      .sort(Store.newestFirst);
+    const days = new Set<string>();
+    const newest: Array<{ id: string; timestamp: number; coverage: Coverage }> = [];
+    for (const row of rows) {
+      const day = new Date(row.timestamp).toISOString().slice(0, 10);
+      if (days.has(day)) continue;
+      days.add(day);
+      newest.push({ id: row.id, timestamp: row.timestamp, coverage: JSON.parse(row.coverage) as Coverage });
+    }
+    return newest;
   }
 
   /**
@@ -3886,7 +5233,7 @@ export class Store {
    * listEvents; archived projects excluded. Unlinked runs (no context) and
    * other cycles' runs are filtered out. `context` is JSON in the column, so
    * the match is done on the parsed value (same pattern as
-   * deriveCommitBoundary).
+   * deriveBoundaryColumns).
    *
    * CR-CRU-129 §S1 — over all three tables: a gate carries a cycle binding
    * (CR-CRU-056 gates parity) and belongs in its cycle's fetch wherever the
@@ -3901,13 +5248,90 @@ export class Store {
            ORDER BY timestamp DESC, rowid DESC`,
         )
         .all(projectKey);
-    return [...linked(`SELECT * FROM events`), ...linked(MILESTONE_ROWS), ...linked(GATE_ROWS)]
-      .filter((row) => {
-        const context = JSON.parse(row.context!) as RunContext;
-        return context.cycleId === cycleId;
-      })
-      .sort(Store.newestFirst)
-      .map(Store.toEvent);
+    return this.toEvents(
+      [...linked(`SELECT * FROM events`), ...linked(MILESTONE_ROWS), ...linked(GATE_ROWS)]
+        .filter((row) => {
+          const context = JSON.parse(row.context!) as RunContext;
+          return context.cycleId === cycleId;
+        })
+        .sort(Store.newestFirst),
+      false,
+    );
+  }
+
+  /**
+   * The runs filed under one release, newest first, aborted ones included —
+   * the `listEventsForCycle` anchor's counterpart, read off the `release`
+   * column through its `(project_key, release, timestamp)` index. Only the
+   * events table carries the column, so no record table is read. An unknown
+   * label answers an empty list; archived projects are excluded.
+   */
+  listEventsForRelease(projectKey: string, release: string): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string, string]>(
+        `SELECT * FROM events WHERE project_key = ? AND release = ?
+           AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
+      )
+      .all(projectKey, release);
+    return this.toEvents(rows.sort(Store.newestFirst), false);
+  }
+
+  /**
+   * How many runs are filed under each release, in ONE grouped read off the
+   * `release` column, aborted runs included: the count `listEventsForRelease`
+   * would answer per label, for every label at once. A release with no run filed under it has
+   * no entry; archived projects are excluded.
+   */
+  countRunsByRelease(projectKey: string): Map<string, number> {
+    const rows = this.db
+      .query<{ release: string; n: number }, [string]>(
+        `SELECT release, COUNT(*) AS n FROM events
+          WHERE project_key = ? AND release IS NOT NULL
+            AND ${Store.NOT_ARCHIVED_SUBQUERY}
+          GROUP BY release`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.release, row.n]));
+  }
+
+  /**
+   * Every gate snapshot of a project, oldest first, RETIRED ONES INCLUDED:
+   * the history read's source, and the one read that returns a retired gate
+   * beside the live ones (the feed leaves them out; `getEvent` serves one at
+   * a time). One statement over the gate table, whatever the number of
+   * releases it is later grouped under; archived projects are excluded.
+   */
+  listGatesWithRetired(projectKey: string): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string]>(
+        `${GATE_ROWS} WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp ASC, rowid ASC`,
+      )
+      .all(projectKey);
+    return rows
+      .sort((a, b) => Store.newestFirst(b, a))
+      .map((row) => Store.toEvent(row));
+  }
+
+  /**
+   * Every release label the project's roadmap has declared: the release a
+   * queued CR is planned into, a live release proposal, and a recorded
+   * release. Deduplicated and in version order. A run may be filed only
+   * under one of these.
+   */
+  declaredReleaseLabels(projectKey: string): string[] {
+    const queued = this.db
+      .query<{ release: string }, [string]>(
+        `SELECT DISTINCT release FROM queue_entries
+          WHERE project_key = ? AND release IS NOT NULL`,
+      )
+      .all(projectKey)
+      .map((row) => row.release);
+    const recorded = [...this.listReleaseProposals(projectKey), ...this.listReleases(projectKey)]
+      .map((event) => event.label)
+      .filter((label): label is string => label !== undefined);
+    return [...new Set([...queued, ...recorded])].sort(compareVersionLabels);
   }
 
   /**
@@ -3948,7 +5372,7 @@ export class Store {
       )
       .all(projectKey);
     return rows
-      .map(Store.toEvent)
+      .map((row) => Store.toEvent(row))
       .sort((a, b) => {
         // `releasedAt` is epoch SECONDS (git's `%ct`); the ingest `timestamp`
         // is epoch MS and stands in for a release that carries no ship date.
@@ -3992,7 +5416,7 @@ export class Store {
       )
       .all(projectKey);
     return rows
-      .map(Store.toEvent)
+      .map((row) => Store.toEvent(row))
       .sort((a, b) => compareVersionLabels(a.label ?? "", b.label ?? ""));
   }
 
@@ -4108,7 +5532,7 @@ export class Store {
          ORDER BY timestamp DESC, rowid DESC`,
       )
       .all(...args)
-      .map(Store.toEvent);
+      .map((row) => Store.toEvent(row));
   }
 
   /**
@@ -4134,11 +5558,117 @@ export class Store {
    * and the store's own contract already promises they stay auditable here.
    */
   getEvent(id: string): RunEvent | null {
+    const row = this.eventRowById(id);
+    return row === null ? null : this.toEvents([row])[0]!;
+  }
+
+  /** The row behind `getEvent`: the events table first, then each record table. */
+  private eventRowById(id: string): EventRow | null {
     for (const source of [`SELECT * FROM events`, MILESTONE_ROWS, GATE_ROWS]) {
       const row = this.db.query<EventRow, [string]>(`${source} WHERE id = ?`).get(id);
-      if (row !== null) return Store.toEvent(row);
+      if (row !== null) return row;
     }
     return null;
+  }
+
+  /**
+   * `getEvent` without a run's tree or raw output: every other field it
+   * serves, a compile report included. Reads no suite, case or raw row.
+   */
+  private getEventHead(id: string): RunEvent | null {
+    const row = this.eventRowById(id);
+    if (row === null) return null;
+    const ids = row.kind === "test" || row.kind === "compile" ? [row.id] : [];
+    return Store.toEvent(row, this.loadRunDetails(ids, false).get(row.id));
+  }
+
+  /**
+   * The `?depth=suites` read: run `id` without its tree or raw output, and its
+   * suites in tree order with their STORED counts (never recounted from leaves).
+   * Reads no case row. `suites` is absent when the run has no tree; null when
+   * no event has the id. `rawBytes` is the raw output's UTF-8 byte length,
+   * counted in SQL so the raw text is never read; absent when the run has none.
+   */
+  getEventSuites(
+    id: string,
+  ): { event: RunEvent; suites?: SuiteSummary[]; rawBytes?: number } | null {
+    const event = this.getEventHead(id);
+    if (event === null) return null;
+    const run = this.db
+      .query<{ has_tree: number; raw_bytes: number | null }, [string]>(
+        `SELECT has_tree, LENGTH(CAST(raw AS BLOB)) AS raw_bytes FROM run_details WHERE event_id = ?`,
+      )
+      .get(id);
+    const rawBytes = run?.raw_bytes ?? null;
+    const raw = rawBytes !== null ? { rawBytes } : {};
+    if (run?.has_tree !== 1) return { event, ...raw };
+    const suites = this.db
+      .query<RunSuiteCountsRow, [string]>(
+        `SELECT name, status, browser, passed, failed, pending FROM run_suites
+          WHERE event_id = ? ORDER BY position`,
+      )
+      .all(id)
+      .map((row) => ({
+        name: row.name,
+        status: row.status as SuiteNode["status"],
+        counts: { passed: row.passed, failed: row.failed, pending: row.pending },
+        ...(row.browser !== null ? { browser: row.browser } : {}),
+      }));
+    return { event, suites, ...raw };
+  }
+
+  /**
+   * The `?suite=` read: run `id` without its tree or raw output, and the FIRST
+   * of its suites named `name` (under `browser`, when one is given), fully
+   * expanded. Reads that one suite's case rows and no other's. `suite` is
+   * absent when none matches; null when no event has the id. `rawBytes` as
+   * for `getEventSuites`.
+   */
+  getEventSuite(
+    id: string,
+    name: string,
+    browser: string | null,
+  ): { event: RunEvent; suite?: SuiteNode; rawBytes?: number } | null {
+    const event = this.getEventHead(id);
+    if (event === null) return null;
+    const rawBytes = this.rawBytesOf(id);
+    const raw = rawBytes !== null ? { rawBytes } : {};
+    const columns = `SELECT event_id, position, name, status, browser FROM run_suites`;
+    const row =
+      browser === null
+        ? this.db
+            .query<RunSuiteRow, [string, string]>(
+              `${columns} WHERE event_id = ? AND name = ? ORDER BY position LIMIT 1`,
+            )
+            .get(id, name)
+        : this.db
+            .query<RunSuiteRow, [string, string, string]>(
+              `${columns} WHERE event_id = ? AND name = ? AND browser = ? ORDER BY position LIMIT 1`,
+            )
+            .get(id, name, browser);
+    if (row === null) return { event, ...raw };
+    const suite = suiteNodeOf(row);
+    const caseRows = this.db
+      .query<RunCaseRow, [string, number]>(
+        `SELECT event_id, suite_position, name, status, duration_ms, has_failure,
+                failure_message, failure_type, failure_trace
+           FROM run_cases WHERE event_id = ? AND suite_position = ? ORDER BY position`,
+      )
+      .all(id, row.position);
+    for (const caseRow of caseRows) suite.children.push(testLeafOf(caseRow));
+    return { event, suite, ...raw };
+  }
+
+  /** Run `id`'s raw output's UTF-8 byte length, counted without reading the
+   *  text; null when the run has no raw output. */
+  private rawBytesOf(id: string): number | null {
+    return (
+      this.db
+        .query<{ raw_bytes: number | null }, [string]>(
+          `SELECT LENGTH(CAST(raw AS BLOB)) AS raw_bytes FROM run_details WHERE event_id = ?`,
+        )
+        .get(id)?.raw_bytes ?? null
+    );
   }
 
   deleteEvent(id: string, projectKey: string): boolean {
@@ -4150,7 +5680,11 @@ export class Store {
         .get(id);
       if (row === null) continue;
       if (row.project_key !== projectKey) return false;
-      this.db.query(`DELETE FROM ${table} WHERE id = ?`).run(id);
+      this.db.transaction(() => {
+        // A run's detail rows go with it.
+        if (table === "events") this.deleteRunDetail(id);
+        this.db.query(`DELETE FROM ${table} WHERE id = ?`).run(id);
+      })();
       this.emit("events", projectKey);
       return true;
     }
@@ -4159,12 +5693,34 @@ export class Store {
 
   clearEvents(projectKey: string): number {
     let changes = 0;
-    for (const table of ["events", "milestones", "gates"]) {
-      changes += this.db.query(`DELETE FROM ${table} WHERE project_key = ?`).run(projectKey)
-        .changes;
-    }
+    this.db.transaction(() => {
+      // Every cleared run's detail rows go with it.
+      this.deleteProjectRunDetail(projectKey);
+      for (const table of ["events", "milestones", "gates"]) {
+        changes += this.db.query(`DELETE FROM ${table} WHERE project_key = ?`).run(projectKey)
+          .changes;
+      }
+    })();
     this.emit("events", projectKey);
     return changes;
+  }
+
+  /** Remove one run's detail rows (its suites, cases, raw output, compile report). */
+  private deleteRunDetail(eventId: string): void {
+    for (const table of RUN_DETAIL_TABLES) {
+      this.db.query(`DELETE FROM ${table} WHERE event_id = ?`).run(eventId);
+    }
+  }
+
+  /** Remove the detail rows of every run a project holds, before the runs themselves. */
+  private deleteProjectRunDetail(projectKey: string): void {
+    for (const table of RUN_DETAIL_TABLES) {
+      this.db
+        .query(
+          `DELETE FROM ${table} WHERE event_id IN (SELECT id FROM events WHERE project_key = ?)`,
+        )
+        .run(projectKey);
+    }
   }
 
   private nextEventId(): string {
@@ -4194,6 +5750,8 @@ export class Store {
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
       // blob (first-class on the event, never inside the gate object).
       ...(event.version !== undefined ? { version: event.version } : {}),
+      // CR-CRU-162 §G5 — a gate's no-mistakes run id rides the same blob.
+      ...(event.runId !== undefined ? { runId: event.runId } : {}),
       // CR-CRU-080 §S4 — release provenance (the tag's ship date and the CR
       // ids the release shipped) rides the SAME generic payload blob, which is
       // why §S4 needs no column and no migration (SCHEMA_VERSION stays 7).
@@ -4287,71 +5845,192 @@ export class Store {
       this.insertRecord(event);
       return;
     }
-    const payload = Store.payloadColumn(event);
-    this.db
-      .query(
-        `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
-           timestamp, name, total, passed, failed, pending, duration_ms,
-           tree, coverage, compile, context, action, first_seen, payload,
-           role, role_inferred, started_at, runtime_ms, status, retired_at,
-           cycle_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.id,
-        event.projectKey,
-        event.agentId,
-        event.kind,
-        event.tier,
-        event.stack ?? null,
-        event.codec ?? null,
-        event.timestamp,
-        event.name ?? null,
-        event.summary?.total ?? null,
-        event.summary?.passed ?? null,
-        event.summary?.failed ?? null,
-        event.summary?.pending ?? null,
-        event.summary?.duration_ms ?? null,
-        event.tree !== undefined ? JSON.stringify(event.tree) : null,
-        event.coverage !== undefined ? JSON.stringify(event.coverage) : null,
-        event.compile !== undefined ? JSON.stringify(event.compile) : null,
-        event.context !== undefined ? JSON.stringify(event.context) : null,
-        event.action ?? null,
-        event.firstSeen ?? null,
-        payload,
-        // CR-CRU-057 §S1 — role and its provenance move together: an event
-        // with no declared role stores NULL in BOTH columns (never a 0 that
-        // would read as "declared nothing").
-        event.role ?? null,
-        event.role !== undefined ? (event.roleInferred === true ? 1 : 0) : null,
-        // CR-CRU-017 §S1 — the RUN lifecycle, NULL on every single-shot ingest
-        // (graceful degradation: no runId, no lifecycle).
-        event.startedAt ?? null,
-        event.runtimeMs ?? null,
-        event.status ?? null,
-        // CR-CRU-073 §S1 — the release-retirement marker; NULL for a live gate
-        // and for every non-gate row.
-        event.retiredAt ?? null,
-        // CR-CRU-094 §S1 — the column is DERIVED here, at the ONE row-insert
-        // seam, from the context the ONE ingest seam (`resolveIngestAttach`)
-        // stamped. Every surface that stores an event — the run routes and
-        // the gates route alike — gets it for free, and no caller can set one
-        // representation without the other, so the column can never disagree
-        // with `context.cycleId`. NULL (never 0) when the run carries none.
-        //
-        // CR-CRU-094 §S2 — the second source is the LIFECYCLE record, which
-        // has no `context` of its own to derive from (giving it one would
-        // enrol a register/unregister event in the cycle's RUN lists). Only
-        // `recordLifecycleEvent` sets the top-level field; every run-bearing
-        // constructor still stamps `context` alone, so the two
-        // representations remain incapable of disagreeing.
-        event.context?.cycleId ?? event.cycleId ?? null,
-      );
+    // A run's raw output is stored as a detail row, never inside `payload`.
+    const payload = Store.payloadColumn({ ...event, raw: undefined });
+    // The event row and its detail rows land together or not at all.
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
+             timestamp, name, total, passed, failed, pending, duration_ms,
+             tree, coverage, compile, context, action, first_seen, payload,
+             role, role_inferred, started_at, runtime_ms, status, retired_at,
+             cycle_id, release)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          event.id,
+          event.projectKey,
+          event.agentId,
+          event.kind,
+          event.tier,
+          event.stack ?? null,
+          event.codec ?? null,
+          event.timestamp,
+          event.name ?? null,
+          event.summary?.total ?? null,
+          event.summary?.passed ?? null,
+          event.summary?.failed ?? null,
+          event.summary?.pending ?? null,
+          event.summary?.duration_ms ?? null,
+          // The tree, compile report and raw output are detail rows
+          // (`writeRunDetailRows`); these legacy columns stay NULL.
+          null,
+          event.coverage !== undefined ? JSON.stringify(event.coverage) : null,
+          null,
+          event.context !== undefined ? JSON.stringify(event.context) : null,
+          event.action ?? null,
+          event.firstSeen ?? null,
+          payload,
+          // CR-CRU-057 §S1 — role and its provenance move together: an event
+          // with no declared role stores NULL in BOTH columns (never a 0 that
+          // would read as "declared nothing").
+          event.role ?? null,
+          event.role !== undefined ? (event.roleInferred === true ? 1 : 0) : null,
+          // CR-CRU-017 §S1 — the RUN lifecycle, NULL on every single-shot ingest
+          // (graceful degradation: no runId, no lifecycle).
+          event.startedAt ?? null,
+          event.runtimeMs ?? null,
+          event.status ?? null,
+          // CR-CRU-073 §S1 — the release-retirement marker; NULL for a live gate
+          // and for every non-gate row.
+          event.retiredAt ?? null,
+          // CR-CRU-094 §S1 — the column is DERIVED here, at the ONE row-insert
+          // seam, from the context the ONE ingest seam (`resolveIngestAttach`)
+          // stamped. Every surface that stores an event — the run routes and
+          // the gates route alike — gets it for free, and no caller can set one
+          // representation without the other, so the column can never disagree
+          // with `context.cycleId`. NULL (never 0) when the run carries none.
+          //
+          // CR-CRU-094 §S2 — the second source is the LIFECYCLE record, which
+          // has no `context` of its own to derive from (giving it one would
+          // enrol a register/unregister event in the cycle's RUN lists). Only
+          // `recordLifecycleEvent` sets the top-level field; every run-bearing
+          // constructor still stamps `context` alone, so the two
+          // representations remain incapable of disagreeing.
+          event.context?.cycleId ?? event.cycleId ?? null,
+          // The release this run verifies, as the route stamped it; NULL when
+          // the run declared none.
+          event.release ?? null,
+        );
+      writeRunDetailRows(this.db, event);
+    })();
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
   }
 
-  private static toEvent(row: EventRow): RunEvent {
+  /**
+   * Rows of `events` (or of the record tables) as events, each run's detail
+   * rebuilt from its rows. The detail of every run among `rows` is read in
+   * bulk — a fixed handful of queries per chunk of ids, never one per row.
+   * Without `treeAndRaw` no run's tree or raw output is read (a compile
+   * report still is): the reads answered with briefs only.
+   */
+  private toEvents(rows: EventRow[], treeAndRaw = true): RunEvent[] {
+    const ids = rows
+      .filter((row) => row.kind === "test" || row.kind === "compile")
+      .map((row) => row.id);
+    const details = this.loadRunDetails(ids, treeAndRaw);
+    return rows.map((row) => Store.toEvent(row, details.get(row.id)));
+  }
+
+  private loadRunDetails(ids: string[], treeAndRaw = true): Map<string, RunDetail> {
+    const details = new Map<string, RunDetail>();
+    for (let start = 0; start < ids.length; start += RUN_DETAIL_CHUNK) {
+      const chunk = ids.slice(start, start + RUN_DETAIL_CHUNK);
+      const among = `event_id IN (${chunk.map(() => "?").join(", ")})`;
+      const detailOf = (id: string): RunDetail => {
+        let detail = details.get(id);
+        if (detail === undefined) {
+          detail = {};
+          details.set(id, detail);
+        }
+        return detail;
+      };
+
+      const runRows = treeAndRaw
+        ? this.db
+            .query<RunDetailsRow, string[]>(`SELECT event_id, has_tree, raw FROM run_details WHERE ${among}`)
+            .all(...chunk)
+        : [];
+      const treeIds = new Set<string>();
+      for (const row of runRows) {
+        const detail = detailOf(row.event_id);
+        if (row.raw !== null) detail.raw = row.raw;
+        if (row.has_tree === 1) {
+          detail.tree = [];
+          treeIds.add(row.event_id);
+        }
+      }
+      if (treeIds.size > 0) {
+        const suites = new Map<string, Map<number, SuiteNode>>();
+        const suiteRows = this.db
+          .query<RunSuiteRow, string[]>(
+            `SELECT event_id, position, name, status, browser FROM run_suites
+              WHERE ${among} ORDER BY event_id, position`,
+          )
+          .all(...chunk);
+        for (const row of suiteRows) {
+          const suite = suiteNodeOf(row);
+          detailOf(row.event_id).tree!.push(suite);
+          let byPosition = suites.get(row.event_id);
+          if (byPosition === undefined) {
+            byPosition = new Map();
+            suites.set(row.event_id, byPosition);
+          }
+          byPosition.set(row.position, suite);
+        }
+        const caseRows = this.db
+          .query<RunCaseRow, string[]>(
+            `SELECT event_id, suite_position, name, status, duration_ms, has_failure,
+                    failure_message, failure_type, failure_trace
+               FROM run_cases WHERE ${among} ORDER BY event_id, suite_position, position`,
+          )
+          .all(...chunk);
+        for (const row of caseRows) {
+          const suite = suites.get(row.event_id)?.get(row.suite_position);
+          if (suite === undefined) continue;
+          suite.children.push(testLeafOf(row));
+        }
+      }
+
+      const compileRows = this.db
+        .query<RunCompileRow, string[]>(
+          `SELECT event_id, format, error_count, warning_count, raw FROM run_compiles WHERE ${among}`,
+        )
+        .all(...chunk);
+      if (compileRows.length > 0) {
+        for (const row of compileRows) {
+          detailOf(row.event_id).compile = {
+            format: row.format,
+            errorCount: row.error_count,
+            warningCount: row.warning_count,
+            diagnostics: [],
+            raw: row.raw,
+          };
+        }
+        const diagnosticRows = this.db
+          .query<RunDiagnosticRow, string[]>(
+            `SELECT event_id, file, line, col, code, message, level FROM run_diagnostics
+              WHERE ${among} ORDER BY event_id, position`,
+          )
+          .all(...chunk);
+        for (const row of diagnosticRows) {
+          details.get(row.event_id)?.compile?.diagnostics.push({
+            ...(row.file !== null ? { file: row.file } : {}),
+            ...(row.line !== null ? { line: row.line } : {}),
+            ...(row.col !== null ? { col: row.col } : {}),
+            ...(row.code !== null ? { code: row.code } : {}),
+            message: row.message,
+            level: row.level === "error" ? "error" : "warning",
+          });
+        }
+      }
+    }
+    return details;
+  }
+
+  private static toEvent(row: EventRow, detail?: RunDetail): RunEvent {
     // CR-CRU-013 §S1+§S4b — pass the kind through for the whole known family
     // (no longer collapse gate/milestone to "test"); hydrate their fields
     // from the generic payload column.
@@ -4394,8 +6073,8 @@ export class Store {
       // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
       // a release recorded before this CR simply has no key (AC4).
       ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),
-      // CR-CRU-038 §S2b — run-level raw output served verbatim from the payload.
-      ...(typeof payload.raw === "string" ? { raw: payload.raw } : {}),
+      // CR-CRU-038 §S2b — run-level raw output, from its detail row.
+      ...(detail?.raw !== undefined ? { raw: detail.raw } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
       ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
@@ -4412,9 +6091,10 @@ export class Store {
             },
           }
         : {}),
-      ...(row.tree !== null ? { tree: JSON.parse(row.tree) as SuiteNode[] } : {}),
+      // The tree and compile report, rebuilt from their detail rows.
+      ...(detail?.tree !== undefined ? { tree: detail.tree } : {}),
       ...(row.coverage !== null ? { coverage: JSON.parse(row.coverage) as Coverage } : {}),
-      ...(row.compile !== null ? { compile: JSON.parse(row.compile) as unknown } : {}),
+      ...(detail?.compile !== undefined ? { compile: detail.compile } : {}),
       ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
       // CR-CRU-057 §S1 — the stamped role and its provenance; BOTH keys are
       // absent on a role-less row (never fabricated into a null or a guess).
@@ -4435,11 +6115,16 @@ export class Store {
       // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),
+      // CR-CRU-162 §G5 — the gate's run id; ABSENT when it named none.
+      ...(typeof payload.runId === "string" ? { runId: payload.runId } : {}),
       ...((row.retired_at ?? null) !== null ? { retiredAt: row.retired_at! } : {}),
       // CR-CRU-094 §S1 — the cycle binding, served from its own COLUMN (not
       // re-derived from the blob, so the projection proves the stored fact).
       // ABSENT on an unbound run and on every pre-094 row.
       ...((row.cycle_id ?? null) !== null ? { cycleId: row.cycle_id! } : {}),
+      // The release a run verifies, served from its own column. ABSENT on a
+      // run filed under none, on every record and on every older row.
+      ...((row.release ?? null) !== null ? { release: row.release! } : {}),
     };
   }
 
@@ -4513,6 +6198,8 @@ export class Store {
         if (Store.ROLLUP_ELIGIBLE_KINDS.has(row.kind)) {
           this.foldIntoRollup(row);
         }
+        // An evicted run's detail rows go with it.
+        this.deleteRunDetail(row.id);
         this.db.query(`DELETE FROM events WHERE id = ?`).run(row.id);
       }
     })();
@@ -4562,13 +6249,14 @@ export class Store {
   ]);
 
   /**
-   * §S0 legal transition table: pending→active, active→done|skipped|failed,
-   * plus the ONE shortcut pending→skipped (a never-started cycle can be
-   * cancelled outright). Everything else rejects naming both states.
+   * §S0 legal transition table: pending→active, active→done|failed, plus the
+   * ONE shortcut pending→skipped (a never-started cycle can be cancelled
+   * outright). CR-CRU-165 R2 — `active → skipped` left the table: an active
+   * cycle ends `done` or `failed`. Everything else rejects naming both states.
    */
   private static readonly CYCLE_TRANSITIONS: Readonly<Record<string, ReadonlySet<string>>> = {
     pending: new Set(["active", "skipped"]),
-    active: new Set(["done", "skipped", "failed"]),
+    active: new Set(["done", "failed"]),
   };
 
   /** §S0 — cycle ids are unique per PROJECT, not per plan. */
@@ -4587,6 +6275,14 @@ export class Store {
         `SELECT * FROM plans WHERE project_key = ? AND plan_id = ?`,
       )
       .get(projectKey, planId);
+  }
+
+  /**
+   * §S4 (N1) — the CR a plan belongs to, so a write against a
+   * named plan can echo it without the caller reading the plan board.
+   */
+  planCr(projectKey: string, planId: number): string | null {
+    return this.getPlanRow(projectKey, planId)?.cr ?? null;
   }
 
   private listCycleRows(projectKey: string, planId: number): PlanCycleRow[] {
@@ -4617,15 +6313,36 @@ export class Store {
     label: string,
     kind: CycleKind,
     seq: number,
+    change?: CycleChange,
   ): PlanCycle {
     const id = this.nextCycleId(projectKey);
     this.db
       .query(
-        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status, seq)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status, seq,
+           change_reason, change_cause, change_spec_ref, change_kind)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
       )
-      .run(projectKey, id, planId, label, kind, seq);
-    return { id, label, kind, status: "pending" };
+      .run(
+        projectKey,
+        id,
+        planId,
+        label,
+        kind,
+        seq,
+        change?.reason ?? null,
+        change?.cause ?? null,
+        change?.specRef ?? null,
+        change?.kind ?? null,
+      );
+    return {
+      id,
+      label,
+      kind,
+      status: "pending",
+      ...(change !== undefined
+        ? { reason: change.reason, cause: change.cause, specRef: change.specRef, changeKind: change.kind }
+        : {}),
+    };
   }
 
   /** §S0 — file the orchestrator's cycle plan. ONE open plan per cr. */
@@ -4712,9 +6429,10 @@ export class Store {
       track?: string;
       cycles: Array<{ label: string; kind: CycleKind }>;
     },
+    author?: string,
   ): { plan: Plan; report: QueueSeqReport & { changed: boolean } } | PlanOpError {
     const compose = this.db.transaction(() => {
-      const report = this.upsertQueueEntry(projectKey, entry);
+      const report = this.upsertQueueEntry(projectKey, entry, author);
       const filed = this.filePlan(projectKey, plan);
       if ("error" in filed) throw new PlanRegistrationRefused(filed);
       return { plan: filed, report };
@@ -4740,6 +6458,7 @@ export class Store {
     planId: number,
     cycle: { label: string; kind: CycleKind },
     before?: number,
+    change?: ChangeRecord,
   ): PlanCycle | PlanOpError {
     const plan = this.getPlanRow(projectKey, planId);
     if (plan === null) {
@@ -4747,6 +6466,18 @@ export class Store {
     }
     if (plan.status !== "open") {
       return { error: `plan ${planId} is closed — cannot append cycles` };
+    }
+    // CR-CRU-165 §S1 — a filed plan grows unrecorded ONLY by a FIX cycle
+    // appended after a done VERIFY; an insert-before and an append of any
+    // other kind are recorded plan changes and carry their record.
+    if (change === undefined && (before !== undefined || cycle.kind !== "fix")) {
+      return {
+        error:
+          `${before !== undefined ? "inserting a cycle" : `appending a ${cycle.kind} cycle`} changes ` +
+          `filed plan ${planId}: a plan grows only by FIX cycles — any other change needs ` +
+          `reason, cause and specRef`,
+        code: "change-record-required",
+      };
     }
     if (before !== undefined) {
       const siblings = this.listCycleRows(projectKey, planId); // seq-ordered
@@ -4768,9 +6499,28 @@ export class Store {
       const earlier = siblings.filter((c) => c.seq < target.seq);
       const pred = earlier.length > 0 ? earlier[earlier.length - 1] : undefined;
       const newSeq = pred !== undefined ? (pred.seq + target.seq) / 2 : target.seq - 1;
-      const inserted = this.insertCycle(projectKey, planId, cycle.label, cycle.kind, newSeq);
+      const inserted = this.insertCycle(projectKey, planId, cycle.label, cycle.kind, newSeq, {
+        ...change!,
+        kind: "insert",
+      });
       this.emit("events", projectKey);
       return inserted;
+    }
+    if (cycle.kind === "fix") {
+      // The unrecorded FIX append: only once the plan's VERIFY cycle is done.
+      // A plain fix append carries no change record (the route builds one only
+      // for an insert or a non-fix kind), so there is no recorded fix append.
+      const verifyDone = this.listCycleRows(projectKey, planId).some(
+        (c) => c.kind === "verify" && c.status === "done",
+      );
+      if (!verifyDone) {
+        return {
+          error:
+            `cannot append a fix cycle to plan ${planId}: its VERIFY cycle is not done — ` +
+            `a FIX cycle follows a done VERIFY whose findings need fixes`,
+          code: "verify-not-done",
+        };
+      }
     }
     const appended = this.insertCycle(
       projectKey,
@@ -4778,6 +6528,7 @@ export class Store {
       cycle.label,
       cycle.kind,
       this.nextSeq(projectKey, planId),
+      cycle.kind === "fix" ? undefined : { ...change!, kind: "append" },
     );
     this.emit("events", projectKey);
     return appended;
@@ -4803,6 +6554,7 @@ export class Store {
     planId: number,
     cycleId: number,
     to: CycleStatus,
+    change?: ChangeRecord,
   ): PlanCycle | PlanOpError {
     const row = this.db
       .query<PlanCycleRow, [string, number, number]>(
@@ -4817,6 +6569,12 @@ export class Store {
         error: `illegal cycle transition: ${row.status} -> ${to}`,
         code: "illegal-transition",
       };
+    }
+    // CR-CRU-165 §S2 — cycle-skip's guards (the table above already confines
+    // a skip to a PENDING cycle). A skip is a recorded plan change.
+    if (to === "skipped") {
+      const refusal = this.skipRefusal(projectKey, planId, cycleId, change);
+      if (refusal !== undefined) return refusal;
     }
     // CR-CRU-024 §S1+§S2 — cross-cycle activation guards. CYCLE_TRANSITIONS is
     // per-cycle only, so activating a cycle while a sibling blocks it currently
@@ -4877,6 +6635,9 @@ export class Store {
          WHERE project_key = ? AND cycle_id = ?`,
       )
       .run(to, activatedAt, doneAt, activeMsAccumulated, projectKey, cycleId);
+    const skip: CycleChange | undefined =
+      to === "skipped" && change !== undefined ? { ...change, kind: "skip" } : undefined;
+    if (skip !== undefined) this.recordCycleChange(projectKey, cycleId, skip);
     this.emit("events", projectKey);
     return {
       id: row.cycle_id,
@@ -4885,12 +6646,77 @@ export class Store {
       status: to,
       ...(activatedAt !== null ? { activatedAt } : {}),
       ...(doneAt !== null ? { doneAt } : {}),
+      ...changeFieldsOf(
+        skip !== undefined
+          ? {
+              ...row,
+              change_reason: skip.reason,
+              change_cause: skip.cause,
+              change_spec_ref: skip.specRef,
+              change_kind: skip.kind,
+            }
+          : row,
+      ),
     };
   }
 
   /**
+   * CR-CRU-165 §S2 — why a PENDING cycle may not be skipped, or undefined when
+   * it may: the skip carries no record, a run was filed against the cycle, or
+   * it is the plan's last cycle that is not skipped. Each refusal names its rule.
+   */
+  private skipRefusal(
+    projectKey: string,
+    planId: number,
+    cycleId: number,
+    change: ChangeRecord | undefined,
+  ): PlanOpError | undefined {
+    if (change === undefined) {
+      return {
+        error: `skipping cycle ${cycleId} changes filed plan ${planId}: a skip needs reason, cause and specRef`,
+        code: "change-record-required",
+      };
+    }
+    const runs = this.db
+      .query<{ n: number }, [string, number]>(
+        `SELECT COUNT(*) AS n FROM events
+          WHERE project_key = ? AND cycle_id = ? AND kind IN ('test', 'compile')`,
+      )
+      .get(projectKey, cycleId)!.n;
+    if (runs > 0) {
+      return {
+        error: `cannot skip cycle ${cycleId}: a run is filed against it — only a cycle no run was filed against can be skipped`,
+        code: "run-filed",
+        cycleRef: cycleId,
+      };
+    }
+    const unskippedOthers = this.listCycleRows(projectKey, planId).filter(
+      (c) => c.cycle_id !== cycleId && c.status !== "skipped",
+    );
+    if (unskippedOthers.length === 0) {
+      return {
+        error: `cannot skip cycle ${cycleId}: it is the last cycle of plan ${planId} that is not skipped — a plan keeps at least one`,
+        code: "last-unskipped",
+        cycleRef: cycleId,
+      };
+    }
+    return undefined;
+  }
+
+  /** CR-CRU-165 §S1/§S2 — write a recorded change onto its cycle. */
+  private recordCycleChange(projectKey: string, cycleId: number, change: CycleChange): void {
+    this.db
+      .query(
+        `UPDATE plan_cycles SET change_reason = ?, change_cause = ?, change_spec_ref = ?, change_kind = ?
+         WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .run(change.reason, change.cause, change.specRef, change.kind, projectKey, cycleId);
+  }
+
+  /**
    * CR-CRU-116 §S1/§S2 — the WAVE-scope refusals, the same pair
-   * `transitionCycle` answers one container down (:3238-3264) and in the SAME
+   * `transitionCycle` answers one container down (its activation refusals)
+ * and in the SAME
    * order: `already-active` before `out-of-order`. A wave is a container of
    * crs exactly as a plan is a container of cycles, so opening work in one
    * while another holds open work, or ahead of an unfinished earlier wave, is
@@ -5023,6 +6849,7 @@ export class Store {
     planId: number,
     cycleId: number,
     label: string,
+    change: ChangeRecord,
   ): PlanCycle | PlanOpError {
     const row = this.db
       .query<PlanCycleRow, [string, number, number]>(
@@ -5049,6 +6876,9 @@ export class Store {
         `UPDATE plan_cycles SET label = ? WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
       )
       .run(label, projectKey, planId, cycleId);
+    // CR-CRU-165 §S1 — a rename is a recorded plan change.
+    const rename: CycleChange = { ...change, kind: "rename" };
+    this.recordCycleChange(projectKey, cycleId, rename);
     this.emit("events", projectKey);
     return {
       id: row.cycle_id,
@@ -5057,6 +6887,10 @@ export class Store {
       status: row.status as CycleStatus,
       ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
       ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
+      reason: rename.reason,
+      cause: rename.cause,
+      specRef: rename.specRef,
+      changeKind: rename.kind,
     };
   }
 
@@ -5075,7 +6909,8 @@ export class Store {
     }
     // CR-CRU-048 §S2 — the filtering (CYCLE_TERMINAL = done|skipped|failed) is
     // unchanged; only the REPORTING gains each blocking cycle's label.
-    const openCycleRefs = this.listCycleRows(projectKey, planId)
+    const cycleRows = this.listCycleRows(projectKey, planId);
+    const openCycleRefs = cycleRows
       .filter((cycle) => !Store.CYCLE_TERMINAL.has(cycle.status))
       .map((cycle) => ({ id: cycle.cycle_id, label: cycle.label }));
     if (openCycleRefs.length > 0) {
@@ -5087,15 +6922,42 @@ export class Store {
       };
     }
     const closedAt = Date.now();
-    this.db
-      .query(`UPDATE plans SET status = 'closed', merge_commit = ?, closed_at = ? WHERE plan_id = ?`)
-      .run(merge?.commit ?? null, closedAt, planId);
+    const mergeCommit = merge?.commit ?? null;
+    // The boundary is derived ONCE, here, and stored: a later run, gate or
+    // milestone, or retention evicting one, never moves a closed plan's record.
+    const close = this.db.transaction((): BoundaryColumns => {
+      const boundary =
+        mergeCommit === null
+          ? { boundary_branch: null, boundary_first_commit: null, boundary_last_commit: null }
+          : deriveBoundaryColumns(
+              this.db,
+              projectKey,
+              cycleRows.map((cycle) => cycle.cycle_id),
+            );
+      this.db
+        .query(
+          `UPDATE plans SET status = 'closed', merge_commit = ?, closed_at = ?,
+             boundary_branch = ?, boundary_first_commit = ?, boundary_last_commit = ?
+           WHERE plan_id = ?`,
+        )
+        .run(
+          mergeCommit,
+          closedAt,
+          boundary.boundary_branch,
+          boundary.boundary_first_commit,
+          boundary.boundary_last_commit,
+          planId,
+        );
+      return boundary;
+    });
+    const boundary = close();
     this.emit("events", projectKey);
     return this.toPlan({
       ...row,
       status: "closed",
-      merge_commit: merge?.commit ?? null,
+      merge_commit: mergeCommit,
       closed_at: closedAt,
+      ...boundary,
     });
   }
 
@@ -5108,7 +6970,7 @@ export class Store {
    * with downtime); every PENDING cycle → `skipped`; the plan status →
    * `aborted`. Closed/aborted/unknown plans reject (only an open plan aborts).
    */
-  abortPlan(projectKey: string, planId: number): Plan | PlanOpError {
+  abortPlan(projectKey: string, planId: number, record: ChangeRecord): Plan | PlanOpError {
     const row = this.getPlanRow(projectKey, planId);
     if (row === null) {
       return { error: `plan not found: ${planId}`, notFound: true };
@@ -5133,17 +6995,30 @@ export class Store {
           )
           .run(now, activeMsAccumulated, projectKey, cycle.cycle_id);
       } else if (cycle.status === "pending") {
+        // CR-CRU-165 §S2b — every cycle the abort skips shows the abort's record.
         this.db
           .query(
             `UPDATE plan_cycles SET status = 'skipped', done_at = ?
              WHERE project_key = ? AND cycle_id = ?`,
           )
           .run(now, projectKey, cycle.cycle_id);
+        this.recordCycleChange(projectKey, cycle.cycle_id, { ...record, kind: "abort" });
       }
     }
-    this.db.query(`UPDATE plans SET status = 'aborted' WHERE plan_id = ?`).run(planId);
+    this.db
+      .query(
+        `UPDATE plans SET status = 'aborted', abort_reason = ?, abort_cause = ?, abort_spec_ref = ?
+         WHERE plan_id = ?`,
+      )
+      .run(record.reason, record.cause, record.specRef, planId);
     this.emit("events", projectKey);
-    return this.toPlan({ ...row, status: "aborted" });
+    return this.toPlan({
+      ...row,
+      status: "aborted",
+      abort_reason: record.reason,
+      abort_cause: record.cause,
+      abort_spec_ref: record.specRef,
+    });
   }
 
   /**
@@ -5230,6 +7105,7 @@ export class Store {
       status: row.status as CycleStatus,
       ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
       ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
+      ...changeFieldsOf(row),
     };
   }
 
@@ -5250,20 +7126,63 @@ export class Store {
     return { cr: row.cr, planId: row.plan_id, cycleIds };
   }
 
-  /** §S0 — list a project's plans, optionally filtered by cr / track. */
-  listPlans(projectKey: string, filter?: { cr?: string; track?: string }): Plan[] {
+  /**
+   * §S0 — list a project's plans, optionally filtered by cr / track /
+   * status (§S1). The filter runs over the stored ROWS before toPlan(), so a
+   * filtered-out plan is never built and its commitBoundary never derived.
+   */
+  listPlans(
+    projectKey: string,
+    filter?: { cr?: string; track?: string; status?: string },
+  ): Plan[] {
     const rows = this.db
       .query<PlanRow, [string]>(
         `SELECT * FROM plans WHERE project_key = ? ORDER BY plan_id ASC`,
       )
       .all(projectKey);
-    return rows
-      .filter(
-        (row) =>
-          (filter?.cr === undefined || row.cr === filter.cr) &&
-          (filter?.track === undefined || row.track === filter.track),
+    const kept = rows.filter(
+      (row) =>
+        (filter?.cr === undefined || row.cr === filter.cr) &&
+        (filter?.track === undefined || row.track === filter.track) &&
+        (filter?.status === undefined || Store.planStatusOf(row.status) === filter.status),
+    );
+    // One read of every cycle the project holds, grouped by plan in memory —
+    // never one cycle query per plan — so a plan read runs the same two
+    // statements however many plans the project has. Each plan's cycles keep
+    // listCycleRows' `seq, cycle_id` order.
+    const cyclesByPlan = new Map<number, PlanCycleRow[]>();
+    const cycleRows = this.db
+      .query<PlanCycleRow, [string]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ?
+         ORDER BY plan_id ASC, seq ASC, cycle_id ASC`,
       )
-      .map((row) => this.toPlan(row));
+      .all(projectKey);
+    for (const cycle of cycleRows) {
+      const group = cyclesByPlan.get(cycle.plan_id);
+      if (group === undefined) cyclesByPlan.set(cycle.plan_id, [cycle]);
+      else group.push(cycle);
+    }
+    return kept.map((row) => this.toPlan(row, cyclesByPlan.get(row.plan_id) ?? []));
+  }
+
+  /**
+   * §S2 — two project-wide plan facts, independent of any list filter:
+   * `filed` (every plan the project has ever filed, whatever its status) and
+   * `lastClosedCr` (the cr of the plan with the latest closed_at, or null).
+   * Aborted plans carry no closed_at, so they never count as closed. Two
+   * cheap SQL reads — no plan is built.
+   */
+  planFacts(projectKey: string): { filed: number; lastClosedCr: string | null } {
+    const counted = this.db
+      .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM plans WHERE project_key = ?`)
+      .get(projectKey);
+    const latest = this.db
+      .query<{ cr: string }, [string]>(
+        `SELECT cr FROM plans WHERE project_key = ? AND closed_at IS NOT NULL
+         ORDER BY closed_at DESC, plan_id DESC LIMIT 1`,
+      )
+      .get(projectKey);
+    return { filed: counted?.n ?? 0, lastClosedCr: latest?.cr ?? null };
   }
 
   // ── CR-CRU-014 §S1 — the CR execution queue ─────────────────────────────
@@ -5492,11 +7411,15 @@ export class Store {
         shipped.add(cr);
       }
     }
+    // CR-CRU-022 §S1 — every cr's CURRENT points, read once for the project
+    // off the declaration journal (its latest points-bearing row).
+    const points = this.latestPointsByCr(projectKey);
     // CR-CRU-095 §S1 — published in the canonical order, and ONLY here: every
     // reader (the routes, the roadmap, the clients) consumes this verbatim.
     return rows
       .map((row): QueueEntry => {
         const derived = this.deriveQueueStatus(projectKey, row.cr, shipped);
+        const declared = points.get(row.cr);
         return {
           cr: row.cr,
           ...(row.title !== null ? { title: row.title } : {}),
@@ -5511,9 +7434,73 @@ export class Store {
           ...(row.lifecycle_json !== null
             ? { lifecycle: JSON.parse(row.lifecycle_json) as QueueLifecycle }
             : {}),
+          // CR-CRU-022 §S1 — absent when never pointed: never defaulted.
+          ...(declared !== undefined ? { points: declared } : {}),
         };
       })
       .sort(compareQueueOrder);
+  }
+
+  /**
+   * CR-CRU-022 §S1 — each cr's CURRENT story points: the value its LATEST
+   * points-bearing journal row declared. One grouped read over the project's
+   * rows (`idx_queue_declarations_cr`); SQLite takes the bare `points` column
+   * from the row that supplied `MAX(id)`. A cr with no such row is absent.
+   */
+  private latestPointsByCr(projectKey: string): Map<string, number> {
+    const rows = this.db
+      .query<{ cr: string; points: number; id: number }, [string]>(
+        `SELECT cr, points, MAX(id) AS id FROM queue_declarations
+          WHERE project_key = ? AND points IS NOT NULL
+          GROUP BY cr`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.cr, row.points]));
+  }
+
+  /** CR-CRU-022 §S1 — one cr's CURRENT story points, or undefined when never pointed. */
+  private latestPoints(projectKey: string, cr: string): number | undefined {
+    const row = this.db
+      .query<{ points: number }, [string, string]>(
+        `SELECT points FROM queue_declarations
+          WHERE project_key = ? AND cr = ? AND points IS NOT NULL
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(projectKey, cr);
+    return row === null ? undefined : row.points;
+  }
+
+  /**
+   * CR-CRU-022 §S1 — APPEND one declaration-journal row. The journal's only
+   * writer, and an INSERT only: no path updates or deletes a row. Called
+   * inside the caller's own write transaction, so a row exists exactly when
+   * the scope move it records was committed.
+   */
+  private appendDeclaration(
+    projectKey: string,
+    row: {
+      cr: string;
+      verb: DeclarationVerb;
+      change: Record<string, { from: unknown; to: unknown }>;
+      points: number | null;
+      author: string | undefined;
+      at: number;
+    },
+  ): void {
+    this.db
+      .query(
+        `INSERT INTO queue_declarations (project_key, cr, verb, change_json, points, author, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        projectKey,
+        row.cr,
+        row.verb,
+        JSON.stringify(row.change),
+        row.points,
+        row.author ?? null,
+        row.at,
+      );
   }
 
   /**
@@ -5542,17 +7529,23 @@ export class Store {
   upsertQueueEntry(
     projectKey: string,
     input: QueuePlanInput,
+    author?: string,
   ): QueueSeqReport & { changed: boolean } {
     const held = this.db
       .query<QueueEntryRow, [string, string]>(
         `SELECT * FROM queue_entries WHERE project_key = ? AND cr = ?`,
       )
       .get(projectKey, input.cr);
+    // CR-CRU-022 §S1 — an ABSENT `points` leaves the declared value alone; a
+    // present one moves it only when it differs from the journal's latest.
+    const heldPoints = this.latestPoints(projectKey, input.cr);
+    const pointsMoved = input.points !== undefined && input.points !== heldPoints;
     if (
       held !== null &&
       held.release === input.release &&
       held.wave === input.wave &&
-      held.title === input.title
+      held.title === input.title &&
+      !pointsMoved
     ) {
       return { changed: false, defaultedSeq: [], preservedSeq: [] };
     }
@@ -5589,6 +7582,26 @@ export class Store {
           )
           .run(input.title, input.wave, input.release, seq, projectKey, input.cr);
         if (moved) this.densifyWave(projectKey, held.wave, input.cr);
+      }
+      // CR-CRU-022 §S1 — journalled only when the write MOVES scope: the cr is
+      // planned into a release (first plan, pointed or not), its release
+      // changes, or its points are set or changed. A retitle or a wave move
+      // inside the same release moves no scope and appends nothing.
+      const heldRelease = held === null ? null : held.release;
+      const change: Record<string, { from: unknown; to: unknown }> = {};
+      if (held === null || heldRelease !== input.release) {
+        change.release = { from: heldRelease, to: input.release };
+      }
+      if (pointsMoved) change.points = { from: heldPoints ?? null, to: input.points };
+      if (Object.keys(change).length > 0) {
+        this.appendDeclaration(projectKey, {
+          cr: input.cr,
+          verb: "cr-plan",
+          change,
+          points: pointsMoved ? (input.points ?? null) : null,
+          author,
+          at: now,
+        });
       }
     })();
     this.emit("events", projectKey);
@@ -5735,6 +7748,7 @@ export class Store {
     projectKey: string,
     cr: string,
     lifecycle: Omit<QueueLifecycle, "at">,
+    author?: string,
   ): { changed: boolean } | null {
     const held = this.db
       .query<QueueEntryRow, [string, string]>(
@@ -5752,10 +7766,31 @@ export class Store {
         return { changed: false };
       }
     }
-    const stamped: QueueLifecycle = { ...lifecycle, at: Date.now() };
-    this.db
-      .query(`UPDATE queue_entries SET lifecycle_json = ? WHERE project_key = ? AND cr = ?`)
-      .run(JSON.stringify(stamped), projectKey, cr);
+    const stamped: QueueLifecycle = {
+      ...lifecycle,
+      at: Date.now(),
+      // The lifecycle carries who (ruling 6): the same author the journal
+      // row below records, absent when the write carries none.
+      ...(author !== undefined ? { author } : {}),
+    };
+    const previous =
+      held.lifecycle_json === null ? null : (JSON.parse(held.lifecycle_json) as QueueLifecycle);
+    this.db.transaction(() => {
+      this.db
+        .query(`UPDATE queue_entries SET lifecycle_json = ? WHERE project_key = ? AND cr = ?`)
+        .run(JSON.stringify(stamped), projectKey, cr);
+      // CR-CRU-022 §S1 — a void or a supersede takes the cr's points out of
+      // its release's scope, so it is journalled, in the same transaction and
+      // at the same instant the lifecycle carries.
+      this.appendDeclaration(projectKey, {
+        cr,
+        verb: lifecycle.state === "VOID" ? "cr-void" : "cr-supersede",
+        change: { lifecycle: { from: previous, to: lifecycle } },
+        points: null,
+        author,
+        at: stamped.at,
+      });
+    })();
     this.emit("events", projectKey);
     return { changed: true };
   }
@@ -6001,8 +8036,16 @@ export class Store {
     return stored === "closed" ? "closed" : stored === "aborted" ? "aborted" : "open";
   }
 
-  private toPlan(row: PlanRow): Plan {
-    const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
+  /**
+   * Build a plan from its row and its cycle rows. A single-plan caller reads
+   * the cycles here; `listPlans` passes the rows it read for the whole
+   * project in one statement.
+   */
+  private toPlan(
+    row: PlanRow,
+    cycleRows: PlanCycleRow[] = this.listCycleRows(row.project_key, row.plan_id),
+  ): Plan {
+    const cycles: PlanCycle[] = cycleRows.map(
       (cycle) => ({
         id: cycle.cycle_id,
         label: cycle.label,
@@ -6021,6 +8064,8 @@ export class Store {
         ...(cycle.status === "active" && cycle.activated_at !== null
           ? { activeMs: this.deriveAndCheckpointActiveMs(cycle, cycle.activated_at) }
           : {}),
+        // CR-CRU-165 §S1/§S2 — a recorded plan change rides its cycle.
+        ...changeFieldsOf(cycle),
       }),
     );
     const plan: Plan = {
@@ -6040,90 +8085,25 @@ export class Store {
       cycles,
       ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
+      // CR-CRU-165 §S2b — an abort's record (absent on unrecorded aborts).
+      ...(typeof row.abort_reason === "string" ? { reason: row.abort_reason } : {}),
+      ...(typeof row.abort_cause === "string" ? { cause: row.abort_cause as ChangeCause } : {}),
+      ...(typeof row.abort_spec_ref === "string" ? { specRef: row.abort_spec_ref } : {}),
     };
-    const boundary = this.deriveCommitBoundary(plan);
-    return boundary !== undefined ? { ...plan, commitBoundary: boundary } : plan;
-  }
-
-  /**
-   * §S0 commit boundary — derived read-only on CLOSED plans: branch + the
-   * earliest/latest linked-run commits from the runs' `context.git`, linked
-   * via `context.cycleId`. Absent fields are OMITTED (never null).
-   */
-  private deriveCommitBoundary(plan: Plan): CommitBoundary | undefined {
+    // The boundary a closed, merged plan stored when it closed: READ, never
+    // derived (the merge commit and close time are its own columns).
     if (plan.status !== "closed" || plan.merge === undefined || plan.closedAt === undefined) {
-      return undefined;
+      return plan;
     }
-    // CR-CRU-126 §S1 — one INDEXED seek per cycle, projecting the three
-    // columns the answer needs, replacing the `SELECT *` scan of every event
-    // in the project. The wide columns (`tree`/`coverage`/`compile`/`payload`)
-    // were the dominant cost — ~37 MB marshalled per scan to read two strings.
-    //
-    // Equality on `cycle_id`, one cycle at a time, rather than one `IN (…)`
-    // over the plan's cycles: MEASURED 2026-09-12, with no ANALYZE stats (and
-    // this store runs none), the `IN` form makes SQLite fall back to
-    // `idx_events_project_timestamp` — a full project scan again — because the
-    // sort-free ordering outbids a multi-seek it has no statistics for. The
-    // equality form plans to `idx_events_project_cycle` unconditionally, and
-    // sort-free, since the index carries `timestamp` third.
-    //
-    // The membership test is the `cycle_id` COLUMN, which CR-CRU-094 §S1
-    // derives at the one row-insert seam from `context.cycleId`, so the two
-    // cannot disagree; `context IS NOT NULL` still excludes the lifecycle rows
-    // (§S2) that carry a cycle binding but no run context.
-    //
-    // CR-CRU-129 §S1 — over the record tables too: a gate carries a cycle
-    // binding and a run context (CR-CRU-056 gates parity), so it contributed
-    // to this boundary before the move and must keep contributing after it.
-    // Their seeks are equality on `cycle_id` like the one above, over tables
-    // holding a project's records rather than its telemetry.
-    const rows: BoundaryEventRow[] = [];
-    for (const source of [
-      `SELECT timestamp, id, context FROM events`,
-      `SELECT timestamp, id, context FROM milestones`,
-      `SELECT timestamp, id, context FROM gates`,
-    ]) {
-      for (const cycle of plan.cycles) {
-        for (const row of this.db
-          .query<BoundaryEventRow, [string, number]>(
-            `${source}
-             WHERE project_key = ? AND cycle_id = ? AND context IS NOT NULL
-             ORDER BY timestamp ASC, rowid ASC`,
-          )
-          .all(plan.projectKey, cycle.id)) {
-          rows.push(row);
-        }
-      }
-    }
-    // A multi-cycle plan's runs INTERLEAVE in time, and first/last are the
-    // earliest and latest across the whole plan — so the per-cycle, per-table
-    // seeks are merged back into the one insertion order the single scan had.
-    rows.sort((left, right) =>
-      left.timestamp !== right.timestamp
-        ? left.timestamp - right.timestamp
-        : Store.insertOrdinal(left.id) - Store.insertOrdinal(right.id),
-    );
-    let branch: string | undefined;
-    let firstRunCommit: string | undefined;
-    let lastRunCommit: string | undefined;
-    for (const row of rows) {
-      const context = JSON.parse(row.context) as RunContext;
-      if (context.git === undefined) {
-        continue;
-      }
-      branch ??= context.git.branch;
-      firstRunCommit ??= context.git.commit;
-      lastRunCommit = context.git.commit;
-    }
-    return {
+    const commitBoundary: CommitBoundary = {
       mergeCommit: plan.merge.commit,
-      ...(branch !== undefined ? { branch } : {}),
-      ...(firstRunCommit !== undefined ? { firstRunCommit } : {}),
-      ...(lastRunCommit !== undefined ? { lastRunCommit } : {}),
+      ...(typeof row.boundary_branch === "string" ? { branch: row.boundary_branch } : {}),
+      ...(typeof row.boundary_first_commit === "string" ? { firstRunCommit: row.boundary_first_commit } : {}),
+      ...(typeof row.boundary_last_commit === "string" ? { lastRunCommit: row.boundary_last_commit } : {}),
       closedAt: plan.closedAt,
     };
+    return { ...plan, commitBoundary };
   }
-
 
   onChange(fn: ChangeListener): () => void {
     this.listeners.add(fn);
@@ -6181,4 +8161,86 @@ export class Store {
         : {}),
     };
   }
+
+  // ── CR-CRU-022 §S2–§S4 — the analytics reads ────────────────────────────
+
+  /**
+   * CR-CRU-022 §S3 — the declaration journal read back, oldest first (`id`
+   * order is append order). The journal's only reader; it never writes.
+   */
+  listQueueDeclarations(projectKey: string): QueueDeclaration[] {
+    return this.db
+      .query<
+        {
+          id: number;
+          cr: string;
+          verb: DeclarationVerb;
+          change_json: string;
+          points: number | null;
+          author: string | null;
+          at: number;
+        },
+        [string]
+      >(
+        `SELECT id, cr, verb, change_json, points, author, at FROM queue_declarations
+          WHERE project_key = ? ORDER BY id ASC`,
+      )
+      .all(projectKey)
+      .map((row) => ({
+        id: row.id,
+        cr: row.cr,
+        verb: row.verb,
+        change: JSON.parse(row.change_json) as QueueDeclaration["change"],
+        ...(row.points !== null ? { points: row.points } : {}),
+        ...(row.author !== null ? { author: row.author } : {}),
+        at: row.at,
+      }));
+  }
+
+  /**
+   * CR-CRU-022 §S3 — each queued cr's INTERNAL `filed_at` (epoch ms). Never
+   * published on the queue read; the burndown derives a release's start from
+   * it server-side.
+   */
+  queueFiledAt(projectKey: string): Map<string, number> {
+    const rows = this.db
+      .query<{ cr: string; filed_at: number }, [string]>(
+        `SELECT cr, filed_at FROM queue_entries WHERE project_key = ?`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.cr, row.filed_at]));
+  }
+
+  /**
+   * CR-CRU-022 §S2 / DN-crucible-analytics §3 — `exec(c)` per cycle: Σ
+   * `duration_ms` of every cycle-linked test and compile run. No tier filter,
+   * so a BDD e2e run bound to the cycle counts, as §3's 2026-09-24 amendment
+   * rules.
+   */
+  cycleExecMs(projectKey: string): Map<number, number> {
+    const rows = this.db
+      .query<{ cycle_id: number; exec_ms: number }, [string]>(
+        `SELECT cycle_id, SUM(COALESCE(duration_ms, 0)) AS exec_ms FROM events
+          WHERE project_key = ? AND cycle_id IS NOT NULL AND kind IN ('test', 'compile')
+          GROUP BY cycle_id`,
+      )
+      .all(projectKey);
+    return new Map(rows.map((row) => [row.cycle_id, row.exec_ms]));
+  }
+}
+
+/**
+ * CR-CRU-022 §S1/§S3 — one declaration-journal row as the analytics read it
+ * back: the cr, the verb that moved scope, the `{field: {from, to}}` change,
+ * the points the row declared (absent when it declared none), its author (the
+ * registered caller; absent on an unattributed store write) and `at` (epoch ms).
+ */
+export interface QueueDeclaration {
+  id: number;
+  cr: string;
+  verb: DeclarationVerb;
+  change: Record<string, { from: unknown; to: unknown }>;
+  points?: number;
+  author?: string;
+  at: number;
 }

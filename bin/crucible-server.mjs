@@ -5,8 +5,14 @@
 // `import.meta.main`). This shim locates that entry relative to the installed
 // package and execs it under Bun, forwarding argv + the child's exit code.
 // Bun is self-provisioned by `crucible-axi install` (curl-installer) when
-// absent — see docs/RUNBOOK.md for the loopback default + CRUCIBLE_PORT /
-// CRUCIBLE_HOST config.
+// absent.
+//
+// This launcher takes NO listener configuration and passes none: the host and
+// port are declared in the server's own `crucible.toml`, in a `[server]` table
+// beside the database `$CRUCIBLE_DB` locates — see "The listener — `[server]`,
+// in the server's own file" in docs/RUNBOOK.md. `$CRUCIBLE_PORT` and
+// `$CRUCIBLE_HOST` are RETIRED (CR-CRU-139 §S1) and are read nowhere; exporting
+// one before this command moves nothing.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

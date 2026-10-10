@@ -70,9 +70,10 @@ const Logic = AppLogic as unknown as {
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
-/** A shipped release, `src/v2.ts:1755-1763` shape. `releasedAt` is the measured
- *  0.1.0 ledger value CR-CRU-091's own tests pin: 2026-08-19 in SECONDS,
- *  1970-01-21 read as MILLISECONDS. The two CRs share the number on purpose. */
+/** A shipped release, `releaseBrief` (src/v2.ts) shape. `releasedAt` is the
+ *  measured 0.1.0 ledger value CR-CRU-091's own tests pin: 2026-08-19 in
+ *  SECONDS, 1970-01-21 read as MILLISECONDS. The two CRs share the number on
+ *  purpose. */
 const SHIPPED = {
   version: "0.1.0",
   commit: "c07274c",
@@ -82,7 +83,7 @@ const SHIPPED = {
   timestamp: 1787149999000,
 };
 
-/** A proposal WITH a declared target, `src/v2.ts:2045-2057` shape. */
+/** A proposal WITH a declared target, `proposalBrief` (src/v2.ts) shape. */
 const PROPOSED_TARGETED = {
   label: "0.2.0",
   targetAt: 1790000000, // 2026-09-21
@@ -159,8 +160,8 @@ describe("CR-CRU-078 §S3/AC6 — a gate resolves to ITS OWN date, or to a decla
       expect(got.state).not.toBe(declared.state);
     }
     // `null` is ABSENCE, not a defect: the wire omits an undeclared target
-    // (`src/v2.ts:2049`), and a client that sends an explicit null means the
-    // same thing.
+    // (`proposalBrief` in `src/v2.ts`), and a client that sends an explicit
+    // null means the same thing.
     expect(Logic.resolveGateDate({ label: "0.4.0", targetAt: null }, "proposed").state).toBe("absent");
     expect(Logic.resolveGateDate({ label: "0.4.0", targetAt: undefined }, "proposed").state).toBe(
       "absent",
@@ -169,18 +170,20 @@ describe("CR-CRU-078 §S3/AC6 — a gate resolves to ITS OWN date, or to a decla
 
   test("a SHIPPED row with no `releasedAt` is an undated TAG, not an undeclared target", () => {
     // A pre-CR-080 ledger row carries no `releasedAt` at all
-    // (`src/v2.ts:1759` spreads it only when defined — verified). It resolves
-    // to the empty state — but tagged `shipped` / `releasedAt`, so the surface
-    // can say "no ship date recorded" rather than "no target declared", which
-    // would be a claim about a plan the row does not have.
+    // (`releaseBrief` in `src/v2.ts` spreads it only when defined —
+    // verified). It resolves to the empty state — but tagged `shipped` /
+    // `releasedAt`, so the surface can say "no ship date recorded" rather than
+    // "no target declared", which would be a claim about a plan the row does
+    // not have.
     //
     // *Citation repaired 2026-08-29 by reading the target: this also cited
-    // "the ship-order read at public/app-logic.mjs:907-918" as already
+    // "the ship-order read" in public/app-logic.mjs (by line span) as already
     // treating such a row as legacy history. There is no ship-order read any
     // more — CR-CRU-077's ascending-by-`releasedAt` sorter went with the code
-    // CR-CRU-078 removed (§S9's own correction), and that line span is now a
-    // cycle-count block. `resolveGateDate` (public/app-logic.mjs:80) is the
-    // ONLY place that reads the field today, and it is what this test calls.*
+    // CR-CRU-078 removed (§S9's own correction), and the span it pointed at
+    // now holds a cycle-count block. `resolveGateDate` (public/app-logic.mjs)
+    // is the ONLY place that reads the field today, and it is what this test
+    // calls.*
     const got = Logic.resolveGateDate({ version: "0.0.9", crs: [], timestamp: 7 }, "shipped");
     expect(got).toEqual({ kind: "shipped", field: "releasedAt", state: "absent", date: "" });
   });
@@ -338,22 +341,50 @@ describe("CR-CRU-078/AC7 — NO forecast date, asserted as an ABSENCE", () => {
     }
   });
 
-  test("no forecasting machinery exists in public/ at all — CR-CRU-022 is unshipped", () => {
-    // AC7's real content is that the CODE has no such path, and the P50/P80
-    // confidence band is CR-CRU-022, deferred past 0.2.0. Scanned rather than
-    // reasoned about, so a later cycle cannot quietly add one.
-    const FORECASTING = /\b(?:forecast|estimated|estimate|interpolat\w*|p50|p80|eta)\b/i;
-    const offenders: string[] = [];
-    for (const [name, src] of [
-      ["public/app-logic.mjs", APP_LOGIC_SRC],
-      ["public/app.js", APP_JS_SRC],
-    ] as const) {
-      const hit = FORECASTING.exec(codeOnly(src));
-      if (hit !== null) offenders.push(`${name}: ${hit[0]}`);
-    }
-    expect(offenders).toEqual([]);
-    // Non-vacuity.
-    expect(FORECASTING.test("const eta = forecastTarget(rel);")).toBe(true);
+  // RETIRED in CR-CRU-022 C4 (orchestrator ruling 2026-09-24): "no forecasting
+  // machinery exists in public/ at all — CR-CRU-022 is unshipped" held only
+  // while 022 was unshipped, and 022 shipped the forecast (the P50/P80 chip,
+  // the analytics pane's forecast card, the …/analytics/forecast read). Its
+  // purpose now lives in two places:
+  //   (i)  tests/cr022-analytics-ui.test.ts, §S5 AC4 — "under
+  //        insufficient_history no date text renders anywhere on the band or
+  //        the pane";
+  //   (ii) this file's remaining AC7 tests, which pin `resolveGateDate`:
+  //        "nothing in an undated proposal's surroundings becomes its date",
+  //        "`timestamp` is never the gate's date for a SHIPPED release either",
+  //        "no undated record, however surrounded, yields a date",
+  //        "an unrecognised kind consults NO field and produces no date", and
+  //        the one below, which puts a real forecast's fields beside the gate.
+  test("a forecast's values never reach the strip's gate date — only the declared target or the ship date", () => {
+    // The CR-CRU-022 forecast payload's own fields (…/analytics/forecast:
+    // p50Ts / p80Ts in epoch MILLISECONDS, remainingPoints, scheduleHealth),
+    // riding beside the release record. p50Ts formats to 2026-10-01 and p80Ts
+    // to 2026-10-07; neither is a declared target, so neither is the date.
+    const FORECAST = {
+      p50Ts: 1_790_812_800_000,
+      p80Ts: 1_791_331_200_000,
+      remainingPoints: 29,
+      scheduleHealth: "at-risk",
+      status: "ok",
+    };
+    const targeted = Logic.resolveGateDate({ ...PROPOSED_TARGETED, ...FORECAST }, "proposed");
+    expect({ field: targeted.field, state: targeted.state, date: targeted.date }).toEqual({
+      field: "targetAt",
+      state: "dated",
+      date: "2026-09-21",
+    });
+    const undeclared = Logic.resolveGateDate({ ...PROPOSED_UNDATED, ...FORECAST }, "proposed");
+    expect({ field: undeclared.field, state: undeclared.state, date: undeclared.date }).toEqual({
+      field: "targetAt",
+      state: "absent",
+      date: "",
+    });
+    expect(JSON.stringify(undeclared)).not.toMatch(ISO_DAY);
+    const shipped = Logic.resolveGateDate({ ...SHIPPED, ...FORECAST }, "shipped");
+    expect({ field: shipped.field, date: shipped.date }).toEqual({ field: "releasedAt", date: "2026-08-19" });
+    // Non-vacuity: the forecast's instants really are formattable days.
+    expect(Logic.formatReleaseDate(FORECAST.p50Ts / 1000)).toBe("2026-10-01");
+    expect(Logic.formatReleaseDate(FORECAST.p80Ts / 1000)).toBe("2026-10-07");
   });
 });
 

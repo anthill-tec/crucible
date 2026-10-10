@@ -2,8 +2,9 @@
 //
 // ── What is broken today ──────────────────────────────────────────────────
 //
-// `MILESTONE_TYPES` (src/v2.ts:1168) is a closed `Set` literal and
-// `POST /api/v2/milestones` refuses anything outside it (src/v2.ts:1289).
+// `MILESTONE_TYPES` (then a module constant in src/v2.ts) is a closed `Set`
+// literal and `POST /api/v2/milestones` refuses anything outside it
+// (`handleMilestones` in src/v2.ts).
 // Six types, chosen by whoever last edited that file. `custom` is the escape
 // hatch and it collapses every project-defined milestone into ONE label, so a
 // project recording two different kinds of dated goal cannot tell them apart,
@@ -19,8 +20,9 @@
 //        -> the project DECLARES its own milestone vocabulary.
 //
 // SHAPE CHOICE, STATED SO GREEN MAY OVERRULE IT. `PATCH …/projects/<key>` is
-// already THE project-configuration surface (src/v2.ts:3383, `PATCHABLE_FIELDS`
-// at :3354, `ProjectPatch` at src/store.ts:35), and §S4 calls a declared type
+// already THE project-configuration surface (`handleProjectPatch` in src/v2.ts,
+// its `PATCHABLE_FIELDS`, and `ProjectPatch` in src/store.ts), and
+// §S4 calls a declared type
 // "configuration" in those words. `milestoneTypes` is the camelCase spelling
 // every other wire field on that route already uses (`sutRoot`,
 // `allowRunDeletion`). Both decisions are isolated in `DECLARATION_FIELD` and
@@ -30,9 +32,10 @@
 // derives.
 //
 // The accepted set a project may post is READ OFF THE SERVER'S OWN REFUSAL
-// (`type must be one of: …`), which is how `tests/milestone-records-survive-
-// retention.test.ts:147` and `tests/milestone-dates-are-first-class.test.ts:167`
-// already read it, and is the "way to SEE the live list" §S5 requires. No test
+// (`type must be one of: …`), which is how `milestoneVocabulary` in
+// `tests/milestone-records-survive-retention.test.ts` and its twin in
+// `tests/milestone-dates-are-first-class.test.ts` already read it, and is the
+// "way to SEE the live list" §S5 requires. No test
 // in this file holds a copy of the vocabulary.
 //
 // ── How each case fails if GREEN does nothing ─────────────────────────────
@@ -59,8 +62,9 @@
 // ── Safety ────────────────────────────────────────────────────────────────
 // Every store here is `:memory:` and every server binds port 0; the dog-food
 // port 3849 is never touched. The live `data/crucible.db` is opened ONLY by
-// `sqlite3 -readonly … .backup` (the idiom `tests/milestone-dates-migration
-// .test.ts:78` established), into an mkdtemp replica, and the case measures
+// `sqlite3 -readonly … .backup` (the idiom `liveStoreReplica` in
+// `tests/milestone-dates-migration.test.ts` established), into an mkdtemp
+// replica, and the case measures
 // the live file's size and mtime before and after and fails if either moved.
 // Fixture cr ids come from the REGISTERED synthetic namespaces the
 // project-namespace tripwire allows (`CR-SHIPPED-*`, `CR-AUTH-*`).
@@ -123,7 +127,8 @@ interface AnyBody {
 
 /**
  * A READ-ONLY replica of the live store, or the STATED reason there is none —
- * the repo's live-subject idiom (`tests/milestone-dates-migration.test.ts:58`).
+ * the repo's live-subject idiom (`liveStoreReplica` in
+ * `tests/milestone-dates-migration.test.ts`).
  * A clean checkout and CI have no live store and may have no `sqlite3`; a case
  * that THREW there would report a missing operator file as a broken invariant.
  */
@@ -528,7 +533,8 @@ describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is 
 
       // …while the accepted set the refusal publishes is declared ∪ reserved ∪
       // seeded — which is what keeps the generic door's own tripwire
-      // (`tests/roadmap-registration-routes.test.ts:1443`) reading a full list.
+      // (the `release-proposal` tripwire test in
+      // `tests/roadmap-registration-routes.test.ts`) reading a full list.
       const accepted = await acceptedTypes(key);
       for (const type of ["risk-review", "field-trial", ...RESERVED, ...SEEDED, "custom"]) {
         expect(accepted).toContain(type);
@@ -653,7 +659,8 @@ describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is 
       // `release-proposal` is excluded because §S2 RETIRES it as a type: the
       // 2 rows carrying it are legacy rows the C2 migration rewrites into
       // undelivered `release` records, and
-      // `tests/roadmap-registration-routes.test.ts:1443` is the standing
+      // the `release-proposal` tripwire test in
+      // `tests/roadmap-registration-routes.test.ts` is the standing
       // tripwire that the generic door must keep refusing it.
       const projectOwned = population.filter(
         (type) => !RESERVED.includes(type as (typeof RESERVED)[number]) && type !== "release-proposal",

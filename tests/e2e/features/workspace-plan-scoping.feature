@@ -19,15 +19,13 @@ Feature: CR-CRU-026 §S0 equivalence — cold-load vs navigation parity, and the
   value is that the pins themselves did not exist yet, not that the
   behavior is unimplemented.
 
-  This feature seeds projects via the API, so it must sort alphabetically
-  AFTER shell-storyboard.feature ("w" > "s") the way workflow.feature and
-  workspace-manager.feature already do — and, within the "workspace-"
-  prefix, AFTER workspace-manager.feature ("workspace-p" > "workspace-m"),
-  so every earlier feature's seeding has already landed in the shared
-  server/db instance by the time these scenarios run. Every project/cr/
-  agent name below is namespaced "WS …" to stay clear of the other
-  features sharing that instance. Results are ingested with tier "e2e" by
-  the orchestrator's ingest step, not by this suite.
+  This feature seeds projects via the API. This file's POSITION governs
+  nothing: shell-storyboard.feature's F1 states its empty-DB precondition
+  with its own `@empty-db` tag, in the `chromium-empty-db` project every
+  other project depends on (see playwright.config.ts's ordering comment).
+  Every project/cr/agent name below is namespaced "WS …" to stay clear of
+  the other features sharing that instance. Results are ingested with tier
+  "e2e" by the orchestrator's ingest step, not by this suite.
 
   NOTE: §S3.4's planless-heuristic clause (a project with NO plan still
   gets the classic CR-007 heuristic marker, byte-identically) is already
@@ -60,6 +58,7 @@ Feature: CR-CRU-026 §S0 equivalence — cold-load vs navigation parity, and the
     Then the Workflow tab shows the cr root for "CR-WS-2" within 2 seconds
     When I navigate home via the ← projects chip
     And I click the projects-row badge for "WS Empty Project"
+    And I click the "Workflow" workspace tab
     Then the Workflow tab shows the CR-011 empty state with none of the previous project's plan content
 
   Scenario: §S0 equivalence — the home timeline's marker vocabulary is identical between cold load and a home→workspace→home in-app round-trip

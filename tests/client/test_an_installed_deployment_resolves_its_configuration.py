@@ -47,7 +47,7 @@ cannot run everywhere is a gate that gets bypassed.
 
 HOW EACH FAILS IF THE CODE DOES NOTHING:
 
-  §S1  `project_config_path()` (clients/_crucible_axi.py:154-158) is ONE path,
+  §S1  `project_config_path` (clients/_crucible_axi.py) is ONE path,
         `<bound project dir or os.getcwd()>/crucible.toml`. With no project dir
         bound it answers with the process cwd, so:
          * the install-dir resolution tests fail resolving the shipped
@@ -78,11 +78,14 @@ HOW EACH FAILS IF THE CODE DOES NOTHING:
 
 The cross-runtime half of §S2 -- that the server READS `dirname(store)/
 crucible.toml` -- is already asserted, on the server's own runtime, by
-tests/server-limits-are-configuration.test.ts:848-852 (`serverConfigPath()` is
-`path.join(dirname($CRUCIBLE_DB), "crucible.toml")`) and :887-888 (a value
+tests/server-limits-are-configuration.test.ts, in its "the server's
+crucible.toml sits beside its database" test (`serverConfigPath()` is
+`path.join(dirname($CRUCIBLE_DB), "crucible.toml")`) and in the positive
+control of its "a SERVER limit configured in the PROJECT's file" test (a value
 written into that file is the value `resolveLimit` returns). This file therefore
 asserts the WRITE side against the same rule -- `install.store_dir()` joined
-with the config filename, which is `src/limits.ts:158-159` computed in python --
+with the config filename, which is `serverConfigPath` (src/limits.ts)
+computed in python --
 rather than spawning bun to re-prove what a bun suite already proves.
 
 Safety -- the L1 sandbox and the L2 escape detector (§S3):
@@ -195,7 +198,8 @@ def _load_module_by_path(path, cache_key):
 
 def _run_main(module, argv):
     """Drive a client's REAL entry point and capture both streams (the sibling
-    convention, tests/client/test_client_limits_resolve_from_configuration.py:195)."""
+    convention, `_run_main` in
+    tests/client/test_client_limits_resolve_from_configuration.py)."""
     stdout = io.StringIO()
     stderr = io.StringIO()
     with mock.patch.object(sys, "argv", ["bun-crucible.py"] + argv):
@@ -591,7 +595,8 @@ class _InstalledDeploymentCase(unittest.TestCase):
             os.path.isfile(self.server_config),
             "§S2: an install that provisioned the server must lay "
             "the server's operator-editable `%s` down BESIDE ITS DATABASE, at "
-            "%s -- the path `src/limits.ts:158-159` computes and the only file "
+            "%s -- the path `serverConfigPath` (src/limits.ts) computes and "
+            "the only file "
             "the server will ever read. `install.store_dir()` already knows "
             "that directory; nothing writes into it. It holds %r"
             % (CONFIG_NAME, self.server_config,
@@ -988,13 +993,15 @@ class TheInstallerLaysDownTheServersOperatorFileTest(_InstalledDeploymentCase):
 
     def test_the_laid_down_path_is_the_one_the_server_computes_from_its_own_store_rule(self):
         """The cross-runtime claim, asserted on the WRITE side: the installer
-        must write where `src/limits.ts:158-159` reads --
+        must write where `serverConfigPath` (src/limits.ts) reads --
         `join(dirname(store), "crucible.toml")`, which `install.store_dir()`
         already mirrors (`resolveDbPath`, CR-CRU-043 rule 4).
 
         The READ side is already asserted on the server's own runtime by
-        tests/server-limits-are-configuration.test.ts:848-852 (the path) and
-        :887-888 (a value written into that file is the value `resolveLimit`
+        tests/server-limits-are-configuration.test.ts, in its "the server's
+        crucible.toml sits beside its database" test (the path) and in the
+        positive control of its "a SERVER limit configured in the PROJECT's
+        file" test (a value written into that file is the value `resolveLimit`
         returns), so bun is not spawned here to re-prove it.
         """
         self.install_provisioned()
@@ -1315,10 +1322,11 @@ class TheKernelIsolationScriptIsDocumentedAndCannotDriftTest(_InstalledDeploymen
 # ===========================================================================
 
 class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase):
-    """`_SHIPPED_DATA_CANDIDATES` (clients/_crucible_axi.py:130-136) is
+    """`_SHIPPED_DATA_CANDIDATES` (clients/_crucible_axi.py) is
     `(<install>/clients/crucible.toml, <install>/crucible.toml)`, and on an
     installed fleet the FIRST never exists -- `[fleet]` copies eight files
-    (install.py:212-221) and the distribution's data is not one of them. So
+    (`FLEET_FILES` in crucible_axi/install.py) and the distribution's data is
+    not one of them. So
     `shipped_data_path()` resolves the SECOND: the OPERATOR's editable file.
 
     One file was therefore doing two incompatible jobs, and both consequences
@@ -1332,7 +1340,7 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
         treats as the BUILD's recommendations, so `recommended` itself becomes
         operator-mutable -- which
         `test_a_shipped_declaration_carries_no_value_of_its_own`
-        (tests/client/test_client_limits_resolve_from_configuration.py:434)
+        (tests/client/test_client_limits_resolve_from_configuration.py)
         exists to forbid and cannot see, because it runs against a CHECKOUT
         where the two files are genuinely different files.
 
@@ -1477,9 +1485,10 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
 
         That rule is already pinned by
         `test_a_shipped_declaration_carries_no_value_of_its_own`
-        (tests/client/test_client_limits_resolve_from_configuration.py:434) and
+        (tests/client/test_client_limits_resolve_from_configuration.py) and
         by `test_setting_a_value_leaves_recommended_reading_as_the_shipped_recommendation`
-        (:446) -- but both run against a CHECKOUT, where the shipped data and
+        (in the same file) -- but both run against a CHECKOUT, where the
+        shipped data and
         the operator's file are genuinely different files. On an INSTALLED
         deployment they are ONE file, so an operator's `value` lands inside the
         shipped table and an operator's `recommended` overwrites the build's.
@@ -1525,8 +1534,8 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
             self.assertIsNone(
                 table[name].get("value"),
                 "a shipped declaration carries no `value` of its own "
-                "(tests/client/test_client_limits_resolve_from_configuration"
-                ".py:434); `%s` picked one up out of the operator's file"
+                "(`test_a_shipped_declaration_carries_no_value_of_its_own`); "
+                "`%s` picked one up out of the operator's file"
                 % (name,))
 
     def test_the_manifest_declares_the_fleet_copy_as_shipped_data_under_its_own_key(self):
@@ -1576,7 +1585,8 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
         manufactures precisely the `RuntimeError: no shipped limit defaults
         found at …` state this section exists to end -- the state the operator
         of the reported 0.2.0 install actually met. `[fleet]` has no uninstall
-        inverse today (install.py:75-77), so the rule costs nothing now and
+        inverse today (`UNINSTALL_STAGE_ORDER` in crucible_axi/install.py), so
+        the rule costs nothing now and
         fails the day one is added that forgets this file.
 
         Asserted after a PLAIN uninstall and after a PURGE, because the two
@@ -1625,8 +1635,8 @@ class TheInstalledFleetCarriesItsOwnShippedDefaultsTest(_InstalledDeploymentCase
         """Two files, two opposite rules, in ONE run -- because the defect was
         that one file carried both. Package data is REPLACED, like every other
         file `[fleet]` copies; the operator's configuration SURVIVES
-        (the existing `_operator_config_is_untouched` rule,
-        crucible_axi/install.py:1170-1186, unchanged)."""
+        (the existing `_operator_config_is_untouched` rule in
+        crucible_axi/install.py, unchanged)."""
         self.install_once()
         self.require_fleet_config()
         Path(self.fleet_config).write_text(

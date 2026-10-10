@@ -4,7 +4,7 @@
 // Measured 2026-08-03 (CR context, "corrected" paragraph): `playwright.config.ts`
 // isolates by pointing the server's `cwd` at a `mkdtempSync` scratch dir and
 // genuinely never touches `data/crucible.db` — but `resolveDbPath`
-// (`src/server.ts:47-66`, CR-CRU-043) falls through when neither `CRUCIBLE_DB`
+// (`src/server.ts`, CR-CRU-043) falls through when neither `CRUCIBLE_DB`
 // nor `<cwd>/data/crucible.db` is present (which is EXACTLY what a scratch
 // cwd guarantees) to `~/.local/share/crucible/crucible.db` — a PERSISTENT,
 // USER-LEVEL database. That file was measured holding 79 projects / 259
@@ -14,7 +14,7 @@
 // This is deliberately a plain `bun:test` file, not a Playwright spec: no
 // live server or worker process is needed to prove this — `resolveDbPath` is
 // a pure, synchronous, exported function that takes injectable `env`/`cwd`
-// (`ResolveDbPathOpts`, `src/server.ts:25-31`) precisely so this is testable
+// (`ResolveDbPathOpts` in `src/server.ts`) precisely so this is testable
 // without booting anything. This file is naturally excluded from the
 // standalone Playwright configs in this directory (their `testMatch`
 // anchors only match `ephemeral.contract.ts` / `non-ephemeral.contract.ts`)
@@ -34,10 +34,16 @@
 // that the config's env, not an accidental cwd/HOME coincidence, is what
 // drives isolation.
 //
-// TODAY (pre-GREEN): `playwright.config.ts`'s `webServer.env` carries only
-// `{ CRUCIBLE_PORT }` (verified this cycle by importing the real config
-// module) — no `CRUCIBLE_DB` key at all — so the first assertion below fails
-// for a real, non-vacuous reason.
+// WHEN THIS WAS WRITTEN (CR-CRU-052 §S5, pre-GREEN): `playwright.config.ts`'s
+// `webServer.env` carried only `{ CRUCIBLE_PORT }` (verified that cycle by
+// importing the real config module) — no `CRUCIBLE_DB` key at all — so the
+// first assertion below failed for a real, non-vacuous reason.
+//
+// SINCE CR-CRU-139 §S1 the other half of that pair is gone too: `$CRUCIBLE_PORT`
+// is RETIRED and no longer read, and the e2e config declares its listener in a
+// `[server]` table written beside the very database this test is about. So
+// `webServer.env` now carries `CRUCIBLE_DB` and nothing else — which is what
+// this test has always asserted, and it goes on asserting exactly that.
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";

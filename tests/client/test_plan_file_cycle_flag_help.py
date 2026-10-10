@@ -47,20 +47,22 @@ calls byte-identical is the COPY, so each entry's body is compared with its
 internal whitespace runs collapsed -- wrapping is a rendering artefact of the
 terminal width, the words are the contract.
 
-BUN'S MODULE-DOCSTRING VERB TABLE (`clients/bun-crucible.py:34`, which reads
+BUN'S MODULE-DOCSTRING VERB TABLE (`clients/bun-crucible.py`'s own module
+docstring, which reads
 `plan-file  File a cycle plan: --cr, --title, one --cycle "<label>" per cycle
 →`) is deliberately NOT asserted here. MEASURED at `a7fe101`, when that line
 still carried the superseded `--cycles` spelling: `bun-crucible.py --help`
 renders `_CLI_DESCRIPTION`, never `__doc__` -- CR-CRU-097 §S2 severed that
-wiring on purpose ("deliberately NOT `__doc__`",
-`clients/bun-crucible.py:2179-2201`), and a drive of the root help finds zero
+wiring on purpose ("deliberately NOT `__doc__`", the comment above
+`_CLI_DESCRIPTION` in `clients/bun-crucible.py`), and a drive of the root help finds zero
 occurrences of the table's own wording (re-measured 2026-09-17: `per cycle`
 appears nowhere in the rendered help, which spells the same verb as "File a
 cycle plan; prints the ASSIGNED numeric cycle ids"). It is a design record,
 not user-visible output, so a test asserting on it would pin prose. GREEN duly
 made that comment-only correction, which is why the line quoted above is the
 repeatable form and the only `--cycles` left in that client is the argparse
-flag itself (`clients/bun-crucible.py:2336`).
+flag itself (the `plan-file` subparser's `--cycles` in `main`
+(`clients/bun-crucible.py`)).
 
 RED phase, against `a7fe101`:
   * every client renders `--cycles` BEFORE `--cycle` (measured: the options
@@ -70,7 +72,7 @@ RED phase, against `a7fe101`:
     `Comma-separated cycle labels, e.g. "a,b,c".` -- so the legacy test fails
     five for five;
   * `_next_start_help` emits `--cycles "<c1,c2>"`
-    (`clients/_crucible_axi.py:1481-1490`), so both AC8 shared-function tests
+    (`clients/_crucible_axi.py` at `a7fe101`), so both AC8 shared-function tests
     and the driven-envelope test fail.
 The two tests that PASS ON ARRIVAL are stated as such in their docstrings:
 cycle 366 already shipped a repeatable-flag help string, byte-identical across
@@ -105,8 +107,10 @@ CLIENT_FILES = {
     "rust": CLIENTS_DIR / "rust-crucible.py",
 }
 
-AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
+# CR-CRU-098 — the frozen `GET …/next` answers. Loaded by PATH off REPO_ROOT,
+# never imported by package, so a re-rooted copy of this file still finds it.
+NEXT_ORACLE_PATH = REPO_ROOT / "tests" / "client" / "cr098_next_oracle.py"
 
 PLAN_FILE_VERB = "plan-file"
 REPEATABLE_FLAG = "--cycle"
@@ -118,8 +122,6 @@ FIXTURE_CR = "CR-AAA-7"
 FIXTURE_WAVE = "5"
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-# `--cycle` NOT followed by another word character: `--cycles` must not match.
-_REPEATABLE_OCCURRENCE = re.compile(r"--cycle(?![-\w])")
 # The repeatable flag carrying its OWN quoted placeholder label.
 _REPEATABLE_WITH_LABEL = re.compile(r'--cycle(?![-\w])\s+"<[^"]+>"')
 
@@ -306,58 +308,12 @@ class PlanFileHelpTeachesTheCanonicalFlagTest(_PlanFileHelpTest):
                     f"got {len(distinct)} distinct: {bodies}")
 
 
-class NextStartTemplateTeachesTheCanonicalFlagTest(unittest.TestCase):
-    """AC8 -- the call an orchestrator copies verbatim."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.axi = _load_module(AXI_MODULE_PATH, "crucible_axi_under_test_for_cycle_help")
-
-    def _template(self):
-        steps = self.axi._next_start_help({"cr": FIXTURE_CR, "wave": FIXTURE_WAVE})
-        self.assertTrue(
-            steps, "the start template must be a non-empty help[] -- an empty "
-                   "one would make every rule below vacuous")
-        step = steps[0]
-        # Non-vacuity: this really is the plan-file start call, still carrying
-        # the entry's own cr and wave (CR-CRU-092 AC2, untouched here).
-        self.assertIn(f"{PLAN_FILE_VERB} --cr {FIXTURE_CR}", step)
-        self.assertIn(f"--wave {FIXTURE_WAVE}", step)
-        return step
-
-    def test_the_start_template_hands_back_the_repeatable_flag_and_no_comma_split_one(self):
-        """§S1/AC8 -- the template emits `--cycle`. A template still spelling
-        `--cycles "<c1,c2>"` reintroduces the delimiter defect on the next
-        filing no matter how good the help is, because the template is what
-        gets pasted."""
-        step = self._template()
-        self.assertNotIn(
-            f'{LEGACY_FLAG} ', step,
-            f"the `next` start template must no longer hand back the "
-            f"comma-split form (AC8); got {step!r}")
-        self.assertRegex(
-            step, _REPEATABLE_OCCURRENCE,
-            f"the `next` start template must hand back {REPEATABLE_FLAG} "
-            f"(AC8); got {step!r}")
-
-    def test_the_start_template_shows_the_flag_repeated_with_its_own_label(self):
-        """§S1 -- "one occurrence per cycle, in order". A template showing a
-        single `--cycle "<label>"` teaches a one-cycle plan and quietly loses
-        the point of the flag; the reader must see the repetition. Bounded
-        above so a runaway template (a whole synthetic plan pasted into the
-        help) fails here rather than reading as success."""
-        step = self._template()
-        labelled = _REPEATABLE_WITH_LABEL.findall(step)
-        occurrences = _REPEATABLE_OCCURRENCE.findall(step)
-        self.assertGreaterEqual(
-            len(labelled), 2,
-            f"the template must REPEAT {REPEATABLE_FLAG}, each occurrence "
-            f"carrying its own quoted placeholder label; found "
-            f"{len(labelled)} in {step!r}")
-        self.assertLessEqual(
-            len(occurrences), 3,
-            f"two or three occurrences teach the repetition; more is a "
-            f"template pasting a plan; found {len(occurrences)} in {step!r}")
+# CR-CRU-098 C3 — `NextStartTemplateTeachesTheCanonicalFlagTest` (its two tests,
+# `test_the_start_template_hands_back_the_repeatable_flag_and_no_comma_split_one`
+# and `test_the_start_template_shows_the_flag_repeated_with_its_own_label`) was
+# deleted here: it called `_next_start_help`, which AC10 removes from the client.
+# Both are PORTED to tests/next-resolver.test.ts (AC5 group, "NEXT's start template
+# hands back the repeatable --cycle form ...") against the server's template.
 
 
 class NextEnvelopeCarriesTheCanonicalFlagTest(unittest.TestCase):
@@ -375,6 +331,8 @@ class NextEnvelopeCarriesTheCanonicalFlagTest(unittest.TestCase):
         self.module = _load_module(
             CLIENT_FILES[self.CLIENT], "cycle_flag_next_client_under_test")
         self.toon = _load_module(TOON_PATH, "toon_under_test_for_cycle_flag_help")
+        self.next_oracle = _load_module(
+            NEXT_ORACLE_PATH, "next_oracle_for_cycle_flag_help")
         self.tmpdir = tempfile.mkdtemp(prefix="cycle-flag-help-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
@@ -391,22 +349,34 @@ class NextEnvelopeCarriesTheCanonicalFlagTest(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _queue(self):
-        # `tracks` is published BESIDE `entries` since CR-CRU-108 §S2/AC4, and a
-        # read that omits it is a hard stop (`queue-track-fact-unpublished`), not
-        # "no tracks". These entries declare no `track`, so the server's own
-        # `declaredTracks` answers the empty list -- which is what this stub must
-        # mirror. Written 2026-09-08: the omission made this AC8 test fail while
-        # the gate stayed green, because the gate runs no python client tests.
+        # The board, as the queue read publishes it: `tracks` BESIDE `entries`
+        # (`declaredTracks`). These entries declare no `track`, so the declared
+        # list is empty. Since CR-CRU-098 `next` reads the server's answer for
+        # this board off `…/next` (`_board` below), not this payload itself.
         return {"ok": True, "tracks": [], "entries": [
             {"cr": FIXTURE_CR, "wave": FIXTURE_WAVE, "dependsOn": [],
              "status": "PENDING", "seq": 10},
         ]}
 
+    def _next_answer(self, path):
+        queue = self._queue()
+        _status, body = self.next_oracle.route_answer(
+            queue["entries"], queue["tracks"], self.next_oracle.scope_of(path))
+        return body
+
+    def _board(self, path):
+        """Every board GET. `…/next` answers what the route publishes for
+        `_queue()`'s board (the frozen record, CR-CRU-098); any other read
+        fails exactly as an unrouted path does."""
+        if path.split("?", 1)[0].endswith("/next"):
+            return self._next_answer(path)
+        return {"ok": False, "error": f"HTTP 404: no stub for {path}"}
+
     def test_the_next_envelope_help_hands_back_the_repeatable_flag(self):
         """AC8 on the wire. The board GET is MOCKED -- the running board on
         :3849 is never read -- and the POST seam is mocked shut so a `next`
         that ever wrote would be visible rather than silently tolerated."""
-        with mock.patch.object(self.module, "_get", return_value=self._queue(),
+        with mock.patch.object(self.module, "_get", side_effect=self._board,
                                create=True), \
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                create=True) as post_mock:

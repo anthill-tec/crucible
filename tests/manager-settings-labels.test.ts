@@ -1,7 +1,7 @@
 // CR-CRU-032 §S5 — project-settings edit-form integrity: field labels + the
 // run-deletion toggle label.
 //
-// Today (verified, public/app.js:1247-1307 — ManagerRowEdit) the manager's
+// Today (verified, `ManagerRowEdit` in public/app.js) the manager's
 // edit-in-place form renders EIGHT BARE inputs with NO labels at all:
 //   manager-edit-name        (text input)
 //   manager-edit-type        (select: backend/frontend)
@@ -29,13 +29,13 @@
 //   asserts via `label.contains(field)`.
 //
 //   Concretely (van.js hyperscript), GREEN adds `label` to the `van.tags`
-//   destructure (public/app.js:14) and wraps each field, e.g.:
+//   destructure (at the top of public/app.js) and wraps each field, e.g.:
 //     label({ "data-testid": "manager-edit-name-label" }, "Name",
 //       input({ "data-testid": "manager-edit-name", ... }))
 //
 // Wording pinned (this file asserts these substrings, case-insensitively):
 //   - retention label mentions the Runs-timeline WINDOW it governs (§S4,
-//     public/app.js:158-175: "the workspace Runs window is governed by the
+//     `refetchEvents` in public/app.js: "the workspace Runs window is governed by the
 //     routed project's own `retention`") — e.g. "Retention (runs shown in
 //     the timeline window)". Test regex: /window|timeline|runs shown/i.
 //   - allow-deletion label names the destructive action AND reads as
@@ -255,7 +255,7 @@ describe("Projects manager — edit-in-place field labels (§S5.1)", () => {
     });
   }
 
-  test("t1/t2/t3 liveness labels are clearly marked as seconds-based liveness fields", async () => {
+  test("the liveness rows are captioned by what happens to the agent \u2014 stale, tombstoned, removed \u2014 never T1/T2/T3 (re-pinned CR-CRU-174 \u00a7S3)", async () => {
     const key = "mgr-label-liveness-seconds";
     await mountApp({ pathname: "/manage", projects: [baseProject(key)] });
 
@@ -264,21 +264,21 @@ describe("Projects manager — edit-in-place field labels (§S5.1)", () => {
     const t2Text = (fields["manager-edit-t2"].label!.textContent ?? "").toLowerCase();
     const t3Text = (fields["manager-edit-t3"].label!.textContent ?? "").toLowerCase();
 
-    expect(t1Text).toMatch(/t1|stale/i);
-    expect(t1Text).toMatch(/second/i);
-    expect(t2Text).toMatch(/t2|tombstone/i);
-    expect(t2Text).toMatch(/second/i);
-    expect(t3Text).toMatch(/t3|prune/i);
-    expect(t3Text).toMatch(/second/i);
+    expect(t1Text).toMatch(/stale/i);
+    expect(t1Text).not.toMatch(/\bt1\b/i);
+    expect(t2Text).toMatch(/tombstone/i);
+    expect(t2Text).not.toMatch(/\bt2\b/i);
+    expect(t3Text).toMatch(/removed/i);
+    expect(t3Text).not.toMatch(/\bt3\b/i);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
 // §S5.1 (AC2) — the retention field's label states it governs the
-// Runs-timeline window (per §S4, public/app.js:158-175).
+// Runs-timeline window (per §S4, public/app.js's `refetchEvents`).
 // ─────────────────────────────────────────────────────────────────────────
 describe("Projects manager — retention label wording (§S5.1 AC2)", () => {
-  test("retention label mentions the runs/timeline window it governs", async () => {
+  test("retention label reads 'Keep the last', and its row explains it governs the runs/timeline window (re-pinned CR-CRU-174 §S3)", async () => {
     const key = "mgr-label-retention-wording";
     await mountApp({ pathname: "/manage", projects: [baseProject(key)] });
 
@@ -286,9 +286,16 @@ describe("Projects manager — retention label wording (§S5.1 AC2)", () => {
     const retentionLabelText = (fields["manager-edit-retention"].label!.textContent ?? "").trim();
 
     expect(retentionLabelText.length).toBeGreaterThan(0);
-    // Pinned wording contract: mentions the Runs-timeline window (e.g.
-    // "Retention (runs shown in the timeline window)").
-    expect(retentionLabelText).toMatch(/window|timeline|runs shown/i);
+    // Pinned wording contract (F12's redraw, CR-CRU-174 §S3): the label
+    // itself reads "Keep the last"; the window/timeline explanation moved
+    // OUT of the label into the row beside it ("older runs are evicted; the
+    // Runs timeline shows up to this many"), so it is checked at the row
+    // scope rather than inside the label element.
+    expect(retentionLabelText).toMatch(/keep the last/i);
+
+    const rowText = managerRow(key).textContent ?? "";
+    expect(rowText).toMatch(/older runs are evicted/i);
+    expect(rowText).toMatch(/runs timeline shows up to this many/i);
   });
 });
 

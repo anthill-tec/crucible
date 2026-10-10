@@ -20,23 +20,35 @@ Feature: CR-CRU-029 §S1+§S2 — dual-axis scroll stays operable in narrow view
   stays viewport-sized regardless of scroll position) — candidate (a) in the
   CR, preferred unless it breaks the CR-016 restore contract.
 
-  Uses the SAME 800×640 narrow viewport CR-023's own
-  viewport-pane-scroll-floor.feature already established as forcing
-  horizontal overflow via the 660px floor (no long-label trick needed — any
-  content overflows below ~687px of available pane width), plus enough
-  filler runs to force genuine vertical overflow on the workspace Runs pane.
+  Uses a 1280×640 viewport — CR-CRU-018 §S1/DN decision 5 (2026-09-23)
+  SCOPES the 660px pane-content floor to the desktop band (≥1025px) and
+  LIFTS it below that, so the original 800×640 narrow viewport this feature
+  used to force horizontal overflow via that floor no longer does: below
+  1025px content now reflows to the tablet band instead of overflowing.
+  RED CR-CRU-018 re-points this feature to 1280×640 (desktop band,
+  unaffected by the new bands) so it keeps testing the SAME CR-CRU-029
+  dual-axis mechanism the 660px floor forces, rather than discovering a
+  false red once GREEN lands (docs/changes/CR-CRU-018-responsive-mobile.md's
+  own "which RED must re-point deliberately rather than discover" note).
+  Below 1025px this same workspace layout ALSO becomes the tablet band's
+  stacked [content / pane] arrangement (DN decision 2) rather than today's
+  side-by-side grid, so 800×640 no longer even exercises the same DOM
+  shape this suite's steps assume (`workspace-runs`/`pane-scroll` inside
+  the desktop two-column grid).
 
-  Sorts after shell-storyboard.feature ("t" < "v", same slot as
-  viewport-pane-scroll-floor.feature) so that feature's F1 "truly empty DB"
-  precondition still holds; sorts before wave-backfill.feature ("v" < "w").
-  Every project name below is namespaced "DAS …" to stay clear of other
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment).
+  Every project name below is namespaced "DAS " to stay clear of other
   features sharing the webServer/DB instance. Results are ingested with tier
   "e2e" by the orchestrator's ingest step, not by this suite.
 
   Scenario: §S1 the horizontal scroll affordance on a dual-axis-overflowing Runs pane stays within the viewport at the top, middle, and bottom of the vertical scroll range, and the horizontal axis stays operable throughout
-    Given the viewport is 800x640
+    Given the viewport is 1280x640
     And a project named "DAS Dual Axis Project" is registered
     And 30 filler passing runs are ingested on that project
+    And a filler run with an unbreakable long agent id is ingested on that project
     When I open the workspace for that project
     And I click the "Runs" workspace tab
     Then the pane-scroll element's bounding box stays within the viewport when the workspace Runs pane is scrolled to the top
@@ -56,7 +68,7 @@ Feature: CR-CRU-029 §S1+§S2 — dual-axis scroll stays operable in narrow view
   # of the round trip — the correct RED signal for this not-yet-bounded
   # container.
   Scenario: §S2 CR-CRU-016 scroll-restore holds on the bounded pane-scroll container at the narrow dual-axis viewport
-    Given the viewport is 800x640
+    Given the viewport is 1280x640
     And a project named "DAS Restore Project" is registered
     And 30 filler passing runs are ingested on that project
     And a passing 1-test run is ingested for agent "agent-das-restore" on that project
@@ -75,7 +87,7 @@ Feature: CR-CRU-029 §S1+§S2 — dual-axis scroll stays operable in narrow view
   # and the pane-scroll testid identity are UNCHANGED in effect by this
   # patch, which only fixes reachability.
   Scenario: §S2 the CR-CRU-023 660px pane-scroll floor is unchanged by the dual-axis fix
-    Given the viewport is 800x640
+    Given the viewport is 1280x640
     And a project named "DAS Floor Guard Project" is registered
     When I open the workspace for that project
     And I click the "Runs" workspace tab

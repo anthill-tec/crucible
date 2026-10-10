@@ -318,7 +318,10 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
       projects: [project({ key, name: "Tab Door Project" })],
       queue: [],
     });
-    expect(tabIsOn("Workflow")).toBe(true);
+    // RE-PINNED 2026-10 (approved by the orchestrator, user ruling
+    // 2026-10-07): this fixture is idle (no plans, no gate events), so it
+    // now lands on Roadmap instead of the pre-ruling hard-coded Workflow.
+    expect(tabIsOn("Roadmap")).toBe(true);
     expect(location.pathname).toBe(`/p/${key}`);
 
     tabButton("Roadmap")!.click();
@@ -431,9 +434,13 @@ describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and e
     history.forward();
     await settle();
 
+    // RE-PINNED 2026-10 (approved by the orchestrator, user ruling
+    // 2026-10-07): leaving the Roadmap segment follows the landing rule, and
+    // this fixture is idle (no plans, no gate events), so it lands on the
+    // Roadmap (was: off the Roadmap, under the pre-ruling Workflow fallback).
     expect(location.pathname).toBe(`/p/${key}`);
-    expect(tabIsOn("Roadmap")).toBe(false);
-    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
   });
 
   test("AC6 — a PENDING row and a COMPLETED_UNTRACKED row stay inert under routing: after entering through the Roadmap tab, clicking either changes neither the tab nor the pathname, and pushes no history entry", async () => {

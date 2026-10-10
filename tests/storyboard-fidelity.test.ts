@@ -6,30 +6,31 @@
 //     horizontal strip rendered directly beneath the top bar, and the
 //     workspace must have NO left rail/pane at all. Today `Workspace()`
 //     wraps `WorkspaceTabs()` inside `div({class: greyed("app-rail")}, ...)`
-//     (public/app.js ~L653-659) — a left-column wrapper, exactly what the
+//     (`Workspace` in public/app.js) — a left-column wrapper, exactly what the
 //     mock forbids.
 //  2. Drill-in presentation — the overlay must be a RIGHT-HAND SLIDE-OVER
 //     sheet, not the current centered box (`run-overlay-scrim` centers its
-//     child via `align-items:center;justify-content:center`, public/app.js
-//     ~L1006-1012; the panel itself carries only `class: "app-rail
+//     child via `align-items:center;justify-content:center`, the then-current
+//     drill-in overlay in public/app.js, since replaced; the panel itself
+//     carries only `class: "app-rail
 //     app-drillin"`, no right-anchoring).
 //  3. Title bar purity (round-7 lock) — home's `app-topbar` renders ONLY
 //     logo + slogan + Health Pill; today it also renders `DensityToggle()`
-//     (public/app.js ~L276). The density toggle instead belongs in the
+//     (`TopBar` in public/app.js). The density toggle instead belongs in the
 //     timeline pane header (next to the filter pulldown), the workspace
 //     Runs pane header, and the drill-in header — none of which render it
 //     today.
 //  4. Pane header labels — home's timeline header today just says
-//     "timeline" (public/app.js ~L527); the workspace Runs header just says
-//     "runs" (~L582). Both need the "Run timeline — <scope>" contract.
+//     "timeline" (`TimelineFeed` in public/app.js); the workspace Runs header just says
+//     "runs" (`WorkspaceRunsFeed`). Both need the "Run timeline — <scope>" contract.
 //  5. Vitals — `VitalsRail()` today is a static stub ("vitals land with the
-//     drill-in cycles", public/app.js ~L592-597); it needs a real Cycle
+//     drill-in cycles", `VitalsRail` in public/app.js); it needs a real Cycle
 //     Health card (from `L.pairTransitions` alone, independent of
 //     coverage) and a coverage-trend card gated on coverage actually being
 //     present.
 //  6. Workspace top bar composition (addendum) — `WorkspaceHeader()` today
 //     is missing the app logo entirely and still carries `DensityToggle()`
-//     (public/app.js ~L541-555); the locked order is logo, ← projects chip,
+//     (`WorkspaceHeader` in public/app.js); the locked order is logo, ← projects chip,
 //     project chip, Health Pill — nothing else.
 //  7. Streak-based transition markers (§S2 re-baseline, second addendum) —
 //     the pairing rule changes from per-fail→pass adjacency to ONE marker
@@ -267,10 +268,13 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     expect(/rail/i.test(tabsRow!.className)).toBe(false);
   });
 
-  // SANCTIONED RE-TARGET (CR-CRU-021 §S1, dispatch-approved): the workspace's
-  // default active tab flips from Runs to Workflow — the other column on a
-  // cold `/p/<key>` load is now the Workflow pane (`workflow-active`), not
-  // `workspace-runs`. Was: `document.querySelector('[data-testid="workspace-runs"]')`.
+  // RE-PINNED 2026-10 (approved by the orchestrator — user ruling
+  // 2026-10-07): this fixture carries no open plan and no gate in flight
+  // (idle), so the other column is now the Roadmap pane
+  // (`roadmap-zones`/`roadmap-empty`), not the Workflow pane — the
+  // 2026-10-07 ruling narrows the old "Workflow by default" (CR-CRU-021
+  // §S1) landing to busy projects only. Was:
+  // `document.querySelector('[data-testid="workflow-active"]')`.
   test("workspace body renders exactly two columns: main content + Project pane, with no left rail anywhere in the workspace", async () => {
     const key = "fid1-p2";
     await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fid1 Project 2" })] });
@@ -284,11 +288,12 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     const pane = document.querySelector('[data-testid="project-pane"]');
     expect(pane).not.toBeNull();
     expect(body!.contains(pane)).toBe(true);
-    // The other column is the tab's own content pane (Workflow by default,
-    // CR-CRU-021 §S1).
-    const workflowPane = document.querySelector('[data-testid="workflow-active"]');
-    expect(workflowPane).not.toBeNull();
-    expect(body!.contains(workflowPane)).toBe(true);
+    // The other column is the tab's own content pane — Roadmap for this
+    // idle fixture (re-pinned 2026-10-07).
+    const roadmapPane = document.querySelector('[data-testid="roadmap-zones"]');
+    expect(roadmapPane).not.toBeNull();
+    expect(body!.contains(roadmapPane)).toBe(true);
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
   });
 
   // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): the tab count
@@ -1241,7 +1246,8 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
 
     // CR-CRU-028 §S1 RE-TARGET — color now conveys LEVEL, not recency (DN
     // §3.2 ramp: orange var(--ember) <65 · yellow #eab308 [65,80) · green
-    // var(--pass) >=80, mock-pinned .lavish/crucible-v2-design.html:541).
+    // var(--pass) >=80, mock-pinned by the COVERAGE TREND card in
+    // .lavish/crucible-v2-design.html).
     // Every fixture percent here (82.1, 84.0, 86.2, 87.3) is
     // >=COVERAGE_LEVEL_YELLOW_MAX(80), so all four bars are GREEN — the
     // latest bar additionally COMPOSES the app-trend-bar-latest outline

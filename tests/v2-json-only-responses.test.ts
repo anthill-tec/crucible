@@ -1,8 +1,8 @@
 // CR-CRU-132 §S1 — the response gate answers JSON, always. RED phase.
 //
 // The server still renders every v2 GET as TOON when asked: `reply()`
-// (`src/v2.ts:213`) branches on `wantsToon()` and answers `text/toon`. §S1
-// DELETES that branch, `wantsToon`, `truncatedToon`, `jsonVariantUrl`,
+// (`reply` in `src/v2.ts`) branches on `wantsToon()` and answers `text/toon`.
+// §S1 DELETES that branch, `wantsToon`, `truncatedToon`, `jsonVariantUrl`,
 // `TOON_MAX_BYTES`, the `toToon` import and `src/toon.ts` itself, and MOVES
 // `@toon-format/toon` from `dependencies` to `devDependencies` so the
 // server's runtime dependency set becomes empty while the client-emit
@@ -35,7 +35,7 @@
 // CONTROL so a green scan later is the deletion's doing and not a blind
 // matcher's.
 import { describe, test, expect, afterEach } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -143,14 +143,20 @@ const PLANTED_PROVENANCE = [
 // other call site is driven exactly once. See the branching-handler note below.
 const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: string[] }> = [
   { path: () => "/api/v2", keys: ["ok", "service", "version", "projects", "help"] },
-  { path: () => "/api/v2/health", keys: ["ok", "status", "version", "uptime_s", "counts", "store"] },
+  // CR-CRU-139 §S1 — `listener` is emitted LAST, after `store`, at the one
+  // shared `healthPayload` site: the boot's second resolution, disclosed beside
+  // its first so the two health routes cannot drift about either.
+  {
+    path: () => "/api/v2/health",
+    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener"],
+  },
   { path: () => "/api/v2/projects", keys: ["ok", "projects"] },
   { path: () => "/api/v2/plans", keys: ["ok", "plans"] },
   { path: () => "/api/v2/agents", keys: ["ok", "agents"] },
   { path: () => "/api/v2/events", keys: ["ok", "events", "openRuns"] },
   { path: (c) => `/api/v2/events/${c.eventId}`, keys: ["ok", "event"] },
   { path: (c) => `/api/v2/status?project=${c.key}`, keys: ["ok", "status"] },
-  { path: (c) => `/api/v2/projects/${c.key}/plans`, keys: ["ok", "plans"] },
+  { path: (c) => `/api/v2/projects/${c.key}/plans`, keys: ["ok", "plans", "lastClosedCr", "filed"] },
   { path: (c) => `/api/v2/projects/${c.key}/queue`, keys: ["ok", "entries", "tracks"] },
   { path: (c) => `/api/v2/projects/${c.key}/releases`, keys: ["ok", "releases"] },
   {
@@ -163,10 +169,11 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   },
   // ── The two BRANCHING handlers, whose extra arms are separate call sites ──
   //
-  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (`src/v2.ts:3619`,
+  // CR-CRU-032 §S1 — `handleEventsList`'s ANCHORED branch (in `src/v2.ts`,
   // entered when `?cycleId=` is present) is a genuinely DIFFERENT payload
-  // from the unanchored recent-N feed (`src/v2.ts:3640`, the `/api/v2/events`
-  // row above), not the same URL under another query string: it omits
+  // from the unanchored recent-N feed (the same function's other branch, the
+  // `/api/v2/events` row above), not the same URL under another query
+  // string: it omits
   // `openRuns` ENTIRELY and adds `cycle` only when the cycleId resolves. Both
   // of its two shapes are pinned, because "an unknown cycleId answers 200
   // with an empty set and NO `cycle` field" is itself the documented contract
@@ -174,10 +181,10 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   // the resolving case would miss a regression that started emitting
   // `cycle: null`.
   //
-  // `handleEventGet` is a THREE-arm branch, and its arms are three distinct
-  // `reply()` call sites, not one: `?suite=<name>` (`src/v2.ts:3673`),
-  // `?depth=suites` (`src/v2.ts:3681`) and the plain whole-event read
-  // (`src/v2.ts:3683`, the `/api/v2/events/<id>` row above). CR-CRU-004 §S4
+  // `handleEventGet` (`src/v2.ts`) is a THREE-arm branch, and its arms are
+  // three distinct `reply()` call sites, not one: `?suite=<name>`,
+  // `?depth=suites` and the plain whole-event read (the
+  // `/api/v2/events/<id>` row above). CR-CRU-004 §S4
   // added the first two as progressive detail; each is driven here so this
   // table really does cover every `reply()` call site rather than 14 of 16.
   //
@@ -220,10 +227,18 @@ interface Fixture {
 describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
+  // CR-CRU-139 §S1 — every server this suite SPAWNS, killed unconditionally at
+  // teardown as well as on its own path. A child that outlives its test does
+  // not merely linger: it HOLDS A PORT, and an orphan is how a resolved
+  // listener becomes a bound one nobody is tracking.
+  const spawnedServers: Array<{ kill(): void }> = [];
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    while (spawnedServers.length > 0) {
+      spawnedServers.pop()!.kill();
+    }
     while (scratchDirs.length > 0) {
       rmSync(scratchDirs.pop()!, { recursive: true, force: true });
     }
@@ -294,7 +309,7 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
   describe("by construction — the machinery is gone from src/, not merely unreachable", () => {
     test("no file under src/ still names wantsToon, truncatedToon, jsonVariantUrl, TOON_MAX_BYTES or toToon in live code, and none carries the text/toon media type", () => {
       // FAILS IF THE CODE DOES NOTHING: every one of the five names is live
-      // in src/v2.ts today (`:161`, `:164`, `:170`, `:181`, `:33`) and
+      // in src/v2.ts today and
       // `text/toon; charset=utf-8` is the content-type `reply()` sets, so
       // this scan reports today and reports nothing only once §S1 lands.
       const residue = scanSrc();
@@ -529,17 +544,29 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
           install.exitCode === 0 ? "" : install.stderr.toString().slice(-2000),
         ).toBe("");
 
+        // CR-CRU-139 §S1/§S1b — the listener of a server started as a
+        // SUBPROCESS is steered by ITS OWN FILE, never by an export:
+        // `$CRUCIBLE_PORT` is retired and no longer read, so a child left to
+        // the environment would fall through to the shipped default and bind
+        // :3849 — a port reserved on this machine. `serverConfigPath()`
+        // resolves `dirname(CRUCIBLE_DB)/crucible.toml`, which is the staged
+        // tree, and `port = 0` there is the FILE asking the kernel to choose,
+        // so the banner below still reports a real ephemeral port.
+        writeFileSync(
+          join(staged, "crucible.toml"),
+          '[server]\nhost = "127.0.0.1"\nport = 0\n',
+        );
         const proc = Bun.spawn({
           cmd: ["bun", "run", "src/server.ts"],
           cwd: staged,
           env: {
             ...process.env,
-            CRUCIBLE_PORT: "0",
             CRUCIBLE_DB: join(staged, "boot-probe.db"),
           },
           stdout: "pipe",
           stderr: "pipe",
         });
+        spawnedServers.push(proc);
 
         let port = 0;
         let bootFailure = "";

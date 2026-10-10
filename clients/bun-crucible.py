@@ -52,7 +52,8 @@ Project + Crucible endpoint:
   <project-dir>/integrations/pi (if it has a package.json) > <project-dir>.
   Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
   Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
-  Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the board the project's `crucible.toml` declares (`[client] url`,
+  shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs/start|parsed|compile,
   /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
   TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.
@@ -81,15 +82,12 @@ import contextlib
 import json
 import os
 import re
+import shlex
 import shutil
-import signal
 import subprocess
 import sys
-import time
 import xml.etree.ElementTree as ET
 
-CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
-DEFAULT_REPORTS = "test-reports"
 DEFAULT_JUNIT = "junit.xml"
 # The STACK this client's runs belong to — the server's own `{tier, stack,
 # context}` field (`src/v2.ts`), stated once so the ingest that claims it and
@@ -153,10 +151,25 @@ def _read_env(project_dir):
 
 
 def _project_key(project_dir):
-    env = _read_env(project_dir)
-    if "CRUCIBLE_PROJECT_KEY" not in env:
+    key = _read_env(project_dir).get("CRUCIBLE_PROJECT_KEY", "").strip()
+    if not key:  # an empty or whitespace-only key is a missing one
         sys.exit(f"[crucible] ERROR: CRUCIBLE_PROJECT_KEY not found in {project_dir}/.env")
-    return env["CRUCIBLE_PROJECT_KEY"]
+    return key
+
+
+def _base_url():
+    """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
+    USE from the fleet's ONE resolver: the project's own `crucible.toml`
+    (`[client] url`), else the install's, else the distribution's shipped
+    declaration.
+
+    A call rather than the module constant this line used to hold. A constant
+    bound at import was a setting no edit an operator made could reach, and it
+    froze the board for the whole process — so a verb handed a different
+    `--project-dir` posted to the previous one's board. `resolve_base_url()` in
+    `_crucible_axi.py` documents the resolution and the environment channel it
+    retired."""
+    return _axi().resolve_base_url()
 
 
 def _request(method, path, payload=None, timeout=None):
@@ -172,7 +185,7 @@ def _request(method, path, payload=None, timeout=None):
     the §S2b empty-body correction). The local name is kept deliberately: the
     CR-CRU-030 delegation pattern, addressed unqualified by every call site
     here and by the client test harnesses."""
-    return _axi().http_request(CRUCIBLE_URL, method, path, payload, timeout)
+    return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -248,110 +261,37 @@ def _prescan_test_total(package_dir, targets):
     return total
 
 
-class _Narrator:
-    """§S2b (CR-CRU-008) — throttled in-run 'running N/M' narration.
+def _recognise_completion(line):
+    """§S2b (CR-CRU-008) — bun's half of the shared narration:
+    `(completed, label)` for one line of its piped output. A `<file>:` section
+    header names the current file (the label shown after the count) and
+    completes nothing; a ✓/✗ (or plain `(pass)`/`(fail)`) result line is one
+    completed test."""
+    text = line.rstrip("\r\n")
+    header = _FILE_HEADER_LINE.match(text)
+    if header:
+        return False, header.group(1)
+    return bool(_COMPLETION_LINE.match(text)), None
 
-    Fed the runner's streamed combined output line-by-line; counts bun's
-    per-test completion lines (the ANSI-colourised ✓/✗ family) and posts progress
-    as a heartbeat `message` through the v2 register/heartbeat verb — no new
-    API, and it prints NOTHING (the stdout data pipe stays pure; heartbeats on
-    an already-existing agent journal no lifecycle event server-side).
 
-    Throttle, read literally from the spec ('update at most every 2s or every
-    10 completions'): the FIRST update fires only once ≥2s have elapsed since
-    the first completion OR ≥10 completions accumulated — a run that finishes
-    inside that first window narrates nothing — and each later update must be
-    ≥2s or ≥10 completions past the last POSTED one. Posting is deliberately
-    best-effort: narration must never fail or slow the wrapped run.
-    """
-
-    def __init__(self, post, total_hint=0, min_seconds=2.0, min_completions=10):
-        self._post = post
-        self._total_hint = total_hint
-        self._min_seconds = min_seconds
-        self._min_completions = min_completions
-        self._count = 0
-        self._current_file = None
-        self._first_seen = None   # monotonic ts of the first completion
-        self._posted_at = None    # monotonic ts of the last posted update
-        self._posted_count = 0
-        self.posted = False
-
-    def observe(self, line):
-        text = line.rstrip("\r\n")
-        header = _FILE_HEADER_LINE.match(text)
-        if header:
-            self._current_file = header.group(1)
-            return
-        if _COMPLETION_LINE.match(text):
-            self._completed()
-
-    def _completed(self):
-        now = time.monotonic()
-        self._count += 1
-        if self._first_seen is None:
-            self._first_seen = now
-        since = now - (self._posted_at if self._posted_at is not None
-                       else self._first_seen)
-        if (since < self._min_seconds
-                and self._count - self._posted_count < self._min_completions):
-            return
-        message = f"running {self._count}/{max(self._total_hint, self._count)}"
-        if self._current_file:
-            message += f" · {self._current_file}"
-        try:
-            self._post(message)
-        except (Exception, SystemExit):
-            return  # best-effort — a failed heartbeat retries next completion
-        self.posted = True
-        self._posted_at, self._posted_count = now, self._count
+def _narrator(project_dir, agent_id, identity, total):
+    """This client's `RunNarrator`: bun's recogniser, the prescanned total, and
+    a tick that reports through the gated identity — if the row is pruned
+    mid-run and a tick re-creates it, this run owns that ghost."""
+    def _tick(message):
+        resp = _register_agent(project_dir, agent_id, message)
+        if identity is not None:
+            identity.observe(resp)
+    return _axi().RunNarrator(_tick, _recognise_completion, total=total)
 
 
 def _run_logged(cmd, cwd, env, log_path, narrator=None):
-    """Run `cmd`. If `log_path` set, capture combined stdout+stderr, write it, and
-    echo. §S2b: the capture is a STREAMING tail (Popen, line-buffered) — the
-    optional `narrator` observes every line live for throttled progress
-    heartbeats — while the captured output, run.log and echo stay byte-identical
-    to the old capture-after-exit behavior (the §S2c failure-marrying parser
-    consumes `result.stdout` unchanged).
-
-    CR-CRU-017 §S4: an interruption of the streaming read (the SIGINT/SIGTERM
-    trap a wrapped run installs raises THROUGH this loop) reaps the runner
-    before it propagates, so a signalled run leaves no orphaned bun behind —
-    the same guarantee `subprocess.run` already gives the un-captured branch
-    above."""
-    if not log_path and narrator is None:
-        return subprocess.run(cmd, cwd=cwd, env=env)
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-    )
-    lines = []
-    try:
-        for line in proc.stdout:
-            lines.append(line)
-            if narrator is not None:
-                narrator.observe(line)
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
-    proc.stdout.close()
-    returncode = proc.wait()
-    out = "".join(lines)
-    if log_path:
-        try:
-            with open(log_path, "w") as f:
-                f.write(out)
-            print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
-        except OSError as e:
-            print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
-                  file=sys.stderr)
-    # §S1 — stdout is the TOON AXI channel; the captured run echo is interactive
-    # (stderr). The §S2c parser consumes the returned CompletedProcess.stdout,
-    # not the stream, so failure-marrying stays byte-identical.
-    sys.stderr.write(out)
-    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+    """Run `cmd` on the shared run path (`run_streamed`): the combined output
+    streams live to stderr and `log_path` while the runner works, the optional
+    `narrator` observes every line, and the returned capture stays
+    byte-identical for the §S2c failure-marrying parser. CR-CRU-017 §S4: a
+    signal trap raising through the read reaps the runner before it propagates."""
+    return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
@@ -447,22 +387,29 @@ def cmd_unregister(args):
                                  unregister_fn=_unregister_agent)
 
 
-def _reports_dir(package_dir, arg_value):
-    rd = arg_value or DEFAULT_REPORTS
-    return rd if os.path.isabs(rd) else os.path.join(package_dir, rd)
+def _reports_dir(package_dir, arg_value, agent_id=None):
+    """The run's reports dir under the package (the shared rule,
+    `run_reports_dir`)."""
+    return _axi().run_reports_dir(package_dir, arg_value, agent_id)
 
 
 def _junit_path(reports_dir):
     return os.path.join(reports_dir, DEFAULT_JUNIT)
 
 
-def _wipe(reports_dir):
-    jp = _junit_path(reports_dir)
-    if os.path.exists(jp):
-        try:
-            os.remove(jp)
-        except OSError:
-            pass
+def _wipe(reports_dir, *extra):
+    """Remove the stale report(s) so only THIS run's results can be ingested.
+
+    CR-CRU-015 §S2 — `extra` names any additional report the run is about to
+    write (the RAW report a declared target produces for server-side decode).
+    A stale one left in place is worse than none: the ingest would succeed and
+    file the PREVIOUS run's evidence under this run's agent."""
+    for path in (_junit_path(reports_dir), *extra):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 # CR-CRU-133 §S2 — the vocabulary a project states a declared target's
@@ -510,20 +457,24 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
     return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)
 
 
-def _report_path_variable(mechanism):
+def _report_path_variable(mechanism, declaration="crucible.reportPath"):
     """CR-CRU-133 §S2 — the environment variable a declared mechanism names, or
     None when the declaration is the flag default (`flag`, or no entry at all).
 
     An unrecognised value is NOT honoured as a variable name: it falls back to
     the default and SAYS so, because a typo'd declaration that silently starved
-    the report is the class of failure this CR exists to end."""
+    the report is the class of failure this CR exists to end.
+
+    CR-CRU-015 §S2 — `declaration` names the block the value was read from, so
+    the same `env:<VAR>` vocabulary can be reused by the RAW-report declaration
+    beside it without the warning naming the wrong key."""
     text = (mechanism or "").strip()
     if text.startswith(REPORT_MECHANISM_ENV_PREFIX):
         variable = text[len(REPORT_MECHANISM_ENV_PREFIX):].strip()
         if variable:
             return variable
     if text and text != REPORT_MECHANISM_FLAG:
-        print(f"[crucible] WARN: unknown crucible.reportPath mechanism "
+        print(f"[crucible] WARN: unknown {declaration} mechanism "
               f"{mechanism!r} — falling back to {REPORT_MECHANISM_FLAG!r}",
               file=sys.stderr)
     return None
@@ -538,8 +489,59 @@ def _declared_report_mechanism(package_dir, script):
     return (crucible.get("reportPath") or {}).get(script)
 
 
+# CR-CRU-015 §S2 — the declaration that a target's report is decoded BY THE
+# SERVER rather than by this client. It sits beside `crucible.reportPath` in
+# the same manifest, keyed by the same target name, and states the three things
+# a client cannot infer without classifying a runner it was told never to read:
+#
+#   "rawReport": {"test:e2e": {"codec": "playwright",
+#                              "file": "playwright.json",
+#                              "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"}}
+#
+# `codec` is the decoder the BOARD resolves from its own registry, `file` is
+# what the report is called inside this client's reports dir, and `path` reuses
+# `reportPath`'s `env:<VAR>` vocabulary for how the target is told where to
+# write it. NO entry is the default: the target's JUnit XML is parsed here and
+# POSTed to /api/v2/runs/parsed, exactly as before.
+RAW_REPORT_KEY = "rawReport"
+RAW_REPORT_DECLARATION = f"crucible.{RAW_REPORT_KEY}"
+
+
+def _declared_raw_report(package_dir, script, reports_dir):
+    """CR-CRU-015 §S2 — the RAW report the declared target writes for the SERVER
+    to decode, as `{codec, path, variable}`, or None when the project declares
+    none (every target but `test:e2e` today).
+
+    A declaration that exists but cannot be honoured is a HARD STOP, never a
+    silent fall-back to the client-side parse: the whole point of declaring a
+    codec is that the client's own parse discards what that codec keeps (here,
+    every Gherkin step), so quietly taking the other route would file evidence
+    the project explicitly refused."""
+    if not script:
+        return None
+    crucible = _package_manifest(package_dir).get("crucible") or {}
+    declared = (crucible.get(RAW_REPORT_KEY) or {}).get(script)
+    if not declared:
+        return None
+    if not isinstance(declared, dict):
+        sys.exit(f"[crucible] ERROR: {RAW_REPORT_DECLARATION}.{script} must be "
+                 f"an object of {{codec, file, path}}, not {declared!r}")
+    codec = str(declared.get("codec") or "").strip()
+    name = str(declared.get("file") or "").strip()
+    variable = _report_path_variable(declared.get("path"),
+                                     declaration=RAW_REPORT_DECLARATION)
+    if not (codec and name and variable):
+        sys.exit(f"[crucible] ERROR: {RAW_REPORT_DECLARATION}.{script} is "
+                 f"incomplete ({declared!r}) — it must name the board `codec` "
+                 f"that decodes the report, the `file` it is written as, and "
+                 f"the `path` mechanism (\"env:<VAR>\") the target reads its "
+                 f"location from")
+    return {"codec": codec, "variable": variable,
+            "path": os.path.join(reports_dir, name)}
+
+
 def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
-                        mechanism=None):
+                        mechanism=None, passthrough=()):
     """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
     is run BY NAME (`bun run test:unit`), never by re-parsing its body.
 
@@ -553,25 +555,37 @@ def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
     standing behind the name. Returns `(cmd, env)` — the invocation, and the
     environment OVERLAY it must be spawned with: empty under the flag default,
     one variable under `env:<VAR>`, and under the latter the invocation carries
-    nothing the target's runner never agreed to accept."""
+    nothing the target's runner never agreed to accept.
+
+    `passthrough` is what the operator typed after `--` on the tier verb. It
+    rides the END of the invocation, behind `--` and after anything the report
+    mechanism appended, so bun forwards it verbatim to the script's last
+    command; with none typed the invocation is exactly what it was without it."""
     variable = _report_path_variable(mechanism)
+    tail = ["--", *passthrough] if passthrough else []
     if variable:
-        return [bun, "run", script], {variable: junit_path}
+        return [bun, "run", script] + tail, {variable: junit_path}
     return ([bun, "run", script]
-            + _bun_test_report_flags(junit_path, coverage, coverage_dir), {})
+            + _bun_test_report_flags(junit_path, coverage, coverage_dir)
+            + tail, {})
 
 
-def _render_invocation(cmd, report_env=None):
+def _render_invocation(cmd, report_env=None, passthrough=()):
     """CR-CRU-133 §S3 — the invocation as an operator must TYPE it, which under
     the env mechanism is not the argv alone: the report path rides an
     environment overlay THIS client supplied, so a message printing only
     `bun run test:e2e` hands back a command that writes its report somewhere
     else under any non-default `--reports` dir. The overlay renders as sorted
     `VAR=value` prefixes so the string is stable; under the flag default the
-    overlay is empty and the rendering is the argv, unchanged."""
+    overlay is empty and the rendering is the argv, unchanged.
+
+    `passthrough` names the trailing tokens of `cmd` the operator typed after
+    `--`; they are shell-quoted so a `--grep "a title"` prints as it ran. With
+    none, the rendering is the argv joined, unchanged."""
     prefix = "".join(f"{name}={value} "
                      for name, value in sorted((report_env or {}).items()))
-    return prefix + " ".join(cmd)
+    head = cmd[:len(cmd) - len(passthrough)]
+    return prefix + " ".join(list(head) + [shlex.quote(a) for a in passthrough])
 
 
 def _parse_junit_file(junit_path):
@@ -600,7 +614,8 @@ def _parse_junit_file(junit_path):
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (bun emits it for
             # BOTH `test.skip` and `test.todo`) is PENDING, never passed. Order
             # matters: failure/error first, then skipped, then pass. A skip does
-            # NOT fail its suite. Mirrors mvn-crucible.py:641, the reference.
+            # NOT fail its suite. Mirrors `_parse_junit` in
+            # `clients/mvn-crucible.py`, the reference.
             if fail:
                 status = "fail"
                 failed += 1
@@ -871,7 +886,7 @@ def _run_context():
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, run_id=None):
+                   context=None, raw=None, run_id=None, release=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
@@ -897,7 +912,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # pre-lifecycle one and the server stores no lifecycle fields at all.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -914,7 +930,65 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
+def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
+                run_id=None, release=None):
+    """CR-CRU-015 §S2 — POST the RAW report and let the BOARD decode it, at
+    `/api/v2/runs`, whose `codec` names the decoder the server resolves from its
+    own registry (`mvn-crucible.py`'s `_ingest_junit_dir` already ingests this
+    way, with `codec: "junit"`).
+
+    This client parses NOTHING on this route, and that is the point: a
+    client-side parse can only send back the shape this client knows how to
+    build, so everything its parser has no notion of — for the playwright codec,
+    every Gherkin step of every scenario — is discarded before the board ever
+    sees the report. The path is handed over as `dataPath`, so the report is
+    read once, by the side that decodes it.
+
+    Returns the response dict; the caller emits the §S1 envelope from the
+    summary the SERVER decoded."""
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "codec": raw_report["codec"],
+        "dataPath": raw_report["path"],
+        "agentId": agent_id,
+    }
+    if tier:
+        payload["tier"] = tier
+    if context:
+        payload["context"] = context
+    # CR-CRU-017 §S1/§S4 — the same optional run-closing seam every ingest
+    # route shares; absent, the server stores no lifecycle fields.
+    if run_id:
+        payload["runId"] = run_id
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
+    run = resp.get("run") or {}
+    print(
+        f"ingest {raw_report['codec']}: ok={resp.get('ok')} "
+        f"report={raw_report['path']} passed={run.get('passed')} "
+        f"failed={run.get('failed')} pending={run.get('pending', 0)} "
+        f"total={run.get('total')}"
+        + (f" error={resp['error']}" if resp.get("error") else ""),
+        file=sys.stderr,
+    )
+    return resp
+
+
+def _decoded_summary(resp):
+    """CR-CRU-015 §S2 — the counts the SERVER decoded, in the shape the ingest
+    envelope reports. On the raw route the client never parsed the report, so
+    what the run envelope states is what the board actually stored — a refused
+    ingest carries no `run` and reports zeros beside its own `error`."""
+    run = resp.get("run") or {}
+
+    def count(key):
+        value = run.get(key)
+        return value if isinstance(value, int) else 0
+
+    return {"passed": count("passed"), "failed": count("failed"),
+            "pending": count("pending"), "total": count("total")}
+
+
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "typescript",
@@ -925,7 +999,8 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
     # the run this client opened, so the span is measured instead of abandoned.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+                              release=release)
     # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
     # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
     # path, and with it `pre-merge-gate`'s), leaving stdout un-decodable.
@@ -950,11 +1025,12 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
 # an OLDER SERVER whose /runs/start route does not exist (404) — the latter
 # warns, naming the fallback, because it was not asked for.
 #
-# There is deliberately NO client-side abort. `POST /runs/<id>/abort` is §S2 and
-# does not exist yet; §S1 already ships the server-side sweep that settles an
-# open run (reason `agent died` when its agent tombstones, `abandoned` past the
-# server's `run_abandon_ms` limit). So the signal/no-result paths STATE that the
-# run was left to that sweep rather than inventing a route.
+# A run that reaches an exit filing nothing (a signal mid-run, no report, a
+# refused ingest) is CLOSED by this client through the shared `abort_run`
+# (`POST /runs/<id>/abort`, reason naming the exit). Only when that abort
+# itself fails is the run left to the server-side sweep (reason `agent died`
+# when its agent tombstones, `abandoned` past the server's `run_abandon_ms`
+# limit), and the envelope then STATES so.
 
 NO_LIFECYCLE_ENV = "BUN_CRUCIBLE_NO_LIFECYCLE"
 _TRUTHY = ("1", "true", "yes", "on")
@@ -977,143 +1053,66 @@ def _lifecycle_enabled(args):
 
 def _run_lifecycle_unavailable_warning(error):
     """The structured warning for a start the SERVER refused — an older build
-    with no /runs/start route (404) being the case the CR names. Degradation is
-    not failure (the evidence still lands), but it is never SILENT: the caller
-    asked for a measured span and got a single-shot event instead."""
-    return {
-        "code": "run-lifecycle-unavailable",
-        "detail": (f"could not open a run lifecycle: {error} — fell back to a "
-                   f"single-shot ingest, so this run is stored with the "
-                   f"tool-reported duration_ms only (no startedAt, no "
-                   f"server-computed runtime_ms)"),
-    }
+    with no /runs/start route (404) being the case the CR names. One wording
+    for the fleet: built by the shared `run_lifecycle_unavailable_warning`."""
+    return _axi().run_lifecycle_unavailable_warning(error)
 
 
 def _run_left_open_warning(run_id, cause):
     """The structured warning for a run this client OPENED and then could not
-    close. It names the settlement path precisely, because the alternative
-    reading — "the run was lost" — is wrong and would send an operator hunting
-    for a missing event."""
-    # THE DETAIL NAMES NO CR AND NO UNBUILT ROUTE (CR-CRU-097 AC3a). This
-    # string is emitted to the user in the AXI envelope on ANY project's
-    # board, so it states what the client DOES — posts no abort, the server
-    # settles the run — and nothing about our backlog. The lineage lives
-    # here: a client-side abort endpoint is CR-CRU-017 §S2 and is not built,
-    # which is WHY there is no post to make; when it ships, this warning
-    # changes behaviour, not just wording.
+    close — one wording for the fleet, built by the shared
+    `run_left_open_warning`."""
+    return _axi().run_left_open_warning(run_id, cause)
+
+
+def _raw_route_coverage_warning(codec, script):
+    """CR-CRU-015 §S2 — the structured warning for a `--coverage` the RAW route
+    cannot carry. `POST /api/v2/runs` posts a report and the codec that decodes
+    it, and has no coverage field at all, so coverage measured by a target
+    whose report the BOARD decodes is measured and then dropped. The flag is
+    accepted on every declared-tier verb, so the drop is easy to reach and
+    impossible to see — it is stated here on the same terms the parsed
+    branch's own "lcov coverage unavailable" WARN states its miss."""
     return {
-        "code": "run-left-open",
-        "detail": (f"{cause} — run {run_id} was never closed by an ingest. "
-                   f"The client posts no abort: the server settles it with "
-                   f"its own auto-abort — reason `agent died` as soon as "
-                   f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than the `run_abandon_ms` limit the server resolves "
-                   f"from the crucible.toml beside its database. The run is "
-                   f"abandoned, not lost"),
+        "code": "raw-report-carries-no-coverage",
+        "detail": (f"--coverage was requested, and `{script}` declares that its "
+                   f"report is decoded on the board by the `{codec}` codec: "
+                   f"the raw report route carries NO coverage, so whatever "
+                   f"this run measured is not ingested and this run is stored "
+                   f"with no coverage at all. Run a target ingested by the "
+                   f"PARSED route (e.g. `regression --coverage`) for coverage "
+                   f"evidence"),
     }
 
 
 def _run_left_open_help():
-    """CR-CRU-048's rule — the state actually reached is "an open run is being
-    settled by the server", so the next action is to WATCH that settlement and
-    then re-run, never the verb's normal successor."""
-    return ["status", "re-run the verb to record a fresh run"]
+    """The next step for a run being settled by the server — the shared
+    `run_left_open_help`."""
+    return _axi().run_left_open_help()
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None):
-    """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`.
-
-    A refusal degrades to single-shot with a warning naming the fallback. An
-    `ok` answer that carries no runId is a server that simply did not open one
-    (nothing failed, so there is nothing to report): the ingest is then the
-    unchanged single-shot POST."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": agent_id,
-        "stack": _STACK,
-    }
-    if tier:
-        payload["tier"] = tier
-    if context:
-        payload["context"] = context
-    resp = _post("/api/v2/runs/start", payload) or {}
-    run_id = resp.get("runId")
-    if run_id:
-        print(f"[crucible] run started: {run_id}", file=sys.stderr)
-        return run_id, []
-    if resp.get("ok"):
-        return None, []
-    error = resp.get("error") or "the server opened no run"
-    print(f"[crucible] WARN: run lifecycle unavailable ({error}) — "
-          f"single-shot ingest", file=sys.stderr)
-    return None, [_run_lifecycle_unavailable_warning(error)]
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
+    """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`,
+    through the shared `open_run`: a refusal degrades to single-shot with a
+    warning naming the fallback; an `ok` answer with no runId is a server that
+    simply did not open one, and the ingest is the unchanged single-shot POST."""
+    return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
+                           tier=tier, context=context, release=release)
 
 
-class _RunAbandoned(Exception):
-    """SIGINT/SIGTERM arrived while a WRAPPED run was in flight. Carries the
-    signal number so the verb exits on the conventional 128+signum."""
-
-    def __init__(self, signum):
-        super().__init__(f"run abandoned on {signal.Signals(signum).name}")
-        self.signum = signum
-
-
-@contextlib.contextmanager
 def _abandon_trap(run_id):
-    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run, turning
-    the signal into a `_RunAbandoned` the verb can report on. Outside a wrapped
-    run (`run_id` None) this is inert and the default disposition stands —
-    there is nothing open to disclose.
-
-    The previous handlers are always restored, so the trap can never outlive
-    the run it guards. A non-main thread cannot install handlers at all
-    (`ValueError`); that is not a reason to fail a test run, so the wrap simply
-    proceeds untrapped."""
-    if run_id is None:
-        yield
-        return
-
-    def _handler(signum, _frame):
-        raise _RunAbandoned(signum)
-
-    previous = {}
-    try:
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, _handler)
-    except ValueError:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-        yield
-        return
-    try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run — the
+    shared `abandon_trap`, which every stack client wraps its run in."""
+    return _axi().abandon_trap(run_id)
 
 
 def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                         warnings=None):
-    """The signal path's ONLY output: one ok:false envelope naming the signal
-    and the open run the server will settle. No POST of any kind is made here —
-    the closing `_close_gate_identity` tombstone in the caller's `finally` is
-    what ARMS the server's `agent died` auto-abort.
-
-    CR-CRU-094 §S3 — `warnings` are the findings this run had ALREADY
-    accumulated when the signal landed (the pre-flight `no-cycle` among them).
-    The envelope here is built from a literal, so without them this one exit
-    would print a warning on stderr and omit it from `warnings[]`; the
-    two-channel guarantee holds on EVERY exit or on none."""
-    signame = signal.Signals(abandoned.signum).name
-    _emit_axi(
-        verb, False,
-        {"runId": run_id, "signal": signame, "help": _run_left_open_help()},
-        _axi_context(project_dir, agent_id=agent_id),
-        list(warnings or [])
-        + [_run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
-        f"{verb}: ok=False — {signame} interrupted the run; run {run_id} left "
-        f"open for the server's auto-abort")
-    return 128 + abandoned.signum
+    """The signal path's ONLY output — the shared `emit_run_abandoned`, which
+    aborts the open run through `abort_run`, names the signal and the run, and
+    returns the exit code (128+signum)."""
+    return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent_id,
+                                     run_id, abandoned, warnings, post_fn=_post)
 
 
 def cmd_test(args, tier=None):
@@ -1130,7 +1129,7 @@ def cmd_test(args, tier=None):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
-    reports_dir = _reports_dir(package_dir, args.reports)
+    reports_dir = _reports_dir(package_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
     junit_path = _junit_path(reports_dir)
@@ -1142,26 +1141,30 @@ def cmd_test(args, tier=None):
     # ghosts. CR-CRU-056: the removal fires ONLY for an identity this run
     # created; a caller who registered BEFORE the run keeps its registration
     # and its cycle binding. Omitted --agent: no lifecycle calls at all.
-    identity = None
+    # The bracket is the shared `gated_run`; the command, environment and log
+    # path are built ahead of it, which touches nothing on the board.
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     # CR-CRU-017 §S4 — the RUN lifecycle rides INSIDE the identity bracket: the
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
-    try:
-        cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
-        env = os.environ.copy()
-        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
-        # Capture output whenever an ingest may be needed: bun's JUnit reporter
-        # writes NOTHING when collection crashes, and the failure detail only
-        # exists on stdout/stderr.
-        log_path = getattr(args, "log", None)
-        if args.agent and not log_path:
-            log_path = os.path.join(reports_dir, "run.log")
-        narrator = None
+    cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
+    env = os.environ.copy()
+    print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
+    # Capture output whenever an ingest may be needed: bun's JUnit reporter
+    # writes NOTHING when collection crashes, and the failure detail only
+    # exists on stdout/stderr.
+    log_path = getattr(args, "log", None)
+    if args.agent and not log_path:
+        log_path = os.path.join(reports_dir, "run.log")
+    narrator = None
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         if args.agent:
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated test run starting")
             # CR-CRU-094 §S3 — PRE-FLIGHT, while `--cycle` can still be
             # supplied: ask the board whether this agent is bound and say so
             # on both channels if it is not. Best-effort — a failed lookup
@@ -1169,24 +1172,20 @@ def cmd_test(args, tier=None):
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=release)
             # bun ≥1.3 hides per-test completion lines when it detects an agent
             # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
             # live and the §S2c run.log keeps its result-line block boundaries.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
-            narrator = _Narrator(
-                # Every narration tick is observed too: if the row is pruned
-                # mid-run and a tick re-creates it, this run owns that ghost.
-                lambda message: identity.observe(
-                    _register_agent(project_dir, args.agent, message)),
-                total_hint=_prescan_test_total(package_dir, args.tests),
-            )
+            narrator = _narrator(project_dir, args.agent, identity,
+                                 _prescan_test_total(package_dir, args.tests))
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
-                                                  context=_run_context())
+                                                  context=_run_context(),
+                                                  release=release)
             # The pre-flight finding rides the SAME envelope warnings[] the
             # run's own lifecycle warnings do, ahead of them (it was decided
             # first) — §S3's second channel.
@@ -1201,13 +1200,15 @@ def cmd_test(args, tier=None):
         try:
             with _axi().ChildRunTiming() as timing, _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
-        except _RunAbandoned as abandoned:
+        except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not args.agent:
             return result.returncode
+        # The final count, then `ingesting…`, both ahead of the ingest below.
+        _axi().close_narration(narrator)
 
         if os.path.exists(junit_path):
             summary, tree, files = _parse_junit_file(junit_path)
@@ -1217,7 +1218,7 @@ def cmd_test(args, tier=None):
                                   tier=tier,
                                   context=_run_context(),
                                   raw=getattr(result, "stdout", None),
-                                  run_id=run_id)
+                                  run_id=run_id, release=release)
             _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1236,7 +1237,7 @@ def cmd_test(args, tier=None):
                      "bun test produced no JUnit XML (collection/compile failure)")
         rc = _ingest_compile(project_dir, args.agent,
                              synthetic + ("\n\n" + tail if tail else ""),
-                             run_id=run_id)
+                             run_id=run_id, release=release)
         # CR-CRU-064 §S3 — the synthetic TS0000 ingest above is UNCHANGED
         # (errorCount=1, red card); the envelope is additive and the exit code
         # is still the ingest's own (AC5).
@@ -1247,11 +1248,10 @@ def cmd_test(args, tier=None):
                                                            result.returncode, tail)],
                   "[crucible] ERROR: no JUnit XML produced — ingested as compile")
         return rc
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
-def cmd_regression(args, verb="regression", tier="regression", script=None):
+def cmd_regression(args, verb="regression", tier="regression", script=None,
+                   passthrough=()):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     carries ONE document under the GATE's own verb, not the inner one's.
@@ -1260,93 +1260,125 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
     (run by name; `None` is this verb's own full-suite `bun test`), and `tier`
     is the tier the run is stamped with. They move together because §S2's rule
     is unchanged: the tier a run reports is the VERB's, so a declared target
-    detected for `unit` rides `unit` and never this body's own name."""
+    detected for `unit` rides `unit` and never this body's own name.
+
+    `passthrough` — what was typed after `--` on a declared tier verb — rides
+    only a declared `script`; this verb's own `bun test` takes none."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
-    reports_dir = _reports_dir(package_dir, args.reports)
+    agent = getattr(args, "agent", None)
+    reports_dir = _reports_dir(package_dir, args.reports, agent)
     os.makedirs(reports_dir, exist_ok=True)
-    _wipe(reports_dir)
+    # CR-CRU-015 §S2 — a declared target may state that its report is decoded
+    # by the BOARD; that report is written into this same reports dir, so it is
+    # resolved before the wipe and wiped with the XML beside it.
+    raw_report = _declared_raw_report(package_dir, script, reports_dir)
+    _wipe(reports_dir, *([raw_report["path"]] if raw_report else []))
     junit_path = _junit_path(reports_dir)
     coverage_on = bool(args.coverage)
-    coverage_dir = os.path.join(package_dir, "coverage")
+    # Coverage follows the run: an agent's own directory holds its lcov too;
+    # otherwise bun keeps writing it to the package's `coverage/`.
+    per_agent = _axi().reports_dir_is_agents_own(args.reports, agent)
+    coverage_dir = os.path.join(reports_dir if per_agent else package_dir, "coverage")
     env = os.environ.copy()
 
     # Gate-run lifecycle bracket (CR-CRU-021 §S5): identical to cmd_test —
     # opening heartbeat (binding when --cycle is given), silent removal after
     # the final ingest, try/finally, and (CR-CRU-056) removal ONLY of an
-    # identity this run created.
-    identity = None
+    # identity this run created — the shared `gated_run`, entered once the
+    # command is built, as `cmd_test` does.
+    # §S1 — the release this run is filed under, exactly as `cmd_test` reads it.
+    release = getattr(args, "release", None)
     # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
     # exactly as `cmd_test` does.
     run_id, run_warnings, preflight_warnings = None, [], []
     report_env = {}
-    try:
-        if script:
-            # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
-            # builder returns both the command and the environment overlay the
-            # target's DECLARATION asked the report path to be carried in.
-            cmd, report_env = _bun_run_script_cmd(
-                bun, script, junit_path, coverage_on, coverage_dir,
-                _declared_report_mechanism(package_dir, script))
-            env.update(report_env)
-        else:
-            cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
-        # §S3 — the echo names the invocation INCLUDING the overlay this client
-        # supplied, so what is printed is what actually ran.
-        invocation = _render_invocation(cmd, report_env)
-        print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
-        # §S2c — capture the run output (failure detail lives only there).
-        log_path = getattr(args, "log", None)
-        if args.agent and not log_path:
-            log_path = os.path.join(reports_dir, "run.log")
-        narrator = None
+    if script:
+        # CR-CRU-133 §S1 — a declared target is invoked on ITS terms: the
+        # builder returns both the command and the environment overlay the
+        # target's DECLARATION asked the report path to be carried in.
+        cmd, report_env = _bun_run_script_cmd(
+            bun, script, junit_path, coverage_on, coverage_dir,
+            _declared_report_mechanism(package_dir, script), passthrough)
+        # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
+        # discipline, for the same reason: the client picks WHERE the
+        # report lands (its reports dir) and the declaration states HOW the
+        # target is told, so nothing is appended to an argv the runner
+        # never agreed to accept.
+        if raw_report:
+            report_env[raw_report["variable"]] = raw_report["path"]
+        env.update(report_env)
+    else:
+        passthrough = ()
+        cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
+    # §S3 — the echo names the invocation INCLUDING the overlay this client
+    # supplied, so what is printed is what actually ran.
+    invocation = _render_invocation(cmd, report_env, passthrough)
+    print(f"[crucible] running: {invocation}  (cwd={package_dir})", file=sys.stderr)
+    # §S2c — capture the run output (failure detail lives only there).
+    log_path = getattr(args, "log", None)
+    if args.agent and not log_path:
+        log_path = os.path.join(reports_dir, "run.log")
+    narrator = None
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         if args.agent:
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the same pre-flight attribution check cmd_test
             # makes, before this (far longer) sweep burns its minutes.
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
+                context=_run_context(), release=release)
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
-            narrator = _Narrator(
-                lambda message: identity.observe(
-                    _register_agent(project_dir, args.agent, message)),
-                total_hint=_prescan_test_total(package_dir, None),
-            )
+            narrator = _narrator(project_dir, args.agent, identity,
+                                 _prescan_test_total(package_dir, None))
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
-                                                  context=_run_context())
+                                                  context=_run_context(),
+                                                  release=release)
             run_warnings = preflight_warnings + run_warnings
         try:
             with _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)
-        except _RunAbandoned as abandoned:
+        except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
-        if not os.path.exists(junit_path):
-            print("[crucible] ERROR: no JUnit XML produced — nothing to ingest",
-                  file=sys.stderr)
+        # An unfiled run (no --agent — reachable only through an
+        # optional-agent caller such as a declared tier verb) files nothing,
+        # exactly as `cmd_test`: no ingest, no abort, the runner's own code.
+        if not args.agent:
+            return result.returncode
+
+        # CR-CRU-015 §S2 — the report that MATTERS is the one this run will
+        # ingest: the raw report the board decodes when the target declares
+        # one, and the JUnit XML this client parses otherwise. A run whose
+        # declared raw report is missing is starved exactly as a run with no
+        # XML is — it must never quietly ingest the other one by the route the
+        # declaration exists to refuse.
+        ingest_path = raw_report["path"] if raw_report else junit_path
+        ingest_name = os.path.basename(ingest_path)
+        if not os.path.exists(ingest_path):
+            print(f"[crucible] ERROR: no {ingest_name} produced — nothing to "
+                  f"ingest", file=sys.stderr)
             # CR-CRU-064 §S3/AC6 — under the `verb` PARAMETER, so a starved
             # `pre-merge-gate` speaks as the gate, never as the inner
             # `regression`. The capture exists here today and was simply
             # discarded; it now carries the cause.
-            # §S4 — nothing was produced, so nothing CLOSES the open run: say
-            # which sweep will settle it rather than leaving it silently open.
-            warnings = list(run_warnings)
-            if run_id:
-                warnings.append(_run_left_open_warning(
-                    run_id, "the runner produced no JUnit XML, so there was "
-                            "nothing to ingest"))
+            # §S4 — nothing was produced, so nothing will ever file the open
+            # run: close it through the shared `abort_run`.
+            warnings = list(run_warnings) + _axi().no_report_left_open_warnings(
+                run_id, ingest_name, post_fn=_post,
+                project_key=_project_key(project_dir), agent_id=args.agent)
             # CR-CRU-133 §S3/AC5 — a DECLARED target that produced nothing is
             # named: which script starved, the exact command that ran it, and
             # the path the report was expected at. It rides the ADDITIVE
@@ -1356,44 +1388,68 @@ def cmd_regression(args, verb="regression", tier="regression", script=None):
             if script:
                 starved = (f"declared target `{script}` exited "
                            f"{result.returncode} and wrote no report at "
-                           f"{junit_path} — re-run `{invocation}` in "
-                           f"{package_dir} and make `{script}` write its JUnit "
-                           f"XML to that path")
+                           f"{ingest_path} — re-run `{invocation}` in "
+                           f"{package_dir} and make `{script}` write its "
+                           f"{ingest_name} to that path")
             _emit_axi(verb, False,
-                      {"help": _axi().no_report_help(verb, "junit.xml",
+                      {"help": _axi().no_report_help(verb, ingest_name,
                                                      remedy=starved)},
                       _axi_context(project_dir, agent_id=args.agent),
                       warnings + [_axi().no_report_warning(
-                          verb, "junit.xml", result.returncode,
+                          verb, ingest_name, result.returncode,
                           getattr(result, "stdout", None) or "",
                           cause=starved)],
-                      f"{verb}: ok=False — no JUnit XML, nothing to ingest")
+                      f"{verb}: ok=False — no {ingest_name}, nothing to ingest")
             return 1
 
-        summary, tree, files = _parse_junit_file(junit_path)
-        _marry_failures(tree, getattr(result, "stdout", None))
-        coverage = None
-        if coverage_on:
-            lcov_path = os.path.join(coverage_dir, "lcov.info")
-            coverage = _parse_lcov(lcov_path)
-            if coverage is None:
-                print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
-                      file=sys.stderr)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier=tier, context=_run_context(),
-                              run_id=run_id)
+        # Something WILL be ingested: the final count, then `ingesting…`.
+        _axi().close_narration(narrator)
+        if raw_report:
+            # CR-CRU-015 §S2 — the board decodes. The client reads the JUnit
+            # XML the same run wrote for its distinct-FILE count ONLY (the
+            # envelope's shrink signal, print-only by CR-CRU-047 §S2); the
+            # evidence itself is the raw report, and the counts reported are
+            # the ones the server's codec produced from it.
+            files = (_parse_junit_file(junit_path)[2]
+                     if os.path.exists(junit_path) else 0)
+            # §S2 — `--coverage` is accepted on every declared-tier verb and
+            # this route has nowhere to put it. Silence here is the exact
+            # failure the declaration exists to end, so the drop is stated on
+            # BOTH channels the parsed branch below uses for its own miss: the
+            # operator's stream, and the envelope the next reader parses.
+            if coverage_on:
+                print(f"[crucible] WARN: --coverage is not carried by the "
+                      f"`{raw_report['codec']}` raw report route — this run "
+                      f"is ingested with no coverage", file=sys.stderr)
+                run_warnings.append(
+                    _raw_route_coverage_warning(raw_report["codec"], script))
+            resp = _ingest_raw(project_dir, args.agent, raw_report, tier=tier,
+                               context=_run_context(), run_id=run_id,
+                               release=release)
+            summary = _decoded_summary(resp)
+        else:
+            summary, tree, files = _parse_junit_file(junit_path)
+            _marry_failures(tree, getattr(result, "stdout", None))
+            coverage = None
+            if coverage_on:
+                lcov_path = os.path.join(coverage_dir, "lcov.info")
+                coverage = _parse_lcov(lcov_path)
+                if coverage is None:
+                    print(f"[crucible] WARN: lcov coverage unavailable at "
+                          f"{lcov_path}", file=sys.stderr)
+            resp = _ingest_parsed(project_dir, args.agent, summary, tree,
+                                  coverage, tier=tier, context=_run_context(),
+                                  run_id=run_id, release=release)
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
         # canned _HELP_STEPS entry, unchanged.
-        help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+        help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                       if verb != "regression" else None)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          help_steps=help_steps, warnings=run_warnings,
                          run_id=run_id)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
-    finally:
-        _close_gate_identity(project_dir, identity)
 
 
 def cmd_auto_ingest(args):
@@ -1518,7 +1574,7 @@ def cmd_pre_merge_gate(args):
         whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                            verb="pre-merge-gate"),
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=CRUCIBLE_URL)
+        crucible_url=_base_url())
 
 
 def _gate_regression_args(args):
@@ -1530,6 +1586,7 @@ def _gate_regression_args(args):
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
         log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
+        release=getattr(args, "release", None),
         # CR-CRU-017 §S4 — the gate's own opt-out decision carries into the
         # regression it runs; the step must never re-decide it.
         no_lifecycle=getattr(args, "no_lifecycle", True),
@@ -1547,7 +1604,9 @@ def _dispatch_gate_suite(args, suite):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     return (_axi().sibling_client_argv(suite.stack, suite.command,
-                                       agent=args.agent), package_dir)
+                                       agent=args.agent,
+                                       release=getattr(args, "release", None)),
+            package_dir)
 
 
 # ── CR-CRU-008 — plan verbs (plan-file / cycle-activate / cycle-done / cr-close) ──
@@ -1637,6 +1696,13 @@ def cmd_cycle_done(args):
     return _cycle_transition(args, "done")
 
 
+def cmd_cycle_skip(args):
+    """S2 -- mark a PENDING cycle skipped (exceptional; recorded
+    with reason, cause and spec reference). Delegates to the shared
+    implementation."""
+    return _axi().cmd_cycle_skip(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
@@ -1686,9 +1752,11 @@ def cmd_abort(args):
 
 
 def cmd_status(args):
-    """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
-    and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    """§S6 — the work-in-flight READ verb (alias `plans`, no --agent): GET
+    …/plans?status=open and return the open plans as a uniform-table §S1
+    envelope plus the server's lastClosedCr and filed, encoded per --format
+    (toon, the default, or json — one JSON object).
+    CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
@@ -1698,6 +1766,28 @@ def cmd_queue(args):
     landing-record sources the release ceremony's provenance needs. Delegates
     to the shared implementation."""
     return _axi().cmd_queue(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_landings(args):
+    """§S9 — the closed plans and the merge commit each recorded, for programs
+    such as the release ceremony (read-only, no --agent): GET
+    …/plans?status=closed, one {cr, mergeCommit} row per closed plan, encoded
+    per --format. Delegates to the shared implementation."""
+    return _axi().cmd_landings(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_history(args):
+    """§S4 — a project's releases through its client (read-only,
+    no --agent): GET …/history as one TOON-AXI table — the default seven
+    columns, --fields/--full extras, or --release <label>'s gate runs.
+    Delegates to the shared implementation."""
+    return _axi().cmd_history(args, _resolve_project_dir(args.project_dir), _ops())
+
+def cmd_project_meta(args):
+    """§S4 — a project's metadata map: a read (GET …/metadata, no
+    --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
+    required). Delegates to the shared implementation."""
+    return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
@@ -1749,7 +1839,7 @@ def cmd_cr_void(args):
 
 
 def cmd_next(args):
-    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/next,
     answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
     Delegates to the shared implementation."""
     return _axi().cmd_next(args, _resolve_project_dir(args.project_dir), _ops())
@@ -1829,6 +1919,9 @@ def _axi():
 # bun-local wrappers keep bun's project_dir-based signatures (resolving the key
 # from `.env` first) and DELEGATE, so extraction is byte-identical.
 _AXI_UNSET = _axi().AXI_UNSET
+# The `--reports` help every running verb carries: the shared per-agent rule,
+# resolved under the package.
+_REPORTS_HELP = _axi().REPORTS_HELP + " Relative to the package."
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
@@ -1857,7 +1950,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=CRUCIBLE_URL)
+        base_url=_base_url())
 
 
 # §S15 — per-verb next-step command TEMPLATES: every envelope names the sane
@@ -1930,22 +2023,6 @@ def _agent_id(args):
     return _axi().require_agent_id(args)
 
 
-def _fleet_context(cr=None):
-    """Env auto-context shared by gates + milestones: `cr` (when supplied),
-    `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
-    OMITTED (never fabricated) so an unset WORKFLOW_WAVE yields no `wave` key."""
-    ctx = {}
-    if cr:
-        ctx["cr"] = cr
-    wave = os.environ.get("WORKFLOW_WAVE")
-    if wave:
-        ctx["wave"] = wave
-    role = os.environ.get("WORKFLOW_ROLE")
-    if role:
-        ctx["track"] = role
-    return ctx
-
-
 def _post_gate(project_dir, agent_id, gate, context=None, release=None):
     """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder).
     `release` is the label of the release the gate gates; it rides on to the
@@ -1990,6 +2067,14 @@ def cmd_gate_run(args):
         args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
 
 
+def cmd_gate_respond(args):
+    """§S1 — axi PROXY wrapper around `no-mistakes axi respond`: delegates to
+    the shared implementation, which records the decision and drives the run
+    through the runner `gate-run` uses; tool discovery stays HERE (this
+    module's own `shutil`) so each client's harness keeps its patch seam."""
+    return _axi().cmd_gate_respond(
+        args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
+
 def cmd_milestone(args):
     """POST a workflow milestone. §S4b — CR-CRU-054 §S2b delegator to the shared
     implementation, which writes the legacy line to STDERR so it can never
@@ -2027,7 +2112,7 @@ def _add_bun_arg(p):
 
 
 def _add_reports_arg(p):
-    p.add_argument("--reports", help=f"Reports dir under the package (default: {DEFAULT_REPORTS}).")
+    p.add_argument("--reports", help=_REPORTS_HELP)
 
 
 def _add_log_arg(p):
@@ -2051,6 +2136,12 @@ def _add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (CR-CRU-054 §S2 — delegates
     to the shared binding so all five clients document it identically)."""
     return _axi().add_gate_cycle_arg(p)
+
+
+def _add_run_release_arg(p):
+    """§S1 — `--release` on a test-run verb, beside `--cycle` (delegates to the
+    shared declaration so all five clients document it identically)."""
+    return _axi().add_run_release_arg(p)
 
 
 def _add_regression_tier_args(p):
@@ -2078,11 +2169,28 @@ def _add_declared_tier_args(p):
     p.add_argument("--coverage", action="store_true",
                    help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
     _add_gate_cycle_arg(p)
+    _add_run_release_arg(p)
     _add_reports_arg(p)
     _add_bun_arg(p)
     _add_package_dir_arg(p)
     _add_log_arg(p)
     _add_no_lifecycle_arg(p)
+    p.add_argument("passthrough", nargs=argparse.REMAINDER,
+                   action=_AfterDashDash, metavar="-- ARGS",
+                   help="Everything after `--` is passed verbatim to the declared "
+                        "target (`bun run <target> -- ARGS`).")
+
+
+class _AfterDashDash(argparse.Action):
+    """A declared tier verb's passthrough: only what follows a bare `--`, with
+    that `--` dropped. A stray positional NOT behind `--` stays the usage error
+    it always was, so nothing reaches the target that was not asked to."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        values = list(values or [])
+        if values and values[0] != "--":
+            parser.error(f"unrecognized arguments: {' '.join(values)}")
+        setattr(namespace, self.dest, values[1:])
 
 
 def _package_manifest(package_dir):
@@ -2138,8 +2246,9 @@ def _read_declared_suites(args, surface):
 
 def _run_declared_script(args, tier, script):
     """§S6, bun's RUN — the declared script, by name, ingested under the tier
-    of the VERB that asked for it."""
-    return cmd_regression(args, verb=tier, tier=tier, script=script)
+    of the VERB that asked for it, with whatever was typed after `--`."""
+    return cmd_regression(args, verb=tier, tier=tier, script=script,
+                          passthrough=getattr(args, "passthrough", None) or ())
 
 
 _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
@@ -2196,6 +2305,11 @@ _CLI_DESCRIPTION = (
     "`flag` (the default — `bun test`'s own report flags are appended) or `env:<VAR>`\n"
     "(the variable the script's own runner reads the path from, so nothing is appended\n"
     "that the runner never agreed to accept).\n"
+    "\n"
+    "A target whose report the BOARD should decode declares that beside it, under\n"
+    "`crucible.rawReport.<target>` = {codec, file, path}: the run's raw report is\n"
+    "POSTed to /api/v2/runs under that codec and parsed server-side, instead of being\n"
+    "parsed here and POSTed to /api/v2/runs/parsed.\n"
     "\n"
     "Run `<verb> --help` for a verb's own flags."
 )
@@ -2262,6 +2376,7 @@ def main():
                    help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
     t.add_argument("--agent", help="If set, ingest the junit result after the run")
     _add_gate_cycle_arg(t)
+    _add_run_release_arg(t)
     _add_reports_arg(t)
     _add_bun_arg(t)
     _add_package_dir_arg(t)
@@ -2285,9 +2400,9 @@ def main():
             cmd_regression,
             "Runs the full-suite `bun test` and ingests it; --coverage adds "
             "lcov.",
-            (_add_regression_tier_args, _add_gate_cycle_arg, _add_reports_arg,
-             _add_bun_arg, _add_package_dir_arg, _add_log_arg,
-             _add_no_lifecycle_arg))),
+            (_add_regression_tier_args, _add_gate_cycle_arg,
+             _add_run_release_arg, _add_reports_arg, _add_bun_arg,
+             _add_package_dir_arg, _add_log_arg, _add_no_lifecycle_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
@@ -2315,6 +2430,7 @@ def main():
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
     _add_gate_cycle_arg(pmg)
+    _add_run_release_arg(pmg)
     _add_reports_arg(pmg)
     _add_bun_arg(pmg)
     _add_package_dir_arg(pmg)
@@ -2372,6 +2488,10 @@ def main():
     _add_project_dir_arg(cdn)
     cdn.set_defaults(func=cmd_cycle_done)
 
+    # S2 -- the shared registrar builds the subparser once.
+    _axi().add_cycle_skip_verb(sub, cmd_cycle_skip,
+                               add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
+
     cc = sub.add_parser("cr-close",
                         help="Close the single OPEN plan (PATCH status=closed + merge.commit). "
                              "Requires --agent <registered id> (§S2b).")
@@ -2417,6 +2537,7 @@ def main():
     ab.add_argument("--user-approved", action="store_true",
                     help="Map to body userApproved:true (the server refuses without it).")
     ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_change_record_args(ab)  # S2b: abort is recorded
     _add_workflow_agent_arg(ab)
     _add_project_dir_arg(ab)
     ab.set_defaults(func=cmd_abort)
@@ -2424,14 +2545,18 @@ def main():
     # ── CR-CRU-030 §S6 — the plan/status READ verb (alias `plans`, no --agent) ──
     for _name in ("status", "plans"):
         sv = sub.add_parser(_name,
-                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
-                                 "+ lastClosedCr (the last CR to close). Read-only; "
-                                 "`plans` is an alias of `status`.")
+                            help="Read the open plans, the work in flight (GET "
+                                 "…/plans?status=open), as a TOON-AXI table + "
+                                 "lastClosedCr (the last CR to close) and filed "
+                                 "(the project's plan count). Read-only; `plans` "
+                                 "is an alias of `status`; --format json writes "
+                                 "one JSON object.")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10), e.g. "
                              "activeCycleLabel,mergeCommit.")
         _add_project_dir_arg(sv)
+        _axi().add_status_format_arg(sv)
         sv.set_defaults(func=cmd_status)
 
     # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
@@ -2439,7 +2564,44 @@ def main():
                         help="Read the registered CR queue (GET …/queue) plus the "
                              "cr-merged milestone ids as a TOON-AXI table. Read-only.")
     _add_project_dir_arg(qv)
+    _axi().add_queue_view_args(qv)
     qv.set_defaults(func=cmd_queue)
+
+    # §S9 — the closed plans' landing commits READ verb (no --agent)
+    lv = sub.add_parser("landings",
+                        help="The closed plans and the merge commit each recorded — for "
+                             "programs such as the release ceremony (GET "
+                             "…/plans?status=closed). Read-only; --format json "
+                             "writes one JSON object.")
+    _add_project_dir_arg(lv)
+    _axi().add_status_format_arg(lv)
+    lv.set_defaults(func=cmd_landings)
+
+    # §S4 — a project's release history READ verb (no --agent)
+    hv = sub.add_parser("history",
+                        help="A project's releases, their states, waves, gate runs "
+                             "and verification (GET …/history) as a TOON-AXI table; "
+                             "--release <label> lists that release's gate runs. "
+                             "Read-only; --format json writes one JSON object.")
+    _add_project_dir_arg(hv)
+    _axi().add_history_args(hv)
+    hv.set_defaults(func=cmd_history)
+
+    # §S4 — the project metadata map: read, or write with --set/--unset
+    pmv = sub.add_parser("project-meta",
+                         help="A project's metadata map (a copy of its .env facts). "
+                              "Readable by anything that reaches the board: "
+                              "non-secret facts only. No flags reads it; "
+                              "--set KEY=VALUE / --unset KEY write it (requires "
+                              "--agent); --format json writes one JSON object.")
+    _axi().add_project_meta_args(pmv)
+    pmv.add_argument("--agent",
+                     help="Registered agent id — required only for a write "
+                          "(--set/--unset), which posts as a live registered "
+                          "ORCHESTRATOR caller; a read (no --set/--unset) needs "
+                          "none. An unregistered id is refused by the server (409).")
+    _add_project_dir_arg(pmv)
+    pmv.set_defaults(func=cmd_project_meta)
 
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot
@@ -2481,11 +2643,19 @@ def main():
                           "client never validates or rewrites the value). Exists "
                           "because no-mistakes' `ci` step is PR-based, and a "
                           "git-flow project that merges directly has no PR for it "
-                          "to watch — without --skip the gate blocks until "
-                          "ci_timeout.")
+                          "to watch — skipping nothing, the gate blocks until "
+                          "ci_timeout. Omitted, the project's declared "
+                          "`[gate] skip` (crucible.toml) applies; a value "
+                          "REPLACES it, and --skip \"\" skips nothing.")
     _axi().add_gate_release_arg(gr)
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
+
+    # §S1 — the gate DECISION verb, through the shared registrar so five
+    # clients cannot fork its flag surface; it drives the run through the
+    # same runner as gate-run.
+    _axi().add_gate_respond_verb(sub, cmd_gate_respond,
+                                 add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
 
     grp = sub.add_parser("gate-report",
                          help="Report a single already-run gate → POST /api/v2/gates.")

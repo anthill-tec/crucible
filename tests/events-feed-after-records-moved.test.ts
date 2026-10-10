@@ -6,13 +6,13 @@
 //
 // READ OFF THE CONSUMERS, not off taste. `public/app.js` renders the timeline
 // straight out of `state.events`, which is this route's `events[]`: a gate row
-// becomes a `GateCardRow`/`GateCardCompact` (app.js:1347), a milestone row
-// becomes a milestone card and a `cr-merged` one gets its own branch
-// (app.js:1349-1350), and the project's whole gate pane is
-// `state.events.filter(e => e.kind === "gate")` (app.js:4478-4482). If the feed
-// stopped carrying the two kinds, the gate pane would render empty and the
-// merge cards would vanish — with no error anywhere, which is the same silent
-// failure mode this CR exists to remove.
+// becomes a `GateCardRow`/`GateCardCompact` (`runFeed` in public/app.js), a
+// milestone row becomes a milestone card and a `cr-merged` one gets its own
+// branch (also in `runFeed`), and the project's whole gate pane is
+// `state.events.filter(e => e.kind === "gate")` (`scopedGateEvents` in
+// public/app.js). If the feed stopped carrying the two kinds, the gate pane
+// would render empty and the merge cards would vanish — with no error
+// anywhere, which is the same silent failure mode this CR exists to remove.
 //
 // So the decision is: THE FEED IS UNCHANGED. It still carries milestones and
 // gates; they simply come from the tables they now live in. "Wire shapes do not
@@ -147,7 +147,7 @@ describe("CR-CRU-129 §S3 — what `GET /api/v2/events` serves once the records 
 
     const row = (feed.body.events ?? []).find((candidate) => candidate.id === merged.id);
     expect(row).toBeDefined();
-    // `public/app.js:1349-1350` branches on exactly these two fields to pick
+    // `runFeed` (public/app.js) branches on exactly these two fields to pick
     // the merge card, so a row arriving without them renders as the wrong
     // thing even though it arrived.
     expect(row!.kind).toBe("milestone");
@@ -165,7 +165,8 @@ describe("CR-CRU-129 §S3 — what `GET /api/v2/events` serves once the records 
 
     const row = (feed.body.events ?? []).find((candidate) => candidate.id === gate.id);
     expect(row).toBeDefined();
-    // `public/app.js:4478-4482` selects the whole gate pane on `kind === "gate"`.
+    // `scopedGateEvents` (public/app.js) selects the whole gate pane on
+    // `kind === "gate"`.
     expect(row!.kind).toBe("gate");
     expect(row!.gate).toEqual({ status: "pass", steps: [] });
   });

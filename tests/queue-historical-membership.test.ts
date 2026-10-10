@@ -57,15 +57,22 @@
 // "all 62 are derivable" is a claim about THIS board, and asserting it against
 // a fixture would make it a claim about the fixture. It reads the live board
 // the sibling suite's way — the project named by the repo root's `.env`,
-// reached at `$CRUCIBLE_URL` — over GET only, and STATES its reason and
+// reached at the board this checkout DECLARES — over GET only, and STATES its reason and
 // returns when the board cannot be read, because off this workstation `.env`
 // is gitignored and the store it serves is never committed.
+//
+// WHICH board is not a literal and not an exported variable: it is what the
+// fleet's own resolver answers for this checkout (`[client] url`, CR-CRU-139
+// §S2), asked through `declaredClientBoard`. A checkout that declares nothing
+// SKIPS rather than falling through to the shipped default, because a census
+// aimed at a board this project does not own measures somebody else's rows.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
 import type { QueueEntryInput } from "../src/store.ts";
+import { declaredClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -175,7 +182,9 @@ async function liveBoard(): Promise<
 > {
   const named = liveProjectKey();
   if ("skip" in named) return named;
-  const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+  const board = declaredClientBoard();
+  if ("skip" in board) return board;
+  const base = board.url;
   try {
     // BOUNDED, for the sibling suite's reason: an unbounded read turns a busy
     // board into a test TIMEOUT, which reads as a failed invariant rather than

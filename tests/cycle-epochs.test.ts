@@ -357,10 +357,19 @@ describe("§S3 (a) — sealed (done) cycles and never-activated cycles are UNCHA
   test("a pending cycle that transitions straight to skipped (never activated, the one legal pending shortcut) has NO activeMs and NO activatedAt", async () => {
     const handle = boot(":memory:");
     const key = await createProject(handle);
-    const { planId, cycleId } = await fileSingleCycle(handle, key, "CR-EPOCH-SKIPPED");
+    const filed = await postJson(handle, plansPath(key), {
+      cr: "CR-EPOCH-SKIPPED",
+      cycles: [{ label: "solo" }, { label: "keeps the plan unskipped" }],
+    });
+    const filedBody = (await filed.json()) as PlanFileResponse;
+    const planId = filedBody.planId;
+    const cycleId = filedBody.cycles[0]!.id;
 
     const skipped = await patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), {
       status: "skipped",
+      reason: "the spec no longer needs this cycle",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2",
     });
     expect(skipped.status).toBe(200);
 

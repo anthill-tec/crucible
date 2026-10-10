@@ -3,10 +3,11 @@ CR-CRU-046-toon-conformance.md §S3 / AC "on an environment where only
 `crucible-axi` + uv are installed, `uv run <client>.py` (the documented
 way) succeeds").
 
-`crucible_axi/manifest.py:43` records each client as a bare FILE PATH, and
-every documented invocation is now `uv run <client>.py` (PEP 723 inline
-script metadata + uv, landed in C1/C2). §S3's risk section is explicit that
-this AC is deliberately an ENVIRONMENT test, not a unit test -- the failure
+`build_manifest` (crucible_axi/manifest.py) records each client as a bare
+FILE PATH, and every documented invocation is now `uv run <client>.py`
+(PEP 723 inline script metadata + uv, landed in C1/C2). §S3's risk
+section is explicit that this AC is deliberately an ENVIRONMENT test,
+not a unit test -- the failure
 mode it guards (`ModuleNotFoundError: toon` on any machine that only has
 `crucible-axi` + uv, without the repo checkout's ambient tooling) is
 invisible to every in-repo import-by-path test, because those tests run

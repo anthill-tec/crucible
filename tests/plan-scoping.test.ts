@@ -17,15 +17,16 @@
 //     CR-011 empty state ("no open plan — file one via POST …").
 //
 // Current code facts (verified against public/app.js on this branch):
-//   - navigate() (~L49) sets state.route with NO clear, NO fetch.
-//   - the popstate handler (~L84-86) is EVEN THINNER: `state.route =
+//   - navigate() (`navigate` in app.js) sets state.route with NO clear, NO fetch.
+//   - the popstate handler (app.js's `popstate` window listener) is EVEN
+//     THINNER: `state.route =
 //     L.routeParse(location.pathname)` — no clear, no fetch, no tab reset.
-//   - refetchPlans() (~L134) early-returns off-workspace and is invoked
+//   - refetchPlans() (`refetchPlans` in app.js) early-returns off-workspace and is invoked
 //     ONLY from refetch() (poll timer / would-be SSE onopen/onmessage).
-//   - WorkflowActive() (~L1799-1800) does
+//   - WorkflowActive() (`WorkflowActive` in app.js) does
 //     `state.plans.filter((p) => p.status === "open")` — NO projectKey
 //     check at all.
-//   - WorkflowHistory() (~L2051-2055) passes `plans: state.plans` (ALL
+//   - WorkflowHistory() (`WorkflowHistory` in app.js) passes `plans: state.plans` (ALL
 //     plans, unfiltered) into L.workflowLens() — only `events` is filtered
 //     by projectKey there.
 // So every pin below is expected to FAIL against current production: a
@@ -54,6 +55,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -67,7 +69,7 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (public/app.js ~L153-154).
+// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js).
 // Every pin except the explicit regression pin settles on ticks far below
 // this, so it can never be the poll fallback quietly doing the work.
 const POLL_INTERVAL_MS = 5000;
@@ -94,7 +96,7 @@ interface CycleFixture {
 }
 
 // NOTE: this is the new-for-C1 contract — every plan carries `projectKey`
-// verbatim (src/types.ts:164, already a real server field). Existing test
+// verbatim (`Plan` in src/types.ts, already a real server field). Existing test
 // files (workflow-tab.test.ts, timeline-plan-integration.test.ts) predate
 // this CR and never scripted a per-key-scoped plans endpoint, so their
 // PlanFixture omits it; this file's mock is the FIRST to actually key the
@@ -176,6 +178,16 @@ async function mountApp(opts: MountOpts): Promise<void> {
   plansGates = new Map();
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+    const historyMatch = /\/api\/v2\/projects\/([^/?]+)\/history/.exec(url);
+    if (historyMatch !== null) {
+      // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
+      // nests its waves under a release, read from GET …/history; this
+      // fixture's plans fall in one release (tests/helpers/history-stub.ts).
+      // The read answers the routed project's own work only.
+      const historyKey = decodeURIComponent(historyMatch[1]!);
+      const body = singleReleaseHistoryStub((plansByKey[historyKey] ?? []).filter((p) => p.projectKey === historyKey));
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }
     const plansMatch = /\/api\/v2\/projects\/([^/?]+)\/plans/.exec(url);
     if (plansMatch !== null) {
       const key = decodeURIComponent(plansMatch[1]!);
@@ -372,10 +384,22 @@ describe("§S1+§S2 — navigating to a plan-less workspace clears the previous 
     await settle();
     badgeFor("Empty B").click();
     await settle();
+    // ADDED 2026-10 (approved by the orchestrator, user ruling 2026-10-07):
+    // idle B now lands on the Roadmap, so its Workflow pane is opened
+    // explicitly before its content is inspected.
+    findByText(document, '[data-testid="workspace-tab"]', "Workflow")!.click();
+    await settle();
 
     expect(planCallCount(keyB)).toBe(1);
-    // CR-011 empty state, testid sweep — neither of A's sections survive.
-    expect(workflowActiveText()).toContain("no open plan");
+    // Empty state, testid sweep — neither of A's sections survive.
+    // CR-CRU-172 §S2/AC3 re-pin (approved by the orchestrator — user rulings
+    // 2026-10-07/08): the CR-011 filler is retired; with nothing running Now
+    // reads exactly `Nothing running → Roadmap`, on its own container.
+    expect(
+      (document.querySelector('[data-testid="workflow-now"]')?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("Nothing running \u2192 Roadmap");
     expect(renderedCrs()).not.toContain("CR-EMPTY-A-OPEN");
     expect(renderedCrs()).not.toContain("CR-EMPTY-A-CLOSED");
     expect(document.querySelectorAll('[data-testid="wave-group"]').length).toBe(0);
@@ -542,6 +566,11 @@ describe("§S2 — render guard: a foreign-projectKey plan never paints, in eith
       projects: [project({ key: routedKey, name: "Guard Hist B" })],
       plans: { [routedKey]: [ownClosed, foreignClosed] },
     });
+    // ADDED 2026-10 (approved by the orchestrator, user ruling 2026-10-07):
+    // this idle fixture (closed plans only) now lands on the Roadmap, so its
+    // Workflow History is opened explicitly before it is inspected.
+    findByText(document, '[data-testid="workspace-tab"]', "Workflow")!.click();
+    await settle();
 
     expect(renderedCrs()).toContain("CR-GUARD-HIST-OWN");
     expect(renderedCrs()).not.toContain("CR-GUARD-HIST-FOREIGN");
@@ -589,12 +618,21 @@ describe("§S1 — workspace → home clears stale plans (isolated from the rend
 
     expect(planCallCount(key)).toBe(2); // a FRESH fetch fired, not a cache hit
     expect(renderedCrs()).not.toContain("CR-HOME-A"); // nothing stale in the interim
-    expect(workflowActiveText()).toContain("no open plan");
+    // RE-PINNED 2026-10 (approved by the orchestrator, user ruling
+    // 2026-10-07): the landing tab waits for the read, so while it is
+    // pending no tab is on and no pane paints (was: the Workflow pane's empty
+    // state, painted before the project's state was known).
+    expect(document.querySelector('[data-testid="workspace-tab"].on')).toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-zones"]')).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
 
     releasePlans(key);
     await settle();
 
     expect(renderedCrs()).toContain("CR-HOME-A"); // the fresh fetch's data now renders
+    // ...on the landing pane: the open plan makes this project busy.
+    expect(findByText(document, '[data-testid="workspace-tab"]', "Workflow")!.classList.contains("on")).toBe(true);
   });
 });
 

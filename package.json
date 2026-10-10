@@ -1,6 +1,6 @@
 {
   "name": "@anthill-tec/crucible-server",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
@@ -29,20 +29,26 @@
     "test:client": "python3 -m unittest discover -s tests/client -t .",
     "test:regression": "bun scripts/run-test-target.ts regression",
     "test:e2e": "bunx bddgen && bunx playwright test",
+    "webkit:docker": "bun scripts/webkit-docker-server.ts",
     "start": "bun run src/server.ts"
   },
   "crucible": {
     "reportPath": {
       "test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"
+    },
+    "rawReport": {
+      "test:e2e": {
+        "codec": "playwright",
+        "file": "playwright.json",
+        "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"
+      }
     }
   },
   "devDependencies": {
-    "@cucumber/gherkin": "^41.0.0",
     "@happy-dom/global-registrator": "^20.10.6",
     "@playwright/test": "^1.61.1",
     "@toon-format/toon": "^4.1.0",
     "bun-types": "^1.3.14",
-    "happy-dom": "^20.10.6",
     "playwright-bdd": "^9.2.0"
   },
   "dependencies": {}

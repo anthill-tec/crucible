@@ -6,23 +6,31 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
+import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
+import { resolveNext } from "./next.ts";
 import {
   authHints,
   hints,
   cycleHints,
   identityHints,
   milestoneHints,
+  planChangeHints,
   projectDeleteHints,
+  projectMetadataHints,
   roadmapHints,
   waveHints,
 } from "./hints.ts";
 import {
   compareContainers,
+  compareVersionLabels,
   declaredTracks,
+  gateDecisionRunKey,
+  invalidSuiteTreeNode,
   normalizeTrack,
   QueueWaveOverflowError,
   reservedMilestoneTypeConflict,
   Store,
+  STORY_POINT_SCALE,
   TRACK_LANE_RULE,
   UUID_RE,
   WAVE_SEQ_STRIDE,
@@ -30,8 +38,9 @@ import {
   waveOverflowMessage,
   waveSeqBase,
 } from "./store.ts";
-import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
+import { AGENT_ROLES, IDENTITY_SOURCES, isDeadCr } from "./types.ts";
 import type {
+  LiveAgent,
   MilestoneDateFilter,
   PlanOpError,
   ProjectPatch,
@@ -45,9 +54,12 @@ import type {
 import type {
   AgentIdentity,
   AgentRole,
+  ChangeRecord,
   Coverage,
   CycleKind,
   CycleStatus,
+  GateDecision,
+  GateDecisionAction,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -111,6 +123,8 @@ interface V2Body {
   merge?: unknown;
   // CR-CRU-013 §S1 (gate object) + §S4b/§S4c (milestone commit)
   gate?: unknown;
+  // CR-CRU-162 §G4 — the gate decision a POST /api/v2/gate-decisions records.
+  decision?: unknown;
   // CR-CRU-073 §S1 — optional top-level release version the gate gated.
   version?: unknown;
   commit?: unknown;
@@ -144,6 +158,8 @@ interface V2Body {
   // CR-CRU-106 §S1 — `cr-depends`' whole payload: the complete dependency
   // set. `cr` is already declared above.
   dependsOn?: unknown;
+  /** CR-CRU-022 §S1 — `cr-plan --points`: story points on the Fibonacci scale. */
+  points?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -243,6 +259,21 @@ function requireRegisteredCaller(
   return { fail: fail(409, error, { help: authHints.unregisteredCaller(agentId) }) };
 }
 
+/**
+ * CR-CRU-022 §S1 — the AUTHOR every HTTP route writes on a declaration-journal
+ * row: the caller `requireRegisteredCaller` / `requireOrchestrator` already
+ * authenticated, and nothing else. The store accepts a missing author only
+ * because a direct store write has no caller; a ROUTE never passes one, and
+ * this seam refuses to hand an empty identity to the journal rather than let
+ * an unauthored row through.
+ */
+function declarationAuthor(caller: { agentId: string }): string {
+  if (caller.agentId.length === 0) {
+    throw new Error("declaration journal: a route must journal its registered caller as author");
+  }
+  return caller.agentId;
+}
+
 // CR-CRU-091 §S3 — the role roadmap registration requires. There is no
 // MAINLINE role in AGENT_ROLES and a track orchestrator registers as
 // ORCHESTRATOR exactly as the mainline one does, so this gate stops
@@ -252,12 +283,126 @@ function requireRegisteredCaller(
 const ROADMAP_ROLE: AgentRole = "ORCHESTRATOR";
 
 /**
+ * §S6 — what an orchestrator-only route calls its own work in a refusal: the
+ * error's subject and the help[] naming its verbs. The roadmap wording is the
+ * default, so every roadmap route's refusal is unchanged.
+ */
+type OrchestratorRefusal = {
+  work: string;
+  help: (agentId: string, role: string | undefined, required: string) => string[];
+};
+
+const ROADMAP_REFUSAL: OrchestratorRefusal = {
+  work: "roadmap registration",
+  help: roadmapHints.notOrchestrator,
+};
+
+const PROJECT_METADATA_REFUSAL: OrchestratorRefusal = {
+  work: "a project metadata write",
+  help: projectMetadataHints.notOrchestrator,
+};
+
+/** CR-CRU-165 §S1/§S2 — a plan change is orchestrator work. */
+const PLAN_CHANGE_REFUSAL: OrchestratorRefusal = {
+  work: "a plan change (cycle-skip, insert-before, rename, non-fix append)",
+  help: planChangeHints.notOrchestrator,
+};
+
+/** CR-CRU-165 §S1 — the two causes a recorded plan change can name. */
+const CHANGE_CAUSES: ReadonlySet<string> = new Set(["spec-design", "gap-analysis"]);
+
+/**
+ * CR-CRU-165 §S1/§S2/§S2b — the warning every recorded plan change and
+ * every abort carries. Structured like `QueueWarning`: `message` is the line
+ * the clients print.
+ */
+const PROCESS_FAILURE_WARNING = {
+  code: "process-failure",
+  message:
+    "this change to a filed plan records a process failure: a spec that changes mid-implementation " +
+    "shows that the spec's design or its gap analysis fell short — it is counted for the retrospective",
+} as const;
+
+/**
+ * CR-CRU-165 §S1/§S2/§S2b — read `reason`, `cause` and `specRef` off a
+ * body. Every refusal names the rule and the field, and is a 400 with the
+ * record's help[]; nothing is read for the write before it passes.
+ */
+function parseChangeRecord(
+  body: V2Body,
+  change: string,
+  rule: string = "a plan grows only by FIX cycles; any other change needs reason, cause and specRef",
+  help: string[] = planChangeHints.recordRequired,
+): ChangeRecord | { fail: Response } {
+  const { reason, cause, specRef } = body as { reason?: unknown; cause?: unknown; specRef?: unknown };
+  const missing = [
+    ...(typeof reason === "string" && reason.trim().length > 0 ? [] : ["reason"]),
+    ...(cause === undefined ? ["cause"] : []),
+    ...(typeof specRef === "string" && specRef.trim().length > 0 ? [] : ["specRef"]),
+  ];
+  if (missing.length > 0) {
+    return {
+      fail: fail(
+        400,
+        `${change} must be recorded: missing ${missing.join(", ")} — ${rule}`,
+        { help },
+      ),
+    };
+  }
+  if (typeof cause !== "string" || !CHANGE_CAUSES.has(cause)) {
+    return {
+      fail: fail(400, `invalid cause: ${JSON.stringify(cause)} (expected spec-design | gap-analysis)`, {
+        help: planChangeHints.invalidCause,
+      }),
+    };
+  }
+  return {
+    reason: reason as string,
+    cause: cause as ChangeRecord["cause"],
+    specRef: specRef as string,
+  };
+}
+
+/**
+ * CR-CRU-165 §S1/§S2 — the gate every plan change passes: an ORCHESTRATOR
+ * caller (409 otherwise, before anything is read for the write), then a
+ * complete record (400 naming the rule).
+ */
+function requirePlanChange(
+  store: Store,
+  projectKey: string,
+  body: V2Body,
+  change: string,
+): ChangeRecord | { fail: Response } {
+  const caller = requireOrchestrator(store, projectKey, body, PLAN_CHANGE_REFUSAL);
+  if ("fail" in caller) return caller;
+  return parseChangeRecord(body, change);
+}
+
+/** CR-CRU-165 §S2 — the help[] matching a store's plan-change refusal. */
+function planChangeHelp(planId: number, cycle: PlanOpError): string[] | undefined {
+  switch (cycle.code) {
+    case "change-record-required":
+      return planChangeHints.recordRequired;
+    case "verify-not-done":
+      return planChangeHints.verifyNotDone;
+    case "run-filed":
+      return planChangeHints.runFiled(cycle.cycleRef!);
+    case "last-unskipped":
+      return planChangeHints.lastUnskipped(planId);
+    default:
+      return undefined;
+  }
+}
+
+/**
  * CR-CRU-091 §S3 — the caller-auth seam, plus the role the five roadmap verbs
  * require. `requireRegisteredCaller` first (its 409 and its state-derived
  * help[] are unchanged), then the stored `Agent.role`.
  *
  * A row carrying NO role is REFUSED, never assumed: pre-CR-044 rows carry
- * none and a role is never fabricated (`src/types.ts:65-69`), so treating an
+ * none and a role is never fabricated (the `role` doc on `Agent` in
+ * `src/types.ts`), so treating an
  * absent declaration as an orchestrator would hand the roadmap to whatever
  * registered before roles existed. Both refusals return BEFORE anything is
  * read for the write, so nothing is stored on either.
@@ -266,6 +411,7 @@ function requireOrchestrator(
   store: Store,
   projectKey: string,
   body: V2Body,
+  refusal: OrchestratorRefusal = ROADMAP_REFUSAL,
 ): { agentId: string } | { fail: Response } {
   const caller = requireRegisteredCaller(store, projectKey, body);
   if ("fail" in caller) return caller;
@@ -275,8 +421,8 @@ function requireOrchestrator(
   return {
     fail: fail(
       409,
-      `agent ${caller.agentId} carries ${found} — roadmap registration requires ${ROADMAP_ROLE}`,
-      { help: roadmapHints.notOrchestrator(caller.agentId, role, ROADMAP_ROLE) },
+      `agent ${caller.agentId} carries ${found} — ${refusal.work} requires ${ROADMAP_ROLE}`,
+      { help: refusal.help(caller.agentId, role, ROADMAP_ROLE) },
     ),
   };
 }
@@ -342,11 +488,13 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
   const now = Date.now();
   const projects = store.listProjects(archived).map((project) => {
     const agents = store.listAgents(project.key);
-    const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
-    const last = events[0];
+    // Bounded reads, never the project's whole event history: the newest
+    // feed row, and each UTC day's newest coverage-bearing run.
+    const last = store.newestEvent(project.key);
+    const coverageDays = store.listCoverageDays(project.key);
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
-    const greenCovered = events.find((e) => e.coverage !== undefined);
+    const greenCovered = coverageDays[0];
     // CR-CRU-033 §S2 (DN-crucible-coverage-trend.md §6) — date-keyed
     // coverage-trend series: a MERGE, per UTC day, of the DURABLE rollup
     // buckets (old days that survived retention pruning) PLUS the
@@ -364,16 +512,11 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
         byDay.set(r.bucket, r.lastCoverage.lines.percent);
       }
     }
-    // Live day-points (within retention): group coverage-bearing events by
-    // UTC day, last-of-day wins. `events` is newest-first, so the FIRST
-    // event seen for a day is its last-of-day; live overwrites any rollup.
-    const liveSeen = new Set<string>();
-    for (const e of events) {
-      if (e.coverage === undefined) continue;
-      const day = new Date(e.timestamp).toISOString().slice(0, 10);
-      if (liveSeen.has(day)) continue;
-      liveSeen.add(day);
-      byDay.set(day, e.coverage.lines.percent);
+    // Live day-points (within retention): each UTC day's last-of-day
+    // coverage-bearing run (`coverageDays` holds exactly one per day); live
+    // overwrites any rollup.
+    for (const e of coverageDays) {
+      byDay.set(new Date(e.timestamp).toISOString().slice(0, 10), e.coverage.lines.percent);
     }
     const coverageTrend = Array.from(byDay.entries())
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -665,15 +808,62 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
   // (or which has outlived the `run_abandon_ms` limit) is aborted here, before the
   // dashboard reads a dead agent with a run still "running".
   store.sweepOpenRuns(now);
-  const agents = store.listAgents(project, now).map((agent) => ({
-    ...agent,
-    runtime_ms:
-      agent.liveness === "tombstoned"
-        ? (store.lastRunTimestamp(agent.projectKey, agent.agentId) ?? agent.lastSeen) -
-          agent.firstSeen
-        : now - agent.firstSeen,
-  }));
+  // §S3/R1 — computed once per read (after the sweep, so a run it just aborted
+  // no longer counts as open): which agents still have a run in flight.
+  const running = new Set(
+    store.listOpenRuns(project).map((run) => `${run.projectKey}\u0000${run.agentId}`),
+  );
+  const agents = store.listAgents(project, now).map((agent) => {
+    const lastRunAt = store.lastRunTimestamp(agent.projectKey, agent.agentId);
+    const idle =
+      agent.liveness !== "tombstoned" && !running.has(`${agent.projectKey}\u0000${agent.agentId}`);
+    return {
+      ...agent,
+      runtime_ms:
+        agent.liveness === "tombstoned"
+          ? (lastRunAt ?? agent.lastSeen) - agent.firstSeen
+          : now - agent.firstSeen,
+      ...(idle ? { idleLine: idleLine(agent, lastRunAt, now) } : {}),
+    };
+  });
   return reply(req, url, { ok: true, agents });
+}
+
+/**
+ * §S3/R1 — idle is the board's word: an agent with no open run reads
+ * `idle · <role> · cycle <id> · last run <message>, <age>` (`no cycle bound` in
+ * place of the cycle when it holds no binding), composed here at read time
+ * from its binding and its last run event; the message carries the outcome or
+ * refusal the ingest routes wrote (§S2). An agent that never ran says when it
+ * was last seen instead. Served as an ADDITIVE `idleLine` — absent while a
+ * run is open or the agent is tombstoned — so the raw `message` is untouched.
+ */
+function idleLine(agent: LiveAgent, lastRunAt: number | null, now: number): string {
+  const segments = ["idle"];
+  if (agent.role !== undefined) segments.push(agent.role);
+  segments.push(
+    agent.boundCycleId !== undefined ? `cycle ${agent.boundCycleId}` : "no cycle bound",
+  );
+  segments.push(
+    lastRunAt !== null
+      ? `last run ${agent.message}, ${relativeAge(lastRunAt, now)}`
+      : `seen ${relativeAge(agent.lastSeen, now)}`,
+  );
+  return segments.join(" · ");
+}
+
+/**
+ * The board's one relative-age convention, mirrored server-side so a
+ * server-composed line reads exactly like the card's own ages (`relativeTime`
+ * in the SPA's app logic): "just now" under 10s, else `Ns/Nm/Nh/Nd ago`.
+ */
+function relativeAge(ts: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - ts) / 1000));
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
@@ -765,7 +955,13 @@ function resolveIngestAttach(
   agentId: string,
   body: V2Body,
   validateUnbound: boolean,
-): { fail?: Response; staleHelp?: string[]; context?: RunContext; role?: AgentRole } {
+): {
+  fail?: Response;
+  staleHelp?: string[];
+  context?: RunContext;
+  role?: AgentRole;
+  refusal?: string;
+} {
   const agent = store.getAgent(projectKey, agentId);
   const roleAttach: { role?: AgentRole } =
     agent?.role !== undefined ? { role: agent.role } : {};
@@ -805,9 +1001,91 @@ function resolveIngestAttach(
       fail: fail(409, `bound cycle ${bound} is ${state} — ingest refused, run NOT stored`, {
         help: cycleHints.staleBinding(bound, state),
       }),
+      // §S2/G4 — the refusal in the card's words; a run-ingest route writes
+      // it onto the agent (`refuseIngest`) so a refused ingest never leaves a
+      // stale count behind.
+      refusal: `ingest refused — cycle ${bound} is ${state}`,
     };
   }
   return { ...roleAttach, context: { ...context, cycleId: bound } };
+}
+
+/**
+ * The release a run is filed under — checked on every run route (the start
+ * and the three ingests) BEFORE any write or `touchAgent`, beside
+ * `resolveIngestAttach` and independent of its `validateUnbound`:
+ *  - no `release` → `{}`, the route is unchanged;
+ *  - not a non-empty string → 400;
+ *  - beside a cycle — an explicit `context.cycleId`, or a poster BOUND to a
+ *    cycle → 400: a cycle's runs are its CR's evidence, a release's runs are
+ *    its verification, and one run is never both;
+ *  - a label the roadmap has not declared (`Store#declaredReleaseLabels`) →
+ *    400 naming every label it has;
+ *  - otherwise the label, for the route to stamp on the run row and event.
+ * `outcome` ends every refusal: what did NOT happen on the calling route.
+ */
+function resolveRunRelease(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  body: V2Body,
+  outcome = "run NOT stored",
+): { fail?: Response; release?: string } {
+  const release = body.release;
+  if (release === undefined || release === null) return {};
+  if (typeof release !== "string" || release.length === 0) {
+    return { fail: fail(400, `release must be a non-empty string — ${outcome}`) };
+  }
+  const context = body.context;
+  const explicitCycle =
+    typeof context === "object" && context !== null
+      ? (context as { cycleId?: unknown }).cycleId
+      : undefined;
+  if (explicitCycle !== undefined && explicitCycle !== null) {
+    return {
+      fail: fail(
+        400,
+        `release ${release} cannot be filed beside context.cycleId ${String(explicitCycle)} — a run is a cycle's or a release's, never both; ${outcome}`,
+      ),
+    };
+  }
+  const bound = store.getAgent(projectKey, agentId)?.boundCycleId;
+  if (bound !== undefined) {
+    return {
+      fail: fail(
+        400,
+        `release ${release} cannot be filed by agent ${agentId}, which is bound to cycle ${bound} — a run is a cycle's or a release's, never both; ${outcome}`,
+      ),
+    };
+  }
+  const declared = store.declaredReleaseLabels(projectKey);
+  if (!declared.includes(release)) {
+    const named = declared.length > 0 ? declared.join(", ") : "none";
+    return {
+      fail: fail(
+        400,
+        `release ${release} is not declared on this project's roadmap (declared: ${named}) — ${outcome}`,
+      ),
+    };
+  }
+  return { release };
+}
+
+/**
+ * §S2/G4 — a run ingest the attach seam refused: the server, which refused
+ * it, writes the refusal onto the agent's `message` (when the seam composed
+ * one) before answering with the refusal itself.
+ */
+function refuseIngest(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  attach: { fail: Response; refusal?: string },
+): Response {
+  if (attach.refusal !== undefined) {
+    store.touchAgent(projectKey, agentId, { message: attach.refusal });
+  }
+  return attach.fail;
 }
 
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
@@ -840,7 +1118,9 @@ function runVerdict(summary: RunSummary): string {
  * Agent shape (where role is a sibling of the run context, not part of it);
  * a role-less event yields no `role` key, same absence rule as above.
  */
-function attachEcho(event: RunEvent): { context?: { cycleId: number }; role?: AgentRole } {
+function attachEcho(
+  event: Pick<RunEvent, "context" | "role">,
+): { context?: { cycleId: number }; role?: AgentRole } {
   const cycleId = event.context?.cycleId;
   return {
     ...(typeof cycleId === "number" ? { context: { cycleId } } : {}),
@@ -897,12 +1177,15 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body, "run NOT started");
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) return attach.fail;
 
   const run = store.startRun(pk.key, agentId, {
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   return json(
     {
@@ -917,6 +1200,38 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
 }
 
 /**
+ * POST /api/v2/runs/<runId>/abort {projectKey, agentId, reason}: the agent
+ * that opened a run closes it at once, when it knows nothing will file it.
+ * The same caller boundary as `handleRunStart`, the same ownership/state
+ * refusals as `resolveRunClose` (400 unknown or another agent's/project's
+ * run; 409 a run already settled), and a reason is required (400). Settled
+ * by `Store#abortOpenRun` — the sweep's own store path, one run row and one
+ * `status: "aborted"` event — so the timeline and live stream see it as they
+ * see a run the server aborted itself.
+ */
+/** The one parameterised run route: `/api/v2/runs/<runId>/abort`. */
+const RUN_ABORT_RE = /^\/api\/v2\/runs\/([^/]+)\/abort$/;
+
+async function handleRunAbort(store: Store, runId: string, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const reason = body.reason;
+  if (typeof reason !== "string" || reason.trim().length === 0) {
+    return fail(400, "reason must be a non-empty string — run NOT aborted");
+  }
+  const close = resolveRunClose(store, pk.key, caller.agentId, { ...body, runId }, "run NOT aborted");
+  if (close.fail !== undefined) return close.fail;
+  if (store.abortOpenRun(runId, reason) === null) {
+    return fail(409, `run ${runId} settled before it could be aborted — run NOT aborted`);
+  }
+  return json({ ok: true, changed: true, runId, status: "aborted", reason });
+}
+
+/**
  * CR-CRU-017 §S1 — the OPTIONAL `runId` seam every ingest route shares.
  *
  * No `runId` → `{}`: the single-shot path is untouched, stores no lifecycle
@@ -926,12 +1241,16 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
  *  - already ended or aborted → 409, nothing stored (the CR's end/end and
  *    end-after-abort races);
  *  - open → the lifecycle stamp for the ONE event about to be written.
+ *
+ * `outcome` ends every refusal — what did NOT happen on the calling route
+ * (the ingest routes store nothing; `handleRunAbort` aborts nothing).
  */
 function resolveRunClose(
   store: Store,
   projectKey: string,
   agentId: string,
   body: V2Body,
+  outcome = "run NOT stored",
 ): {
   fail?: Response;
   runId?: string;
@@ -939,7 +1258,7 @@ function resolveRunClose(
 } {
   if (body.runId === undefined || body.runId === null) return {};
   if (typeof body.runId !== "string" || body.runId.length === 0) {
-    return { fail: fail(400, "runId must be a non-empty string — run NOT stored") };
+    return { fail: fail(400, `runId must be a non-empty string — ${outcome}`) };
   }
   const runId = body.runId;
   const run = store.getRun(runId);
@@ -947,7 +1266,7 @@ function resolveRunClose(
     return {
       fail: fail(
         400,
-        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); run NOT stored`,
+        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); ${outcome}`,
       ),
     };
   }
@@ -955,7 +1274,7 @@ function resolveRunClose(
     return {
       fail: fail(
         400,
-        `runId ${runId} belongs to agent ${run.agentId} in another run context — run NOT stored`,
+        `runId ${runId} belongs to agent ${run.agentId} in another run context — ${outcome}`,
       ),
     };
   }
@@ -963,7 +1282,7 @@ function resolveRunClose(
     return {
       fail: fail(
         409,
-        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; run NOT stored`,
+        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
       ),
     };
   }
@@ -993,8 +1312,12 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body);
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
-  if (attach.fail !== undefined) return attach.fail;
+  if (attach.fail !== undefined) {
+    return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
+  }
   // CR-CRU-017 §S1 — the optional run this ingest CLOSES, resolved before any
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);
@@ -1007,6 +1330,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   // The run is settled by the event that closed it — recorded after the write,
   // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
@@ -1033,6 +1357,10 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   if (!Array.isArray(body.tree)) {
     return fail(400, "tree is required");
   }
+  // Every node must be a SuiteNode and every leaf a TestLeaf — the shapes the
+  // store keeps as rows — or the run is refused naming the first that is not.
+  const treeRefusal = invalidSuiteTreeNode(body.tree);
+  if (treeRefusal !== null) return fail(400, `${treeRefusal} — run NOT stored`);
 
   const summary = body.summary as RunSummary;
   const hasCoverage = typeof body.coverage === "object" && body.coverage !== null;
@@ -1053,8 +1381,12 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body);
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
-  if (attach.fail !== undefined) return attach.fail;
+  if (attach.fail !== undefined) {
+    return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
+  }
   // CR-CRU-017 §S1 — the optional run this ingest CLOSES, resolved before any
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);
@@ -1068,6 +1400,7 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
@@ -1100,13 +1433,19 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  // The release is checked here whatever `validateUnbound` says below: an
+  // explicit cycle beside a release is refused on this route too.
+  const releaseRef = resolveRunRelease(store, pk.key, agentId, body);
+  if (releaseRef.fail !== undefined) return releaseRef.fail;
   // CR-CRU-057 §S1 — compile evidence is stamped on the SAME footing as run and
   // gate evidence: the one CR-CRU-056 attach seam resolves the poster's row
   // once and yields both its declared role and its bound cycle (gates parity —
   // this route never ran §S7 explicit-context validation either, so
   // validateUnbound stays false).
   const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
-  if (attach.fail !== undefined) return attach.fail;
+  if (attach.fail !== undefined) {
+    return refuseIngest(store, pk.key, agentId, { ...attach, fail: attach.fail });
+  }
   // CR-CRU-017 §S1 — the optional run this compile ingest CLOSES.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
@@ -1116,6 +1455,7 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
@@ -1216,6 +1556,117 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   return evidenceResponse(
     { ok: true, changed: true, event: event.id, ...attachEcho(event) },
     { status: 201 },
+  );
+}
+
+/** CR-CRU-162 §G2 — the answers `no-mistakes axi respond --action` accepts. */
+const GATE_DECISION_ACTIONS: ReadonlySet<string> = new Set(["approve", "fix", "skip"]);
+
+/** An optional decision field: absent (or null), or a string. */
+function optionalString(value: unknown): { ok: true; value?: string } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true };
+  return typeof value === "string" ? { ok: true, value } : { ok: false };
+}
+
+/**
+ * CR-CRU-162 §G4 — POST /api/v2/gate-decisions: one `axi respond` decision → its
+ * own record, keyed by the no-mistakes run id. Refused with a 400 naming the
+ * field before anything is stored; the caller and cycle-stamping rules are
+ * `handleGates`' own (a registered caller, then the one attach seam).
+ */
+async function handleGateDecisions(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  const raw = body.decision;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return fail(400, "decision is required", { help: hints.gateDecisionFields });
+  }
+  const d = raw as Record<string, unknown>;
+  if (typeof d.runId !== "string" || d.runId.length === 0) {
+    return fail(400, "decision.runId is required — the no-mistakes run id", {
+      help: hints.gateDecisionFields,
+    });
+  }
+  if (typeof d.action !== "string" || !GATE_DECISION_ACTIONS.has(d.action)) {
+    return fail(
+      400,
+      `decision.action is required, one of: ${[...GATE_DECISION_ACTIONS].join(", ")}`,
+      { help: hints.gateDecisionFields },
+    );
+  }
+  const findings = d.findings;
+  if (
+    findings !== undefined &&
+    findings !== null &&
+    !(Array.isArray(findings) && findings.every((id) => typeof id === "string"))
+  ) {
+    return fail(400, "decision.findings must be an array of finding ids", {
+      help: hints.gateDecisionFields,
+    });
+  }
+  const addedFinding = d.addedFinding;
+  if (
+    addedFinding !== undefined &&
+    addedFinding !== null &&
+    (typeof addedFinding !== "object" || Array.isArray(addedFinding))
+  ) {
+    return fail(400, "decision.addedFinding must be ONE JSON finding object", {
+      help: hints.gateDecisionFields,
+    });
+  }
+  const text: Record<"step" | "instructions" | "reason", string | undefined> = {
+    step: undefined,
+    instructions: undefined,
+    reason: undefined,
+  };
+  for (const field of ["step", "instructions", "reason"] as const) {
+    const parsed = optionalString(d[field]);
+    if (!parsed.ok) {
+      return fail(400, `decision.${field} must be a string`, { help: hints.gateDecisionFields });
+    }
+    text[field] = parsed.value;
+  }
+  // The same caller seam as /gates: refused BEFORE any touchAgent/record.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
+  // ...and the same attach seam: a BOUND agent's decision is stamped from its
+  // binding (validateUnbound stays false, exactly as a gate snapshot's).
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
+  if (attach.fail !== undefined) return attach.fail;
+  const decision = store.recordGateDecision(
+    pk.key,
+    agentId,
+    {
+      runId: d.runId,
+      action: d.action as GateDecisionAction,
+      ...(text.step !== undefined ? { step: text.step } : {}),
+      ...(Array.isArray(findings) ? { findings: findings as string[] } : {}),
+      ...(typeof addedFinding === "object" && addedFinding !== null
+        ? { addedFinding: addedFinding as Record<string, unknown> }
+        : {}),
+      ...(text.instructions !== undefined ? { instructions: text.instructions } : {}),
+      ...(text.reason !== undefined ? { reason: text.reason } : {}),
+    },
+    {
+      ...(attach.context !== undefined ? { context: attach.context } : eventContext(body)),
+      ...(attach.role !== undefined ? { role: attach.role } : {}),
+    },
+  );
+  // A decision is not an event: its id is answered as `decision`, and the
+  // reply names the one read that shows it (the gate's), never the cycle's.
+  return json(
+    {
+      ok: true,
+      changed: true,
+      decision: decision.id,
+      ...attachEcho(decision),
+      help: hints.afterGateDecision,
+    },
+    201,
   );
 }
 
@@ -1544,7 +1995,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     // `wave-sequence`'s envelope, with nothing written.
     let written: ReturnType<Store["filePlanRegistering"]>;
     try {
-      written = store.filePlanRegistering(pk.key, entry, planInput);
+      written = store.filePlanRegistering(pk.key, entry, planInput, declarationAuthor(caller));
     } catch (error) {
       if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
       throw error;
@@ -1616,17 +2067,42 @@ async function handleCycleAppend(
     }
     before = beforeRaw;
   }
-  const cycle = store.appendCycle(pk.key, planId, parsed, before);
+  // CR-CRU-165 §S1 — a FIX append after a done VERIFY needs nothing more (the
+  // store holds the VERIFY rule); an insert-before or an append of any other
+  // kind is a recorded plan change: orchestrator-only, with its record.
+  let change: ChangeRecord | undefined;
+  if (before !== undefined || parsed.kind !== "fix") {
+    const record = requirePlanChange(
+      store,
+      pk.key,
+      body,
+      before !== undefined ? "inserting a cycle" : `appending a ${parsed.kind} cycle`,
+    );
+    if ("fail" in record) return record.fail;
+    change = record;
+  }
+  const cycle = store.appendCycle(pk.key, planId, parsed, before, change);
   if ("error" in cycle) {
     const help =
       cycle.code === "insert-before-active"
         ? cycleHints.insertBeforeActive(cycle.cycleRef!)
         : cycle.notFound === true
           ? hints.planCycleNotFound
-          : hints.closedPlan;
+          : (planChangeHelp(planId, cycle) ?? hints.closedPlan);
     return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
   }
-  return json({ ok: true, changed: true, ...cycle }, 201);
+  return json(
+    {
+      ok: true,
+      changed: true,
+      ...cycle,
+      // §S4 (N1) — the plan's own CR, so a client that named the
+      // plan directly can label its envelope without reading the board.
+      cr: store.planCr(pk.key, planId),
+      ...(change !== undefined ? { warnings: [PROCESS_FAILURE_WARNING] } : {}),
+    },
+    201,
+  );
 }
 
 /** PATCH …/plans/<planId>/cycles/<id> — §S0 transitions (legal table in the store). */
@@ -1665,7 +2141,10 @@ async function handleCycleTransition(
     if (typeof body.label !== "string" || body.label.length === 0) {
       return fail(400, "label must be a non-empty string", { help: hints.cycleInput });
     }
-    const edited = store.editCycleLabel(pk.key, planId, cycleId, body.label);
+    // CR-CRU-165 §S1 — a rename is a recorded plan change.
+    const record = requirePlanChange(store, pk.key, body, `renaming cycle ${cycleId}`);
+    if ("fail" in record) return record.fail;
+    const edited = store.editCycleLabel(pk.key, planId, cycleId, body.label, record);
     if ("error" in edited) {
       const help =
         edited.code === "locked"
@@ -1675,7 +2154,7 @@ async function handleCycleTransition(
             : hints.planCycleNotFound;
       return fail(edited.notFound === true ? 404 : 400, edited.error, { help });
     }
-    return json({ ok: true, changed: true, cycle: edited });
+    return json({ ok: true, changed: true, cycle: edited, warnings: [PROCESS_FAILURE_WARNING] });
   }
   if (typeof body.status !== "string" || !CYCLE_STATUSES.has(body.status)) {
     return fail(
@@ -1684,7 +2163,15 @@ async function handleCycleTransition(
       { help: hints.cycleStatus },
     );
   }
-  const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus);
+  // CR-CRU-165 §S2 — the route half of cycle-skip: the same guards as the
+  // verb, so the route cannot be used to get round it.
+  let change: ChangeRecord | undefined;
+  if (body.status === "skipped") {
+    const record = requirePlanChange(store, pk.key, body, `skipping cycle ${cycleId}`);
+    if ("fail" in record) return record.fail;
+    change = record;
+  }
+  const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus, change);
   if ("error" in cycle) {
     // CR-CRU-024 §S4 — attach the help[] matching the store's refusal code.
     const help =
@@ -1694,10 +2181,15 @@ async function handleCycleTransition(
           ? cycleHints.alreadyActive(cycle.cycleRef!)
           : cycle.code === "illegal-transition"
             ? hints.illegalCycleTransition
-            : hints.planCycleNotFound;
+            : (planChangeHelp(planId, cycle) ?? hints.planCycleNotFound);
     return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
   }
-  return json({ ok: true, changed: true, cycle });
+  return json({
+    ok: true,
+    changed: true,
+    cycle,
+    ...(change !== undefined ? { warnings: [PROCESS_FAILURE_WARNING] } : {}),
+  });
 }
 
 /** PATCH …/plans/<planId> — the CR close (feature merge). */
@@ -1848,17 +2340,26 @@ async function handlePlanAbort(
       { help: hints.abortNeedsApproval },
     );
   }
+  // CR-CRU-165 §S2b — an abort is a recorded failure too: its reason, cause
+  // and spec reference are required, after approval and before existence.
+  const record = parseChangeRecord(
+    body,
+    "aborting a plan",
+    "an abort is a recorded failure of the spec or of its gap analysis and needs reason, cause and specRef",
+    planChangeHints.abortRecordRequired,
+  );
+  if ("fail" in record) return record.fail;
   const planId = numericId(planIdRaw);
   if (planId === null) {
     return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
   }
-  const plan = store.abortPlan(pk.key, planId);
+  const plan = store.abortPlan(pk.key, planId, record);
   if ("error" in plan) {
     return fail(plan.notFound === true ? 404 : 400, plan.error, {
       help: plan.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
     });
   }
-  return json({ ok: true, changed: true, plan });
+  return json({ ok: true, changed: true, plan, warnings: [PROCESS_FAILURE_WARNING] });
 }
 
 /**
@@ -1876,17 +2377,34 @@ async function handleProjectStop(store: Store, key: string, req: Request): Promi
   return json({ ok: true, checkpointed });
 }
 
-/** GET …/plans (+?cr=&track=) — closed plans carry the derived commitBoundary. */
+/** §S1 — the plan statuses GET …/plans?status= accepts. */
+const PLAN_LIST_STATUSES: ReadonlySet<string> = new Set(["open", "closed", "aborted"]);
+
+/**
+ * GET …/plans (+?cr=&track=&status=) — closed plans carry the derived
+ * commitBoundary. §S1: an optional `status` (open | closed | aborted) filters
+ * the rows before any plan is built; any other value, the empty string
+ * included, is refused 400. §S2: every response also carries the project-wide
+ * `lastClosedCr` and `filed`, computed over ALL plans regardless of filters.
+ */
 function handlePlansList(store: Store, key: string, req: Request, url: URL): Response {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const cr = url.searchParams.get("cr") ?? undefined;
   const track = url.searchParams.get("track") ?? undefined;
+  const status = url.searchParams.get("status") ?? undefined;
+  if (status !== undefined && !PLAN_LIST_STATUSES.has(status)) {
+    return fail(400, `invalid status: ${JSON.stringify(status)} (expected open | closed | aborted)`, {
+      help: hints.plansStatusFilter,
+    });
+  }
   const plans = store.listPlans(pk.key, {
     ...(cr !== undefined ? { cr } : {}),
     ...(track !== undefined ? { track } : {}),
+    ...(status !== undefined ? { status } : {}),
   });
-  return reply(req, url, { ok: true, plans });
+  const { lastClosedCr, filed } = store.planFacts(pk.key);
+  return reply(req, url, { ok: true, plans, lastClosedCr, filed });
 }
 
 /**
@@ -1899,7 +2417,20 @@ function handlePlansList(store: Store, key: string, req: Request, url: URL): Res
  * archived projects by default, which IS the exclusion rule here.
  */
 function handlePlansGlobalList(store: Store, req: Request, url: URL): Response {
-  const plans = store.listProjects().flatMap((project) => store.listPlans(project.key));
+  // CR-CRU-165 N2 — `cr` and `status` are HONOURED with the project route's
+  // own validation; a filtered query never answers with the unfiltered list.
+  const cr = url.searchParams.get("cr") ?? undefined;
+  const status = url.searchParams.get("status") ?? undefined;
+  if (status !== undefined && !PLAN_LIST_STATUSES.has(status)) {
+    return fail(400, `invalid status: ${JSON.stringify(status)} (expected open | closed | aborted)`, {
+      help: hints.plansStatusFilter,
+    });
+  }
+  const filter = {
+    ...(cr !== undefined ? { cr } : {}),
+    ...(status !== undefined ? { status } : {}),
+  };
+  const plans = store.listProjects().flatMap((project) => store.listPlans(project.key, filter));
   return reply(req, url, { ok: true, plans });
 }
 
@@ -1971,6 +2502,390 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
     return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
   return reply(req, url, { ok: true, releases: store.listReleases(key).map(releaseBrief) });
+}
+
+/** One no-mistakes run of a release's gate, derived from its snapshots. */
+interface HistoryGateRun {
+  runId?: string;
+  outcome: string;
+  stopStep?: string;
+  fixRounds: number;
+  durationMs: number;
+  pushedCommit?: string;
+  eventId: string;
+  retired: boolean;
+  decisionSummary?: DecisionSummary;
+}
+
+/** One release label's workflow: its gate runs, its verification, what it shipped. */
+interface HistoryWorkflow {
+  label: string;
+  gateRuns: HistoryGateRun[];
+  verificationRuns: number;
+  packages?: PackageRef[];
+}
+
+/** One history row: one release, its single label and its single workflow. */
+interface HistoryRelease {
+  labels: string[];
+  state: "shipped" | "in progress" | "ship not recorded";
+  shippedAt?: number;
+  tag?: string;
+  commit?: string;
+  targetAt?: number;
+  /** The release's completed CRs; `pendingCount` the rest of its CRs. */
+  crCount: number;
+  pendingCount: number;
+  /** Each wave's completed CRs, and how many of its CRs are not completed yet. */
+  waves: { wave: string; crs: string[]; pendingCount: number }[];
+  workflows: HistoryWorkflow[];
+}
+
+/** A release record as the history read holds it while composing the rows. */
+interface HistoryLabel {
+  label: string;
+  /** Absent for a release only the queue names. */
+  record?: RunEvent;
+  /** Epoch SECONDS; present exactly when the release shipped. */
+  shippedAt?: number;
+  crs: string[];
+}
+
+/**
+ * GET …/projects/<key>/history — the project's history told by release.
+ * Existence is validated the `handleProjectReleases` way. Every source is ONE
+ * statement — the release records, the queue, the plans, every gate snapshot
+ * (retired ones included: this is the one read that returns them), the gate
+ * decisions of the runs found, and the run count per release — grouped here
+ * in memory, never re-read per release.
+ *
+ * Which releases: only what is past — a release that shipped, or one at
+ * least one of whose CRs is completed (merged: a closed plan with a merge
+ * commit, or named by a shipped release record). A shipped release's CRs are
+ * its record's `crs`; an unshipped one's are the queue entries declaring it.
+ * Work no release names falls in the release that succeeds it on the
+ * timeline. A row lists its completed CRs and counts the rest as pending. One
+ * row per release — releases shipped the same day are separate rows — newest
+ * version first.
+ */
+function handleProjectHistory(store: Store, key: string, req: Request, url: URL): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return reply(req, url, { ok: true, releases: projectHistory(store, key) });
+}
+
+function projectHistory(store: Store, key: string): HistoryRelease[] {
+  const queue = store.listQueue(key);
+  const plans = store.listPlans(key);
+  // A CR's wave: its queue entry's, else its plan's (a wave-less plan is the
+  // "" wave the page bands it under).
+  const waveOfCr = new Map<string, string>(plans.map((plan) => [plan.cr, plan.wave ?? ""]));
+  for (const entry of queue) waveOfCr.set(entry.cr, entry.wave);
+  const planned = new Set(plans.map((plan) => plan.cr));
+  // A queued CR declared VOID or SUPERSEDED that no plan ever took up is no
+  // work of its own: it belongs to no release, wherever the queue files it.
+  const queuedWork = queue.filter((entry) => !isDeadCr(entry) || planned.has(entry.cr));
+  const queuedUnder = new Map<string, string[]>();
+  for (const entry of queuedWork) {
+    if (entry.release === undefined) continue;
+    queuedUnder.set(entry.release, [...(queuedUnder.get(entry.release) ?? []), entry.cr]);
+  }
+
+  // The release records, settled ones first; within each read the first
+  // (newest) record of a label wins. A release SHIPPED when its record carries
+  // the date it shipped: a settled record holding no date is a ship that was
+  // never recorded, told as unshipped rather than dated by its ingest instant.
+  const labels = new Map<string, HistoryLabel>();
+  for (const record of [...store.listReleases(key), ...store.listReleaseProposals(key)]) {
+    if (record.label === undefined || labels.has(record.label)) continue;
+    const shippedAt = record.deliveredAt ?? record.releasedAt;
+    const crs = shippedAt !== undefined && record.crs !== undefined ? record.crs : queuedUnder.get(record.label);
+    labels.set(record.label, {
+      label: record.label,
+      record,
+      ...(shippedAt !== undefined ? { shippedAt } : {}),
+      crs: [...new Set(crs ?? [])],
+    });
+  }
+  // A release only the queue names holds that work all the same.
+  for (const [label, crs] of queuedUnder) {
+    if (!labels.has(label)) labels.set(label, { label, crs: [...new Set(crs)] });
+  }
+
+  // A CR is completed once merged — a closed plan with a merge commit — or
+  // once a shipped release record names it.
+  const completed = new Set(
+    plans.filter((plan) => plan.status === "closed" && plan.merge !== undefined).map((plan) => plan.cr),
+  );
+  for (const entry of labels.values()) {
+    if (entry.shippedAt === undefined) continue;
+    for (const cr of entry.record?.crs ?? []) completed.add(cr);
+  }
+
+  placeUnnamedCrs(labels, [...new Set([...queuedWork.map((entry) => entry.cr), ...planned])], plans);
+
+  const gateRuns = historyGateRuns(store, key, labels, waveOfCr);
+  const verification = store.countRunsByRelease(key);
+
+  const past = [...labels.values()].filter(
+    (entry) => entry.shippedAt !== undefined || entry.crs.some((cr) => completed.has(cr)),
+  );
+
+  return past
+    .sort((a, b) => compareVersionLabels(b.label, a.label))
+    .map((entry) => historyRow(entry, waveOfCr, completed, gateRuns, verification));
+}
+
+/**
+ * Every CR no release holds falls in the release that succeeds it on the
+ * timeline — by its plan's close time, else the first time its work ran (a
+ * cycle activated) — and a CR whose work has no time yet in the lowest
+ * unshipped release.
+ */
+function placeUnnamedCrs(labels: Map<string, HistoryLabel>, crs: string[], plans: Plan[]): void {
+  const held = new Set([...labels.values()].flatMap((entry) => entry.crs));
+  const timeline = [...labels.values()].sort(compareShipOrder);
+  for (const cr of crs) {
+    if (held.has(cr)) continue;
+    const own = plans.filter((plan) => plan.cr === cr);
+    const closedAt = own
+      .filter((plan) => plan.status === "closed" && plan.closedAt !== undefined)
+      .map((plan) => plan.closedAt!);
+    const activatedAt = own.flatMap((plan) =>
+      plan.cycles.map((cycle) => cycle.activatedAt).filter((at): at is number => at !== undefined),
+    );
+    const at = closedAt.length > 0 ? Math.max(...closedAt) : activatedAt.length > 0 ? Math.min(...activatedAt) : undefined;
+    const entry = timelineRelease(timeline, at);
+    if (entry !== undefined) entry.crs.push(cr);
+  }
+}
+
+/**
+ * The release that succeeds a moment (epoch MILLISECONDS) on the timeline:
+ * the first that shipped at or after it, else the lowest unshipped one. A
+ * moment not known yet falls in the lowest unshipped release. `timeline` is in
+ * ship order (`compareShipOrder`).
+ */
+function timelineRelease(timeline: HistoryLabel[], at: number | undefined): HistoryLabel | undefined {
+  return timeline.find(
+    (entry) => entry.shippedAt === undefined || (at !== undefined && entry.shippedAt * 1000 >= at),
+  );
+}
+
+/**
+ * One release's row of the history: its completed CRs, by wave, and a count
+ * of the rest. A wave with no completed CR is not listed.
+ */
+function historyRow(
+  entry: HistoryLabel,
+  waveOfCr: Map<string, string>,
+  completed: Set<string>,
+  gateRuns: Map<string, HistoryGateRun[]>,
+  verification: Map<string, number>,
+): HistoryRelease {
+  const crs = entry.crs;
+  const done = crs.filter((cr) => completed.has(cr));
+  const waves = new Map<string, { crs: string[]; pendingCount: number }>();
+  for (const cr of crs) {
+    const wave = waveOfCr.get(cr);
+    if (wave === undefined) continue;
+    const held = waves.get(wave) ?? { crs: [], pendingCount: 0 };
+    if (completed.has(cr)) held.crs.push(cr);
+    else held.pendingCount += 1;
+    waves.set(wave, held);
+  }
+  const shipped = entry.shippedAt !== undefined;
+  const runs = gateRuns.get(entry.label) ?? [];
+  const state: HistoryRelease["state"] = shipped
+    ? "shipped"
+    : crs.length > 0 && done.length === crs.length
+      ? "ship not recorded"
+      : "in progress";
+  const record = entry.record;
+  return {
+    labels: [entry.label],
+    state,
+    ...(shipped ? { shippedAt: entry.shippedAt, tag: `v${entry.label}` } : {}),
+    ...(shipped && record?.commit !== undefined ? { commit: record.commit } : {}),
+    ...(record?.targetAt !== undefined ? { targetAt: record.targetAt } : {}),
+    crCount: done.length,
+    pendingCount: crs.length - done.length,
+    waves: [...waves.entries()]
+      .filter(([, held]) => held.crs.length > 0)
+      .sort(([a], [b]) => compareVersionLabels(b, a))
+      .map(([wave, held]) => ({ wave, crs: held.crs, pendingCount: held.pendingCount })),
+    workflows: [
+      {
+        label: entry.label,
+        gateRuns: runs,
+        verificationRuns: verification.get(entry.label) ?? 0,
+        ...(record?.packages !== undefined ? { packages: record.packages } : {}),
+      },
+    ],
+  };
+}
+
+/**
+ * Every gate run of the project, keyed by the release label it belongs to,
+ * newest run first. Snapshots carrying a `runId` group by it; the rest are
+ * seal-bounded — each run is the snapshots up to and including the next one
+ * not in flight. A run belongs to the release its snapshots name; one naming
+ * none belongs to the release of the wave it gated; one naming neither
+ * belongs to the next release to ship.
+ */
+function historyGateRuns(
+  store: Store,
+  key: string,
+  labels: Map<string, HistoryLabel>,
+  waveOfCr: Map<string, string>,
+): Map<string, HistoryGateRun[]> {
+  const byRunId = new Map<string, RunEvent[]>();
+  const groups: RunEvent[][] = [];
+  let open: RunEvent[] = [];
+  for (const snapshot of store.listGatesWithRetired(key)) {
+    if (snapshot.runId !== undefined) {
+      const group = byRunId.get(snapshot.runId);
+      if (group === undefined) {
+        const created = [snapshot];
+        byRunId.set(snapshot.runId, created);
+        groups.push(created);
+      } else {
+        group.push(snapshot);
+      }
+      continue;
+    }
+    open.push(snapshot);
+    if (isSealedGate(snapshot)) {
+      groups.push(open);
+      open = [];
+    }
+  }
+  if (open.length > 0) groups.push(open);
+
+  const decisions = store.listGateDecisionsForRuns(
+    [...byRunId.keys()].map((runId) => ({ projectKey: key, runId })),
+  );
+  const releaseOfWave = waveReleases(labels, waveOfCr);
+
+  const runs = new Map<string, { at: number; run: HistoryGateRun }[]>();
+  for (const group of groups) {
+    const seal = [...group].reverse().find(isSealedGate) ?? group[group.length - 1]!;
+    const label = gateRunRelease(group, seal, labels, releaseOfWave);
+    if (label === undefined) continue;
+    const newest = group[group.length - 1]!;
+    const runId = group[0]!.runId;
+    const runDecisions =
+      runId !== undefined && isSealedGate(seal) ? decisions.get(gateDecisionRunKey(key, runId)) : undefined;
+    const stopStep = gateStepStates(seal.gate).find(
+      (step) => step.status !== "passed" && step.status !== "skipped",
+    )?.name;
+    const pushedCommit = gatePushedCommit(seal.gate);
+    const outcome = (seal.gate as { outcome?: unknown } | null | undefined)?.outcome;
+    const run: HistoryGateRun = {
+      ...(runId !== undefined ? { runId } : {}),
+      outcome: typeof outcome === "string" ? outcome : "unknown",
+      ...(stopStep !== undefined ? { stopStep } : {}),
+      fixRounds: gateFixRounds(group),
+      durationMs: seal.timestamp - group[0]!.timestamp,
+      ...(pushedCommit !== undefined ? { pushedCommit } : {}),
+      eventId: newest.id,
+      retired: seal.retiredAt !== undefined,
+      ...(runDecisions !== undefined && runDecisions.length > 0
+        ? { decisionSummary: decisionSummary(seal.gate, runDecisions) }
+        : {}),
+    };
+    runs.set(label, [...(runs.get(label) ?? []), { at: newest.timestamp, run }]);
+  }
+  return new Map(
+    [...runs.entries()].map(([label, list]) => [
+      label,
+      list.sort((a, b) => b.at - a.at).map((entry) => entry.run),
+    ]),
+  );
+}
+
+/**
+ * The release a gate run belongs to: the newest version its snapshots name;
+ * else, by the wave its snapshots name, the first of that wave's releases
+ * still to ship when the run sealed (shipped ones in ship order, then the
+ * unshipped in version order), falling back to the last of them; else,
+ * gating a wave no release holds or naming neither, the first release that
+ * shipped at or after the run sealed, or the lowest unshipped release.
+ */
+function gateRunRelease(
+  group: RunEvent[],
+  seal: RunEvent,
+  labels: Map<string, HistoryLabel>,
+  releaseOfWave: Map<string, HistoryLabel[]>,
+): string | undefined {
+  const newestFirst = [...group].reverse();
+  const version = newestFirst.find((snapshot) => snapshot.version !== undefined)?.version;
+  if (version !== undefined && labels.has(version)) return version;
+  const wave = newestFirst.find((snapshot) => snapshot.context?.wave !== undefined)?.context?.wave;
+  const candidates = wave !== undefined ? (releaseOfWave.get(wave) ?? []) : [];
+  if (candidates.length > 0) {
+    const stillToShip = (entry: HistoryLabel): boolean =>
+      entry.shippedAt === undefined || entry.shippedAt * 1000 >= seal.timestamp;
+    return (candidates.find(stillToShip) ?? candidates[candidates.length - 1])!.label;
+  }
+  return timelineRelease([...labels.values()].sort(compareShipOrder), seal.timestamp)?.label;
+}
+
+/** Shipped releases in ship order, then the unshipped ones by version. */
+function compareShipOrder(a: HistoryLabel, b: HistoryLabel): number {
+  if (a.shippedAt !== undefined && b.shippedAt !== undefined) return a.shippedAt - b.shippedAt;
+  if (a.shippedAt !== undefined) return -1;
+  if (b.shippedAt !== undefined) return 1;
+  return compareVersionLabels(a.label, b.label);
+}
+
+/** Each wave's releases: shipped ones in ship order, then the unshipped by version. */
+function waveReleases(
+  labels: Map<string, HistoryLabel>,
+  waveOfCr: Map<string, string>,
+): Map<string, HistoryLabel[]> {
+  const byWave = new Map<string, HistoryLabel[]>();
+  for (const entry of labels.values()) {
+    const waves = new Set(
+      entry.crs.map((cr) => waveOfCr.get(cr)).filter((wave): wave is string => wave !== undefined),
+    );
+    for (const wave of waves) byWave.set(wave, [...(byWave.get(wave) ?? []), entry]);
+  }
+  for (const list of byWave.values()) list.sort(compareShipOrder);
+  return byWave;
+}
+
+/** A gate object's steps with their names and statuses. */
+function gateStepStates(gate: unknown): { name: string; status?: unknown }[] {
+  return gateSteps(gate) as { name: string; status?: unknown }[];
+}
+
+/** The times a step ENTERED `fixing` across a run's snapshots, in order. */
+function gateFixRounds(group: RunEvent[]): number {
+  let rounds = 0;
+  let previous = new Map<string, unknown>();
+  for (const snapshot of group) {
+    const current = new Map<string, unknown>();
+    for (const step of gateStepStates(snapshot.gate)) {
+      if (step.status === "fixing" && previous.get(step.name) !== "fixing") rounds += 1;
+      current.set(step.name, step.status);
+    }
+    previous = current;
+  }
+  return rounds;
+}
+
+/** The commit a gate pushed (`push.commit`), when it names one. */
+function gatePushedCommit(gate: unknown): string | undefined {
+  if (typeof gate !== "object" || gate === null) return undefined;
+  const push = (gate as { push?: unknown }).push;
+  if (typeof push !== "object" || push === null) return undefined;
+  const commit = (push as { commit?: unknown }).commit;
+  return typeof commit === "string" && commit.length > 0 ? commit : undefined;
 }
 
 /**
@@ -2078,6 +2993,34 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
   }
   const entries = store.listQueue(key);
   return reply(req, url, { ok: true, entries, tracks: declaredTracks(entries) });
+}
+
+/**
+ * CR-CRU-098 §S2 — GET …/projects/<key>/next[?track=&release=&wave=]: the plan
+ * pointer, published WHOLE (`help[]` and `warnings[]` included). The key is
+ * validated like every other project read; the inputs are the two facts the
+ * queue read publishes — `listQueue`'s entries in their published order and
+ * `declaredTracks` over them — and the answer is `resolveNext`'s, verbatim.
+ * Derived and read-only: nothing is stored and nothing cached.
+ */
+function handleNextGet(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const entries = store.listQueue(key);
+  const param = (name: string): string | undefined => url.searchParams.get(name) ?? undefined;
+  const result = resolveNext(entries, declaredTracks(entries), {
+    track: param("track"),
+    release: param("release"),
+    wave: param("wave"),
+  });
+  if (!result.ok) {
+    return fail(
+      400,
+      "`track` is required — this project declares more than one lane, and next never picks one",
+      result.fields,
+    );
+  }
+  return reply(req, url, { ok: true, ...result.fields, warnings: result.warnings });
 }
 
 /**
@@ -2989,6 +3932,19 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   if (typeof body.title !== "string" || body.title.length === 0) {
     return fail(400, "`title` is required — the CR's brief");
   }
+  // CR-CRU-022 §S1 — story points are optional; when sent they must sit on
+  // the planning-poker Fibonacci scale, refused BEFORE anything is written.
+  const points = body.points ?? undefined;
+  if (
+    points !== undefined &&
+    (typeof points !== "number" || !STORY_POINT_SCALE.includes(points))
+  ) {
+    return fail(
+      400,
+      `\`points\` must be on the planning-poker Fibonacci scale ` +
+        `${STORY_POINT_SCALE.join(", ")} — got ${JSON.stringify(points)}`,
+    );
+  }
   // CR-CRU-104 §S1 — the ONE membership rule, the same decision the migration
   // door passes through. `cr-plan` declares no track, so `release` is its
   // whole declaration.
@@ -3016,12 +3972,17 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // envelope, and nothing is written.
   let report: QueueSeqReport & { changed: boolean };
   try {
-    report = store.upsertQueueEntry(pk.key, {
-      cr: body.cr,
-      release: body.release,
-      wave: String(body.wave),
-      title: body.title,
-    });
+    report = store.upsertQueueEntry(
+      pk.key,
+      {
+        cr: body.cr,
+        release: body.release,
+        wave: String(body.wave),
+        title: body.title,
+        ...(points !== undefined ? { points } : {}),
+      },
+      declarationAuthor(caller),
+    );
   } catch (error) {
     if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
     throw error;
@@ -3289,11 +4250,16 @@ async function handleCrLifecycle(
       help: roadmapHints.shippedCr(cr, label),
     });
   }
-  const result = store.setQueueLifecycle(pk.key, cr, {
-    state: verb === "supersede" ? "SUPERSEDED" : "VOID",
-    ...(by !== undefined ? { by } : {}),
-    ...(reason !== undefined ? { reason } : {}),
-  });
+  const result = store.setQueueLifecycle(
+    pk.key,
+    cr,
+    {
+      state: verb === "supersede" ? "SUPERSEDED" : "VOID",
+      ...(by !== undefined ? { by } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    },
+    declarationAuthor(caller),
+  );
   if (result === null) {
     return fail(404, `cr ${cr} is not registered in this project's queue`, {
       help: roadmapHints.unregisteredCr(cr),
@@ -3355,6 +4321,89 @@ async function handleProjectDelete(store: Store, key: string, req: Request): Pro
   return json({ ok: true, changed: true, deleted });
 }
 
+// §S2 — a metadata key is an environment-variable name.
+const METADATA_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
+// §S2 — the project's identity stays local: never a metadata key.
+const METADATA_RESERVED_KEY = "CRUCIBLE_PROJECT_KEY";
+
+/**
+ * §S3 — GET …/projects/<key>/metadata: the project's map, `{}` when it holds
+ * none. Open to any reader; an unknown project answers `requireProject`'s
+ * refusal.
+ */
+function handleProjectMetadataGet(store: Store, key: string, req: Request, url: URL): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  return reply(req, url, { ok: true, metadata: store.getProjectMetadata(pk.key) });
+}
+
+/**
+ * §S2 — PATCH …/projects/<key>/metadata {agentId, set?, unset?}. Order: the
+ * project, the body, then `requireOrchestrator` (both 409 refusals return
+ * before anything is read for the write), then every shape rule, and only
+ * then the store's one-transaction apply. A change notifies the `projects`
+ * stream from inside the store, as `updateProject` does.
+ */
+async function handleProjectMetadataPatch(
+  store: Store,
+  key: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  const caller = requireOrchestrator(store, pk.key, body, PROJECT_METADATA_REFUSAL);
+  if ("fail" in caller) return caller.fail;
+
+  const change = parseMetadataChange(body as Record<string, unknown>);
+  if ("error" in change) {
+    return fail(400, change.error, { help: hints.projectMetadataInput });
+  }
+  const { metadata, changed } = store.applyProjectMetadata(pk.key, change);
+  return json({ ok: true, metadata, changed });
+}
+
+/**
+ * §S2 — every shape rule a metadata write must pass, checked in full before
+ * anything is written: a non-empty `set` or `unset`, environment-variable
+ * keys, string values, no key in both, and never the reserved identity key.
+ */
+function parseMetadataChange(
+  raw: Record<string, unknown>,
+): { set: Record<string, string>; unset: string[] } | { error: string } {
+  const rawSet = raw.set ?? {};
+  const rawUnset = raw.unset ?? [];
+  if (typeof rawSet !== "object" || rawSet === null || Array.isArray(rawSet)) {
+    return { error: "set must be an object of {KEY: \"value\"}" };
+  }
+  if (!Array.isArray(rawUnset)) return { error: "unset must be an array of keys" };
+  const setEntries = Object.entries(rawSet as Record<string, unknown>);
+  if (setEntries.length === 0 && rawUnset.length === 0) {
+    return { error: "a metadata write must name at least one key in a non-empty set or unset" };
+  }
+  const set: Record<string, string> = {};
+  for (const [metaKey, value] of setEntries) {
+    if (!METADATA_KEY_RE.test(metaKey)) {
+      return { error: `set key ${JSON.stringify(metaKey)} is not an environment-variable name` };
+    }
+    if (typeof value !== "string") return { error: `set value for ${metaKey} must be a string` };
+    set[metaKey] = value;
+  }
+  const unset: string[] = [];
+  for (const metaKey of rawUnset as unknown[]) {
+    if (typeof metaKey !== "string" || !METADATA_KEY_RE.test(metaKey)) {
+      return { error: `unset key ${JSON.stringify(metaKey)} is not an environment-variable name` };
+    }
+    if (Object.hasOwn(set, metaKey)) return { error: `key ${metaKey} is named in both set and unset` };
+    unset.push(metaKey);
+  }
+  if (Object.hasOwn(set, METADATA_RESERVED_KEY) || unset.includes(METADATA_RESERVED_KEY)) {
+    return { error: `${METADATA_RESERVED_KEY} is refused — a project's identity stays local` };
+  }
+  return { set, unset };
+}
+
 // CR-CRU-012 §S1 — the PATCHable field set; anything else 400s by name.
 const PATCHABLE_FIELDS = new Set([
   "name",
@@ -3376,6 +4425,31 @@ const LIVENESS_WIRE_KEYS = {
   t2_ms: "tombstoneAfterMs",
   t3_ms: "pruneAfterMs",
 } as const;
+
+/**
+ * The liveness ladder's order rule: stale < tombstoned < removed, strictly.
+ * Returns the refusal naming the first pair out of order, or null when the
+ * effective thresholds climb.
+ */
+function refuseLivenessOrder(effective: LivenessConfig): string | null {
+  const rungs = [
+    { name: "stale", wire: "t1_ms", ms: effective.staleAfterMs },
+    { name: "tombstoned", wire: "t2_ms", ms: effective.tombstoneAfterMs },
+    { name: "removed", wire: "t3_ms", ms: effective.pruneAfterMs },
+  ];
+  for (let i = 1; i < rungs.length; i++) {
+    const before = rungs[i - 1]!;
+    const after = rungs[i]!;
+    if (before.ms >= after.ms) {
+      return (
+        "liveness thresholds must climb: stale (t1_ms) < tombstoned (t2_ms) < removed (t3_ms) — " +
+        `${before.name} after ${before.ms}ms is not shorter than ${after.name} after ${after.ms}ms ` +
+        "once merged with the project's override and the board defaults"
+      );
+    }
+  }
+  return null;
+}
 
 /**
  * CR-CRU-012 §S1 — PATCH …/projects/<key>. Editable: name, type
@@ -3442,6 +4516,13 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       liveness[internal] = value;
     }
     if (Object.keys(liveness).length > 0) {
+      // The thresholds are an agent's silence ladder — stale, then tombstoned,
+      // then removed — so the EFFECTIVE ladder (defaults ⟵ the project's
+      // existing override ⟵ this patch, the order `livenessConfig` and
+      // `updateProject` merge in) must climb strictly, checked before any write.
+      const effective = { ...store.livenessConfig(pk.key), ...liveness };
+      const order = refuseLivenessOrder(effective);
+      if (order !== null) return fail(400, order);
       patch.liveness = liveness;
     }
   }
@@ -3592,6 +4673,9 @@ function eventBrief(event: RunEvent) {
     // `context` is untouched beside it — §S1 keeps it authoritative for the
     // frontend consumers that already read `context.cycleId`.
     ...(event.cycleId !== undefined ? { cycleId: event.cycleId } : {}),
+    // The release a run verifies, top-level beside `cycleId`; key ABSENT on
+    // every event filed under none.
+    ...(event.release !== undefined ? { release: event.release } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.
@@ -3664,7 +4748,7 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   if (rawCycleId !== null && project !== undefined) {
     const cycleId = Number(rawCycleId);
     if (Number.isFinite(cycleId)) {
-      const events = store.listEventsForCycle(project, cycleId).map(eventBrief);
+      const events = withDecisionSummaries(store, store.listEventsForCycle(project, cycleId));
       const cycle = store.findCyclePlanEntry(project, cycleId);
       // Unknown cycleId → 200 with an empty set and NO `cycle` field.
       return reply(req, url, {
@@ -3673,6 +4757,16 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
         ...(cycle !== null ? { cycle } : {}),
       });
     }
+  }
+  // The by-release anchor, parallel to the cycleId one: exactly the runs filed
+  // under that release, newest first, aborted ones included, in the list's own
+  // brief shape. An unknown label is 200 with an empty set.
+  const release = url.searchParams.get("release");
+  if (release !== null && project !== undefined) {
+    return reply(req, url, {
+      ok: true,
+      events: withDecisionSummaries(store, store.listEventsForRelease(project, release)),
+    });
   }
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
@@ -3690,48 +4784,151 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   // own", a settled-history question.
   return reply(req, url, {
     ok: true,
-    events: store.listEvents(project, limit).map(eventBrief),
+    events: withDecisionSummaries(store, store.listEvents(project, limit)),
     openRuns: store.listOpenRuns(project).map(openRunBrief),
   });
 }
 
-/** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */
-function suiteCounts(node: SuiteNode): { passed: number; failed: number; pending: number } {
-  const counts = { passed: 0, failed: 0, pending: 0 };
-  for (const leaf of node.children) {
-    if (leaf.status === "pass") counts.passed += 1;
-    else if (leaf.status === "fail") counts.failed += 1;
-    else counts.pending += 1;
+/** The counts a sealed gate's decisions reduce to on the events list. */
+interface DecisionSummary {
+  decisions: number;
+  fixed: number;
+  added: number;
+  declined: number;
+  approvedWithReason: number;
+}
+
+/**
+ * Event briefs for a list page. Each SEALED gate naming a run with at least
+ * one recorded decision also carries `decisionSummary`; the decisions of
+ * every such run on the page come from ONE grouped read
+ * (`Store.listGateDecisionsForRuns`), never one read per gate. The key is
+ * ABSENT on an in-flight gate, a gate naming no run, a run with no decision,
+ * and every other kind.
+ */
+function withDecisionSummaries(store: Store, events: RunEvent[]) {
+  const sealed = events.filter(
+    (e): e is RunEvent & { runId: string } => e.runId !== undefined && isSealedGate(e),
+  );
+  const grouped = store.listGateDecisionsForRuns(
+    sealed.map((e) => ({ projectKey: e.projectKey, runId: e.runId })),
+  );
+  return events.map((event) => {
+    const brief = eventBrief(event);
+    if (event.runId === undefined || !isSealedGate(event)) return brief;
+    const decisions = grouped.get(gateDecisionRunKey(event.projectKey, event.runId));
+    if (decisions === undefined || decisions.length === 0) return brief;
+    return { ...brief, decisionSummary: decisionSummary(event.gate, decisions) };
+  });
+}
+
+/** A gate event whose gate object is not marked `inFlight: true`. */
+function isSealedGate(event: RunEvent): boolean {
+  if (event.kind !== "gate") return false;
+  const gate = event.gate;
+  return !(typeof gate === "object" && gate !== null && (gate as { inFlight?: unknown }).inFlight === true);
+}
+
+/**
+ * The Counting rules: `fixed` = the distinct finding ids selected by `fix`
+ * decisions; `added` = the decisions carrying an added finding; `declined` =
+ * each APPROVED step's own `findings` count minus the distinct ids fixed at
+ * that step, summed over approved steps; `approvedWithReason` = the `approve`
+ * decisions carrying a reason.
+ */
+function decisionSummary(gate: unknown, decisions: GateDecision[]): DecisionSummary {
+  const fixed = new Set<string>();
+  const fixedAtStep = new Map<string, Set<string>>();
+  const approvedSteps = new Set<string>();
+  let added = 0;
+  let approvedWithReason = 0;
+  for (const d of decisions) {
+    if (d.addedFinding !== undefined) added += 1;
+    if (d.action === "fix") {
+      for (const id of d.findings ?? []) {
+        fixed.add(id);
+        if (d.step !== undefined) {
+          const atStep = fixedAtStep.get(d.step) ?? new Set<string>();
+          atStep.add(id);
+          fixedAtStep.set(d.step, atStep);
+        }
+      }
+    }
+    if (d.action === "approve") {
+      if (d.reason !== undefined) approvedWithReason += 1;
+      if (d.step !== undefined) approvedSteps.add(d.step);
+    }
   }
-  return counts;
+  let declined = 0;
+  for (const step of gateSteps(gate)) {
+    if (!approvedSteps.has(step.name) || typeof step.findings !== "number") continue;
+    declined += Math.max(0, step.findings - (fixedAtStep.get(step.name)?.size ?? 0));
+  }
+  return { decisions: decisions.length, fixed: fixed.size, added, declined, approvedWithReason };
+}
+
+/** A gate object's steps, each with its name and its own findings count. */
+function gateSteps(gate: unknown): { name: string; findings?: unknown }[] {
+  if (typeof gate !== "object" || gate === null) return [];
+  const steps = (gate as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter(
+    (s): s is { name: string; findings?: unknown } =>
+      typeof s === "object" && s !== null && typeof (s as { name?: unknown }).name === "string",
+  );
 }
 
 /** §S1 — event-specific 404 (distinct from the server's route catch-all). */
-/** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>. */
+/** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>[&browser=<b>].
+ *  A scenario run under two browsers is two same-named nodes; `browser` picks
+ *  that browser's own node. Omitted, the first same-named node answers.
+ *  Each progressive read asks the store for only what it serves — the suites
+ *  rows alone, or one suite's leaves — and neither carries the run's raw
+ *  output, which only the full read does; each carries `rawBytes`, its byte
+ *  length, when the run has raw output. */
 function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
-  const event = store.getEvent(id);
-  if (event === null) {
-    return fail(404, `event not found: ${id}`);
-  }
+  const notFound = (): Response => fail(404, `event not found: ${id}`);
   const suite = url.searchParams.get("suite");
   if (suite !== null) {
-    const match = (event.tree ?? []).find((node) => node.name === suite);
-    if (match === undefined) {
+    const read = store.getEventSuite(id, suite, url.searchParams.get("browser"));
+    if (read === null) return notFound();
+    if (read.suite === undefined) {
       return fail(404, `suite not found in event ${id}: ${suite}`);
     }
     // Approved contract: tree becomes a single-element array — just the
     // requested suite, fully expanded (leaves incl. failure detail).
-    return reply(req, url, { ok: true, event: { ...event, tree: [match] } });
+    return reply(req, url, { ok: true, event: { ...read.event, tree: [read.suite], ...rawBytesOf(read) } });
   }
-  if (url.searchParams.get("depth") === "suites" && event.tree !== undefined) {
-    const tree = event.tree.map((node) => ({
-      name: node.name,
-      status: node.status,
-      counts: suiteCounts(node),
-    }));
-    return reply(req, url, { ok: true, event: { ...event, tree } });
+  if (url.searchParams.get("depth") === "suites") {
+    const read = store.getEventSuites(id);
+    if (read === null) return notFound();
+    if (read.suites !== undefined) {
+      return reply(req, url, { ok: true, event: { ...read.event, tree: read.suites, ...rawBytesOf(read) } });
+    }
+    // A run with no tree has no suites to summarise: the full read's answer,
+    // still without the raw output.
+    return reply(req, url, { ok: true, event: { ...withGateDecisions(store, read.event), ...rawBytesOf(read) } });
   }
-  return reply(req, url, { ok: true, event });
+  const event = store.getEvent(id);
+  if (event === null) return notFound();
+  return reply(req, url, { ok: true, event: withGateDecisions(store, event) });
+}
+
+/** The `rawBytes` key of a progressive read's answer — absent when the run has no raw output. */
+function rawBytesOf(read: { rawBytes?: number }): { rawBytes?: number } {
+  return read.rawBytes !== undefined ? { rawBytes: read.rawBytes } : {};
+}
+
+/**
+ * CR-CRU-162 §G5 — the gate read carries its run's decisions, in posting order,
+ * on this single-event detail read only (the brief list does no per-event
+ * join). The key is ABSENT when there is nothing to show: a gate that named no
+ * run has nothing to join, and a run with no recorded decision has none.
+ */
+function withGateDecisions(store: Store, event: RunEvent): RunEvent & { decisions?: unknown[] } {
+  if (event.kind !== "gate" || event.runId === undefined) return event;
+  const decisions = store.listGateDecisions(event.projectKey, event.runId);
+  return decisions.length > 0 ? { ...event, decisions } : event;
 }
 
 /**
@@ -3842,11 +5039,25 @@ export function handleV2(
     if (req.method === "GET" && segments.length === 2 && segments[1] === "releases") {
       return handleProjectReleases(store, segments[0]!, req, url);
     }
+    // The project's history told by release, retired gates included.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "history") {
+      return handleProjectHistory(store, segments[0]!, req, url);
+    }
     // CR-CRU-129 §S3 — the project's milestone RECORDS of one type. Beside
     // `releases` because it is the same read generalised: `releases` answers
     // the `release` type, this one answers whichever type the caller names.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "milestones") {
       return handleProjectMilestones(store, segments[0]!, req, url);
+    }
+    // §S2/§S3 — the project's metadata map: an open read and an
+    // orchestrator-only write, on the same path.
+    if (segments.length === 2 && segments[1] === "metadata") {
+      if (req.method === "GET") {
+        return handleProjectMetadataGet(store, segments[0]!, req, url);
+      }
+      if (req.method === "PATCH") {
+        return handleProjectMetadataPatch(store, segments[0]!, req);
+      }
     }
     // CR-CRU-014 §S1 — the project's CR execution queue (roadmap).
     if (segments.length === 2 && segments[1] === "queue") {
@@ -3899,6 +5110,17 @@ export function handleV2(
     if (req.method === "DELETE" && segments.length === 1) {
       return handleProjectDelete(store, segments[0]!, req);
     }
+    // CR-CRU-022 §S2–§S4 — the three analytics reads, GET-only.
+    if (req.method === "GET" && segments.length === 3 && segments[1] === "analytics") {
+      if (segments[2] === "velocity") return handleAnalyticsVelocity(store, segments[0]!, req, url);
+      if (segments[2] === "burndown") return handleAnalyticsBurndown(store, segments[0]!, req, url);
+      if (segments[2] === "forecast") return handleAnalyticsForecast(store, segments[0]!, req, url);
+      if (segments[2] === "changes") return handleAnalyticsChanges(store, segments[0]!, req, url);
+    }
+    // CR-CRU-098 §S2 — the plan pointer: GET-only, derived, stores nothing.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "next") {
+      return handleNextGet(store, segments[0]!, req, url);
+    }
   }
   // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must
   // declare a role, heartbeat must not be forced to re-declare it.
@@ -3928,10 +5150,19 @@ export function handleV2(
   if (req.method === "POST" && pathname === "/api/v2/runs/compile") {
     return handleRunsCompile(store, req);
   }
+  // A client's abort of its own open run, beside the opener it settles.
+  const abortRunId = RUN_ABORT_RE.exec(pathname)?.[1];
+  if (req.method === "POST" && abortRunId !== undefined) {
+    return handleRunAbort(store, decodeURIComponent(abortRunId), req);
+  }
   // CR-CRU-013 §S1+§S4b — flat top-level gate/milestone routes (next to
   // /runs, NOT under /projects/).
   if (req.method === "POST" && pathname === "/api/v2/gates") {
     return handleGates(store, req);
+  }
+  // CR-CRU-162 §G4 — a gate decision, flat beside the gate route it answers.
+  if (req.method === "POST" && pathname === "/api/v2/gate-decisions") {
+    return handleGateDecisions(store, req);
   }
   if (req.method === "POST" && pathname === "/api/v2/milestones") {
     return handleMilestones(store, req);
@@ -3954,4 +5185,136 @@ export function handleV2(
     return handleStatus(store, req, url);
   }
   return null;
+}
+
+// ── CR-CRU-022 §S2–§S4 — roadmap analytics ───────────────────────────────
+
+/**
+ * The analytics reads validate the project key exactly as every other v2
+ * project read does (`releases`, `queue`, `release-proposals`, `milestones`):
+ * UUID shape (400), then existence (404 + help). C3 ruling #8 — no carve-out
+ * for non-UUID keys.
+ */
+function requireHeldProject(store: Store, key: string): Response | null {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return null;
+}
+
+/** `?release=<label>`, required by the two release-scoped reads. */
+function requireReleaseParam(url: URL): string | { fail: Response } {
+  const release = url.searchParams.get("release");
+  if (release === null || release.length === 0) {
+    return { fail: fail(400, "`release` is required — the release label to analyse, e.g. ?release=0.3.0") };
+  }
+  return release;
+}
+
+/**
+ * CR-CRU-091 — the release's DECLARED target, epoch seconds: the live
+ * proposal's `targetAt`, else a delivered record's. Absent when none was
+ * declared — never defaulted.
+ */
+function declaredTarget(store: Store, key: string, release: string): number | undefined {
+  const proposal = store.listReleaseProposals(key).find((event) => event.label === release);
+  if (proposal?.targetAt !== undefined) return proposal.targetAt;
+  return store.listReleases(key).find((event) => event.label === release)?.targetAt;
+}
+
+/**
+ * DN §5/§9 — GET …/analytics/velocity?release=: the release's pace so far
+ * (points per day since its start) + the project-level flow line.
+ */
+function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const payload = velocity({
+    release,
+    plans: store.listPlans(key),
+    entries: store.listQueue(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    execByCycle: store.cycleExecMs(key),
+    now: Date.now(),
+  });
+  if (payload === null) {
+    return fail(404, `no CR was ever planned into release ${release}`);
+  }
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/** §S3 — GET …/analytics/burndown?release=: the release's SCRUM burndown. */
+function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const target = declaredTarget(store, key, release);
+  const payload = burndown({
+    release,
+    entries: store.listQueue(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    plans: store.listPlans(key),
+    ...(target !== undefined ? { targetAt: target } : {}),
+  });
+  if (payload === null) {
+    return fail(404, `no CR was ever planned into release ${release}`);
+  }
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/**
+ * §S4 — GET …/analytics/forecast?release=[&seed=]: the Monte Carlo band.
+ * `seed` is TEST-ONLY (DN §7): an integer that makes the draws deterministic.
+ */
+function handleAnalyticsForecast(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const seedParam = url.searchParams.get("seed");
+  const seed = seedParam === null ? undefined : Number(seedParam);
+  if (seed !== undefined && !Number.isInteger(seed)) {
+    return fail(400, "`seed` must be an integer (test-only: it makes the forecast's draws deterministic)");
+  }
+  const entries = store.listQueue(key);
+  if (!entries.some((entry) => entry.release === release)) {
+    return fail(404, `no CR is planned into release ${release}`);
+  }
+  const target = declaredTarget(store, key, release);
+  const payload = forecast({
+    release,
+    entries,
+    plans: store.listPlans(key),
+    filedAt: store.queueFiledAt(key),
+    journal: store.listQueueDeclarations(key),
+    now: Date.now(),
+    ...(target !== undefined ? { targetAt: target } : {}),
+    random: seed !== undefined ? seededRandom(seed) : Math.random,
+  });
+  return reply(req, url, { ok: true, ...payload });
+}
+
+/**
+ * §S3/AC12 — GET …/analytics/changes?release=: the release's recorded plan
+ * changes and plan aborts, each counted by cause (`unrecorded` for the ones
+ * that predate the record).
+ */
+function handleAnalyticsChanges(store: Store, key: string, req: Request, url: URL): Response {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  const release = requireReleaseParam(url);
+  if (typeof release !== "string") return release.fail;
+  const payload = planChanges({ release, entries: store.listQueue(key), plans: store.listPlans(key) });
+  if (payload === null) {
+    return fail(404, `no CR is planned into release ${release}`);
+  }
+  return reply(req, url, { ok: true, ...payload });
 }

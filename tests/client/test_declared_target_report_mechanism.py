@@ -1,6 +1,6 @@
 """CR-CRU-133 (cycle 464) — a declared target is run on its own terms.
 
-`clients/bun-crucible.py`'s `_bun_run_script_cmd` (`:479`) states in its own
+`_bun_run_script_cmd` (`clients/bun-crucible.py`) states in its own
 docstring that a DECLARED tier target "is run BY NAME (`bun run test:unit`),
 never by re-parsing its body … and the client never classifies what the project
 declared", and then appends `--reporter=junit --reporter-outfile=<path>` —
@@ -32,7 +32,7 @@ implements a decision rather than re-deriving one):
   * §S3's richer starvation message rides the EXISTING additive keywords of
     the SHARED `no_report_help(verb, artifact, remedy=None)` /
     `no_report_warning(verb, artifact, exit_code, output, cause=None)`
-    (`clients/_crucible_axi.py:1365,1384`, 11 call sites / 22 helper calls
+    (both in `clients/_crucible_axi.py`, 11 call sites / 22 helper calls
     across five clients).
     Neither helper's required-parameter shape may change, and this client may
     not grow a local copy — `tests/client/test_cr054_drift_guard.py` guards
@@ -107,6 +107,10 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
+
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
@@ -315,8 +319,11 @@ class _DeclaredTargetCase(unittest.TestCase):
         self._saved_env = {key: os.environ.get(key) for key in _ENV_KEYS}
         for key in _ENV_KEYS:
             os.environ.pop(key, None)
-        os.environ["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        os.environ["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # CR-CRU-139 §S2 — the unreachable board is DECLARED in this fixture's
+        # own project file, which is where a client reads its target now, and
+        # the interlock confirms the fleet resolves it before any drive runs.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
         os.environ["CR133_ARGV_LOG"] = self.argv_log
 
     def tearDown(self):
@@ -355,7 +362,7 @@ class _DeclaredTargetCase(unittest.TestCase):
         return f"bun test {paths}"
 
     def junit_path(self, project=None):
-        return str(Path(project or self.project) / "test-reports" / "junit.xml")
+        return str(Path(project or self.project) / "test-reports" / AGENT / "junit.xml")
 
     # ── driving ────────────────────────────────────────────────────────────
 

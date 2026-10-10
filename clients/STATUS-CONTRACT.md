@@ -1,6 +1,6 @@
 # Crucible `status` envelope contract
 
-**Version: 2.0.0**
+**Version: 3.0.0**
 
 This is the stable, versioned contract for the `status` (alias `plans`) read verb
 emitted by every `*-crucible.py` client in this directory. It is committed WITH the
@@ -10,7 +10,10 @@ knows the shape it renders.
 
 `status` is a read-only, hook-safe board query: it never mutates state, never hangs,
 and never exits non-zero — so a session-start hook can surface the board (AXI
-principle 7, "ambient context") before the agent acts.
+principle 7, "ambient context") before the agent acts. It shows the **work in
+flight**: the project's open plans, read with the single request
+`GET …/plans?status=open`. It is not a history of the project — `queue` (with
+`cr-plan --full`) is the read for every CR and plan, and `status` has no flag for it.
 
 The envelope is a TOON-AXI document (AXI manifesto, https://axi.md) with a single
 top-level `axi` object. The principles each field/behavior satisfies are named inline
@@ -22,9 +25,11 @@ below.
 axi:
   verb: status
   ok: <bool>
+  tier: <string>
   plans[]{cr,wave,status,activeCycleId}
   lastClosedCr: <string|null>
   count: <int>
+  filed: <int|null>
   help[]
   context: { projectKey, agentId?, cycleId?, wave?, cr?, track? }
   warnings[]{code,detail}
@@ -35,12 +40,19 @@ axi:
 | Field       | Meaning | AXI principle |
 |-------------|---------|---------------|
 | `ok`        | `true` for every successful or DEGRADED read (a definitive data-state). `status` never returns `ok:false` — an unreachable server is a data-state, not a command error. | 5 (definitive states) |
+| `tier`      | The tier of the run this exit ingested; `status` ingests nothing, so it reads `none`. Present on every envelope the fleet emits. | 5 |
 | `context`   | The resolved run context: `projectKey`, plus optional `agentId`, `cycleId`, `wave`, `cr`, `track`. | 1 (TOON envelope) |
 | `warnings`  | Structured `{code,detail}` entries on STDOUT (never stderr) — e.g. the `status-unavailable` degrade signal. Empty `[]` on a clean read. | 6 (structured, on stdout) |
-| `plans`     | The board: one uniform row per open plan (see row schema). Empty `[]` when no plan is filed, or in the unavailable degrade. | 1, 2 (minimal schema) |
-| `lastClosedCr` | The `cr` of the plan with the latest `closedAt` (the last CR to close), or `null` when none has closed — never a fabricated guess. | 5 |
-| `count`     | Total plans available (unaffected by the `--fields` column projection); `0` on an empty or unavailable board. | 5 |
-| `help`      | A block of CONCRETE next-step command templates for the terminal state reached. | 9 (next-steps) |
+| `plans`     | The work in flight: one uniform row per open plan (see row schema), in the order the server publishes them. Empty `[]` when no plan is open, or in the unavailable degrade. | 1, 2 (minimal schema) |
+| `lastClosedCr` | The `cr` of the plan with the latest `closedAt` (the last CR to close), or `null` when none has closed — never a fabricated guess. Aborted plans have no `closedAt` and never count. Published by the server over all of the project's plans; `null` in the unavailable degrade. | 5 |
+| `count`     | The number of `plans[]` rows — the open plans (unaffected by the `--fields` column projection); `0` on an empty or unavailable board. | 5 |
+| `filed`     | The number of plans the project has ever filed, whatever their status (open, closed or aborted). Published by the server over all of the project's plans; `null` in the unavailable degrade, where the number is unknown, not zero. | 5 |
+| `help`      | A block of CONCRETE next-step command templates for the terminal state reached (see Terminal states). | 9 (next-steps) |
+
+`lastClosedCr` and `filed` are project facts the SERVER publishes on every
+`GET …/plans` response, computed over all of the project's plans whatever `status`,
+`cr` or `track` filter the request carried. `status` passes both through unchanged;
+no client filters rows or recomputes either value.
 
 ### `plans[]` row schema (the §S6 base row)
 
@@ -53,7 +65,7 @@ round-trips as a TOON table.
 |------------------|---------|
 | `cr`             | The plan's CR id. |
 | `wave`           | The plan's wave. |
-| `status`         | The plan lifecycle status (`open` / closed). |
+| `status`         | The plan lifecycle status — always `open`, because `status` reads only the open plans. |
 | `activeCycleId`  | The id of the plan's single `status:"active"` cycle (the active cycle), or `null` when none is active. |
 
 The single active cycle is the `status:"active"` cycle carried by the plan. Its
@@ -64,16 +76,29 @@ a nested dict.
 
 ## Terminal states (all exit 0)
 
-`status` has THREE definitive terminal states (AXI principle 5 — never an ambiguous
-blank), each distinguished by its warnings/count, all exit 0:
+`status` has THREE definitive reachable states (AXI principle 5 — never an ambiguous
+blank), all `ok:true`, `warnings:[]`, exit 0, told apart by `count` and `filed`:
 
-1. **Board present** — `ok:true`, non-empty `plans[]`, `count>0`, `warnings:[]`.
-2. **No plan filed** — a REACHABLE server with zero plans: `ok:true`, `plans:[]`,
-   `count:0`, `warnings:[]`. The `help[]` points at `plan-file`. This state carries
-   NO `status-unavailable` warning — it is explicitly the "0 plans" empty state, not
-   an outage.
-3. **Unavailable (tolerant degrade)** — the plans fetch failed (server unreachable /
-   non-ok). See below.
+| State | `plans` | `count` | `filed` | `lastClosedCr` | `help[]` |
+|---|---|---|---|---|---|
+| **Work in flight** | the open plans | > 0 | > 0 | as published | `cycle-activate <id>` |
+| **None open** | `[]` | 0 | > 0 | as published (`null` on an aborted-only board) | `next`, then `plan-file --cr <cr> --cycle <label>` |
+| **Never filed** | `[]` | 0 | 0 | `null` | `plan-file --cr <cr> --cycle <label>` |
+
+1. **Work in flight** — at least one plan is open: its rows are `plans[]`.
+2. **None open** — plans have been filed, but none is open (every one closed or
+   aborted). The `help[]` points at `next` to find the next CR, then `plan-file`.
+3. **Never filed** — a REACHABLE server holding no plan at all. The `help[]` points
+   at `plan-file` to file the first plan.
+
+`filed` — not `lastClosedCr` — is the signal that separates "none open" from
+"never filed": a board whose only plans were aborted has `lastClosedCr: null`
+(nothing ever closed) yet `filed > 0`, so it is "none open". Neither empty state
+carries a `status-unavailable` warning — each is a definitive empty state, not an
+outage.
+
+A fourth exit path, **Unavailable (tolerant degrade)**, is reached when the plans
+read fails (server unreachable / non-ok). See below.
 
 ## Tolerant-degrade shape (`status-unavailable`)
 
@@ -84,9 +109,11 @@ unavailable" and continue, never fail (CR-CRU-035 §S1):
 - `ok: true` — a definitive DATA-state (AXI principle 5), never a command failure.
 - `warnings[]` carries a structured `{code:"status-unavailable", detail:"…"}` entry
   (AXI principle 6 — structured, on stdout). Its presence is the signal that
-  distinguishes this state from the "no plan filed" empty state.
-- `plans: []`, `lastClosedCr: null`, `count: 0` — an EMPTY board, never fabricated or
-  stale rows.
+  distinguishes this state from the reachable "none open" and "never filed" empty
+  states.
+- `plans: []`, `lastClosedCr: null`, `count: 0`, `filed: null` — an EMPTY board,
+  never fabricated or stale rows. `filed` is `null`, not `0`: the board could not be
+  read, so the number of plans is unknown.
 - `help[]` carries a CONCRETE next-step naming the Crucible server (e.g. "check the
   Crucible server is running / reachable at <base>") — AXI principle 9.
 - exit code `0`. No traceback, no hang: the underlying fetch is bounded by a short
@@ -94,6 +121,40 @@ unavailable" and continue, never fail (CR-CRU-035 §S1):
 
 A hook that receives `ok:true` together with a `status-unavailable` warning renders
 "board unavailable" and moves on — it never fails on it.
+
+## `--format {toon,json}` — JSON for programs
+
+`status` and its alias `plans` accept `--format {toon,json}` in all five clients.
+
+- `--format toon` is the default, and is the TOON-AXI envelope documented above.
+- `--format json` writes the SAME envelope as ONE JSON object on stdout: every key the
+  `axi` object carries (`verb`, `ok`, `tier`, `plans`, `lastClosedCr`, `count`,
+  `filed`, `help`, `context`, `warnings`) with the same values, unwrapped — there is
+  no `axi` key.
+- This holds on every exit path: the three reachable states and the unavailable
+  degrade, whose signal a program reads as the `warnings[].code` value
+  `status-unavailable`. Exit codes and the stderr line are the same in both formats.
+- Any other value is refused by argument parsing.
+- The no-argument dashboard does not take the flag; it always writes TOON.
+
+A work-in-flight read with `--format json`:
+
+```json
+{
+  "verb": "status",
+  "ok": true,
+  "tier": "none",
+  "plans": [
+    {"cr": "CR-ABC-012", "wave": "3", "status": "open", "activeCycleId": 42}
+  ],
+  "lastClosedCr": "CR-ABC-011",
+  "count": 1,
+  "filed": 12,
+  "help": ["cycle-activate <id>"],
+  "context": {"projectKey": "00000000-0000-7000-8000-000000000000"},
+  "warnings": []
+}
+```
 
 ## Agent identity and role (CR-CRU-044 §S4, renamed by CR-CRU-059 §S0)
 
@@ -179,9 +240,10 @@ ingests.
 
 ## Bounded fetch
 
-The plans GET is bounded by a short `timeout=` on the underlying `urlopen` call across
-all five clients, so an unreachable or slow server fails fast and `status` returns
-promptly regardless of server state — it can never hang a session-start hook.
+`status`'s one read, `GET …/plans?status=open`, is bounded by a short `timeout=` on
+the underlying `urlopen` call across all five clients, so an unreachable or slow
+server fails fast and `status` returns promptly regardless of server state — it can
+never hang a session-start hook.
 
 ## Versioning
 
@@ -189,6 +251,14 @@ This contract is versioned so Model-B's generated hook can pin what it renders. 
 the VERSION above on any change to the envelope shape, the row schema, the terminal
 states, or the tolerant-degrade shape. Additive `--fields` columns do not change the
 base contract and do not require a version bump.
+
+- **3.0.0 (CR-CRU-150)** — a BREAKING change to the rows a consumer gets: `plans[]`
+  is now the open plans only (the work in flight, read with `GET …/plans?status=open`),
+  no longer every plan the project has filed, and `count` counts those rows. Added:
+  the top-level `filed` (every plan ever filed, whatever its status; `null` in the
+  unavailable degrade), a `help[]` per state (work in flight / none open / never
+  filed, told apart by `filed`), and `--format {toon,json}`. `queue` (with
+  `cr-plan --full`) is the read for every CR and plan.
 
 - **2.0.0 (CR-CRU-059)** — a MAJOR bump, because §S0's classification-flag rename to
   `--role` is a CLEAN BREAK with no alias: a hook pinned to 1.x that shells the retired

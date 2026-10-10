@@ -51,6 +51,21 @@ export function formatReleaseDate(epochSeconds) {
 }
 
 /**
+ * A recorded moment's clock time, `HH:MM` on the same UTC clock the board's
+ * dated values use (`formatReleaseDate`), so one record never reads
+ * differently per viewer. A moment from another UTC day than `now` carries
+ * its day ahead of the clock (`YYYY-MM-DD HH:MM`), that day being
+ * `formatReleaseDate`'s own answer. Epoch MILLISECONDS in (a record's
+ * `timestamp`); an unusable value renders the empty string.
+ */
+export function clockTime(ts, now) {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return "";
+  const clock = new Date(ts).toISOString().slice(11, 16);
+  const day = formatReleaseDate(ts / 1000);
+  return day === formatReleaseDate(now / 1000) ? clock : `${day} ${clock}`;
+}
+
+/**
  * CR-CRU-078 §S3/AC6/AC7 — what date ONE release gate carries, resolved once
  * so the render draws an answer instead of re-deciding per call site.
  *
@@ -263,10 +278,15 @@ export function routeParse(pathname) {
   if (parts[0] === "p" && parts.length >= 3 && parts[2] === "roadmap") {
     roadmap = true;
   }
+  // CR-CRU-022 §S5 — /p/<key>/roadmap/analytics: the Roadmap pane's analytics
+  // STATE (F14¾), riding the roadmap route exactly as /run/<id> rides a
+  // pane, so Back and deep links reach it with no second mechanism.
+  const analytics = roadmap && parts.length >= 4 && parts[3] === "analytics";
   if (parts[0] === "p" && parts.length >= 2) {
     const route = { page: "workspace", projectKey: decodeURIComponent(parts[1]) };
     if (overlay !== undefined) route.overlay = overlay;
     if (roadmap) route.roadmap = true;
+    if (analytics) route.analytics = true;
     return route;
   }
   const route = { page: "home" };
@@ -312,6 +332,44 @@ export function workspaceTabs(project) {
       disabled: name === "BDD" && project.type !== "frontend",
     };
   });
+}
+
+/**
+ * The BDD tab's index: the BDD-bearing runs among `events`, newest first. A
+ * run is BDD-bearing when it is a test run the playwright codec decoded (the
+ * codec that produces Gherkin) — a junit unit run carries no specification.
+ * Each row carries only what the index names: when, who, its cycle (null
+ * when the run carries none, so the row reads as unbound rather than being
+ * hidden or attributed) and its verdict with counts.
+ */
+export function bddIndexRows(events) {
+  return (events ?? [])
+    .filter((e) => e.kind === "test" && e.codec === "playwright")
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .map((e) => {
+      const cycleId = e.context?.cycleId ?? e.cycleId;
+      const label = e.context?.cycle;
+      const hasLabel = typeof label === "string" && label.length > 0;
+      const cycle =
+        typeof cycleId === "number"
+          ? hasLabel
+            ? `cycle ${cycleId} · ${label}`
+            : `cycle ${cycleId}`
+          : null;
+      const passed = e.passed ?? 0;
+      const failed = e.failed ?? 0;
+      const pending = e.pending ?? 0;
+      return {
+        id: e.id,
+        timestamp: e.timestamp,
+        agentId: e.agentId,
+        cycle,
+        verdict: failed > 0 ? "fail" : passed > 0 ? "pass" : "pending",
+        passed,
+        failed,
+        pending,
+      };
+    });
 }
 
 /**
@@ -852,6 +910,12 @@ export function workflowLens({ plans, events }) {
       // CR-011 C4) so history rows can render sealed cycle timers.
       ...(cycle.activatedAt !== undefined ? { activatedAt: cycle.activatedAt } : {}),
       ...(cycle.doneAt !== undefined ? { doneAt: cycle.doneAt } : {}),
+      // §S3 — a recorded plan change's fields pass through so history
+      // rows can show why the cycle changed (absent on an untouched cycle).
+      ...(cycle.reason !== undefined ? { reason: cycle.reason } : {}),
+      ...(cycle.cause !== undefined ? { cause: cycle.cause } : {}),
+      ...(cycle.specRef !== undefined ? { specRef: cycle.specRef } : {}),
+      ...(cycle.changeKind !== undefined ? { changeKind: cycle.changeKind } : {}),
       runs: linkedRuns.get(planCycleIndexKey(plan, cycle.id)) ?? [],
     }));
     const node = {
@@ -863,6 +927,10 @@ export function workflowLens({ plans, events }) {
       // CR-CRU-020 §S1.1 — closedAt passthrough (real server field,
       // Plan.closedAt) so the lens can order CR groups newest-first.
       ...(plan.closedAt !== undefined ? { closedAt: plan.closedAt } : {}),
+      // §S2b — an aborted plan's record (absent before it was recorded).
+      ...(plan.reason !== undefined ? { reason: plan.reason } : {}),
+      ...(plan.cause !== undefined ? { cause: plan.cause } : {}),
+      ...(plan.specRef !== undefined ? { specRef: plan.specRef } : {}),
       cycles,
       rollup: {
         done: cycles.filter((c) => c.status === "done").length,
@@ -931,14 +999,16 @@ export function workflowLens({ plans, events }) {
   // Derived GLOBALLY off the raw `plans` like `declaredWaveLabels` above,
   // because a re-filed plan takes its wave from the caller and need not share
   // the abandoned attempt's wave. Keyed on `cr` so it reaches INFERRED nodes
-  // (`:898-918`) too: they carry no `status` at all, so the plan-record filter
-  // below can never exclude them.
-  // The `c.status !== "open"` clause this set stands beside (`:955`) is
+  // (the inferred-fallback loop above) too: they carry no `status` at all,
+  // so the plan-record filter below can never exclude them.
+  // The `c.status !== "open"` clause this set stands beside (the `wave.crs`
+  // filter below) is
   // retained DELIBERATELY, and not because it still decides anything: §S1
   // mandates that the existing condition stay as-is beneath the new one, and
   // the mutation analysis run against this change proved it an EQUIVALENT
   // mutant — a declared node is built `{cr: plan.cr, status: plan.status}`
-  // (`:857-861`) and `liveCrs` below is every open plan's `cr`, so
+  // (the declared-node literal above) and `liveCrs` below is every open
+  // plan's `cr`, so
   // `status === "open"` implies its `cr` is in `liveCrs`; no fixture can
   // separate the two and deleting the clause changes no test. It stays as
   // defence in depth — a later reader should neither treat it as
@@ -1022,6 +1092,50 @@ export function workflowLens({ plans, events }) {
 }
 
 /**
+ * The one sealed-gate decision-summary line, worded identically wherever it
+ * is shown (the Runs-timeline gate card and the History wave row). Counted by
+ * the server off the run's decision records and carried on the events-list
+ * brief as `decisionSummary`; absent (no recorded decisions) → null, so no
+ * line renders. `1 decision` is singular. `fixed <f>` always appears (even
+ * `fixed 0`, so the line is never a bare count); `+ <a> added`,
+ * `declined <d>` and the approved-with-a-reason clause appear only when
+ * non-zero.
+ */
+export function gateDecisionSummaryText(summary) {
+  if (summary === undefined || summary === null) return null;
+  const decisions = `${summary.decisions} ${summary.decisions === 1 ? "decision" : "decisions"}`;
+  const added = summary.added > 0 ? ` + ${summary.added} added` : "";
+  const declined = summary.declined > 0 ? ` · declined ${summary.declined}` : "";
+  const reasoned =
+    summary.approvedWithReason > 0
+      ? ` · ${summary.approvedWithReason} approved with a reason`
+      : "";
+  return `${decisions} · fixed ${summary.fixed}${added}${declined}${reasoned}`;
+}
+
+/**
+ * The gate a History wave row summarises: the wave's LATEST sealed gate, the
+ * same "latest wins" rule the Workflow gate widget (`boundaryGate`) applies —
+ * a gate marked `gate.inFlight === true` is never a candidate. null when the
+ * wave carries no sealed gate.
+ */
+export function waveLatestSealedGate(events, wave) {
+  return (events ?? [])
+    .filter(
+      (e) =>
+        e.kind === "gate" &&
+        e.gate?.inFlight !== true &&
+        e.context?.wave !== undefined &&
+        e.context?.wave !== null &&
+        String(e.context.wave) === String(wave),
+    )
+    .reduce(
+      (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
+      null,
+    );
+}
+
+/**
  * CR-CRU-078 §S4 (superseding CR-CRU-077 §S4/AC6) — the terse status a CR
  * states on its flowchart NODE, keyed by the four derived `QueueStatus`
  * values. Each is derivable from the status value ALONE.
@@ -1058,8 +1172,8 @@ const ALL_DIGITS = /^\d+$/;
 /**
  * CR-CRU-102 §S1/AC1/AC2/AC6 — the BARE form of one dependency id, as read
  * beside the row that declares it. The approved design
- * (`.lavish/crucible-workflow-flowchart.html`, zone 2 lines 195-198) draws
- * `deps 078`, and this is how that is produced WITHOUT the product knowing
+ * (`.lavish/crucible-workflow-flowchart.html`, zone 2's pending `cr pend` rows)
+ * draws `deps 078`, and this is how that is produced WITHOUT the product knowing
  * any project's id prefix:
  *
  *   1. find the two ids' common leading text;
@@ -1170,20 +1284,42 @@ export function briefCrTitle(title, cr) {
  * An absent, malformed or unrecognised axis yields `null` — never a default.
  * A `SUPERSEDED` record with no `by` still says superseded rather than naming
  * an `undefined` successor.
+ *
+ * It also carries the table's STATUS-cell words (`label`) and the status
+ * badge's tooltip (`tip`). A dead row's cell names the lifecycle in place of
+ * the derived status: `VOID`, or `SUPERSEDED → <successor>`. That is DISPLAY
+ * only; the entry's `status` field is never touched. The tooltip's head reads
+ * state · date · who, where who is the lifecycle's own `author` (ruling 6),
+ * dropped when absent and never replaced by a placeholder. The reason is
+ * carried whole, because the row never renders it.
  */
 export function lifecycleBadge(lifecycle) {
   if (lifecycle === null || typeof lifecycle !== "object") return null;
   const nonEmpty = (value) =>
     typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  const reason = nonEmpty(lifecycle.reason);
+  const tip = (state) => {
+    const day = typeof lifecycle.at === "number" ? formatReleaseDate(lifecycle.at / 1000) : "";
+    const head = [state, day === "" ? null : day, nonEmpty(lifecycle.author)]
+      .filter((part) => part !== null)
+      .join(" · ");
+    return { head, reason };
+  };
   if (lifecycle.state === "SUPERSEDED") {
     const by = nonEmpty(lifecycle.by);
-    return { state: "SUPERSEDED", text: by === null ? "superseded" : `superseded by ${by}` };
+    return {
+      state: "SUPERSEDED",
+      text: by === null ? "superseded" : `superseded by ${by}`,
+      label: by === null ? "SUPERSEDED" : `SUPERSEDED → ${by}`,
+      tip: tip("SUPERSEDED"),
+    };
   }
   if (lifecycle.state === "VOID") {
-    const reason = nonEmpty(lifecycle.reason);
     return {
       state: "VOID",
       text: reason === null ? "void · abandoned" : `void · abandoned — ${reason}`,
+      label: "VOID",
+      tip: tip("VOID"),
     };
   }
   return null;
@@ -1237,30 +1373,46 @@ export function roadmapTableColumns(entries) {
 const ROADMAP_WAVE_ROWS = 5;
 
 /**
- * CR-CRU-096 §S5/AC9/AC9a — ACTIONABLE, the same predicate the queue verbs
- * already use (`clients/_crucible_axi.py:1301`): `PENDING` on the
- * server-derived status axis AND carrying no `lifecycle` disposition.
- *
- * The second half is load-bearing here for the same reason it is there:
- * `deriveQueueStatus` cannot see `lifecycle` by signature, so a VOID or
- * SUPERSEDED CR with no plan reads `status: "PENDING"`. It is not work, so it
- * gets no row — and no information is lost, because zone 3's table carries the
- * disposition (`roadmap-lifecycle-badge`, CR-CRU-078 AC27's column).
- *
- * `entry` is guarded by the status read: a null member short-circuits before
- * the `in`, which is why the key test is the mirror of the Python one rather
- * than an `undefined` comparison that would treat `lifecycle: null` as work.
+ * §S1 AC5 — the browser's ONE dead-CR rule, a state-based mirror of
+ * `isDeadCr` in `src/types.ts` (this module cannot import `src/`, so it keeps
+ * this copy, and tests/dead-cr-rule-parity.test.ts holds the two to the same
+ * answer on every fixture). Dead iff `lifecycle.state` is `VOID` or
+ * `SUPERSEDED`; no lifecycle, a `null` one, or a state it does not recognise
+ * is live. A null or undefined `entry` is live too: the optional chain answers
+ * `undefined`, which is neither state. Exported by name just below.
  */
-const roadmapActionable = (entry) => entry?.status === "PENDING" && !("lifecycle" in entry);
+function isDeadCr(entry) {
+  const state = entry?.lifecycle?.state;
+  return state === "VOID" || state === "SUPERSEDED";
+}
+export { isDeadCr };
+
+/**
+ * CR-CRU-096 §S5/AC9/AC9a — ACTIONABLE: `PENDING` on the server-derived status
+ * axis AND not dead under `isDeadCr` above (a `lifecycle.state` of `VOID` or
+ * `SUPERSEDED`).
+ *
+ * The second half is load-bearing: `deriveQueueStatus` cannot see `lifecycle`
+ * by signature, so a VOID or SUPERSEDED CR with no plan reads
+ * `status: "PENDING"`. It is not work, so it gets no row — and no information
+ * is lost, because zone 3's table carries the disposition
+ * (`roadmap-lifecycle-badge`, CR-CRU-078 AC27's column).
+ *
+ * The test is on the STATE, not on whether a `lifecycle` key is present: a
+ * PENDING member carrying `lifecycle: null`, or a state `isDeadCr` does not
+ * recognise, is live work and gets its row. A null member short-circuits on
+ * the status read.
+ */
+const roadmapActionable = (entry) => entry?.status === "PENDING" && !isDeadCr(entry);
 
 /**
  * CR-CRU-096 §S3/AC6a — MERGED is `COMPLETED` **or** `COMPLETED_UNTRACKED`:
- * one fact at two luminances (`public/styles.css:1416` — "the SAME green,
- * DIMMED"), the second being the same merge recorded before plan tracking
- * existed. The roll-up counts this set and neither row predicate admits it, so
- * the two readings cannot disagree — an earlier draft of AC6 that counted only
- * `COMPLETED` would have left an untracked-merged member counted nowhere and
- * drawn nowhere.
+ * one fact at two luminances (the `.app-flow-node.completed_untracked` rule
+ * in `public/styles.css` — "the SAME green, DIMMED"), the second being the
+ * same merge recorded before plan tracking existed. The roll-up counts this
+ * set and neither row predicate admits it, so the two readings cannot
+ * disagree — an earlier draft of AC6 that counted only `COMPLETED` would have
+ * left an untracked-merged member counted nowhere and drawn nowhere.
  */
 const roadmapMerged = (entry) =>
   entry?.status === "COMPLETED" || entry?.status === "COMPLETED_UNTRACKED";
@@ -1268,11 +1420,11 @@ const roadmapMerged = (entry) =>
 /**
  * CR-CRU-096 §S7/AC22 — the leading-integer READING of a wave label, or `null`
  * when the label carries no digit at all. `wave` is free TEXT on the wire, so
- * this is the same digit `waveNumber` (`src/store.ts:411`) reads server-side —
+ * this is the same digit `waveNumber` (`src/store.ts`) reads server-side —
  * except that "no integer" answers `null` here rather than lane `0`: the
  * server needs a lane to compute a seq block in, and this needs to know the
  * label has no numeric reading so it can join no run (AC22b). `/\d+/` is the
- * SAME digit this module's `numericLabelCompare` (`:690`) already reads out of
+ * SAME digit this module's `numericLabelCompare` already reads out of
  * a wave or track label — one reading of a wave's number, three questions
  * asked of it, never three spellings.
  */
@@ -1352,12 +1504,13 @@ export function compressWaveRuns(labels) {
  *                `crs` at all shipped nothing this surface can name.
  *   - proposed — the CRs the orchestrator DECLARED into it (`entry.release`),
  *                revisable until it ships. The same join the server makes for
- *                a proposal's `waves[]` (`src/v2.ts:2053`).
+ *                a proposal's `waves[]` (`proposalBrief` in `src/v2.ts`).
  * Either way the ORDER is the queue's own: the payload is already the
  * orchestrator's authored sequence (§S6), so membership filters it and nothing
  * re-sorts it.
  *
- * WAVES are that membership grouped by declared wave in FIRST-APPEARANCE
+ * WAVES are that membership's LIVE part (§S1 AC3: a dead member that is not
+ * running is skipped) grouped by declared wave in FIRST-APPEARANCE
  * order, so a wave interleaved by the authoring still appears exactly once
  * (AC16) with its own CRs in the order they were authored (AC9). A member
  * declaring no wave groups under `wave: null` — a real group the renderer
@@ -1405,6 +1558,15 @@ export function focusedReleaseView(gate, releases, entries) {
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
+    // §S1 AC3 (rulings 2, 4 and 5) — the Wave Card holds only LIVE membership:
+    // a member `isDeadCr` rules dead joins no box (so no header count, row,
+    // lane, `+N more` or roll-up, waved or loose) UNLESS it is still
+    // `IN_PROGRESS`. A running dead member stays drawn and counted, because
+    // `next` holds its lane as in-flight (AC9c's carve-out). The skip comes
+    // BEFORE the box lookup, so a wave with no live or running member never
+    // gets a box at all: no box, header or count (ruling 5). `members` itself
+    // is NOT filtered: it feeds zone 3's table, where a dead row stays visible.
+    if (isDeadCr(entry) && entry?.status !== "IN_PROGRESS") continue;
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
@@ -1429,11 +1591,12 @@ export function focusedReleaseView(gate, releases, entries) {
     // not this module's: "a CR with no declared wave is outside this
     // constraint entirely — never blocked, never blocking, and never confers
     // activeness on any wave". The store says the same thing in one line
-    // (`if (row.wave === "") continue;`, src/store.ts:3388 — re-pinned
-    // 2026-09-10 from :3377 (CR-CRU-118 §S4a added 11 comment lines above it),
-    // and before that 2026-09-09 from :3374, the `let active` declaration
-    // three lines above it, miscited on arrival rather than staled later),
-    // and a view that
+    // (`if (row.wave === "") continue;`, the loop in `waveScopeRefusal`
+    // (src/store.ts) — cited by line until it was rewritten by symbol; that
+    // line cite was re-pinned 2026-09-10 (CR-CRU-118 §S4a added
+    // 11 comment lines above it), and before that 2026-09-09 off the
+    // `let active` declaration three lines above it, miscited on arrival
+    // rather than staled later), and a view that
     // flipped the flag anyway would publish `active: true` on a container the
     // server holds outside the rule — a release whose only runner declares no
     // wave would report an active wave that does not exist. The two halves of
@@ -1443,7 +1606,8 @@ export function focusedReleaseView(gate, releases, entries) {
 
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the
   // membership it is a window on so the two cannot drift. `entries` stays the
-  // WHOLE membership, which is the one fact the header states (AC3); `rows` is
+  // WHOLE LIVE membership (a dead member that is not running was never
+  // grouped, see above), which is the one fact the header states (AC3); `rows` is
   // the members the box draws, and `hiddenCount` the SCHEDULED remainder the
   // `+N more` pointer states.
   //
@@ -1458,8 +1622,9 @@ export function focusedReleaseView(gate, releases, entries) {
   // Merged members (AC6a — `COMPLETED` and `COMPLETED_UNTRACKED` alike) are
   // excluded from a TRIMMED box by construction: neither predicate below
   // admits them, so they roll up (§S3) and are never rows. The loose group
-  // draws them like everything else, which is what keeps AC9b's lifecycle
-  // badge reachable there.
+  // draws them like everything else. A dispositioned member reaches the loose
+  // group (and AC9b's lifecycle badge there) only while it is `IN_PROGRESS`;
+  // otherwise it never entered `entries` (§S1 AC3, above).
   //
   // AC11a — a running CR outside the top five EXTENDS the list; it never
   // displaces a scheduled row. So the rows are re-projected by ONE filter over
@@ -1485,7 +1650,7 @@ export function focusedReleaseView(gate, releases, entries) {
       box.hiddenCount = actionable.length - scheduled.length;
     }
     // §S3/AC6 — the merged work the roll-up states: counted over the WHOLE
-    // membership, independently of the trim, so it is never the merged rows
+    // live membership, independently of the trim, so it is never the merged rows
     // shown (zero, by AC9) and never the project total.
     box.mergedCount = box.entries.filter(roadmapMerged).length;
     // CR-CRU-085 §S2/AC1/AC4/AC7 — the box's LANES, decided here beside the
@@ -1591,6 +1756,7 @@ if (typeof window !== "undefined") {
     filterEvents,
     relativeTime,
     formatReleaseDate,
+    clockTime,
     resolveGateDate,
     releaseStripGates,
     releaseStripFocusIndex,
@@ -1599,6 +1765,7 @@ if (typeof window !== "undefined") {
     livenessGlyph,
     routeParse,
     workspaceTabs,
+    bddIndexRows,
     focusedReleaseView,
     compressWaveRuns,
     roadmapTableColumns,
@@ -1615,6 +1782,8 @@ if (typeof window !== "undefined") {
     planCycleIndex,
     timelineRows,
     workflowLens,
+    gateDecisionSummaryText,
+    waveLatestSealedGate,
     drillinDefaultMode,
     agentRole,
     foldSuites,

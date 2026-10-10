@@ -2,8 +2,9 @@
 // reporter codec: `@playwright/test --reporter=json` (including the
 // playwright-bdd flavor, whose Gherkin feature/scenario names arrive as
 // ordinary suite/spec titles) → canonical feature → scenario → step
-// RunSchema tree. One SuiteNode PER SCENARIO named
-// "<Feature title> › <Scenario title>"; one TestLeaf PER STEP of the LAST
+// RunSchema tree. One SuiteNode PER SCENARIO PER PLAYWRIGHT PROJECT named
+// "<Feature title> › <Scenario title>" and carrying `browser` = the project's
+// `projectName`; one TestLeaf PER STEP of THAT project's LAST
 // attempt, in step order. Registry-only resolution (CR-CRU-010 §S1) — the
 // only callers are the `codecs` map's "playwright" entry.
 import { readFileSync, statSync } from "node:fs";
@@ -28,6 +29,7 @@ interface PwResult {
 }
 
 interface PwTest {
+  projectName?: string;
   results?: PwResult[];
 }
 
@@ -67,20 +69,31 @@ function scenarioStatus(status: string): SuiteNode["status"] {
   return "fail";
 }
 
-function specToNode(featureTitle: string, spec: PwSpec): SuiteNode {
-  // The last attempt is the run's verdict (earlier attempts are retries).
-  const results = spec.tests?.flatMap((t) => t.results ?? []) ?? [];
+function scenarioNode(name: string, test: PwTest | undefined): SuiteNode {
+  // Within ONE project, its last attempt is the verdict (earlier attempts are
+  // that project's retries).
+  const results = test?.results ?? [];
   const last = results[results.length - 1];
   return {
-    name: `${featureTitle} › ${spec.title}`,
+    name,
     status: last === undefined ? "pending" : scenarioStatus(last.status),
     children: (last?.steps ?? []).map(stepLeaf),
+    ...(test?.projectName !== undefined ? { browser: test.projectName } : {}),
   };
+}
+
+function specToNodes(featureTitle: string, spec: PwSpec): SuiteNode[] {
+  // A spec's `tests` are one entry PER PLAYWRIGHT PROJECT, so each project
+  // gets its own node and its own verdict — one browser never hides another.
+  const name = `${featureTitle} › ${spec.title}`;
+  const tests = spec.tests ?? [];
+  if (tests.length === 0) return [scenarioNode(name, undefined)];
+  return tests.map((test) => scenarioNode(name, test));
 }
 
 function collectScenarios(suite: PwSuite, out: SuiteNode[]): void {
   for (const spec of suite.specs ?? []) {
-    out.push(specToNode(suite.title, spec));
+    out.push(...specToNodes(suite.title, spec));
   }
   for (const inner of suite.suites ?? []) {
     collectScenarios(inner, out);

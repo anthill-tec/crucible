@@ -28,7 +28,6 @@
 // functions GREEN will modify, which is what makes it an honest RED bed for
 // this CR's specific contract (harness identity, not UI behaviour).
 import { afterEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { request, type APIRequestContext } from "@playwright/test";
 import { startServer } from "../src/server.ts";
 import {
@@ -40,8 +39,6 @@ import {
   registerAgent,
   RUSTC_ERRORS,
 } from "./e2e/steps/harness.ts";
-
-const REPO_ROOT = join(import.meta.dir, "..");
 
 let handle: ReturnType<typeof startServer> | undefined;
 let ctx: APIRequestContext | undefined;
@@ -96,11 +93,12 @@ describe("§S2 — filePlan declares a registered caller (CR-CRU-060)", () => {
     const { projectKey } = await boot();
 
     // The EXACT shape workflow.steps.ts already calls filePlan with today
-    // (harness.ts:243-259 / workflow.steps.ts:19): no agentId argument at
+    // (`filePlan` in harness.ts, called by workflow.steps.ts's "a cycle plan
+    // is filed for cr" step): no agentId argument at
     // all, no prior registerAgent call by the caller. TODAY this rejects
     // with a 409 "a registered caller is required — this request carried
-    // no agentId" inside filePlan's own `expect(res.ok()).toBe(true)`
-    // (harness.ts:257), so the promise below REJECTS instead of resolving.
+    // no agentId" inside filePlan's own `expect(res.ok()).toBe(true)`,
+    // so the promise below REJECTS instead of resolving.
     const plan = await filePlan(req(), projectKey, "CR-DRIFT-1", ["c1 red-green"]);
 
     // POSITIVE — the exact server-computed shape for a fresh plan.
@@ -126,7 +124,7 @@ describe("§S3 — ingest calls carry a REGISTERED id even when the caller suppl
 
     // TODAY this rejects 409 "agent crb-filler-0 is not registered with
     // this project — refused" inside ingestParsed's own
-    // `expect(res.ok()).toBe(true)` (harness.ts:214).
+    // `expect(res.ok()).toBe(true)`.
     const result = await ingestParsed(req(), projectKey, unregisteredId, {
       total: 1,
       passed: 1,
@@ -208,8 +206,9 @@ describe("§S4 — the ensure-registered guarantee is idempotent (CR-CRU-060)", 
     const { projectKey } = await boot();
     const id = "agent-already-registered";
 
-    // The seeding.steps.ts shape exactly (harness.ts:134-144 via
-    // seeding.steps.ts:24): registerAgent BEFORE any ingest call.
+    // The seeding.steps.ts shape exactly (`registerAgent` in harness.ts, via
+    // seeding.steps.ts's "an online agent ... is registered" step):
+    // registerAgent BEFORE any ingest call.
     await registerAgent(req(), projectKey, id, "pre-registered by the caller");
     expect(await agentIdsFor(projectKey)).toContain(id);
 

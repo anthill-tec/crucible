@@ -30,7 +30,8 @@ suite whose colour means nothing:
          later change pools the two suites' counts into one total or drops the
          loser's attribution.
   RED  `UnrunnableInterpreterFailsTheGateTest`. MEASURED: `subprocess.run(argv,
-         ...)` at `_crucible_axi.py:4267` is unguarded, so a declared command
+         ...)` in `run_gate_suites`' dispatch branch (`_crucible_axi.py`) is
+         unguarded, so a declared command
          whose first token does not exist raises `FileNotFoundError: [Errno 2]
          No such file or directory: '<...>/python3-cr112-missing'` out of
          `cmd_pre_merge_gate`. The gate emits NO envelope at all: no
@@ -41,7 +42,8 @@ suite whose colour means nothing:
   RED  `UnrunnableLocalRunnerFailsTheGateTest`. The same crash class as the
          first shape at a DIFFERENT unguarded call site — `run_gate_suites` →
          `_captured_suite_run` → the client's own `_run_logged`
-         (`bun-crucible.py:310`) — so a declared suite the gate runs in its own
+         (`_run_logged` in `bun-crucible.py`) — so a declared suite the
+         gate runs in its own
          process, whose runner is missing, kills the gate too, and kills it
          BEFORE any suite has run at all. Included because AC3's shapes are
          otherwise both on the dispatched side, and a GREEN that guards only
@@ -152,6 +154,12 @@ def _load_module(path, name):
 # adopting cycles 378/379. Only NON-test names are taken: importing one of its
 # TestCases would run that cycle's suite a second time under this module.
 _GATE = _load_module(GATE_HARNESS_PATH, "cr112_c2_gate_harness")
+
+#: CR-CRU-139 §S2 -- the fleet's ONE replace-safe `[client] url` writer, for the
+#: one fixture below that builds its own project instead of the harness's.
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_board,
+)
 
 BUN_SUITE = _GATE.BUN_SUITE
 PYTHON_SUITE = _GATE.PYTHON_SUITE
@@ -521,9 +529,10 @@ class UnrunnableLocalRunnerFailsTheGateTest(_UnrunnableSuiteProbe):
     to a dispatched one.
 
     A different unguarded call site from the first shape's — `run_gate_suites`
-    → `_captured_suite_run` → the client's own `_run_logged` at
-    `bun-crucible.py:310`, versus the dispatch's `subprocess.run` at
-    `_crucible_axi.py:4267` — so a GREEN that guards only the dispatch still
+    → `_captured_suite_run` → the client's own `_run_logged` in
+    `bun-crucible.py`, versus the dispatch's `subprocess.run` in
+    `run_gate_suites` (`_crucible_axi.py`) — so a GREEN that guards only
+    the dispatch still
     dies here, and dies BEFORE any suite has run at all (ESCALATION 6)."""
 
     UNRUNNABLE = BUN_SUITE
@@ -560,6 +569,13 @@ class SingleSuiteProjectGateIsUnchangedTest(_OutcomeCase):
         """ONE declared target, owned by this client's own stack — the shape AC4
         names. No python target and no e2e target: a project with one suite is
         the case §S2 says must not change."""
+        # CR-CRU-139 §S2 -- this override replaces the harness's own fixture
+        # writer, so it owes the same board DECLARATION: the gate and the
+        # clients it dispatches resolve `[client] url` from the project file,
+        # and a fixture that declared none would be refused by the harness's
+        # interlock rather than post to the shipped default.
+        declare_board(Path(self.tmpdir) / "crucible.toml", self.board.url)
+
         bun_tests = Path(self.tmpdir, "tests", "unit")
         bun_tests.mkdir(parents=True, exist_ok=True)
         (bun_tests / "probe.test.ts").write_text(_GATE._BUN_PROBE_TEST_TS)

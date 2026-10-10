@@ -48,6 +48,8 @@ export interface RouteState {
   overlay?: string;
   /** CR-CRU-012 §S2 — /manage: the Projects manager slide-over over home. */
   manage?: boolean;
+  /** CR-CRU-022 §S5 — /p/<key>/roadmap/analytics: the Roadmap pane's analytics state. */
+  analytics?: boolean;
 }
 
 export interface WorkspaceProjectLike {
@@ -137,6 +139,10 @@ export declare function relativeTime(ts: number, now: number): string;
 /** CR-CRU-091 §S1/AC3 — the one release-date formatter; epoch SECONDS in, ISO
  * `YYYY-MM-DD` out, empty string for an absent or unusable value. */
 export declare function formatReleaseDate(epochSeconds: number | null | undefined): string;
+
+/** A record's clock time on the board's UTC clock — `HH:MM`, prefixed with
+ * its `YYYY-MM-DD` day when not from `now`'s day; epoch MILLISECONDS in. */
+export declare function clockTime(ts: number, now: number): string;
 
 /** CR-CRU-078 §S3 — the kind of gate the strip is resolving a date for. The
  *  caller declares it from the slice it iterated; it is never sniffed. */
@@ -230,6 +236,11 @@ export interface ReleasePackage {
 export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;
+  /** §S1 AC3 — the box's LIVE membership: every member except a dead one
+   *  (`isDeadCr`) that is not `IN_PROGRESS`. A running dead member stays.
+   *  A wave whose every member is dead and none running draws no box at all
+   *  (ruling 5), so an entry here is never empty on that account.
+   *  The header count is its length. */
   entries: Entry[];
   /** CR-CRU-096 §S5 — the members this box DRAWS, in the server's published
    *  order. A window on `entries`, never a re-ordering of it. For a wave box
@@ -302,6 +313,13 @@ export interface FocusedReleaseView<Entry = unknown> {
   packagesState: "listed" | "empty" | "absent";
   tracks: string[];
 }
+
+/** §S1 AC5 — the browser's state-based mirror of `isDeadCr` in
+ *  `src/types.ts`: dead iff `lifecycle.state` is `VOID` or `SUPERSEDED`.
+ *  A null/undefined entry or lifecycle, or an unrecognised state, is live. */
+export declare function isDeadCr(
+  entry: { lifecycle?: { state?: string } | null } | null | undefined,
+): boolean;
 
 export declare function focusedReleaseView<Entry = unknown>(
   gate: ReleaseStripGate | null | undefined,
@@ -403,6 +421,11 @@ export interface LensPlanCycleLike {
   status: string;
   activatedAt?: number;
   doneAt?: number;
+  // §S3 — a recorded plan change's fields (absent on an untouched cycle).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
+  changeKind?: string;
 }
 
 export interface LensPlanLike {
@@ -420,6 +443,10 @@ export interface LensPlanLike {
   // CR-CRU-020 §S1.1 — real server field (Plan.closedAt), consumed by the
   // lens to order CR groups within a wave newest-first.
   closedAt?: number;
+  // §S2b — an aborted plan's record (absent before it was recorded).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
 }
 
 // CR-CRU-026 §S3.3 — keys are compound `<projectKey> <cycleId>` strings
@@ -449,6 +476,11 @@ export interface LensCycleNode<E extends LensRunLike> {
   id?: number;
   label: string;
   status: string;
+  // §S3 — a recorded plan change's fields (absent on an untouched cycle).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
+  changeKind?: string;
   runs: E[];
 }
 
@@ -460,6 +492,10 @@ export interface LensCrNode<E extends LensRunLike> {
   merge?: { commit: string };
   // CR-CRU-020 §S1.1 — passthrough of Plan.closedAt (declared nodes only).
   closedAt?: number;
+  // §S2b — passthrough of an aborted plan's record (declared nodes only).
+  reason?: string;
+  cause?: string;
+  specRef?: string;
   cycles: Array<LensCycleNode<E>>;
   rollup: { done: number; total: number };
   agents: string[];

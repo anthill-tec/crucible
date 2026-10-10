@@ -6,7 +6,8 @@
 // existing record read (`GET …/projects/<key>/milestones`,
 // `listMilestonesByType`, `idx_milestones_project_type`) rather than adding a
 // second one. It stays UNWINDOWED and PROJECTION-FREE, as that route's own
-// rationale requires (src/v2.ts:1939-1971).
+// rationale requires (the doc comment on `handleProjectMilestones` in
+// src/v2.ts).
 //
 // ── THE ONE SPELLING DECISION, isolated in `milestonesQuery` below ────────
 //
@@ -157,7 +158,8 @@ describe("what is outstanding, and what slipped — milestones answer by date", 
    * The project-defined type is written through the STORE, deliberately: the
    * POST validator is still closed until §S4 opens it, while the store's
    * `type` column is unconstrained TEXT and the read route refuses to check
-   * the type against anything (src/v2.ts:1950-1958). So a type the server
+   * the type against anything (the "THE TYPE IS A PARAMETER" paragraph on
+   * `handleProjectMilestones` in src/v2.ts). So a type the server
    * learned at runtime is recordable and readable TODAY, which is what makes
    * the AC's "the answer includes project-defined types" testable now.
    */

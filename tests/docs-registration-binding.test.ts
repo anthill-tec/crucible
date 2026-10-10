@@ -11,10 +11,11 @@
 //   cycle" resolution anywhere, and no `WORKFLOW_CYCLE_ID` reference.
 //
 // ESCALATION (documented per sub-agent-procedure "when in doubt"):
-//   The CR's own §S4b text cites TWO drift sites verbatim: `:278` ("attach
-//   `context.cycleId`") and `:285` ("clients auto-attach it"). Having read
-//   the real file (PRD-crucible-v2.md:260-370) before writing a single
-//   assertion, the `:285` phrase is NOT about cycle attachment at all — it
+//   The CR's own §S4b text cites TWO drift sites in PRD §4.11 verbatim: the
+//   "attach `context.cycleId`" clause and the "clients auto-attach it"
+//   phrase. Having read the real file (PRD-crucible-v2.md:260-370) before
+//   writing a single assertion, the "clients auto-attach it" phrase is NOT
+//   about cycle attachment at all — it
 //   is the **track** auto-attach sentence: "Model-B track operators register
 //   `track` with the CR's plan (clients auto-attach it from `WORKFLOW_ROLE`)".
 //   That mechanism (track inferred from $WORKFLOW_ROLE) is untouched by
@@ -66,7 +67,8 @@ function extractCycleAttachParagraph(md: string): string {
 
 // §S4b(a+b) — the superseded "agents attach context.cycleId" clause (PRD:278)
 // is replaced by the registration-binding model; WORKFLOW_CYCLE_ID drift
-// (PRD:292, :358) is swept from the whole document.
+// (the `WORKFLOW_*` env-var list and the plan-verb list, both in PRD §4.11)
+// is swept from the whole document.
 
 describe("§S4b PRD — superseded cycle-attach clause replaced by the registration-binding model", () => {
   test("the 'Agents attach context.cycleId' clause (PRD:278) is gone", () => {

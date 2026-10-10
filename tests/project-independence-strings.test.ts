@@ -13,7 +13,8 @@
 // comment reference (378 of them survive by AC8) cannot fail it and a
 // re-worded string cannot pass it by moving the literal into a variable.
 //
-// RED phase: fails against TODAY's tree, where public/app.js:2353-2354 renders
+// RED phase: fails against TODAY's tree, where the BDD tab (then `BddFeed`,
+// since replaced by `BddPanel` in public/app.js) renders
 // "BDD run results already stream into the Runs timeline — the dedicated BDD
 // surface lands in CR-CRU-015 (0.2.0)" — a CR id AND a release version.
 import { describe, test, expect, afterEach } from "bun:test";
@@ -184,14 +185,19 @@ describe("CR-CRU-097 §S4/AC1 — the BDD empty state is project-independent", (
     expect(text).not.toMatch(RELEASE_VERSION);
   });
 
-  test("the empty state still states the capability and that no dedicated surface exists yet", async () => {
+  // NARROWED by CR-CRU-015 §S4's ruling (2026-09-18): the surface-absence
+  // clause pinned the WORDING of a sentence CR-CRU-015 §S3 legitimately made
+  // false — the dedicated BDD surface now exists and renders the Gherkin of an
+  // ingested run. A test that pins incidental wording made false by a
+  // legitimate change is narrowed, never worked around by bending the
+  // product's words back to fit it. What survives is AC1's DURABLE half, and
+  // the invariant CR-CRU-097 actually exists for is the sibling test above.
+  test("the empty state still states the capability", async () => {
     await mountBddTab("bdd-empty-capability");
 
     const text = bddEmptyText();
     expect(text.length).toBeGreaterThan(0);
-    // AC1's positive half: the capability (results already stream into the
-    // Runs timeline) and the absence (no dedicated surface yet).
+    // AC1's positive half: the capability — results reach the Runs timeline.
     expect(text).toContain("Runs timeline");
-    expect(text.toLowerCase()).toContain("does not exist yet");
   });
 });

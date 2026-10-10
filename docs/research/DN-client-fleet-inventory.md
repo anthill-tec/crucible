@@ -195,7 +195,7 @@ avoids this entirely.
 **Verdict: arduino's handling is the more defensive/correct one; the other four share a latent
 crash-on-empty-body bug.** Low probability (the Crucible server always returns a JSON body today)
 but a real inconsistency between five otherwise-identical HTTP helpers, and the same class of
-finding as CR-050's `mvn-crucible.py:641` `<skipped/>` precedent — the CORRECT behavior sat in the
+finding as CR-050's `<skipped/>` precedent (`_parse_junit` in `clients/mvn-crucible.py`) — the CORRECT behavior sat in the
 client everyone assumed was just "the odd one out."
 
 ## §1 — SHARED (27) — lifts as-is, cosmetic differences only
@@ -222,8 +222,8 @@ Notable per-name specifics:
   loader label never observed outside the function. Lift with a label derived from `__name__`, not
   a hardcoded per-client string, so this stops being even a cosmetic difference.
 - **Residual un-lifted constants (not in the 42, but load-bearing for several SHARED functions
-  above):** `bun-crucible.py` defines its OWN full-literal `_HELP_STEPS` (line 1530) and
-  `_PREFER_GATE_RUN_WARNING` (line 1682) dicts, byte-identical TODAY to `_crucible_axi.HELP_STEPS`
+  above):** `bun-crucible.py` defines its OWN full-literal `_HELP_STEPS` and
+  `_PREFER_GATE_RUN_WARNING` dicts, byte-identical TODAY to `_crucible_axi.HELP_STEPS`
   / `.PREFER_GATE_RUN_WARNING` but never delegated to them — the other four clients call
   `_axi().HELP_STEPS` / `_axi().PREFER_GATE_RUN_WARNING` directly. This is exactly the kind of
   un-deduplicated constant CR-CRU-054 exists to remove; it is not one of the 42 named functions,

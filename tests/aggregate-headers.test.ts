@@ -31,8 +31,8 @@
 //
 // Singular/plural decision: no counter-evidence found for `1 agent`
 // (singular) in the F13 mock or spec text beyond the plural `N agents`
-// wording (crucible-v2-design.html:675, "group headers carry an N agents
-// aggregate only"). Using singular `1 agent` for exactly one
+// wording (the `F13` frame of .lavish/crucible-v2-design.html, "group
+// headers carry an N agents aggregate only"). Using singular `1 agent` for exactly one
 // fleet-registered participant per the dispatch brief's default.
 //
 // New testid/attribute contract this file introduces for GREEN (does not
@@ -45,19 +45,20 @@
 //     participant count is > 0. Absent (not `0 agents`) when the count is
 //     zero, and absent entirely while collapsed.
 //
-// KNOWN CONFLICT WITH AN EXISTING TEST (flagged, not silently patched):
-// tests/workflow-lens.test.ts ("the rollup summary is `<done>/<total>
-// cycles`, and a participating agent's live runtime renders under the
-// group") asserts `[data-testid="cr-agent-runtime"]` is present WITHOUT
-// ever clicking the group's toggle — i.e. it pins the OLD CR-011 §S2
-// always-visible-at-header-level behavior that §S4 explicitly retires
-// ("CR-011's information survives, one level down"). That test will start
-// failing once GREEN lands §S4 and needs a SANCTIONED RE-TARGET (require
-// `groupToggle.click()` before asserting `cr-agent-runtime`), matching the
-// pattern already used elsewhere in this CR (see the "SANCTIONED
-// RE-TARGET" comments in tests/workflow-history-refinements.test.ts). Out
-// of scope for this dispatch (new-file-only); reported for the
-// orchestrator/GREEN to action.
+// KNOWN CONFLICT WITH AN EXISTING TEST — RESOLVED by CR-CRU-179 §S2 (user
+// ruling 2026-10-09, approved in advance): rather than re-targeting
+// tests/workflow-lens.test.ts's always-visible assertion onto this file's
+// post-expansion pill/runtime contract, the user ruled the WHOLE agents
+// block removed — "History repeats `1 agent · vidushi · 0ms` under every
+// CR … it carries no information. Remove it." CR-CRU-179's pre-approved
+// re-pin list names this file: every assertion below that expected the
+// `cr-agents-pill` / `cr-agent-runtime` elements to APPEAR once a CR
+// group's header is expanded is re-pinned (`SANCTIONED RE-TARGET
+// (CR-CRU-179 §S2)` comments mark each site) to assert their ABSENCE
+// instead — the elements never render, expanded or collapsed. The
+// collapsed-state absence assertions already pinned here were already
+// correct and are UNCHANGED. Who ran what stays on the Runs tab (CR-CRU-179
+// §S2's own words); this file no longer has anything to say about it.
 //
 // Drives the REAL production public/app.js shell inside a happy-dom
 // window — same harness pattern as tests/workflow-history-refinements.
@@ -68,6 +69,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "./helpers/dom-settle";
+import { singleReleaseHistoryStub } from "./helpers/history-stub";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -154,7 +156,14 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
     let body: unknown;
-    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+    if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
+      // CR-CRU-173 §S1 re-pin (approved in advance) — GREEN's page fetches
+      // this new read to nest History's waves under a release; this stub
+      // wraps EVERY wave these fixtures carry in one (always-open) release
+      // so nothing this file already asserts moves except its nesting depth
+      // (tests/helpers/history-stub.ts).
+      body = singleReleaseHistoryStub(opts.plans);
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: opts.plans };
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
@@ -248,12 +257,6 @@ function crGroupToggle(crGroup: HTMLElement): HTMLElement {
   return toggle!;
 }
 
-function agentIdsOf(runtimeRows: NodeListOf<Element>): string[] {
-  return Array.from(runtimeRows).map((r) =>
-    (r.querySelector(".app-agent-id")?.textContent ?? "").trim(),
-  );
-}
-
 describe("§S4 — CR-group headers carry an aggregate pill, never per-agent rows", () => {
   test(
     "a closed CR group's collapsed header carries ZERO agentId-bearing elements and no pill; expanding the same header (the group's own toggle) renders the `2 agents` aggregate pill plus the two per-agent runtime rows; collapsing again hides both",
@@ -320,15 +323,17 @@ describe("§S4 — CR-group headers carry an aggregate pill, never per-agent row
       toggle.click();
       await settle();
 
-      const pill = crGroup!.querySelector('[data-testid="cr-agents-pill"]');
-      expect(pill).not.toBeNull();
-      expect((pill!.textContent ?? "").trim()).toBe("2 agents");
+      // SANCTIONED RE-TARGET (CR-CRU-179 §S2, user ruling 2026-10-09,
+      // approved in advance): the agents block is REMOVED — expanding the
+      // header must render NEITHER the aggregate pill NOR the per-agent
+      // runtime rows, for either of this fixture's two fleet-registered
+      // participants.
+      expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+      expect(crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]').length).toBe(0);
+      expect(crGroup!.textContent ?? "").not.toContain("agent-alpha");
+      expect(crGroup!.textContent ?? "").not.toContain("agent-beta");
 
-      const runtimeRows = crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]');
-      expect(runtimeRows.length).toBe(2);
-      expect(agentIdsOf(runtimeRows).sort()).toEqual(["agent-alpha", "agent-beta"]);
-
-      // Collapsing again hides both the pill and the per-agent rows.
+      // Collapsing again changes nothing — still no pill, still no rows.
       toggle.click();
       await settle();
       expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
@@ -337,7 +342,7 @@ describe("§S4 — CR-group headers carry an aggregate pill, never per-agent row
   );
 
   test(
-    "exactly one fleet-registered participating agent renders the SINGULAR `1 agent` pill text once the header is expanded",
+    "SANCTIONED RE-TARGET (CR-CRU-179 §S2): exactly one fleet-registered participating agent STILL renders no cr-agents-pill once the header is expanded (the agents block is removed, singular count included)",
     async () => {
       const key = "agg-singular-1";
       const now = Date.now();
@@ -375,10 +380,9 @@ describe("§S4 — CR-group headers carry an aggregate pill, never per-agent row
       crGroupToggle(crGroup!).click();
       await settle();
 
-      const pill = crGroup!.querySelector('[data-testid="cr-agents-pill"]');
-      expect(pill).not.toBeNull();
-      expect((pill!.textContent ?? "").trim()).toBe("1 agent");
-      expect((pill!.textContent ?? "").trim()).not.toBe("1 agents");
+      expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+      expect(crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]').length).toBe(0);
+      expect(crGroup!.textContent ?? "").not.toContain("agent-solo");
     },
   );
 
@@ -479,15 +483,14 @@ describe("§S4 regression pins — the three historical causes never surface an 
       crGroupToggle(crGroup!).click();
       await settle();
 
-      // Expanded — the pill counts ONLY the fleet-registered participant.
-      const pill = crGroup!.querySelector('[data-testid="cr-agents-pill"]');
-      expect(pill).not.toBeNull();
-      expect((pill!.textContent ?? "").trim()).toBe("1 agent");
-
-      const runtimeRows = crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]');
-      expect(runtimeRows.length).toBe(1);
-      expect(agentIdsOf(runtimeRows)).toEqual(["real-registered"]);
+      // SANCTIONED RE-TARGET (CR-CRU-179 §S2): the agents block is removed
+      // — expanded or collapsed, NEITHER id ever surfaces a pill
+      // or a runtime row (the fleet-registration distinction this
+      // regression exists to pin is now moot: nothing renders either way).
+      expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+      expect(crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]').length).toBe(0);
       expect(crGroup!.textContent ?? "").not.toContain("ghost-unregistered");
+      expect(crGroup!.textContent ?? "").not.toContain("real-registered");
     },
   );
 
@@ -545,13 +548,12 @@ describe("§S4 regression pins — the three historical causes never surface an 
       crGroupToggle(crGroup!).click();
       await settle();
 
-      // Behind expansion, the runtime row is fine.
-      const pill = crGroup!.querySelector('[data-testid="cr-agents-pill"]');
-      expect(pill).not.toBeNull();
-      expect((pill!.textContent ?? "").trim()).toBe("1 agent");
-      const runtimeRows = crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]');
-      expect(runtimeRows.length).toBe(1);
-      expect(agentIdsOf(runtimeRows)).toEqual(["gate-ghost-online"]);
+      // SANCTIONED RE-TARGET (CR-CRU-179 §S2): the agents block is
+      // removed — expansion renders no pill and no runtime row, even for
+      // this still-`online` lingering agent.
+      expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+      expect(crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]').length).toBe(0);
+      expect(crGroup!.textContent ?? "").not.toContain("gate-ghost-online");
     },
   );
 
@@ -622,14 +624,14 @@ describe("§S4 regression pins — the three historical causes never surface an 
       expect(crGroup!.querySelectorAll('[data-run-id]').length).toBe(0);
       expect(crGroup!.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
 
-      // The aggregate pill + per-agent runtime rows are exactly what DOES
-      // appear at header level — never the raw run entries.
-      const pill = crGroup!.querySelector('[data-testid="cr-agents-pill"]');
-      expect(pill).not.toBeNull();
-      expect((pill!.textContent ?? "").trim()).toBe("2 agents");
-      const runtimeRows = crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]');
-      expect(runtimeRows.length).toBe(2);
-      expect(agentIdsOf(runtimeRows).sort()).toEqual(["leak-agent-1", "leak-agent-2"]);
+      // SANCTIONED RE-TARGET (CR-CRU-179 §S2): the agents block is
+      // removed — NEITHER the aggregate pill NOR the per-agent runtime
+      // rows appear at header level, even once expanded; the ONLY thing the
+      // group's own toggle reveals is the cycle rows asserted above.
+      expect(crGroup!.querySelector('[data-testid="cr-agents-pill"]')).toBeNull();
+      expect(crGroup!.querySelectorAll('[data-testid="cr-agent-runtime"]').length).toBe(0);
+      expect(crGroup!.textContent ?? "").not.toContain("leak-agent-1");
+      expect(crGroup!.textContent ?? "").not.toContain("leak-agent-2");
     },
   );
 });

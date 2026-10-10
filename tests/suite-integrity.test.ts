@@ -55,6 +55,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
+import { declareClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT_PATH = path.join(REPO_ROOT, "clients", "bun-crucible.py");
@@ -274,6 +275,10 @@ async function runRegression(
   for (const k of Object.keys(baseEnv)) {
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
+  // CR-CRU-139 §S2 — the board is DECLARED in the project dir this drive
+  // resolves, never exported; the interlock refuses a spawn that would reach
+  // any other board.
+  declareClientBoard(crucibleUrl, dir);
   const proc = Bun.spawn({
     cmd: [
       "uv",
@@ -288,7 +293,7 @@ async function runRegression(
       dir,
     ],
     cwd: dir,
-    env: { ...baseEnv, CRUCIBLE_URL: crucibleUrl },
+    env: { ...baseEnv },
     stdout: "pipe",
     stderr: "ignore",
   });

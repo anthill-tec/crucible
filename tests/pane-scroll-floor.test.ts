@@ -32,12 +32,13 @@
 // existing precedent in tests/e2e/ but nothing blocks adding it), so this
 // is NOT deferred for lack of harness support — it is deferred for a
 // concrete DOM gap found while scoping the extension: `[data-testid=
-// "workspace-body"]` (public/app.js:1727) is the only testid wrapping ANY
-// active workspace-tab pane, and it wraps the WHOLE tab-or-detail region,
-// not the individual scrolling boundary — Workflow/Coverage/Compile/BDD
-// have no testid on their own `.app-center`/`.app-pane-content` pair (only
-// Runs and the in-pane run detail share `[data-testid="workspace-runs"]`;
-// home has `[data-testid="timeline"]`). Which DOM node is "the pane" for a
+// "workspace-body"]` (in `Workspace`, public/app.js) is the only testid
+// wrapping ANY active workspace-tab pane, and it wraps the WHOLE tab-or-detail
+// region, not the individual scrolling boundary —
+// Workflow/Coverage/Compile/BDD have no testid on their own
+// `.app-center`/`.app-pane-content` pair (only Runs and the in-pane run detail
+// share `[data-testid="workspace-runs"]`; home has
+// `[data-testid="timeline"]`). Which DOM node is "the pane" for a
 // `scrollWidth > clientWidth` measurement on Workflow specifically is
 // therefore GREEN's call (may need a new pane-level testid) — asserting a
 // guess now risks pinning the wrong element and false-failing a valid
@@ -53,12 +54,12 @@
 // to all SIX named panes except the in-pane run detail, per public/app.js:
 // 764/873/1099/1141/1165/1661) currently declares ONLY
 // `.app-center > .app-pane-content { min-height: calc(100% + 260px); }`
-// (public/styles.css:236) — no `overflow-x: auto`, no `min-width` anywhere.
-// The in-pane run detail (WorkspaceRunDetail, public/app.js:1679 — its
-// `[data-testid="workspace-runs"]` wrapper around RunDetailBody) does not
-// carry `.app-pane-content` at all. Both gaps are pinned RED below; the
-// other five panes' DOM-presence assertions already hold today (regression
-// pins, not RED) since the class is already wired there — GREEN's job is
+// (that rule in public/styles.css) — no `overflow-x: auto`, no `min-width`
+// anywhere. The in-pane run detail (`WorkspaceRunDetail` in public/app.js —
+// its `[data-testid="workspace-runs"]` wrapper around RunDetailBody) does not
+// carry `.app-pane-content` at all. Both gaps are pinned RED below; the other
+// five panes' DOM-presence assertions already hold today (regression pins, not
+// RED) since the class is already wired there — GREEN's job is
 // the CSS floor + wiring the run-detail pane.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";

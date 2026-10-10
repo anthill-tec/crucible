@@ -28,7 +28,7 @@
 // and asserts the result is neither the user-level nor the XDG path.
 import { defineConfig, devices } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,47 @@ import { fileURLToPath } from "node:url";
 // `seedProject`'s ephemeral guard demands cannot drift apart. Direction is
 // deliberate: config depends on harness, never the reverse.
 import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
+import { webkitEngineAvailable } from "./tests/e2e/steps/webkit-docker-preflight.ts";
+
+// CR-CRU-018 \u00a7S1 AC13/AC14 (DN decision 13, "WebKit provisioning \u2014 the two
+// paths") \u2014 WebKit runs two ways, never a third "install it locally": CI
+// installs it natively (Ubuntu runners), and locally the ONLY working path is
+// Playwright's own Docker `run-server`, reached from THIS process via
+// PW_TEST_CONNECT_WS_ENDPOINT \u2014 Playwright's OWN env var, consumed
+// automatically by every browser launch in this process (verified:
+// node_modules/playwright/lib/index.js's connectOptionsFromEnv()).
+// scripts/webkit-docker-server.ts (`bun run webkit:docker`) is the one
+// command that sets it.
+//
+// Docker mode (`bun run webkit:docker`) points EVERY browser launch in this
+// process at the container, so the container's `localhost` is not the
+// host's. It is answered with Playwright's OWN tethering, not a network
+// route: the launcher also sets PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>
+// (read beside the endpoint by connectOptionsFromEnv(),
+// node_modules/playwright/lib/index.js; BrowserType.connect's
+// `exposeNetwork`), so the remote browser's requests to localhost /
+// 127.0.0.1 / [::1] travel back over the SAME websocket and are made from
+// THIS process. Consequences, all deliberate: every baseURL stays
+// `localhost:PORT` in every mode, including the host-side `request` fixture
+// (which inherits `use.baseURL` and could never resolve a container-only
+// alias); the webServer keeps its loopback-only bind (`host = "127.0.0.1"`
+// below, never widened); and no host firewall rule is involved. THE PORT
+// USED IS `PORT` (E2E_PORT, 39877, imported above), never either
+// workstation board (:3849 / :3850). The earlier `hostmachine` route
+// (`--add-host=hostmachine:host-gateway` + a hostmachine baseURL) is
+// RETIRED: it needed a wider bind and a firewall rule, and the host-side
+// `request` fixture cannot resolve `hostmachine` at all.
+//
+// The webkit-iphone project is ENDPOINT-GATED (user-approved ruling): it
+// collects its feature only when a WebKit engine exists for this run, CI's
+// native install or the Docker endpoint (`webkitEngineAvailable`, the one
+// predicate tests/e2e-suite-reaches-the-board.test.ts shares). A plain
+// local `bun run test:e2e` therefore runs Chromium only instead of failing
+// on an engine this host cannot launch.
+const webkitAvailable = webkitEngineAvailable({
+  isCI: Boolean(process.env.CI),
+  wsEndpoint: process.env.PW_TEST_CONNECT_WS_ENDPOINT,
+});
 
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
@@ -52,6 +93,20 @@ const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
 // exactly the path rule 3 would have adopted, and `startServer()` creates the
 // `data/` parent itself (`mkdirSync(path.dirname(dbPath), {recursive: true})`).
 const SCRATCH_DB = path.join(SCRATCH_CWD, "data", "crucible.db");
+
+// CR-CRU-139 §S1/§S1b — the LISTENER is declared in the server's own file, not
+// exported at it: `$CRUCIBLE_PORT` is retired and no longer read, so a child
+// left to the environment would fall through to the shipped default and bind
+// :3849 — the port a production install occupies. The server finds this file
+// by the same rule it finds its database (`serverConfigPath()` ->
+// `dirname(CRUCIBLE_DB)/crucible.toml`), so it is written beside SCRATCH_DB
+// and the suite's port stays OWNED by the harness (`E2E_PORT`), declared here
+// exactly once.
+mkdirSync(path.dirname(SCRATCH_DB), { recursive: true });
+writeFileSync(
+  path.join(path.dirname(SCRATCH_DB), "crucible.toml"),
+  `[server]\nhost = "127.0.0.1"\nport = ${String(PORT)}\n`,
+);
 
 // CR-CRU-007 C5b — E2E house style: the E2E layer is proper BDD (Gherkin
 // `.feature` files bound to Playwright via playwright-bdd). `bddgen`
@@ -82,6 +137,18 @@ export default defineConfig({
   // variable — so a hardcoded path here would make the declaration a lie and
   // the client could never move the file this suite writes. The default is
   // kept for a bare `bun run test:e2e`, which is unaffected.
+  //
+  // CR-CRU-015 §S2 — and the RAW report the SERVER decodes. The JUnit XML has
+  // no notion of a `test.step`, so every Gherkin step this suite executes is
+  // already gone by the time that file is written; playwright's own JSON
+  // report keeps them, and `src/codecs/playwright.ts` (registered as the
+  // `"playwright"` codec) turns them back into the feature → scenario → step
+  // tree. `package.json`'s `crucible.rawReport` DECLARES that this target
+  // takes that report's path from PLAYWRIGHT_JSON_OUTPUT_NAME, so the path is
+  // read from the environment for exactly the reason the junit reporter above
+  // reads one: playwright's json reporter prefers an explicit `outputFile`
+  // OVER the variable, and a hardcoded path here would make the declaration a
+  // lie. The default keeps a bare `bun run test:e2e` writing beside the XML.
   reporter: [
     ["list"],
     [
@@ -91,75 +158,167 @@ export default defineConfig({
           process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
       },
     ],
+    [
+      "json",
+      {
+        outputFile:
+          process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? "test-reports/playwright.json",
+      },
+    ],
   ],
   use: {
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
   },
-  // CR-CRU-016 C4 — `drill-in.feature` sorts alphabetically before
-  // `shell-storyboard.feature` ("d" < "s"), but shell-storyboard.feature's
-  // FIRST scenario (F1) asserts a truly empty DB — a precondition that MUST
-  // hold before ANY scenario in the shared webServer/DB seeds a project.
-  // playwright-bdd's file resolver (tinyglobby) always returns results in
-  // alphabetical order regardless of pattern order passed to `features`
-  // (verified: reordering the `features` array above had no effect), so
-  // ordering must be enforced at the Playwright project level instead:
-  // Playwright's documented "project dependencies" guarantee a dependency
-  // project completes before its dependent starts, independent of file
-  // discovery order. `chromium` covers everything except drill-in.feature;
-  // `chromium-drill-in` depends on it and runs strictly after.
+  // ORDERING. One scenario in this suite — shell-storyboard.feature's F1,
+  // "fresh forge — empty state" — asserts a database NOTHING has seeded, and
+  // every scenario shares one webServer and one DB for the whole run. Its
+  // `Given a fresh, empty Crucible database` is a NO-OP step (see
+  // tests/e2e/steps/navigation.steps.ts): the emptiness is provided by running
+  // FIRST, not by truncating anything, so the precondition is an ordering
+  // constraint and there is exactly one of it.
   //
-  // CR-CRU-025 C4 — `cycle-run-navigation.feature` sorts alphabetically
-  // BEFORE drill-in.feature too ("cycle" < "drill" < "shell"), which would
-  // break the SAME F1 precondition. Same fix, its own dependent project
-  // (`chromium-cycle-run-navigation`) — it and `chromium-drill-in` have no
-  // ordering requirement relative to EACH OTHER (each seeds its own
-  // namespaced fixtures), only relative to `chromium`.
+  // playwright-bdd's file resolver (tinyglobby) always returns files in
+  // alphabetical order regardless of the order passed to `features` (verified:
+  // reordering the `features` array above had no effect), and F1's file sorts
+  // well down that list — so the constraint is enforced at the Playwright
+  // PROJECT level, where "project dependencies" are documented to complete a
+  // dependency project before any dependent starts.
   //
-  // CR-CRU-034 C1 RED — `drilldown-dual-axis-scroll.feature` sorts
-  // alphabetically right after drill-in.feature ("drill-in" < "drilldown",
-  // the hyphen sorts before any letter) — still BEFORE shell-storyboard's
-  // F1 precondition. Same fix again, its own dependent project
-  // (`chromium-drilldown-dual-axis-scroll`); no ordering requirement
-  // relative to `chromium-drill-in` / `chromium-cycle-run-navigation`
-  // (own namespaced "DDA …" fixtures), only relative to `chromium`.
+  // CR-CRU-016 C4 / CR-CRU-025 C4 / CR-CRU-034 C1 / CR-CRU-017 §S3 each hit
+  // this constraint when adding a feature that sorts BEFORE shell-storyboard,
+  // and each answered it the same way: pin THAT feature into its own project
+  // that `dependencies` on `chromium`, so it runs after the whole main body.
   //
-  // CR-CRU-017 §S3 — `run-lifecycle.feature` sorts alphabetically BEFORE
-  // shell-storyboard.feature ("r" < "s") too, so it would seed projects ahead
-  // of that same F1 empty-DB precondition. Same fix once more, its own
-  // dependent project (`chromium-run-lifecycle`); no ordering requirement
-  // relative to the other dependents (its fixtures are namespaced "RL …"),
-  // only relative to `chromium`.
+  // CR-CRU-015 §S2 — that edge is WIDER than the constraint, and the width is
+  // not free. Playwright skips every dependent project when its dependency
+  // project holds ANY failing test (`hasFailedDeps` in the runner's phase
+  // loop, measured here: one failing scenario in `chromium` left "14 did not
+  // run"). Since this CR makes the suite's own report the board's evidence,
+  // those 14 scenarios land as nodes with no steps and no verdict — a reader
+  // cannot tell a skipped specification from an empty one. So the DEPENDENCY
+  // is narrowed to the constraint that actually exists: F1 is TAGGED
+  // `@empty-db` in its own feature file and is the whole of the dependency
+  // project, and every other project depends on THAT. A failure anywhere in
+  // the main body now skips nothing, because nothing depends on it.
+  //
+  // The four stay their own projects, declared AFTER `chromium` and running
+  // after it: measured, moving them into `chromium` (where file order puts
+  // them first) reds CR-CRU-034 §S1, which needs the DB state the main body
+  // leaves behind. They share a phase with `chromium` (same dependency
+  // depth), and a phase runs its projects in declaration order on the single
+  // declared worker — which is exactly the relative order the four have
+  // always had among themselves.
   projects: [
+    {
+      name: "chromium-empty-db",
+      use: { ...devices["Desktop Chrome"] },
+      grep: /@empty-db/,
+    },
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      grepInvert: /@empty-db/,
       testIgnore:
-        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle)\.feature\.spec\.js$/,
+        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle|mobile-viewport-responsive|tablet-viewport-responsive)\.feature\.spec\.js$/,
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-drill-in",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drill-in\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-cycle-run-navigation",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /cycle-run-navigation\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-drilldown-dual-axis-scroll",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drilldown-dual-axis-scroll\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
     },
     {
       name: "chromium-run-lifecycle",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /run-lifecycle\.feature\.spec\.js$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium-empty-db"],
+    },
+    // CR-CRU-018 §S1 AC1 — the DEDICATED `@mobile`-tagged e2e feature, not a
+    // second pass of the whole suite body (which would roughly double a
+    // 9m27s suite for one invariant). Two real Playwright DEVICE profiles
+    // (touch + narrow UA, not merely a resized desktop viewport), each
+    // scoped to its OWN feature file via `testMatch` so neither the
+    // `chromium` main body nor the other mobile project ever double-runs a
+    // scenario. Both `grepInvert: /@empty-db/` per the CR's own ordering
+    // note: a project that swept up the F1 empty-db precondition a second
+    // time would both red tests/e2e-suite-dependency-graph.test.ts's "the
+    // ordering precondition runs exactly once" invariant AND seed the
+    // "empty" database ahead of that second run. Both `dependencies` on
+    // `chromium-empty-db` (never on `chromium`) for the same reason every
+    // other project here does: a failing scenario in the main body must
+    // skip nothing.
+    {
+      name: "chromium-mobile",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
+    },
+    {
+      name: "chromium-tablet",
+      // DN-crucible-responsive-model.md decision 1 — tablet is 641-1024px.
+      // No named Playwright "tablet" device sits inside that exact band (the
+      // closest built-ins straddle it: "iPad Mini" landscape is 1024 wide,
+      // its portrait is 768), so the viewport is declared explicitly at
+      // 820x1180 (touch-enabled, mid-band) rather than borrowing a device
+      // whose width sits at the band's own edge.
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 820, height: 1180 },
+        isMobile: true,
+        hasTouch: true,
+      },
+      testMatch: /tablet-viewport-responsive\.feature\.spec\.js$/,
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
+    },
+    // CR-CRU-018 §S1 AC13/AC14 (DN decision 13, user ruling 2026-09-23) — the
+    // SAME phone feature `chromium-mobile` runs, on WebKit instead of Blink: a
+    // phone profile under Chromium proves geometry, not the platform, and
+    // §S3's subject matter (scroll containment, 100vh,
+    // -webkit-fill-available, flex/grid edge cases) is exactly where the
+    // engines diverge. `testMatch` is IDENTICAL to chromium-mobile's, on
+    // purpose — both engines assert the same phone ACs, never a second
+    // feature. `devices["iPhone 15"]` is VERIFIED against this pinned
+    // Playwright version's own device descriptors
+    // (node_modules/playwright-core/lib/server/deviceDescriptorsSource.json)
+    // to declare `defaultBrowserType: "webkit"` — not assumed, per the DN's
+    // own caution not to assume a name survives a version.
+    //
+    // `baseURL` is `localhost` here exactly as for every other project, in
+    // every mode: in CI WebKit is native (same machine as the webServer), and
+    // in Docker mode the exposeNetwork tethering above carries the
+    // container's loopback requests back to this host. Declared explicitly
+    // (not inherited) so the project's own object states it.
+    //
+    // ENDPOINT-GATED: with no WebKit engine for this run (no CI, no Docker
+    // endpoint) `testIgnore` excludes every file, so the project stays
+    // DECLARED (a later edit cannot quietly delete it) but collects nothing,
+    // and a plain local run never attempts a WebKit launch.
+    {
+      name: "webkit-iphone",
+      use: {
+        ...devices["iPhone 15"],
+        baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${String(PORT)}`,
+      },
+      testMatch: /mobile-viewport-responsive\.feature\.spec\.js$/,
+      ...(webkitAvailable ? {} : { testIgnore: /.*/ }),
+      grepInvert: /@empty-db/,
+      dependencies: ["chromium-empty-db"],
     },
   ],
   webServer: {
@@ -170,7 +329,7 @@ export default defineConfig({
     // webServerPlugin.js), so CRUCIBLE_DB here OVERRIDES any ambient
     // CRUCIBLE_DB the developer's shell happens to export: the suite cannot
     // be pointed at a real database by accident, only by editing this line.
-    env: { CRUCIBLE_PORT: String(PORT), CRUCIBLE_DB: SCRATCH_DB },
+    env: { CRUCIBLE_DB: SCRATCH_DB },
     port: PORT,
     reuseExistingServer: false,
     timeout: 20_000,

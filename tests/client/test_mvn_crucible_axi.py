@@ -240,10 +240,18 @@ else:
 # A fake `mvnw` substituted for the real Maven Wrapper: writes a Surefire
 # JUnit report and exits 0, regardless of the goal it was invoked with --
 # `_mvn_base()` prefers an executable `./mvnw` in the maven dir over `mvn`.
+# Like real Surefire it writes where `-Dsurefire.reportsDirectory` points,
+# else to its own default `target/surefire-reports`.
+_FAKE_MVNW_SUREFIRE_DIR = (
+    "import sys\n"
+    "d = next((a.split('=', 1)[1] for a in sys.argv[1:]"
+    " if a.startswith('-Dsurefire.reportsDirectory=')),"
+    " os.path.join('target', 'surefire-reports'))\n"
+    "os.makedirs(d, exist_ok=True)\n"
+)
 _FAKE_MVNW_TEST_BODY = '''#!/usr/bin/env python3
 import os
-os.makedirs(os.path.join("target", "surefire-reports"), exist_ok=True)
-with open(os.path.join("target", "surefire-reports", "TEST-FixtureTest.xml"), "w") as f:
+''' + _FAKE_MVNW_SUREFIRE_DIR + '''with open(os.path.join(d, "TEST-FixtureTest.xml"), "w") as f:
     f.write(%r)
 print("[fake-mvnw] wrote surefire report")
 ''' % PASS_SUREFIRE_XML
@@ -377,17 +385,6 @@ class _BaseMvnAxiTest(unittest.TestCase):
              "cycles": [{"id": active_id, "status": "active"},
                         {"id": active_id - 1, "status": "done"}]},
         ])
-
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-quiet", "cr": "CR-CRU-030", "status": "open",
-             "cycles": [{"id": 40, "status": "pending"}, {"id": 41, "status": "done"}]},
-        ])
-
-    def _no_open_plans_at_all(self):
-        """CR-CRU-036 §S1 tolerant case: no open plan exists at all (a
-        lightweight project) — the guard must PROCEED, never withhold."""
-        return _open_plans_response([])
 
     def _plans_fetch_failure(self):
         """CR-CRU-036 §S1 tolerant case: the plans GET itself fails (infra
@@ -589,7 +586,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["abort", "--agent", "test-agent", "--project-dir", self.tmpdir],
+            ["abort", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": False, "error": "409 userApproved required"})
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -597,7 +594,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
         self.assertIs(axi.get("ok"), False)
 
         code2, out2, _err2, _p2, _g2, _pa2 = self._run(
-            ["abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir],
+            ["abort", "--user-approved", "--reason", "fixture abort", "--cause", "gap-analysis", "--spec-ref", "fixture S2b", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": True})
         self.assertEqual(code2, 0, f"stdout={out2!r}")
         axi2 = self._decode_axi(out2)
@@ -654,7 +651,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
         test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
         against the SAME `while proc.poll() is None:` polling loop
         mvn-crucible.py's `cmd_gate_run` already wires up (confirmed by
-        reading the function body at mvn-crucible.py:1565)."""
+        reading the body of `cmd_gate_run` in clients/mvn-crucible.py)."""
         saved_path = os.environ.get("PATH", "")
         fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-mvn-interim-")
         fake_path = os.path.join(fake_bin_dir, "no-mistakes")
@@ -695,7 +692,24 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
         gate_calls = [c for c in calls if c[0] == "/api/v2/gates"]
         self.assertGreaterEqual(len(gate_calls), 2,
                                  f"expected >=1 interim + 1 final gate POST, got {calls}")
-        self.assertEqual(calls, gate_calls,
+        # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
+        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate\u00b7<run>`,
+        # `<run>` the first 8 characters of the no-mistakes run id),
+        # whose own lifecycle (open/heartbeat/removal) is the ONLY other
+        # plumbing allowed; any other call, or a lifecycle call for any
+        # other id, still fails the comparison below.
+        run_identity = "test-agent\u00b7gate\u00b7" + "gate-axi-mvn-interim-001"[:8]
+        lifecycle_paths = ("/api/v2/agents/heartbeat", "/api/v2/agents/register",
+                           "/api/v2/agents/unregister")
+        identity_calls = [c for c in calls if c[0] in lifecycle_paths
+                          and isinstance(c[1], dict)
+                          and c[1].get("agentId") == run_identity]
+        self.assertTrue(
+            any(c[0] == "/api/v2/agents/heartbeat" for c in identity_calls),
+            f"the run identity {run_identity!r} must be opened/heartbeated; "
+            f"got {calls}")
+        other_calls = [c for c in calls if c not in identity_calls]
+        self.assertEqual(other_calls, gate_calls,
                           "gate-run owns ALL Crucible plumbing -- no other endpoint "
                           "should ever be hit")
 
@@ -776,6 +790,14 @@ class MvnCrucibleStatusHookSafeTest(_BaseMvnAxiTest):
             f"the unavailable envelope must still carry the last-closed-CR key "
             f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
         self.assertIsNone(axi.get("lastClosedCr"))
+        # §S5/AC6 (the status open-plans change) — the degrade adds ONE field: filed, also an
+        # explicit null (the board could not be read, so the number is
+        # unknown, not zero).
+        self.assertIn(
+            "filed", axi,
+            f"the unavailable envelope must carry `filed` as an explicit "
+            f"null too; got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("filed"))
         self.assertNotIn(
             "lastRunCr", axi,
             f"the old key must be ABSENT from the envelope -- an envelope "
@@ -790,14 +812,41 @@ class MvnCrucibleStatusHookSafeTest(_BaseMvnAxiTest):
             f"the help[] hint must point at reaching/starting the Crucible "
             f"server; got {help_steps!r}")
 
-    def test_status_no_open_plan_still_exits_zero_with_definitive_empty_state(self):
-        """Characterization -- existing behavior preserved: a REACHABLE server
-        with no open plan is the OTHER definitive empty state (`count:0`),
-        and it must stay DISTINCT from the status-unavailable degrade above
-        (AXI principle 5 -- never an ambiguous/conflated empty state)."""
+    def test_status_never_filed_reports_filed_zero_and_plan_file_only_help(self):
+        """§S4/AC5 REWRITE of
+        `test_status_no_open_plan_still_exits_zero_with_definitive_empty_state`,
+        which pinned only `count:0`/`plans:[]` -- now ONE of TWO
+        distinguishable empty-board states, told apart by `filed`. This is
+        the "never filed" row: `filed:0`, `lastClosedCr:null`, help[] names
+        `plan-file` ONLY (nothing to advance)."""
         code, out, _err, _p, _g, _pa = self._run(
             ["status", "--project-dir", self.tmpdir],
-            get_return=self._no_open_plans_at_all())
+            get_return={"ok": True, "plans": [], "lastClosedCr": None, "filed": 0})
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 0)
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertEqual(
+            axi.get("help"), ["plan-file --cr <cr> --cycle <label>"],
+            f"the 'never filed' help is plan-file ONLY; got {axi!r}")
+        self.assertEqual(
+            axi.get("warnings"), [],
+            "the no-plan empty state must NOT carry the status-unavailable "
+            "warning -- it is a DIFFERENT definitive state than the "
+            "server-unreachable degrade")
+
+    def test_status_none_open_on_a_board_with_closed_history_names_next_then_plan_file(self):
+        """§S4/AC5 -- the OTHER empty-board state: a board that HAS
+        filed plans (`filed>0`) but none currently open. `lastClosedCr` is
+        still published, and help[] names `next` THEN `plan-file`, never
+        `cycle-activate` (nothing to activate)."""
+        code, out, _err, _p, _g, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return={"ok": True, "plans": [], "lastClosedCr": "CR-DONE", "filed": 4})
 
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -805,10 +854,55 @@ class MvnCrucibleStatusHookSafeTest(_BaseMvnAxiTest):
         self.assertEqual(axi.get("plans"), [])
         self.assertEqual(axi.get("count"), 0)
         self.assertEqual(
-            axi.get("warnings"), [],
-            "the no-plan empty state must NOT carry the status-unavailable "
-            "warning -- it is a DIFFERENT definitive state than the "
-            "server-unreachable degrade")
+            axi.get("filed"), 4,
+            "filed>0 tells 'none open' apart from 'never filed' even though "
+            "both report an empty plans[]")
+        self.assertEqual(axi.get("lastClosedCr"), "CR-DONE")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"],
+            f"'none open' help names next then plan-file, NOT "
+            f"cycle-activate; got {axi!r}")
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_none_open_aborted_only_board_last_closed_cr_stays_null(self):
+        """§S4/AC5 -- the aborted-only variant Model B asked for
+        (#1391): `filed>0` (the aborted plans still count) but
+        `lastClosedCr` is null (an aborted plan never has a `closedAt`)."""
+        code, out, _err, _p, _g, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return={"ok": True, "plans": [], "lastClosedCr": None, "filed": 2})
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 2)
+        self.assertIsNone(
+            axi.get("lastClosedCr"),
+            "an aborted-only board must still report lastClosedCr null even "
+            "though filed>0 -- filed alone tells it apart from never-filed")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"])
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_reads_exactly_one_status_open_filtered_path(self):
+        """AC4 -- 'cmd_status issues exactly one read, GET .../plans?status=open'."""
+        code, out, _err, _p, get_mock, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return={"ok": True, "plans": [], "lastClosedCr": None, "filed": 0})
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertEqual(
+            get_mock.call_count, 1,
+            f"cmd_status must issue EXACTLY one plans read; got "
+            f"{get_mock.call_args_list!r}")
+        called_path = get_mock.call_args.args[0] if get_mock.call_args.args \
+            else get_mock.call_args.kwargs.get("path")
+        self.assertTrue(
+            str(called_path).endswith("?status=open"),
+            f"the one read must carry the status=open filter (§S3); "
+            f"got path={called_path!r}")
 
     def test_status_plans_fetch_is_bounded_by_a_short_timeout(self):
         """§S1 bounded fetch -- the underlying urlopen call must pass a short
@@ -1160,8 +1254,8 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         fake_mvnw_body = (
             "#!/usr/bin/env python3\n"
             "import os\n"
-            "os.makedirs(os.path.join('target', 'surefire-reports'), exist_ok=True)\n"
-            "with open(os.path.join('target', 'surefire-reports', 'TEST-FixtureTest.xml'), 'w') as f:\n"
+            + _FAKE_MVNW_SUREFIRE_DIR +
+            "with open(os.path.join(d, 'TEST-FixtureTest.xml'), 'w') as f:\n"
             f"    f.write({PASS_SUREFIRE_XML!r})\n"
             f"print({marker!r})\n"
         )
@@ -1200,8 +1294,8 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         fake_mvnw_body = (
             "#!/usr/bin/env python3\n"
             "import os\n"
-            "os.makedirs(os.path.join('target', 'surefire-reports'), exist_ok=True)\n"
-            "with open(os.path.join('target', 'surefire-reports', 'TEST-FixtureTest.xml'), 'w') as f:\n"
+            + _FAKE_MVNW_SUREFIRE_DIR +
+            "with open(os.path.join(d, 'TEST-FixtureTest.xml'), 'w') as f:\n"
             f"    f.write({PASS_SUREFIRE_XML!r})\n"
             f"print({marker!r})\n"
         )

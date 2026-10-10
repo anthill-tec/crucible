@@ -12,7 +12,7 @@
 //   `wave-sequence` (authored)  waveSeqBase(wave) + index + 1   wave 5 -> 5001+
 //   bulk queue post (defaulted) `declaredSeq ?? index`          wave 6 -> 62
 //
-// `listQueue` is `ORDER BY seq ASC` (src/store.ts:3465-3470) — ONE column, no
+// `listQueue` (src/store.ts) is `ORDER BY seq ASC` — ONE column, no
 // container key — so a positional value from an unauthored wave sorts ahead of
 // every authored wave. On the live board (94 rows, read 2026-09-02) that is not
 // an edge case: 66 of 94 rows carry NO release at all, the 28 authored 0.2.0
@@ -21,9 +21,10 @@
 //
 // ── The seam GREEN must expose ────────────────────────────────────────────
 //
-// ONE comparator, shared. `compareVersionLabels` is already exported
-// (src/store.ts:359) and a container comparator already exists as
-// `compareContainers` (src/v2.ts:1927-1932, module-private); CR-091's comment
+// ONE comparator, shared. `compareVersionLabels` (src/store.ts) is already
+// exported and a container comparator already exists as
+// `compareContainers` (module-private in src/v2.ts then; lifted into
+// src/store.ts since); CR-091's comment
 // on it warns that "a second one would order them differently". §S1 therefore
 // LIFTS that one comparator so `listQueue` and the write-path warnings share
 // it. This suite never imports it and never greps for it: AC2 is asserted as a
@@ -34,7 +35,8 @@
 //
 // The write path already PUBLISHES its container verdict: `cross-wave-backwards`
 // fires exactly when a dependant's container sorts strictly BEFORE its
-// dependency's (src/v2.ts:1995-2011). So for any pair of DISTINCT containers,
+// dependency's (`dependencyWarnings` in src/v2.ts). So for any pair of
+// DISTINCT containers,
 //
 //     warning fires  <=>  the dependant precedes the dependency in listQueue
 //
@@ -56,7 +58,8 @@
 //
 // Round 1 — `compareContainers` reads `a.release ?? ""`, and
 // `compareVersionLabels("", "0.2.0")` is NEGATIVE (a label with FEWER numeric
-// components sorts first, src/store.ts:390), so applied verbatim every
+// components sorts first, per `compareVersionLabels` in src/store.ts), so
+// applied verbatim every
 // release-LESS row sorts BEFORE every declared release — 66 of the live
 // board's 94 rows, CR-CRU-015 among them — and AC7 would still fail. RED's
 // proposal "every undeclared row sorts LAST (globally)" was OVERRULED: the
@@ -143,7 +146,8 @@ function spanOf(order: string[], members: string[]): { first: number; last: numb
 
 /**
  * The oracle's candidate set, by the client's OWN two-axis rule
- * (`_is_actionable`, clients/_crucible_axi.py:1310-1319): PENDING on the
+ * (`_is_actionable` in the client then; since moved server-side as
+ * `isActionable` in src/next.ts): PENDING on the
  * server-derived status axis AND carrying no `lifecycle` disposition, because
  * `deriveQueueStatus` cannot see `lifecycle` by signature, so a VOID cr with
  * no plan still reads PENDING. Modelled here rather than imported: AC6 keeps
@@ -284,8 +288,9 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
       expect(publishedOrder(entries)).toEqual(BOARD_SNAPSHOT_2026_09_02.publishedOrder);
 
       // The oracle's recommendation, as the oracle derives it: the FIRST
-      // actionable row of the published order (`actionable[0]`,
-      // clients/_crucible_axi.py:1531). It must belong to the active release —
+      // actionable row of the published order (`actionable[0]` in the client's
+      // then `resolve_next`; now `resolveNext` in src/next.ts). It must belong
+      // to the active release —
       // before §S1 the wave-6 deferred rows reached it first.
       expect(firstActionable(entries)?.release).toBe("0.2.0");
       expect(firstActionable(entries)?.cr).toBe(BOARD_SNAPSHOT_2026_09_02.firstActionableCr);
@@ -453,7 +458,7 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
 
       // 0.10.0 is the LAST release, not the first: a codepoint compare of the
       // labels would put it before 0.2.0, which is the bug
-      // `compareVersionLabels` exists to avoid (src/store.ts:344-353), and its
+      // `compareVersionLabels` (src/store.ts) exists to avoid, and its
       // seq of 65 would put it second. Neither decides — the key does.
       expect(publishedOrder(entries)).toEqual([
         "CR-R001-W1",
@@ -521,7 +526,8 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
 
       // CR-091 §S4/§S8 tolerates the shared seq block precisely because "the
       // ordering anomaly is confined to a comparison across releases that no
-      // read makes" (src/store.ts:386-392). This read makes it.
+      // read makes" (the doc comment on `WAVE_SEQ_STRIDE` in src/store.ts).
+      // This read makes it.
       store.replaceQueue(key, [
         { cr: "CR-R010-a", wave: "5", dependsOn: [], seq: 5001, release: "0.10.0" },
         { cr: "CR-R010-b", wave: "5", dependsOn: [], seq: 5002, release: "0.10.0" },
@@ -548,7 +554,8 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
       const key = seedProject(store);
 
       // `waveSeqBase` reads the LEADING integer and gives a cell without one
-      // block 0 (src/store.ts:396-405), so block 0 sorts before wave 1 — and
+      // block 0 (via `waveNumber` in src/store.ts), so block 0 sorts before
+      // wave 1 — and
       // the two block-0 cells, being one container for ordering purposes, fall
       // through to seq. The seq values here deliberately contradict that: a
       // seq-only read puts both block-0 rows LAST.
@@ -675,7 +682,7 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
         entries: rows,
       });
       expect(posted.status).toBe(200);
-      // The write's own reply is a READER too (src/v2.ts:1870).
+      // The write's own reply is a READER too (`handleQueuePost` in src/v2.ts).
       expect(publishedOrder(posted.body.entries!)).toEqual(["CR-WIRE-W5", "CR-WIRE-W6"]);
 
       const read = await get(`/api/v2/projects/${key}/queue`);
@@ -697,7 +704,8 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       // positional one — on synthetic ids: what is under test is the RULE that
       // the reader re-derives nothing (CR-CRU-097 §S5/AC4).
       // Declarations ride the store directly: POST /queue carries no `release`
-      // (src/v2.ts:1848-1859), and this test is about the READ, not the verb.
+      // (`handleQueuePost` in src/v2.ts), and this test is about the READ, not
+      // the verb.
       booted.store.replaceQueue(key, [
         { cr: "CR-UNDECLARED-W6-A", wave: "6", dependsOn: [], seq: 62 },
         { cr: "CR-UNDECLARED-W6-B", wave: "6", dependsOn: [], seq: 64 },
@@ -808,7 +816,8 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       );
       expect(warning).toBeDefined();
       // CR-091's shape, reused verbatim: the CONTAINERS, not the two crs, and
-      // an undeclared container renders as `-/<wave>` (src/v2.ts:1911-1913).
+      // an undeclared container renders as `-/<wave>` (`containerLabel` in
+      // src/v2.ts).
       expect(warning!.containers).toEqual(["0.2.0/5", "-/6"]);
       expect(warning!.crs).toBeUndefined();
     },

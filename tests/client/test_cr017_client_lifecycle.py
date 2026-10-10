@@ -15,20 +15,31 @@ and its acceptance-criteria line:
     aborted event with the signal reason; `--no-lifecycle` produces a
     single-shot event."
 
-SCOPE NOTE — why the signal path posts NOTHING here. The abort ROUTE
-(`POST /api/v2/runs/<id>/abort`) is §S2 and does NOT exist yet; §S1 (already
-on this branch) ships the server-side auto-abort instead: an open run is
-settled with reason `agent died` the moment its agent tombstones, and with
-reason `abandoned` once it is older than the server's configured
+SCOPE NOTE (CR-CRU-131 §S1b era) — why the signal path USED TO post
+nothing. The abort ROUTE (`POST /api/v2/runs/<id>/abort`) was CR-CRU-017
+§S2 and did NOT exist at the time this file was written; §S1 (already on
+this branch back then) shipped the server-side auto-abort instead: an open
+run is settled with reason `agent died` the moment its agent tombstones, and
+with reason `abandoned` once it is older than the server's configured
 `run_abandon_ms` deadline (a `[limits.run_abandon_ms]` table in the server's
-own crucible.toml since CR-CRU-131 §S1b retired the environment variable that
-used to carry it -- and the WORDING a user is shown for that settlement is
-pinned in tests/client/test_open_run_warning_names_the_limit.py). So this
-cycle's client obligation on SIGINT/SIGTERM is exactly three things — stop
+own crucible.toml since CR-CRU-131 §S1b retired the environment variable
+that used to carry it -- and the WORDING a user is shown for THAT settlement
+is pinned in tests/client/test_open_run_warning_names_the_limit.py). So that
+cycle's client obligation on SIGINT/SIGTERM was exactly three things — stop
 cleanly, invent NO abort call, and SAY in the envelope that the open run was
-left to the server's own auto-abort — which is what the signal tests below
-pin. A client-side `/abort` POST appearing here would be a FAILURE, not an
-improvement: it would be a fabricated route.
+left to the server's own auto-abort.
+
+CR-CRU-170 §S2 RE-PIN (orchestrator-approved): §S1 of that CR built the
+route this note said did not exist, and §S2 wires the signal path to call
+it. `SignalLeavesTheRunToTheServerAutoAbortTest` below is migrated: the
+client's obligation on SIGINT/SIGTERM is now to stop cleanly, POST EXACTLY
+ONE abort for the run it opened (naming the signal), and SAY the run was
+aborted — falling back to the server's own auto-abort sweep (the
+paragraph above, unchanged) only when that abort attempt itself fails,
+which this file does not drive (see `test_a_client_aborts_a_run_it_cannot_file.py`
+for the refused-abort fallback). Every other test in this file (the
+wrapped-run/no-lifecycle/degraded-start/preflight paths) is untouched by
+this CR and keeps its original pin.
 
 RED phase (confirmed by reading clients/bun-crucible.py at HEAD of
 feature/CR-CRU-017-run-lifecycle): the client has no lifecycle bracket at all.
@@ -216,6 +227,24 @@ class _FakeCrucible:
                 event["runtime_ms"] = int(time.time() * 1000) - started_at
             self.events.append(event)
             return {"ok": True}
+        # CR-CRU-170 \u00a7S2 (orchestrator-approved re-pin) \u2014 the client's own
+        # close of a run it opened and cannot file: `POST
+        # /api/v2/runs/<runId>/abort {projectKey, agentId, reason}`, answered
+        # the way `handleRunAbort` (src/v2.ts) answers it for a run this
+        # fake still holds open \u2014 settled, removed from `self.runs` so a
+        # second attempt would see "unknown", and recorded as an `aborted`
+        # event exactly as the real store's `abortRun` stamps one.
+        if path.startswith("/api/v2/runs/") and path.endswith("/abort"):
+            run_id = path[len("/api/v2/runs/"):-len("/abort")]
+            if run_id not in self.runs:
+                return {"ok": False, "error": f"unknown runId: {run_id}"}
+            reason = payload.get("reason")
+            started_at = self.runs.pop(run_id)
+            self.events.append({"path": path, "payload": payload,
+                                "startedAt": started_at, "status": "aborted",
+                                "abortReason": reason})
+            return {"ok": True, "changed": True, "runId": run_id,
+                    "status": "aborted", "reason": reason}
         return {"ok": False, "error": f"unhandled POST {path}"}
 
     # -- read helpers -------------------------------------------------------
@@ -444,7 +473,7 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     # deliberately. `test` used to stamp `tier="unit"` on a run it could not
     # classify from a file path; it now states only the tier its CALLER named,
     # so an un-tiered `bun test` sends no `tier` key and the server applies its
-    # own documented default (`src/store.ts:1911`). This test's own subject —
+    # own documented default (`recordTestEvent` in `src/store.ts`). This test's own subject —
     # `--no-lifecycle` makes NO run-start call, sends NO runId, and adds NOTHING
     # to the single-shot body — is untouched: the key set is re-recorded against
     # today's single-shot ingest, not loosened.
@@ -550,9 +579,14 @@ class OlderServerDegradesToSingleShotTest(_BaseCr017ClientTest):
 
 
 class SignalLeavesTheRunToTheServerAutoAbortTest(_BaseCr017ClientTest):
-    """§S4 — "trap SIGINT/SIGTERM". The abort ROUTE is §S2 and does not exist
-    yet, so the client's obligation is to stop cleanly, POST no abort, and SAY
-    that the open run is left to the server's own auto-abort sweep."""
+    """§S4 — "trap SIGINT/SIGTERM". CR-CRU-170 §S2 (orchestrator-approved
+    re-pin) built the client-side close this class used to say did not
+    exist: the client's obligation is now to stop cleanly, POST exactly ONE
+    abort for the run IT opened (naming the signal), and SAY the run was
+    aborted — falling back to the server's own auto-abort sweep only if
+    that abort attempt itself fails (untested here; see
+    `test_a_client_aborts_a_run_it_cannot_file.py` for the refused-abort
+    fallback, driven through the five-client subprocess harness)."""
 
     def _run_with_signal(self, signame, server):
         """Drive a run that is interrupted by `signame` mid-tool. An OUTER
@@ -586,16 +620,36 @@ class SignalLeavesTheRunToTheServerAutoAbortTest(_BaseCr017ClientTest):
             os.environ.pop("FAKE_BUN_SIGNAL", None)
 
     def _assert_abandoned(self, signame, code, out, server):
+        """CR-CRU-170 \u00a7S2 (orchestrator-approved re-pin) \u2014 the client now
+        closes the run IT opened with exactly one abort naming the signal,
+        instead of inventing nothing and leaving it to the server's sweep.
+        Still: no ingest, the runner reaped, 128+signum."""
         paths = server.paths()
         self.assertIn("/api/v2/runs/start", paths,
                       f"the interrupted run must have been OPENED; paths={paths}")
+        aborts = [p for p in paths
+                 if p.startswith("/api/v2/runs/") and p.endswith("/abort")]
         self.assertEqual(
-            [p for p in paths if "abort" in p], [],
-            f"the client must invent NO abort call — POST /api/v2/runs/<id>/abort "
-            f"is CR-CRU-017 §S2 and does not exist yet; paths={paths}")
+            len(aborts), 1,
+            f"the client must close the run IT opened with exactly one "
+            f"abort POST — POST /api/v2/runs/<id>/abort, CR-CRU-170 \u00a7S2; "
+            f"paths={paths}")
+        abort_path = aborts[0]
+        self.assertEqual(
+            abort_path, "/api/v2/runs/run-cr017-1/abort",
+            f"the abort must target the run this client itself opened; got "
+            f"{abort_path!r}")
+        abort_payload = server.payload_for(abort_path) or {}
+        self.assertEqual(abort_payload.get("agentId"), self.AGENT,
+                         f"got {abort_payload!r}")
+        reason = abort_payload.get("reason") or ""
+        self.assertIn(
+            signame, reason,
+            f"the abort's own reason must name the signal that triggered "
+            f"it; got reason={reason!r}")
         self.assertEqual(
             [p for p in paths if p.startswith("/api/v2/runs/")
-             and p != "/api/v2/runs/start"], [],
+             and p not in ("/api/v2/runs/start", abort_path)], [],
             f"an interrupted run has no result to ingest; paths={paths}")
         self.assertEqual(
             code, 128 + getattr(signal, signame),
@@ -605,20 +659,18 @@ class SignalLeavesTheRunToTheServerAutoAbortTest(_BaseCr017ClientTest):
         axi = self._assert_toon_axi_shaped(out, "test", f"{signame} path")
         self.assertIs(axi.get("ok"), False,
                       "an abandoned run did not succeed")
+        warnings = axi.get("warnings") or []
+        left_open = [w for w in warnings if w.get("code") == "run-left-open"]
+        self.assertEqual(
+            left_open, [],
+            f"an abort that SUCCEEDED carries no run-left-open warning \u2014 "
+            f"the server has nothing left to sweep; warnings={warnings!r}")
         text = self._warning_text(axi)
         self.assertTrue(axi.get("warnings"),
-                        f"the abandoned run must be NAMED; axi={axi!r}")
-        self.assertIn(
-            "auto-abort", text,
-            f"the warning must say the run is left to the SERVER's auto-abort "
-            f"(the client posts nothing); warnings={text!r}")
-        self.assertIn(
-            "abandoned", text,
-            f"the warning must say the run was abandoned rather than lost; "
-            f"warnings={text!r}")
+                        f"the aborted run must be NAMED; axi={axi!r}")
         self.assertIn(
             signame, text,
-            f"the warning must name the signal that interrupted the run; "
+            f"the disclosure must name the signal that interrupted the run; "
             f"warnings={text!r}")
 
     def test_sigint_mid_run_leaves_the_open_run_to_the_server(self):

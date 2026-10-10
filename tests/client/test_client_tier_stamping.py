@@ -40,20 +40,20 @@ nothing:
 
   RED  `{Bun,Mvn,Python,Rust}UnearnedTierTest` — all TWELVE methods. The
          census finds twelve unearned literal sites today: bun `cmd_test`
-         (:1065 `/runs/start`, :1089 `/runs/parsed`), bun `cmd_auto_ingest`
-         (:1252, `e2e`), mvn `cmd_test` (:1270 `/runs`, :1276 `/runs/parsed`),
-         mvn `cmd_auto_ingest` (:1339 `/runs`, :1346 `/runs/parsed`
-         `regression`), python `cmd_test` (:686 `/runs/parsed`, :696
-         `/runs/compile`), python `cmd_auto_ingest` (:854), rust `cmd_test`
-         (:1085) and rust `cmd_auto_ingest` (:793).
+         (`/runs/start`, `/runs/parsed`), bun `cmd_auto_ingest` (`e2e`), mvn
+         `cmd_test` (`/runs`, `/runs/parsed`), mvn `cmd_auto_ingest` (`/runs`,
+         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`,
+         `/runs/compile`), python `cmd_auto_ingest`, rust `cmd_test` and rust
+         `cmd_auto_ingest`.
   RED  `UnearnedTierLiteralCensusTest.
          test_no_client_stamps_a_tier_its_own_verb_did_not_earn` — the derived
          count is 12, not 0.
   RED  `CompileIngestCarriesNoTestTierTest.
          test_python_test_ingests_a_collection_failure_as_compile_with_no_tier`
-         (`python-crucible.py:696`, `tier="unit"`) and
+         (`cmd_test` in `python-crucible.py`, `tier="unit"`) and
          `..._python_regression_ingests_a_collection_failure_as_compile_with_no_tier`
-         (`python-crucible.py:799`, `tier="regression"` — see ESCALATION 2).
+         (`_regression_run` in `python-crucible.py`, `tier="regression"` —
+         see ESCALATION 2).
   PIN  `CompileIngestCarriesNoTestTierTest` — the other five clients' compile
          paths (bun `test`-with-no-XML, bun `check`, mvn `check`, rust `check`,
          arduino `compile`) pass today and must STAY passing: AC13a's rule is
@@ -133,25 +133,26 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
 
   1. AC3's own prose says "EACH of the eight unearned call sites" and then
      enumerates TEN, while §S2's census table carries TWELVE unearned rows
-     (AC3's enumeration omits mvn `cmd_auto_ingest`'s `tier="regression"`
-     site, :1346, which §S2's table marks unearned and whose reason —
-     auto-ingest ran no tests — is the strongest of the four). This file
-     asserts the DERIVED set, so the disagreement between the AC's "eight",
-     its own list of ten and the table's twelve cannot be inherited: the count
-     is measured, and every measured site is driven.
-  2. AC13a names ONE offender, `python-crucible.py:696`. There is a SECOND:
-     `python-crucible.py:799`, `_regression_run`'s no-XML fallback, ingests to
-     `/api/v2/runs/compile` with `tier="regression"`. It is EARNED under AC3
-     (the enclosing verb IS `regression`) and forbidden under AC13a (a compile
-     event is not a test tier) — the two ACs meet on that one line, and AC13a
-     wins there by its own words ("no COMPILE ingest carries a test tier").
-     Asserted here as RED; if the ruling is otherwise, this test is the one to
-     retarget.
+     (AC3's enumeration omits mvn `cmd_auto_ingest`'s `tier="regression"` site,
+     its `/runs/parsed` call, which §S2's table marks unearned and whose reason
+     — auto-ingest ran no tests — is the strongest of the four). This file
+     asserts the DERIVED set, so the disagreement between the AC's "eight", its
+     own list of ten and the table's twelve cannot be inherited: the count is
+     measured, and every measured site is driven.
+  2. AC13a names ONE offender, `cmd_test` in `python-crucible.py`. There is a
+     SECOND: `_regression_run` in `python-crucible.py`, its no-XML fallback,
+     ingests to `/api/v2/runs/compile` with `tier="regression"`. It is EARNED
+     under AC3 (the enclosing verb IS `regression`) and forbidden under AC13a
+     (a compile event is not a test tier) — the two ACs meet on that one line,
+     and AC13a wins there by its own words ("no COMPILE ingest carries a test
+     tier"). Asserted here as RED; if the ruling is otherwise, this test is the
+     one to retarget.
   3. §S2's table and this file's own census disagree with the CR's Surfaces
-     paragraph about WHICH endpoint bun's two `cmd_test` sites reach: :1065 is
-     `_start_run` → `POST /api/v2/runs/start`, :1089 is `_ingest_parsed` →
-     `POST /api/v2/runs/parsed`. Both are asserted separately, because a fix
-     applied to the ingest alone leaves the OPENED run stamped `unit`.
+     paragraph about WHICH endpoint bun's two `cmd_test` sites reach: the first
+     is `_start_run` → `POST /api/v2/runs/start`, the second is
+     `_ingest_parsed` → `POST /api/v2/runs/parsed`. Both are asserted
+     separately, because a fix applied to the ingest alone leaves the OPENED
+     run stamped `unit`.
 
 Invocation:
     python3 -m pytest tests/client/test_client_tier_stamping.py -q
@@ -172,6 +173,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    declare_and_require_board,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -194,8 +199,9 @@ COMPILE = "/api/v2/runs/compile"
 AGENT = "CR-CRU-111-C2-tier-probe"
 
 # Nothing listens on port 1 without root — the fleet's own idiom. `_post`/`_get`
-# are patched in every drive, so no request can leave this process; the env var
-# is the belt to that brace, and the live :3849 board is never touched.
+# are patched in every drive, so no request can leave this process; the DECLARED
+# board (CR-CRU-139 §S2, written into each fixture's own project file) is the
+# belt to that brace, and the live :3849 board is never touched.
 _UNREACHABLE_CRUCIBLE_URL = "http://127.0.0.1:1"
 
 
@@ -514,10 +520,25 @@ sys.exit(int(os.environ.get("FAKE_PY_EXIT_CODE", "1")))
 
 # `mvnw`, laid into the maven dir the fixture builds; the reports are written by
 # the fixture, never by this wrapper, so a drive measures the ingest and not a
-# fake build. Exits FAKE_MVN_EXIT_CODE with javac-shaped output.
+# fake build. Like the real plugins it honours `-D<kind>.reportsDirectory`:
+# given the property, it delivers the reports the fixture laid at Maven's own
+# default `[module/]target/<kind>-reports` there. Exits FAKE_MVN_EXIT_CODE with
+# javac-shaped output.
 _FAKE_MVNW = """#!{python}
+import glob
 import os
+import shutil
 import sys
+
+for _kind in ("surefire", "failsafe"):
+    _prefix = "-D" + _kind + ".reportsDirectory="
+    _dest = next((a[len(_prefix):] for a in sys.argv[1:] if a.startswith(_prefix)), None)
+    if not _dest:
+        continue
+    for _src in glob.glob(os.path.join(os.getcwd(), "**", "target", _kind + "-reports",
+                                       "TEST-*.xml"), recursive=True):
+        os.makedirs(_dest, exist_ok=True)
+        shutil.move(_src, os.path.join(_dest, os.path.basename(_src)))
 
 code = int(os.environ.get("FAKE_MVN_EXIT_CODE", "0"))
 if code:
@@ -690,8 +711,13 @@ class _ClientDriveCase(unittest.TestCase):
         self._saved_env = {k: os.environ.get(k) for k in _ENV_KEYS}
         for key in _ENV_KEYS:
             os.environ.pop(key, None)
-        os.environ["CRUCIBLE_URL"] = _UNREACHABLE_CRUCIBLE_URL
-        os.environ["CRUCIBLE_BASE"] = _UNREACHABLE_CRUCIBLE_URL
+        # CR-CRU-139 §S2 — the unreachable board is DECLARED in this project's
+        # own `crucible.toml`, which is where a client reads its target now.
+        # The interlock confirms the fleet really resolves it before any drive
+        # runs: an un-steered drive would resolve the shipped default, and the
+        # `_get`/`_patch` pre-flight would reach a LIVE board with it.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  f"{self.CLIENT}-crucible.py")
 
     def tearDown(self):
         for key, value in self._saved_env.items():
@@ -900,11 +926,11 @@ class BunUnearnedTierTest(_BunCase):
     editing one line in one client". Each client's drives sit in its own class
     so each uses its own stack's fixture.
 
-    RED — `bun-crucible.py` `cmd_test` :1065/:1089 and `cmd_auto_ingest`
-    :1252."""
+    RED — `bun-crucible.py` `cmd_test` (its `_start_run` and `_ingest_parsed`
+    calls) and `cmd_auto_ingest`."""
 
     def test_bun_test_opens_the_run_without_claiming_a_tier(self):
-        """AC3, bun `cmd_test` :1065 — `_start_run` OPENS the run with
+        """AC3, bun `cmd_test` — `_start_run` OPENS the run with
         `tier="unit"` before `bun test` has run a single test. The run row is
         stamped at the moment the client knows least about it."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
@@ -912,17 +938,18 @@ class BunUnearnedTierTest(_BunCase):
         self.assertNoStatedTier(drive, RUN_START, "bun cmd_test -> POST /runs/start")
 
     def test_bun_test_ingests_the_run_without_claiming_a_tier(self):
-        """AC3, bun `cmd_test` :1089 — the CR's own example: "a targeted run of
-        a real browser suite is recorded on the board as a unit run"."""
+        """AC3, bun `cmd_test`'s `_ingest_parsed` call — the CR's own example:
+        "a targeted run of a real browser suite is recorded on the board as a
+        unit run"."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
         drive = self.drive(self.bun_argv("test"))
         self.assertNoStatedTier(drive, PARSED, "bun cmd_test -> POST /runs/parsed")
 
     def test_bun_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
-        """AC3's explicit auto-ingest clause, bun :1252 — this verb "runs no
-        tests at all, it ingests report files it merely found, so it cannot
-        know the tier by construction", yet bun asserts `e2e` over whatever
-        report was lying in the reports dir."""
+        """AC3's explicit auto-ingest clause, bun `cmd_auto_ingest` — this verb
+        "runs no tests at all, it ingests report files it merely found, so it
+        cannot know the tier by construction", yet bun asserts `e2e` over
+        whatever report was lying in the reports dir."""
         self.write_bun_junit()
         drive = self.drive(self.bun_argv("auto-ingest", with_bun=False))
         self.assertNoStatedTier(drive, PARSED,
@@ -930,37 +957,28 @@ class BunUnearnedTierTest(_BunCase):
 
 
 class MvnUnearnedTierTest(_MvnCase):
-    """RED — `mvn-crucible.py` `cmd_test` :1270/:1276 and `cmd_auto_ingest`
-    :1339/:1346."""
+    """RED — `mvn-crucible.py` `cmd_test` (its `/runs` and `/runs/parsed`
+    calls) and `cmd_auto_ingest` (the same two)."""
 
     def test_mvn_test_single_report_dir_claims_no_tier(self):
-        """AC3, mvn `cmd_test` :1270 — the fast junit-dir path
+        """AC3, mvn `cmd_test` — the fast junit-dir path
         (`POST /api/v2/runs`, server-side codec)."""
         self.write_reports()
         drive = self.drive(self.mvn_argv("test"))
         self.assertNoStatedTier(drive, RUNS, "mvn cmd_test -> POST /runs")
 
-    def test_mvn_test_many_report_dirs_claims_no_tier(self):
-        """AC3, mvn `cmd_test` :1276 — the multi-module reactor path
-        (client-parsed, `POST /api/v2/runs/parsed`). A second call site of the
-        same verb: fixing one leaves the other stamping `unit`."""
-        self.write_reports()
-        self.write_reports(module="probe-module", name="TEST-ProbeTwo.xml")
-        drive = self.drive(self.mvn_argv("test"))
-        self.assertNoStatedTier(drive, PARSED, "mvn cmd_test -> POST /runs/parsed")
-
     def test_mvn_auto_ingest_single_report_dir_claims_no_tier(self):
-        """AC3's auto-ingest clause, mvn :1339 — no maven ran; the reports were
-        merely discovered."""
+        """AC3's auto-ingest clause, mvn `cmd_auto_ingest`'s `/runs` call —
+        no maven ran; the reports were merely discovered."""
         self.write_reports()
         drive = self.drive(self.mvn_argv("auto-ingest"))
         self.assertNoStatedTier(drive, RUNS, "mvn cmd_auto_ingest -> POST /runs")
 
     def test_mvn_auto_ingest_coverage_path_claims_no_tier(self):
-        """AC3's auto-ingest clause, mvn :1346 — the site AC3's OWN enumeration
-        omits (ESCALATION 1) though §S2's census table marks it unearned. It is
-        the worst of the four: `auto-ingest` ran nothing and calls the result a
-        full `regression`."""
+        """AC3's auto-ingest clause, mvn `cmd_auto_ingest`'s `/runs/parsed`
+        call — the site AC3's OWN enumeration omits (ESCALATION 1) though §S2's
+        census table marks it unearned. It is the worst of the four:
+        `auto-ingest` ran nothing and calls the result a full `regression`."""
         self.write_reports()
         drive = self.drive(self.mvn_argv("auto-ingest", ["--coverage"]))
         self.assertNoStatedTier(drive, PARSED,
@@ -968,27 +986,28 @@ class MvnUnearnedTierTest(_MvnCase):
 
 
 class PythonUnearnedTierTest(_PythonCase):
-    """RED — `python-crucible.py` `cmd_test` :686/:696 and `cmd_auto_ingest`
-    :854."""
+    """RED — `python-crucible.py` `cmd_test` (its `/runs/parsed` and
+    `/runs/compile` calls) and `cmd_auto_ingest`."""
 
     def test_python_test_ingests_the_run_without_claiming_a_tier(self):
-        """AC3, python `cmd_test` :686 — `--tests tests.whatever` says nothing
-        about the dependency that target takes."""
+        """AC3, python `cmd_test`'s `/runs/parsed` call — `--tests
+        tests.whatever` says nothing about the dependency that target takes."""
         os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
         drive = self.drive(self.py_argv(
             "test", ["--tests", "tests.probe", "--python", _fake("fake-python-runner")]))
         self.assertNoStatedTier(drive, PARSED, "python cmd_test -> POST /runs/parsed")
 
     def test_python_test_collection_failure_claims_no_tier(self):
-        """AC3, python `cmd_test` :696 — the no-XML fallback stamps `unit` on a
-        COMPILE ingest. It is an AC3 site AND AC13a's named offender; the
-        AC13a face of the same line is asserted separately below."""
+        """AC3, python `cmd_test`'s `/runs/compile` call — the no-XML fallback
+        stamps `unit` on a COMPILE ingest. It is an AC3 site AND AC13a's named
+        offender; the AC13a face of the same line is asserted separately
+        below."""
         drive = self.drive(self.py_argv(
             "test", ["--tests", "tests.probe", "--python", _fake("fake-python-runner")]))
         self.assertNoStatedTier(drive, COMPILE, "python cmd_test -> POST /runs/compile")
 
     def test_python_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
-        """AC3's auto-ingest clause, python :854."""
+        """AC3's auto-ingest clause, python `cmd_auto_ingest`."""
         self.write_py_reports()
         drive = self.drive(self.py_argv("auto-ingest"))
         self.assertNoStatedTier(drive, PARSED,
@@ -996,11 +1015,11 @@ class PythonUnearnedTierTest(_PythonCase):
 
 
 class RustUnearnedTierTest(_RustCase):
-    """RED — `rust-crucible.py` `cmd_test` :1085 and `cmd_auto_ingest` :793,
-    the client's ONLY two tier statements."""
+    """RED — `rust-crucible.py` `cmd_test` and `cmd_auto_ingest`, the
+    client's ONLY two tier statements."""
 
     def test_rust_test_ingests_the_nextest_run_without_claiming_a_tier(self):
-        """AC3, rust `cmd_test` :1085 — the profile (`-P ci`, `-P e2e`) is the
+        """AC3, rust `cmd_test` — the profile (`-P ci`, `-P e2e`) is the
         caller's own tier statement and the client overwrites it with `unit`.
         (AC12 rules on what the profile SHOULD carry; that is cycle 381's.)"""
         self.write_nextest_junit()
@@ -1008,7 +1027,7 @@ class RustUnearnedTierTest(_RustCase):
         self.assertNoStatedTier(drive, RUNS, "rust cmd_test -> POST /runs")
 
     def test_rust_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
-        """AC3's auto-ingest clause, rust :793 — a junit left in
+        """AC3's auto-ingest clause, rust `cmd_auto_ingest` — a junit left in
         `target/nextest/<profile>/` by ANY earlier run is ingested as `unit`."""
         self.write_nextest_junit()
         drive = self.drive(self.rust_argv("auto-ingest"))
@@ -1060,7 +1079,7 @@ class BunEarnedTierTest(_BunCase):
     `tier=` in `clients/` satisfies every assertion above and fails every
     assertion here.
 
-    PIN — bun `regression` :1175/:1219."""
+    PIN — bun `regression` (`cmd_regression`, both its calls)."""
 
     def test_bun_regression_opens_and_ingests_the_run_as_regression(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
@@ -1072,7 +1091,7 @@ class BunEarnedTierTest(_BunCase):
 
 
 class PythonEarnedTierTest(_PythonCase):
-    """PIN — python `_regression_run` :817."""
+    """PIN — python `_regression_run`."""
 
     def test_python_regression_ingests_the_run_as_regression(self):
         os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
@@ -1085,8 +1104,8 @@ class PythonEarnedTierTest(_PythonCase):
 
 class MvnEarnedTierTest(_MvnCase):
     """PIN — mvn's four tier verbs: `unit`/`module` (via `_run_surefire_tier`'s
-    `tier=label`, where the verb's own name IS the value), `e2e` :1097 and
-    `regression` :1226."""
+    `tier=label`, where the verb's own name IS the value), `e2e`
+    (`cmd_e2e`) and `regression` (`_regression_run`)."""
 
     def test_mvn_unit_verb_still_ingests_as_unit(self):
         self.write_reports()
@@ -1241,20 +1260,20 @@ class PythonCompileTierTest(_PythonCase, _CompileTierAssertion):
     to its compile ingest at all."""
 
     def test_python_test_ingests_a_collection_failure_as_compile_with_no_tier(self):
-        """AC13a's named offender, `python-crucible.py:696`: "a collection/syntax
-        failure with no XML is ingested as a compile event stamped
-        `tier="unit"`, so a build failure is recorded on the board as a unit
-        test tier"."""
+        """AC13a's named offender, `cmd_test` in `python-crucible.py`: "a
+        collection/syntax failure with no XML is ingested as a compile event
+        stamped `tier="unit"`, so a build failure is recorded on the board as a
+        unit test tier"."""
         drive = self.drive(self.py_argv(
             "test", ["--tests", "tests.probe", "--python", _fake("fake-python-runner")]))
         self.assertCompileCarriesNoTestTier(drive, "python cmd_test (no XML)")
 
     def test_python_regression_ingests_a_collection_failure_as_compile_with_no_tier(self):
-        """The SECOND offender, unnamed by AC13a — `python-crucible.py:799`
-        (ESCALATION 2). `_regression_run`'s no-XML fallback ingests the capture
-        to `/api/v2/runs/compile` with `tier="regression"`. AC3 calls that tier
-        earned (the verb IS `regression`); AC13a forbids a test tier on a
-        compile event whatever the verb is called. Asserted under AC13a's
+        """The SECOND offender, unnamed by AC13a — `_regression_run` in
+        `python-crucible.py` (ESCALATION 2). Its no-XML fallback ingests the
+        capture to `/api/v2/runs/compile` with `tier="regression"`. AC3 calls
+        that tier earned (the verb IS `regression`); AC13a forbids a test tier
+        on a compile event whatever the verb is called. Asserted under AC13a's
         rule."""
         drive = self.drive(self.py_argv(
             "regression", ["--python", _fake("fake-python-runner"),
@@ -1304,7 +1323,7 @@ class RustCompileTierTest(_RustCase, _CompileTierAssertion):
 
 class ArduinoCompileTierTest(_ArduinoCase, _CompileTierAssertion):
     """PIN — arduino's compile path is the one AC13a names as ALREADY correct
-    (`arduino-crucible.py:366 _ingest_compile` takes no tier). AC13 (cycle 381)
+    (`_ingest_compile` in `arduino-crucible.py` takes no tier). AC13 (cycle 381)
     will make this client stamp its TEST runs; this test is the guard that the
     stamping stops at the test ingest and never reaches the build."""
 

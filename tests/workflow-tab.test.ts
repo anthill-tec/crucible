@@ -8,7 +8,7 @@
 // liveness.test.ts: real VanJS/VanX vendor bundles, real public/app-
 // logic.mjs, real public/app.js; `fetch` is scripted, including the
 // project-scoped plans endpoint (GET /api/v2/projects/<key>/plans) the C1
-// server API already serves (src/v2.ts:638 handlePlansList).
+// server API already serves (`handlePlansList` in src/v2.ts).
 //
 // RED phase: expected to fail against CURRENT production, whose
 // public/app-logic.mjs TAB_NAMES is `["Runs","Coverage","Compile","BDD"]`
@@ -43,8 +43,9 @@ const VAN_X_SRC = readFileSync(
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (public/app.js:153). Wait
-// comfortably past it before asserting on a poll-driven liveness update.
+// The real poll interval is a hard-coded 5000ms (`startPolling` in
+// public/app.js). Wait comfortably past it before asserting on a
+// poll-driven liveness update.
 const POLL_INTERVAL_MS = 5000;
 const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
 const POLL_TEST_TIMEOUT_MS = 15_000;
@@ -85,7 +86,7 @@ interface EventBriefFixture {
   pending?: number;
   duration_ms?: number;
   hasCoverage?: boolean;
-  // CR-CRU-011 §S0 run linkage — verbatim passthrough per src/v2.ts:717.
+  // CR-CRU-011 §S0 run linkage — verbatim passthrough per `eventBrief` in src/v2.ts.
   context?: { cycleId?: number };
 }
 interface ProjectFixture {
@@ -494,7 +495,7 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
     POLL_TEST_TIMEOUT_MS,
   );
 
-  test("with NO open plan, the active section renders an empty-state naming the plan API", async () => {
+  test("with NO open plan and no gate event at all, the Workflow tab reads exactly `Nothing running \u2192 Roadmap` (re-pinned 2026-10-08, \u00a7S2 \u2014 the CR-011 plan-API filler text is retired)", async () => {
     const key = "wf-empty-1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -506,9 +507,11 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
 
     await openWorkflowTab();
 
-    const body = document.querySelector('[data-testid="workspace-body"]');
-    expect(body).not.toBeNull();
-    expect((body!.textContent ?? "").toLowerCase()).toContain("no open plan");
+    // Scoped to Now's own container (orchestrator-approved 2026-10-08) —
+    // `workspace-body` also holds History and the Project pane.
+    const nowPane = document.querySelector('[data-testid="workflow-now"]');
+    expect(nowPane).not.toBeNull();
+    expect((nowPane!.textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Nothing running \u2192 Roadmap");
     // bound: no cycle rows render when there is nothing to show.
     expect(document.querySelectorAll('[data-testid="cycle-row"]').length).toBe(0);
   });

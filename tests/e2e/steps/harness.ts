@@ -71,11 +71,24 @@ function assertEphemeralTarget(action: string): void {
 //
 // CR-CRU-052 §S3/§S2 — guarded (ephemeral target only, checked before the POST)
 // and self-cleaning (every key created is registered for `teardownSeededProjects`).
-export async function seedProject(request: APIRequestContext, name: string): Promise<string> {
+//
+// CR-CRU-015 §S3 — the optional `type` (the POST's own `backend|frontend`
+// field, read by `handleProjectCreate` in src/v2.ts) is threaded through
+// because the BDD tab is gated to
+// FRONTEND projects (`workspaceTabs`, public/app-logic.mjs), so a scenario
+// about that tab cannot use a default-typed fixture. Omitted, the field is not
+// sent at all and the server's own default applies — every existing caller is
+// unaffected.
+export async function seedProject(
+  request: APIRequestContext,
+  name: string,
+  type?: "backend" | "frontend",
+  sutRoot?: string,
+): Promise<string> {
   assertEphemeralTarget(`seed project "${name}"`);
   const key = crypto.randomUUID();
   const res = await request.post("/api/v2/projects", {
-    data: { key, name, sutRoot: "/tmp/e2e" },
+    data: { key, name, sutRoot: sutRoot ?? "/tmp/e2e", ...(type !== undefined ? { type } : {}) },
   });
   expect(res.ok()).toBe(true);
   const tracked = seededProjectKeys.get(request);
@@ -156,12 +169,13 @@ export const HARNESS_AGENT_ID = "e2e-harness";
  * boundary. Every helper that hits a `requireRegisteredCaller` route
  * (CR-CRU-056) calls this with the id it is about to send, so the id is a live
  * registered agent by the time the real request goes out — whether the caller
- * registered it (`seeding.steps.ts:24`), generated it and registered nothing
+ * registered it (`seeding.steps.ts`'s "an online agent ... is registered"
+ * step), generated it and registered nothing
  * (`cycle-run-navigation.steps.ts`'s `crb-filler-*`), or supplied no id at all
  * (`filePlan`).
  *
  * Safe to call UNCONDITIONALLY: registration is idempotent by construction —
- * `handleAgentTouch` (`src/v2.ts:499`) branches on `hasAgent` and merely skips
+ * `handleAgentTouch` (`src/v2.ts`) branches on `hasAgent` and merely skips
  * the lifecycle-event journal on a repeat, so a re-register of a live id is a
  * no-op touch, never a duplicate row and never a 409.
  *
@@ -234,6 +248,90 @@ export async function ingestJunit(
   return (await res.json()) as RunIngestResponse;
 }
 
+// ── CR-CRU-015 §S2/§S3 — the RAW Playwright JSON report, decoded BY THE
+// SERVER. `codec: "playwright"` on POST /api/v2/runs makes the registry codec
+// (src/codecs/playwright.ts) turn the report into the feature → scenario →
+// step tree the BDD section reads; `runs/parsed` is deliberately NOT used,
+// because a client-side parse would flatten the Gherkin before the server ever
+// saw it and store `codec: "parsed"` (§S2's refused route).
+
+/** One feature, two scenarios — a passing one whose four steps include an
+ *  `And` (so verbatim step text is exercised) and a failing one that stops AT
+ *  the broken step, which is the shape the codec produces for a real run and
+ *  the shape `tests/e2e/features/bdd-gherkin-section.feature` asserts. Kept
+ *  beside the JUnit/rustc fixtures above rather than inline in a step file,
+ *  the same rule this harness states in its header. */
+export const PLAYWRIGHT_BDD_FEATURE_TITLE = "Gherkin Rendering Feature";
+export const PLAYWRIGHT_BDD_REPORT = JSON.stringify({
+  suites: [
+    {
+      title: PLAYWRIGHT_BDD_FEATURE_TITLE,
+      specs: [
+        {
+          title: "a passing scenario renders every step",
+          tests: [
+            {
+              results: [
+                {
+                  status: "passed",
+                  duration: 20,
+                  steps: [
+                    { title: "Given the board has a frontend project", duration: 5 },
+                    { title: "When a BDD run is ingested for it", duration: 6 },
+                    { title: "And the run carries its Gherkin steps", duration: 4 },
+                    { title: "Then the BDD section renders them in order", duration: 5 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          title: "a failing scenario stops at the broken step",
+          tests: [
+            {
+              results: [
+                {
+                  status: "failed",
+                  duration: 7,
+                  steps: [
+                    { title: "Given the board has a frontend project", duration: 4 },
+                    {
+                      title: "When the specification breaks",
+                      duration: 3,
+                      error: {
+                        message: "expect(received).toBe(expected) — the step never rendered",
+                        stack:
+                          "expect(received).toBe(expected)\n    at bdd-gherkin-section.steps.ts:42:7",
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+});
+
+/** POST /api/v2/runs with `codec: "playwright"` — the server decodes. */
+export async function ingestPlaywright(
+  request: APIRequestContext,
+  projectKey: string,
+  agentId: string,
+  report: string,
+  tier = "e2e",
+): Promise<RunIngestResponse> {
+  await ensureRegistered(request, projectKey, agentId);
+  const res = await request.post("/api/v2/runs", {
+    data: { projectKey, agentId, codec: "playwright", data: report, tier },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as RunIngestResponse;
+}
+
 export async function ingestParsed(
   request: APIRequestContext,
   projectKey: string,
@@ -294,7 +392,7 @@ export async function filePlan(
   wave?: string,
 ): Promise<PlanFileResponse> {
   // CR-CRU-060 §S2 — `filePlan` is handed no id by ANY of its call sites
-  // (gates.steps.ts:22, wave-backfill.steps.ts:21, workflow.steps.ts:19), so
+  // (the Steps in gates.steps.ts, wave-backfill.steps.ts and workflow.steps.ts), so
   // it registers one for itself rather than growing a new required argument.
   await ensureRegistered(request, projectKey, HARNESS_AGENT_ID);
   const res = await request.post(`/api/v2/projects/${projectKey}/plans`, {
@@ -363,6 +461,51 @@ export async function backfillPlanWave(
   return (await res.json()) as { ok: boolean; changed: boolean; plan: { wave?: string } };
 }
 
+export interface AppendCycleResponse {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+  cr: string;
+}
+
+/**
+ * POST …/plans/<planId>/cycles {label, kind, reason, cause, specRef} —
+ * CR-CRU-165 §S1's cycle-add verb: appending a non-FIX cycle (or any
+ * insert) to a filed plan is a recorded plan change, ORCHESTRATOR-only
+ * (`requireOrchestrator`, src/v2.ts). `agentId` must already carry role
+ * ORCHESTRATOR (roadmap-graph.steps.ts's "an orchestrator {string} is
+ * registered on that project" step) — unlike `filePlan`/`transitionCycle`,
+ * this helper sends NO registration of its own: `HARNESS_AGENT_ID` carries
+ * role "report" (`ensureRegistered`) and can never pass `requireOrchestrator`.
+ */
+export async function appendCycle(
+  request: APIRequestContext,
+  projectKey: string,
+  planId: number,
+  agentId: string,
+  input: {
+    label: string;
+    kind?: string;
+    reason: string;
+    cause: "spec-design" | "gap-analysis";
+    specRef: string;
+  },
+): Promise<AppendCycleResponse> {
+  const res = await request.post(`/api/v2/projects/${projectKey}/plans/${planId}/cycles`, {
+    data: {
+      agentId,
+      label: input.label,
+      kind: input.kind ?? "red-green",
+      reason: input.reason,
+      cause: input.cause,
+      specRef: input.specRef,
+    },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as AppendCycleResponse;
+}
+
 export interface CompileIngestResponse {
   event: string;
   errors: number;
@@ -411,6 +554,190 @@ export function junit60(failCount = 3): string {
   return [`<testsuite name="Suite60" tests="60">`, ...cases, "</testsuite>"].join("\n");
 }
 
+// CR-CRU-159 C1 — heat-strip reveal e2e fixtures (plain/non-spec runs,
+// Density presentation). Each builds the raw JUnit XML `ingestJunit` posts
+// under `codec: "junit"`; the server-side codec (`src/codecs/junit.ts`)
+// turns it into the suite/leaf tree the heat-strip renders over.
+
+/** §S1 AC1/AC6 — a single suite of `total` leaves with a named passing leaf
+ *  and a named failing leaf (a UNIQUE failure message, so Density never
+ *  digests it) planted at the given 0-based positions; every other leaf
+ *  passes. A large `total` (with both targets well past VIRT_WINDOW/2) makes
+ *  the suite's own virtualized leaf list, once loaded, tall enough that a
+ *  mid-list target sits below the pane's fold without any extra filler
+ *  content — the §S1 "below the fold" shape. */
+export function junitTargetedSuite(
+  suiteName: string,
+  total: number,
+  green: { name: string; position: number },
+  red: { name: string; position: number },
+): string {
+  const cases: string[] = [];
+  for (let i = 0; i < total; i++) {
+    if (i === green.position) {
+      cases.push(`<testcase name="${green.name}" time="0.01"/>`);
+    } else if (i === red.position) {
+      cases.push(
+        `<testcase name="${red.name}" time="0.01"><failure message="${red.name}-failure">trace</failure></testcase>`,
+      );
+    } else {
+      cases.push(`<testcase name="${suiteName}-filler-${i}" time="0.01"/>`);
+    }
+  }
+  return [`<testsuite name="${suiteName}" tests="${total}">`, ...cases, "</testsuite>"].join("\n");
+}
+
+/** §S1 G4/AC4 — a suite whose DENSITY ENTRIES exceed VIRT_WINDOW (120) once a
+ *  `groupSize`-leaf identical-failure group collapses to ONE digest entry:
+ *  `groupSize` identically-failing leaves, then the named target leaf, then
+ *  `trailing` more individually-entried leaves (so the suite's digested
+ *  entry count, not just its raw leaf count, clears 120). */
+export function junitDigestWindowSuite(
+  suiteName: string,
+  groupSize: number,
+  targetName: string,
+  trailing: number,
+): string {
+  const cases: string[] = [];
+  for (let i = 0; i < groupSize; i++) {
+    cases.push(
+      `<testcase name="${suiteName}-dup${i}" time="0.01"><failure message="shared-digest-failure">trace</failure></testcase>`,
+    );
+  }
+  cases.push(`<testcase name="${targetName}" time="0.01"/>`);
+  for (let i = 0; i < trailing; i++) {
+    cases.push(`<testcase name="${suiteName}-trail${i}" time="0.01"/>`);
+  }
+  const total = groupSize + 1 + trailing;
+  return [`<testsuite name="${suiteName}" tests="${total}">`, ...cases, "</testsuite>"].join("\n");
+}
+
+/** §S1 G6/AC2 — two COLLAPSED suites in one run (a `<testsuites>` root,
+ *  `src/codecs/junit.ts`'s `parseJunit` walks every child `<testsuite>`): an
+ *  all-pass suite (exercises a GREEN synthetic cell) and a suite carrying one
+ *  passing + one named failing leaf (exercises a RED synthetic cell). */
+export function junitSynthSuites(greenSuite: string, redSuite: string, redFailingLeaf: string): string {
+  const green = [
+    `<testsuite name="${greenSuite}" tests="2">`,
+    `<testcase name="${greenSuite}-p1" time="0.01"/>`,
+    `<testcase name="${greenSuite}-p2" time="0.01"/>`,
+    `</testsuite>`,
+  ].join("\n");
+  const red = [
+    `<testsuite name="${redSuite}" tests="2">`,
+    `<testcase name="${redSuite}-p1" time="0.01"/>`,
+    `<testcase name="${redFailingLeaf}" time="0.01"><failure message="${redFailingLeaf}-failure">trace</failure></testcase>`,
+    `</testsuite>`,
+  ].join("\n");
+  return [`<testsuites>`, green, red, `</testsuites>`].join("\n");
+}
+
+/** §S1 AC6 — a tiny 2-leaf suite, fully visible with no scrolling once
+ *  loaded (the "already fully visible" fixture — the pane must NOT move). */
+export function junitSmallSuite(suiteName: string, leafName: string): string {
+  return [
+    `<testsuite name="${suiteName}" tests="2">`,
+    `<testcase name="${leafName}" time="0.01"/>`,
+    `<testcase name="${suiteName}-p2" time="0.01"/>`,
+    `</testsuite>`,
+  ].join("\n");
+}
+
+/** The run-view suite-load isolation fixture: `suiteCount` all-passing
+ *  suites of `leavesPerSuite` leaves each, wrapped in a `<testsuites>` root
+ *  (`junitSynthSuites`'s multi-suite shape) so a run this large (734+ tests
+ *  across many suites, the gap analysis's own measured shape) seeds in one
+ *  ingest. Suite names are zero-padded (`Suite-01` …) so a mid-run target
+ *  reads predictably in a feature file. */
+export function junitManySuites(suiteCount: number, leavesPerSuite: number): string {
+  const pad = String(suiteCount).length;
+  const suites: string[] = [];
+  for (let s = 1; s <= suiteCount; s++) {
+    const suiteName = `Suite-${String(s).padStart(pad, "0")}`;
+    const cases: string[] = [];
+    for (let l = 1; l <= leavesPerSuite; l++) {
+      cases.push(`<testcase name="${suiteName}-leaf-${l}" time="0.01"/>`);
+    }
+    suites.push(
+      [`<testsuite name="${suiteName}" tests="${leavesPerSuite}">`, ...cases, `</testsuite>`].join("\n"),
+    );
+  }
+  return [`<testsuites>`, ...suites, `</testsuites>`].join("\n");
+}
+
+// CR-CRU-159 C2 — heat-strip reveal e2e fixtures (spec/BDD runs, the
+// feature-unfold case, G5/AC3). Each builds the raw Playwright JSON report
+// `ingestPlaywright` posts under `codec: "playwright"`; the server-side codec
+// (`src/codecs/playwright.ts`) turns it into the feature → scenario → step
+// tree `SpecFeatures` groups by feature title (the part of its canonical
+// "<Feature> › <Scenario>" name before the separator, `collectScenarios`'
+// own naming: `${featureTitle} › ${spec.title}`).
+
+export interface PwStepFixture {
+  title: string;
+  error?: { message: string; stack?: string };
+}
+export interface PwScenarioFixture {
+  title: string;
+  status: "passed" | "failed" | "skipped" | "interrupted";
+  steps: PwStepFixture[];
+}
+export interface PwFeatureFixture {
+  title: string;
+  scenarios: PwScenarioFixture[];
+}
+
+/** Raw Playwright JSON reporter shape `src/codecs/playwright.ts` decodes —
+ *  one `suites[]` entry per Gherkin FEATURE, one `specs[]` entry per
+ *  SCENARIO, one `tests[0].results[0].steps[]` entry per STEP. One project
+ *  (`tests` has exactly one entry, no `projectName`) per scenario — multi-
+ *  browser scoping is tests/playwright-run-browser-scoping.test.ts's own
+ *  concern, not this CR's. */
+export function playwrightFeaturesReport(features: PwFeatureFixture[]): string {
+  return JSON.stringify({
+    suites: features.map((f) => ({
+      title: f.title,
+      specs: f.scenarios.map((s) => ({
+        title: s.title,
+        tests: [
+          {
+            results: [
+              {
+                status: s.status,
+                duration: 5,
+                steps: s.steps.map((step) => ({
+                  title: step.title,
+                  duration: 2,
+                  ...(step.error !== undefined ? { error: step.error } : {}),
+                })),
+              },
+            ],
+          },
+        ],
+      })),
+    })),
+  });
+}
+
+/** §S1 AC3/G5 — `count` ALL-PASS, single-scenario features titled
+ *  `${baseName} filler N`. None of them is the report-first feature and none
+ *  is failing, so CR-CRU-145 §S1's progressive-expansion default folds every
+ *  one of them whole (`openProgressively` in public/app.js) — cheap below-
+ *  the-fold filler for a target feature placed after them, without any one
+ *  feature needing dozens of scenarios of its own. */
+export function playwrightFillerFeatures(baseName: string, count: number): PwFeatureFixture[] {
+  return Array.from({ length: count }, (_, i) => ({
+    title: `${baseName} filler ${i + 1}`,
+    scenarios: [
+      {
+        title: `${baseName} filler ${i + 1} › its one calm scenario`,
+        status: "passed" as const,
+        steps: [{ title: "Given a calm precondition" }, { title: "Then nothing of note happens" }],
+      },
+    ],
+  }));
+}
+
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
 // (same fixture shape as tests/v2-runs-events.test.ts; the v1
 // `ingest-routes.test.ts` it also came from was deleted by CR-CRU-008's C7
@@ -442,19 +769,28 @@ export interface GatePayload {
   fixes?: Array<{ id: string; file: string; description: string }>;
   push?: { commit: string; remote: string };
   pr?: string;
+  // CR-CRU-172 §S0/AC1 — the run identity every gate_from_axi builder adds
+  // (interim and seal). Optional, test-authored for the e2e drive.
+  run?: { id: string; branch?: string; head?: string };
+  // CR-CRU-117 §S1 mark — a snapshot of a run still going, not a verdict.
+  inFlight?: boolean;
 }
 
 export interface EventPostResponse {
   event: string;
 }
 
-/** POST /api/v2/gates — §S1 gate event ingest. */
+/** POST /api/v2/gates — §S1 gate event ingest. CR-CRU-172 §S0/AC1 —
+ *  `version` is an optional TOP-LEVEL sibling of `gate` (the release the
+ *  gate gates), exactly as `src/v2.ts` reads it (`body.version`), never
+ *  nested inside the gate payload. */
 export async function postGate(
   request: APIRequestContext,
   projectKey: string,
   agentId: string,
   gate: GatePayload,
   context?: Record<string, unknown>,
+  version?: string,
 ): Promise<EventPostResponse> {
   // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
   await ensureRegistered(request, projectKey, agentId);
@@ -464,19 +800,34 @@ export async function postGate(
       agentId,
       gate,
       ...(context !== undefined ? { context } : {}),
+      ...(version !== undefined ? { version } : {}),
     },
   });
   expect(res.ok()).toBe(true);
   return (await res.json()) as EventPostResponse;
 }
 
-/** POST /api/v2/milestones — §S4b/§S4c milestone event ingest. */
+/** POST /api/v2/milestones — §S4b/§S4c milestone event ingest. CR-CRU-173
+ *  §S1 (e2e) — widened with the CR-CRU-080/CR-CRU-084 "release" ceremony
+ *  fields (`crs`, `releasedAt`, `packages`) `src/v2.ts` `handleMilestones`
+ *  already reads straight off the body (verified by reading it — see
+ *  CR-CRU-173's own tests/history-by-release-read.test.ts's `shipReleaseAt`
+ *  for the store-level sibling of this same shape), additive and optional so
+ *  every existing caller (gates.steps.ts's gap-analysis milestone) is
+ *  unaffected. */
 export async function postMilestone(
   request: APIRequestContext,
   projectKey: string,
   agentId: string,
   type: string,
-  opts?: { label?: string; context?: Record<string, unknown>; commit?: string },
+  opts?: {
+    label?: string;
+    context?: Record<string, unknown>;
+    commit?: string;
+    crs?: string[];
+    releasedAt?: number;
+    packages?: Array<{ registry: string; name: string; version: string }>;
+  },
 ): Promise<EventPostResponse> {
   // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
   await ensureRegistered(request, projectKey, agentId);
@@ -488,6 +839,9 @@ export async function postMilestone(
       ...(opts?.label !== undefined ? { label: opts.label } : {}),
       ...(opts?.context !== undefined ? { context: opts.context } : {}),
       ...(opts?.commit !== undefined ? { commit: opts.commit } : {}),
+      ...(opts?.crs !== undefined ? { crs: opts.crs } : {}),
+      ...(opts?.releasedAt !== undefined ? { releasedAt: opts.releasedAt } : {}),
+      ...(opts?.packages !== undefined ? { packages: opts.packages } : {}),
     },
   });
   expect(res.ok()).toBe(true);

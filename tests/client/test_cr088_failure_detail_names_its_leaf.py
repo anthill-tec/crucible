@@ -9,8 +9,8 @@ change shipped and pass against it. Gates (g)-(l), added by cycle C3 after VERIF
 measured the shipped discriminator OVER-TIGHTENING, state the other half of the
 same rule -- a failing leaf keeps its own message whatever SYNTAX declared it --
 and FAIL today (see §S1 GAP 3 below). They are the C3 RED gates.
-The rule lives in `clients/bun-crucible.py::_parse_console_failures` (lines
-606-679) and landed in this same change, per CR-CRU-088 §S1. BEFORE it, the
+The rule lives in `clients/bun-crucible.py::_parse_console_failures`
+and landed in this same change, per CR-CRU-088 §S1. BEFORE it, the
 parser married a pending `error:` block to the NEXT `(fail)` line by POSITION,
 so a block that arrived after its own leaf's fail line -- a leaked async
 throw's aftermath -- was handed to a later leaf that never produced it, and
@@ -53,7 +53,7 @@ and, for GAP 1, asserts only the outcome both readings agree on.
   "the LAST `test("…")` line at or above the caret", i.e. the innermost
   enclosing test. §S1 does not say this; the shipped parser does -- it keeps
   the LAST declaration echoed before the caret (`_ECHO_TEST_DECL` /
-  `_ECHO_CARET`, clients/bun-crucible.py:702-715).
+  `_ECHO_CARET` in clients/bun-crucible.py).
 
   GAP 2 -- BARE ECHO NAME vs COMPOSED FAIL-LINE KEY. Under nested describes the
   echo carries the BARE test name (`test("epsilon leaks after failing"`) while
@@ -61,8 +61,8 @@ and, for GAP 1, asserts only the outcome both readings agree on.
   (`(fail) outer > inner > zeta fails later`). §S1's "the following `(fail)`
   line is X" does not say which side is normalised for the comparison. Measured:
   they are only comparable on the fail line's TRAILING `" > "` segment. This
-  matters doubly because `_parse_console_failures` indexes BOTH the composed key
-  and the bare trailing segment (clients/bun-crucible.py:781-782), so a
+  matters doubly because `_parse_console_failures` (clients/bun-crucible.py)
+  indexes BOTH the composed key and the bare trailing segment, so a
   mis-attribution under nesting poisons TWO keys.
 
   GAP 3 -- WHICH SYNTAX THE ECHO CAN NAME (the C3 RED gates, (g)-(l)). §S1's
@@ -74,7 +74,8 @@ and, for GAP 1, asserts only the outcome both readings agree on.
       literal on the same line as `test(`, so `test.each([…])(…)`, `it.each(…)`,
       `test(NAME, …)` and any declaration split across lines match nothing. That
       alone would be harmless -- it is exactly the documented fallback -- except
-      that `window` (clients/bun-crucible.py:765) is ASSIGNED on every match and
+      that `window` in `_parse_console_failures` (clients/bun-crucible.py) is
+      ASSIGNED on every match and
       NEVER INVALIDATED. Because the echo window spans the test boundary (GAP 1),
       it still holds the PRECEDING test's name, so the block is attributed to a
       test that did not raise it and is discarded as that test's aftermath.
@@ -90,7 +91,8 @@ and, for GAP 1, asserts only the outcome both readings agree on.
   predecessor keeps ITS OWN, whatever syntax declared either.
 
 WIRE FORMS (AC3). Every gate runs over BOTH legal result-line families
-documented at clients/bun-crucible.py:656-676 -- the ANSI-colourised `✗` form
+documented above `_FAIL_LINE` in clients/bun-crucible.py -- the ANSI-colourised
+`✗` form
 bun emits even through a pipe, and the plain `(fail)` form. The ANSI fixtures
 are NOT synthesised from the plain ones: each is an independent verbatim
 capture of the same fixture project run under FORCE_COLOR=1.
@@ -120,7 +122,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 
-# Both legal wire forms, per clients/bun-crucible.py:656-676 (AC3).
+# Both legal wire forms, per the result-line comment above `_FAIL_LINE` in
+# clients/bun-crucible.py (AC3).
 WIRE_FORMS = ("plain", "ansi")
 
 
@@ -1263,7 +1266,7 @@ class NestedDescribeAttributionTest(_ParserCase):
     """The rule under nested describes -- the shape most likely to break a naive
     name-matching implementation, because the echo names the BARE test while the
     `(fail)` line carries the COMPOSED `suite > name` key, and
-    `_parse_console_failures` indexes BOTH (clients/bun-crucible.py:781-782).
+    `_parse_console_failures` (clients/bun-crucible.py) indexes BOTH.
     Decidable from bun's bytes: measured, the echo's bare name and the fail
     line's trailing segment line up exactly (see §S1 GAP 2 for what §S1 leaves
     open)."""
@@ -1335,7 +1338,8 @@ class ShapedDeclarationKeepsItsOwnMessageTest(_ParserCase):
     declaration shapes, in two distinct ways:
 
       - `test.each`, `it.each`, a variable name and a split declaration yield NO
-        name at all -- and `window` (clients/bun-crucible.py:765, 801-812) is
+        name at all -- and `window` (its declaration-match branch in
+        `_parse_console_failures` in clients/bun-crucible.py) is
         ASSIGNED on every declaration match but NEVER INVALIDATED, so it still
         holds the PRECEDING test's name from the same six-line echo window
         (§S1 GAP 1's window really does span the boundary; here that is not a
@@ -1349,7 +1353,7 @@ class ShapedDeclarationKeepsItsOwnMessageTest(_ParserCase):
     Either way the names disagree and the producer's OWN prelude block -- the
     only place bun ever prints its reason -- is thrown away. The leaf still shows
     as failing, with no reason: a silent hole on every bun ingest in the fleet
-    (`_marry_failures`, clients/bun-crucible.py:818-835). CR-CRU-088's own Risk
+    (`_marry_failures` in clients/bun-crucible.py). CR-CRU-088's own Risk
     section names this over-tightening the worse outcome of the two, and the six
     C1 fixtures cannot see it because every one of them declares its tests as a
     plain, single-line, double-quoted literal.

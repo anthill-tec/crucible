@@ -61,7 +61,8 @@ Project + Crucible endpoint:
   Interpreter resolution: --python > $PY_CRUCIBLE_PYTHON > <project-dir>/.venv/bin/python
   (if present) > the interpreter running this script. The venv must have xmlrunner
   (and, for --coverage, coverage.py) plus any imports the code-under-test needs.
-  Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the board the project's `crucible.toml` declares (`[client] url`,
+  shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile,
   /api/v2/projects/<key>/plans, /api/v2/gates, /api/v2/milestones.
 
@@ -78,20 +79,18 @@ import argparse
 import glob
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
 # The STACK this client's runs belong to — the server's own `{tier, stack,
 # context}` field (`src/v2.ts`). CR-CRU-112 AC5, measured at cycle 388's RED:
 # this client sent NO stack key at all, so nothing this project had ever
 # ingested from its python suite was attributable to it.
 _STACK = "python"
-
-# §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
 
 
 def _resolve_project_dir(arg_value):
@@ -134,10 +133,10 @@ def _read_env(project_dir):
 
 
 def _project_key(project_dir):
-    env = _read_env(project_dir)
-    if "CRUCIBLE_PROJECT_KEY" not in env:
+    key = _read_env(project_dir).get("CRUCIBLE_PROJECT_KEY", "").strip()
+    if not key:  # an empty or whitespace-only key is a missing one
         sys.exit(f"[crucible] ERROR: CRUCIBLE_PROJECT_KEY not found in {project_dir}/.env")
-    return env["CRUCIBLE_PROJECT_KEY"]
+    return key
 
 
 def _resolve_python(arg_value, project_dir):
@@ -160,6 +159,21 @@ def _resolve_python(arg_value, project_dir):
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ────
 
 
+def _base_url():
+    """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
+    USE from the fleet's ONE resolver: the project's own `crucible.toml`
+    (`[client] url`), else the install's, else the distribution's shipped
+    declaration.
+
+    A call rather than the module constant this line used to hold. A constant
+    bound at import was a setting no edit an operator made could reach, and it
+    froze the board for the whole process — so a verb handed a different
+    `--project-dir` posted to the previous one's board. `resolve_base_url()` in
+    `_crucible_axi.py` documents the resolution and the environment channel it
+    retired."""
+    return _axi().resolve_base_url()
+
+
 def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
@@ -173,7 +187,7 @@ def _request(method, path, payload=None, timeout=None):
     the §S2b empty-body correction). The local name is kept deliberately: the
     CR-CRU-030 delegation pattern, addressed unqualified by every call site
     here and by the client test harnesses."""
-    return _axi().http_request(CRUCIBLE_URL, method, path, payload, timeout)
+    return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -224,6 +238,8 @@ def _axi():
 
 
 _AXI_UNSET = _axi().AXI_UNSET
+# The `--reports` help every running verb carries: the shared per-agent rule.
+_REPORTS_HELP = _axi().REPORTS_HELP
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
@@ -252,7 +268,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=CRUCIBLE_URL)
+        base_url=_base_url())
 
 
 # ── run context (declared cycle linkage) ────────────────────────────────────
@@ -270,26 +286,48 @@ def _run_context():
     return _axi().run_context()
 
 
-def _run_logged(cmd, cwd, env, log_path):
-    """Run `cmd` with combined stdout+stderr ALWAYS captured (the no-XML compile
-    fallback needs the real runner output), echoed to STDERR so the machine
-    stdout channel stays the TOON-AXI envelope, and additionally written to
-    `log_path` when set. Returns CompletedProcess (`.stdout` holds the capture)."""
-    result = subprocess.run(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    out = result.stdout or ""
-    if log_path:
-        try:
-            with open(log_path, "w") as f:
-                f.write(out)
-            print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
-        except OSError as e:
-            print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
-                  file=sys.stderr)
-    sys.stderr.write(out)
-    return result
+def _run_logged(cmd, cwd, env, log_path, narrator=None):
+    """Run `cmd` on the shared run path (`run_streamed`): the combined
+    stdout+stderr streams live to STDERR (the machine stdout channel stays the
+    TOON-AXI envelope) and to `log_path` while the runner works, the optional
+    `narrator` observes every line, and the output is ALWAYS captured (the
+    no-XML compile fallback needs the real runner output). Returns
+    CompletedProcess (`.stdout` holds the capture)."""
+    return _axi().run_streamed(cmd, cwd, env, log_path, narrator, capture=True)
+
+
+# unittest's verbose (`-v`) verdict for one finished test: the line ends
+# `<description> ... <verdict>` (xmlrunner adds ` (<elapsed>s)`), or the
+# verdict starts its own line when the test printed after the ` ... `.
+_UNITTEST_VERDICT_LINE = re.compile(
+    r"(?:\s\.\.\.\s+|^)"
+    r"(?:ok|FAIL|ERROR|expected failure|unexpected success|skip(?:ped)?)"
+    r"(?: \(\d+(?:\.\d+)?s\)| '.*')?\s*$")
+
+
+def _recognise_completion(line):
+    """python's half of the shared narration: one unittest verbose verdict
+    line is one completed test. unittest states its total only once the run
+    (and its JUnit XML) is written, so the narration carries no denominator."""
+    return _UNITTEST_VERDICT_LINE.search(line.rstrip("\r\n")) is not None
+
+
+def _narrator(project_dir, agent_id, identity=None):
+    """This client's `RunNarrator`: python's recogniser, an unknown total
+    (`running N`, then `ran N/N`), and the shared role-optional heartbeat
+    tick (`narration_poster`), observed by a gated `identity` when there is one."""
+    return _axi().RunNarrator(
+        _axi().narration_poster(_post, _project_key(project_dir), agent_id,
+                                identity),
+        _recognise_completion)
+
+
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
+    """Open the run BEFORE xmlrunner is spawned, through the shared
+    `open_run`. Returns `(run_id, warnings)`; a refusal degrades to a
+    single-shot ingest with a warning naming the fallback."""
+    return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
+                           tier=tier, context=context, release=release)
 
 
 # ── Agent lifecycle ─────────────────────────────────────────────────────────
@@ -437,9 +475,9 @@ def cmd_unregister(args):
 # ── Toolchain: unittest/xmlrunner test + regression + auto-ingest + check ────
 
 
-def _reports_dir(project_dir, arg_value):
-    rd = arg_value or DEFAULT_REPORTS
-    return rd if os.path.isabs(rd) else os.path.join(project_dir, rd)
+def _reports_dir(project_dir, arg_value, agent_id=None):
+    """The run's reports dir (the shared rule, `run_reports_dir`)."""
+    return _axi().run_reports_dir(project_dir, arg_value, agent_id)
 
 
 def _wipe(reports_dir):
@@ -454,11 +492,14 @@ def _wipe(reports_dir):
 
 
 def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
-    """Build the xmlrunner invocation: targeted (dotted paths) or discover."""
+    """Build the xmlrunner invocation: targeted (dotted paths) or discover.
+    `-v` makes unittest print one verdict line per test, which is what the
+    run's narration counts."""
     base = [python, "-m", "xmlrunner"]
     if targets:
-        return base + list(targets) + ["-o", reports_dir]
-    return base + ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir]
+        return base + list(targets) + ["-o", reports_dir, "-v"]
+    return base + ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir,
+                   "-v"]
 
 
 def _parse_junit_dir(reports_dir):
@@ -501,7 +542,8 @@ def _parse_junit_dir(reports_dir):
                 # skip/skipIf/skipUnless, as emitted by xmlrunner) is PENDING,
                 # never passed. Order matters: failure/error first, then
                 # skipped, then pass. A skip does NOT fail its suite.
-                # Mirrors mvn-crucible.py:641, the reference implementation.
+                # Mirrors `_parse_junit` in `clients/mvn-crucible.py`, the
+                # reference implementation.
                 if fail:
                     status = "fail"
                     failed += 1
@@ -566,23 +608,29 @@ def _is_zero_discovery(result):
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, files=None):
+                   context=None, raw=None, files=None, run_id=None,
+                   stack_on_start=False, release=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
     Returns the parsed response dict (the caller emits the §S1 envelope).
 
     CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
     argument: it is appended to the human-readable count line and is never
-    added to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2)."""
+    added to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2).
+    `run_id` is the OPEN run this ingest closes; absent, the single-shot body.
+    `stack_on_start` says the board ACCEPTED this run's start, whose body
+    already carried the stack."""
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
-        # CR-CRU-112 AC5 — the run says which STACK produced it. This client
-        # opens no run of its own (there is no `/api/v2/runs/start` here), so
-        # the parsed ingest is the ONE place a python run can carry it.
-        "stack": _STACK,
         "summary": summary,
         "tree": tree,
     }
+    # CR-CRU-112 AC5 — the run says which STACK produced it, exactly once: on
+    # the `/api/v2/runs/start` the board accepted (as the fleet's other clients
+    # do), or here when no start carried it and this ingest is the ONE place a
+    # python run can.
+    if not stack_on_start:
+        payload["stack"] = _STACK
     if coverage:
         payload["coverage"] = coverage
     if tier:
@@ -591,7 +639,10 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["context"] = context
     if raw:
         payload["raw"] = raw
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
+    if run_id:
+        payload["runId"] = run_id
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+                              release=release)
     cov_line = ""
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
@@ -608,12 +659,13 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text):
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None):
     """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context).
 
     CR-CRU-111 AC13a — no COMPILE ingest carries a test tier, so this helper takes
     none: it is the shape `arduino-crucible.py:_ingest_compile` already had, and the
-    only way to keep a build event out of the board's test-tier record for good."""
+    only way to keep a build event out of the board's test-tier record for good.
+    `run_id` is the OPEN run this ingest closes, as on the parsed ingest."""
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "python",
@@ -623,17 +675,30 @@ def _ingest_compile(project_dir, agent_id, errors_text):
     context = _run_context()
     if context:
         payload["context"] = context
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    if run_id:
+        payload["runId"] = run_id
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+                              release=release)
     print(f"ingest compile (python): ok={resp.get('ok')}"
           + (f" error={resp['error']}" if resp.get("error") else ""),
           file=sys.stderr)
     return 0 if resp.get("ok") else 1
 
 
-def _collect_coverage(python, project_dir, env):
+def _collect_coverage(python, project_dir, env, data_file=None):
     """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
-    Returns None if coverage.py or the lcov output is unavailable."""
-    lcov_path = os.path.join(project_dir, "coverage.lcov")
+    Returns None if coverage.py or the lcov output is unavailable.
+
+    `data_file` is where the run wrote coverage.py's data when it reported
+    into the agent's own directory; the lcov is derived beside it. Absent, the
+    data file and the lcov keep their project-root locations."""
+    if data_file:
+        lcov_path = os.path.join(os.path.dirname(data_file), "coverage.lcov")
+        lcov_cmd = [python, "-m", "coverage", "lcov", f"--data-file={data_file}",
+                    "-o", lcov_path]
+    else:
+        lcov_path = os.path.join(project_dir, "coverage.lcov")
+        lcov_cmd = [python, "-m", "coverage", "lcov", "-o", lcov_path]
     # NOTE: no PYTHONSAFEPATH here (CR-CRU-040 §S1) — matches _regression_run. A real
     # coverage.py install wins over the stray top-level `coverage/` (bun lcov)
     # namespace-dir shadow on its own — a regular package beats a namespace package
@@ -647,7 +712,7 @@ def _collect_coverage(python, project_dir, env):
     # not specific to this client, and would cost a 3.11 floor (`python -P`) to
     # defend — deliberately left unguarded.
     cov_env = dict(env)
-    r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
+    r = subprocess.run(lcov_cmd,
                        cwd=project_dir, env=cov_env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
         print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})",
@@ -688,16 +753,33 @@ def cmd_test(args, tier=None, verb="test"):
     §S6 ruling 1 — python's declaration surface IS this invocation, so a tier
     verb whose `--start-dir`/`--pattern` the caller stated runs THIS body under
     that tier, and `verb` names the envelope the run belongs to (the tier the
-    caller invoked), exactly as the gate verbs elsewhere pass theirs."""
+    caller invoked), exactly as the gate verbs elsewhere pass theirs.
+
+    `--cycle` binds the run the way `cmd_regression` binds its own: an
+    opening heartbeat DECLARES the run's identity under the cycle, and the
+    closing anti-ghost cleanup fires ONLY for an identity this run created.
+    Without `--agent` nothing is opened, so nothing is posted."""
     project_dir = _resolve_project_dir(args.project_dir)
+    with _axi().gated_run(project_dir, args.agent,
+                          getattr(args, "cycle", None),
+                          "gated test run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        return _test_run(args, tier, verb, project_dir, identity)
+
+
+def _test_run(args, tier, verb, project_dir, identity):
+    """`cmd_test`'s run body, inside its gated-identity bracket."""
     python = _resolve_python(args.python, project_dir)
-    reports_dir = _reports_dir(project_dir, args.reports)
+    reports_dir = _reports_dir(project_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
 
     cmd = _xmlrunner_cmd(python, getattr(args, "tests", None), args.start_dir,
                          args.pattern, reports_dir)
     env = os.environ.copy()
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
     # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
     # can still be supplied: ask the board whether this agent is bound and say
     # so on both channels if it is not. Best-effort — a failed lookup warns
@@ -705,25 +787,47 @@ def cmd_test(args, tier=None, verb="test"):
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
-        context=_run_context())
+        context=_run_context(), release=release)
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+    narrator, run_id = None, None
+    stack_on_start = False
+    if args.agent:
+        # The shared run path: narrate per-test progress, and open the run
+        # BEFORE xmlrunner is spawned so the board shows it running.
+        narrator = _narrator(project_dir, args.agent, identity)
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
+                                          context=_run_context(),
+                                          release=release)
+        stack_on_start = not run_warnings
+        preflight_warnings = list(preflight_warnings) + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the day
     # this project declares a `unit` start-dir, that cell runs THIS body and a
     # run of it that spends its wall clock waiting says so in its own envelope.
     # The shared check is scoped to `unit` by the tier it is handed, so an
     # untiered targeted run measures and warns about nothing.
-    with _axi().ChildRunTiming() as timing:
-        result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    # A signal while the run is open is trapped and the open run disclosed.
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, project_dir, env,
+                                 getattr(args, "log", None), narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                         args.agent, run_id, abandoned,
+                                         preflight_warnings,
+                                         post_fn=_post)
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not args.agent:
         return result.returncode
+    # The final count, then `ingesting…`, both ahead of the ingest below.
+    _axi().close_narration(narrator)
 
     if _produced_xml(reports_dir):
         summary, tree, files = _parse_junit_dir(reports_dir)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
-                              raw=result.stdout, files=files)
+                              raw=result.stdout, files=files, run_id=run_id,
+                              stack_on_start=stack_on_start, release=release)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          warnings=(list(preflight_warnings)
                                    + _axi().unit_run_wall_vs_cpu_warnings(
@@ -735,7 +839,8 @@ def cmd_test(args, tier=None, verb="test"):
     # output as compile so the RED is still reported rather than silently lost.
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
     # tier, whatever verb reached it.
-    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result))
+    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
+                    run_id=run_id, release=release)
     # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
     # additive, so a starved toolchain stops returning an exit code with empty
     # stdout. The exit code is untouched (AC5).
@@ -760,25 +865,23 @@ def cmd_regression(args, verb="regression"):
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
-    identity = None
-    try:
+    with _axi().gated_run(project_dir, getattr(args, "agent", None),
+                          getattr(args, "cycle", None),
+                          "gated regression run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
-            identity = _open_gate_identity(project_dir, args.agent,
-                                           getattr(args, "cycle", None),
-                                           "gated regression run starting")
             # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
             # makes, before this (far longer) sweep burns its minutes.
             preflight_warnings = _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
-                context=_run_context())
-        return _regression_run(args, verb, preflight_warnings)
-    finally:
-        _close_gate_identity(project_dir, identity)
+                context=_run_context(), release=getattr(args, "release", None))
+        return _regression_run(args, verb, preflight_warnings, identity)
 
 
-def _regression_run(args, verb="regression", preflight_warnings=()):
+def _regression_run(args, verb="regression", preflight_warnings=(), identity=None):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
     coverage.py and post /api/v2/runs/parsed with coverage. A bound agent's run is
     server-stamped with its registered cycle. `verb` (CR-CRU-058 §S1) names the
@@ -786,21 +889,30 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
 
     CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight finding,
     decided BEFORE the sweep started; it rides every envelope this body can
-    emit, ahead of whatever the run itself discovers."""
+    emit, ahead of whatever the run itself discovers. `identity` is the gated
+    run's identity, observing every narration tick."""
     preflight_warnings = list(preflight_warnings)
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
-    reports_dir = _reports_dir(project_dir, args.reports)
+    agent = getattr(args, "agent", None)
+    # §S1 — the release this run is filed under (None: a cycle's run).
+    release = getattr(args, "release", None)
+    reports_dir = _reports_dir(project_dir, args.reports, agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
     env = os.environ.copy()
 
     run_cmd = _xmlrunner_cmd(python, None, args.start_dir, args.pattern, reports_dir)
     coverage_on = bool(args.coverage)
+    # Coverage follows the run: an agent's own directory holds coverage.py's
+    # data file too; otherwise it stays where coverage.py puts it (cwd).
+    data_file = (os.path.join(reports_dir, ".coverage")
+                 if _axi().reports_dir_is_agents_own(args.reports, agent) else None)
     if coverage_on:
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
+                   *([f"--data-file={data_file}"] if data_file else []),
                    "-m", "xmlrunner", "discover", "-s", args.start_dir,
-                   "-p", args.pattern, "-o", reports_dir]
+                   "-p", args.pattern, "-o", reports_dir, "-v"]
         # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
         # wins over the stray top-level `coverage/` (bun lcov) namespace-dir shadow
         # on its own — a regular package beats a namespace package regardless of cwd
@@ -816,7 +928,25 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
         # Deliberately left unguarded.
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
-    result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
+    narrator, run_id = None, None
+    stack_on_start = False
+    if agent:
+        # The shared run path: narrate per-test progress, and open the run
+        # BEFORE the sweep is spawned so the board shows it running.
+        narrator = _narrator(project_dir, agent, identity)
+        run_id, run_warnings = _start_run(project_dir, agent, tier="regression",
+                                          context=_run_context(),
+                                          release=release)
+        stack_on_start = not run_warnings
+        preflight_warnings += run_warnings
+    try:
+        with _axi().abandon_trap(run_id):
+            result = _run_logged(run_cmd, project_dir, env,
+                                 getattr(args, "log", None), narrator)
+    except _axi().RunAbandoned as abandoned:
+        return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent,
+                                         run_id, abandoned, preflight_warnings,
+                                         post_fn=_post)
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not _produced_xml(reports_dir):
@@ -829,18 +959,26 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
                       f"pattern={args.pattern!r} matched nothing")
             warning = {"code": "no-tests-discovered", "detail": detail}
             print(f"[crucible] ERROR: no-tests-discovered — {detail}", file=sys.stderr)
+            # Nothing ran, so nothing will ever file the run this verb opened:
+            # close it through the shared `abort_run`.
             _emit_axi(verb, False,
                       {"help": ["check --start-dir / --pattern; ensure the test dir "
                                 "is a package (has __init__.py)"]},
                       _axi_context(project_dir, agent_id=args.agent),
-                      preflight_warnings + [warning])
+                      preflight_warnings + [warning]
+                      + _axi().no_report_left_open_warnings(
+                          run_id, "TEST-*.xml", post_fn=_post,
+                          project_key=_project_key(project_dir),
+                          agent_id=args.agent))
             return result.returncode or 1
         print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
               file=sys.stderr)
         # CR-CRU-111 AC13a — this ingest is a build event, not a run of the
         # `regression` tier: an earned verb name does not make a compile event a
         # test tier, so no tier goes on this body.
-        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result))
+        _axi().close_narration(narrator)
+        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
+                        run_id=run_id, release=release)
         # CR-CRU-064 §S2/AC6 — emitted under the `verb` PARAMETER, never the
         # literal "regression": `pre-merge-gate` runs this body as its
         # regression step, so a starved GATE must speak as the gate. The
@@ -856,14 +994,19 @@ def _regression_run(args, verb="regression", preflight_warnings=()):
         return result.returncode or 1
 
     summary, tree, files = _parse_junit_dir(reports_dir)
-    coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
+    coverage = (_collect_coverage(python, project_dir, env, data_file)
+                if coverage_on else None)
+    # The final count, then `ingesting…`, both ahead of the ingest below.
+    _axi().close_narration(narrator)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_run_context(), files=files)
+                          tier="regression", context=_run_context(), files=files,
+                          run_id=run_id, stack_on_start=stack_on_start,
+                          release=release)
     ok = bool(resp.get("ok")) and summary["failed"] == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                   if verb != "regression" else None)
     _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                      help_steps=help_steps, warnings=preflight_warnings)
@@ -989,6 +1132,7 @@ def cmd_pre_merge_gate(args):
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
+        release=getattr(args, "release", None),
     )
     # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
     # composed once for the fleet. This stack's surface enumerates none (the
@@ -1003,7 +1147,7 @@ def cmd_pre_merge_gate(args):
         verb="pre-merge-gate", dispatch=None,
         whole_suite=lambda: cmd_regression(reg_args, verb="pre-merge-gate"),
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=CRUCIBLE_URL)
+        crucible_url=_base_url())
 
 
 # ── CR-CRU-008/030 — plan verbs ─────────────────────────────────────────────
@@ -1075,6 +1219,13 @@ def cmd_cycle_done(args):
     return _cycle_transition(args, "done")
 
 
+def cmd_cycle_skip(args):
+    """S2 -- mark a PENDING cycle skipped (exceptional; recorded
+    with reason, cause and spec reference). Delegates to the shared
+    implementation."""
+    return _axi().cmd_cycle_skip(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
@@ -1124,9 +1275,11 @@ def cmd_abort(args):
 
 
 def cmd_status(args):
-    """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
-    and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    """§S6 — the work-in-flight READ verb (alias `plans`, no --agent): GET
+    …/plans?status=open and return the open plans as a uniform-table §S1
+    envelope plus the server's lastClosedCr and filed, encoded per --format
+    (toon, the default, or json — one JSON object).
+    CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
@@ -1136,6 +1289,28 @@ def cmd_queue(args):
     landing-record sources the release ceremony's provenance needs. Delegates
     to the shared implementation."""
     return _axi().cmd_queue(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_landings(args):
+    """§S9 — the closed plans and the merge commit each recorded, for programs
+    such as the release ceremony (read-only, no --agent): GET
+    …/plans?status=closed, one {cr, mergeCommit} row per closed plan, encoded
+    per --format. Delegates to the shared implementation."""
+    return _axi().cmd_landings(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_history(args):
+    """§S4 — a project's releases through its client (read-only,
+    no --agent): GET …/history as one TOON-AXI table — the default seven
+    columns, --fields/--full extras, or --release <label>'s gate runs.
+    Delegates to the shared implementation."""
+    return _axi().cmd_history(args, _resolve_project_dir(args.project_dir), _ops())
+
+def cmd_project_meta(args):
+    """§S4 — a project's metadata map: a read (GET …/metadata, no
+    --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
+    required). Delegates to the shared implementation."""
+    return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
@@ -1187,7 +1362,7 @@ def cmd_cr_void(args):
 
 
 def cmd_next(args):
-    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/next,
     answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
     Delegates to the shared implementation."""
     return _axi().cmd_next(args, _resolve_project_dir(args.project_dir), _ops())
@@ -1250,6 +1425,15 @@ def cmd_gate_run(args):
         args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
 
 
+def cmd_gate_respond(args):
+    """§S1 — axi PROXY wrapper around `no-mistakes axi respond`: delegates to
+    the shared implementation, which records the decision and drives the run
+    through the runner `gate-run` uses; tool discovery stays HERE (this
+    module's own `shutil`) so each client's harness keeps its patch seam."""
+    return _axi().cmd_gate_respond(
+        args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
+
+
 def cmd_milestone(args):
     """POST a workflow milestone. §S4b — CR-CRU-054 §S2b delegator to the shared
     implementation, which writes the legacy line to STDERR so it can never
@@ -1303,7 +1487,7 @@ def _add_discover_args(p):
                    help="Discovery start dir (default: tests)")
     p.add_argument("--pattern", default="test_*.py",
                    help="Discovery filename pattern (default: test_*.py)")
-    p.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    p.add_argument("--reports", help=_REPORTS_HELP)
 
 
 def _add_log_arg(p):
@@ -1318,6 +1502,13 @@ def _add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (CR-CRU-054 §S2 — delegates
     to the shared binding so all five clients document it identically)."""
     return _axi().add_gate_cycle_arg(p)
+
+
+def _add_run_release_arg(p):
+    """§S1 — `--release` on a test-run verb, beside `--cycle` where it has one
+    (delegates to the shared declaration so all five clients document it
+    identically)."""
+    return _axi().add_run_release_arg(p)
 
 
 def _add_regression_tier_args(p):
@@ -1353,10 +1544,11 @@ def _add_declared_tier_args(p):
                         "target and the verb refuses.")
     p.add_argument("--pattern", default="test_*.py",
                    help="Discovery filename pattern (default: test_*.py)")
-    p.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    p.add_argument("--reports", help=_REPORTS_HELP)
     _add_python_arg(p)
     _add_log_arg(p)
     _add_gate_cycle_arg(p)
+    _add_run_release_arg(p)
 
 
 def _read_declared_discovery(args, _target):
@@ -1500,6 +1692,8 @@ def main():
                    help="Dotted test target(s), e.g. tests.test_mcp_server or "
                         "tests.test_mcp_server.Cls.test_x. Omit to discover.")
     t.add_argument("--agent", help="If set, ingest the result after the run")
+    _add_gate_cycle_arg(t)
+    _add_run_release_arg(t)
     _add_discover_args(t)
     _add_python_arg(t)
     _add_project_dir_arg(t)
@@ -1523,7 +1717,8 @@ def main():
             "Runs full-suite unittest discovery via xmlrunner and ingests it; "
             "--coverage adds coverage.py.",
             (_add_regression_tier_args, _add_gate_cycle_arg,
-             _add_discover_args, _add_python_arg, _add_log_arg))),
+             _add_run_release_arg, _add_discover_args, _add_python_arg,
+             _add_log_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
@@ -1558,6 +1753,7 @@ def main():
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
     _add_gate_cycle_arg(pmg)
+    _add_run_release_arg(pmg)
     _add_discover_args(pmg)
     _add_python_arg(pmg)
     _add_project_dir_arg(pmg)
@@ -1612,6 +1808,10 @@ def main():
     _add_project_dir_arg(cdn)
     cdn.set_defaults(func=cmd_cycle_done)
 
+    # S2 -- the shared registrar builds the subparser once.
+    _axi().add_cycle_skip_verb(sub, cmd_cycle_skip,
+                               add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
+
     cc = sub.add_parser("cr-close",
                         help="Close the single OPEN plan (PATCH status=closed + merge.commit). "
                              "Requires --agent <registered id> (§S2b).")
@@ -1656,19 +1856,24 @@ def main():
     ab.add_argument("--user-approved", action="store_true",
                     help="Map to body userApproved:true (the server refuses without it).")
     ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_change_record_args(ab)  # S2b: abort is recorded
     _add_workflow_agent_arg(ab)
     _add_project_dir_arg(ab)
     ab.set_defaults(func=cmd_abort)
 
     for _name in ("status", "plans"):
         sv = sub.add_parser(_name,
-                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
-                                 "+ lastClosedCr (the last CR to close). Read-only; "
-                                 "`plans` is an alias of `status`.")
+                            help="Read the open plans, the work in flight (GET "
+                                 "…/plans?status=open), as a TOON-AXI table + "
+                                 "lastClosedCr (the last CR to close) and filed "
+                                 "(the project's plan count). Read-only; `plans` "
+                                 "is an alias of `status`; --format json writes "
+                                 "one JSON object.")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10).")
         _add_project_dir_arg(sv)
+        _axi().add_status_format_arg(sv)
         sv.set_defaults(func=cmd_status)
 
     # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
@@ -1676,7 +1881,44 @@ def main():
                         help="Read the registered CR queue (GET …/queue) plus the "
                              "cr-merged milestone ids as a TOON-AXI table. Read-only.")
     _add_project_dir_arg(qv)
+    _axi().add_queue_view_args(qv)
     qv.set_defaults(func=cmd_queue)
+
+    # §S9 — the closed plans' landing commits READ verb (no --agent)
+    lv = sub.add_parser("landings",
+                        help="The closed plans and the merge commit each recorded — for "
+                             "programs such as the release ceremony (GET "
+                             "…/plans?status=closed). Read-only; --format json "
+                             "writes one JSON object.")
+    _add_project_dir_arg(lv)
+    _axi().add_status_format_arg(lv)
+    lv.set_defaults(func=cmd_landings)
+
+    # §S4 — a project's release history READ verb (no --agent)
+    hv = sub.add_parser("history",
+                        help="A project's releases, their states, waves, gate runs "
+                             "and verification (GET …/history) as a TOON-AXI table; "
+                             "--release <label> lists that release's gate runs. "
+                             "Read-only; --format json writes one JSON object.")
+    _add_project_dir_arg(hv)
+    _axi().add_history_args(hv)
+    hv.set_defaults(func=cmd_history)
+
+    # §S4 — the project metadata map: read, or write with --set/--unset
+    pmv = sub.add_parser("project-meta",
+                         help="A project's metadata map (a copy of its .env facts). "
+                              "Readable by anything that reaches the board: "
+                              "non-secret facts only. No flags reads it; "
+                              "--set KEY=VALUE / --unset KEY write it (requires "
+                              "--agent); --format json writes one JSON object.")
+    _axi().add_project_meta_args(pmv)
+    pmv.add_argument("--agent",
+                     help="Registered agent id — required only for a write "
+                          "(--set/--unset), which posts as a live registered "
+                          "ORCHESTRATOR caller; a read (no --set/--unset) needs "
+                          "none. An unregistered id is refused by the server (409).")
+    _add_project_dir_arg(pmv)
+    pmv.set_defaults(func=cmd_project_meta)
 
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot
@@ -1711,11 +1953,19 @@ def main():
                           "client never validates or rewrites the value). Exists "
                           "because no-mistakes' `ci` step is PR-based, and a "
                           "git-flow project that merges directly has no PR for it "
-                          "to watch — without --skip the gate blocks until "
-                          "ci_timeout.")
+                          "to watch — skipping nothing, the gate blocks until "
+                          "ci_timeout. Omitted, the project's declared "
+                          "`[gate] skip` (crucible.toml) applies; a value "
+                          "REPLACES it, and --skip \"\" skips nothing.")
     _axi().add_gate_release_arg(gr)
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
+
+    # §S1 — the gate DECISION verb, through the shared registrar so five
+    # clients cannot fork its flag surface; it drives the run through the
+    # same runner as gate-run.
+    _axi().add_gate_respond_verb(sub, cmd_gate_respond,
+                                 add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
 
     grp = sub.add_parser("gate-report",
                          help="Report a single already-run gate → POST /api/v2/gates.")

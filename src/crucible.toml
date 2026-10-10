@@ -36,6 +36,66 @@
 # reasoning: a bound nobody can justify is the same defect as a default nobody
 # chose.
 
+# ── The LISTENER this server binds (CR-CRU-139 §S1) ──────────────────────
+#
+# A connection is configuration too. The port and the bind address used to be
+# expressible only as `$CRUCIBLE_PORT` / `$CRUCIBLE_HOST` exports, so the only
+# record of an operator's decision was a shell history and the failure mode of
+# forgetting was silent — a second instance quietly landing on the first one's
+# port. Both variables are RETIRED: they are not read at all. Declare the
+# listener HERE — in the `crucible.toml` beside the server's own database —
+# and an explicit `startServer({ port, hostname })` argument (the in-process
+# test seam) is the only thing that outranks the file.
+
+# ── Two settings that are NOT in this file, and cannot be (§S3) ───────────
+#
+# A reader who has just found `[server] port` here is owed the boundary, or the
+# next change "finishes the job" by moving a value that precedes this file's
+# own discovery.
+#
+# `CRUCIBLE_DB` stays in the environment because it is what FINDS this file:
+# the operator's copy is the `crucible.toml` beside the database, so the store
+# path is answered before any table below it can be read. A `db` line here
+# could only ever be read by a process that had already found the file it was
+# written in.
+#
+# `CRUCIBLE_PROJECT_KEY` stays in the environment for the matching reason on
+# the CLIENT's side, and is named here only to complete the boundary: it is
+# IDENTITY, read from a project's `.env` to say which project a run belongs
+# to, before that project's own directory has been resolved to a file. The
+# server never reads it — it is told the key on every request.
+
+[server]
+# The address this server binds. It stays LOOPBACK unless an operator
+# deliberately widens it: the HTTP API is unauthenticated, and `dataPath`
+# ingest makes the server READ FILES OFF ITS OWN DISK on a caller's say-so, so
+# a board reachable from the network is a file-read primitive handed to it.
+# Set `0.0.0.0` only behind something that authenticates, and never by
+# accident.
+host = "127.0.0.1"
+# The port this server listens on. 3849 is the value this project has always
+# defaulted to, so an install with no operator file listens exactly where it
+# did before — the whole safety argument for moving the setting into a file.
+# The installer WRITES the port it chose into the operator's own copy of this
+# table, and a port already written there is never re-probed: re-running an
+# install must not orphan the clients already pointed at this board.
+port = 3849
+# The floor of the port range this project may occupy on one machine. The
+# range exists because two instances on one workstation — a production board
+# and the development board its own work is reported to — is the case this
+# project actually runs in, and "pick a free port" is a decision that has to
+# be made SOMEWHERE. The installer probes this range, in order, BINDING each
+# candidate rather than connecting to it (a socket bound but not listening
+# answers no connection and is still taken).
+port_range_min = 3800
+# The ceiling of that range: a hundred ports in the 3000s, which is as many
+# instances of this project as one machine has any business hosting. It is
+# read from THIS FILE by the installer rather than carried as a constant in
+# it, so an operator who must move the range moves it where it is declared —
+# and an install that exhausts the range STOPS and says what occupies it,
+# rather than drifting outside the bounds nobody widened.
+port_range_max = 3899
+
 [limits.run_abandon_ms]
 description = "Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off the board sooner."
 recommended = 1800000

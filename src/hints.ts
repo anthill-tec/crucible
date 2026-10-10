@@ -31,11 +31,15 @@ export const hints: Record<
   | "abortNeedsApproval"
   | "gateFields"
   | "gateOutcomes"
+  | "gateDecisionFields"
+  | "afterGateDecision"
   | "illegalCycleTransition"
   | "planCycleNotFound"
   | "planFileInput"
   | "cycleInput"
   | "cycleStatus"
+  | "plansStatusFilter"
+  | "projectMetadataInput"
   | "duplicateOpenPlan"
   | "closedPlan"
   | "nonTerminalCycles"
@@ -108,7 +112,7 @@ export const hints: Record<
   /** CR-CRU-024 §S6 — abort refused: no explicit user approval on the call. */
   abortNeedsApproval: [
     "aborting discards a declared workflow and destroys its running plan — never retry this call on your own initiative",
-    "present the abort to the user first; retry with {userApproved: true} ONLY after the user has explicitly approved this specific abort",
+    "present the abort to the user first; retry with {userApproved: true, reason, cause, specRef} ONLY after the user has explicitly approved this specific abort — cause is spec-design | gap-analysis, specRef the spec commit or §",
   ],
   /** CR-CRU-013 §S1 — a gate POST missing a required field. */
   gateFields: [
@@ -119,10 +123,19 @@ export const hints: Record<
   gateOutcomes: [
     "gate.outcome must be one of: checks-passed, passed, failed, cancelled",
   ],
+  /** CR-CRU-162 §G4 — a gate-decision POST with a missing or ill-typed field. */
+  gateDecisionFields: [
+    "POST /api/v2/gate-decisions {projectKey, agentId, context?, decision:{runId, action, step?, findings?, addedFinding?, instructions?, reason?}}",
+    "decision.runId (the no-mistakes run id) and decision.action (approve | fix | skip) are required; findings is an array of finding ids; addedFinding is ONE JSON finding object",
+  ],
+  /** CR-CRU-162 §G5 — after a decision is recorded: where it is read back. */
+  afterGateDecision: [
+    "GET /api/v2/events/<gate event id> — a gate whose run carries this runId lists its decisions[], in posting order",
+  ],
   /** CR-CRU-024 §S4 — an illegal per-cycle transition (e.g. active→pending). */
   illegalCycleTransition: [
     "cycles never retreat — a done/skipped/failed cycle is final and an active cycle cannot return to pending",
-    "append a new cycle for rework: POST …/plans/<planId>/cycles {label}",
+    "for rework, append a FIX cycle once the plan's VERIFY cycle is done: POST …/plans/<planId>/cycles {label, kind: \"fix\"}",
   ],
   /** CR-CRU-024 §S4 — 404 on an unknown plan or cycle in a plan/cycle route. */
   planCycleNotFound: [
@@ -142,10 +155,22 @@ export const hints: Record<
   cycleStatus: [
     "status must be one of: pending | active | done | skipped | failed",
   ],
+  /** §S1 — GET …/plans?status= with a value outside the accepted set. */
+  plansStatusFilter: [
+    "status must be one of: open | closed | aborted — or omit it to list every plan",
+    "GET …/plans?status=open — the work in flight; composes with ?cr=<cr> and ?track=<track>",
+  ],
+  /** §S2 — a PATCH …/metadata body refused before anything is written. */
+  projectMetadataInput: [
+    "PATCH /api/v2/projects/<key>/metadata {agentId, set?: {KEY: \"value\", …}, unset?: [\"KEY\", …]} — name at least one key in a non-empty set or unset",
+    "every key is an environment-variable name (^[A-Z][A-Z0-9_]*$), every set value a string, and no key appears in both set and unset",
+    "CRUCIBLE_PROJECT_KEY is refused — a project's identity stays local, never in its metadata",
+    "the map is readable by anything that reaches the board: hold non-secret facts only",
+  ],
   /** CR-CRU-024 §S4 — a second open plan filed for a cr that already has one. */
   duplicateOpenPlan: [
     "one open plan per cr — close the existing open plan (PATCH …/plans/<planId> {status:\"closed\"}) before filing another",
-    "or append cycles to the existing plan: POST …/plans/<planId>/cycles {label}",
+    "or, once its VERIFY cycle is done, append a FIX cycle to the existing plan: POST …/plans/<planId>/cycles {label, kind: \"fix\"}",
   ],
   /** CR-CRU-024 §S4 — a mutation aimed at an already-closed plan. */
   closedPlan: [
@@ -160,7 +185,7 @@ export const hints: Record<
   nonTerminalCycles: [
     "transition every listed cycle to a terminal state (done | skipped | failed) before closing the plan",
     "GET …/plans?cr=<cr> — inspect the cycles still open",
-    "if the listed cycles will never run, abandon the plan instead: POST …/plans/<planId>/abort {userApproved: true} — present the abort to the user first and send it ONLY after explicit approval",
+    "if the listed cycles will never run, abandon the plan instead: POST …/plans/<planId>/abort {userApproved: true, reason, cause, specRef} — present the abort to the user first and send it ONLY after explicit approval; an abort is a recorded process failure",
   ],
   /** CR-CRU-024 §S4 — an unparseable JSON request body on a plan/cycle route. */
   malformedBody: [
@@ -169,12 +194,12 @@ export const hints: Record<
   /** CR-CRU-024 §S3.2 — a label edit aimed at the LOCKED active cycle. */
   cycleLocked: [
     "the active cycle is locked while it runs — confirm it (done) or fail it first, then edit",
-    "or append a new cycle for the rename: POST …/plans/<planId>/cycles {label}",
+    "a rename is a recorded plan change, legal on a PENDING cycle only: PATCH …/cycles/<id> {label, reason, cause, specRef}",
   ],
   /** CR-CRU-024 §S3.2 — a label edit aimed at a terminal (history) cycle. */
   cycleImmutable: [
     "done/skipped/failed cycles are immutable history — their labels are frozen",
-    "append a new cycle for rework instead: POST …/plans/<planId>/cycles {label}",
+    "for rework, append a FIX cycle once the plan's VERIFY cycle is done: POST …/plans/<planId>/cycles {label, kind: \"fix\"}",
   ],
   /** CR-CRU-024 §S3.2 — a body carrying BOTH label and status. */
   cycleOneMutation: [
@@ -197,7 +222,7 @@ export const cycleHints = {
   /** §S1 — an earlier sibling is still pending; offer activate-first or skip. */
   outOfOrder: (earlier: number): string[] => [
     `activate cycle ${earlier} first — cycles activate in ascending order`,
-    `or transition cycle ${earlier} pending→skipped, then retry this activation`,
+    `or, only if a spec change the user approved made it obsolete, skip cycle ${earlier} (pending→skipped with reason, cause and specRef — a recorded process failure), then retry this activation`,
   ],
   /** §S2 — another cycle is already active; offer the terminal-transition path. */
   alreadyActive: (active: number): string[] => [
@@ -391,6 +416,16 @@ export const authHints = {
 };
 
 /**
+ * The first move every orchestrator-only refusal hands back: re-declare the
+ * caller with the role the route requires. Shared by the roadmap and the
+ * project-metadata refusals so both name the same call, word for word.
+ */
+const reDeclareRole = (agentId: string, role: string | undefined, required: string): string =>
+  role === undefined
+    ? `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${agentId} with role ${required} — its row predates declared roles and carries none, and a role is never fabricated`
+    : `re-register ${agentId} with role ${required}: POST /api/v2/agents/register {projectKey, agentId, role: "${required}"} — it currently holds ${role}`;
+
+/**
  * CR-CRU-091 §S3/§S8 — the roadmap-registration refusals. Every entry is
  * STATE-DERIVED (AXI P9): it names the state actually found — the role the
  * caller holds, the release nobody proposed, the container the cr really sits
@@ -405,9 +440,7 @@ export const roadmapHints = {
    * which is refused rather than assumed, so the help says so out loud.
    */
   notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
-    role === undefined
-      ? `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${agentId} with role ${required} — its row predates declared roles and carries none, and a role is never fabricated`
-      : `re-register ${agentId} with role ${required}: POST /api/v2/agents/register {projectKey, agentId, role: "${required}"} — it currently holds ${role}`,
+    reDeclareRole(agentId, role, required),
     "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
     "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
   ],
@@ -481,5 +514,151 @@ export const roadmapHints = {
   unregisteredCr: (cr: string): string[] => [
     `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> — a lifecycle disposition belongs to a registered cr, and neither verb creates one`,
     "GET /api/v2/projects/<key>/queue — the crs this project actually holds",
+  ],
+};
+
+/**
+ * §S6 — a non-orchestrator's project-metadata write. Its own words, not the
+ * roadmap's: the refusal names the metadata write and `project-meta`, and
+ * says a read needs no role at all.
+ */
+export const projectMetadataHints = {
+  notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
+    reDeclareRole(agentId, role, required),
+    "a project metadata write is orchestrator work: project-meta --set/--unset requires it, while project-meta with neither only reads the map and needs no role",
+    "an agent already exercising a TDD role should hand the write to its orchestrator rather than re-declaring its own role",
+  ],
+};
+
+/**
+ * CR-CRU-098 §S2/AC5 — the `next` pointer's state-derived `help[]`, authored
+ * by the server beside the answer it rides (`src/next.ts`). Ported VERBATIM
+ * from the client's `_next_start_help`, `_hold_help` and `_drained_help`: the
+ * strings are byte-identical, so the move each decision hands back does not
+ * change with the side that computes it. Each builder takes only the facts it
+ * reads, so the resolver's own trigger type satisfies it structurally.
+ */
+type HeldBy =
+  | { kind: "in-flight"; cr: string }
+  | { kind: "dead-dependency"; cr: string; state: string; by?: string }
+  | { kind: "dependency"; blockedBy: ReadonlyArray<{ cr: string }> }
+  | { kind: "unknown-dependency"; cr: string };
+
+export const nextHints = {
+  /** NEXT — the concrete call that STARTS this cr, carrying its own wave. */
+  start: (cr: string, wave: string | undefined): string[] => {
+    let step =
+      `plan-file --cr ${cr} --title "<brief>" ` +
+      `--cycle "<c1>" --cycle-kind <k1> ` +
+      `--cycle "<c2>" --cycle-kind <k2> --agent <agentId>`;
+    if (wave) step += ` --wave ${wave}`;
+    return [step, "status"];
+  },
+  /** HOLD — the move that clears the NAMED trigger, then `next` again. */
+  hold: (trigger: HeldBy): string[] => {
+    let steps: string[];
+    if (trigger.kind === "in-flight") {
+      steps = [
+        `cr-close --cr ${trigger.cr} --commit <sha> --agent <agentId> — ` +
+          `${trigger.cr} occupies the lane and holds everything behind it`,
+      ];
+    } else if (trigger.kind === "dead-dependency") {
+      const target = trigger.by ? `at ${trigger.by}` : "off it";
+      steps = [
+        `re-point the dependsOn ${target} in docs/changes/README.md ` +
+          `and re-run queue-file — ${trigger.cr} is ${trigger.state}, so waiting will ` +
+          `never clear this`,
+      ];
+    } else if (trigger.kind === "unknown-dependency") {
+      steps = [
+        `cr-plan --cr ${trigger.cr} --release <v> --wave <n> ` +
+          `--title <brief> --agent <agentId> — the queue does not ` +
+          `hold ${trigger.cr}`,
+      ];
+    } else {
+      steps = trigger.blockedBy.map((row) => `cr-close --cr ${row.cr} --commit <sha> --agent <agentId>`);
+    }
+    steps.push("next");
+    return steps;
+  },
+  /**
+   * DRAINED — the move that would REFILL the lane. `dead` is the rows the
+   * answer's container declared dead (named on `wave-complete`); `nextWave`
+   * is the label published after a finished wave, verbatim, or absent.
+   */
+  drained: (
+    reason: string,
+    dead: ReadonlyArray<{ cr: string; state: string; by?: string }>,
+    nextWave?: string,
+  ): string[] => {
+    const sequence = "wave-sequence --release <v> --wave <n> --crs <a,b,c> --agent <agentId>";
+    if (reason === "no-roadmap") {
+      return [
+        "release-propose --label <v> --agent <agentId>",
+        "cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>",
+        sequence,
+      ];
+    }
+    if (reason === "awaiting-assignment") return [`${sequence} --track <n>`];
+    const steps: string[] = [];
+    if (dead.length > 0) {
+      steps.push(
+        "the lane's remaining entries are declared dead: " +
+          dead.map(({ cr, state, by }) => (by ? `${cr} (${state} by ${by})` : `${cr} (${state})`)).join(", "),
+      );
+    }
+    steps.push("cr-plan --cr <id> --release <v> --wave <n> --title <brief> --agent <agentId>");
+    const opens = nextWave || "<n>";
+    steps.push(`wave-sequence --release <v> --wave ${opens} --crs <a,b,c> --agent <agentId>`);
+    return steps;
+  },
+  /** The multi-track refusal — names the live lanes, never picks one. */
+  needsTrack: (tracks: readonly string[]): string[] => [
+    `next --track <n> — the live lanes are ${tracks.join(", ")}`,
+  ],
+};
+
+/**
+ * CR-CRU-165 §S1/§S2/§S2b — the plan-change refusals. A filed plan grows
+ * unrecorded only by a FIX cycle after a done VERIFY; every other change
+ * (insert-before, rename, non-fix append, skip) and every abort is the
+ * exception for a spec change the user approved mid-implementation, and
+ * carries reason, cause and specRef.
+ */
+export const planChangeHints = {
+  /** A plan change asked for by a caller that is not ORCHESTRATOR. */
+  notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
+    reDeclareRole(agentId, role, required),
+    "a plan change (cycle-skip, insert-before, rename, non-fix append) is orchestrator work and is exceptional: it records a failure of the spec or of its gap analysis",
+    "an agent already exercising a TDD role should hand the change to its orchestrator rather than re-declaring its own role",
+  ],
+  /** A plan change, or an abort, sent without its record. */
+  recordRequired: [
+    "send reason (why the filed plan changes), cause (spec-design | gap-analysis) and specRef (the spec commit or § that changed)",
+    "a plan grows only by FIX cycles: POST …/plans/<planId>/cycles {label, kind: \"fix\"} after a done VERIFY needs nothing more",
+    "any other change is exceptional — use it only for a spec change the user approved mid-implementation; it is recorded as a process failure",
+  ],
+  /** An abort sent without its record. */
+  abortRecordRequired: [
+    "send reason (why the plan no longer fits), cause (spec-design | gap-analysis) and specRef (the spec commit or § that changed) beside {userApproved: true}",
+    "an abort is a re-plan: its pending cycles are skipped and show the abort's reason; re-file the CR's plan afterwards",
+  ],
+  /** A record whose cause is outside the two the rule names. */
+  invalidCause: [
+    "cause must be one of: spec-design | gap-analysis — the part of the process the change shows fell short",
+  ],
+  /** An unrecorded FIX append before the plan's VERIFY cycle is done. */
+  verifyNotDone: [
+    "a FIX cycle follows a done VERIFY whose findings need fixes — finish the plan's VERIFY cycle first",
+    "GET …/plans?cr=<cr> — inspect the plan's VERIFY cycle and its status",
+  ],
+  /** A skip aimed at a cycle a run was filed against. */
+  runFiled: (cycleId: number): string[] => [
+    `a run is filed against cycle ${cycleId}, so it is not a planned cycle that never ran — end it done or failed instead`,
+  ],
+  /** A skip that would leave the plan with no cycle that is not skipped. */
+  lastUnskipped: (planId: number): string[] => [
+    `plan ${planId} must keep at least one cycle that is not skipped`,
+    `if the whole plan no longer fits the spec, abort it: POST …/plans/${planId}/abort {userApproved: true, reason, cause, specRef} — present the abort to the user first`,
   ],
 };

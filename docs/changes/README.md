@@ -5,7 +5,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 **Design contract:** [../research/PRD-crucible-v2.md](../research/PRD-crucible-v2.md)
 **Evidence base:** [../research/DN-crucible-api-reconstruction.md](../research/DN-crucible-api-reconstruction.md)
-**Target release:** 0.3.0
+**Target release:** 0.4.0
 
 | CR | Title | Type | Status | Depends on | Wave |
 |---|---|---|---|---|---|
@@ -71,11 +71,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is selected by "last non-empty line", which fits python and node but not maven | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
 | [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (runs the server) and exposes no run command; provision-and-exit + a `serve` verb + bun guarantee | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
-| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 7 (post-0.2.0) |
+| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | the BDD-driven e2e suite reaches the board, with its Gherkin rendered | feature | COMPLETED (0.3.0) | 004, 007 | 7 (0.3.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
-| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 7 (post-0.2.0) |
-| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 7 (post-0.2.0) |
-| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 7 (post-0.2.0) |
+| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | COMPLETED (0.3.0) | 015, 016, 093 | 7 (0.3.0) |
+| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: SCRUM velocity, burndown and forecast | feature | COMPLETED (0.3.0) | 011, 014, 091 | 7 (0.3.0) |
+| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | COMPLETED (0.3.0) | 095 | 7 (0.3.0) |
 | [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened | bugfix | COMPLETED (0.2.0) | 043, 066 | 5 (0.2.0) |
 | [CR-CRU-069](CR-CRU-069-uninstall-inverts-install.md) | Install has no inverse: `crucible-axi uninstall` + `install.sh` teardown | feature | COMPLETED (0.2.0) | 009, 066 | 5 (0.2.0) |
 | [CR-CRU-070](CR-CRU-070-systemd-user-unit.md) | systemd `--user` unit: install script provisions and reverses it | feature | COMPLETED (0.2.0) | 066, 069 | 5 (0.2.0) |
@@ -142,15 +142,41 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-134](CR-CRU-134-a-figure-in-prose-is-derived-or-it-drifts.md) | a figure in prose is derived, or it drifts | fix | COMPLETED (0.2.0) | 131 | 6 (0.2.0) |
 | [CR-CRU-135](CR-CRU-135-a-tests-warnings-are-not-its-working-directorys.md) | a test's warnings are not its working directory's | fix | COMPLETED (0.2.0) | 030, 131 | 6 (0.2.0) |
 | [CR-CRU-136](CR-CRU-136-a-classname-is-decoded-not-guessed.md) | a classname is decoded, not guessed | fix | COMPLETED (0.2.0) | 133 | 6 (0.2.0) |
-| [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
 | [CR-CRU-137](CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md) | the pipeline's own defaults are chosen, not inherited | hotfix | COMPLETED (0.2.2) | 087, 134, 136 | 7 (0.2.2) |
+| [CR-CRU-138](CR-CRU-138-an-installed-deployment-resolves-its-configuration.md) | an installed deployment resolves the configuration it was given | hotfix | COMPLETED (0.2.1) | 131 | 6 (0.2.1) |
+| [CR-CRU-139](CR-CRU-139-a-connection-is-configuration-too.md) | a connection is configuration too | feature | COMPLETED (0.3.0) | 131, 138 | 7 (0.3.0) |
 | [CR-CRU-140](CR-CRU-140-evidence-a-filer-can-cite.md) | evidence a filer can cite | hotfix | COMPLETED (0.2.2) | — | 7 (0.2.2) |
-| [CR-CRU-141](CR-CRU-141-a-ci-run-is-earned-by-what-changed.md) | a CI run is earned by what changed | fix | PENDING | 137 | 7 (0.3.0) |
+| [CR-CRU-141](CR-CRU-141-a-ci-run-is-earned-by-what-changed.md) | a CI run is earned by what changed | fix | VOID | 137 | 7 (0.3.0) |
 | [CR-CRU-142](CR-CRU-142-the-orchestrators-own-copy-resolves-its-own-package.md) | the orchestrator's own copy resolves its own package, not the install it just wrote | hotfix | COMPLETED (0.2.2) | — | 7 (0.2.2) |
 | [CR-CRU-143](CR-CRU-143-a-conditional-key-is-not-an-unexpected-one.md) | a conditional key is not an unexpected one | hotfix | COMPLETED (0.2.2) | 138 | 7 (0.2.2) |
+| [CR-CRU-144](CR-CRU-144-a-tier-is-claimed-not-measured.md) | a tier is claimed, never measured | fix | VOID | 111 | 7 (0.3.0) |
+| [CR-CRU-145](CR-CRU-145-one-gherkin-renderer-and-an-index.md) | one Gherkin renderer, and the BDD tab is its index | fix | COMPLETED (0.3.0) | 015 | 7 (0.3.0) |
+| [CR-CRU-146](CR-CRU-146-the-cycle-row-is-not-clickable-but-looks-it.md) | the history cycle row looks clickable and is not | fix | COMPLETED (0.3.0) | 020, 021, 018 | 7 (0.3.0) |
+| [CR-CRU-147](CR-CRU-147-a-voided-cr-is-not-queued-work.md) | a voided CR is not queued work, and its row says so | fix | COMPLETED (0.3.0) | 091, 078 | 7 (0.3.0) |
+| [CR-CRU-148](CR-CRU-148-the-phone-compile-pane-collapses-to-zero-height.md) | the phone compile pane collapses to zero height | fix | COMPLETED (0.3.0) | 018 | 7 (0.3.0) |
+| [CR-CRU-149](CR-CRU-149-dead-code-the-last-crs-left-behind.md) | dead code the last CRs left behind | chore | COMPLETED (0.3.0) | 145, 146, 147, 150 | 7 (0.3.0) |
+| [CR-CRU-150](CR-CRU-150-status-shows-the-work-in-flight.md) | `status` shows the work in flight, not the project's history | feature | COMPLETED (0.3.0) | 030, 035, 094 | 7 (0.3.0) |
+| [CR-CRU-154](CR-CRU-154-a-project-carries-its-own-metadata.md) | a project carries its own metadata | feature | COMPLETED (0.3.0) | 091, 130, 150 | 7 (0.3.0) |
+| [CR-CRU-155](CR-CRU-155-each-test-run-keeps-its-reports-to-itself.md) | each test run keeps its reports to itself | fix | COMPLETED (0.3.0) | — | 7 (0.3.0) |
+| [CR-CRU-156](CR-CRU-156-the-velocity-card-sits-below-vitals.md) | the Velocity card sits below Vitals | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-159](CR-CRU-159-a-heat-strip-click-brings-its-test-into-view.md) | a heat-strip click brings its test into view | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-163](CR-CRU-163-a-project-declares-the-gate-steps-it-never-runs.md) | a project declares which gate steps it never runs | feature | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-165](CR-CRU-165-a-plan-grows-only-by-fix-cycles-and-a-skip-is-a-recorded-failure.md) | a plan grows only by FIX cycles, and a skipped cycle is a recorded failure | feature | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-162](CR-CRU-162-a-gate-decision-is-recorded.md) | a gate decision is recorded, not lost in the tool's logs | feature | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-157](CR-CRU-157-the-agent-card-tells-the-truth-about-the-agent.md) | the agent card tells the truth about the agent | fix | PENDING | — | 7 (0.3.0) |
+| [CR-CRU-158](CR-CRU-158-a-runs-detail-stays-responsive-while-agents-run.md) | a run's detail stays responsive while agents run | fix | PENDING | 157 | 7 (0.3.0) |
+| [CR-CRU-161](CR-CRU-161-velocity-follows-the-flow-not-the-calendar.md) | velocity follows the flow, not the calendar | feature | PENDING | 158 | 7 (0.3.0) |
+| [CR-CRU-160](CR-CRU-160-the-burndown-fills-its-pane-and-draws-f16s-projection.md) | the burndown fills its pane and draws F16's projection | fix | PENDING | 161 | 7 (0.3.0) |
+| [CR-CRU-164](CR-CRU-164-a-releases-verification-runs-are-filed-under-it.md) | a release's verification runs are filed under the release | feature | PENDING | 157 | 7 (0.3.0) |
+| [CR-CRU-151](CR-CRU-151-a-run-says-which-stack-produced-it.md) | a run says which stack produced it, and the board keeps it | fix | PENDING | 112 | 8 (0.4.0) |
+| [CR-CRU-153](CR-CRU-153-the-arduino-stacks-compile-errors-are-decoded.md) | the arduino stack's compile errors are decoded | feature | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | PENDING | 151 | 8 (0.4.0) |
 
 ## Deferred — post-0.2.0
 
+- 2026-09-18 — *resolved:* the `test-targets.ts` wait-blindness became **CR-CRU-144**; the BDD
+  run-identity gap became a §S3 AC and shipped in CR-CRU-015 (cycle C3). Both entries deleted per
+  the register's own rule — memory holds only what the repo does not yet track.
 - 2026-09-16 — **six more retyped figures in `docs/RUNBOOK.md`, beyond the schema version CR-CRU-134
   fixed** (candidate patch CR, found by CR-CRU-134's §S3 census). Highest-value: the port `3849`
   (5 sites) and host `127.0.0.1` (6 sites) are both retyped from `src/server.ts:249,252`'s `??`

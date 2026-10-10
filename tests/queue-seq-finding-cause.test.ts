@@ -2,7 +2,8 @@
 //
 // ── The defect, in one sentence ────────────────────────────────────────────
 //
-// `defaultedSeqWarnings` (src/v2.ts) builds ONE hard-coded sentence — "seq was
+// `defaultedSeqWarnings` (since renamed `seqScaleWarnings` (src/v2.ts)) built
+// ONE hard-coded sentence — "seq was
 // defaulted for <crs> …" — for a trigger that fires on TWO different facts
 // (src/store.ts, `upsertQueueEntry`): `(moved || !scale) && <a sibling on the
 // other scale>`.

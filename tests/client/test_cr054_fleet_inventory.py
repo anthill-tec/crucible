@@ -1140,22 +1140,46 @@ _ALL_CLIENT_STATUS_REGISTRATIONS = {
 class Cr094LastClosedCrRenameInventoryTest(unittest.TestCase):
     """AC7 -- one renamed field, at one locus, advertised identically by all
     five clients, with the retired name present nowhere in the shipped fleet
-    source."""
+    source.
 
-    def test_the_shared_module_computes_the_field_under_its_new_name(self):
-        """The computation stays where it is (one locus the five clients
-        delegate to); only its name moves."""
+    "status reads open plans" §S2/AC7 AMENDMENT: this computation moved AGAIN, from "one
+    client-side locus" to "the server" -- `GET .../plans` now publishes
+    `lastClosedCr` itself (computed over ALL the project's plans, not just
+    the ones a client happened to fetch), so the client-side function is
+    DELETED outright, not kept as the one remaining locus. The test below
+    used to assert the OPPOSITE (that `clients/_crucible_axi.py` DEFINES
+    `last_closed_cr`) -- that pin is now the exact thing AC7 forbids, so it
+    is REWRITTEN here to assert the deletion instead of the (now retired)
+    rename target. `test_no_client_defines_the_renamed_computation_privately`
+    below already asserted "no client carries a private copy" and stays
+    correct unchanged: with the shared copy now gone too, the ONLY place
+    left that could define it is nowhere at all."""
+
+    def test_the_computation_is_deleted_client_side_the_server_publishes_it_now(self):
+        """§S2 -- 'the client function last_closed_cr is deleted,
+        and the one place the value is computed is the server.' Checked
+        across the shared module AND the standalone `crucible_axi/` install
+        package (AC7's own wording: 'defined nowhere in clients/ or
+        crucible_axi/')."""
         shared = _defined_function_names(AXI_MODULE_PATH)
-        self.assertIn(
+        self.assertNotIn(
             CR094_LAST_CLOSED_CR_FUNCTION, shared,
-            f"the shared module must define the computation under the name "
-            f"that states it; defined names lack "
-            f"{CR094_LAST_CLOSED_CR_FUNCTION!r}")
+            f"the shared module must NO LONGER define the computation -- "
+            f"the status open-plans change moves it to the server entirely; found it "
+            f"still defined in {AXI_MODULE_PATH}")
         self.assertNotIn(
             "last_run_cr", shared,
-            "the old function name must be GONE, not kept as a wrapper or an "
-            "alias -- a second name for one computation is how the fleet ends "
-            "up emitting both keys")
+            "the old (pre-rename) function name must also stay GONE")
+        crucible_axi_pkg_dir = REPO_ROOT / "crucible_axi"
+        offenders = {}
+        for py_path in sorted(crucible_axi_pkg_dir.glob("*.py")):
+            names = _defined_function_names(py_path)
+            if CR094_LAST_CLOSED_CR_FUNCTION in names:
+                offenders[str(py_path)] = names[CR094_LAST_CLOSED_CR_FUNCTION]
+        self.assertEqual(
+            offenders, {},
+            f"the standalone crucible_axi/ install package must not define "
+            f"the computation either -- AC7 names it explicitly: {offenders!r}")
 
     def test_no_client_defines_the_renamed_computation_privately(self):
         """Fleet discipline: the clients delegate, they do not each carry a
@@ -1166,6 +1190,30 @@ class Cr094LastClosedCrRenameInventoryTest(unittest.TestCase):
             offenders, [],
             f"the computation lives ONCE, in the shared module; no client may "
             f"fork it under the new name: {offenders!r}")
+
+    def test_cmd_status_takes_last_closed_cr_from_the_response_not_a_local_call(self):
+        """AC7 -- 'cmd_status takes lastClosedCr from the response.'
+        Read `cmd_status`'s own body: it must contain NO call to the retired
+        `last_closed_cr(...)` computation at all -- a source-level guarantee
+        that survives even if some OTHER function in the module happened to
+        keep the name (it must not, per the test above, but this pins the
+        call site too, independently)."""
+        tree = ast.parse(AXI_MODULE_PATH.read_text(), filename=str(AXI_MODULE_PATH))
+        cmd_status_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "cmd_status":
+                cmd_status_node = node
+                break
+        self.assertIsNotNone(
+            cmd_status_node,
+            f"{AXI_MODULE_PATH} must still define a top-level cmd_status")
+        calls = [n.func.id for n in ast.walk(cmd_status_node)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+        self.assertNotIn(
+            CR094_LAST_CLOSED_CR_FUNCTION, calls,
+            f"cmd_status must take lastClosedCr from the plans response "
+            f"(GET .../plans?status=open), never compute it via a local "
+            f"{CR094_LAST_CLOSED_CR_FUNCTION!r} call; calls seen: {calls!r}")
 
     def test_the_retired_spellings_survive_nowhere_in_the_shipped_fleet_source(self):
         """The clean break, across the shared module and all five clients --

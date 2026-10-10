@@ -103,7 +103,9 @@ def _run_main(module, argv):
     """Invoke `module.main()` with sys.argv patched → (code, stdout, stderr)."""
     out, err = io.StringIO(), io.StringIO()
     code = 0
-    with mock.patch.object(sys, "argv", ["client"] + argv), \
+    # os.environ is restored on exit: arduino's main() exports $AGENT_ID from --agent for its
+    # children, which would otherwise leak into every later test in this process.
+    with mock.patch.object(sys, "argv", ["client"] + argv), mock.patch.dict(os.environ), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             module.main()
@@ -125,7 +127,7 @@ def _proposal(label, waves=(), target_at=None):
     return row
 
 
-class _RoadmapVerbTestBase(unittest.TestCase):
+class _RoadmapVerbTestBase:
     """Drives ONE client's real `main()` in-process with `_post`/`_get`
     replaced by recording stubs — the fleet's established harness idiom
     (`test_queue_file_verb.py`), and exactly the "recording stub" AC20 asks
@@ -133,10 +135,11 @@ class _RoadmapVerbTestBase(unittest.TestCase):
 
     CLIENT = None
 
-    @classmethod
-    def setUpClass(cls):
-        if cls.CLIENT is None:
-            raise unittest.SkipTest("abstract base")
+    # A plain MIXIN, deliberately not a unittest.TestCase: only the five
+    # concrete per-client classes below inherit TestCase, so discovery never
+    # collects this abstract class. It used to be a TestCase whose setUpClass
+    # raised SkipTest("abstract base"), putting one permanent phantom
+    # `skipped` into every Python suite run.
 
     def setUp(self):
         self.module = _load_module(CLIENT_FILES[self.CLIENT],
@@ -510,8 +513,6 @@ class _AskingTests:
 
 
 class _EnvelopeContractTests:
-
-    SUCCESS_CALLS = None  # filled in below (argv, post_return)
 
     def _each_verb(self):
         return (
@@ -901,23 +902,23 @@ class _AllRoadmapVerbTests(_WireTests, _AskingTests, _EnvelopeContractTests,
     """Every mixin above, bound to one client by the five subclasses below."""
 
 
-class PythonRoadmapVerbTest(_AllRoadmapVerbTests):
+class PythonRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
     CLIENT = "python"
 
 
-class BunRoadmapVerbTest(_AllRoadmapVerbTests):
+class BunRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
     CLIENT = "bun"
 
 
-class RustRoadmapVerbTest(_AllRoadmapVerbTests):
+class RustRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
     CLIENT = "rust"
 
 
-class MvnRoadmapVerbTest(_AllRoadmapVerbTests):
+class MvnRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
     CLIENT = "mvn"
 
 
-class ArduinoRoadmapVerbTest(_AllRoadmapVerbTests):
+class ArduinoRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
     CLIENT = "arduino"
 
 
@@ -946,7 +947,7 @@ class RoadmapVerbsLandOnceTest(unittest.TestCase):
             f"missing {missing!r}")
 
     def test_each_client_delegator_is_a_thin_wrapper(self):
-        """The `queue-file` shape (`clients/python-crucible.py:1100-1104`):
+        """The `queue-file` shape (`cmd_queue_file` in `clients/python-crucible.py`):
         the client body is one `return _axi().<impl>(args, <project dir>,
         _ops())` call. Anything longer means logic leaked into a client."""
         offenders = {}

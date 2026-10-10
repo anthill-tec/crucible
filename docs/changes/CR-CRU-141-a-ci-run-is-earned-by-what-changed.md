@@ -1,7 +1,27 @@
 # CR-CRU-141 — a CI run is earned by what changed
 
-**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-137 · **Status** PENDING
+**Type** fix · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-137 · **Status** VOID — voided at gap
+analysis 2026-09-24 (user ruling)
 
+> **VOID (2026-09-24), not deferred.** The gap analysis measured the cost this CR exists to remove,
+> and it is not a cost:
+>
+> - **The minutes are free.** `anthill-tec/crucible` is **public**, and GitHub-hosted standard
+>   runners bill nothing for public repositories. A full run is 16.6 runner-minutes (run
+>   `35353919400`: `test-bun` 10.4, `test-python` 3.7, `test-e2e` 1.8, `build` 0.5, `pack-server`
+>   0.2) and about 10 minutes of wall-clock, at no charge. The spec's "`test-bun` alone is ~16
+>   minutes" was stale.
+> - **The motivating pattern has stopped.** 13 of the 17 `develop` pushes between 2026-09-16 and
+>   2026-09-18 were docs-only, because we pushed per commit. Since 2026-09-18 `develop` is pushed in
+>   batches: 62 commits sat unpushed at the time of this measurement.
+> - **What is left is machinery for nothing.** The two surviving constraints (no doc a test reads
+>   may be skipped; no half-skipped publish graph) leave only heavy designs, such as a second
+>   workflow with a derived docs-to-suite coupling, to save free minutes on pushes we no longer make.
+>
+> **Re-open only if** the repository goes private (minutes would then bill against the org's plan),
+> or per-commit pushing returns. The record below stays as written, because its measurement is what
+> stops the next author reaching for `paths-ignore: docs/**`.
+>
 > **Deferred out of hotfix 0.2.2 (user ruling 2026-09-17) after gap analysis measured the original
 > approach INERT.** The first draft proposed a trigger-level path condition. Its own safety rule —
 > and that rule was the best thing in it — makes it a no-op for every case it was filed for. The

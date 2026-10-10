@@ -2,10 +2,10 @@
 // alternative. C1 RED.
 //
 // The rule this CR lifts already ships one container down. `transitionCycle`
-// (src/store.ts:3280-3306) refuses a second active sibling with
+// (src/store.ts) refuses a second active sibling with
 // `code: "already-active"` and refuses activating ahead of a seq-earlier
-// pending sibling with `code: "out-of-order"`; `CycleTransitionError`
-// (src/store.ts:589-596) already names both codes. A WAVE is the same kind of
+// pending sibling with `code: "out-of-order"`; `PlanOpError`'s `code`
+// union (src/store.ts) already names both codes. A WAVE is the same kind of
 // object one level up, so this suite drives the SAME two codes out of the
 // plans POST — the write that opens work — and asserts no third code string
 // is invented for the wave scope.
@@ -14,13 +14,13 @@
 //
 // Every `src/` range in this header was written against the PRE-guard tree
 // and re-read at HEAD before it was rewritten. All four shifts are OURS:
-// §S1/§S2/§S3 inserted 31 lines at src/store.ts:603 and 8 at the top of
-// src/v2.ts, and §S1 lifted the in-flight rule into `Store.queueStatusOf`
-// ABOVE `deriveQueueStatus`.
-//   `transitionCycle`'s refusals   store.ts:3238-3264 -> :3269-3295
-//   `deriveQueueStatus`            store.ts:4098-4111 -> :4256-4262
-//   `handlePlanFile`               v2.ts:1367-1436    -> :1375-1460
-//   its dispatch in `handlePlansRoute`  v2.ts:2918-2928 -> :2941-2951
+// §S1/§S2/§S3 inserted 31 lines into src/store.ts (the `WaveScopeError`
+// block after `PlanOpError`) and 8 at the top of src/v2.ts, and §S1 lifted
+// the in-flight rule into `Store.queueStatusOf` ABOVE `deriveQueueStatus`.
+//   `transitionCycle`'s refusals   in src/store.ts
+//   `deriveQueueStatus`            in src/store.ts
+//   `handlePlanFile`               in src/v2.ts
+//   its dispatch in `handlePlansRoute`  in src/v2.ts
 // The CR that moves a file re-pins what cites it — in the files it authored
 // as well as in the one file a guard happens to watch. The snapshot below is
 // dated because it describes the tree at RED; its ranges now name the SAME
@@ -29,11 +29,11 @@
 // ── RE-PINNED AGAIN 2026-09-10 (CR-CRU-118 §S4b) ──────────────────────────
 //
 // CR-CRU-118 §S4a inserted 11 comment lines above `recordReleaseProposal`
-// (src/store.ts:2218-2228), shifting every range BELOW it in that file by +11.
+// (in src/store.ts), shifting every range BELOW it in that file by +11.
 // Re-read at HEAD; the constructs themselves did not move:
-//   `transitionCycle`'s refusals   store.ts:3269-3295 -> :3280-3306
-//   `deriveQueueStatus`            store.ts:4256-4262 -> :4267-4273
-//   `Store.queueStatusOf`          store.ts:4270-4292 -> :4281-4303
+//   `transitionCycle`'s refusals   in src/store.ts
+//   `deriveQueueStatus`            in src/store.ts
+//   `Store.queueStatusOf`          in src/store.ts
 // The `src/v2.ts` ranges above sit outside that hunk and are left as they
 // stand. Same rule as the block above: the CR that moves a file re-pins what
 // cites it, in the files it authored as well as in the one a guard watches.
@@ -45,9 +45,9 @@
 // nothing caught it): CR-CRU-119's seq-cause split, then CR-CRU-121's 55-line
 // composed plan-file/queue write. Re-read at HEAD and measured at both ends;
 // the constructs themselves did not move:
-//   `deriveQueueStatus`            store.ts:4267-4273 -> :4349-4355
-//   `Store.queueStatusOf`          store.ts:4281-4303 -> :4363-4385
-//   the in-flight rule line        store.ts:4290      -> :4372
+//   `deriveQueueStatus`            in src/store.ts
+//   `Store.queueStatusOf`          in src/store.ts
+//   the in-flight rule line        in `Store.queueStatusOf`
 // Only the LIVE citations below are re-pinned. The `src/v2.ts` ranges in the
 // dated RED snapshot that follows are a historical record of the tree at RED,
 // not live navigation, and are left as they stand — the same call CR-CRU-118
@@ -55,8 +55,8 @@
 //
 // ── WHAT WAS BROKEN AT RED (read 2026-09-09, before §S2's guard) ──────────
 //
-// `handlePlanFile` (src/v2.ts:1375-1460), which `handlePlansRoute` dispatches
-// at :2941-2951, validates `cr`, `cycles`, `title`, `orchestrator`, `wave` and
+// `handlePlanFile` (src/v2.ts), which `handlePlansRoute` dispatches,
+// validates `cr`, `cycles`, `title`, `orchestrator`, `wave` and
 // `track` and then calls `store.filePlan` — it never read the queue and asked
 // nothing about waves. So every refusal asserted below answered
 // `201 {ok:true}`, which is exactly the RED signal: the guard did not exist.
@@ -64,9 +64,9 @@
 // ── THE ONE SOURCE OF ACTIVENESS ──────────────────────────────────────────
 //
 // A wave is ACTIVE while it holds a CR the queue derives as `IN_PROGRESS`.
-// That derivation is `deriveQueueStatus` (src/store.ts:4349-4355), which
-// since §S1 delegates to `Store.queueStatusOf` (:4363-4385) where the rule is
-// spelled once: `plans.find((plan) => plan.status === "open")` (:4372).
+// That derivation is `deriveQueueStatus` (src/store.ts), which
+// since §S1 delegates to `Store.queueStatusOf` where the rule is
+// spelled once: `plans.find((plan) => plan.status === "open")`.
 // `plan.status` has THREE values — `open`, `closed`, `aborted` — and only
 // `open` confers activeness, which is why the aborted-plan fixture below is a
 // fixture and not a footnote: the live board carries 6 aborted plans across
@@ -270,24 +270,29 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
     const res = await send("POST", `/api/v2/projects/${key}/plans/${planId}/abort`, {
       agentId: ORCH,
       userApproved: true,
+      reason: "the spec no longer fits this plan",
+      cause: "spec-design",
+      specRef: "CR-CRU-165 \u00a7S2b",
     });
     expect(res.status).toBe(200);
     expect(res.body.plan!.status).toBe("aborted");
   }
 
   /** Drive a cr to `COMPLETED`: file a plan, take every cycle to a terminal
-   *  state (`pending → skipped`, the cheapest legal edge), then close WITH a
+   *  state (`pending → active → done`), then close WITH a
    *  merge — `deriveQueueStatus` reads COMPLETED off exactly that pair. */
   async function land(key: string, cr: string, wave?: string): Promise<void> {
     const plan = await openPlan(key, cr, wave);
     const planId = plan.planId!;
     for (const cycle of plan.cycles!) {
-      const moved = await send(
-        "PATCH",
-        `/api/v2/projects/${key}/plans/${planId}/cycles/${cycle.id}`,
-        { agentId: ORCH, status: "skipped" },
-      );
-      expect(moved.status).toBe(200);
+      for (const status of ["active", "done"]) {
+        const moved = await send(
+          "PATCH",
+          `/api/v2/projects/${key}/plans/${planId}/cycles/${cycle.id}`,
+          { agentId: ORCH, status },
+        );
+        expect(moved.status).toBe(200);
+      }
     }
     const closed = await send("PATCH", `/api/v2/projects/${key}/plans/${planId}`, {
       agentId: ORCH,
@@ -480,9 +485,7 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
         // (c) BOTH conditions at once — a cr inserted into an EARLIER wave
         // after wave 6's work opened. §S1's precedence is asserted on this
         // very fixture below: `already-active` wins, the order
-        // `transitionCycle` uses (src/store.ts:3280-3306; re-pinned
-        // 2026-09-10 from :3269-3295 and 2026-09-09 from :3238-3264, the
-        // header records why).
+        // `transitionCycle` uses (`transitionCycle` in src/store.ts).
         const both = await seed("cru116-census-both");
         await queue(both, [
           { cr: SIX_OPEN, wave: "6", dependsOn: [] },
@@ -616,7 +619,7 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
         const key = await seed("cru116-s2-waveless-never-blocks");
         const entries = await queue(key, [
           // `wave: ""` is the wire's own way of declaring NO wave
-          // (src/types.ts:392). It is PENDING and unlanded, and it sorts ahead
+          // (the `wave` field of `QueueEntry` in src/types.ts). It is PENDING and unlanded, and it sorts ahead
           // of every numbered wave — so a guard that treats it as a container
           // would report it as wave 0's blocker.
           { cr: LOOSE, title: "belongs to no wave", wave: "", dependsOn: [] },

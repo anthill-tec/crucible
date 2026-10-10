@@ -9,11 +9,11 @@
 // round-trip against the real server).
 //
 // Current code facts (verified against public/app.js on this branch):
-//   - runFeed() (app.js ~L749) only knows 4 timelineRows kinds (marker /
+//   - runFeed() (`runFeed` in app.js) only knows 4 timelineRows kinds (marker /
 //     cycle-span-open / declared-marker / card) — a gate/milestone event
 //     falls through `else rows.push(EventCard(row.event))`, so it renders as
 //     an ordinary 🧪/🛠 RUN CARD today (RatioPill and all), not a gate-card.
-//   - RunDetailBody's kind dispatch (app.js ~L2748) is
+//   - RunDetailBody's kind dispatch (`RunDetailBody` in app.js) is
 //     `d.kind === "compile" ? CompileBody(d) : TestBody(d)` — a gate event
 //     (kind "gate") falls to TestBody, which has no gate-shaped rendering.
 //   - There is no home-vs-workspace `surface` distinction anywhere in

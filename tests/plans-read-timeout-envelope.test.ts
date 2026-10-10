@@ -26,6 +26,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const CLIENT = join(import.meta.dir, "..", "clients", "python-crucible.py");
 
@@ -126,11 +127,15 @@ async function runVerb(args: string[], crucibleUrl: string, cwd: string): Promis
   for (const name of Object.keys(env)) {
     if (name.startsWith("WORKFLOW_")) delete env[name];
   }
+  // CR-CRU-139 §S2 — the board is DECLARED in the project file this drive
+  // resolves, never exported; the interlock refuses a spawn that would reach
+  // any other board.
+  declareClientBoard(crucibleUrl, cwd, projectDirFromArgs(args));
   const started = Date.now();
   const proc = Bun.spawn({
     cmd: ["uv", "run", CLIENT, ...args],
     cwd,
-    env: { ...env, CRUCIBLE_URL: crucibleUrl },
+    env: { ...env },
     stdout: "pipe",
     stderr: "pipe",
   });

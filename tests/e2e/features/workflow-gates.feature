@@ -11,16 +11,24 @@ Feature: CR-CRU-013 gate + milestone events — E2E round trip (AC150)
   server, house style (Gherkin + playwright-bdd, not a bespoke .e2e.ts file
   — see tests/e2e/features/workflow.feature for the precedent this mirrors).
 
-  This feature sorts alphabetically AFTER shell-storyboard.feature
-  ("workflow-gates" > "shell-storyboard"), so its F1 empty-DB precondition
-  already holds by the time this scenario seeds data into the shared
-  server/db instance (same discipline as workflow.feature's own header
-  note). Every project/cr name below is namespaced "GT " / "CR-GT-…" to stay
+  Final step RE-PINNED (approved by the orchestrator — user rulings
+  2026-10-07/08): a SEALED gate at the wave/release boundary no longer
+  populates a Workflow-tab gate pane — that widget is retired (a sealed gate
+  now belongs to History, not Now). With every plan closed and nothing
+  running, Now reads exactly "Nothing running → Roadmap" instead.
+
+  This file's POSITION governs nothing: shell-storyboard.feature's F1 states
+  its empty-DB precondition with its own `@empty-db` tag, in the
+  `chromium-empty-db` project every other project depends on (see
+  playwright.config.ts's ordering comment).
+  Every project/cr name below is namespaced "GT " / "CR-GT-…" to stay
   clear of the other features sharing that instance. Results are ingested
   with tier "e2e" by the orchestrator's ingest step, not by this suite.
 
-  Scenario: AC150 filing a plan, posting a gap-analysis milestone, closing its cycle + the plan, then ingesting a passed gate renders the workspace milestone entry + boundary gate card, the home compact gate entry with zero milestones, the gated wave header, and a populated Workflow-tab gate pane
+  Scenario: AC150 filing a plan, posting a gap-analysis milestone, closing its cycle + the plan, then ingesting a passed gate renders the workspace milestone entry + boundary gate card, the home compact gate entry with zero milestones, the gated wave header, and the Workflow tab mounts no gate pane for it
     Given a project named "GT Wave Project" is registered
+    And an orchestrator "gt-orch-1" is registered on that project
+    And a release "0.173.637" is proposed for that project
     And a cycle plan is filed for cr "CR-GT-1" with a cycle labelled "c1 red-green" in wave "5"
     And cycle 1 of that plan is activated
     And a gap-analysis milestone "CR-GT-1 gap-analysis" is posted for that cr in wave "5"
@@ -33,7 +41,7 @@ Feature: CR-CRU-013 gate + milestone events — E2E round trip (AC150)
     And the workspace Runs pane shows a gate card with outcome "passed" and pushed commit "gtaabbc"
     When I click the "Workflow" workspace tab
     Then the wave header for wave "5" reads "gated"
-    And the Workflow tab's gate pane is populated with the outcome banner and at least one step row
+    And the Workflow tab mounts no gate pane for the sealed gate, and reads exactly "Nothing running → Roadmap"
     When I open the home page
     Then the home timeline shows a compact gate entry with outcome "passed" and pushed commit "gtaabbc"
     And the home timeline shows zero milestone entries

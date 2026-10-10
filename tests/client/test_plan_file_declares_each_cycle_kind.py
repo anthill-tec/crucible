@@ -1,7 +1,7 @@
 """CR-CRU-127 — a filed cycle declares its kind.
 
 `plan-file` cannot say what KIND a cycle is, so every cycle it files is stored
-`red-green` (`parseCycleInput`'s default, `src/v2.ts:1368-1369`). The defect
+`red-green` (the omitted-kind default in `parseCycleInput` in `src/v2.ts`). The defect
 demonstrated itself while this CR was being filed: plan 136's cycle 442 is the
 VERIFY cycle and is stored `red-green`, because `cmd_plan_file` hard-codes
 `"cycles": [{"label": label} for label in labels]` (`clients/_crucible_axi.py`)
@@ -51,7 +51,7 @@ FINDINGS recorded by RED, not guessed around:
   F1. §S6's regression AC says
       `test_plan_file_help_suggests_the_cycle_activate_placeholder_template`
       passes BYTE-UNCHANGED. It cannot: that test files with `--cycles "a,b"`
-      (`test_bun_crucible_axi_conventions.py:508`), the exact form §S4a now
+      (in `test_bun_crucible_axi_conventions.py`), the exact form §S4a now
       REFUSES. The two ACs were written in the same amendment and contradict.
       Resolved by §S5's own rule — the INVOCATION is migrated, the ASSERTION
       (`cycle-activate <id>` in a successful filing's `help[]`) is untouched —
@@ -126,7 +126,7 @@ LEGACY_FLAG = "--cycles"
 # help that failed to print can never read as "the flag is simply absent".
 ANCHOR_FLAG = "--cr"
 
-# `CYCLE_KINDS`, src/v2.ts:1337 — the server's vocabulary, which §S1 keeps OUT
+# `CYCLE_KINDS` (src/v2.ts) — the server's vocabulary, which §S1 keeps OUT
 # of the fleet (no `choices=`) and §S6 therefore requires the help to teach.
 CYCLE_KINDS = ("red-green", "verify", "fix")
 
@@ -516,9 +516,10 @@ class SuggestedInvocationTemplatesTeachTheMandatedFormTest(_CycleKindWireTestBas
     """§S6/AC6 (gap analysis DRIFT-1) — the template exists TWICE, so repairing
     either alone is the half-migration §S5 exists to prevent:
 
-      1. `CYCLE_FLAG_TEMPLATE` (`clients/_crucible_axi.py:1241-1242`), consumed
+      1. `CYCLE_FLAG_TEMPLATE` (`clients/_crucible_axi.py`), consumed
          by three refusal `help[]` lists;
-      2. `_next_start_help`'s own hand-built step string (`:1855-1856`) — the
+      2. `_next_start_help`'s own hand-built step string (since moved to the
+         server: `nextHints` in `src/hints.ts`, its `start` builder) — the
          literal command an orchestrator copies to START a CR. It is what this
          board handed the orchestrator for CR-CRU-127 itself.
 
@@ -591,43 +592,11 @@ class SuggestedInvocationTemplatesTeachTheMandatedFormTest(_CycleKindWireTestBas
             f"`{REPEATABLE_FLAG}`/`{KIND_FLAG}` pair teaches a one-cycle plan; "
             f"got {cycles!r}")
 
-    def test_the_next_start_template_files_a_plan_under_the_mandate(self):
-        steps = AXI._next_start_help({"cr": self.CR, "wave": self.WAVE})
-        self.assertTrue(
-            steps,
-            "`next`'s start help must be a non-empty help[] — an empty one "
-            "makes every rule here vacuous")
-        cycles = self._assert_template_files_kinded_cycles(
-            steps[0], source="_next_start_help")
-        self.assertGreaterEqual(
-            len(cycles), 2,
-            f"the START template teaches the shape of a whole plan; got "
-            f"{cycles!r}")
-
-    def test_both_templates_teach_the_same_form(self):
-        """DRIFT-1's actual finding: the template exists twice. Two templates
-        that both pass the mandate but teach DIFFERENT invocations is the
-        drift a shared constant exists to prevent — and the duplicate is
-        hand-built, so nothing structural stops it."""
-        start = AXI._next_start_help({"cr": self.CR, "wave": self.WAVE})[0]
-        for flag in (REPEATABLE_FLAG, KIND_FLAG):
-            with self.subTest(flag=flag):
-                shared_count = shlex.split(AXI.CYCLE_FLAG_TEMPLATE).count(flag)
-                # NON-VACUITY: two templates that both spell a flag ZERO times
-                # agree perfectly and teach nothing. The mandated form carries
-                # a `--cycle`/`--cycle-kind` PAIR per cycle, at least twice.
-                self.assertGreaterEqual(
-                    shared_count, 2,
-                    f"the mandated form repeats `{flag}` once per cycle, so "
-                    f"both templates must spell it at least twice; "
-                    f"CYCLE_FLAG_TEMPLATE={AXI.CYCLE_FLAG_TEMPLATE!r}")
-                self.assertEqual(
-                    shared_count,
-                    shlex.split(start).count(flag),
-                    f"both suggested-invocation templates must teach the same "
-                    f"form; `{flag}` appears a different number of times in "
-                    f"CYCLE_FLAG_TEMPLATE={AXI.CYCLE_FLAG_TEMPLATE!r} and in "
-                    f"_next_start_help={start!r}")
+    # CR-CRU-098 C3 — `test_the_next_start_template_files_a_plan_under_the_mandate`
+    # and `test_both_templates_teach_the_same_form` were deleted here: they called
+    # `_next_start_help`, which AC10 removes from the client. Both are KEPT
+    # (adapted) in tests/client/test_cr098_next_start_template_survives_the_move.py
+    # (docs/changes/CR-CRU-098-test-classification.md).
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -738,7 +707,7 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
         decision rather than an oversight — and it is the test that fails the
         day someone "finishes the job" by tightening the route, which would
         silently retire CR-CRU-124 §S4/AC3 through the SHARED `parseCycleInput`
-        (`src/v2.ts:1359`, also called by `handleCycleAppend` at `:1551`).
+        (`src/v2.ts`, also called by `handleCycleAppend`).
 
         The residue is recorded in the spec's non-goals: anything that is not
         one of the five clients can still file a kindless cycle."""
@@ -755,7 +724,7 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
         pairs = self._ordered_pairs(self._plan_for(self.PERMISSIVE_CR))
         self.assertEqual(
             pairs, [("a cycle carrying no kind", "red-green")],
-            f"the route's own default (`parseCycleInput`, src/v2.ts:1368-1369) "
+            f"the route's own default (`parseCycleInput` in src/v2.ts) "
             f"must still apply and still be `red-green`; got {pairs!r}")
 
 

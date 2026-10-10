@@ -6,9 +6,9 @@
 // C1 made every server limit resolve from a `crucible.toml` read at the point
 // of use, and deliberately left three overrides in front of that file:
 //
-//   src/store.ts:747   Number(process.env.CRUCIBLE_DEFAULT_RETENTION)
-//   src/store.ts:843   Number(process.env.CRUCIBLE_RUN_ABANDON_MS)
-//   src/v2.ts:371      Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "")
+//   `defaultRetention` (src/store.ts)   Number(process.env.CRUCIBLE_DEFAULT_RETENTION)
+//   `runAbandonAfterMs` (src/store.ts)  Number(process.env.CRUCIBLE_RUN_ABANDON_MS)
+//   `projectInactiveMs` (src/v2.ts)     Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "")
 //
 // They are retired here. The reason is the CR's own: a limit read from the
 // environment is a limit with no `description`, no `recommended`, no `min` and
@@ -61,6 +61,7 @@ import { retentionDisclosure } from "../src/server.ts";
 import { serverConfigPath, shippedLimits } from "../src/limits.ts";
 import {
   BOOTSTRAP_ENV,
+  RETIRED_CONNECTION_ENV,
   RETIRED_LIMIT_ENV,
   activeFlags,
   boot,
@@ -110,7 +111,8 @@ function stillSet(name: string, raw: string): void {
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // RED, all three. Today each resolver reads its variable FIRST and returns it
-// whenever it is finite and positive (src/store.ts:747, :843, src/v2.ts:371),
+// whenever it is finite and positive (`defaultRetention` and
+// `runAbandonAfterMs` in src/store.ts, `projectInactiveMs` in src/v2.ts),
 // so each test below observes the OVERRIDE's number at the enforcement site
 // where the FILE's is asserted.
 //
@@ -165,7 +167,8 @@ describe("CR-CRU-131 §S1b — $CRUCIBLE_RUN_ABANDON_MS no longer decides when t
     const store = Store.open(":memory:");
     // The horizon is the LONGER of the two, so the agent cannot tombstone at
     // the instant swept — `agent died` is checked before the deadline is
-    // (src/store.ts:3745) and would settle the run for the wrong reason.
+    // (`sweepOpenRuns` in src/store.ts) and would settle the run for the
+    // wrong reason.
     const key = projectOutlivingHorizon(store, ignored, "abandon-override-subject");
     const run = store.startRun(key, "abandon-override-agent");
 
@@ -290,8 +293,8 @@ describe("CR-CRU-131 §S1b — with no variable AND no file, retention is still 
     expect(eventCount(store, key)).toBe(written.length);
 
     // And the SUFFICIENT half, because a fixture smaller than the
-    // recommendation would survive a cap too: `retentionDisclosure` returns
-    // `null` the moment ANY cap resolves (src/server.ts:321), so a line here
+    // recommendation would survive a cap too: `retentionDisclosure`
+    // (src/server.ts) returns `null` the moment ANY cap resolves, so a line here
     // is the observable form of "no cap resolves at all".
     const disclosure = retentionDisclosure(store);
     expect(disclosure).not.toBeNull();
@@ -303,7 +306,7 @@ describe("CR-CRU-131 §S1b — with no variable AND no file, retention is still 
 // §S1b — the advice stops naming a lever that no longer exists
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// RED. `retentionDisclosure()` (src/server.ts:325, :327) currently tells an
+// RED. `retentionDisclosure()` in src/server.ts currently tells an
 // operator to "Set $CRUCIBLE_DEFAULT_RETENTION to bound every project". After
 // this cycle that instruction is unfollowable, and unfollowable advice on the
 // boot banner is worse than none: it sends an operator to a lever, they pull
@@ -339,18 +342,24 @@ describe("CR-CRU-131 §S1b — the uncapped-retention disclosure names the FILE 
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // ONE scan, both stacks: `src/` is the server's, `clients/` is the clients',
-// `public/` is what a browser is served. Prose counts as well as code, and
-// deliberately: `clients/bun-crucible.py:1010` is not a comment, it is text a
-// CLIENT EMITS to a user — it read "older than CRUCIBLE_RUN_ABANDON_MS" — and
-// src/server.ts:303 is a comment that would go on teaching the next author a
-// mechanism that no longer exists. Neither may survive.
+// `public/` is what a browser is served, `bin/` is what an installed package
+// puts on an operator's PATH — a launcher's own header is the first thing a
+// reader of `crucible-server` meets, so a retired knob presented there as live
+// configuration outranks every document that says otherwise.
+// Prose counts as well as code, and
+// deliberately: the warning `_run_left_open_warning` (clients/bun-crucible.py)
+// builds is not a comment, it is text a CLIENT EMITS to a user — it read
+// "older than CRUCIBLE_RUN_ABANDON_MS" — and the doc comment on
+// `retentionDisclosure` in src/server.ts is a comment that would go on
+// teaching the next author a mechanism that no longer exists. Neither may
+// survive.
 //
 // `docs/` is NOT scanned, and that is the distinction: a CR, the PRD and the
 // RUNBOOK must be free to RECORD that these variables existed and were
 // retired. An operator who learned one from the source has to be able to find
 // out it is gone.
 
-const SHIPPED_TREES = ["src", "clients", "public"];
+const SHIPPED_TREES = ["src", "clients", "public", "bin"];
 const SCANNED_EXTS = [".ts", ".js", ".mjs", ".py", ".html", ".css"];
 
 interface Hit {
@@ -375,7 +384,7 @@ function hitsFor(names: readonly string[], corpus: Map<string, string>): Hit[] {
 }
 
 describe("CR-CRU-131 §S1b — no retired limit variable is named in the shipped tree", () => {
-  test("neither src/, clients/ nor public/ still names one, in code or in the prose it emits", () => {
+  test("no shipped tree — src/, clients/, public/, bin/ — still names one, in code or in the prose it emits", () => {
     const corpus = new Map(
       SHIPPED_TREES.flatMap((dir) => listFiles(dir, SCANNED_EXTS)).map((file) => [
         relative(REPO_ROOT, file),
@@ -417,5 +426,99 @@ describe("CR-CRU-131 §S1b — no retired limit variable is named in the shipped
       );
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-139 §S4 — the retirement vocabulary is MEASURED against the source
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// `BOOTSTRAP_ENV` and the two retirement lists are the vocabulary every
+// documentation guard in this repo is driven from: the RUNBOOK must record a
+// retired name as retired, and must keep documenting a bootstrap name as live
+// configuration. A wrong entry therefore does not merely mislabel a constant —
+// it makes a guard enforce a falsehood, which is how the RUNBOOK came to
+// document a listener knob for two cycles after the listener stopped reading
+// one.
+//
+// So membership is not taken on the list's word. It is decided by whether the
+// SHIPPED CODE actually reads the variable: a bootstrap name must be read
+// somewhere, and a retired connection name must be read nowhere. The two
+// halves share one instrument, so the positive half is the negative half's
+// non-vacuity control.
+
+/**
+ * The shapes a READ of `name` takes in this repo's two stacks — an actual
+ * lookup, never a mention.
+ *
+ * Prose that RECORDS the retirement (`$CRUCIBLE_PORT`, `` `CRUCIBLE_HOST` ``)
+ * carries none of these shapes, which is the point: the connection retirement
+ * is explained where it used to happen (the doc comment on
+ * `resolveListener` in `src/server.ts`), and an
+ * explanation must not read as the thing it explains.
+ */
+function readsOf(name: string, text: string): string[] {
+  const shapes = [
+    // TypeScript / JavaScript: `process.env.NAME`, `Bun.env["NAME"]`,
+    // `env.NAME` (the injectable `env` every resolver in src/ takes).
+    new RegExp(`(?:process\\.env|Bun\\.env|\\benv)\\s*(?:\\.${name}\\b|\\[\\s*["'\`]${name}["'\`]\\s*\\])`),
+    // Python: `os.environ.get("NAME")`, `env["NAME"]`, `env.get("NAME")`.
+    new RegExp(`(?:os\\.environ|\\benv)\\s*(?:\\.get\\(\\s*["']${name}["']|\\[\\s*["']${name}["']\\s*\\])`),
+    // Python membership, the shape `_project_key` in clients/bun-crucible.py
+    // once used to check its `.env` before reading it.
+    new RegExp(`["']${name}["']\\s+(?:not\\s+)?in\\s+\\w*env\\w*`),
+  ];
+  const hits: string[] = [];
+  text.split("\n").forEach((line, index) => {
+    if (shapes.some((shape) => shape.test(line))) hits.push(`${String(index + 1)}: ${line.trim()}`);
+  });
+  return hits;
+}
+
+describe("CR-CRU-139 §S4 — a name is bootstrap or retired by what the code READS, not by what a list says", () => {
+  test("every BOOTSTRAP_ENV name is genuinely read in the shipped tree, and no retired connection variable is read anywhere", () => {
+    const corpus = new Map(
+      SHIPPED_TREES.flatMap((dir) => listFiles(dir, SCANNED_EXTS)).map((file) => [
+        relative(REPO_ROOT, file),
+        readFileSync(file, "utf8"),
+      ]),
+    );
+    expect(corpus.size).toBeGreaterThan(20);
+
+    const readsIn = (name: string): string[] =>
+      [...corpus].flatMap(([file, text]) => readsOf(name, text).map((hit) => `${file}:${hit}`));
+
+    // POSITIVE, and the instrument's control: a variable that really is
+    // bootstrap is READ, so a green negative below is this scan working rather
+    // than a regex that matches nothing. `CRUCIBLE_DB` is read in
+    // `resolveStore` (src/server.ts); `CRUCIBLE_PROJECT_KEY` in `_load_env`
+    // (clients/arduino-crucible.py).
+    const unread = BOOTSTRAP_ENV.filter((name) => readsIn(name).length === 0);
+    expect(
+      unread,
+      `BOOTSTRAP_ENV claims ${JSON.stringify(unread)} answers "where am I / who am I" before a ` +
+        `configuration file can be found, but nothing in the shipped trees READS it. A ` +
+        `list that names a dead variable as live is what every RUNBOOK guard is then driven ` +
+        `from, so the documentation goes on teaching a knob that does nothing.`,
+    ).toEqual([]);
+
+    // NEGATIVE — the connection settings come from a `crucible.toml` and from
+    // nowhere else.
+    const stillRead = RETIRED_CONNECTION_ENV.flatMap((name) =>
+      readsIn(name).map((hit) => `${name} @ ${hit}`),
+    );
+    expect(stillRead).toEqual([]);
+
+    // The vocabulary's own invariant, mirroring the disjointness the limit
+    // retirement already pins: "retire one" can never quietly mean "retire a
+    // variable another list calls live", or the two guards driven from them
+    // demand opposite things about the same line of the RUNBOOK.
+    const claimedBoth = RETIRED_CONNECTION_ENV.filter((name) => BOOTSTRAP_ENV.includes(name));
+    expect(
+      claimedBoth,
+      `${JSON.stringify(claimedBoth)} is named by BOOTSTRAP_ENV and by RETIRED_CONNECTION_ENV at ` +
+        `once — one guard will require the RUNBOOK to document it as live configuration while ` +
+        `another requires it to be recorded as retired.`,
+    ).toEqual([]);
   });
 });

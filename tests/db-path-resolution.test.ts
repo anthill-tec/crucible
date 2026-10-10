@@ -18,7 +18,7 @@
 //
 // and wire startServer() to call it (reading CRUCIBLE_DB from process.env the
 // same way CRUCIBLE_PORT/CRUCIBLE_HOST already are) instead of the hardcoded
-// `opts?.dbPath ?? "data/crucible.db"` default at src/server.ts:147.
+// `opts?.dbPath ?? "data/crucible.db"` default in `startServer` (src/server.ts).
 //
 // NOTE (verified while writing this suite): Bun's os.homedir() reads HOME
 // ONCE at process startup and does NOT observe a runtime `process.env.HOME`

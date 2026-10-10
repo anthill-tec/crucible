@@ -78,18 +78,20 @@ code, and every drive in this file is built from them:
 
   client   compile ingest, and whether it is a FALLBACK from the tier verb
   bun      NOT from `regression` — that verb's no-JUnit exit ingests NOTHING
-           (`bun-crucible.py:1370`, "no JUnit XML, nothing to ingest"). bun's
-           compile fallback lives on the untiered `test` verb (`:1231`), so
+           (`cmd_regression` in `bun-crucible.py`, "no JUnit XML, nothing to
+           ingest"). bun's compile fallback lives on the untiered `test`
+           verb (`cmd_test`'s no-XML branch), so
            this file drives THAT, and asserts it states `compile`.
   python   YES — `_regression_run`'s no-XML branch ingests the capture to
-           /api/v2/runs/compile (`python-crucible.py:824`).
+           /api/v2/runs/compile (`_regression_run` in `python-crucible.py`).
   mvn      YES — `_run_surefire_tier` → `_compile_fallback` →
            `_emit_compile_fallback_axi` (which already carries `stage:
            "compile"`; the ruled `tier` field is its machine-readable twin).
   rust     YES — `cmd_test`'s no-junit branch runs `cargo check` and ingests
-           rustc stderr (`rust-crucible.py:1136`).
+           rustc stderr (`cmd_test` in `rust-crucible.py`).
   arduino  NO compile fallback from a test run AT ALL: no reports → an
-           `ok:false` no-report envelope and no ingest (`:538`). arduino's
+           `ok:false` no-report envelope and no ingest
+           (`_run_native_tests_body` in `arduino-crucible.py`). arduino's
            compile ingest is a first-class verb (`compile`/`check`, the
            arduino-cli target build), so this file drives THAT — AC13a's rule
            is fleet-wide and the envelope must state `compile` there too.
@@ -811,7 +813,8 @@ class ArduinoIngestedTierEnvelopeTest(_EnvelopeTierProbe,
     THE COMPILE ROW IS DRIVEN ON `compile`, NOT ON THE TIER VERB, and this
     client has no compile FALLBACK at all: a native run that produces no
     reports emits an `ok:false` no-report envelope and ingests nothing
-    (`arduino-crucible.py:538`). Its compile ingest is a first-class verb — the
+    (`_run_native_tests_body` in `arduino-crucible.py`). Its compile ingest is a
+    first-class verb — the
     `arduino-cli` target build — and AC13a's rule is fleet-wide, so that is
     where the compile statement is asserted. See ESCALATION 3."""
 

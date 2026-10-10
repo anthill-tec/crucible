@@ -119,9 +119,20 @@ develop's own line numbers, not invented from this branch's.
       its two `install.py` siblings were ALREADY stale before this CR — CR-CRU-070 RED-phase
       archaeology pointing at unrelated lines — so this CR invalidated no correct citation, but the
       AC is only tickable once they name what they claim.)
-- [ ] The back-merge is where develop's three `cli.py:355-362` citations get re-checked — recorded
+- [x] The back-merge is where develop's three `cli.py:355-362` citations get re-checked — recorded
       here as a close-out obligation of `git flow hotfix finish`, against develop's own line
       numbers, never numbers carried over from this branch.
+      DISCHARGED at the back-merge (`4b531d8`), on develop, with develop's own numbers: this CR's
+      two `bind_project_dir` insertions both land ABOVE the block (`cmd_install` +8, `cmd_uninstall`
+      +5), so the cited range shifts by exactly +13 and `cli.py:355-362` becomes `cli.py:368-375` —
+      still the same CR-CRU-139 §S1b `--host`/`--port` listener write, from its comment header
+      through the `install.write_listener_settings(host=args.host, port=args.port)` call. All three
+      citations are re-pointed: `tests/cr009-release-bundle.test.ts:153` and `:1602` (the second is
+      at `:1602`, not the `:1492` the obligation's reader expected — a reminder that the citing
+      line drifts too, and that the check is by CONTENT, not by remembered coordinates) and
+      `tests/docs-runbook-documents-every-limit.test.ts:909`. The sibling
+      `crucible_axi/install.py:559` in the latter two is unshifted and was re-read, not assumed:
+      the merge changes exactly one file under `crucible_axi/`, and it is `cli.py`.
 
 ## Estimated size
 

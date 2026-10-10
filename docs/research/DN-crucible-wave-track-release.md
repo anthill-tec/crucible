@@ -193,8 +193,9 @@ TRACK  scheduling   → which lane executes, in what order → answers "what do 
 
 ### D2 — what shipped instead: a scheduling attribute deciding a membership question
 
-This DN states a lane is a `(release, wave, track)` slice. The shipped resolver
-(`clients/_crucible_axi.py:1821`, `resolve_next`) filters by **track only**, and then answers the
+This DN states a lane is a `(release, wave, track)` slice. The shipped resolver (the client's
+`resolve_next`, then in the shared client module `clients/_crucible_axi.py` — moved to the server
+as `resolveNext` in `src/next.ts` by CR-CRU-098) filters by **track only**, and then answers the
 wave question from that track-filtered set:
 
 ```python
@@ -202,7 +203,7 @@ lane = entries if wanted is None else [
     e for e in entries if canonical_track(e.get("track")) == wanted]   # a SCHEDULING filter
 ...
 if not actionable:
-    return (True, 0, _drained_answer("wave-complete", lane), warnings)  # a MEMBERSHIP claim  :1848
+    return (True, 0, _drained_answer("wave-complete", lane), warnings)  # a MEMBERSHIP claim
 ```
 
 `next` accordingly takes `--track` and has no `--wave`. One defect, two faces:
@@ -219,14 +220,17 @@ Both follow from the same category error: the wave answer is computed over a tra
 Correcting it means the wave predicate reads `wave` and nothing else, while `--track` keeps doing
 its own job — choosing which CR is next, and in what order.
 
-The reason vocabulary needs nothing new: `DRAINED_REASONS` at `:1523` is already
+The reason vocabulary needs nothing new: `DRAINED_REASONS` (then beside `resolve_next`, now
+`DRAINED_REASONS` in `src/next.ts`) is already
 `("wave-complete", "awaiting-assignment", "no-roadmap")`, and a lane with nothing scheduled whose
 wave is NOT complete is `awaiting-assignment` — which is what that reason already means.
 
-**The fix needs no server change.** Every queue entry already publishes its `wave`
-(`src/types.ts:407`), so the predicate is computable from the SAME single read the resolver already
-performs — `:1498` states the contract as "ONE read (`GET …/queue`) in, ONE decision out". The
-correction lives in the shared client module, where all five clients inherit it at once.
+**The fix needs no server change.** Every queue entry already publishes its `wave` (the `wave`
+field of `QueueEntry` in `src/types.ts`), so the predicate is computable from the SAME single read
+the resolver already performs — the `next` section header in `clients/_crucible_axi.py` states the
+contract as "ONE read (`GET …/queue`) in, ONE
+decision out". The correction lives in the shared client module, where all five clients inherit
+it at once.
 
 ### D3 — a release's IN-FLIGHT state already has a carrier: the gate
 
@@ -234,9 +238,9 @@ This DN states the release workflow "is already partially tracked, **as a gate**
 release is "recorded at publish/tag time rather than declared in advance". Both hold. What is
 missing is not an API for "a release started" but a FIELD on the record that already exists:
 
-- `CR-CRU-073 §S1` (`src/store.ts:2013-2016`) retires a gate by matching its first-class `version`
-  to a release's `label`, "never parsed back out of the free-text intent".
-- No client ever sends `version`: `post_gate` (`clients/_crucible_axi.py:4647`) posts
+- `CR-CRU-073 §S1` (the doc of `recordGateEvent` in `src/store.ts`) retires a gate by matching its
+  first-class `version` to a release's `label`, "never parsed back out of the free-text intent".
+- No client ever sends `version`: `post_gate` (`clients/_crucible_axi.py`) posts
   `{projectKey, agentId, gate}` + optional `context` in all five clients, and `gate-report` has no
   `--version`/`--label` flag.
 - Verified on a live event: `evt-1788925414091-197`, `version: <ABSENT>`, `retiredAt: <none>`.
@@ -253,8 +257,8 @@ release-identified):
 
 | | defect | cite |
 |---|---|---|
-| a | interim POSTs guarded by `0 < nsteps < 9`, but `axi status` always emits 9 rows (unrun ones `pending`), so streaming NEVER fires | `_crucible_axi.py:4801`, `:1315` |
-| b | `axi run`'s 8-minute bounded hold returns with `error:` and no `outcome`; `gate_from_axi(final=True)` falls back to `"failed" if any_failed else "passed"` and seals **`passed`** mid-run | `:1306-1310`, `:4811-4819` |
+| a | interim POSTs guarded by `0 < nsteps < 9`, but `axi status` always emits 9 rows (unrun ones `pending`), so streaming NEVER fires | the `0 < nsteps < 9` guard in `cmd_gate_run` in `clients/_crucible_axi.py` (since replaced by `axi_snapshot_in_flight`), fed the step count `gate_from_axi` returns |
+| b | `axi run`'s 8-minute bounded hold returns with `error:` and no `outcome`; `gate_from_axi(final=True)` falls back to `"failed" if any_failed else "passed"` and seals **`passed`** mid-run | the final-snapshot fallback in `gate_from_axi` (`clients/_crucible_axi.py`), sealed by the final `post_gate` in `cmd_gate_run` |
 
 (b) put a false `outcome=passed` gate on this project's board during the 0.2.0 review, and because
 of D3 that event can never be retired by the release it belongs to. `pending` and

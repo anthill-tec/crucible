@@ -22,7 +22,8 @@
 //     There is no uv provisioning step at all → assertion 1 fails. This is the
 //     measured defect: CI run 31677479804 produced 102 bun failures of which
 //     **98** were `error: Executable not found in $PATH: "uv"`, because
-//     `tests/clients-bun-crucible.test.ts:83` spawns the client fleet as
+//     `runScript` (tests/clients-bun-crucible.test.ts) spawns the client
+//     fleet as
 //     `["uv", "run", SCRIPT_PATH, …]` (PEP 723, CR-CRU-046 §S3) and
 //     `oven-sh/setup-bun` provides bun, not uv.
 //
@@ -32,10 +33,13 @@
 //     (→ assertion 2 fails; `tests/client/test_cr046_uv_env_gate.py`'s
 //     `setUpClass` raises ``RuntimeError: `uv` is not on PATH … Remedy:
 //     install uv.``), no dependency-install step at all (→ assertion 3 fails;
-//     `test_cr040_coverage_tooling.py:172` needs the gate venv's python to run
-//     `-m coverage`, and `pyproject.toml:27` already declares
+//     `test_gate_venv_python_can_execute_coverage_module`
+//     (tests/client/test_cr040_coverage_tooling.py) needs the gate venv's
+//     python to run `-m coverage`, and the `dev` extra in `pyproject.toml`
+//     already declares
 //     `dev = ["coverage>=7"]`), and no `build` install (→ assertion 4 fails;
-//     `tests/client/test_crucible_axi_wheel_packaging.py:121` raises
+//     `CrucibleAxiWheelPackagingTest.setUpClass`
+//     (tests/client/test_crucible_axi_wheel_packaging.py) raises
 //     ``RuntimeError: no interpreter on this machine can `import build```).
 //
 //   * Assertions 5 (AC9 — no `if:` on a test job, CR-CRU-062 §S0) and 6
@@ -168,7 +172,7 @@ describe("CR-CRU-063 §S1 — uv is provisioned on the jobs that drive the clien
       provisioning.length,
       "release.yml job 'test-bun' has no uv provisioning step (expected an " +
         "`astral-sh/setup-uv` `uses:` or an explicit uv install `run:`). " +
-        "tests/clients-bun-crucible.test.ts:83 spawns the client fleet as " +
+        "tests/clients-bun-crucible.test.ts's runScript spawns the client fleet as " +
         '["uv", "run", SCRIPT_PATH, …]; without uv on PATH the suite emits ' +
         '`error: Executable not found in $PATH: "uv"` 98 times.\n' +
         `test-bun steps:\n${stepInventory(steps)}`,
@@ -217,9 +221,11 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
       installers.length,
       "release.yml job 'test-python' has no step installing the project's " +
         "`dev` optional-dependency group (expected an install whose args carry " +
-        "the extra, e.g. `.[dev]`). tests/client/test_cr040_coverage_tooling.py:172 " +
+        "the extra, e.g. `.[dev]`). tests/client/test_cr040_coverage_tooling.py's " +
+        "test_gate_venv_python_can_execute_coverage_module " +
         "requires the gate venv's python to execute `-m coverage`, and " +
-        "pyproject.toml:27 already declares `dev = [\"coverage>=7\"]` — §S2/AC8: " +
+        "pyproject.toml's `dev` extra already declares `dev = [\"coverage>=7\"]` " +
+        "— §S2/AC8: " +
         "consume that group, never restate its contents in YAML.\n" +
         `test-python steps:\n${stepInventory(steps)}`,
     ).toBeGreaterThan(0);
@@ -230,7 +236,7 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
 
     // NEGATIVE duplication check (the positive contract above is on the parsed
     // graph, per AC7). A version constraint or a bare coverage install in YAML
-    // is a second declaration of pyproject.toml:27 and the two will drift.
+    // is a second declaration of pyproject.toml's `dev` extra and the two will drift.
     expect(
       raw.includes("coverage>="),
       "release.yml contains the version constraint `coverage>=` — that duplicates " +
@@ -254,7 +260,7 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
     expect(
       installers.length,
       "release.yml job 'test-python' has no step installing `build`. " +
-        "tests/client/test_crucible_axi_wheel_packaging.py:121 raises " +
+        "tests/client/test_crucible_axi_wheel_packaging.py's setUpClass raises " +
         "``RuntimeError: no interpreter on this machine can `import build`… " +
         "Remedy: `python3 -m pip install --upgrade build``` — the same package " +
         "the `build` job already installs; that asymmetry is the bug (§S2).\n" +
@@ -353,8 +359,8 @@ describe("0.2.0 release (CR-CRU-112 §S1 / CR-CRU-096 AC26) — test-bun owns th
 // its own CR says is settled by running commands.
 //
 // Measured on this branch at RED time:
-//   * release.yml carries FOUR literal `bun-version: "1.4.2"` entries (:121
-//     test-bun, :201 test-e2e, :384 publish-npm, :444 dry-run-npm) — four
+//   * release.yml carries FOUR literal `bun-version: "1.4.2"` entries (in the
+//     test-bun, test-e2e, publish-npm and dry-run-npm jobs) — four
 //     sites, so the site-count assertion FAILS with 4 where 1 is required.
 //   * package.json declares no `packageManager`. Its `engines.bun` (`>=1.2`)
 //     is the compatibility FLOOR that CR-CRU-087's own gap analysis (D2)
@@ -915,5 +921,120 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
         `forbid. upload pins: ${pinsOf(uploads)} (at required: ${atRequired(uploads)}); ` +
         `download pins: ${pinsOf(downloads)} (at required: ${atRequired(downloads)}).`,
     ).toBe(atRequired(downloads));
+  });
+});
+
+// \u2500\u2500 CR-CRU-018 \u00a7S1 AC13/AC14 \u2014 WebKit is provisioned in BOTH CI jobs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+//
+// Spec: docs/changes/CR-CRU-018-responsive-mobile.md's AC "WebKit is
+//   provisioned in CI, and its local absence is EXPLICIT": "both CI jobs gain
+//   WebKit (they install `chromium` only today \u2014 two
+//   `bunx playwright install --with-deps chromium` steps under
+//   `.github/workflows/`)". Governed by
+//   docs/research/DN-crucible-responsive-model.md, "WebKit provisioning \u2014 the
+//   two paths": "CI \u2014 the gate | Native: add WebKit to the existing
+//   `bunx playwright install --with-deps` steps in **both** jobs".
+//
+// THIS CYCLE'S SCOPE IS THE TEST ONLY \u2014 GREEN edits .github/workflows/, this
+// RED pass must not (see this dispatch's own "Do NOT" list). release.yml on
+// this branch installs `chromium` alone in both `test-bun` (the job that RUNS
+// the whole `bun test` suite, CR-CRU-112 \u00a7S1 \u2014 collects
+// tests/webkit-iphone-engine-coverage.test.ts and every other webkit-project
+// assertion in THIS file's own repository) and `test-e2e` (the Playwright/BDD
+// job that runs the `webkit-iphone` project directly), so BOTH assertions
+// below are expected to FAIL right now \u2014 there is no `webkit` argument to
+// `playwright install --with-deps` anywhere in the file (measured by grep:
+// zero occurrences of the literal `webkit` in release.yml on this branch).
+//
+// `installsPlaywrightBrowser()` is REUSED from the existing Chromium-CI-shape
+// guard above (CR-CRU-112 \u00a7S1's "test-bun installs the Chromium browser" test)
+// \u2014 one browser-install-detection mechanism, asked about a second browser name,
+// never a second parser.
+describe("CR-CRU-018 \u00a7S1 AC13/AC14 \u2014 both CI jobs provision WebKit, not chromium alone", () => {
+  test("test-bun installs the WebKit browser \u2014 `bun test` collects tests/webkit-iphone-engine-coverage.test.ts and the whole suite, and CR-CRU-018's phone band runs on webkit-iphone under it", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-bun");
+
+    const chromiumSteps = steps.filter((step) => installsPlaywrightBrowser(step, "chromium"));
+    expect(
+      chromiumSteps.length,
+      "release.yml job 'test-bun' has no Chromium-install step at all \u2014 this " +
+        "guard would then say nothing meaningful about a SECOND browser being " +
+        "added beside it.",
+    ).toBeGreaterThan(0);
+
+    const webkitSteps = steps.filter((step) => installsPlaywrightBrowser(step, "webkit"));
+    expect(
+      webkitSteps.length,
+      "release.yml job 'test-bun' has no step installing the WebKit browser " +
+        "(expected `webkit` named among a `playwright install \u2026` step's " +
+        "arguments, e.g. `playwright install --with-deps chromium webkit`). " +
+        "CR-CRU-018 \u00a7S1 AC13/AC14: the phone band is asserted on BOTH engines, and " +
+        "`bun test` is the job that runs tests/webkit-iphone-engine-coverage.test.ts " +
+        "and the rest of this repository's webkit-iphone assertions \u2014 this is CI's " +
+        "OWN native provisioning path (DN \"WebKit provisioning \u2014 the two paths\": " +
+        "CI installs natively, Ubuntu runners support it directly).\n" +
+        `test-bun steps:\n${stepInventory(steps)}`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("test-e2e installs the WebKit browser \u2014 the job that runs the `webkit-iphone` Playwright project (playwright.config.ts) directly", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-e2e");
+
+    const chromiumSteps = steps.filter((step) => installsPlaywrightBrowser(step, "chromium"));
+    expect(
+      chromiumSteps.length,
+      "release.yml job 'test-e2e' has no Chromium-install step at all \u2014 this " +
+        "guard would then say nothing meaningful about a SECOND browser being " +
+        "added beside it.",
+    ).toBeGreaterThan(0);
+
+    const webkitSteps = steps.filter((step) => installsPlaywrightBrowser(step, "webkit"));
+    expect(
+      webkitSteps.length,
+      "release.yml job 'test-e2e' has no step installing the WebKit browser " +
+        "(expected `webkit` named among a `playwright install \u2026` step's " +
+        "arguments). CR-CRU-018 \u00a7S1 AC13/AC14: `test-e2e` runs `bun run test:e2e` " +
+        "(`bunx bddgen && bunx playwright test`, no `--project` filter), which " +
+        "collects EVERY project declared in playwright.config.ts \u2014 including " +
+        "`webkit-iphone` \u2014 so without this step the CI run either red-lines on a " +
+        "missing WebKit executable or (worse) silently reports zero webkit-iphone " +
+        "scenarios.\n" +
+        `test-e2e steps:\n${stepInventory(steps)}`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("AC \u2014 every occurrence of 'webkit' in release.yml sits on a `playwright install` line or in a comment, so the two assertions above are reading a real install argument", () => {
+    const { raw } = readReleaseWorkflow();
+    // The control that guards the two positive assertions above: 'webkit'
+    // may appear in release.yml ONLY as a `playwright install …` argument
+    // or inside a YAML comment explaining one. Any other occurrence (an env
+    // value, a job name, a script path) could satisfy a looser reading of the
+    // positive checks for the wrong reason, so it is named here as a defect.
+    // (RED's original form asserted 'webkit' appeared NOWHERE — true only
+    // before GREEN provisioned it, and contradicted by the two positives once
+    // they were satisfied.)
+    const lines = raw.split("\n");
+    const occurrences = lines
+      .map((line, index) => ({ line, lineNo: index + 1 }))
+      .filter(({ line }) => line.toLowerCase().includes("webkit"));
+    expect(
+      occurrences.length,
+      "expected release.yml to name 'webkit' at least once \u2014 the two positive " +
+        "assertions above require a `playwright install \u2026 webkit` step.",
+    ).toBeGreaterThan(0);
+    const stray = occurrences.filter(({ line }) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#")) return false;
+      const code = line.split(" #")[0] ?? line;
+      return !/playwright install\b/.test(code) || !code.toLowerCase().includes("webkit");
+    });
+    expect(
+      stray.map(({ line, lineNo }) => `release.yml:${String(lineNo)}: ${line.trim()}`),
+      "every 'webkit' in release.yml must sit on a `playwright install \u2026` line " +
+        "or in a comment \u2014 any other occurrence could make the two positive " +
+        "assertions above pass for the wrong reason.",
+    ).toEqual([]);
   });
 });

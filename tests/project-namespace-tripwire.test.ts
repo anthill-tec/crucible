@@ -152,9 +152,9 @@ function titleSpans(text: string): Span[] {
 }
 
 // RULED, NOT CODED — a test's own DIAGNOSTIC failure message.
-// tests/queue-canonical-order.test.ts:138 throws
-// `CR-CRU-095: ${cr} is absent from the published order`, and
-// tests/roadmap-registration-store.test.ts:194 has the same shape. Both are
+// `spanOf` in tests/queue-canonical-order.test.ts throws
+// `CR-CRU-095: ${cr} is absent from the published order`, and `entryOf` in
+// tests/roadmap-registration-store.test.ts has the same shape. Both are
 // EXEMPT, and the argument is: a thrown diagnostic is the test telling a
 // maintainer WHICH CONTRACT IT WAS CHECKING when it broke. It is never
 // compared against a product value, never rendered to a user of any project,
@@ -319,6 +319,28 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // apply, and a residue entry would have PINNED a real board id into an
 // assertion. AC4's remedy is the one that fits: the fixture now states a
 // synthetic `cr` it invents itself, and the round trip it proves is unchanged.
+//
+// THREE entries added 2026-09-24 by CR-CRU-022 (`CR-PTS`, `CR-UI`, `CR-VEL`),
+// each read at its use site like every entry above. Two were added because the
+// guard FAILED on the day their files were written — the deny-by-default rule
+// working, not a hole being widened: `CR-PTS-1` is the cr §S1's story-points
+// suite plans with `--points 5` and then reads back from the queue
+// (tests/cr022-story-points.test.ts:154, asserted at :160), and `CR-UI-2` is
+// the unpointed cr of §S5's UI fixture queue that the roadmap-progress band
+// must NAME (tests/cr022-analytics-ui.test.ts:74, asserted at :231; its
+// pointed sibling `CR-UI-1` is at :73). Both ids are what their assertions are
+// ABOUT — the band's unpointed list, the round-tripped points — so stripping
+// them from a message does not apply and a residue entry would pin nothing
+// real: the fixtures invent them, which is AC4's remedy already taken. The
+// third, `CR-VEL`, did NOT fail the guard and is registered anyway, found by
+// scanning every CR-shaped literal the CR added under tests/ rather than only
+// the two the guard reported: §S2's velocity suite invents `CR-VEL-1..4` as
+// its merged-cr fixtures (tests/cr022-velocity-analytics.test.ts:167-197, and
+// prose at :31). Today they sit only in fixture setup, but they are the suite's
+// own invention, and listing the namespace now means a later assertion on one
+// is read as synthetic rather than reported as a real board id. The CR's other
+// fixture ids (`CR-BURN-A`, `CR-BURN-NT-1`, `CR-FCST-HIST-1`, …) need no entry:
+// a letter segment follows the namespace, so `CR_LITERAL` never matches them.
 const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-AAA": "test_crucible_axi_shared.py — two-agent warning fixture",
   "CR-AUTH": "cycle/plan fixtures for an authored-but-unplanned CR",
@@ -334,12 +356,16 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-EXPLICIT": "CR-CRU-140 §S3's explicit-body-context milestone fixture — the `cr` a caller states and gets back",
   "CR-GW": "workflow gate-widget fixture",
   "CR-NEW": "§S5's synthetic newly-planned rows (AC4's remedy)",
+  "CR-NEXTPTR": "CR-CRU-098 fixtures for the ported next resolver/route tests (tests/next-resolver.test.ts, tests/next-route.test.ts)",
   "CR-NT": "f13 fidelity fixture — a no-title CR",
   "CR-ORD": "workflow-history ordering fixture",
   "CR-PLANLESS": "home-marker fixture — a run with no plan",
+  "CR-PTS": "CR-CRU-022 §S1's story-points fixture — the cr planned with --points and read back",
   "CR-RM": "roadmap-pane fixtures",
   "CR-SHIPPED": "§S5's synthetic completed rows (AC4's remedy)",
   "CR-SOLO": "f13 fidelity fixture — a single-CR workflow",
+  "CR-UI": "CR-CRU-022 §S5's UI fixture queue — a pointed cr and the unpointed one the band names",
+  "CR-VEL": "CR-CRU-022 §S2's velocity fixtures — the merged crs whose points make the weeks",
 };
 
 // EXEMPT BY NAME (AC7a) — the four files whose fixtures hold ANOTHER
@@ -532,8 +558,45 @@ function collectHelpSurfaces(): HelpSurface[] {
 // that row would legally re-admit real board ids into that file's assertions.
 // CR-CRU-140's one leak was a different kind (the asserted VALUE) and took
 // AC4's synthetic-id remedy instead — recorded at SYNTHETIC_NAMESPACES above.
+//
+// TWO, after CR-CRU-015's close-out on 2026-09-18, and the second row is taken
+// for exactly the reason the first was: the guard FAILED on the day the file
+// was written, which is the forward guarantee working rather than a hole being
+// widened. The remedy hierarchy the 0.2.2 note above records was walked in
+// order and neither of the first two reaches it; the entry states the reading
+// at its own line below.
+//
+// FOUR ROWS MOVE at CR-CRU-147's close-out on 2026-09-25 (the VERIFY FIX
+// round, cycle 527): two files are ADDED (43 entries -> 45) and one ceiling
+// is RAISED, 11 -> 12. A raise is the one move this table otherwise refuses,
+// so it is stated as one rather than folded in. Each reading was MEASURED by
+// this file's own checker on the feature branch after the round's last
+// content edit, and each is dated and reasoned at its own line below.
 const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "agent-role.test.ts")]: 1,
+  // ADDED 2026-09-18 by CR-CRU-015 §S4 — the SECOND entry this table has taken
+  // since it was measured on 2026-09-03 (41 files then, 43 now). ONE literal,
+  // MEASURED by this file's own checker on the day the file was written:
+  // `expect(rows.some((r) => r.cr === "CR-CRU-015")).toBe(true)`, the rail's
+  // second claim — that the dependency CR-CRU-018's queue row declares names a
+  // row that actually exists, an ordering fact being a fact only while BOTH
+  // ends do.
+  //
+  // THE IDS ARE THE SUBJECT AND CANNOT BE SYNTHESISED, which is the same
+  // justification the CR-CRU-118 board census gives at
+  // RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10 above. This suite drives NO fixture:
+  // its whole input is docs/changes/README.md, this project's live hand-edited
+  // queue table, and the claim §S4 asks the queue to keep carrying is about
+  // those two real rows. So AC4's remedy cannot reach it — a synthetic id would
+  // assert nothing about whether CR-018 really depends on 015, which is the
+  // only fact the rail exists to hold — and neither can CR-CRU-138's, because
+  // the literal is the asserted VALUE and not decoration inside an `expect`
+  // MESSAGE: stripping it deletes the assertion rather than the decoration.
+  // A residue row is the last resort here, not the convenient one.
+  //
+  // The ceiling may only shrink, as always, and this one shrinks to 0 the day
+  // CR-CRU-018 lands and the ordering it needed stops needing a rail.
+  [join("tests", "bdd-consumer-queue-ordering.test.ts")]: 1,
   [join("tests", "ci-toolchain-provisioning.test.ts")]: 1,
   [join("tests", "client", "test_arduino_crucible_axi.py")]: 9,
   [join("tests", "client", "test_bun_crucible_auto_attach.py")]: 4,
@@ -589,6 +652,15 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "client", "test_mvn_crucible_axi.py")]: 10,
   [join("tests", "client", "test_python_crucible_axi.py")]: 9,
   [join("tests", "client", "test_queue_file_verb.py")]: 23,
+  // ADDED 2026-09-25 by CR-CRU-147's close-out (cycle 527). FOUR literals,
+  // all from the C2 RED (7fabc15), all fixture ids and not board ids: the
+  // expected TODAY values of the first four keys (:202 `CR-VOID-2`) and the
+  // per-row lifecycle map (:238 `CR-LIVE-2`, :238 `CR-VOID-3`, :239
+  // `CR-SUP-2`). `CR-LIVE`/`CR-VOID`/`CR-SUP` are not registered in
+  // SYNTHETIC_NAMESPACES, so the checker reads them as real namespaces. The
+  // ceiling may only shrink, and it shrinks to 0 the day those three prefixes
+  // are registered as synthetic.
+  [join("tests", "client", "test_queue_rows_carry_title_and_lifecycle.py")]: 4,
   [join("tests", "client", "test_rust_crucible_axi.py")]: 9,
   [join("tests", "cr009-release-bundle.test.ts")]: 1,
   [join("tests", "docs-project-delete-cascade-dn.test.ts")]: 1,
@@ -597,8 +669,25 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "releases.test.ts")]: 2,
   [join("tests", "roadmap-registration-routes.test.ts")]: 8,
   [join("tests", "roadmap-registration-store.test.ts")]: 5,
-  [join("tests", "roadmap-release-focus.test.ts")]: 11,
+  // RAISED 2026-09-25 by CR-CRU-147's close-out (cycle 527), 11 -> 12. The C4
+  // commit that moved three tests to the §S2 row contract (64f6e60) removed
+  // ONE `CR-CRU-085` (base :921, `toContain("CR-CRU-085")` on the retired
+  // lifecycle badge) and added TWO. Both new ones are the STATUS badge's
+  // asserted text, `SUPERSEDED → CR-CRU-085` (:945, :983). The id is the
+  // CR-F fixture's successor, and the badge's contract is to name it, so the
+  // literal is the asserted VALUE and not decoration on a message. The other
+  // ten are unchanged: nine `briefCrTitle` literals (:794–:808) and :1018.
+  [join("tests", "roadmap-release-focus.test.ts")]: 12,
   [join("tests", "storyboard-fidelity.test.ts")]: 3,
+  // ADDED 2026-09-25 by CR-CRU-147's close-out (cycle 527). ONE literal, from
+  // the C3 RED (e16b5b3): `CR-CRU-147 ruling 2` at :1135, which sits in an
+  // `expect()` MESSAGE. It is reported because that `expect`'s first argument
+  // opens a callback (`loose.map((node) => ...)`), and by AC10's documented
+  // boundary a callback beginning inside the call ends the message span. That
+  // over-report is the fail-loud direction, in the file that wrote it. The
+  // ceiling shrinks to 0 when the message loses the id or the span learns the
+  // shape.
+  [join("tests", "roadmap-wave-rows.test.ts")]: 1,
   [join("tests", "workflow-history-refinements.test.ts")]: 3,
 };
 
@@ -2006,6 +2095,29 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // tests/project-namespace-tripwire.test.ts -t 'never below its develop
 // baseline'` reported `clients: 861` against the then-recorded `858`.
 //
+// UPDATED 2026-09-16 by CR-CRU-139 C1 (§S1/§S1a). `src/` HEAD moves 724 -> 736:
+// +12 lineage comments in `src/server.ts` and `src/limits.ts`, from the
+// listener becoming configuration (the `[server]` table readers, the pure
+// `resolveListener`, the per-axis rules, the `listener` disclosure block, and
+// the two shared-seam changes in `limits.ts`). `public` (477) and `clients`
+// (862) were re-measured in the SAME run and did not move -- this CR's other
+// half edits `crucible_axi/` and `tests/client/`, neither of which is a
+// classified tree. Measured with this file's own classifier at cycle close-out
+// by the orchestrator, ONCE, as CR-CRU-139's close-out criterion requires:
+// `bun test tests/project-namespace-tripwire.test.ts -t 'never below its
+// develop baseline'` reported `src: 736` against the then-recorded `724`.
+// Re-recording mid-cycle was deliberately refused -- GREEN raised it, and a
+// per-drift re-pin is what turned CR-CRU-138 into three approval round-trips.
+//
+// UPDATED 2026-09-16 by CR-CRU-139 C2 (§S2). `clients/` HEAD moves 862 -> 872:
+// +10 from the board becoming configuration — the `[client]` table commentary in
+// `clients/crucible.toml`, `resolve_base_url`/`shipped_board`/the table-name
+// block in `_crucible_axi.py`, and one `_base_url()` docstring per client.
+// `src` (736) and `public` (477) were re-measured in the SAME run and did not
+// move: C2 touches no `.ts`/`.js` in either tree. Measured by the orchestrator
+// at cycle close-out, ONCE, reconciled against the figure GREEN raised rather
+// than re-derived. GREEN refused to re-record mid-cycle a second time, citing
+// the paragraph above -- so this note is now load-bearing twice over.
 // UPDATED 2026-09-17 by CR-CRU-137 §S1 — `clients` 862 -> 864, +2, and both
 // land in `clients/bun-crucible.py`, the only production file §S1 touches:
 // the header of the `DEFAULT_TEST_TIMEOUT_MS` block (:477, why this project
@@ -2093,10 +2205,386 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // stale head also reds tests/help-surface-order-independence.test.ts, whose
 // child `bun test` collects THIS file; that file is correct, fired for the
 // right reason, and gets no change.
+//
+// UPDATED 2026-09-17 by the 0.2.2 BACK-MERGE into develop (`4b531d8`, tag
+// `0.2.2`/`87ec641` merged into `287a64c`) — `src` 736 -> 743 (+7) and
+// `clients` 872 -> 875 (+3). NEITHER figure is either side's recorded one, and
+// that is the whole reason a back-merge re-record is mandatory rather than
+// bookkeeping: the two notes above measure two DIFFERENT trees — CR-CRU-139
+// read 736/872 on develop, which never carried CR-CRU-140's citations, and the
+// 0.2.2 close-out read 731/865 on the hotfix branch, which never carried
+// CR-CRU-139's — so the merged truth is their UNION, a figure no run on either
+// branch could have produced. Both notes above stay exactly as they are: each
+// is still the correct reading of the tree it was taken on.
+//
+// ATTRIBUTED per tree and per file over `4b531d8^1..4b531d8` (what the hotfix
+// brought that develop lacked), citation by citation rather than subtracted:
+//
+//   src +7, all of it CR-CRU-140's, and all of it prose the merge moved
+//     verbatim: src/hints.ts +2 (:6 the module block on `cycleEvidence`, :76
+//     the `readEvidence` doc comment) and src/v2.ts +5 (:852 the
+//     `evidenceResponse` header, :1287 and :1356 the two §S3 milestone-attach
+//     comments, plus the lineage `CR-CRU-056` at :1292 and `CR-CRU-024` at
+//     :1294 that the §S3 comment makes to explain the new call by the seams it
+//     reuses — a lineage citation of a PRIOR CR counts exactly like the CR's
+//     own, because the measure is provenance, not authorship).
+//
+//   clients +3: clients/bun-crucible.py +2 — CR-CRU-137 §S1's
+//     `DEFAULT_TEST_TIMEOUT_MS` header and the `_bun_test_cmd` docstring line,
+//     which on THIS tree are :492 and :520, not the :477/:505 the note above
+//     records, because CR-CRU-139 C2's edits to the same file sit above them
+//     and pushed them down — and clients/_crucible_axi.py +1 (:2273, the
+//     `LANDED_STATUSES` docstring naming `CR-CRU-140 §S2` as the reason its
+//     mirrored citation moved).
+//
+// THE SAME NON-MOVE, RE-CHECKED ON THE MERGED TREE rather than carried across:
+// the merge also brings src/store.ts's two `CR-CRU-140 §S2` "WHAT THIS TABLE
+// HOLDS" headers (:2318, :2389), so the RAW added-literal count under `src/` is
+// 9, not 7. They are `--` SQL comments inside the schema DDL TEMPLATE LITERAL,
+// hence STRING CONTENT to this file's TypeScript classifier and not prose here.
+// They moved no head on either branch and move none on the union — which is
+// why the arithmetic above is per-file and per-id and never a diff subtraction.
+//
+// `public` (477) re-measures at its recorded head in the same run and could not
+// have moved: the merge changes exactly five files inside a classified tree —
+// the three `src/` files and the two `clients/` files above — and nothing under
+// `public/` at all. Both branches recorded 477 for that same reason, so the
+// union is forced to it.
+//
+// MEASURED with this file's own machinery on the MERGED tree, not transcribed
+// from either side: `bun test tests/project-namespace-tripwire.test.ts -t
+// "never below its develop baseline"` reported, against the then-recorded
+// 736/872,
+//
+//     -  "clients": 872   +  "clients": 875
+//     -  "src":     736   +  "src":     743
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 743 and 875 are far above the 512
+// and 601 floors, no head came out below its baseline — a merge that only
+// UNIONS two trees' prose can add and cannot shed — and the three `develop`
+// floors stay at 512/378/601, unchanged, as always for a re-record.
+//
+// It clears the CASCADE with it, as every re-record here does: this file's
+// stale head also reds tests/help-surface-order-independence.test.ts, whose
+// child `bun test` collects THIS file; that file is correct, fired for the
+// right reason, and gets no change.
+//
+// UPDATED 2026-09-18 by CR-CRU-015's CLOSE-OUT — `clients` 875 -> 888 (+13) and
+// `public` 477 -> 482 (+5). MEASURED with this file's own machinery on the
+// feature branch rather than transcribed from the gate that reported it: the
+// close-out regression (run-68249e61, cycle 494) reported, against the
+// then-recorded 875/477,
+//
+//     -  "clients": 875   +  "clients": 888
+//     -  "public":  477   +  "public":  482
+//
+// and the same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID over `develop...HEAD`, attributes every one of the eighteen:
+//
+//   clients +13, all of it in clients/bun-crucible.py (156 -> 169), the only
+//     file under `clients/` this CR touches:
+//       • ELEVEN `CR-CRU-015`, §S2's raw-report route end to end — `extra` and
+//         `declaration` on the target block (:477, :542), the
+//         decoded-BY-THE-SERVER declaration itself (:566) and the raw report it
+//         names (:585), the POST that hands the board the undecoded file
+//         (:995), the counts the server decodes back (:1037), the `--coverage`
+//         warning the raw route cannot answer client-side (:1151), and the FOUR
+//         call-site comments that carry the declaration through a wrapped run
+//         (:1423, :1450, :1501, :1547).
+//       • ONE `CR-CRU-017` (:1019) and ONE `CR-CRU-047` (:1549) — LINEAGE
+//         citations the new prose makes to explain the new code by the seams it
+//         reuses: the optional run-closing seam every ingest already carries,
+//         and the distinct-test-FILE count whose shrink signal is print-only. A
+//         lineage citation of a PRIOR CR counts exactly like the CR's own,
+//         because the measure is provenance, not authorship.
+//
+//   public +5: public/app.js +4 (259 -> 263) — TWO `CR-CRU-015` for §S3's BDD
+//     pane (:2635, the section that renders THIS run's Gherkin; :2753, the user
+//     ruling that the pane NAMES its subject) plus the two lineage citations
+//     that pane's own prose makes, `CR-CRU-122` (:2825, the words-AND-a-spinner
+//     in-flight idiom it reuses) and `CR-CRU-078` (:2831, the empty-chrome
+//     skeleton it refuses to draw) — and public/styles.css +1 (76 -> 77), the
+//     §S3 header on the Gherkin feature ▸ scenario ▸ steps block (:764).
+//
+// `src` (743) re-measures at its recorded head in the same run and could not
+// have moved: of the 27 files this CR touches, exactly THREE sit inside a
+// classified tree — the one under `clients/` and the two under `public/` above
+// — and nothing under `src/` at all. The other 24 are `docs/`, `tests/`,
+// `package.json` and `playwright.config.ts`, and none of those is a tree this
+// guard walks.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 888 and 482 are far above the 601
+// and 378 floors, no head came out below its baseline, and the three `develop`
+// floors stay at 512/378/601, unchanged, as always for a re-record.
+//
+// TAKEN AT CLOSE-OUT, after the CR's last content edit, so these are its final
+// figures rather than a mid-cycle reading. It clears the CASCADE with it, as
+// every re-record here does: this file's stale head also reds
+// tests/help-surface-order-independence.test.ts, whose child `bun test`
+// collects THIS file; that file is correct, fired for the right reason, and
+// gets no change.
+//
+// UPDATED 2026-09-24 by CR-CRU-018's CLOSE-OUT (the C5 FIX round, cycle 499).
+// `public` moves 482 -> 496 (+14). MEASURED with this file's own machinery on
+// the feature branch after the FIX round's last content edit:
+// `bun test tests/project-namespace-tripwire.test.ts -t "never below its
+// develop baseline"` reported, against the then-recorded 482,
+//
+//     -  "public": 482   +  "public": 496
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show b32ddbc:<path>` (the merge-base with `develop`),
+// attributes all fourteen. Those are the only two files under a classified
+// tree that this CR touches:
+//
+//   public/app.js +8 (263 -> 271): SEVEN `CR-CRU-018` for the DN decisions the
+//     frontend implements. They are decisions 3 + 9 (the viewport trigger of
+//     the pane collapse, :2479), decision 9 (the phone foot strip, :2541),
+//     decision 10 / phone AC8 (the roadmap card testids, :2992; the re-flowed
+//     row, :3021; the phone-band zone, :3213) and decision 11 (the row being
+//     clicked, :4186; the row-is-the-toggle `CycleLine`, :4636). The last of
+//     those also carries ONE `CR-CRU-146 §S1`: the hit-area fix that
+//     CR-CRU-146 names, landed here once.
+//   public/styles.css +6 (77 -> 83): TWO `CR-CRU-018` (the §S1 bands header,
+//     :1826; the §S2 touch floor, :2009), plus FOUR lineage citations the band
+//     prose makes to explain what it overrides or reuses. Those are
+//     `CR-CRU-023` twice (the 1024×640 guarantee the desktop band starts at,
+//     :1830; the 660px floor it scopes, :1873), `CR-CRU-093` (the collapsed
+//     sliver column, :1858) and `CR-CRU-029` (the dual-axis scroller the pane
+//     keeps, :1876).
+//
+// Every one of the fourteen is prose on a `//` or `/* */` line, and none is
+// in a string. `src` (743) and `clients` (888) re-measure at their recorded
+// heads in the same run and could not have moved, because this CR changes no
+// file under either tree.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 496 is far above the 378 floor,
+// and the three `develop` floors stay at 512/378/601, unchanged. As always, the
+// re-record also clears the CASCADE: tests/help-surface-order-independence.test.ts
+// collects THIS file in its child `bun test`, fired for the right reason, and
+// gets no change.
+//
+// UPDATED 2026-09-24 by CR-CRU-022's CLOSE-OUT (the C5 FIX round, cycle 504).
+// ALL THREE trees move: `src` 743 -> 772 (+29), `public` 496 -> 519 (+23),
+// `clients` 888 -> 889 (+1). MEASURED with this file's own machinery on the
+// feature branch AFTER the FIX round's last content edit (the CR-PTS/CR-UI/
+// CR-VEL registration above, which touches only this file under tests/):
+// `bun test tests/project-namespace-tripwire.test.ts` reported, against the
+// then-recorded 743/496/888,
+//
+//     -  "clients": 888   +  "clients": 889
+//     -  "public":  496   +  "public":  519
+//     -  "src":     743   +  "src":     772
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 0127005:<path>` (the merge-base with `develop`),
+// attributes all fifty-three. No citation is REMOVED anywhere, and every
+// classified file this CR touches is listed:
+//
+//   src +29:
+//     src/store.ts   350 -> 366 (+16, all `CR-CRU-022`): §S1's points field,
+//       Fibonacci scale and scope-moving verbs (:358, :366, :372), the
+//       current-points reads and the journal append (:5545, :5568, :5576,
+//       :5592, :5605), the three write paths that journal or clear points
+//       (:5670, :5717, :5907), and the §S2–§S4 analytics reads (:6345,
+//       :6348, :6381, :6395, :6413).
+//     src/v2.ts      239 -> 245 (+6): FIVE `CR-CRU-022` (:149 `--points`, :251
+//       the journal author, :3011 the scale check, :3944 and :4007 the
+//       analytics routes) plus ONE lineage `CR-CRU-091` (:4035, the declared
+//       target the forecast reads).
+//     src/types.ts    56 -> 60  (+4): TWO `CR-CRU-022` (:463 derived points,
+//       :472 the dead-CR predicate) plus TWO lineage `CR-CRU-147` (:472, :477),
+//       the predicate's own origin.
+//     src/analytics.ts  new -> 3 (+3): ONE `CR-CRU-022` (:1, the module
+//       header) and TWO lineage `CR-CRU-091` (:174, :452, the declared target).
+//
+//   public +23:
+//     public/app.js  271 -> 291 (+20): SIXTEEN `CR-CRU-022`, §S5's routes,
+//       reads, Velocity card, release band and analytics pane (:95, :126, :136,
+//       :190, :213, :238, :404, :416, :783, :2675, :2683, :3304, :4085, :4318,
+//       :4847, :5871), plus FOUR lineage citations its prose makes:
+//       `CR-CRU-016` (:126, the pane-swap route), `CR-CRU-078` twice (:786 no
+//       date of its own; :4466 the pinned skeleton), `CR-CRU-091` (:4626).
+//     public/app-logic.mjs 89 -> 90, public/app-logic.d.mts 53 -> 54 and
+//       public/styles.css 83 -> 84 (+1 each, all `CR-CRU-022` §S5: :266, :51,
+//       :2028). The two vendored uPlot files are new and hold no citation.
+//
+//   clients +1: clients/_crucible_axi.py 220 -> 221, ONE `CR-CRU-022` (:4379,
+//     §S1's story points riding only when declared).
+//
+// THE SAME NON-MOVE AS BEFORE, re-checked rather than assumed: src/store.ts's
+// raw added-literal count is 18, not 16. The two extra (:2508 `CR-CRU-022
+// §S1`, the declaration journal's header, and :2512 its `CR-CRU-130` lineage)
+// are `--` SQL comments inside the schema DDL TEMPLATE LITERAL, so they are
+// STRING CONTENT to this file's TypeScript classifier and move no head.
+//
+// GROWTH IS THE DIRECTION THE RULE PERMITS: 772, 519 and 889 are far above
+// the 512/378/601 floors, and those three `develop` floors stay unchanged, as
+// always for a re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit,
+// so these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-09-24 by CR-CRU-098's CLOSE-OUT (the C4 FIX round, cycle 510).
+// `src` moves 772 -> 779 (+7) and `clients` moves 889 -> 884 (-5). MEASURED
+// with this file's own machinery on the feature branch AFTER the FIX round's
+// last content edit (the `isActionable` cross-reference to CR-CRU-147 in
+// src/next.ts, plus the citation re-pins, which are all under tests/ and so
+// move no head): `bun test tests/project-namespace-tripwire.test.ts -t "never
+// below its develop baseline"` reported, against the then-recorded
+// 772/519/889,
+//
+//     -  "clients": 889   +  "clients": 884
+//     -  "src":     772   +  "src":     779
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 7f2a85c:<path>` (the merge-base with `develop`),
+// attributes all twelve moves (+7 in `src`; +5 and -10 in `clients`). Every
+// classified file this CR touches is listed:
+//
+//   src +7:
+//     src/next.ts    new -> 4 (+4): ONE `CR-CRU-098` (:1, the module header)
+//       plus THREE lineage citations. Those are `CR-CRU-095` (:4, the
+//       published order the entries arrive in), `CR-CRU-092` (:7, the ported
+//       resolver block; its `-095, -108` abbreviations are not literals) and
+//       `CR-CRU-147` (:163, the CR that owns unifying `isActionable` with
+//       `isDeadCr`).
+//     src/v2.ts      245 -> 247 (+2, both `CR-CRU-098` §S2): the GET …/next
+//       route header (:2104) and its dispatch comment (:3979).
+//     src/hints.ts    45 -> 46  (+1, `CR-CRU-098` §S2/AC5): the `nextHints`
+//       block, the server-authored `help[]` (:488).
+//
+//   clients -5: clients/_crucible_axi.py 221 -> 216, the only file under
+//     `clients/` whose count moved (the five per-client files each changed
+//     ONE line and re-measure unchanged). FIVE `CR-CRU-098` are added: §S3's
+//     read-is-the-server's block (:2249), the decision vocabulary now living
+//     on the server (:2271), the lane MATCH moved to the server (:2284), the
+//     §S2/AC6 refusal fields (:2296) and the `cmd_next` docstring (:2380).
+//     TEN lineage citations are REMOVED, because §S4/AC10 deletes the
+//     client resolver and the orphaned vocabulary whose prose carried them
+//     (base lines at 7f2a85c): `CR-CRU-131` twice and `CR-CRU-140` once in
+//     the `LANDED_STATUSES` re-pin history (:2266, :2269, :2273), `CR-CRU-091`
+//     twice (:2295 the argument-parsing split, :2776 the published `seq`),
+//     `CR-CRU-108` three times (:2308, :2314, :2718, the track-fact error and
+//     the published `tracks`), `CR-CRU-095` once (:2762, the lane order) and
+//     `CR-CRU-097` once (:2778, the detail that names no CR).
+//
+// A NET LOSS, and stated as one: `clients` goes DOWN in this re-record. It
+// is not lineage being shed from living code. The
+// ten citations sat on code this CR DELETES, and they left with it. Their
+// facts survive where the logic moved to: src/next.ts cites `CR-CRU-092`/
+// `-095`/`-108` for the ported block. `clients` (884) is still far above its
+// 601 floor, so the directional half holds.
+//
+// `public` (519) re-measures at its recorded head in the same run, and could
+// not have moved: this CR changes no file under `public/`.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit, so these
+// are its final figures and not a mid-cycle reading. It clears the CASCADE
+// with it: tests/help-surface-order-independence.test.ts collects THIS file in
+// its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-09-25 by CR-CRU-145's CLOSE-OUT (the C4 FIX round, cycle 519).
+// `public` moves 519 -> 514 (-5). MEASURED with this file's own machinery on
+// the feature branch AFTER the FIX round's last content edit (the BDD index
+// row's verdict glyph in public/app.js, which adds no citation, plus two
+// tests under tests/, which move no head): `bun test
+// tests/project-namespace-tripwire.test.ts -t "never below its develop
+// baseline"` reported, against the then-recorded 779/519/884,
+//
+//     -  "public": 519   +  "public": 514
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 1056f8f:<path>` (the branch's base on `develop`;
+// `develop`'s own later e2df749 is docs-only and gives the same counts),
+// attributes all five. Every one is a REMOVAL, and every classified file this
+// CR touches is listed:
+//
+//   public -5:
+//     public/app.js  291 -> 287 (-4): the C3 GREEN (b753ec5) retires the BDD
+//       pane's own Gherkin renderer, and the prose on that renderer left with
+//       it (base lines at 1056f8f): `CR-CRU-015` twice (:2906 the "renders the
+//       GHERKIN" section header; :3024 the pane naming its subject),
+//       `CR-CRU-122` once (:3096 the "words AND a spinner" read-in-flight note)
+//       and `CR-CRU-078` once (:3102 the "no skeleton of empty Gherkin chrome"
+//       note). A fifth mover nets to zero: the C2 GREEN (a25ff4e) rewrote the
+//       suite-row block, and its `CR-CRU-122 §S3` lazy-load comment (:6494)
+//       moved with it, one out and one in.
+//     public/styles.css 84 -> 83 (-1): `CR-CRU-015` once (:764, the "BDD
+//       section's Gherkin: feature ▸ scenario ▸ steps" block header),
+//       removed with the retired renderer's rules in b753ec5.
+//     public/app-logic.mjs 90 -> 90 (0): `bddIndexRows` adds no citation.
+//
+//   src 0: src/codecs/playwright.ts 3 -> 3, src/types.ts 60 -> 60 and
+//     src/v2.ts 247 -> 247. C1 and C2 edit all three, add no citation and
+//     remove none, so `src` (779) re-measures at its recorded head.
+//
+//   clients 0: this CR changes no file under `clients/`, so `clients` (884)
+//     could not have moved.
+//
+// A NET LOSS, and stated as one: `public` goes DOWN in this re-record. It is
+// not lineage being shed from living code. The five citations sat on code
+// this CR DELETES (the bespoke renderer, retired by §S2 for the one run
+// detail), and they left with it. No CR-CRU-145 citation is added under a
+// classified tree. `public` (514) is still far above its 378 floor, so the
+// directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit, so these
+// are its final figures and not a mid-cycle reading. It clears the CASCADE
+// with it: tests/help-surface-order-independence.test.ts collects THIS file in
+// its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-09-25 by CR-CRU-147's CLOSE-OUT (the VERIFY FIX round, cycle
+// 527). `src` moves 779 -> 778 (-1). MEASURED with this file's own machinery
+// on the feature branch AFTER the FIX round's last content edit (ruling 7's
+// keyboard-reachable tooltip in public/app.js and public/styles.css, which
+// adds no citation, plus comment and helper fixes under tests/, which move no
+// head): `bun test tests/project-namespace-tripwire.test.ts -t "never below
+// its develop baseline"` reported, against the then-recorded 779/514/884,
+//
+//     -  "src": 779   +  "src": 778
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show b79c755:<path>` (the merge-base with `develop`),
+// attributes the one move. It is a REMOVAL, and every classified file this CR
+// touches is listed:
+//
+//   src -1:
+//     src/next.ts    4 -> 3 (-1): the lineage `CR-CRU-147` (base :163) is
+//       gone. It was a forward reference in `isActionable`'s docblock naming
+//       this CR as the owner of the job of unifying the predicate with
+//       `isDeadCr`. The C1 GREEN (8ac07cf) did that job and rewrote the
+//       docblock to describe the one rule, so the forward reference retired
+//       with the work it pointed at.
+//     src/types.ts and src/store.ts: C1/C2 edit both, and no changed line
+//       carries a citation, so neither moves.
+//
+//   public 0: public/app.js, public/app-logic.mjs, public/app-logic.d.mts and
+//     public/styles.css all change, and none moves. The three rewritten
+//     lines that carry a citation keep it: `CR-CRU-096` and `CR-CRU-078` in
+//     app-logic.mjs's `roadmapActionable` docblock, and `CR-CRU-091` in
+//     app.js's second-axis comment. `public` (514) re-measures at its
+//     recorded head.
+//
+//   clients 0: clients/_crucible_axi.py gains the queue rows' `title` and
+//     `lifecycle` (C2) with no citation, so `clients` (884) re-measures at
+//     its recorded head.
+//
+// A NET LOSS of one, and stated as one. It is not lineage shed from living
+// code: the citation promised work this CR has now done. `src` (778) is still
+// far above its 512 floor, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the CR's last content edit, so these
+// are its final figures and not a mid-cycle reading. It clears the CASCADE
+// with it: tests/help-surface-order-independence.test.ts collects THIS file in
+// its child `bun test`, fired for the right reason, and gets no change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 731 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 477 },
-  clients: { exts: [".py"], develop: 601, head: 865 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
+  clients: { exts: [".py"], develop: 601, head: 884 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

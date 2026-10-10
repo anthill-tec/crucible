@@ -8,7 +8,7 @@
 //
 // ── What is broken today ───────────────────────────────────────────────────
 //
-// `upsertQueueEntry` (src/store.ts:3635-3641) compares only the target wave's
+// `upsertQueueEntry` (src/store.ts) compares only the target wave's
 // siblings, and only when the cr MOVED. So `cr-plan` declaring a row that
 // HOLDS a positional seq into a release whose other wave is authored (`5001+`)
 // preserves that seq (CR-091 carry-forward), leaves a mixture of two scales
@@ -21,7 +21,8 @@
 // ── The seam GREEN must expose ────────────────────────────────────────────
 //
 // The SAME `defaultedSeq` report and the SAME `defaulted-seq` code
-// (src/v2.ts:1896-1908), reached when the mismatched sibling sits in another
+// (`defaultedSeqWarnings`, since succeeded by `seqScaleWarnings` in
+// src/v2.ts), reached when the mismatched sibling sits in another
 // wave of the SAME RELEASE — a mixture is a DIFFERENCE OF SCALE, never "this
 // write chose the value". The message gains the words "or release" and is
 // otherwise unchanged. The two axes are a UNION: rows carrying no release are
@@ -74,7 +75,9 @@ const ORCH = "orchestrator-1";
 /**
  * §S2/AC11 — the warning's wording is REUSED with ONE addition: "or release".
  * Pinned once so the same-wave (preserved) and the same-release (widened)
- * cases are asserted against ONE string. src/v2.ts:1902-1904 still carries
+ * cases are asserted against ONE string. The `message` in
+ * `defaultedSeqWarnings` (since succeeded by `seqScaleWarnings` in src/v2.ts)
+ * still carries
  * the same-wave-only sentence, which is why the AC11 pins are RED with AC9.
  */
 function defaultedSeqMessage(crs: string[]): string {

@@ -1,6 +1,6 @@
 """CR-CRU-044 C4 RED -- §S5 the agent identity hard stop, `clients/bun-crucible.py`.
 
-Found live 2026-07-28: `_agent_id()` (bun-crucible.py, currently near line 1545)
+Found live 2026-07-28: `_agent_id()` (`_agent_id` in bun-crucible.py)
 fabricates an agent identity for the fleet gate/milestone verbs when no
 `--agent` is given:
 
@@ -15,8 +15,9 @@ User directive: the agent identity must be DEFINED or the verb FAILS. There
 is no fallback, no default, and no fabricated value -- not even a
 `$WORKFLOW_ROLE`-derived one, because `WORKFLOW_ROLE` carries the TRACK LANE
 (`mainline` | `track-n`), not an agent identity (PRD-crucible-v2.md:362,
-DN-model-b-language.md:53, `clients/_crucible_axi.py:71-73`/`:373-375` both
-read it into `ctx["track"]`, never an id). Registering `mainline` or
+DN-model-b-language.md:53, `axi_context` and `fleet_context` in
+`clients/_crucible_axi.py` both read it into `ctx["track"]`, never an
+id). Registering `mainline` or
 `track-2` as an agent would be the exact same category error as
 `bun-crucible`, merely tidier-looking -- explicitly NOT an acceptable fix.
 
