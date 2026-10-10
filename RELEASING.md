@@ -66,7 +66,7 @@ dynamic = ["version"]
 
 [tool.hatch.version]
 source = "vcs"
-raw-options = { local_scheme = "no-local-version" }
+raw-options = { local_scheme = "no-local-version", version_scheme = "release-branch-semver" }
 ```
 
 There is **no `version = "..."` field** in `pyproject.toml`, and the Python version must
