@@ -48,15 +48,6 @@ import time
 import unittest
 from unittest import mock
 
-
-from tests.client.test_cr054_fleet_inventory import CLIENT_FILES
-from tests.client.test_client_fleet_envelope_census import install_project_limits
-from tests.client.test_a_gate_posted_by_the_fleet_carries_its_run_and_release import (
-    ENV_KEYS,
-    _FAKE_NO_MISTAKES_BODY,
-    _load_module,
-    _run_main,
-)
 from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
@@ -64,6 +55,14 @@ from tests.client.live_run_harness import (
     new_scratch,
     scrubbed_env,
 )
+from tests.client.test_a_gate_posted_by_the_fleet_carries_its_run_and_release import (
+    _FAKE_NO_MISTAKES_BODY,
+    ENV_KEYS,
+    _load_module,
+    _run_main,
+)
+from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.test_cr054_fleet_inventory import CLIENT_FILES
 
 GATES_PATH = "/api/v2/gates"
 HEARTBEAT_PATH = "/api/v2/agents/heartbeat"

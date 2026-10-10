@@ -63,11 +63,9 @@ import io
 import os
 import re
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
