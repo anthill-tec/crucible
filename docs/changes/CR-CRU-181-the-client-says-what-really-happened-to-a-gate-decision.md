@@ -1,85 +1,111 @@
 # CR-CRU-181 — the client says what really happened to a gate decision and a release
 
-**Type** fix (patch CR, after the 0.3.0 release) · **Points** 5 (set at filing, 2026-10-10) ·
-**Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-10 (user ruling: the 0.3.0
-follow-ups are patch CRs in wave 8)
+**Type** fix (patch CR, after the 0.3.0 release) · **Points** 5 (confirmed at gap analysis
+2026-10-12) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-10 (user
+ruling: the 0.3.0 follow-ups are patch CRs in wave 8)
 
 ## Problem
 
 Found while releasing 0.3.0 (2026-10-10), and by Model B's first use of 0.3.0 (Sandesh #1435).
 
 1. **A gate decision that no-mistakes accepted is reported, and left unrecorded, as refused.**
-   `gate-respond --action approve --step review` drove the run past review, then its wait (8 m) ran
-   out during the test step. no-mistakes' answer to the elapsed wait names no run, so
-   `gate_decision_recorder` (`clients/_crucible_axi.py`) took the refusal branch:
-   - it printed `REFUSED: no-mistakes recorded no decision — its answer names no run: wait of 8m0s
-     elapsed while driving the run`, exit 1, `decision=none`;
-   - it posted no decision to the board.
+   `gate-respond --action approve --step review` drove run `01M4HEHR…` past review; its wait (8 m)
+   then ran out during the test step. no-mistakes answered the elapsed wait with a snapshot that names
+   no run and carries `error: wait of 8m0s elapsed while driving the run`. `gate_decision_recorder`
+   reads "names no run" as a refusal:
+   - it printed `REFUSED: no-mistakes recorded no decision`, with `decision: none`;
+   - it posted no decision. The store holds a decision for the release's second gate run
+     (`01M4HR4P…`, where the wait did not run out) and none for `01M4HEHR…`.
 
-   But no-mistakes had recorded the approval: `axi status` showed review `completed`. So the board
-   lacks a decision that was taken, and the operator is told the opposite of what happened. The
-   recorder's own contract says "an elapsed wait is not a failed run".
-2. **`gate-respond` cannot say which release a gate belongs to.** `gate-run --release X` stamps its
-   snapshots, but `gate-respond` has no `--release`. The snapshots it posts while driving the run
-   carry `release: unstated`, so a release gate's later snapshots lose the release its first ones
-   carry.
-3. **`history --release X` calls a release the project holds "unknown".** History lists a release
+   A real refusal looks the same on the wire: `--reason` on a review approval was refused at once,
+   also with a snapshot that names no run. What tells the two apart is whether the step the decision
+   answered is still awaiting approval afterwards.
+2. **The held report does not say how to reattach.** A held run's report ends "inspect with `axi
+   status` and reattach". Reattaching is `gate-run`, which requires `--intent`, and the report names
+   neither.
+3. **A gate run's later snapshots lose its release.** `gate-run --release X` stamps every snapshot it
+   posts with `version: X`. `gate-respond` takes no release, so the snapshots it posts while driving
+   the same run carry none. 0.3.0's final seal (run `01M4HR4P…`, pushed `740b642`) and seven interim
+   snapshots are stored with no release; History lists the seal under 0.3.0 only because its
+   timestamp falls in 0.3.0's window.
+4. **`history --release X` calls a release the project holds "unknown".** History lists a release
    once it has shipped or has at least one completed CR. A planned release with neither is held by
-   the project, and `queue` lists its CRs, but `history --release 1.1.0` refuses with
-   `unknown release: 1.1.0` and the help line "history — lists every release label the project
+   the project, through its queue rows or a release proposal, yet `history --release 1.1.0` refuses
+   with `unknown release: 1.1.0` and the help line "history — lists every release label the project
    holds", which is false for that release.
-4. **The test-family verbs may orphan their run identity on an early signal.** CR-CRU-180 found that
-   a SIGINT/SIGTERM landing while `gate-run`'s run identity was being opened (its first heartbeat in
-   flight) left the identity on the board, and fixed it for `gate-run` only (`AbandonTrap.held()`).
-   `gated_run`, which the test and regression verbs use, opens an identity the same way and has not
-   been checked.
 
 ## Steps
 
 ### §S1 — an accepted decision is recorded, and reported as accepted
 
-When no-mistakes' snapshot names no run but the decision was taken (the step it answered is no
-longer `awaiting_approval`), the client finds the run from no-mistakes' own status and records the
-decision against it. It reports the decision as recorded, and the run as still in flight with the
-reattach step (`gate-run … --intent …`). A refusal that left the step awaiting approval stays a
-refusal, with nothing recorded.
+Before launching `no-mistakes axi respond`, `gate-respond` reads `no-mistakes axi status` once. That
+read names the run and the step awaiting approval, which is the step the decision answers when
+`--step` is omitted. After respond exits, the client judges the decision by that step's status
+(from the drive's last streamed snapshot, or one more `axi status` read when the stream has none):
 
-### §S2 — `gate-respond` takes the release
+- **Accepted** (the step is no longer awaiting approval): the decision is recorded against the run,
+  whether or not the respond's own answer named it. An exit whose run is still going is then a held
+  exit, reported as the held report reports any held run.
+- **Refused** (the step is still awaiting approval): nothing is recorded, as today.
 
-`gate-respond --release <label>` stamps every snapshot it posts with the release, as `gate-run
---release` does. Omitted, the client reads the release from the run's earlier snapshots on the
-board, so a release gate never loses its release mid-run.
+The held report's help names the reattach command: `gate-run --intent "<intent>"`, plus `--release
+<label>` when the drive knew one.
+
+### §S2 — a run's snapshots keep the run's release (server)
+
+When the board stores a gate snapshot with no `version` whose `gate.run.id` names a run, it stores
+the snapshot under the `version` that the latest earlier snapshot of the same run in the same
+project carries. A snapshot that names no run, or whose run has never carried a release, stays
+release-less: nothing is derived from a branch or a timestamp. A snapshot that carries its own
+`version` keeps it.
 
 ### §S3 — `history --release` tells a planned release from an unknown one
 
-A label the project holds as a release (registered, or named by any queue row) but that History does
-not list yet is answered with an error naming why ("not in History yet: nothing shipped and no CR
-completed"), and a help line pointing at `queue --fields release,seq,points,dependsOn`. Only a label
-the project does not hold at all is "unknown".
+When the label is not among History's releases, the client checks whether the project holds it:
+named by any queue row (`GET …/queue`), or by a live release proposal (`GET …/release-proposals`).
 
-### §S4 — the test-family verbs survive an early signal
+- **Held but not listed:** an error naming why ("not in History yet: nothing shipped and no CR
+  completed"), and a help entry naming `queue --fields release,seq,points,dependsOn`.
+- **Not held:** stays `unknown release: <label>`.
 
-Establish whether `gated_run` has the gap `gate-run` had, reproducing it with the recording board's
-held-reply seam (`tests/client/live_run_harness.py`). If it does, it is fixed the same way, failing
-test first. If it does not, the test that proves it stays as a regression.
+These reads happen on the refusal path only.
 
 ## Acceptance criteria
 
-- [ ] With no-mistakes answering an elapsed wait with a snapshot naming no run, and its status
-      showing the answered step past `awaiting_approval`: `gate-respond` exits 0, its envelope
-      carries `decision: <id>` (not `none`), and the board holds one decision for that run and step.
-- [ ] With the step still `awaiting_approval` after the answer: exit non-zero, `decision: none`, and
-      no decision posted.
-- [ ] `gate-respond --release 0.4.0` posts snapshots whose `release` is `0.4.0`; without the flag, a
-      run whose `gate-run` snapshots carry `0.4.0` gets `0.4.0` on `gate-respond`'s snapshots too.
-- [ ] `history --release <label>`, for a label held by a queue row but not listed by History,
-      exits 1 with an error containing `not in History yet` and a help entry naming `queue`; for a
-      label the project does not hold, the error stays `unknown release: <label>`.
-- [ ] Each test-family verb (`test` in all five clients, plus bun `e2e`), signalled (SIGINT and
-      SIGTERM) while its identity's opening heartbeat is held, removes its identity: one removal
-      and exit 128+signum.
+- [ ] **Accepted after an elapsed wait.** For EACH of the five clients (`bun`, `python`, `mvn`,
+      `rust`, `arduino`), against a fake no-mistakes whose status shows the run awaiting approval at
+      `review` before the respond, and whose respond answer names no run (an elapsed wait) while
+      status then shows `review` completed and `test` running:
+      - the board holds exactly one decision, for that run with `step: review` and the respond's
+        action;
+      - the envelope carries `decision: <that id>` and `inFlight: true`;
+      - the exit is the held exit (non-zero, nothing sealed).
+- [ ] **`--step` omitted.** Same setup, with `--step` omitted: the recorded decision's `step` is
+      `review`, taken from the status read before the respond.
+- [ ] **Refused.** For EACH of the five clients, with status still showing `review` awaiting
+      approval after the respond: no decision is posted, the envelope carries `decision: none`, and
+      the exit is non-zero.
+- [ ] **Held report.** Every held exit of `gate-run` and `gate-respond` prints a help line containing
+      `gate-run --intent`, and also `--release <label>` when the drive was given one.
+- [ ] **Server inheritance.** Through `POST /api/v2/gates`:
+      - a release-less snapshot whose `gate.run.id` matches an earlier snapshot stored with
+        `version: 0.4.0` is stored with `version` `0.4.0`;
+      - a release-less snapshot of a run no snapshot gave a release is stored with none;
+      - a snapshot that names no run is stored with none;
+      - a snapshot carrying its own `version` keeps it, and runs in another project are never read.
+- [ ] **End to end.** `gate-run --release 0.4.0` followed by `gate-respond` on the same run (one
+      client, against a live in-process board): every snapshot the respond posts, and its seal, is
+      stored with `version` `0.4.0`.
+- [ ] **History, held label.** For EACH of the five clients, `history --release <label>` for a label
+      named only by a queue row, and for a label named only by a live release proposal, exits 1. The
+      error contains `not in History yet`, and a help entry names `queue`.
+- [ ] **History, unknown label.** For a label the project does not hold, the error stays
+      `unknown release: <label>`.
+- [ ] **No new CR literals.** No CR-shaped literal is added to comments under `clients/` or `src/`,
+      and the citation tripwire's pins are unchanged.
 
 ## How it is worked
 
-On a feature branch. One cycle per step (§S1–§S4), RED first, then verify. Each change is mirrored
-in all five clients through the shared module.
+On a feature branch, one cycle per step (§S1–§S3), RED first, then verify. The client changes live
+in the shared module (`clients/_crucible_axi.py`), which all five clients' `gate-respond`,
+`gate-run` and `history` verbs already call; the server change is in gate ingest.
