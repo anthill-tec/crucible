@@ -1615,6 +1615,22 @@ GATE_POSTED_INTERIM = "interim"
 # naming a command the tool does not have would strand it further.
 AXI_REATTACH_HELP = "inspect with `axi status` and reattach"
 
+# The step state a decision answers: the run is held at that step until a
+# respond moves it on.
+AXI_AWAITING_APPROVAL = "awaiting_approval"
+
+
+def axi_reattach_help(intent=None, release=None):
+    """The held report's next move, naming the command that reattaches the
+    run: `gate-run --intent <intent>`, plus `--release <label>` when the drive
+    knew one. A drive that does not know the run's intent (a respond) names
+    the flag with a placeholder rather than inventing one."""
+    command = "gate-run --intent " + (shlex.quote(intent) if intent
+                                      else '"<intent>"')
+    if isinstance(release, str) and release:
+        command += f" --release {shlex.quote(release)}"
+    return f"{AXI_REATTACH_HELP} with `{command}`"
+
 # CR-CRU-117 §S2 — what the HUMAN channel says when the poll loop already put
 # an in-flight ladder on the board and the run then held. `NOT SEALED` alone is
 # true and still leaves the impression the board is silent, with only the
@@ -7198,7 +7214,7 @@ def poll_axi_snapshot(no_mistakes_path):
 
 def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
                       context, ops, release=None, heartbeat=None,
-                      poster_for=None):
+                      poster_for=None, observe=None):
     """§S8/CR-CRU-117 §S2 — poll `axi status` while `proc` is alive and POST one
     INTERIM gate per DISTINCT ladder. Returns True when at least one interim
     gate reached the board: the fact the envelope states and the sealing
@@ -7220,7 +7236,9 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
     long as this loop drives the run (`drive_axi_run`). `poster_for(decoded)`,
     when given, answers the id each snapshot posts under in place of
     `agent_id` (`DrivenRunIdentity.poster_for`, which opens the run identity
-    at the run's first snapshot)."""
+    at the run's first snapshot). `observe(decoded)`, when given, is handed
+    every snapshot a poll decoded, so a verb that judges the run after it
+    exits can read the last one (`LastStreamedSnapshot`)."""
     last_poll = None
     last_ladder = None
     posted_interim = False
@@ -7231,6 +7249,8 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
             if heartbeat is not None:
                 heartbeat(GATE_RUN_DRIVING_MESSAGE)
             decoded = poll_axi_snapshot(no_mistakes_path)
+            if decoded is not None and observe is not None:
+                observe(decoded)
             if decoded is not None and axi_snapshot_in_flight(decoded):
                 ladder = axi_ladder_identity(decoded)
                 if ladder != last_ladder:
@@ -7281,7 +7301,8 @@ def gate_run_result_fields(outcome, resolved, release, posted_interim, held,
 
 
 def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
-                        verb="gate-run", axi_verb="axi run"):
+                        verb="gate-run", axi_verb="axi run", intent=None,
+                        release=None):
     """§S3/CR-CRU-117 §S2 — the caller-facing report for an exit that SEALED
     nothing: the stderr lines and the legacy one-liner, built from ONE list of
     facts so the two channels cannot drift apart.
@@ -7293,7 +7314,8 @@ def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
 
     `verb` and `axi_verb` name the proxy verb and the no-mistakes call it drove
     (`gate-run` over `axi run`, `gate-respond` over `axi respond`), so the one
-    report serves every verb `drive_axi_run` runs."""
+    report serves every verb `drive_axi_run` runs. `intent` and `release` are
+    what the reattach move names (`axi_reattach_help`)."""
     said = (f"the run is still in flight — `{axi_verb}` resolved no outcome"
             if held else
             f"the run resolved {resolved!r}, which is in no pass family "
@@ -7304,7 +7326,7 @@ def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
     if detail:
         rest.append(f"the run said: {detail}")
     if held:
-        rest.append(AXI_REATTACH_HELP)
+        rest.append(axi_reattach_help(intent, release))
     lines = [f"{verb}: NOT SEALED: {said}"] + [f"{verb}: {r}" for r in rest]
     legacy = (f"{verb}: ok=False sealed=nothing exit={exit_code} — "
               + "; ".join([said] + rest))
@@ -7358,12 +7380,12 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
 
     return drive_axi_run("gate-run", run_argv, intent, project_dir, agent_id,
                          ops, release=release, skip=skip,
-                         skip_source=skip_source)
+                         skip_source=skip_source, reattach_intent=intent)
 
 
 def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
                   release=None, skip=(), skip_source=ENVELOPE_TIER_NONE,
-                  on_final=None):
+                  on_final=None, on_snapshot=None, reattach_intent=None):
     """G1 — the ONE launch/stream/seal body every axi PROXY verb runs.
 
     `gate-run` drives `no-mistakes axi run` and `gate-respond` drives
@@ -7383,6 +7405,12 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
     and reports that instead; `fields` are added to the envelope (and to the
     legacy line, in order); `ok` False fails an exit that would otherwise
     pass. With no `on_final`, the exit is exactly the seal-or-held one.
+    `on_snapshot(decoded)`, when given, sees every snapshot the poll loop
+    decoded (`stream_axi_ladder`'s `observe`), before `on_final` is asked.
+
+    `reattach_intent` is the run's own intent, named by a held exit's
+    reattach move with the drive's `release` (`axi_reattach_help`); a verb
+    that does not know it leaves it None and the move names a placeholder.
 
     Every snapshot, interim and seal, posts under the run's OWN identity,
     `<caller>\u00b7gate\u00b7<run>` (`gate_run_identity`, `DrivenRunIdentity`): named
@@ -7401,7 +7429,9 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
                 return _drive_axi_run(verb, run_argv, intent, project_dir,
                                       agent_id, run, ops, release=release,
                                       skip=skip, skip_source=skip_source,
-                                      on_final=on_final)
+                                      on_final=on_final,
+                                      on_snapshot=on_snapshot,
+                                      reattach_intent=reattach_intent)
             finally:
                 run.close()
     except RunAbandoned as abandoned:
@@ -7419,7 +7449,8 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
 
 
 def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
-                   ops, *, release, skip, skip_source, on_final):
+                   ops, *, release, skip, skip_source, on_final,
+                   on_snapshot=None, reattach_intent=None):
     """`drive_axi_run`'s body, inside the run-identity bracket: every gate it
     posts is posted as `run.poster_for(snapshot)` (the run identity), while
     `agent_id` (the caller) still names the envelope."""
@@ -7443,7 +7474,8 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
     posted_interim = stream_axi_ladder(proc, run_argv[0], intent, project_dir,
                                        agent_id, context, ops, release,
                                        heartbeat=run.heartbeat,
-                                       poster_for=run.poster_for)
+                                       poster_for=run.poster_for,
+                                       observe=on_snapshot)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout. A closed
@@ -7511,7 +7543,9 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
         lines, legacy = unsealed_run_report(proc.returncode, resolved,
                                             final_decoded.get("error"),
                                             held, posted_interim,
-                                            verb=verb, axi_verb=axi_verb)
+                                            verb=verb, axi_verb=axi_verb,
+                                            intent=reattach_intent,
+                                            release=release)
         for line in lines:
             print(line, file=sys.stderr)
         ops.emit(verb, False, result_fields, envelope_context, [],
@@ -7601,19 +7635,106 @@ def axi_run_id(decoded):
     return run_id if isinstance(run_id, str) and run_id else None
 
 
-def gate_decision_recorder(decision, project_dir, agent_id, ops):
+def awaited_approval(decoded, step=None):
+    """The `(run id, step)` a status read names as awaiting approval -- the
+    decision point a respond answers -- or `(None, None)` when it names no
+    run or no such step. With `step`, only that step counts; without it, the
+    first step awaiting approval is the one answered."""
+    run_id = axi_run_id(decoded) if isinstance(decoded, dict) else None
+    if run_id is None:
+        return None, None
+    for s in decoded["run"].get("steps") or []:
+        name = s.get("step") if isinstance(s, dict) else None
+        if (name and str(s.get("status")) == AXI_AWAITING_APPROVAL
+                and (step is None or name == step)):
+            return run_id, name
+    return None, None
+
+
+def axi_step_status(decoded, run_id, step):
+    """The status a snapshot gives `step` of run `run_id`, or None when it
+    does not say: no ladder, no such step, or a ladder of another run."""
+    run = decoded.get("run") if isinstance(decoded, dict) else None
+    if not isinstance(run, dict):
+        return None
+    named = run.get("id")
+    if named and named != run_id:
+        return None
+    for s in run.get("steps") or []:
+        if isinstance(s, dict) and s.get("step") == step:
+            return str(s.get("status") or "")
+    return None
+
+
+class LastStreamedSnapshot:
+    """The last snapshot a drive's poll loop decoded (`drive_axi_run`'s
+    `on_snapshot`), kept for a verb that judges the run once it exits."""
+
+    def __init__(self):
+        self.decoded = None
+
+    def observe(self, decoded):
+        self.decoded = decoded
+
+
+def awaited_step_moved_on(run_id, step, answer, streamed, no_mistakes_path):
+    """Did the respond move `step` of run `run_id` past awaiting approval?
+    True (accepted), False (refused: it is still awaiting), or None when no
+    snapshot says.
+
+    Judged by the step's OWN status, never by whether the respond's answer
+    names a run: an elapsed wait and a refusal both answer with no run. The
+    answer and the drive's last streamed snapshot settle it when either shows
+    the step moved on; otherwise one more `axi status` read decides, since a
+    snapshot streamed while the respond was still starting can predate the
+    decision."""
+    for seen in (answer, streamed):
+        status = axi_step_status(seen, run_id, step)
+        if status is not None and status != AXI_AWAITING_APPROVAL:
+            return True
+    status = axi_step_status(poll_axi_snapshot(no_mistakes_path), run_id, step)
+    if status is None:
+        return None
+    return status != AXI_AWAITING_APPROVAL
+
+
+def gate_decision_recorder(decision, project_dir, agent_id, ops, *,
+                           awaited=(None, None), streamed=None,
+                           no_mistakes_path=None):
     """G6 — `drive_axi_run`'s `on_final` for `gate-respond`: record the
-    decision once the tool has ACCEPTED it, which is when its snapshot names
-    the run it acted on. Whether that run then resolved or its wait elapsed
-    does not matter — an elapsed wait is not a failed run. A snapshot naming
-    no run is a refusal (AC5): reported, and nothing is recorded."""
+    decision once the tool has ACCEPTED it. Whether that run then resolved or
+    its wait elapsed does not matter — an elapsed wait is not a failed run.
+    A refusal is reported, and nothing is recorded.
+
+    `awaited` is the `(run id, step)` the status read before the respond named
+    as awaiting approval (`awaited_approval`). When it names one, the decision
+    is judged by that step's own status afterwards (`awaited_step_moved_on`,
+    reading `streamed`'s last snapshot and `no_mistakes_path`): moved on is
+    accepted and recorded against that run, whether or not the respond's
+    answer named it; still awaiting is refused. Otherwise, or when no snapshot
+    says, the answer decides: one naming the run it acted on is accepted, one
+    naming no run is refused."""
+    awaited_run, awaited_step = awaited
+
     def record(decoded):
         if decoded is None:
             return ("no-mistakes answered with no snapshot, so it took no "
                     "decision", {"decision": ENVELOPE_TIER_NONE}, False)
         run_id = axi_run_id(decoded)
+        said = decoded.get("error")
+        if awaited_run is not None:
+            moved_on = awaited_step_moved_on(
+                awaited_run, awaited_step, decoded,
+                streamed.decoded if streamed is not None else None,
+                no_mistakes_path)
+            if moved_on is False:
+                return ((f"no-mistakes recorded no decision — step "
+                         f"{awaited_step!r} is still awaiting approval"
+                         + (f": {said}" if said else "")),
+                        {"decision": ENVELOPE_TIER_NONE}, False)
+            if moved_on:
+                run_id = awaited_run
         if run_id is None:
-            said = decoded.get("error")
             return (("no-mistakes recorded no decision — its answer names no "
                      "run" + (f": {said}" if said else "")),
                     {"decision": ENVELOPE_TIER_NONE}, False)
@@ -7661,11 +7782,21 @@ def cmd_gate_respond(args, project_dir, no_mistakes_path, ops):
                  f"not launched: {e}")
         return 1
 
+    # One status read BEFORE the respond names the run and the step awaiting
+    # approval: the step the decision answers when `--step` is omitted, and
+    # the step whose own status judges it once the respond exits.
+    awaited = awaited_approval(poll_axi_snapshot(nm), args.step)
+    if awaited[1] is not None and "step" not in decision:
+        decision["step"] = awaited[1]
+    streamed = LastStreamedSnapshot()
+
     run_argv = [nm, "axi", "respond"] + gate_respond_argv(args)
     return drive_axi_run(
         "gate-respond", run_argv, f"respond: {args.action}", project_dir,
-        agent_id, ops,
-        on_final=gate_decision_recorder(decision, project_dir, agent_id, ops))
+        agent_id, ops, on_snapshot=streamed.observe,
+        on_final=gate_decision_recorder(decision, project_dir, agent_id, ops,
+                                        awaited=awaited, streamed=streamed,
+                                        no_mistakes_path=nm))
 
 
 def _decode_axi_snapshot(snapshot):
