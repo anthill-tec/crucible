@@ -402,6 +402,40 @@ class HistoryContractTests:
             f"{self.CLIENT}: and an EMPTY gate-run table — never a "
             f"fabricated row; got {axi.get('history')!r}")
 
+    def test_a_label_history_lists_never_reads_the_queue_or_release_proposals(self):
+        # The held check is the REFUSAL path only: a label History already
+        # lists answers from the one history read, and the two sources that
+        # tell a planned release from an unknown one are never consulted.
+        # Both answer here, so a stray read would succeed silently and only
+        # the recorded calls can catch it.
+        responses = {
+            HISTORY_PATH: HISTORY_RESPONSE,
+            QUEUE_PATH: QUEUE_RESPONSE_HOLDS_LABEL,
+            RELEASE_PROPOSALS_PATH: PROPOSALS_RESPONSE_EMPTY,
+        }
+        for label in ("9.9.9", "9.9.8"):
+            with self.subTest(release=label):
+                code, out, err, mock_get = self.drive_multi(
+                    ["--release", label], responses)
+                self.assertEqual(
+                    code, 0,
+                    f"{self.CLIENT}: `--release {label}` names a release "
+                    f"History lists; must succeed; stdout={out!r} "
+                    f"stderr={err!r}")
+                called_paths = [call.args[0] for call in mock_get.call_args_list]
+                self.assertNotIn(
+                    QUEUE_PATH, called_paths,
+                    f"{self.CLIENT}: a label History lists must never read "
+                    f"the queue; calls={called_paths!r}")
+                self.assertNotIn(
+                    RELEASE_PROPOSALS_PATH, called_paths,
+                    f"{self.CLIENT}: a label History lists must never read "
+                    f"the release proposals; calls={called_paths!r}")
+                self.assertEqual(
+                    called_paths, [HISTORY_PATH],
+                    f"{self.CLIENT}: a label History lists is answered by "
+                    f"the one history read alone; calls={called_paths!r}")
+
     def test_an_unknown_release_label_is_refused_with_help(self):
         code, out, err, _mg = self.drive(["--release", "42.0.0"], HISTORY_RESPONSE)
         self.assertEqual(
