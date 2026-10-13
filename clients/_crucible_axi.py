@@ -2271,7 +2271,7 @@ def emit_release_run_refused_hard_stop(verb, refusal, context=None):
     return 1
 
 
-def _hard_stop_context(args, project_key_fn):
+def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
     `project_key_fn(args)` is the client's own `.env` key resolver (project-dir
@@ -2282,7 +2282,7 @@ def _hard_stop_context(args, project_key_fn):
     if project_key_fn is None:
         return {}
     try:
-        return axi_context(project_key_fn(args))
+        return axi_context(project_key_fn(args), agent_id=agent_id)
     except Exception:
         return {}
 
@@ -2315,6 +2315,12 @@ def run_verb(func, args, project_key_fn=None):
         return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
+    except RunAbandoned as abandoned:
+        # A signal that escaped a gated-run bracket: the bracket already
+        # aborted its open run and removed its identity.
+        return emit_bracket_abandoned(
+            getattr(args, "cmd", None), abandoned,
+            _hard_stop_context(args, project_key_fn, abandoned.agent_id))
 
 
 def fleet_context(cr=None):
@@ -5511,17 +5517,37 @@ def post_ingest(post_fn, path, payload, *, release=None):
         _ingested_run_tier = (payload or {}).get("tier")
     elif path == COMPILE_INGEST_PATH:
         _ingested_compile = True
-    resp = post_fn(path, payload)
-    # An ingest carrying a runId that the board REFUSED files nothing for the
-    # run this client opened, so the run is closed here, once, through
-    # `abort_run` \u2014 the one seam every client's every ingest passes through.
     run_id = (payload or {}).get("runId")
-    if run_id and not (resp or {}).get("ok") and run_id not in _refused_ingest_runs:
-        _refused_ingest_runs.add(run_id)
-        error = (resp or {}).get("error") or "no reason given"
-        _refused_ingest_warnings.append(abort_run(
-            post_fn, payload.get("projectKey"), payload.get("agentId"), run_id,
-            f"the board refused the ingest that carried it ({error})"))
+    refused = None
+    # Inside a gated bracket the ingest is held: a signal landing on it is
+    # noted, the run is filed (or, refused, aborted) first, and the signal is
+    # raised once that is done, carrying the run it settled.
+    try:
+        with _gated_held():
+            resp = post_fn(path, payload)
+            if run_id:
+                # Filed (or, refused, aborted just below): a gated bracket has
+                # no open run left to abort for it.
+                _settle_gated_run(run_id)
+            # An ingest carrying a runId that the board REFUSED files nothing
+            # for the run this client opened, so the run is closed here, once,
+            # through `abort_run` \u2014 the one seam every client's every ingest
+            # passes through.
+            if (run_id and not (resp or {}).get("ok")
+                    and run_id not in _refused_ingest_runs):
+                _refused_ingest_runs.add(run_id)
+                error = (resp or {}).get("error") or "no reason given"
+                refused = abort_run(
+                    post_fn, payload.get("projectKey"), payload.get("agentId"),
+                    run_id,
+                    f"the board refused the ingest that carried it ({error})")
+                _refused_ingest_warnings.append(refused)
+    except RunAbandoned as abandoned:
+        abandoned.run_id = run_id
+        if refused is not None:
+            _refused_ingest_warnings.remove(refused)
+            abandoned.warnings = [refused]
+        raise
     return resp
 
 
@@ -6525,6 +6551,7 @@ def abort_run(post_fn, project_key, agent_id, run_id, reason):
     resp = post_fn(run_abort_path(run_id),
                    {"projectKey": project_key, "agentId": agent_id,
                     "reason": reason}) or {}
+    _settle_gated_run(run_id)
     if resp.get("ok"):
         print(f"[crucible] run {run_id} aborted: {reason}", file=sys.stderr)
         return run_aborted_warning(run_id, reason)
@@ -6548,13 +6575,27 @@ def no_report_left_open_warnings(run_id, artifact, *, post_fn, project_key,
         f"the runner produced no {artifact}, so there was nothing to ingest")]
 
 
-class RunAbandoned(Exception):
+class RunAbandoned(BaseException):
     """SIGINT/SIGTERM arrived while a WRAPPED run was in flight. Carries the
-    signal number so the verb exits on the conventional 128+signum."""
+    signal number so the verb exits on the conventional 128+signum.
+
+    A `BaseException`, as `KeyboardInterrupt` is: a best-effort `except
+    Exception` on the way (a pre-flight lookup, a disk probe) must never
+    swallow the signal and let the run carry on as if nothing had landed.
+
+    When it escapes a gated-run bracket's body (`gated_run`), the bracket
+    records what it closed on the way out: `agent_id` (the identity it opened
+    and removed), `run_id` (the run `open_run` had opened inside it, already
+    aborted \u2014 or filed, when the signal landed on its held ingest) and
+    `warnings` (an abort's one warning; none for a filed run), so `run_verb`
+    can report the exit without reaching back into the bracket."""
 
     def __init__(self, signum):
         super().__init__(f"run abandoned on {signal.Signals(signum).name}")
         self.signum = signum
+        self.agent_id = None
+        self.run_id = None
+        self.warnings = []
 
 
 class AbandonTrap:
@@ -6568,11 +6609,16 @@ class AbandonTrap:
     nothing. A slow runner widens exactly that gap. Inside `held()` a signal
     is noted, not raised; it is raised as `RunAbandoned` the moment the span
     ends, once the step has recorded what it created. An untrapped run never
-    installs the handler, so `held()` is then inert."""
+    installs the handler, so `held()` is then inert.
+
+    `reported` turns True once a signal inside this trap's span has been
+    turned into the exit's one `ok: false` envelope (or is on its way to
+    it): a later signal then has nothing left to report."""
 
     def __init__(self):
         self._holding = 0
         self._pending = None
+        self.reported = False
 
     def handle(self, signum, _frame):
         if self._holding:
@@ -6627,6 +6673,93 @@ def abandon_trap(run_id):
             signal.signal(sig, handler)
 
 
+# The gated-run bracket in flight in this process (`gated_run`): its trap, and
+# the run `open_run` opened inside it that nothing has filed or closed yet, as
+# `(post_fn, project_key, agent_id, run_id)`. Module state for the same reason
+# the ingest claim is: `open_run` is reached from the bracket's body through
+# each client's own `_start_run`, which carries no trap, and `post_ingest` /
+# `abort_run` settle the run from wherever the client files or closes it.
+_gated_trap = None
+_gated_open_run = None
+
+
+def _gated_held():
+    """The in-flight gated bracket's `held()` span, or an inert one outside a
+    bracket: a step that opens something on the board and learns it did only
+    from the answer runs inside it."""
+    if _gated_trap is None:
+        return contextlib.nullcontext()
+    return _gated_trap.held()
+
+
+def _note_gated_run(post_fn, project_key, agent_id, run_id):
+    """Record the run `open_run` just opened inside the gated bracket, so a
+    signal before it is filed aborts it."""
+    global _gated_open_run
+    if _gated_trap is not None:
+        _gated_open_run = (post_fn, project_key, agent_id, run_id)
+
+
+def _settle_gated_run(run_id):
+    """`run_id` was filed or closed: the gated bracket has nothing left to
+    abort for it."""
+    global _gated_open_run
+    if _gated_open_run is not None and _gated_open_run[3] == run_id:
+        _gated_open_run = None
+
+
+def _abort_gated_run(abandoned):
+    """Close the run the gated bracket's body opened and has not filed, with a
+    reason naming the signal, and record it and its abort's warning on
+    `abandoned`. Inert when no such run is open."""
+    if _gated_open_run is None:
+        return
+    post_fn, project_key, agent_id, run_id = _gated_open_run
+    signame = signal.Signals(abandoned.signum).name
+    abandoned.run_id = run_id
+    abandoned.warnings = [abort_run(post_fn, project_key, agent_id, run_id,
+                                    f"{signame} interrupted the wrapped run")]
+
+
+def _emit_abandoned(verb, context, run_id, signum, warnings, closing):
+    """The ONE ok:false envelope of an interrupted run: it names the signal and,
+    when a run was open, the run and how it was settled (`closing`, its
+    `abort_run` warning; None with a `run_id` when the run was filed).
+    Returns the exit code, 128+signum."""
+    if _gated_trap is not None:
+        # Printed inside a gated bracket: its closing step must not print a
+        # second one for a signal that lands after this.
+        _gated_trap.reported = True
+    signame = signal.Signals(signum).name
+    warnings = list(warnings or [])
+    if closing is None and run_id is None:
+        fields = {"signal": signame}
+        tail = "no run was open on the board"
+    elif closing is None:
+        fields = {"runId": run_id, "signal": signame}
+        tail = f"run {run_id} was filed before the exit"
+    else:
+        settled = ("aborted" if closing["code"] == RUN_ABORTED_CODE
+                   else "left open for the server's auto-abort")
+        fields = {"runId": run_id, "signal": signame,
+                  "help": run_left_open_help()}
+        tail = f"run {run_id} {settled}"
+        warnings.append(closing)
+    emit_axi(verb, False, fields, context, warnings,
+             f"{verb}: ok=False \u2014 {signame} interrupted the run; {tail}")
+    return 128 + signum
+
+
+def emit_bracket_abandoned(verb, abandoned, context):
+    """The exit of a signal that escaped a gated-run bracket: the bracket has
+    already settled the run it opened (when it opened one) \u2014 filed by a held
+    ingest, or aborted \u2014 and removed its identity, so all that is left is the
+    one envelope. Returns 128+signum."""
+    closing = abandoned.warnings[-1] if abandoned.warnings else None
+    return _emit_abandoned(verb or "unknown", context, abandoned.run_id,
+                           abandoned.signum, abandoned.warnings[:-1], closing)
+
+
 def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
                        warnings=None, *, post_fn):
     """The signal path's ONLY output: the run it opened is closed through
@@ -6640,20 +6773,18 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
     accumulated when the signal landed (the pre-flight `no-cycle` among them).
     The envelope here is built from a literal, so without them this one exit
     would print a warning on stderr and omit it from `warnings[]`; the
-    two-channel guarantee holds on EVERY exit or on none."""
-    signame = signal.Signals(abandoned.signum).name
-    closing = abort_run(post_fn, project_key, agent_id, run_id,
-                        f"{signame} interrupted the wrapped run")
-    settled = ("aborted" if closing["code"] == RUN_ABORTED_CODE
-               else "left open for the server's auto-abort")
-    emit_axi(
-        verb, False,
-        {"runId": run_id, "signal": signame, "help": run_left_open_help()},
-        axi_context(project_key, agent_id=agent_id),
-        list(warnings or []) + [closing],
-        f"{verb}: ok=False \u2014 {signame} interrupted the run; run {run_id} "
-        f"{settled}")
-    return 128 + abandoned.signum
+    two-channel guarantee holds on EVERY exit or on none.
+
+    A run the board never opened (`run_id` None: the runner of a run whose
+    `/runs/start` was refused or skipped, trapped by the gated bracket) has
+    nothing to abort; the envelope then names the signal alone."""
+    closing = None
+    if run_id is not None:
+        signame = signal.Signals(abandoned.signum).name
+        closing = abort_run(post_fn, project_key, agent_id, run_id,
+                            f"{signame} interrupted the wrapped run")
+    return _emit_abandoned(verb, axi_context(project_key, agent_id=agent_id),
+                           run_id, abandoned.signum, warnings, closing)
 
 
 def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
@@ -6675,8 +6806,14 @@ def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
         payload["context"] = context
     if release:
         payload["release"] = release
-    resp = post_fn(RUN_START_PATH, payload) or {}
-    run_id = resp.get("runId")
+    # Inside a gated bracket the board creates the run before its answer is
+    # read, so the POST is held: a signal landing on it is raised once the run
+    # is recorded, and the bracket aborts it.
+    with _gated_held():
+        resp = post_fn(RUN_START_PATH, payload) or {}
+        run_id = resp.get("runId")
+        if run_id:
+            _note_gated_run(post_fn, project_key, agent_id, run_id)
     if run_id:
         print(f"[crucible] run started: {run_id}", file=sys.stderr)
         return run_id, []
@@ -6826,14 +6963,63 @@ def gated_run(project_dir, agent_id, cycle_id, message, *, open_fn, close_fn):
 
     `open_fn` / `close_fn` are the CLIENT's own `_open_gate_identity` /
     `_close_gate_identity` delegators, so the bracket's two board touches stay
-    the patchable seams in the client module, exactly as before."""
+    the patchable seams in the client module, exactly as before.
+
+    With an agent, SIGINT/SIGTERM are trapped for the WHOLE bracket
+    (`abandon_trap`), and the identity is opened inside the trap's `held()`,
+    as `drive_axi_run`'s run identity is. A signal that escapes the body \u2014
+    landing anywhere a verb's own runner trap does not cover \u2014 aborts the
+    run `open_run` opened inside the bracket (when it opened one and nothing
+    has filed it), removes the identity, and propagates as `RunAbandoned`
+    carrying both, for `run_verb` to report on 128+signum. The ingest
+    (`post_ingest`) runs inside the same `held()`: a signal landing on it lets
+    the ingest file the run, then propagates naming that filed run. The
+    identity's removal runs inside `held()` too, so a signal never cuts it
+    short: when the exit's interrupted envelope is already printed or owed,
+    a signal landing on the removal is dropped; on an otherwise-normal exit
+    it propagates as `RunAbandoned` naming the identity. Without an agent the
+    default disposition stands."""
+    global _gated_trap, _gated_open_run
+    if not agent_id:
+        try:
+            yield None
+        finally:
+            close_fn(project_dir, None)
+        return
     identity = None
+    with abandon_trap(agent_id) as trap:
+        outer = (_gated_trap, _gated_open_run)
+        _gated_trap, _gated_open_run = trap, None
+        try:
+            with trap.held():
+                identity = open_fn(project_dir, agent_id, cycle_id, message)
+            yield identity
+        except RunAbandoned as abandoned:
+            trap.reported = True
+            _abort_gated_run(abandoned)
+            abandoned.agent_id = agent_id
+            raise
+        finally:
+            try:
+                _close_gated_identity(trap, project_dir, identity, agent_id,
+                                      close_fn)
+            finally:
+                _gated_trap, _gated_open_run = outer
+
+
+def _close_gated_identity(trap, project_dir, identity, agent_id, close_fn):
+    """The gated bracket's closing step: remove the identity inside the
+    trap's `held()`, so a signal landing on it lets the removal finish. That
+    signal then ends the exit with its one envelope — unless the exit has
+    already reported a signal, when it is dropped."""
     try:
-        if agent_id:
-            identity = open_fn(project_dir, agent_id, cycle_id, message)
-        yield identity
-    finally:
-        close_fn(project_dir, identity)
+        with trap.held():
+            close_fn(project_dir, identity)
+    except RunAbandoned as late:
+        if trap.reported:
+            return
+        late.agent_id = agent_id
+        raise
 
 
 def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):

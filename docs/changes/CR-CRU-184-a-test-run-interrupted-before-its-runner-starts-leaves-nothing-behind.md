@@ -63,28 +63,28 @@ naming the signal, which also reports the filed run. The results the runner earn
 Every case below runs a REAL client subprocess against the recording board, using its held-reply seam
 (`hold_next_reply`) and each stack's fake runner (`tests/client/live_run_harness.py`).
 
-- [ ] **Opening, every call site.** For EACH of the 13 call sites above (one verb per site), SIGTERM
+- [x] **Opening, every call site.** For EACH of the 13 call sites above (one verb per site), SIGTERM
       sent while the identity's opening heartbeat is held:
       - the identity is removed (one removal);
       - no run is left open;
       - the exit is 143 and the envelope names `SIGTERM`.
-- [ ] **Opening, both signals.** For EACH of the five clients (its `test` verb), the same with SIGINT
+- [x] **Opening, both signals.** For EACH of the five clients (its `test` verb), the same with SIGINT
       (exit 130) and with SIGTERM.
-- [ ] **Run opening.** For EACH of the five clients (`test`), SIGINT and SIGTERM sent while
+- [x] **Run opening.** For EACH of the five clients (`test`), SIGINT and SIGTERM sent while
       `/runs/start`'s reply is held:
       - the run is aborted with a reason naming the signal;
       - the identity is removed;
       - the exit is 128+signum.
-- [ ] **No run opened.** For EACH of the five clients (`test`), with `/runs/start` refused by the
+- [x] **No run opened.** For EACH of the five clients (`test`), with `/runs/start` refused by the
       board, SIGTERM during the runner removes the identity and exits 143.
-- [ ] **Ingest held.** For EACH of the five clients (`test`), SIGTERM sent while the ingest's reply
+- [x] **Ingest held.** For EACH of the five clients (`test`), SIGTERM sent while the ingest's reply
       is held:
       - the run is filed with the runner's results and is not aborted;
       - the identity is removed;
       - the exit is 143 and the envelope names `SIGTERM` and the run id.
-- [ ] **Runner unchanged.** A signal during the runner of an opened run behaves exactly as today, and
+- [x] **Runner unchanged.** A signal during the runner of an opened run behaves exactly as today, and
       every existing interrupt test passes unchanged.
-- [ ] **No new CR literals.** No CR-shaped literal is added to comments under `clients/`, and the
+- [x] **No new CR literals.** No CR-shaped literal is added to comments under `clients/`, and the
       citation tripwire's pins are unchanged.
 
 ## How it is worked
