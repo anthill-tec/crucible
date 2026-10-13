@@ -718,6 +718,14 @@ def take_unknown_project_help():
     return taken
 
 
+def forget_unknown_project_refusal():
+    """Clear a noted unknown-project refusal. Called once per verb dispatch
+    (`run_verb`), so a refusal a verb left unreported (it exited without an
+    envelope) is never carried into the next verb of the same process."""
+    global _unknown_project_help
+    _unknown_project_help = None
+
+
 def unknown_project_warning():
     """The warning an unknown-project refusal carries: the `.env` the key was
     read from, which is where the operator corrects it."""
@@ -2354,8 +2362,10 @@ def run_verb(func, args, project_key_fn=None):
 
     CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
     tier statement starts from `none` here: an invocation may never inherit
-    what an earlier one in the same process put on the board."""
+    what an earlier one in the same process put on the board. Nor may it
+    inherit an unknown-project refusal an earlier one was handed."""
     forget_ingested_run()
+    forget_unknown_project_refusal()
     try:
         return func(args)
     except AgentIdentityRequired:
