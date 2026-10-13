@@ -120,9 +120,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
+import { hints } from "../src/hints.ts";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+
+// A well-formed UUID the board has never been asked to hold — the exact
+// shape of key a mistyped or invented `.env` carries. Every client reads
+// its key verbatim and sends it on; none of them invents or repairs one.
+const UNKNOWN_PROJECT_KEY = "00000000-0000-0000-0000-000000000000";
 
 // ── spawn + capture helpers ──────────────────────────────────────────────
 
@@ -225,6 +231,14 @@ async function getAgents(
 
 async function getAgentIds(baseUrl: string, key: string): Promise<string[]> {
   return (await getAgents(baseUrl, key)).map((a) => a.agentId);
+}
+
+/** The project keys the board currently holds, sorted — so a refused write
+ *  that must leave the project list untouched can be pinned before/after. */
+async function listProjectKeys(baseUrl: string): Promise<string[]> {
+  const res = await fetch(`${baseUrl}/api/v2/projects`);
+  const body = (await res.json()) as { projects: Array<{ key: string }> };
+  return body.projects.map((p) => p.key).sort();
 }
 
 interface PlanCycleWire {
@@ -683,6 +697,79 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     // is not exercising a TDD role — it is no longer an implicit default
     // (--role is required), but it still round-trips the same way.
     expect(agent!.message.toLowerCase()).toContain("report");
+  });
+});
+
+describe("clients/bun-crucible.py — a key no project holds is refused by every write, not silently adopted", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  test("register against a key the board does not hold exits non-zero, names the key, carries the board's own help[] and a warning naming the .env path — the project list and agent roster are both untouched", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratchDir("bun-crucible-unknown-key-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${UNKNOWN_PROJECT_KEY}\n`);
+    const envPath = join(dir, ".env");
+
+    const res = await runScript(
+      ["register", "--agent", "bc-unknown-key", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    // The TOP-LEVEL help[] is REPLACED by the board's own hint, not merely
+    // echoed somewhere inside the raw HTTP error body.
+    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
+    expect(helpLine).toBe(hints.unknownProject.join(","));
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+  });
+
+  test("'test' against a key the board does not hold is refused the SAME way: non-zero exit, the board's own unknown-project envelope — no project is created and no run is recorded", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratchDir("bun-crucible-unknown-key-test-");
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "clients-bun-crucible-unknown-key-fixture", version: "0.0.0", private: true }),
+    );
+    writeFileSync(
+      join(dir, "sample.test.ts"),
+      'import { test, expect } from "bun:test";\n\ntest("adds numbers correctly", () => {\n  expect(1 + 1).toBe(2);\n});\n',
+    );
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${UNKNOWN_PROJECT_KEY}\n`);
+    const envPath = join(dir, ".env");
+
+    const res = await runScript(
+      ["test", "--agent", "bc-unknown-key-test", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
+    expect(helpLine).toBe(hints.unknownProject.join(","));
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
   });
 });
 
