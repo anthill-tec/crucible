@@ -1,7 +1,7 @@
 // §S3/AC "Docs" — the PRD and the client-fleet DN stop promising client
 // self-registration.
 //
-// Spec: docs/changes/CR-CRU-185-a-run-under-a-key-no-project-holds-is-refused.md
+// Spec: the spec for this change, under docs/changes/
 //   §S3: "The PRD's transition-shim line that names 'idempotent
 //   self-registration', and the client-fleet DN's `_project_key` row that
 //   describes arduino's `_ensure_project`, say instead that clients never
