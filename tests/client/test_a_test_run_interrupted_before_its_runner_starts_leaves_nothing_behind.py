@@ -210,7 +210,8 @@ class _OpeningSignalCase(unittest.TestCase):
     def _drive_held_heartbeat_signal(self, cmd, signum):
         """Hold the identity's OPENING heartbeat's reply, wait for it to
         reach the board, signal the client, THEN release the reply — the
-        window CR-CRU-180 already closed for `gate-run`'s own identity."""
+        window gate-run's own identity bracket already closed for its own
+        identity."""
         self.board.hold_next_reply(HEARTBEAT_PATH)
         proc = subprocess.Popen(cmd, cwd=self.project, env=self.env(),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -330,9 +331,9 @@ class _OpeningSignalCase(unittest.TestCase):
             f"stderr={stderr[-2000:]!r}")
 
 
-# The call-site table CR-CRU-184 §1 names: (client, call site, the ONE verb
-# this file drives it through, the argv builder above for that verb). Named
-# by VERB in every subTest/assertion below, never by line number.
+# The call-site table the spec names: (client, call site, the ONE verb this
+# file drives it through, the argv builder above for that verb). Named by
+# VERB in every subTest/assertion below, never by line number.
 CALL_SITES = (
     ("bun", "cmd_test", "test", "_bun_test_cmd"),
     ("bun", "cmd_regression", "regression", "_bun_regression_cmd"),
@@ -366,7 +367,7 @@ class OpeningEveryCallSiteRemovesTheIdentityTest(_OpeningSignalCase):
     def test_the_call_site_table_names_exactly_thirteen_sites(self):
         self.assertEqual(
             len(CALL_SITES), 13,
-            f"CR-CRU-184 §1's table names 13 call sites; got "
+            f"the spec's call-site table names 13 call sites; got "
             f"{len(CALL_SITES)}: {CALL_SITES!r}")
 
     def test_every_call_site_removes_the_identity_and_leaves_no_run_open_on_sigterm(self):
@@ -474,9 +475,10 @@ class NoRunOpenedRemovesTheIdentityOnRunnerSignalTest(_OpeningSignalCase):
 # ═══════════════════════════════════════════════════════════════════════════
 # "Runner unchanged" pin — stability, NOT RED by construction: the one span
 # `abandon_trap` already wraps today (the runner, once `/runs/start` has
-# already returned a real run id) is untouched by this CR and must keep
-# behaving exactly as CR-CRU-170 already landed it. A representative single
-# case; the fleet-wide sweep of this span already lives in
+# already returned a real run id) is untouched by this change and must keep
+# behaving exactly as the runner-interrupt abort the clients already have
+# does today. A representative single case; the fleet-wide sweep of this span
+# already lives in
 # `test_a_client_aborts_a_run_it_cannot_file.py` and is not duplicated here.
 # ═══════════════════════════════════════════════════════════════════════════
 
