@@ -40,8 +40,9 @@ Found while releasing 0.3.0 (2026-10-10), and by Model B's first use of 0.3.0 (S
 
 Before launching `no-mistakes axi respond`, `gate-respond` reads `no-mistakes axi status` once. That
 read names the run and the step awaiting approval, which is the step the decision answers when
-`--step` is omitted. After respond exits, the client judges the decision by that step's status
-(from the drive's last streamed snapshot, or one more `axi status` read when the stream has none):
+`--step` is omitted. After respond exits, the client judges the decision by that step's status. A snapshot that shows
+the step moved on (the respond's own answer, or the drive's last streamed snapshot) settles it.
+Otherwise one more `axi status` read decides, because a streamed snapshot can predate the decision:
 
 - **Accepted** (the step is no longer awaiting approval): the decision is recorded against the run,
   whether or not the respond's own answer named it. An exit whose run is still going is then a held
