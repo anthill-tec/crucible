@@ -121,6 +121,7 @@ import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { hints } from "../src/hints.ts";
+import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
@@ -735,8 +736,8 @@ describe("clients/bun-crucible.py — a key no project holds is refused by every
     expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
     // The TOP-LEVEL help[] is REPLACED by the board's own hint, not merely
     // echoed somewhere inside the raw HTTP error body.
-    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
-    expect(helpLine).toBe(hints.unknownProject.join(","));
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
     expect(res.stdout).toContain(envPath);
     expect(await listProjectKeys(baseUrl)).toEqual(before);
     expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
@@ -765,8 +766,8 @@ describe("clients/bun-crucible.py — a key no project holds is refused by every
 
     expect(res.code).not.toBe(0);
     expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
-    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
-    expect(helpLine).toBe(hints.unknownProject.join(","));
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
     expect(res.stdout).toContain(envPath);
     expect(await listProjectKeys(baseUrl)).toEqual(before);
     expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);

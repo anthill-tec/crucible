@@ -117,6 +117,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 import { hints } from "../src/hints.ts";
+import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const PYTHON_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "python-crucible.py");
@@ -694,8 +695,8 @@ describe("clients/python-crucible.py — a key no project holds is refused by ev
     // REPLACED by the board's own hint, not merely echoed somewhere inside the
     // raw HTTP error body (which already carries it verbatim and would make a
     // bare substring check pass before the fix lands).
-    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
-    expect(helpLine).toBe(hints.unknownProject.join(","));
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
     expect(res.stdout).toContain(envPath);
     expect(await listProjectKeys(baseUrl)).toEqual(before);
     expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
@@ -726,8 +727,8 @@ describe("clients/python-crucible.py — a key no project holds is refused by ev
 
     expect(res.code).not.toBe(0);
     expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
-    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
-    expect(helpLine).toBe(hints.unknownProject.join(","));
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
     expect(res.stdout).toContain(envPath);
     expect(await listProjectKeys(baseUrl)).toEqual(before);
     expect(await nonLifecycleEvents(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
@@ -1493,8 +1494,8 @@ describe("clients/arduino-crucible.py — a key no project holds is refused by e
 
     expect(res.code).not.toBe(0);
     expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
-    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
-    expect(helpLine).toBe(hints.unknownProject.join(","));
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
     expect(res.stdout).toContain(envPath);
     expect(await listProjectKeys(baseUrl)).toEqual(before);
     expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
@@ -1521,8 +1522,8 @@ describe("clients/arduino-crucible.py — a key no project holds is refused by e
 
     expect(res.code).not.toBe(0);
     expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
-    const helpLine = res.stdout.match(/^ {2}help\[\d+\]: (.+)$/m)?.[1];
-    expect(helpLine).toBe(hints.unknownProject.join(","));
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
     expect(res.stdout).toContain(envPath);
     expect(await listProjectKeys(baseUrl)).toEqual(before);
     expect(await nonLifecycleEvents(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
