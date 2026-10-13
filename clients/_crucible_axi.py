@@ -6609,11 +6609,16 @@ class AbandonTrap:
     nothing. A slow runner widens exactly that gap. Inside `held()` a signal
     is noted, not raised; it is raised as `RunAbandoned` the moment the span
     ends, once the step has recorded what it created. An untrapped run never
-    installs the handler, so `held()` is then inert."""
+    installs the handler, so `held()` is then inert.
+
+    `reported` turns True once a signal inside this trap's span has been
+    turned into the exit's one `ok: false` envelope (or is on its way to
+    it): a later signal then has nothing left to report."""
 
     def __init__(self):
         self._holding = 0
         self._pending = None
+        self.reported = False
 
     def handle(self, signum, _frame):
         if self._holding:
@@ -6721,6 +6726,10 @@ def _emit_abandoned(verb, context, run_id, signum, warnings, closing):
     when a run was open, the run and how it was settled (`closing`, its
     `abort_run` warning; None with a `run_id` when the run was filed).
     Returns the exit code, 128+signum."""
+    if _gated_trap is not None:
+        # Printed inside a gated bracket: its closing step must not print a
+        # second one for a signal that lands after this.
+        _gated_trap.reported = True
     signame = signal.Signals(signum).name
     warnings = list(warnings or [])
     if closing is None and run_id is None:
@@ -6964,8 +6973,12 @@ def gated_run(project_dir, agent_id, cycle_id, message, *, open_fn, close_fn):
     has filed it), removes the identity, and propagates as `RunAbandoned`
     carrying both, for `run_verb` to report on 128+signum. The ingest
     (`post_ingest`) runs inside the same `held()`: a signal landing on it lets
-    the ingest file the run, then propagates naming that filed run. Without an
-    agent the default disposition stands."""
+    the ingest file the run, then propagates naming that filed run. The
+    identity's removal runs inside `held()` too, so a signal never cuts it
+    short: when the exit's interrupted envelope is already printed or owed,
+    a signal landing on the removal is dropped; on an otherwise-normal exit
+    it propagates as `RunAbandoned` naming the identity. Without an agent the
+    default disposition stands."""
     global _gated_trap, _gated_open_run
     if not agent_id:
         try:
@@ -6982,14 +6995,31 @@ def gated_run(project_dir, agent_id, cycle_id, message, *, open_fn, close_fn):
                 identity = open_fn(project_dir, agent_id, cycle_id, message)
             yield identity
         except RunAbandoned as abandoned:
+            trap.reported = True
             _abort_gated_run(abandoned)
             abandoned.agent_id = agent_id
             raise
         finally:
             try:
-                close_fn(project_dir, identity)
+                _close_gated_identity(trap, project_dir, identity, agent_id,
+                                      close_fn)
             finally:
                 _gated_trap, _gated_open_run = outer
+
+
+def _close_gated_identity(trap, project_dir, identity, agent_id, close_fn):
+    """The gated bracket's closing step: remove the identity inside the
+    trap's `held()`, so a signal landing on it lets the removal finish. That
+    signal then ends the exit with its one envelope — unless the exit has
+    already reported a signal, when it is dropped."""
+    try:
+        with trap.held():
+            close_fn(project_dir, identity)
+    except RunAbandoned as late:
+        if trap.reported:
+            return
+        late.agent_id = agent_id
+        raise
 
 
 def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
