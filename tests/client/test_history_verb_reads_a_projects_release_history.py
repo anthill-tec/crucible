@@ -52,6 +52,22 @@ verb: no `--agent` required (no drive below ever passes one).
     refusal-exit convention — `cmd_release_propose`/`cmd_cr_plan` on a
     non-ok server read, `clients/_crucible_axi.py`), `help` a non-empty
     list, and the error naming the bad input.
+  * ADDED coverage below: when `--release <label>` names NO release in the
+    history read, a REFUSAL is not automatically "unknown" — the client
+    must first ask whether the project HOLDS the label another way: a
+    queue row's own `release` column (`GET …/queue`) or a LIVE release
+    proposal's own `label` (`GET …/release-proposals`). Held-but-unlisted
+    is still a refusal (exit 1) but with a DIFFERENT error ("not in
+    History yet", never the plain "unknown release: <label>" wording) and
+    a help entry naming `queue`; a label held by neither source keeps the
+    plain `unknown release: <label>` refusal. These two extra reads belong
+    to the refusal path only — a `--release` the history read already
+    lists must never trigger them.
+  * `release` queue-row fixtures/`release-proposals` fixtures below reuse
+    the SAME shared-module routes `cr_depends`/`cr_plan`'s own asking already
+    reads (`clients/_crucible_axi.py`'s `queue_candidates`/
+    `proposal_candidates`), so the request paths pinned here are not a new
+    invention.
   * Harness: `test_landings_reads_the_closed_plans.py`'s own idiom for a
     brand-new read-only verb across the fleet — `_get` mocked per client
     (no live server, no RecordingBoard: `RecordingBoard.do_GET`,
@@ -85,6 +101,8 @@ ENV_KEYS = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID", "WORKFLOW_CYC
 
 PROJECT_KEY = "cr175-c3-history"
 HISTORY_PATH = f"/api/v2/projects/{PROJECT_KEY}/history"
+QUEUE_PATH = f"/api/v2/projects/{PROJECT_KEY}/queue"
+RELEASE_PROPOSALS_PATH = f"/api/v2/projects/{PROJECT_KEY}/release-proposals"
 
 
 def _load_module(path, name):
@@ -139,6 +157,33 @@ HISTORY_RESPONSE = {"ok": True, "releases": [SHIPPED_RELEASE, UNSHIPPED_RELEASE]
 UNKNOWN_PROJECT_RESPONSE = {
     "ok": False,
     "error": f"HTTP 404: unknown project: {PROJECT_KEY}",
+}
+
+# ── fixtures: a `--release <label>` the server's own history read does NOT
+# list, where the label is nonetheless HELD by the project — named by a
+# queue row's own `release` column, or by a live release proposal's own
+# `label` — versus a label held by NEITHER (a true unknown). The held check
+# reads `GET …/queue` and `GET …/release-proposals`; each fixture below pins
+# ONE of the two sources as the match and leaves the other empty, so a test
+# proves the implementation actually consulted the source that matters
+# rather than always answering "held" once either read merely succeeds.
+
+HELD_BY_QUEUE_LABEL = "5.5.0"
+HELD_BY_PROPOSAL_LABEL = "6.6.0"
+TRULY_UNKNOWN_LABEL = "15.0.0"
+
+QUEUE_RESPONSE_EMPTY = {"ok": True, "entries": []}
+PROPOSALS_RESPONSE_EMPTY = {"ok": True, "proposals": []}
+
+QUEUE_RESPONSE_HOLDS_LABEL = {
+    "ok": True,
+    "entries": [{"cr": "CR-HELD-1", "release": HELD_BY_QUEUE_LABEL,
+                 "wave": "9", "status": "planned"}],
+}
+
+PROPOSALS_RESPONSE_HOLDS_LABEL = {
+    "ok": True,
+    "proposals": [{"label": HELD_BY_PROPOSAL_LABEL, "waves": ["9"]}],
 }
 
 DEFAULT_COLUMNS = ("release", "state", "shippedAt", "tag", "crs", "pending", "target")
@@ -211,6 +256,25 @@ class _HistoryContractTestBase:
             f"{self.CLIENT}: stdout must TOON-decode as an 'axi' envelope; "
             f"got {stdout_text!r}")
         return decoded["axi"]
+
+    def drive_multi(self, extra_argv, path_responses):
+        """Like `drive`, but `_get` answers PER PATH (a dict of path ->
+        response) rather than one fixed response for every call "" the held
+        check issues up to three reads (history, queue, release-proposals)
+        and each must see its OWN fixture. A path with no entry answers an
+        explicit failure rather than silently reusing another path's
+        fixture, so a wrong/extra read is caught instead of masked."""
+        argv = ["history"] + list(extra_argv) + ["--project-dir", self.tmpdir]
+
+        def _fake_get(path, *args, **kwargs):
+            if path not in path_responses:
+                return {"ok": False,
+                        "error": f"test fixture has no response for {path!r}"}
+            return path_responses[path]
+
+        with mock.patch.object(self.module, "_get", side_effect=_fake_get) as mock_get:
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, mock_get
 
 
 class HistoryContractTests:
@@ -338,6 +402,40 @@ class HistoryContractTests:
             f"{self.CLIENT}: and an EMPTY gate-run table — never a "
             f"fabricated row; got {axi.get('history')!r}")
 
+    def test_a_label_history_lists_never_reads_the_queue_or_release_proposals(self):
+        # The held check is the REFUSAL path only: a label History already
+        # lists answers from the one history read, and the two sources that
+        # tell a planned release from an unknown one are never consulted.
+        # Both answer here, so a stray read would succeed silently and only
+        # the recorded calls can catch it.
+        responses = {
+            HISTORY_PATH: HISTORY_RESPONSE,
+            QUEUE_PATH: QUEUE_RESPONSE_HOLDS_LABEL,
+            RELEASE_PROPOSALS_PATH: PROPOSALS_RESPONSE_EMPTY,
+        }
+        for label in ("9.9.9", "9.9.8"):
+            with self.subTest(release=label):
+                code, out, err, mock_get = self.drive_multi(
+                    ["--release", label], responses)
+                self.assertEqual(
+                    code, 0,
+                    f"{self.CLIENT}: `--release {label}` names a release "
+                    f"History lists; must succeed; stdout={out!r} "
+                    f"stderr={err!r}")
+                called_paths = [call.args[0] for call in mock_get.call_args_list]
+                self.assertNotIn(
+                    QUEUE_PATH, called_paths,
+                    f"{self.CLIENT}: a label History lists must never read "
+                    f"the queue; calls={called_paths!r}")
+                self.assertNotIn(
+                    RELEASE_PROPOSALS_PATH, called_paths,
+                    f"{self.CLIENT}: a label History lists must never read "
+                    f"the release proposals; calls={called_paths!r}")
+                self.assertEqual(
+                    called_paths, [HISTORY_PATH],
+                    f"{self.CLIENT}: a label History lists is answered by "
+                    f"the one history read alone; calls={called_paths!r}")
+
     def test_an_unknown_release_label_is_refused_with_help(self):
         code, out, err, _mg = self.drive(["--release", "42.0.0"], HISTORY_RESPONSE)
         self.assertEqual(
@@ -362,6 +460,134 @@ class HistoryContractTests:
             "42.0.0", str(axi.get("error") or ""),
             f"{self.CLIENT}: the refusal must NAME the unknown release it "
             f"refused; got error={axi.get('error')!r}")
+
+    def test_a_label_held_only_by_a_queue_row_is_refused_not_in_history_yet(self):
+        responses = {
+            HISTORY_PATH: HISTORY_RESPONSE,
+            QUEUE_PATH: QUEUE_RESPONSE_HOLDS_LABEL,
+            RELEASE_PROPOSALS_PATH: PROPOSALS_RESPONSE_EMPTY,
+        }
+        code, out, err, mock_get = self.drive_multi(
+            ["--release", HELD_BY_QUEUE_LABEL], responses)
+        self.assertEqual(
+            code, 1,
+            f"{self.CLIENT}: a label named only by a queue row's own "
+            f"`release` column is HELD by the project but not yet in "
+            f"History \u2014 still a refusal, exit 1; stdout={out!r} "
+            f"stderr={err!r}")
+        axi = self.decode_toon_axi(out)
+        self.assertIs(
+            axi.get("ok"), False,
+            f"{self.CLIENT}: ok must be false on the held-but-unlisted "
+            f"refusal; got {axi!r}")
+        error = str(axi.get("error") or "")
+        self.assertIn(
+            "not in History yet", error,
+            f"{self.CLIENT}: a label the project holds (through a queue "
+            f"row) but History has not listed yet must say so, NOT the "
+            f"generic unknown-release refusal; got error={error!r}")
+        self.assertNotIn(
+            "unknown release", error,
+            f"{self.CLIENT}: a HELD label must never fall back to the "
+            f"plain unknown-release wording; got error={error!r}")
+        help_steps = axi.get("help")
+        self.assertIsInstance(
+            help_steps, list,
+            f"{self.CLIENT}: the held-but-unlisted refusal must carry a "
+            f"help[] list; got {axi!r}")
+        self.assertTrue(
+            any("queue" in str(step) for step in help_steps),
+            f"{self.CLIENT}: the help must name `queue` as the next step "
+            f"to inspect the held row; got help={help_steps!r}")
+        called_paths = [call.args[0] for call in mock_get.call_args_list]
+        self.assertIn(
+            QUEUE_PATH, called_paths,
+            f"{self.CLIENT}: the held check must actually READ the queue "
+            f"(GET \u2026/queue) rather than assume; calls={called_paths!r}")
+
+    def test_a_label_held_only_by_a_live_release_proposal_is_refused_not_in_history_yet(self):
+        responses = {
+            HISTORY_PATH: HISTORY_RESPONSE,
+            QUEUE_PATH: QUEUE_RESPONSE_EMPTY,
+            RELEASE_PROPOSALS_PATH: PROPOSALS_RESPONSE_HOLDS_LABEL,
+        }
+        code, out, err, mock_get = self.drive_multi(
+            ["--release", HELD_BY_PROPOSAL_LABEL], responses)
+        self.assertEqual(
+            code, 1,
+            f"{self.CLIENT}: a label named only by a LIVE release "
+            f"proposal is HELD by the project but not yet in History \u2014 "
+            f"still a refusal, exit 1; stdout={out!r} stderr={err!r}")
+        axi = self.decode_toon_axi(out)
+        self.assertIs(
+            axi.get("ok"), False,
+            f"{self.CLIENT}: ok must be false on the held-but-unlisted "
+            f"refusal; got {axi!r}")
+        error = str(axi.get("error") or "")
+        self.assertIn(
+            "not in History yet", error,
+            f"{self.CLIENT}: a label the project holds (through a live "
+            f"release proposal) but History has not listed yet must say "
+            f"so, NOT the generic unknown-release refusal; got "
+            f"error={error!r}")
+        self.assertNotIn(
+            "unknown release", error,
+            f"{self.CLIENT}: a HELD label must never fall back to the "
+            f"plain unknown-release wording; got error={error!r}")
+        help_steps = axi.get("help")
+        self.assertIsInstance(
+            help_steps, list,
+            f"{self.CLIENT}: the held-but-unlisted refusal must carry a "
+            f"help[] list; got {axi!r}")
+        self.assertTrue(
+            any("queue" in str(step) for step in help_steps),
+            f"{self.CLIENT}: the help must name `queue` as the next step "
+            f"to inspect the held release; got help={help_steps!r}")
+        called_paths = [call.args[0] for call in mock_get.call_args_list]
+        self.assertIn(
+            RELEASE_PROPOSALS_PATH, called_paths,
+            f"{self.CLIENT}: the held check must actually READ the live "
+            f"release proposals (GET \u2026/release-proposals) rather than "
+            f"assume; calls={called_paths!r}")
+
+    def test_a_label_held_by_neither_queue_nor_proposal_stays_unknown_release(self):
+        responses = {
+            HISTORY_PATH: HISTORY_RESPONSE,
+            QUEUE_PATH: QUEUE_RESPONSE_EMPTY,
+            RELEASE_PROPOSALS_PATH: PROPOSALS_RESPONSE_EMPTY,
+        }
+        code, out, err, mock_get = self.drive_multi(
+            ["--release", TRULY_UNKNOWN_LABEL], responses)
+        self.assertEqual(
+            code, 1,
+            f"{self.CLIENT}: a label held by NEITHER the queue nor a live "
+            f"proposal must still refuse, exit 1; stdout={out!r} "
+            f"stderr={err!r}")
+        axi = self.decode_toon_axi(out)
+        self.assertIs(
+            axi.get("ok"), False,
+            f"{self.CLIENT}: ok must be false on the unknown-release "
+            f"refusal; got {axi!r}")
+        self.assertEqual(
+            axi.get("error"), f"unknown release: {TRULY_UNKNOWN_LABEL}",
+            f"{self.CLIENT}: a label the project does not hold at all "
+            f"must keep the plain `unknown release: <label>` wording "
+            f"VERBATIM, not the held-but-unlisted wording; got "
+            f"error={axi.get('error')!r}")
+        self.assertNotIn(
+            "not in History yet", str(axi.get("error") or ""),
+            f"{self.CLIENT}: a truly unknown label must never be reported "
+            f"as held; got error={axi.get('error')!r}")
+        called_paths = [call.args[0] for call in mock_get.call_args_list]
+        self.assertIn(
+            QUEUE_PATH, called_paths,
+            f"{self.CLIENT}: ruling a label OUT as held requires actually "
+            f"reading the queue, not assuming; calls={called_paths!r}")
+        self.assertIn(
+            RELEASE_PROPOSALS_PATH, called_paths,
+            f"{self.CLIENT}: ruling a label OUT as held requires actually "
+            f"reading the live release proposals, not assuming; "
+            f"calls={called_paths!r}")
 
     def test_an_unknown_project_is_refused_with_help(self):
         code, out, err, _mg = self.drive([], UNKNOWN_PROJECT_RESPONSE)

@@ -40,8 +40,9 @@ Found while releasing 0.3.0 (2026-10-10), and by Model B's first use of 0.3.0 (S
 
 Before launching `no-mistakes axi respond`, `gate-respond` reads `no-mistakes axi status` once. That
 read names the run and the step awaiting approval, which is the step the decision answers when
-`--step` is omitted. After respond exits, the client judges the decision by that step's status
-(from the drive's last streamed snapshot, or one more `axi status` read when the stream has none):
+`--step` is omitted. After respond exits, the client judges the decision by that step's status. A snapshot that shows
+the step moved on (the respond's own answer, or the drive's last streamed snapshot) settles it.
+Otherwise one more `axi status` read decides, because a streamed snapshot can predate the decision:
 
 - **Accepted** (the step is no longer awaiting approval): the decision is recorded against the run,
   whether or not the respond's own answer named it. An exit whose run is still going is then a held
@@ -72,7 +73,7 @@ These reads happen on the refusal path only.
 
 ## Acceptance criteria
 
-- [ ] **Accepted after an elapsed wait.** For EACH of the five clients (`bun`, `python`, `mvn`,
+- [x] **Accepted after an elapsed wait.** For EACH of the five clients (`bun`, `python`, `mvn`,
       `rust`, `arduino`), against a fake no-mistakes whose status shows the run awaiting approval at
       `review` before the respond, and whose respond answer names no run (an elapsed wait) while
       status then shows `review` completed and `test` running:
@@ -80,28 +81,28 @@ These reads happen on the refusal path only.
         action;
       - the envelope carries `decision: <that id>` and `inFlight: true`;
       - the exit is the held exit (non-zero, nothing sealed).
-- [ ] **`--step` omitted.** Same setup, with `--step` omitted: the recorded decision's `step` is
+- [x] **`--step` omitted.** Same setup, with `--step` omitted: the recorded decision's `step` is
       `review`, taken from the status read before the respond.
-- [ ] **Refused.** For EACH of the five clients, with status still showing `review` awaiting
+- [x] **Refused.** For EACH of the five clients, with status still showing `review` awaiting
       approval after the respond: no decision is posted, the envelope carries `decision: none`, and
       the exit is non-zero.
-- [ ] **Held report.** Every held exit of `gate-run` and `gate-respond` prints a help line containing
+- [x] **Held report.** Every held exit of `gate-run` and `gate-respond` prints a help line containing
       `gate-run --intent`, and also `--release <label>` when the drive was given one.
-- [ ] **Server inheritance.** Through `POST /api/v2/gates`:
+- [x] **Server inheritance.** Through `POST /api/v2/gates`:
       - a release-less snapshot whose `gate.run.id` matches an earlier snapshot stored with
         `version: 0.4.0` is stored with `version` `0.4.0`;
       - a release-less snapshot of a run no snapshot gave a release is stored with none;
       - a snapshot that names no run is stored with none;
       - a snapshot carrying its own `version` keeps it, and runs in another project are never read.
-- [ ] **End to end.** `gate-run --release 0.4.0` followed by `gate-respond` on the same run (one
+- [x] **End to end.** `gate-run --release 0.4.0` followed by `gate-respond` on the same run (one
       client, against a live in-process board): every snapshot the respond posts, and its seal, is
       stored with `version` `0.4.0`.
-- [ ] **History, held label.** For EACH of the five clients, `history --release <label>` for a label
+- [x] **History, held label.** For EACH of the five clients, `history --release <label>` for a label
       named only by a queue row, and for a label named only by a live release proposal, exits 1. The
       error contains `not in History yet`, and a help entry names `queue`.
-- [ ] **History, unknown label.** For a label the project does not hold, the error stays
+- [x] **History, unknown label.** For a label the project does not hold, the error stays
       `unknown release: <label>`.
-- [ ] **No new CR literals.** No CR-shaped literal is added to comments under `clients/` or `src/`,
+- [x] **No new CR literals.** No CR-shaped literal is added to comments under `clients/` or `src/`,
       and the citation tripwire's pins are unchanged.
 
 ## How it is worked

@@ -4220,10 +4220,13 @@ export class Store {
     meta?: { context?: RunContext; role?: AgentRole; version?: string },
   ): RunEvent {
     this.touchAgent(projectKey, agentId);
-    const version = meta?.version;
+    const runId = gateRunId(gate);
+    // A snapshot posted without a release keeps the one its run already
+    // carries: the latest earlier snapshot of the same run, in this project.
+    const version =
+      meta?.version ?? (runId !== undefined ? this.latestGateRunVersion(projectKey, runId) : undefined);
     const alreadyReleased =
       version !== undefined && this.listReleases(projectKey).some((r) => r.label === version);
-    const runId = gateRunId(gate);
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -4243,6 +4246,25 @@ export class Store {
     };
     this.insertEvent(event);
     return event;
+  }
+
+  /**
+   * The release the latest stored snapshot of a run carries, within one
+   * project; nothing when the run has no snapshot or that snapshot names no
+   * release. Order is posting order: timestamp, then rowid.
+   */
+  private latestGateRunVersion(projectKey: string, runId: string): string | undefined {
+    const row = this.db
+      .query<{ version: string | null }, [string, string]>(
+        `SELECT version FROM gates
+          WHERE project_key = ?
+            AND json_valid(payload)
+            AND json_extract(payload, '$.runId') = ?
+          ORDER BY timestamp DESC, rowid DESC
+          LIMIT 1`,
+      )
+      .get(projectKey, runId);
+    return row?.version ?? undefined;
   }
 
   /**
