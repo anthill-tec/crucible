@@ -82,8 +82,9 @@
 // v2 endpoint ground truth (read directly from src/v2.ts, NOT assumed):
 // `POST /api/v2/agents/register`, `POST /api/v2/agents/unregister`,
 // `POST /api/v2/projects` ({key?, name} — key must be a UUID or omitted;
-// a pre-existing key returns 200 {changed:false}, perfect for arduino's
-// idempotent self-registration), `POST /api/v2/runs/parsed` (summary+tree,
+// a pre-existing key returns 200 {changed:false}; arduino once called it to
+// self-register, which was removed — no client registers a project now),
+// `POST /api/v2/runs/parsed` (summary+tree,
 // v2 equivalent of v1 `/api/ingest/parsed`), `POST /api/v2/runs/compile`
 // (rejects an EMPTY `errors` string with 400 — `handleRunsCompile` in src/v2.ts — this is the
 // exact 400 the CR's bug note is about), `GET /api/v2/events/<id>` returns

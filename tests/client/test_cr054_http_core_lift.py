@@ -42,13 +42,14 @@ brief named `_project_key` as part of the "HTTP core" to lift (+ `_abbrev_home`
 "if C1 classed it SHARED"). `_abbrev_home` IS SHARED (DN §1) so it is
 included below. `_project_key` is NOT SHARED -- DN §3 explicitly classifies
 it GENUINELY PER-CLIENT: arduino's version delegates to its own `_load_env`,
-which ALSO reads `CRUCIBLE_PROJECT_NAME` (needed for arduino's unique
-`_ensure_project`/self-registration bootstrap, per
-DN-crucible-api-reconstruction.md §4) and falls back to the ambient
-environment, versus bun/rust/mvn/python's strict single-key `.env`-only read
-with `sys.exit` on absence -- "a real, justified divergence... not a
-candidate for a shared PARAMETERISED lift without also lifting
-`_load_env`/`_ensure_project`, which is out of this CR's 42." The CR's own
+which at the time ALSO read `CRUCIBLE_PROJECT_NAME` for arduino's
+self-registration bootstrap and fell back to the ambient environment, versus
+bun/rust/mvn/python's strict single-key `.env`-only read with `sys.exit` on
+absence -- "a real, justified divergence... not a candidate for a shared
+PARAMETERISED lift without also lifting `_load_env`, which is out of this
+CR's 42." That bootstrap has since been removed: no client registers a
+project, and arduino's `_load_env` now reads only `CRUCIBLE_PROJECT_KEY`
+from the subproject `.env`. The CR's own
 Non-goals section excludes "the genuinely per-client logic" from any lift,
 and `tests/client/test_cr054_fleet_inventory.py` (C1, committed) already
 encodes `_project_key` in `GENUINELY_PER_CLIENT`, not `SHARED`. Per the AC

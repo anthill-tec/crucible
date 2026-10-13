@@ -220,12 +220,13 @@ ALLOW_LIST = {
         "183-452 lines: argparse subcommand wiring is inherently "
         "per-toolchain -- different flag sets per verb per stack (DN §3)."),
     "_project_key": (
-        "arduino delegates to its own _load_env(pd), which ALSO reads "
-        "CRUCIBLE_PROJECT_NAME for arduino's unique self-registration "
-        "bootstrap (POST /api/projects/add, DN-crucible-api-reconstruction."
-        "md §4); the other four are a strict single-key .env-only read "
-        "with sys.exit on absence. Real divergence tied to a "
-        "responsibility outside this CR's 42 (DN §3)."),
+        "arduino delegates to its own _load_env(pd), which parses the "
+        "subproject .env itself (quote-stripping its values) and reads "
+        "only CRUCIBLE_PROJECT_KEY -- the CRUCIBLE_PROJECT_NAME read and "
+        "the project self-registration it fed were removed, and no client "
+        "registers a project; the other four read the key through their "
+        "own _read_env. Each is a single-key .env-only read with sys.exit "
+        "on absence, through a per-client .env parser (DN §3)."),
     # -- outside the DN §3 table, but the SAME bootstrap constraint the CR's
     # own §S2 binding constraint states applies: "clients/*-crucible.py are
     # vendored into consumer repos and load _crucible_axi.py by file path" --
