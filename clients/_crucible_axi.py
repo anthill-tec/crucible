@@ -2758,6 +2758,21 @@ def _history_refusal(emit, ops, project_dir, error, help_steps):
     return 1
 
 
+def _history_label_is_held(ops, project_key, label):
+    """Whether the project holds `label` outside History: named by a queue
+    row's own `release`, or by a live release proposal's own `label`. Read on
+    the refusal path only; a failed read holds nothing, so the refusal stays
+    the plain unknown-release one."""
+    queue = ops.get(f"/api/v2/projects/{project_key}/queue") or {}
+    if queue.get("ok") and any(
+            isinstance(e, dict) and str(e.get("release")) == label
+            for e in queue.get("entries") or []):
+        return True
+    proposals = ops.get(release_proposals_path(project_key)) or {}
+    return bool(proposals.get("ok")) and any(
+        p["label"] == label for p in proposal_candidates(proposals))
+
+
 def cmd_history(args, project_dir, ops):
     """§S4 — a project's releases through its client (read-only,
     no --agent): ONE read, `GET …/history`, answered as one envelope whose
@@ -2783,6 +2798,12 @@ def cmd_history(args, project_dir, ops):
         release = next((r for r in releases if _history_label(r) == label),
                        None)
         if release is None:
+            if _history_label_is_held(ops, ops.project_key(project_dir), label):
+                return _history_refusal(
+                    emit, ops, project_dir,
+                    f"release {label} is not in History yet: nothing shipped "
+                    f"and no CR completed",
+                    ["queue --fields release,seq,points,dependsOn"])
             return _history_refusal(
                 emit, ops, project_dir,
                 f"unknown release: {label}",
