@@ -1,13 +1,28 @@
 // CR-CRU-001 §S5 — Boot safety (Store.open + corrupt-db recovery)
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, afterAll, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Store } from "../src/store.ts";
 
+/** Every scratch directory `freshTmpDir()` made — removed after each test
+ *  (and once more after the file), whether the test passed or failed. */
+const scratchDirs: string[] = [];
+
+function removeScratchDirs(): void {
+  for (const dir of scratchDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+afterEach(removeScratchDirs);
+afterAll(removeScratchDirs);
+
 function freshTmpDir(): string {
   // NEVER inside the repo — a fresh OS tmpdir per test.
-  return fs.mkdtempSync(path.join(os.tmpdir(), "crucible-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-test-"));
+  scratchDirs.push(dir);
+  return dir;
 }
 
 describe("Store.open — static factory", () => {

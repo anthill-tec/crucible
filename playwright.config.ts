@@ -28,7 +28,7 @@
 // and asserts the result is neither the user-level nor the XDG path.
 import { defineConfig, devices } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,6 +82,15 @@ const webkitAvailable = webkitEngineAvailable({
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
+// The scratch directory (and the run's database inside it) belongs to the
+// process that loaded this config, and goes when that process ends — on a
+// passing run, a failing run, or a bare load of this module. Every process
+// that loads the config (the runner and each worker) makes its own, so each
+// removes its own; the runner's, which the webServer uses, is removed only
+// once Playwright has stopped that server and is itself exiting.
+process.on("exit", () => {
+  rmSync(SCRATCH_CWD, { recursive: true, force: true });
+});
 // CR-CRU-052 §S5 — the per-run database, named explicitly rather than left to
 // be resolved. A real FILE (not `:memory:`) deliberately: the webServer is a
 // separate long-lived process, so either would survive across requests within a

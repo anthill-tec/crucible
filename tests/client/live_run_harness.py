@@ -9,10 +9,13 @@ Never the live :3849/:3850 Crucible server and never a real toolchain: every
 runner here is a small python program speaking the real tool's output shape.
 """
 
+import atexit
+import contextlib
 import http.server
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -343,6 +346,81 @@ block_after = _env_int("FAKE_BLOCK_AFTER_INDEX", "0")
 release_file = os.environ.get("FAKE_RELEASE_FILE")
 marker = os.environ.get("FAKE_MARKER_LINE")
 no_report = os.environ.get("FAKE_NO_REPORT") == "1"
+# The ran-nothing fixture \u2014 a SECOND starvation shape: the runner writes a
+# report that EXISTS but holds ZERO results (no testcases), with a
+# caller-controlled exit code (default 1 \u2014 the \"exited non-zero\" shape \u00a7S4
+# is about; a caller proving the UNCHANGED exit-0 pin sets FAKE_EXIT_CODE=0).
+# Inert unless FAKE_ZERO_REPORT=1, so every pre-existing fake runner that
+# never sets it is byte-for-byte unchanged.
+zero_report = os.environ.get("FAKE_ZERO_REPORT") == "1"
+zero_report_exit_code = _env_int("FAKE_EXIT_CODE", "1")
+
+# \u00a7S3 fixture \u2014 a long-lived GRANDCHILD this runner starts on its own
+# (never the client's direct child), to prove a group-kill reaches it. It
+# writes its own pid to FAKE_GRANDCHILD_PIDFILE and sleeps; inert unless that
+# var is set, so every pre-existing fake runner that never sets it is
+# unchanged.
+grandchild_pidfile = os.environ.get("FAKE_GRANDCHILD_PIDFILE")
+if grandchild_pidfile:
+    import subprocess as _gc_subprocess
+    _gc_body = (
+        "import os, sys, time\\n"
+        "with open(sys.argv[1], 'w') as _gc_f:\\n"
+        "    _gc_f.write(str(os.getpid()))\\n"
+        "    _gc_f.flush()\\n"
+        "time.sleep(120)\\n"
+    )
+    # stdio is explicitly DEVNULL \u2014 inheriting the runner's own stdout pipe
+    # would hold it open past the runner's own exit (a SEPARATE, orthogonal
+    # pipe-EOF hang), which is not this fixture's concern: it proves ONLY
+    # that the process ITSELF (by pid) is gone, exactly what \u00a7S3 asks.
+    _gc_subprocess.Popen([sys.executable, "-c", _gc_body, grandchild_pidfile],
+                         stdin=_gc_subprocess.DEVNULL, stdout=_gc_subprocess.DEVNULL,
+                         stderr=_gc_subprocess.DEVNULL)
+    # The grandchild is LIVE (its pid on disk) before this runner goes on to
+    # print anything, the signal marker included: a signal that lands on the
+    # marker always finds the grandchild already running. Bounded.
+    _gc_deadline = time.time() + 10
+    while time.time() < _gc_deadline:
+        try:
+            with open(grandchild_pidfile) as _gc_f:
+                if _gc_f.read().strip():
+                    break
+        except FileNotFoundError:
+            pass
+        time.sleep(0.02)
+
+# \u00a7S3 fixture \u2014 a runner whose OUTPUT ends before the runner does: once its
+# grandchild (if any) is live it closes its stdout and stderr, so the client
+# reading them sees EOF while this runner is still running, writes its own
+# pid to FAKE_CLOSE_OUTPUT_MARKER, and lingers FAKE_LINGER_SECONDS (bounded)
+# before it exits. Inert unless that var is set.
+close_output_marker = os.environ.get("FAKE_CLOSE_OUTPUT_MARKER")
+if close_output_marker:
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.close(1)
+    os.close(2)
+    with open(close_output_marker, "w") as _co_f:
+        _co_f.write(str(os.getpid()))
+    time.sleep(_env_int("FAKE_LINGER_SECONDS", "8"))
+    os._exit(0)
+
+# \u00a7S2 client-paragraph fixture \u2014 the TMPDIR this runner itself sees, and
+# the TMPDIR a CHILD IT SPAWNS WITHOUT AN EXPLICIT ENV sees, both written to
+# FAKE_TMPDIR_CAPTURE_FILE before any test case runs. Inert unless that var
+# is set.
+tmpdir_capture_file = os.environ.get("FAKE_TMPDIR_CAPTURE_FILE")
+if tmpdir_capture_file:
+    import subprocess as _tc_subprocess
+    _tc_own = os.environ.get("TMPDIR", "")
+    _tc_child = _tc_subprocess.run(
+        [sys.executable, "-c",
+         "import os, sys; sys.stdout.write(os.environ.get('TMPDIR', ''))"],
+        capture_output=True, text=True)
+    _tc_isdir = "1" if (_tc_own and os.path.isdir(_tc_own)) else "0"
+    with open(tmpdir_capture_file, "w") as _tc_f:
+        _tc_f.write(_tc_own + "\\n" + (_tc_child.stdout or "") + "\\n" + _tc_isdir)
 
 def maybe_block(i, stream=sys.stdout):
     if i != block_after:
@@ -360,22 +438,43 @@ outfile = None
 for a in sys.argv[1:]:
     if a.startswith("--reporter-outfile="):
         outfile = a.split("=", 1)[1]
+# \u00a7S2 client-paragraph fixture \u2014 mark the LAST FAKE_FAIL_COUNT cases as
+# failing (a real \"a failure\" run), instead of the always-clean suite below.
+# 0 (the default) is byte-for-byte the pre-existing always-passing behaviour.
+fail_count = _env_int("FAKE_FAIL_COUNT", "0")
+if zero_report:
+    if outfile and not no_report:
+        d = os.path.dirname(outfile)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(outfile, "w") as f:
+            f.write('<?xml version="1.0"?><testsuites><testsuite name="narration.test.ts" '
+                    'tests="0" failures="0"></testsuite></testsuites>')
+    sys.exit(zero_report_exit_code)
 sys.stdout.write("narration.test.ts:\\n")
 sys.stdout.flush()
 cases = []
+any_failed = False
 for i in range(1, total + 1):
     maybe_block(i)
-    sys.stdout.write("(pass) narration.test.ts > case_%d [0.01ms]\\n" % i)
-    sys.stdout.flush()
-    cases.append('<testcase name="case_%d" file="narration.test.ts" time="0.001"></testcase>' % i)
+    if i > total - fail_count:
+        any_failed = True
+        sys.stdout.write("(fail) narration.test.ts > case_%d [0.01ms]\\n" % i)
+        sys.stdout.flush()
+        cases.append('<testcase name="case_%d" file="narration.test.ts" time="0.001">'
+                     '<failure message="planted">planted failure</failure></testcase>' % i)
+    else:
+        sys.stdout.write("(pass) narration.test.ts > case_%d [0.01ms]\\n" % i)
+        sys.stdout.flush()
+        cases.append('<testcase name="case_%d" file="narration.test.ts" time="0.001"></testcase>' % i)
 if outfile and not no_report:
     d = os.path.dirname(outfile)
     if d:
         os.makedirs(d, exist_ok=True)
     with open(outfile, "w") as f:
         f.write('<?xml version="1.0"?><testsuites><testsuite name="narration.test.ts" '
-                'tests="%d" failures="0">%s</testsuite></testsuites>' % (total, "".join(cases)))
-sys.exit(0)
+                'tests="%d" failures="%d">%s</testsuite></testsuites>' % (total, fail_count, "".join(cases)))
+sys.exit(1 if any_failed else 0)
 """
 
 FAKE_MVNW = "#!{python}\n" + _PROLOGUE + """
@@ -386,6 +485,15 @@ if "test-compile" in args:
 dirs = [a.split("=", 1)[1] for a in args
         if a.startswith("-Dsurefire.reportsDirectory=")]
 dirs = dirs or [os.path.join("target", "surefire-reports")]
+if zero_report:
+    if not no_report:
+        for d in dirs:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "TEST-com.acme.LiveZeroTest.xml"), "w") as f:
+                f.write('<?xml version="1.0"?><testsuite name="com.acme.LiveZeroTest" '
+                        'tests="0" failures="0"></testsuite>')
+    sys.stdout.write("[INFO] BUILD SUCCESS\\n")
+    sys.exit(zero_report_exit_code)
 classes = ["com.acme.LiveCase%dTest" % i for i in range(1, total + 1)]
 if not no_report:
     for d in dirs:
@@ -414,6 +522,14 @@ if os.environ.get("FAKE_ZERO_DISCOVERY") == "1":
     sys.stderr.write("\\n----------------------------------------------------------------------\\n"
                      "Ran 0 tests in 0.000s\\n\\nNO TESTS RAN\\n")
     sys.exit(5)
+if zero_report:
+    if outdir and not no_report:
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, "TEST-fake_module.FakeCase.xml"), "w") as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\\n<testsuite '
+                    'name="fake_module.FakeCase" tests="0" errors="0" failures="0" '
+                    'skipped="0"></testsuite>\\n')
+    sys.exit(zero_report_exit_code)
 cases = []
 for i in range(1, total + 1):
     maybe_block(i)
@@ -443,6 +559,14 @@ for i, a in enumerate(args):
     if a == "--output-path" and i + 1 < len(args):
         lcov = args[i + 1]
 verdict = os.environ.get("FAKE_CARGO_VERDICT", "PASS")
+if zero_report:
+    if not no_report:
+        junit_dir = os.path.join(os.getcwd(), "target", "nextest", profile)
+        os.makedirs(junit_dir, exist_ok=True)
+        with open(os.path.join(junit_dir, "junit.xml"), "w") as f:
+            f.write('<?xml version="1.0"?><testsuites><testsuite name="fake-crate" '
+                    'tests="0" failures="0"></testsuite></testsuites>')
+    sys.exit(zero_report_exit_code)
 sys.stdout.write("    Starting %d tests across 1 binary (run ID: deadbeef, nextest "
                  "profile: %s)\\n" % (total, profile))
 sys.stdout.flush()
@@ -471,6 +595,12 @@ sys.exit(0)
 
 FAKE_NATIVE_RUNNER = _PROLOGUE + """
 reports_dir = os.environ.get("REPORTS_DIR") or "reports"
+if zero_report:
+    if not no_report:
+        os.makedirs(reports_dir, exist_ok=True)
+        with open(os.path.join(reports_dir, "TEST-native.xml"), "w") as f:
+            f.write('<?xml version="1.0"?><testsuite name="native" tests="0" failures="0"></testsuite>')
+    sys.exit(zero_report_exit_code)
 cases = []
 for i in range(1, total + 1):
     maybe_block(i)
@@ -498,6 +628,76 @@ def write_fake_bun(project_dir, n_declared):
                              FAKE_BUN.format(python=sys.executable))
 
 
+# The ran-nothing e2e fixture \u2014 the `bun-crucible.py e2e` shape: a DECLARED RAW-report
+# target (`test:e2e`, this repo's own declaration), run via `bun run <script>`.
+# `FAKE_BUN_E2E` is faithful to `bun run` the one way this scenario needs: it
+# reads the invoked script's body out of the fixture's OWN `package.json` and
+# executes it, so a run dispatched THROUGH the declared `test:e2e` script
+# actually reaches the fake Playwright named there (adapted from the proven
+# pattern in `test_bun_crucible_agent_report_isolation.py`'s `_FAKE_BUN_TEMPLATE`).
+FAKE_BUN_E2E_BODY = """
+import json
+import os
+import shlex
+import subprocess
+import sys
+
+argv = sys.argv[1:]
+
+if argv[:1] == ["run"] and len(argv) > 1:
+    script = argv[1]
+    try:
+        with open(os.path.join(os.getcwd(), "package.json")) as handle:
+            scripts = (json.load(handle) or {}).get("scripts") or {}
+    except OSError:
+        scripts = {}
+    body = scripts.get(script)
+    if body is None:
+        sys.stderr.write("error: Script not found %s\\n" % script)
+        sys.exit(1)
+    command = " ".join([body] + [shlex.quote(a) for a in argv[2:]])
+    sys.exit(subprocess.run(command, shell=True, cwd=os.getcwd()).returncode)
+
+sys.exit(1)
+"""
+
+# The fake Playwright: writes its RAW report to the path the declared env var
+# names (only when BOTH the path and FAKE_E2E_RAW_CONTENT are given \u2014 the
+# \"exits before writing anything\" shape leaves FAKE_E2E_RAW_CONTENT unset), and
+# exits with FAKE_E2E_EXIT_CODE (default 0 \u2014 a caller proving the \u00a7S4 failure
+# shape sets it non-zero).
+FAKE_PLAYWRIGHT_BODY = """
+import os
+import sys
+
+outfile = os.environ.get("PLAYWRIGHT_JSON_OUTPUT_NAME")
+content = os.environ.get("FAKE_E2E_RAW_CONTENT", "")
+if outfile and content:
+    directory = os.path.dirname(outfile)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(outfile, "w") as handle:
+        handle.write(content)
+sys.exit(int(os.environ.get("FAKE_E2E_EXIT_CODE", "0")))
+"""
+
+
+def write_fake_bun_e2e(project_dir):
+    """A `bun` stand-in that answers `bun run <script>` by executing the
+    declared script's OWN body \u2014 the e2e route is a declared RAW-report
+    target, never `bun test`'s own flag contract."""
+    return _write_executable(os.path.join(project_dir, "fake_bun_e2e.py"),
+                             f"#!{sys.executable}\n" + FAKE_BUN_E2E_BODY)
+
+
+def write_fake_playwright(project_dir):
+    """Stands in for `bunx playwright test`: writes its JSON report only when
+    handed content (the \u00a7S4 \"exited before writing anything\" case leaves it
+    unwritten), and exits with a caller-controlled code."""
+    return _write_executable(os.path.join(project_dir, "fake_playwright.py"),
+                             f"#!{sys.executable}\n" + FAKE_PLAYWRIGHT_BODY)
+
+
 def write_fake_mvnw(maven_dir):
     return _write_executable(os.path.join(maven_dir, "mvnw"),
                              FAKE_MVNW.format(python=sys.executable))
@@ -511,6 +711,17 @@ def write_fake_python(project_dir):
 def write_fake_cargo(bin_dir):
     return _write_executable(os.path.join(bin_dir, "cargo"),
                              FAKE_CARGO.format(python=sys.executable))
+
+
+# A `docker` stand-in for verbs that only LIST containers before their run
+# (mvn `e2e`'s pre-run check): it prints nothing and exits 0, so a test never
+# reaches the host's real docker.
+FAKE_DOCKER = "#!{python}\nimport sys\nsys.exit(0)\n"
+
+
+def write_fake_docker(bin_dir):
+    return _write_executable(os.path.join(bin_dir, "docker"),
+                             FAKE_DOCKER.format(python=sys.executable))
 
 
 def write_fake_native(project_dir, sub="tests/native"):
@@ -588,10 +799,13 @@ def drive_live(cmd, cwd, env, scratch, marker, log_path=None, timeout=60):
                  live_in_log)
 
 
-def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30):
+def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30,
+                     pre_signal=None):
     """Run `cmd`, wait until its blocked runner's marker has reached the
     client's stderr (the client is reading the run, its run already open),
-    then deliver `signum` to the CLIENT process."""
+    then deliver `signum` to the CLIENT process. `pre_signal`, when given, is
+    called once the marker is seen and BEFORE the signal is sent, so a caller
+    can observe the live run first."""
     marker = "LIVE_RUN_SIGNAL_MARKER"
     # A fresh release file per drive: an earlier drive's release must never
     # unblock this one's runner before the signal lands.
@@ -605,6 +819,8 @@ def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30):
         try:
             reached = _wait_for(stderr_path, marker, 15)
             if reached:
+                if pre_signal is not None:
+                    pre_signal()
                 proc.send_signal(signum)
             stdout, _ = proc.communicate(timeout=timeout)
         finally:
@@ -663,7 +879,120 @@ def drive_and_close_stderr(cmd, cwd, env, scratch, timeout=30):
 
 
 def new_scratch(prefix):
-    return tempfile.mkdtemp(prefix=prefix)
+    """A fresh scratch directory that is removed when this process exits \u2014
+    cleanly or on an uncaught error \u2014 whether or not the caller also
+    removes it (a caller's own earlier removal makes this a no-op)."""
+    scratch = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    return scratch
+
+
+# \u2500\u2500 \u00a7S3 / \u00a7S2-client fixtures: a grandchild's pid, and process-tree checks \u2500\u2500
+
+_GRANDCHILD_SEQ = [0]
+
+
+def fresh_grandchild_pidfile(scratch):
+    """A grandchild-pidfile path no earlier drive in this process has used."""
+    _GRANDCHILD_SEQ[0] += 1
+    return os.path.join(scratch, f"grandchild-{os.getpid()}-{_GRANDCHILD_SEQ[0]}.pid")
+
+
+_CAPTURE_SEQ = [0]
+
+
+def fresh_capture_path(scratch, name):
+    """A capture-file path no earlier drive in this process has used."""
+    _CAPTURE_SEQ[0] += 1
+    return os.path.join(scratch, f"{name}-{os.getpid()}-{_CAPTURE_SEQ[0]}")
+
+
+def wait_for_pidfile(path, timeout=15):
+    """Poll for the grandchild's own pidfile and return the int pid it wrote,
+    or None if it never appeared \u2014 the caller's own signal that the
+    grandchild never actually started, which is a fixture failure, never a
+    RED failure."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        text = _read(path).strip()
+        if text:
+            try:
+                return int(text)
+            except ValueError:
+                pass
+        time.sleep(0.02)
+    return None
+
+
+def pid_alive(pid):
+    """Whether `pid` still names a live process \u2014 `os.kill(pid, 0)` sends no
+    signal, only probes."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def wait_for_pid_gone(pid, timeout=10):
+    """Poll until `pid` is no longer alive, or the timeout passes \u2014 GREEN's
+    own SIGTERM-then-SIGKILL grace needs a short window, never an instant
+    check."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def kill_pid_if_alive(pid):
+    """Best-effort SIGKILL cleanup for a grandchild this process's OWN test
+    started on purpose \u2014 called from every test's `finally`/`tearDown`
+    regardless of whether the assertion under test passed, so a RED failure
+    (today's bug: the grandchild survives) never leaks a sleeping process
+    past this test."""
+    if pid is None:
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.kill(pid, signal.SIGKILL)
+
+
+def wait_until_waiting_on_a_child(pid, timeout=10):
+    """Poll until process `pid`'s main thread is blocked waiting on a child
+    (Linux's `/proc/<pid>/wchan` reads `do_wait`), and return whether it got
+    there. Where `/proc/<pid>/wchan` is not readable, the state cannot be
+    observed: a short fixed pause stands in for it, and True is returned."""
+    path = f"/proc/{pid}/wchan"
+    if not os.path.exists(path):
+        time.sleep(1)
+        return True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _read(path).strip() == "do_wait":
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def read_tmpdir_capture(path):
+    """Decode a `FAKE_TMPDIR_CAPTURE_FILE`: `(own_tmpdir, child_tmpdir,
+    isdir)`, the runner's own `TMPDIR`, the one a child it spawned WITHOUT
+    an explicit `env` saw, and whether `own_tmpdir` actually existed as a
+    directory at capture time (`"1"`/`"0"`). `(None, None, None)` when the
+    file was never written (the runner never reached the capture point,
+    which the caller's own assertion on it must fail loudly on, not
+    silently)."""
+    text = _read(path)
+    if not text:
+        return None, None, None
+    lines = text.split("\n")
+    own = lines[0] if len(lines) > 0 else ""
+    child = lines[1] if len(lines) > 1 else ""
+    isdir = lines[2] if len(lines) > 2 else ""
+    return own, child, isdir
 
 
 SIGNALS = (signal.SIGINT, signal.SIGTERM)

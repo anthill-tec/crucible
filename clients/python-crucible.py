@@ -824,6 +824,11 @@ def _test_run(args, tier, verb, project_dir, identity):
 
     if _produced_xml(reports_dir):
         summary, tree, files = _parse_junit_dir(reports_dir)
+        if _axi().ran_nothing(result.returncode, summary["total"]):
+            return _axi().emit_ran_nothing(
+                verb, "TEST-*.xml", result.returncode, result.stdout or "",
+                run_id, preflight_warnings, post_fn=_post,
+                project_key=_project_key(project_dir), agent_id=args.agent)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files, run_id=run_id,
@@ -994,6 +999,11 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         return result.returncode or 1
 
     summary, tree, files = _parse_junit_dir(reports_dir)
+    if _axi().ran_nothing(result.returncode, summary["total"]):
+        return _axi().emit_ran_nothing(
+            verb, "TEST-*.xml", result.returncode, result.stdout or "",
+            run_id, preflight_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
     coverage = (_collect_coverage(python, project_dir, env, data_file)
                 if coverage_on else None)
     # The final count, then `ingesting…`, both ahead of the ingest below.

@@ -1290,6 +1290,13 @@ def _test_run(args, tier, select, profile, project_dir, identity):
         junit_path = _claim_output(_resolve_junit_path(project_dir, profile),
                                    own_dir, _OWN_JUNIT_FILE)
         if junit_path:
+            if _axi().ran_nothing(result.returncode,
+                                  _axi().junit_testcase_count([junit_path])):
+                return _axi().emit_ran_nothing(
+                    verb, "junit.xml", result.returncode, result.stdout or "",
+                    run_id, preflight_warnings, post_fn=_post,
+                    project_key=_project_key(project_dir),
+                    agent_id=args.agent)
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context(), run_id=run_id,
                                      release=release)
@@ -1738,6 +1745,12 @@ def _smoke_run(args, verb, project_dir, identity=None):
                           agent_id=args.agent),
                       "[smoke-test] no junit.xml found — nothing to ingest")
             return 1
+        if _axi().ran_nothing(result.returncode,
+                              _axi().junit_testcase_count([junit_path])):
+            return _axi().emit_ran_nothing(
+                verb, "junit.xml", result.returncode, result.stdout or "",
+                run_id, run_warnings, post_fn=_post,
+                project_key=_project_key(project_dir), agent_id=args.agent)
 
         payload = {
             "projectKey": _project_key(project_dir),
@@ -1912,6 +1925,12 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
                       agent_id=args.agent),
                   f"[crucible] ERROR: no junit.xml at {junit_path}")
         return 1
+    if _axi().ran_nothing(result.returncode,
+                          _axi().junit_testcase_count([junit_path])):
+        return _axi().emit_ran_nothing(
+            verb, "junit.xml", result.returncode, result.stdout or "",
+            run_id, run_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
 
     # CR-CRU-051 §S3 — the pre-merge-gate site's own distinct-source `files`
     # count, and its resolved GRANULARITY for this client (per test BINARY;

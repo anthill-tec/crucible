@@ -569,6 +569,16 @@ def _dirs_with_xml(dirs):
     return [d for d in dirs if os.path.isdir(d) and glob.glob(os.path.join(d, "TEST-*.xml"))]
 
 
+def _ran_nothing(result, dirs):
+    """Whether the runner exited non-zero while the reports in `dirs` hold no
+    results — the shared `ran_nothing` over every `TEST-*.xml` the run wrote.
+    `dirs` holding no report at all is the compile fallback's case, not this."""
+    reports = sorted(path for d in dirs
+                     for path in glob.glob(os.path.join(d, "TEST-*.xml")))
+    return bool(reports) and _axi().ran_nothing(
+        result.returncode, _axi().junit_testcase_count(reports))
+
+
 def _warn_if_stale(dirs):
     now = time.time()
     for d in dirs:
@@ -978,6 +988,12 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
         maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
     dirs = _run_read_dirs(maven_dir, getattr(args, "module", None), ("surefire",),
                           reports_dir)
+    if _ran_nothing(result, _dirs_with_xml(dirs)):
+        return _axi().emit_ran_nothing(
+            label, "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id, pinned_warnings,
+            post_fn=_post, project_key=_project_key(project_dir),
+            agent_id=args.agent)
     # CR-CRU-056 §S3 — no client-side cycle resolution: a bound agent's run is
     # server-stamped with its registered cycle.
     ctx = _run_context()
@@ -1195,6 +1211,12 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
                                    args.agent, run_warnings)
         return rc
     _warn_if_stale(dirs)
+    if _ran_nothing(result, dirs):
+        return _axi().emit_ran_nothing(
+            label, "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id, pinned_warnings,
+            post_fn=_post, project_key=_project_key(project_dir),
+            agent_id=args.agent)
     summary, tree, files = _parse_junit(dirs)
     # The subcommand name IS the tier, as it is for `unit`/`module`: a tier
     # PARAMETER, never a literal this body asserts about a run it did not name.
@@ -1421,6 +1443,12 @@ def _regression_run(args, identity=None, verb="regression",
         return rc
 
     _warn_if_stale(dirs)
+    if _ran_nothing(result, dirs):
+        return _axi().emit_ran_nothing(
+            verb, "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id, preflight_warnings,
+            post_fn=_post, project_key=_project_key(project_dir),
+            agent_id=args.agent)
     summary, tree, files = _parse_junit(dirs)
 
     coverage = None
@@ -1527,6 +1555,13 @@ def _test_run(args, tier, project_dir, identity):
                                   run_id=run_id, release=release)
         return rc
     _warn_if_stale(dirs)
+    if _axi().ran_nothing(result.returncode, _axi().junit_testcase_count(
+            sorted(glob.glob(os.path.join(dirs[0], "TEST-*.xml"))))):
+        return _axi().emit_ran_nothing(
+            "test", "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id,
+            preflight_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
     ctx = _run_context()
     resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx,
                              run_id=run_id, release=release)

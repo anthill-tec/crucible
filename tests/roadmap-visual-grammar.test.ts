@@ -52,7 +52,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { chromium } from "@playwright/test";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -966,6 +966,9 @@ const PRE_CR_COMMIT = "63f07f5bf79ca00f53f3cf402bbca802ba57fc4c";
 
 let baselineFailure = "";
 let baselineCommit = "";
+/** The scratch directory holding the baseline script — removed by the
+ *  file's own `afterAll`, whether the suite passed or failed. */
+let baselineDir: string | null = null;
 /** The pre-CR STYLESHEET, served beside the pre-CR markup. Swapping only the
  *  two scripts would render the old DOM under the NEW cascade — which is how
  *  the first attempt at the non-vacuity block measured a HORIZONTAL pre-CR
@@ -1228,6 +1231,7 @@ beforeAll(async () => {
         maxBuffer: 64 * 1024 * 1024,
       });
     const baseDir = mkdtempSync(path.join(tmpdir(), "roadmap-ac26-"));
+    baselineDir = baseDir;
     const basePath = path.join(baseDir, "app-logic.mjs");
     writeFileSync(basePath, showAt("public/app-logic.mjs"));
     baselineStyles = showAt("public/styles.css");
@@ -1404,6 +1408,8 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  if (baselineDir !== null) rmSync(baselineDir, { recursive: true, force: true });
+  baselineDir = null;
   if (page !== null) await page.close();
   if (widePage !== null) await widePage.close();
   if (browser !== null) await browser.close();

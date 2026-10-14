@@ -33,16 +33,31 @@
 // the "CWD" and the "XDG home" side of the story. Nothing here ever writes to
 // the real ~/.local/share, and nothing here touches this repo's own
 // data/crucible.db (the live dog-food database).
-import { describe, test, expect, afterEach, beforeEach } from "bun:test";
+import { describe, test, expect, afterAll, afterEach, beforeEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveDbPath, startServer } from "../src/server.ts";
 import { Store } from "../src/store.ts";
 
+/** Every scratch directory `freshTmpDir()` made — removed after each test
+ *  (and once more after the file), whether the test passed or failed. */
+const scratchDirs: string[] = [];
+
+function removeScratchDirs(): void {
+  for (const dir of scratchDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+afterEach(removeScratchDirs);
+afterAll(removeScratchDirs);
+
 function freshTmpDir(): string {
   // NEVER inside the repo — a fresh OS tmpdir per test.
-  return fs.mkdtempSync(path.join(os.tmpdir(), "crucible-dbpath-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-dbpath-test-"));
+  scratchDirs.push(dir);
+  return dir;
 }
 
 describe("resolveDbPath — pure resolution logic (§S1-§S3)", () => {

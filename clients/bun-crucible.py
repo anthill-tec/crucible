@@ -86,6 +86,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 DEFAULT_JUNIT = "junit.xml"
@@ -292,6 +293,27 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     byte-identical for the §S2c failure-marrying parser. CR-CRU-017 §S4: a
     signal trap raising through the read reaps the runner before it propagates."""
     return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
+
+
+@contextlib.contextmanager
+def _run_scoped_tmpdir(env):
+    """A test-family runner's environment with `TMPDIR` pointed at ONE fresh
+    directory under the system temp root, removed once the runner has exited
+    \u2014 on a pass, a failure, a run with no report and a trapped signal alike.
+
+    Bun hands a child spawned without an explicit `env` the environment as it
+    stood when bun started, so a `TMPDIR` the test preload sets never reaches
+    it; exported here, before the runner starts, every child of the run
+    inherits it, and whatever the run leaves under it goes with it."""
+    path = tempfile.mkdtemp(prefix="bun-crucible-run-")
+    try:
+        yield dict(env, TMPDIR=path)
+    finally:
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            print(f"[crucible] WARN: could not remove the run's temp root "
+                  f"{path}: {e}", file=sys.stderr)
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
@@ -973,6 +995,39 @@ def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
     return resp
 
 
+def _raw_report_result_count(raw_report):
+    """The number of results the declared RAW report holds, counted before it
+    is offered to the board \u2014 or `None` when this client cannot tell.
+
+    The client still decodes nothing it files: this count only asks whether
+    the report holds ANY result. For the `playwright` codec a result is a
+    spec anywhere in the report's suite tree (each spec is a scenario the
+    board's codec turns into a node), so a report whose suites hold no spec \u2014
+    what Playwright writes when it cannot start \u2014 counts 0. Any other codec,
+    or a report that cannot be read as Playwright JSON, is `None`: unknown,
+    so it is filed as it stands and the board's own decoder judges it."""
+    if raw_report["codec"] != "playwright":
+        return None
+    try:
+        with open(raw_report["path"], encoding="utf-8") as handle:
+            report = json.load(handle)
+    except (OSError, ValueError) as exc:
+        print(f"[crucible] WARN: could not count the results in "
+              f"{raw_report['path']} ({exc}) \u2014 it is filed as it stands",
+              file=sys.stderr)
+        return None
+    suites = report.get("suites") if isinstance(report, dict) else None
+    if not isinstance(suites, list):
+        return None
+    count = 0
+    while suites:
+        suite = suites.pop()
+        if isinstance(suite, dict):
+            count += len(suite.get("specs") or [])
+            suites.extend(suite.get("suites") or [])
+    return count
+
+
 def _decoded_summary(resp):
     """CR-CRU-015 §S2 — the counts the SERVER decoded, in the shape the ingest
     envelope reports. On the raw route the client never parsed the report, so
@@ -1198,8 +1253,10 @@ def cmd_test(args, tier=None):
         # envelope. The shared check is scoped to `unit` by the tier it is
         # handed, so an untiered `bun test` measures and warns about nothing.
         try:
-            with _axi().ChildRunTiming() as timing, _abandon_trap(run_id):
-                result = _run_logged(cmd, package_dir, env, log_path, narrator)
+            with _axi().ChildRunTiming() as timing, _abandon_trap(run_id), \
+                    _run_scoped_tmpdir(env) as run_env:
+                result = _run_logged(cmd, package_dir, run_env, log_path,
+                                     narrator)
         except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
@@ -1212,6 +1269,13 @@ def cmd_test(args, tier=None):
 
         if os.path.exists(junit_path):
             summary, tree, files = _parse_junit_file(junit_path)
+            if _axi().ran_nothing(result.returncode, summary["total"]):
+                return _axi().emit_ran_nothing(
+                    "test", "junit.xml", result.returncode,
+                    getattr(result, "stdout", None) or "", run_id,
+                    run_warnings, post_fn=_post,
+                    project_key=_project_key(project_dir),
+                    agent_id=args.agent)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
@@ -1346,8 +1410,9 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                                                   release=release)
             run_warnings = preflight_warnings + run_warnings
         try:
-            with _abandon_trap(run_id):
-                result = _run_logged(cmd, package_dir, env, log_path, narrator)
+            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
+                result = _run_logged(cmd, package_dir, run_env, log_path,
+                                     narrator)
         except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
@@ -1401,6 +1466,19 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                           cause=starved)],
                       f"{verb}: ok=False — no {ingest_name}, nothing to ingest")
             return 1
+
+        # A report that EXISTS but holds no results — the declared raw report,
+        # or the JUnit XML this client parses — from a runner that exited
+        # non-zero, is a run that never ran: it takes the no-report exit
+        # above, never a `total: 0` ingest.
+        result_count = (_raw_report_result_count(raw_report) if raw_report
+                        else _axi().junit_testcase_count([junit_path]))
+        if _axi().ran_nothing(result.returncode, result_count):
+            return _axi().emit_ran_nothing(
+                verb, ingest_name, result.returncode,
+                getattr(result, "stdout", None) or "", run_id, run_warnings,
+                post_fn=_post, project_key=_project_key(project_dir),
+                agent_id=args.agent)
 
         # Something WILL be ingested: the final count, then `ingesting…`.
         _axi().close_narration(narrator)
