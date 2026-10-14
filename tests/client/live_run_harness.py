@@ -390,6 +390,22 @@ if grandchild_pidfile:
             pass
         time.sleep(0.02)
 
+# \u00a7S3 fixture \u2014 a runner whose OUTPUT ends before the runner does: once its
+# grandchild (if any) is live it closes its stdout and stderr, so the client
+# reading them sees EOF while this runner is still running, writes its own
+# pid to FAKE_CLOSE_OUTPUT_MARKER, and lingers FAKE_LINGER_SECONDS (bounded)
+# before it exits. Inert unless that var is set.
+close_output_marker = os.environ.get("FAKE_CLOSE_OUTPUT_MARKER")
+if close_output_marker:
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.close(1)
+    os.close(2)
+    with open(close_output_marker, "w") as _co_f:
+        _co_f.write(str(os.getpid()))
+    time.sleep(_env_int("FAKE_LINGER_SECONDS", "8"))
+    os._exit(0)
+
 # \u00a7S2 client-paragraph fixture \u2014 the TMPDIR this runner itself sees, and
 # the TMPDIR a CHILD IT SPAWNS WITHOUT AN EXPLICIT ENV sees, both written to
 # FAKE_TMPDIR_CAPTURE_FILE before any test case runs. Inert unless that var
@@ -697,6 +713,17 @@ def write_fake_cargo(bin_dir):
                              FAKE_CARGO.format(python=sys.executable))
 
 
+# A `docker` stand-in for verbs that only LIST containers before their run
+# (mvn `e2e`'s pre-run check): it prints nothing and exits 0, so a test never
+# reaches the host's real docker.
+FAKE_DOCKER = "#!{python}\nimport sys\nsys.exit(0)\n"
+
+
+def write_fake_docker(bin_dir):
+    return _write_executable(os.path.join(bin_dir, "docker"),
+                             FAKE_DOCKER.format(python=sys.executable))
+
+
 def write_fake_native(project_dir, sub="tests/native"):
     native_dir = os.path.join(project_dir, *sub.split("/"))
     os.makedirs(native_dir, exist_ok=True)
@@ -931,6 +958,23 @@ def kill_pid_if_alive(pid):
         return
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.kill(pid, signal.SIGKILL)
+
+
+def wait_until_waiting_on_a_child(pid, timeout=10):
+    """Poll until process `pid`'s main thread is blocked waiting on a child
+    (Linux's `/proc/<pid>/wchan` reads `do_wait`), and return whether it got
+    there. Where `/proc/<pid>/wchan` is not readable, the state cannot be
+    observed: a short fixed pause stands in for it, and True is returned."""
+    path = f"/proc/{pid}/wchan"
+    if not os.path.exists(path):
+        time.sleep(1)
+        return True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _read(path).strip() == "do_wait":
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def read_tmpdir_capture(path):

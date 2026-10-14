@@ -40,6 +40,7 @@ from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
     drive_and_signal,
+    fresh_capture_path,
     fresh_grandchild_pidfile,
     install_project,
     kill_pid_if_alive,
@@ -48,6 +49,7 @@ from tests.client.live_run_harness import (
     scrubbed_env,
     wait_for_pid_gone,
     wait_for_pidfile,
+    wait_until_waiting_on_a_child,
     write_fake_bun,
     write_fake_cargo,
     write_fake_mvnw,
@@ -309,6 +311,82 @@ class BothRunStreamedBranchesAreGroupKilledTest(_ProcessTreeCase):
     def test_mvn_test_without_agent_sigint(self):
         self._no_agent_grandchild_survives_sigint(
             "mvn", self._mvn_test_cmd_no_agent())
+
+
+# ---------------------------------------------------------------------------
+# The teed branch waits for its runner inside the takedown guard: a signal
+# that lands after the runner's output has ended, but before the runner is
+# reaped, still takes the whole group down.
+# ---------------------------------------------------------------------------
+
+def _drive_signal_after_output_ends(cmd, cwd, env, output_closed_marker,
+                                    signum, timeout=30):
+    """Drive `cmd` until its runner has closed its output (the runner's own
+    pid appears in `output_closed_marker`) and the client is blocked waiting
+    on that runner, then signal the CLIENT and wait for it to exit. Returns
+    the runner's pid, whether the client was seen waiting, and its exit."""
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    runner_pid, waiting = None, False
+    try:
+        runner_pid = wait_for_pidfile(output_closed_marker, timeout=15)
+        if runner_pid is not None:
+            waiting = wait_until_waiting_on_a_child(proc.pid, timeout=10)
+            proc.send_signal(signum)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return runner_pid, waiting, proc.returncode, stdout, stderr
+
+
+class ASignalAfterTheRunnersOutputEndsTakesTheGroupDownTest(_ProcessTreeCase):
+
+    def test_sigterm_after_the_runner_closes_its_output_leaves_no_grandchild(self):
+        pidfile = fresh_grandchild_pidfile(self.scratch)
+        marker = fresh_capture_path(self.scratch, "output-closed")
+        env = dict(self.env(), FAKE_GRANDCHILD_PIDFILE=pidfile,
+                   FAKE_CLOSE_OUTPUT_MARKER=marker, FAKE_LINGER_SECONDS="8")
+        runner_pid, waiting, code, stdout, stderr = (
+            _drive_signal_after_output_ends(
+                self._python_test_cmd(), self.project, env, marker,
+                signal.SIGTERM))
+        grandchild_pid = wait_for_pidfile(pidfile, timeout=1)
+        if grandchild_pid is not None:
+            self._grandchild_pids.append(grandchild_pid)
+        if runner_pid is not None:
+            self._grandchild_pids.append(runner_pid)
+        self.assertIsNotNone(
+            runner_pid,
+            f"fixture failure: the runner never closed its output; "
+            f"stderr={stderr[-2000:]!r}")
+        self.assertIsNotNone(
+            grandchild_pid,
+            f"fixture failure: the grandchild never wrote its pidfile; "
+            f"stderr={stderr[-2000:]!r}")
+        self.assertTrue(
+            waiting,
+            "fixture failure: the client was never seen waiting on its "
+            "runner after the runner's output ended")
+        self.assertEqual(
+            code, 143,
+            f"a SIGTERM to the client exits 128+SIGTERM (143); got {code}; "
+            f"stdout={stdout!r} stderr={stderr[-2000:]!r}")
+        self.assertTrue(
+            wait_for_pid_gone(grandchild_pid, timeout=10),
+            f"the grandchild (pid {grandchild_pid}) must be dead once the "
+            f"client has exited: a signal that lands after the runner's "
+            f"output ends, before the runner is reaped, must still take "
+            f"the runner's whole group down; stderr={stderr[-2000:]!r}")
+        self.assertTrue(
+            wait_for_pid_gone(runner_pid, timeout=10),
+            f"the runner (pid {runner_pid}) must be dead once the client "
+            f"has exited; stderr={stderr[-2000:]!r}")
 
 
 if __name__ == "__main__":

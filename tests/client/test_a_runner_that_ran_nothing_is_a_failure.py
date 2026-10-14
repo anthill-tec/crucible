@@ -49,6 +49,7 @@ from tests.client.live_run_harness import (
     write_fake_bun,
     write_fake_bun_e2e,
     write_fake_cargo,
+    write_fake_docker,
     write_fake_mvnw,
     write_fake_native,
     write_fake_playwright,
@@ -457,6 +458,95 @@ class RunnerExitsZeroWithZeroResultsFilesNormallyTest(_ZeroResultCase):
         }
         with open(f"{self.project}/package.json", "w") as f:
             json.dump(manifest, f)
+
+
+# ---------------------------------------------------------------------------
+# "Every report-ingesting verb" -- each other test-family verb that ingests a
+# report, one case per verb, through the real client: a fake runner that
+# writes a report holding ZERO results and exits non-zero is aborted, never
+# filed.
+# ---------------------------------------------------------------------------
+
+class EveryReportIngestingVerbWithZeroResultsAbortsTheRunTest(_ZeroResultCase):
+
+    def _bun(self, verb, exit_code):
+        fake = write_fake_bun(self.project, 3)
+        return self.run_client(
+            [sys.executable, str(CLIENTS / "bun-crucible.py"), verb,
+             "--bun", fake, "--project-dir", self.project,
+             "--package-dir", self.project, "--reports", "reports",
+             "--agent", AGENT],
+            self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE=str(exit_code)))
+
+    def _python(self, verb, exit_code):
+        fake = write_fake_python(self.project)
+        return self.run_client(
+            [sys.executable, str(CLIENTS / "python-crucible.py"), verb,
+             "--python", fake, "--project-dir", self.project,
+             "--reports", "reports", "--agent", AGENT],
+            self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE=str(exit_code)))
+
+    def _rust(self, verb, *extra, exit_code):
+        write_fake_cargo(self.bin_dir)
+        return self.run_client(
+            [sys.executable, str(CLIENTS / "rust-crucible.py"), verb, *extra,
+             "--project-dir", self.project, "--reports", "reports",
+             "--agent", AGENT],
+            self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE=str(exit_code)))
+
+    def _mvn(self, verb, exit_code):
+        write_fake_mvnw(self.project)
+        write_fake_docker(self.bin_dir)
+        return self.run_client(
+            [sys.executable, str(CLIENTS / "mvn-crucible.py"), verb,
+             "--project-dir", self.project, "--reports", "reports",
+             "--agent", AGENT],
+            self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE=str(exit_code)))
+
+    def assert_aborted_never_filed(self, result, exit_code):
+        self.assertNotEqual(
+            result.returncode, 0,
+            f"stdout={result.stdout!r} stderr={result.stderr[-2000:]!r}")
+        axi = self.axi(result.stdout)
+        self.assertEqual(axi.get("ok"), False, f"got axi={axi!r}")
+        self.assert_names_exit_code(self.no_report_warning(axi), exit_code)
+        self.assert_run_aborted_or_left_open(axi, RUN_ID)
+        self.assert_never_filed()
+
+    def test_bun_regression_on_the_junit_route(self):
+        self.assert_aborted_never_filed(self._bun("regression", 1), 1)
+
+    def test_python_regression(self):
+        self.assert_aborted_never_filed(self._python("regression", 1), 1)
+
+    def test_rust_workspace_regression(self):
+        self.assert_aborted_never_filed(
+            self._rust("workspace-regression", "--min-free-g", "0",
+                       "--keep-target", exit_code=101), 101)
+
+    def test_rust_smoke_test(self):
+        self.assert_aborted_never_filed(
+            self._rust("smoke-test", exit_code=101), 101)
+
+    def test_mvn_unit(self):
+        self.assert_aborted_never_filed(self._mvn("unit", 1), 1)
+
+    def test_mvn_module(self):
+        self.assert_aborted_never_filed(self._mvn("module", 1), 1)
+
+    def test_mvn_integration(self):
+        self.assert_aborted_never_filed(self._mvn("integration", 1), 1)
+
+    def test_mvn_e2e(self):
+        self.assert_aborted_never_filed(self._mvn("e2e", 1), 1)
+
+    def test_mvn_regression(self):
+        self.assert_aborted_never_filed(self._mvn("regression", 1), 1)
+
+    def test_bun_regression_with_zero_results_and_exit_zero_files_normally(self):
+        result = self._bun("regression", 0)
+        self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r}")
+        self.assert_filed_normally(self.axi(result.stdout))
 
 
 if __name__ == "__main__":
