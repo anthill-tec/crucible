@@ -7045,10 +7045,13 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
                     log.flush()
                 if narrator is not None:
                     narrator.observe(line)
+            # The runner's output can end before the runner does: the wait
+            # stays inside the guard, so a signal that lands before it is
+            # reaped still takes its group down.
+            returncode = proc.wait()
         except BaseException:
             _take_down_runner_group(proc)
             raise
-        returncode = proc.wait()
     out = "".join(lines)
     if log is not None:
         print(f"[crucible] run log \u2192 {log_path} ({len(out)} bytes)",
