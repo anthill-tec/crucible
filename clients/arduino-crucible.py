@@ -1748,7 +1748,8 @@ def main():
         os.environ["AGENT_ID"] = args.agent
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
-        sys.exit(cmd_dashboard())
+        sys.exit(_axi().run_dashboard(
+            cmd_dashboard, lambda a: _project_key(_project_dir(a))))
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.

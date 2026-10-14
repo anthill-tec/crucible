@@ -2493,6 +2493,32 @@ def _hard_stop_context(args, project_key_fn, agent_id=None):
         return {}
 
 
+ESCAPED_FAILURE_CODE = "verb-failed"
+
+
+def emit_escaped_failure(verb, exc, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for an `OSError`/`ValueError` that escaped a verb's body, and
+    return the non-zero exit code. `error` names the exception's type and
+    message."""
+    detail = f"{type(exc).__name__}: {exc}"
+    emit_axi(verb or "unknown", False,
+             {"error": detail,
+              "help": ["fix the cause this error names, then re-run the verb"]},
+             context or {}, [],
+             legacy_line=f"error: {ESCAPED_FAILURE_CODE} — {detail}")
+    return 1
+
+
+def run_dashboard(cmd_dashboard, project_key_fn=None):
+    """Run a client's no-argument dashboard through `run_verb`, so a failure
+    escaping it is converted exactly as one escaping a verb is. The dashboard
+    IS the `status` view, so its envelope names that verb."""
+    return run_verb(lambda _args: cmd_dashboard(),
+                    argparse.Namespace(cmd="status", project_dir=None),
+                    project_key_fn)
+
+
 def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
     typed hard stop — an undeclared agent identity (§S5), an unresolvable
@@ -2540,6 +2566,15 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         return emit_bracket_abandoned(
             getattr(args, "cmd", None), abandoned,
             _hard_stop_context(args, project_key_fn, abandoned.agent_id))
+    except (OSError, ValueError) as exc:
+        # After every typed hard stop, never in their place: an I/O or parse
+        # failure the verb's own body let escape is reported, not a traceback.
+        # It is not a refusal, so a gate that died this way still falls
+        # through to its outcome milestone below, as a fail.
+        code = emit_escaped_failure(
+            getattr(args, "cmd", None), exc,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
     if (getattr(args, "cmd", None) == GATE_VERB and ops_fn is not None
             and project_dir_fn is not None):
         record_gate_outcome(args, code, project_dir_fn(args), ops_fn())
@@ -4691,7 +4726,10 @@ def parse_queue_table(text):
     so the server's `unknownDependencies` join matches the `cr` set.
 
     Raises QueueParseError (naming the CR) for a row whose column count differs
-    from the header's or whose Wave cell has no leading integer."""
+    from the header's or whose Wave cell has no leading integer; (naming the
+    column) for a header with no Title or no Depends-on column; and for text
+    holding no queue table at all, so a caller never posts an empty set to
+    the full-replace endpoint by mistake."""
     header = None
     idx = {}
     entries = []
@@ -4713,6 +4751,11 @@ def parse_queue_table(text):
                     "depends": _find_col(cells, "depend"),
                     "wave": _find_col(cells, "wave"),
                 }
+                for key, column in (("title", "Title"), ("depends", "Depends on")):
+                    if idx[key] is None:
+                        raise QueueParseError(
+                            f"malformed queue table: the header has no {column} "
+                            f"column ({stripped!r})")
             continue
         m = _QUEUE_ROW_RE.match(line)
         if not m:
@@ -4741,6 +4784,10 @@ def parse_queue_table(text):
                     continue
                 deps.append(prefix + tok if re.fullmatch(r"\d+", tok) else tok)
         entries.append({"cr": cr, "title": title, "wave": wave, "dependsOn": deps})
+    if header is None:
+        raise QueueParseError(
+            "no queue table found: no table header names both a CR and a Wave "
+            "column")
     return entries
 
 
