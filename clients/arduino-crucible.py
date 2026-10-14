@@ -850,7 +850,9 @@ def _compile_run(args, pd):
         errors = re.sub(r"\x1b\[[0-9;]*m", "", (run.stdout + run.stderr).strip())
         if args.agent or os.environ.get("AGENT_ID"):
             agent_id = _agent_id(args)
-            _ingest_compile(pd, key, agent_id, errors)
+            _ingest_compile(pd, key, agent_id, errors,
+                            context=_axi().cycle_context(
+                                _run_context(), getattr(args, "cycle", None)))
         else:
             sys.stderr.write(errors + "\n")
     else:
@@ -916,7 +918,7 @@ def cmd_auto_ingest(args):
     # a tier" governs the runs this client RUNS, never the reports it finds.
     payload = {"projectKey": key, "agentId": agent_id,
                "summary": summary, "tree": tree}
-    context = _run_context()
+    context = _axi().cycle_context(_run_context(), getattr(args, "cycle", None))
     if context:
         payload["context"] = context
     # CR-CRU-094 §S3 — this verb invokes no toolchain and offers no `--cycle`,
@@ -942,8 +944,15 @@ def cmd_pre_merge_gate(args):
     posted and regression is SKIPPED (non-zero exit); on compile success the
     regression run posts the tier:'regression' event with coverage attached."""
     pd = _project_dir(args)
+    # The gate files from its first step on (a failing compile files a compile
+    # result), so an unattributed gate is refused before that step.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(pd), _axi().optional_agent_id(args),
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     if not getattr(args, "skip_check", False):
-        check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir)
+        check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir,
+                                        cycle=getattr(args, "cycle", None))
         # The STEP form (no envelope of its own) — this gate owns stdout.
         state = _compile_run(check_args, pd)
         if not state["ok"]:
@@ -1448,14 +1457,17 @@ def main():
     ai.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     ai.add_argument("--reports",
                     help="reports dir holding TEST-*.xml (default <native_dir>/reports)")
+    _axi().add_filing_cycle_arg(ai)
     ai.set_defaults(func=cmd_auto_ingest)
 
     ck = sub.add_parser("check", parents=[common],
                         help="arduino-cli compile -> /api/v2/runs/compile on failure")
+    _axi().add_filing_cycle_arg(ck)
     ck.set_defaults(func=cmd_check)
 
     cpl = sub.add_parser("compile", parents=[common],
                          help="arduino-cli compile -> /api/v2/runs/compile on failure (§S3)")
+    _axi().add_filing_cycle_arg(cpl)
     cpl.set_defaults(func=cmd_compile)
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],

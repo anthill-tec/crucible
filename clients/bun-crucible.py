@@ -1043,13 +1043,17 @@ def _decoded_summary(resp):
             "pending": count("pending"), "total": count("total")}
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None):
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
+                    cycle_id=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "typescript",
         "errors": errors_text,
         "agentId": agent_id,
     }
+    # A `--cycle` the result is filed under.
+    if cycle_id is not None:
+        payload["context"] = _axi().cycle_context(None, cycle_id)
     # CR-CRU-017 §S4 — a collection/compile failure is still an END: it closes
     # the run this client opened, so the span is measured instead of abandoned.
     if run_id:
@@ -1550,7 +1554,8 @@ def cmd_auto_ingest(args):
     # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests a report it merely
     # found, so it cannot know its tier by construction and states none.
     resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                          context=_run_context())
+                          context=_axi().cycle_context(
+                              _run_context(), getattr(args, "cycle", None)))
     _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
@@ -1601,7 +1606,8 @@ def _check_gate(args, project_dir):
     if not ok:
         sys.stderr.write(out)
         if args.agent:
-            _ingest_compile(project_dir, args.agent, out)
+            _ingest_compile(project_dir, args.agent, out,
+                            cycle_id=getattr(args, "cycle", None))
     return {"exit": result.returncode, "ok": ok}
 
 
@@ -1610,10 +1616,16 @@ def cmd_pre_merge_gate(args):
     coverage reserved for the pre-merge gate). fail-fast `check` (tsc) → `regression
     --coverage`. A check failure aborts before the suite."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # The gate files from its first step on (a failing tsc files a compile
+    # result), so an unattributed gate is refused before that step.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(
             agent=args.agent, bun=args.bun, package_dir=args.package_dir,
-            project_dir=args.project_dir,
+            project_dir=args.project_dir, cycle=getattr(args, "cycle", None),
         )
         # The STEP form (no envelope of its own) — this gate owns stdout.
         state = _check_gate(check_args, project_dir)
@@ -2492,12 +2504,14 @@ def main():
                         "a cycle-bound agent's ingests are server-stamped with its registered "
                         "cycle.")
     _add_reports_arg(a)
+    _axi().add_filing_cycle_arg(a)
     _add_package_dir_arg(a)
     _add_project_dir_arg(a)
     a.set_defaults(func=cmd_auto_ingest)
 
     c = sub.add_parser("check", help="`tsc --noEmit` typecheck gate; ingest errors on failure.")
     c.add_argument("--agent", help="If set, ingest type errors on failure")
+    _axi().add_filing_cycle_arg(c)
     _add_bun_arg(c)
     _add_package_dir_arg(c)
     _add_project_dir_arg(c)
