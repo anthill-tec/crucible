@@ -1,4 +1,4 @@
-"""RED -- §S3's two `parse_queue_table` defects (`clients/_crucible_axi.py`),
+"""RED -- the two `parse_queue_table` defects (`clients/_crucible_axi.py`),
 read directly off the function body:
 
   1. The header-detection condition only requires a `Wave` cell and a `CR`
@@ -75,7 +75,7 @@ _NO_QUEUE_TABLE_TEXT = (
 
 
 class ParseQueueTableMissingColumnTest(unittest.TestCase):
-    """AC: `parse_queue_table` raises `QueueParseError` naming the missing
+    """`parse_queue_table` raises `QueueParseError` naming the missing
     column -- never `TypeError` -- for a header without `title` and for one
     without `depends`."""
 
@@ -100,7 +100,7 @@ class ParseQueueTableMissingColumnTest(unittest.TestCase):
             f"{ctx.exception!r}")
 
     def test_missing_title_never_raises_plain_typeerror(self):
-        """A `TypeError` here is the EXACT defect this AC exists to close
+        """A `TypeError` here is the EXACT defect this behaviour closes
         (`cells[idx["title"]]` == `cells[None]`) -- asserted explicitly
         because a bare `assertRaises(QueueParseError)` would also, less
         informatively, simply fail to catch a TypeError and report it as an
@@ -119,7 +119,7 @@ class ParseQueueTableMissingColumnTest(unittest.TestCase):
 
 
 class ParseQueueTableNoTableTest(unittest.TestCase):
-    """AC: `parse_queue_table` raises `QueueParseError` for text holding no
+    """`parse_queue_table` raises `QueueParseError` for text holding no
     queue table at all, rather than silently returning `[]`."""
 
     def test_text_with_no_queue_table_raises_queue_parse_error(self):
@@ -152,7 +152,7 @@ class _RecordingQueueOps:
 
 
 class QueueFileNoTableRefusesToPostTest(unittest.TestCase):
-    """AC: `queue-file` given a file with no queue table answers `ok: false`
+    """`queue-file` given a file with no queue table answers `ok: false`
     and posts nothing -- `cmd_queue_file`'s own `except QueueParseError`
     branch already does both correctly; what is missing is only that
     `parse_queue_table` must actually raise for this input to REACH it

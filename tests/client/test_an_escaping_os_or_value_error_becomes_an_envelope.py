@@ -137,7 +137,8 @@ class _EscapingFailureCase(unittest.TestCase):
 
 
 class RegisterEscapingFailureBecomesEnvelopeTest(_EscapingFailureCase):
-    """§S1 AC1 -- `register`, the simplest verb every client exposes, driven
+    """An escaping failure becomes an envelope -- `register`, the simplest
+    verb every client exposes, driven
     with its own real `_post` raising first `OSError` then `ValueError`."""
 
     def test_oserror_from_post_becomes_ok_false_envelope_every_client(self):
@@ -196,7 +197,7 @@ class RegisterEscapingFailureBecomesEnvelopeTest(_EscapingFailureCase):
 
 
 class DashboardEscapingFailureBecomesEnvelopeTest(_EscapingFailureCase):
-    """§S1 AC1's dashboard clause -- the no-argument invocation, which
+    """The same for the dashboard -- the no-argument invocation, which
     `main()` routes to `cmd_dashboard()` WITHOUT ever calling `run_verb`."""
 
     def test_oserror_from_get_becomes_ok_false_envelope_every_client(self):

@@ -1,4 +1,4 @@
-"""RED -- §S1's installer clause: `crucible_axi.cli.main` applies NO
+"""RED -- the installer: `crucible_axi.cli.main` applies NO
 conversion at all to an escaping `OSError`/`ValueError`, for either of its
 two different contracts.
 
@@ -6,8 +6,8 @@ two different contracts.
     `install.run_uninstall` with no enclosing `try`/`except` at all (read
     directly: the `while True: ok, stages, warnings = install.run_install(...)`
     loop in `cmd_install`, and the single call in `cmd_uninstall`) -- an
-    `OSError` there (the Problem section's own count: "13 in
-    crucible_axi/install.py") reaches neither the `axi.emit_axi(...)` call
+    `OSError` there (`crucible_axi/install.py` makes 13 unguarded
+    throwing calls) reaches neither the `axi.emit_axi(...)` call
     later in the same function nor any handler in `main`, so it prints a
     Python traceback and `crucible-axi install`/`uninstall` never puts an
     envelope on stdout at all.
@@ -108,7 +108,8 @@ class ServeOSErrorStartingTheServerBinaryTest(unittest.TestCase):
     """`cmd_serve`'s THIRD, unguarded failure site: the actual
     `subprocess.run(argv, env=env)` launch call, as opposed to the two
     sibling sites (`server_launch_argv`/`write_listener_settings`) that
-    already carry the `print(...); return 1` shape this AC extends to it."""
+    already carry the `print(...); return 1` shape the launch call must
+    share."""
 
     def test_oserror_starting_the_server_binary_prints_error_line_exit_1_no_envelope(self):
         install_mod, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")

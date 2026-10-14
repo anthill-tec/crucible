@@ -35,7 +35,7 @@ patched to RECORD instead of reach the network -- never a fake `run_verb`.
   rust-crucible.py:3532     sys.exit(_axi().run_verb(
 
 The "hard stop before the runner started still records none" half of this
-AC is EXISTING, unchanged behaviour (every typed-hard-stop `except` clause
+behaviour ALREADY holds, unchanged (every typed-hard-stop `except` clause
 in `run_verb` already `return`s before the milestone tail, and
 `test_an_unattributed_run_is_refused_while_a_cycle_is_active.py` already
 drives a pre-merge-gate hard-stop refusal end to end) -- not re-asserted
@@ -137,7 +137,7 @@ class GateDiedAfterItsRunnerStartedRecordsAFailTest(unittest.TestCase):
             # Simulates the fail-fast step having passed (or been skipped)
             # and the expensive regression run having genuinely begun, then
             # an OSError escaping while moving/reading its report -- the
-            # exact defect class the CR's Problem section names.
+            # exact defect class: an I/O failure escaping the gate's body.
             raise OSError("no space left on device while moving the merged report")
 
         code = self._run_verb(_body_that_dies_after_its_runner_started)
