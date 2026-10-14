@@ -1,13 +1,13 @@
 # CR-CRU-190 — the 0.4.0 follow-ups list
 
-**Type** fix (patch CR, one list of follow-ups) · **Points** 13 (set at filing, 2026-10-14; the
-gap analysis splits it if the list outgrows the cap) · **Wave** 8 (0.4.0) · **Depends on**
+**Type** fix (patch CR, one list of follow-ups) · **Points** 13 (set at filing, 2026-10-14; items 6–8 added the same day;
+the gap analysis splits it if the list outgrows the cap) · **Wave** 8 (0.4.0) · **Depends on**
 CR-CRU-184 · **Status** PENDING — filed 2026-10-14 (user ruling: the open follow-ups are ONE patch
 CR, not several; placed after CR-CRU-189)
 
 ## Problem
 
-Five follow-ups came out of wave 8's work and Model B's mail. Each is small, and the user ruled that
+Eight follow-ups came out of wave 8's work and Model B's mail. Each is small, and the user ruled that
 they are worked as one CR.
 
 1. **An agent's badge names its cycle by a board-wide id.** Noticed by the user (2026-10-14). An agent's
@@ -35,6 +35,19 @@ they are worked as one CR.
    iterating on one test can only run the whole file; `bun test -t "<name>"` has no client form.
 5. **`python-crucible.py` runs `unittest` only.** Requested by Model B (Sandesh #1446). A pytest
    project has no client form for its runs.
+
+6. **An archived project's release burndown reports a total of zero.** Found during CR-CRU-188
+   (cycle 675): `listQueue` returns no rows for an archived project, yet its release burndown route
+   still answers 200 with `totalPoints: 0`, neither its real total nor the archived refusal the
+   other agent and read routes give.
+7. **`cr-close` hides a failed `cr-merged` post.** Found closing CR-CRU-188: `cr-close` posts the
+   `cr-merged` milestone itself, and the board refused it (HTTP 409) because the orchestrator was
+   still bound to the plan's verify cycle (its `pre-merge-gate --cycle` bound it, and the close
+   closed that plan). The envelope still read `ok: true, warnings: []`; the refusal appeared only in
+   a trailing human line.
+8. **One `--cycle` help line misdescribes its verb.** rust `docker-e2e-gate` opens no gated
+   identity, but its `--cycle` help says the gated run leaves its registration and binding intact
+   (the wording the gated verbs use) rather than the filing wording `check`/`compile` carry.
 
 ## Steps
 
@@ -71,6 +84,23 @@ today's projects). With `pytest`, the client runs `pytest --junitxml=<report>` a
 report exactly as it ingests `xmlrunner`'s, through the same run lifecycle, interrupt trap,
 temp-root and ran-nothing exits as the `unittest` path.
 
+### §S6 — an archived project's burndown says it is archived
+
+The release burndown, forecast and velocity routes answer an archived project the way the other
+read routes do (the archived refusal), never a computed zero.
+
+### §S7 — `cr-close` reports its own `cr-merged` post
+
+When `cr-close`'s `cr-merged` post fails, the envelope says so: a warning naming the board's refusal,
+and `help[]` naming the remedy (re-register unbound, then `milestone --type cr-merged`). The close
+itself stays done. A gate's cycle binding is released when its cycle is marked done, so the close's
+own post is not refused for it.
+
+### §S8 — every `--cycle` help line describes its own verb
+
+`docker-e2e-gate`'s `--cycle` help uses the filing wording, and a census test checks that each
+verb's `--cycle` help matches whether that verb opens a gated identity.
+
 ## Acceptance criteria
 
 - [ ] **Badge.** On a board whose plan has five cycles, an idle agent bound to the second shows
@@ -88,6 +118,14 @@ temp-root and ran-nothing exits as the `unittest` path.
 - [ ] **Pytest.** `python-crucible.py test --runner pytest` and `regression --runner pytest` run a
       pytest fixture, file its pass and fail counts, abort a ran-nothing run, and survive a SIGTERM
       like the `unittest` path. Without `--runner`, every existing python test passes unchanged.
+- [ ] **Archived burndown.** For an archived project, the burndown, forecast and velocity routes
+      answer the archived refusal, never `totalPoints: 0`.
+- [ ] **A failed `cr-merged` post is reported.** Against a live in-process board that refuses the
+      `cr-merged` post, `cr-close` closes the CR and its envelope carries a warning naming the refusal
+      and `help[]` naming the remedy; after a gate bound the orchestrator to the verify cycle and
+      that cycle is marked done, `cr-close`'s own `cr-merged` post succeeds.
+- [ ] **Help matches the verb.** For EACH client, every verb's `--cycle` help matches whether the
+      verb opens a gated identity.
 - [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/`, `clients/` or test
       comments, and the citation tripwire's pins are unchanged.
 
