@@ -81,45 +81,50 @@ declares.
 
 ### §S4 — a deliberate construct is marked in place
 
-`unreachable-except`, `python-empty-except` and `use-defused-xml-parse` are suppressed at each
-flagged site with `# pi-lens-ignore: <rule> — <reason>`, the reason stating why the code is right
-as written. `SIM114` in `test_cr054_drift_guard.py` is fixed, not marked.
+`unreachable-except`, `python-empty-except`, `python-unsafe-regex`, `python-command-injection`,
+`python-subprocess-shell` and `use-defused-xml-parse` are suppressed at each flagged site with
+`# pi-lens-ignore: <rule> — <reason>`, the reason stating why the code is right as written.
+
+Every ruff finding that pi-lens's own ruff configuration reports over the same files is cleared too
+(user ruling at cycle 2: pi-lens's edit hook blocks on them). A mechanical finding is fixed with no
+behaviour change, `SIM114` in `test_cr054_drift_guard.py` among them. A security rule on deliberate
+code is marked in place with its reason, as above, plus the `# noqa: <code>` ruff needs.
 
 ## Acceptance criteria
 
-- [ ] **An escaping failure is an envelope, in every client.** For EACH of `python-crucible.py`,
+- [x] **An escaping failure is an envelope, in every client.** For EACH of `python-crucible.py`,
       `bun-crucible.py`, `rust-crucible.py`, `mvn-crucible.py` and `arduino-crucible.py`, a verb
       that raises an `OSError` and a verb that raises a `ValueError`, each driven through the
       client's own `main`, exit non-zero. The output is an `ok: false` envelope whose `error` names
       the exception's type and message, with no traceback on stderr. The same holds for the
       no-argument dashboard in each client.
-- [ ] **A gate that died after it ran records a fail.** For EACH client's `pre-merge-gate`, an
+- [x] **A gate that died after it ran records a fail.** For EACH client's `pre-merge-gate`, an
       `OSError` raised after its runner started yields the `ok: false` envelope and a
       `pre-merge-gate` milestone with outcome `fail`. A hard stop before the runner started still
       records none.
-- [ ] **The installer too.** `crucible_axi.cli.main` does the same for an `OSError` raised by
+- [x] **The installer too.** `crucible_axi.cli.main` does the same for an `OSError` raised by
       `install` and by `uninstall`. `serve` reports an `OSError` from starting the server binary with
       an error line and exit 1, with no envelope and no traceback.
-- [ ] **Typed stops unchanged.** Each typed hard stop `run_verb` converts today is still reported
+- [x] **Typed stops unchanged.** Each typed hard stop `run_verb` converts today is still reported
       with its own envelope and exit code.
-- [ ] **A table missing a column is a parse error.** `parse_queue_table` raises `QueueParseError`
+- [x] **A table missing a column is a parse error.** `parse_queue_table` raises `QueueParseError`
       naming the missing column for a header without `title` and for one without `depends`, never
       `TypeError`.
-- [ ] **No queue table is a parse error.** `parse_queue_table` raises `QueueParseError` for text with
+- [x] **No queue table is a parse error.** `parse_queue_table` raises `QueueParseError` for text with
       no queue table. `queue-file` given such a file answers `ok: false` and posts nothing.
-- [ ] **The rules are off with reasons.** `.pi-lens.json` disables exactly
+- [x] **The rules are off with reasons.** `.pi-lens.json` disables exactly
       `unchecked-throwing-call-python` and `unchecked-numeric-parse-python`, each with a `reason`
       covering both shipped and test code.
-- [ ] **Type-clean.** pi-lens's own bundled Pyright CLI (`~/.pi-lens/tools/node_modules/.bin/pyright`),
+- [x] **Type-clean.** pi-lens's own bundled Pyright CLI (`~/.pi-lens/tools/node_modules/.bin/pyright`),
       run directly over `clients/`, `crucible_axi/` and the three named test files, reports zero
       errors. It is run directly because pi-lens's language-server probe cannot sync a file over
       5,000 lines, and `_crucible_axi.py` is over that.
-- [ ] **Lint-clean.** A pi-lens sweep (`lens_diagnostics`, `source: session`, `mode: full`,
+- [x] **Lint-clean.** A pi-lens sweep (`lens_diagnostics`, `source: session`, `mode: full`,
       `refreshRunners: all`) over the same files reports zero blocking findings and no `unchecked-*`
-      warnings. Each `pi-lens-ignore` carries a reason. A file an analyser did not answer for is
+      warnings, and ruff under pi-lens's own configuration reports none. Each `pi-lens-ignore` carries a reason. A file an analyser did not answer for is
       re-swept after it is touched, never counted as clean.
-- [ ] **No pinned behaviour moves.** Both full suites pass, and the typecheck is clean.
-- [ ] **No new CR literals.** No CR-shaped literal is added under `clients/`, `crucible_axi/` or in
+- [x] **No pinned behaviour moves.** Both full suites pass, and the typecheck is clean.
+- [x] **No new CR literals.** No CR-shaped literal is added under `clients/`, `crucible_axi/` or in
       test comments, and the citation tripwire's pins are unchanged.
 
 ## How it is worked

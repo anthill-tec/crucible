@@ -28,7 +28,8 @@ only after they exist. Before this, nothing materialised the directory and
 every published path dangled.
 """
 
-from __future__ import annotations
+# pi-lens-ignore: I001 — tomllib is stdlib (3.11+); ruff's default 3.10 target misfiles it as third-party
+from __future__ import annotations  # noqa: I001
 
 import inspect
 import json
@@ -368,7 +369,8 @@ _DEFAULT_LISTENER_HOST = "127.0.0.1"
 # Hosts that name "every interface" rather than a reachable address. A client
 # cannot POST to `http://0.0.0.0:<port>`, so the URL written beside such a bind
 # names the loopback the operator can actually reach.
-_UNSPECIFIED_HOSTS = ("0.0.0.0", "::", "")
+# pi-lens-ignore: S104 — names the every-interface hosts so they can be recognised, never binds one
+_UNSPECIFIED_HOSTS = ("0.0.0.0", "::", "")  # noqa: S104
 
 # The envelope `warnings[]` code an exhausted range fails an install with. A
 # code of its own, not the generic `stage-failed`: `cli` matches on it to decide
@@ -809,7 +811,8 @@ def _guarantee_bun(no_bun_bootstrap: bool = False) -> str:
     if bun is None:
         opted_out = _bun_bootstrap_disabled(no_bun_bootstrap)
         if not opted_out:
-            subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
+            # pi-lens-ignore: python-command-injection, python-subprocess-shell, S602 — runs the fixed constant Bun installer pipe, no caller input reaches it; --no-bun-bootstrap opts out
+            subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)  # noqa: S602
         bun = _resolve_bun_path()
         if bun is None:
             why = ("and the automatic bootstrap is disabled "

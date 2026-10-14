@@ -692,7 +692,8 @@ def _parse_junit(dirs):
     for d in dirs:
         for xml_file in sorted(glob.glob(os.path.join(d, "TEST-*.xml"))):
             try:
-                root = ET.parse(xml_file).getroot()
+                # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+                root = ET.parse(xml_file).getroot()  # noqa: S314
             except ET.ParseError as e:
                 print(f"[crucible] WARN: unparseable report {xml_file}: {e}",
                       file=sys.stderr)
@@ -1286,9 +1287,9 @@ def cmd_compile(args):
     _emit_axi("compile", ok,
               {"exit": result.returncode,
                "help": (_axi().HELP_STEPS["check"] if ok else
-                        [f"fix the compile error(s) ingested to Crucible (and "
-                         f"echoed on stderr), then re-run compile "
-                         f"--agent <agentId>", "status"])},
+                        ["fix the compile error(s) ingested to Crucible (and "
+                         "echoed on stderr), then re-run compile "
+                         "--agent <agentId>", "status"])},
               _axi_context(project_dir, agent_id=args.agent), warnings,
               f"compile: ok={ok} exit={result.returncode}")
     return rc
@@ -1301,15 +1302,16 @@ def _docker_clean_check(maven_dir):
     try:
         r = subprocess.run(["docker", "ps", "--format", "{{.Names}} ({{.Image}})"],
                            capture_output=True, text=True)
-        running = [l for l in r.stdout.splitlines() if l.strip()]
+        running = [line for line in r.stdout.splitlines() if line.strip()]
         if running:
             print(f"[crucible] ⚠ {len(running)} docker container(s) already running before e2e:",
                   file=sys.stderr)
-            for l in running[:15]:
-                print(f"    {l}", file=sys.stderr)
+            for name in running[:15]:
+                print(f"    {name}", file=sys.stderr)
             print("    Confirm these are expected; stale e2e containers can poison the run.",
                   file=sys.stderr)
-    except Exception:
+    except Exception:  # noqa: S110
+        # pi-lens-ignore: python-empty-except, S110 — the docker listing is informational; an absent or failing docker must never stop the e2e run
         pass
 
 
@@ -1710,6 +1712,7 @@ def _clean_stale_bind_mounts(project_dir):
                     )
                     break
         except PermissionError:
+            # pi-lens-ignore: python-empty-except — best-effort hygiene: a bind-mount dir this user cannot list is left as it is and the run goes on
             pass
 
 
@@ -2281,7 +2284,8 @@ def _read_declared_profile(args, target):
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     pom = os.path.join(maven_dir, "pom.xml")
     try:
-        root = ET.parse(pom).getroot()
+        # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the project's own pom.xml from the working tree; the clients are stdlib-only
+        root = ET.parse(pom).getroot()  # noqa: S314
     except OSError:
         return None
     except ET.ParseError as error:
@@ -2416,7 +2420,8 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(unit=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs `mvn clean test -Dtest=<pattern>` and ingests surefire.",
                  (_add_unit_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
@@ -2801,7 +2806,9 @@ def main():
     args = p.parse_args()
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
-        sys.exit(cmd_dashboard())
+        sys.exit(_axi().run_dashboard(
+            cmd_dashboard,
+            lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.

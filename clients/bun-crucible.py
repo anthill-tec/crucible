@@ -258,6 +258,7 @@ def _prescan_test_total(package_dir, targets):
             with open(p, encoding="utf-8", errors="replace") as f:
                 total += len(_TEST_DECL.findall(f.read()))
         except OSError:
+            # pi-lens-ignore: python-empty-except — the total is approximate by design; an unreadable source is simply not counted
             pass
     return total
 
@@ -428,10 +429,8 @@ def _wipe(reports_dir, *extra):
     file the PREVIOUS run's evidence under this run's agent."""
     for path in (_junit_path(reports_dir), *extra):
         if os.path.exists(path):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
 
 
 # CR-CRU-133 §S2 — the vocabulary a project states a declared target's
@@ -622,7 +621,8 @@ def _parse_junit_file(junit_path):
     total = passed = failed = pending = 0
     duration_ms = 0
     files = set()
-    root = ET.parse(junit_path).getroot()
+    # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+    root = ET.parse(junit_path).getroot()  # noqa: S314
     suites = root.findall(".//testsuite") or [root]
     for suite in suites:
         children = []
@@ -711,6 +711,7 @@ def _parse_junit_file(junit_path):
 # line, so both matcher families accept both forms and the marrying logic
 # downstream is unchanged. (`_ANSI_SGR_RUN` is zero-or-more, so the existing
 # duration-tail pattern already matches the plain `[0.15ms]` tail.)
+# pi-lens-ignore: python-unsafe-regex — compiles a module-built constant pattern; no user input reaches it
 _ANSI_SGR_RE = re.compile(_ANSI_SGR_RUN)
 _DURATION_TAIL = (r"(?:\s+" + _ANSI_SGR_RUN + r"\[" + _ANSI_SGR_RUN
                   + r"[0-9.]+\s*m?s" + _ANSI_SGR_RUN + r"\])?")
@@ -2487,7 +2488,8 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(regression=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
             "Runs the full-suite `bun test` and ingests it; --coverage adds "
             "lcov.",
@@ -2822,7 +2824,9 @@ def main():
     args = p.parse_args()
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
-        sys.exit(cmd_dashboard())
+        sys.exit(_axi().run_dashboard(
+            cmd_dashboard,
+            lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.

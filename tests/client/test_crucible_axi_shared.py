@@ -1248,10 +1248,10 @@ class SharedQueueFileRegistrarTest(unittest.TestCase):
         broken on four clients."""
         axi = _load_axi_module()
         registrar = getattr(axi, "add_queue_file_verb", None)
-        self.assertTrue(
-            callable(registrar),
-            f"`add_queue_file_verb` must be callable to register anything; "
-            f"got {registrar!r}")
+        if not callable(registrar):
+            self.fail(
+                f"`add_queue_file_verb` must be callable to register anything; "
+                f"got {registrar!r}")
 
         def delegator(args):
             return 0

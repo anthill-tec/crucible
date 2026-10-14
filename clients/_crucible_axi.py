@@ -24,7 +24,8 @@ being on `sys.path`; it loads the sibling `clients/toon.py` codec by path the
 same way the clients do.
 """
 
-import argparse
+# pi-lens-ignore: I001 — tomllib is stdlib (3.11+); ruff's default 3.10 target misfiles it as third-party
+import argparse  # noqa: I001
 import collections
 import contextlib
 import datetime
@@ -256,11 +257,11 @@ def shipped_data_path():
         if os.path.isfile(candidate):
             return candidate
     raise RuntimeError(
-        "no shipped limit defaults found at %s. They travel as PACKAGE DATA "
+        f"no shipped limit defaults found at {', '.join(_SHIPPED_DATA_CANDIDATES)}. "
+        "They travel as PACKAGE DATA "
         "beside this module; without them a client can resolve nothing, "
         "because the last resort is a DATA FILE in the distribution rather "
-        "than a number in a resolver."
-        % (", ".join(_SHIPPED_DATA_CANDIDATES),))
+        "than a number in a resolver.")
 
 
 def _shipped_declaration(name, table, path):
@@ -269,23 +270,21 @@ def _shipped_declaration(name, table, path):
     check, and a limit missing its sentence is a number nobody chose."""
     if not isinstance(table, dict):
         raise RuntimeError(
-            "%s declares no `[limits.%s]` table, so this distribution cannot "
-            "say what it enforces" % (path, name))
+            f"{path} declares no `[limits.{name}]` table, so this distribution cannot "
+            "say what it enforces")
     out = {}
     for field in _DOCUMENTED_FIELDS:
         raw = table.get(field)
         if field == "description":
             if not isinstance(raw, str) or not raw:
                 raise RuntimeError(
-                    "%s does not describe `%s`: a limit without a sentence an "
-                    "operator can act on is a number nobody chose"
-                    % (path, name))
+                    f"{path} does not describe `{name}`: a limit without a sentence an "
+                    "operator can act on is a number nobody chose")
         elif not isinstance(raw, int) or isinstance(raw, bool):
             raise RuntimeError(
-                "%s does not declare an integer `%s` for `%s`; that file is "
+                f"{path} does not declare an integer `{field}` for `{name}`; that file is "
                 "this distribution's PACKAGE DATA, so a missing field is a "
-                "broken distribution rather than an operator error"
-                % (path, field, name))
+                "broken distribution rather than an operator error")
         out[field] = raw
     return out
 
@@ -327,10 +326,11 @@ def shipped_board():
     url = table.get(CLIENT_BOARD_FIELD) if isinstance(table, dict) else None
     if not isinstance(url, str) or not url.strip():
         raise RuntimeError(
-            "%s declares no `[%s] %s`, so this distribution cannot say which "
+            f"{path} declares no `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}`, so this "
+            "distribution cannot say which "
             "board it posts to. The last resort is PACKAGE DATA rather than a "
             "literal in this module, and there is deliberately no address here "
-            "to fall back to." % (path, CLIENT_TABLE, CLIENT_BOARD_FIELD))
+            "to fall back to.")
     return url.strip()
 
 
@@ -389,11 +389,11 @@ def _limit_refusal(name, declaration, path):
     offending value, the range it crossed and the setting running instead.
     REFUSED, never clamped -- a clamp leaves the operator's stated intent and
     the running behaviour different with nothing saying so."""
-    return ("[crucible] WARNING: %s sets `%s` to %d, outside the range "
-            "[%d, %d] declared beside it — the value is REFUSED, not clamped, "
-            "so `%s` runs at its recommended %d until the file is corrected."
-            % (path, name, declaration["value"], declaration["min"],
-               declaration["max"], name, declaration["recommended"]))
+    return (f"[crucible] WARNING: {path} sets `{name}` to {declaration['value']:d}, "
+            f"outside the range [{declaration['min']:d}, {declaration['max']:d}] "
+            "declared beside it — the value is REFUSED, not clamped, "
+            f"so `{name}` runs at its recommended {declaration['recommended']:d} "
+            "until the file is corrected.")
 
 
 def _limits_unreadable(candidates):
@@ -403,10 +403,11 @@ def _limits_unreadable(candidates):
     nothing. The order is the answer to "which file would have won", so the
     first name is the one to create."""
     return ("[crucible] WARNING: no readable configuration. Tried, in "
-            "precedence order: %s — none of them reads (absent, or does not "
+            f"precedence order: {', '.join(candidates)} — none of them reads (absent, "
+            "or does not "
             "parse), so every bound this client enforces runs at the value the "
             "build recommends. Create the first of them (or correct its TOML) "
-            "to configure them." % (", ".join(candidates),))
+            "to configure them.")
 
 
 def _effective_limit(name, declaration, path):
@@ -433,11 +434,11 @@ def resolve_limit(name):
     every such string."""
     if name not in CLIENT_LIMIT_NAMES:
         raise ValueError(
-            "`%s` is not a limit a client enforces (%s). A limit is owned by the process "
+            f"`{name}` is not a limit a client enforces "
+            f"({', '.join(CLIENT_LIMIT_NAMES)}). A limit is owned by the process "
             "that ENFORCES it, and the server is not necessarily on this machine — "
             "`run_abandon_ms`, `project_inactive_ms` and `retention` resolve from the "
-            "SERVER's own crucible.toml, never from here."
-            % (name, ", ".join(CLIENT_LIMIT_NAMES)))
+            "SERVER's own crucible.toml, never from here.")
     path, tables = _read_project_config()
     shipped = shipped_limits()[name]
     declaration = (shipped if tables is None
@@ -623,7 +624,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     lift; the other four inherit the fix. A NON-empty body that is not valid
     JSON still raises, unchanged — only the empty case was ever a defect.
     """
-    req = urllib.request.Request(
+    # pi-lens-ignore: S310 — the URL is the Crucible board the client is configured to post to, never caller-chosen input
+    req = urllib.request.Request(  # noqa: S310
         f"{base_url}{path}",
         data=json.dumps(payload).encode() if payload is not None else None,
         headers={"Content-Type": "application/json"},
@@ -635,11 +637,13 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         # context-managed read would consume that double's `__enter__` result
         # instead of the double itself. The explicit close keeps the
         # connection from leaking all the same.
-        response = urllib.request.urlopen(req, timeout=timeout)
+        # pi-lens-ignore: S310 — the URL is the Crucible board the client is configured to post to, never caller-chosen input
+        response = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
         try:
             body = response.read()
         finally:
             response.close()
+    # pi-lens-ignore: unreachable-except — HTTPError is caught before its base URLError, so both clauses are reached
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
         failure = {"ok": False, "error": f"HTTP {e.code}: {detail}"}
@@ -661,6 +665,7 @@ def http_request(base_url, method, path, payload=None, timeout=None):
             if method != "GET":
                 note_unknown_project_refusal(body)
         return failure
+    # pi-lens-ignore: unreachable-except — URLError follows its subclass HTTPError and precedes the unrelated TimeoutError, so it is reached
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
                                       f"(is Crucible running at {base_url}?)"}
@@ -767,7 +772,7 @@ def run_reports_dir(base_dir, reports_arg, agent_id=None):
     `base_dir`."""
     if reports_arg:
         chosen = reports_arg
-    elif reports_dir_is_agents_own(reports_arg, agent_id):
+    elif agent_id and reports_dir_is_agents_own(reports_arg, agent_id):
         chosen = os.path.join(DEFAULT_REPORTS_DIR, agent_id)
     else:
         chosen = DEFAULT_REPORTS_DIR
@@ -820,6 +825,7 @@ def run_context():
     except (OSError, subprocess.CalledProcessError):
         # A non-repo cwd / absent git is not an ingest failure — the run
         # context simply carries no git provenance.
+        # pi-lens-ignore: python-empty-except — no git here is a valid outcome, not an error to handle or re-raise
         pass
     return context
 
@@ -984,7 +990,8 @@ def silence_closed_pipe(name):
     try:
         os.dup2(devnull, stream.fileno())
     except (AttributeError, OSError, ValueError):
-        setattr(sys, name, open(os.devnull, "w"))  # kept open: it IS sys.<name> now
+        # pi-lens-ignore: SIM115 — kept open on purpose: it IS sys.<name> now, for the rest of the process
+        setattr(sys, name, open(os.devnull, "w"))  # noqa: SIM115
     finally:
         os.close(devnull)
 
@@ -2493,6 +2500,32 @@ def _hard_stop_context(args, project_key_fn, agent_id=None):
         return {}
 
 
+ESCAPED_FAILURE_CODE = "verb-failed"
+
+
+def emit_escaped_failure(verb, exc, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for an `OSError`/`ValueError` that escaped a verb's body, and
+    return the non-zero exit code. `error` names the exception's type and
+    message."""
+    detail = f"{type(exc).__name__}: {exc}"
+    emit_axi(verb or "unknown", False,
+             {"error": detail,
+              "help": ["fix the cause this error names, then re-run the verb"]},
+             context or {}, [],
+             legacy_line=f"error: {ESCAPED_FAILURE_CODE} — {detail}")
+    return 1
+
+
+def run_dashboard(cmd_dashboard, project_key_fn=None):
+    """Run a client's no-argument dashboard through `run_verb`, so a failure
+    escaping it is converted exactly as one escaping a verb is. The dashboard
+    IS the `status` view, so its envelope names that verb."""
+    return run_verb(lambda _args: cmd_dashboard(),
+                    argparse.Namespace(cmd="status", project_dir=None),
+                    project_key_fn)
+
+
 def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
     typed hard stop — an undeclared agent identity (§S5), an unresolvable
@@ -2540,6 +2573,15 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         return emit_bracket_abandoned(
             getattr(args, "cmd", None), abandoned,
             _hard_stop_context(args, project_key_fn, abandoned.agent_id))
+    except (OSError, ValueError) as exc:
+        # After every typed hard stop, never in their place: an I/O or parse
+        # failure the verb's own body let escape is reported, not a traceback.
+        # It is not a refusal, so a gate that died this way still falls
+        # through to its outcome milestone below, as a fail.
+        code = emit_escaped_failure(
+            getattr(args, "cmd", None), exc,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
     if (getattr(args, "cmd", None) == GATE_VERB and ops_fn is not None
             and project_dir_fn is not None):
         record_gate_outcome(args, code, project_dir_fn(args), ops_fn())
@@ -2959,7 +3001,7 @@ def select_history_fields(rows, extra_fields, full=False):
     plus the requested extras (all five with `full`), in the read's order.
     Without `full` a long text cell is truncated (`truncate_field`)."""
     requested = list(HISTORY_EXTRA_FIELDS) if full else list(extra_fields or [])
-    keys = list(HISTORY_BASE_FIELDS)
+    keys: list[str] = list(HISTORY_BASE_FIELDS)
     for f in requested:
         if f not in keys:
             keys.append(f)
@@ -3255,7 +3297,7 @@ def select_queue_fields(rows, extra_fields, full=False):
                for f in requested):
         return projected, []
     warnings = []
-    for row, late in zip(projected, queue_late_dependencies(rows)):
+    for row, late in zip(projected, queue_late_dependencies(rows), strict=True):
         named = " ".join(late)
         row[QUEUE_WARNING_FIELD] = (f"before its dependency {named}"
                                     if late else "")
@@ -4257,7 +4299,7 @@ def plan_file_cycle_entries(args):
             [f"{CYCLE_FLAG_TEMPLATE} — repeat the --cycle/--cycle-kind PAIR "
              f"once per cycle, in the order the cycles run"])
     return [{"label": label, "kind": kind}
-            for label, kind in zip(repeated, kinds)]
+            for label, kind in zip(repeated, kinds, strict=True)]
 
 
 def cmd_plan_file(args, project_dir, ops):
@@ -4691,9 +4733,12 @@ def parse_queue_table(text):
     so the server's `unknownDependencies` join matches the `cr` set.
 
     Raises QueueParseError (naming the CR) for a row whose column count differs
-    from the header's or whose Wave cell has no leading integer."""
+    from the header's or whose Wave cell has no leading integer; (naming the
+    column) for a header with no Title or no Depends-on column; and for text
+    holding no queue table at all, so a caller never posts an empty set to
+    the full-replace endpoint by mistake."""
     header = None
-    idx = {}
+    idx: dict[str, int] = {}
     entries = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -4707,12 +4752,20 @@ def parse_queue_table(text):
             low = [c.lower() for c in cells]
             if "wave" in low and any(c == "cr" or c.startswith("cr ") for c in low):
                 header = cells
-                idx = {
+                found = {
                     "cr": _find_col(cells, "cr"),
                     "title": _find_col(cells, "title"),
                     "depends": _find_col(cells, "depend"),
                     "wave": _find_col(cells, "wave"),
                 }
+                for key, column in (("title", "Title"), ("depends", "Depends on")):
+                    if found[key] is None:
+                        raise QueueParseError(
+                            f"malformed queue table: the header has no {column} "
+                            f"column ({stripped!r})")
+                # The header test above already names a CR and a Wave cell, so
+                # every column is found here; only the found ones are kept.
+                idx = {k: v for k, v in found.items() if v is not None}
             continue
         m = _QUEUE_ROW_RE.match(line)
         if not m:
@@ -4741,6 +4794,10 @@ def parse_queue_table(text):
                     continue
                 deps.append(prefix + tok if re.fullmatch(r"\d+", tok) else tok)
         entries.append({"cr": cr, "title": title, "wave": wave, "dependsOn": deps})
+    if header is None:
+        raise QueueParseError(
+            "no queue table found: no table header names both a CR and a Wave "
+            "column")
     return entries
 
 
@@ -6308,7 +6365,7 @@ def declared_gate_suites(args, surface, stack):
         tier = named if named in TIER_MEANINGS else None
         if tier == "regression":
             continue
-        excluded = GATE_UNCOVERED_TIERS.get(tier)
+        excluded = GATE_UNCOVERED_TIERS.get(tier) if tier is not None else None
         suites.append(GateSuite(target=target, tier=tier, command=command,
                                 stack=declaring_stack(command) or stack,
                                 gated=excluded is None, excluded=excluded))
@@ -6642,8 +6699,11 @@ class ChildRunTiming:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.wall = max(time.monotonic() - self._wall_at, 0.0)
-        self.cpu = max(self._child_cpu() - self._cpu_at, 0.0)
+        wall_at, cpu_at = self._wall_at, self._cpu_at
+        if wall_at is None or cpu_at is None:
+            raise RuntimeError("ChildRunTiming exited without being entered")
+        self.wall = max(time.monotonic() - wall_at, 0.0)
+        self.cpu = max(self._child_cpu() - cpu_at, 0.0)
         return False
 
     @property
@@ -6964,7 +7024,8 @@ def junit_testcase_count(paths):
     count = 0
     for path in paths:
         try:
-            root = ET.parse(path).getroot()
+            # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+            root = ET.parse(path).getroot()  # noqa: S314
         except (ET.ParseError, OSError) as exc:
             print(f"[crucible] WARN: could not count the results in {path} "
                   f"({exc}) \u2014 it is filed as it stands", file=sys.stderr)
@@ -7582,7 +7643,8 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
 # record `cr-close` reads before it will close a CR.
 GATE_VERB = "pre-merge-gate"
 GATE_MILESTONE_TYPE = "pre-merge-gate"
-GATE_OUTCOME_PASS = "pass"
+# pi-lens-ignore: S105 — "pass" is the gate outcome the board records, not a credential
+GATE_OUTCOME_PASS = "pass"  # noqa: S105
 GATE_OUTCOME_FAIL = "fail"
 
 

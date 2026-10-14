@@ -153,9 +153,7 @@ def is_thin_delegator(name, funcs, _seen=frozenset()):
     if len(core) != 1:
         return False
     stmt = core[0]
-    if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
-        call = stmt.value
-    elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+    if isinstance(stmt, (ast.Return, ast.Expr)) and isinstance(stmt.value, ast.Call):
         call = stmt.value
     else:
         return False

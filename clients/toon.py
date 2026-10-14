@@ -223,9 +223,7 @@ def _is_safe_unquoted(value: str, delimiter: str = _DEFAULT_DELIMITER) -> bool:
         return False
     if delimiter in value:
         return False
-    if value.startswith("-") or value.startswith("#"):
-        return False
-    return True
+    return not value.startswith(("-", "#"))
 
 
 def _number_text(value: Any) -> str:
@@ -549,7 +547,8 @@ def _scan_lines(text: str, indent_size: int, strict: bool) -> tuple[list[dict], 
             raw = raw[1:]
         if raw.endswith("\r"):
             raw = raw[:-1]
-        leading = _LEADING_WHITESPACE.match(raw).group(0)
+        leading_match = _LEADING_WHITESPACE.match(raw)
+        leading = leading_match.group(0) if leading_match else ""
         first_tab = leading.find("\t")
         indent = first_tab if strict and first_tab != -1 else len(leading)
         tab_indent = 0 if strict or first_tab == -1 else leading.count("\t")
@@ -1104,7 +1103,7 @@ def _decode_object_fields(reader: _Reader, base_depth: int, strict: bool) -> dic
             break
         if computed_depth is None and line["depth"] >= base_depth:
             computed_depth = line["depth"]
-        if line["depth"] == computed_depth:
+        if computed_depth is not None and line["depth"] == computed_depth:
             reader.read()
             key, value = _decode_key_value(line, reader, computed_depth, strict, seen_keys)
             obj[key] = value
@@ -1174,15 +1173,18 @@ def _decode_keyed_object(header: dict, reader: _Reader, base_depth: int, strict:
             start_line = line["line_number"]
         end_line = line["line_number"]
         last_entry_line = line
-        key, end = _with_line(line, lambda: _parse_key_token(line["content"], 0))
+        entry_content = line["content"]
+        key, end = _with_line(
+            line, lambda content=entry_content: _parse_key_token(content, 0))
         _assert_no_duplicate_key(key, line, seen_entry_keys)
         cells_content = _trim_spaces(line["content"][end:])
         values = ([] if cells_content == "" else
-                  _with_line(line, lambda: _parse_delimited_values(
-                      cells_content, header["delimiter"])))
+                  _with_line(line, lambda cells=cells_content: _parse_delimited_values(
+                      cells, header["delimiter"])))
         _assert_expected_count(len(values), leaf_field_count, "keyed entry cells",
                                strict, line)
-        primitives = _with_line(line, lambda: [_parse_primitive_token(v) for v in values])
+        primitives = _with_line(
+            line, lambda tokens=values: [_parse_primitive_token(v) for v in tokens])
         obj[key] = _build_object_from_fields(header["fields"], primitives)
         entry_count += 1
     _assert_expected_count(entry_count, header["length"], "keyed entries",
@@ -1212,11 +1214,13 @@ def _decode_tabular_array(header: dict, reader: _Reader, base_depth: int, strict
             end_line = line["line_number"]
             last_row_line = line
             reader.read()
-            values = _with_line(line, lambda: _parse_delimited_values(
-                line["content"], header["delimiter"]))
+            row_content = line["content"]
+            values = _with_line(line, lambda content=row_content: _parse_delimited_values(
+                content, header["delimiter"]))
             _assert_expected_count(len(values), _count_leaf_fields(header["fields"]),
                                    "tabular row values", strict, line)
-            primitives = _with_line(line, lambda: [_parse_primitive_token(v) for v in values])
+            primitives = _with_line(
+                line, lambda tokens=values: [_parse_primitive_token(v) for v in tokens])
             rows.append(_build_object_from_fields(header["fields"], primitives))
         else:
             break

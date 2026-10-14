@@ -317,7 +317,8 @@ def _parse_junit(path):
     collapses to zero: a constant zero would make a shrinking suite look
     identical to a healthy one. It rides the printed run envelope only, never
     the ingest payload (CR-CRU-047 §S2)."""
-    root = ET.parse(path).getroot()
+    # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+    root = ET.parse(path).getroot()  # noqa: S314
     suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
     total = passed = failed = pending = 0
     tree = []
@@ -1436,7 +1437,8 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(unit=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs the native host tests (`make junit`) under --dir -> "
                  "/api/v2/runs/parsed.",
@@ -1748,7 +1750,8 @@ def main():
         os.environ["AGENT_ID"] = args.agent
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
-        sys.exit(cmd_dashboard())
+        sys.exit(_axi().run_dashboard(
+            cmd_dashboard, lambda a: _project_key(_project_dir(a))))
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.

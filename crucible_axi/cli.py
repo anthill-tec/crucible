@@ -390,6 +390,11 @@ def cmd_serve(args) -> int:
         returncode = subprocess.run(argv, env=env).returncode
     except KeyboardInterrupt:
         return 130
+    except OSError as exc:
+        # The binary could not be started (removed, not executable): the same
+        # error line and exit 1 as the two guarded sites above, no envelope.
+        print(f"crucible-axi serve: {exc}", file=sys.stderr)
+        return 1
     return returncode if returncode >= 0 else 128 - returncode
 
 
@@ -399,6 +404,23 @@ _COMMANDS = {
     "uninstall": cmd_uninstall,
 }
 
+#: The commands whose contract is ONE envelope on stdout. `serve` is not one:
+#: its stdout belongs to the server, so it reports its own failures as an
+#: error line on stderr.
+_ENVELOPED_COMMANDS = frozenset({"install", "uninstall"})
+
+
+def _run_enveloped(handler, args) -> int:
+    """Run an enveloped command, reporting an `OSError`/`ValueError` that
+    escapes it through the same `ok:false` envelope it emits, never a
+    traceback."""
+    try:
+        return handler(args)
+    except (OSError, ValueError) as exc:
+        axi = _load_client_module("_crucible_axi")
+        axi.bind_project_dir(args.target_dir)
+        return axi.emit_escaped_failure(args.command, exc)
+
 
 def main(argv=None) -> int:
     parser = _build_parser()
@@ -407,4 +429,6 @@ def main(argv=None) -> int:
     if handler is None:
         parser.print_help()
         return 1
+    if args.command in _ENVELOPED_COMMANDS:
+        return _run_enveloped(handler, args)
     return handler(args)

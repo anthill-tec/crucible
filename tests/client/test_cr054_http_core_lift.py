@@ -74,10 +74,11 @@ Fallback:
 """
 
 import ast
+import email.message
+import importlib.util
 import json
 import sys
 import unittest
-import importlib.util
 import urllib.error
 from pathlib import Path
 from unittest import mock
@@ -183,8 +184,9 @@ def _fake_response(body_bytes):
 
 def _raising_http_error(code=409, reason="Conflict", body=b"conflict detail"):
     def _raiser(*_args, **_kwargs):
-        err = urllib.error.HTTPError("http://x", code, reason, {}, None)
-        err.read = lambda: body
+        err = urllib.error.HTTPError("http://x", code, reason,
+                                     email.message.Message(), None)
+        err.read = lambda n=-1: body
         raise err
     return _raiser
 
@@ -325,11 +327,11 @@ class HttpCoreStdlibOnlyTest(unittest.TestCase):
                     root = alias.name.split(".")[0]
                     if root not in stdlib_names:
                         offenders.append(root)
-            elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                if node.module:
-                    root = node.module.split(".")[0]
-                    if root not in stdlib_names:
-                        offenders.append(root)
+            elif (isinstance(node, ast.ImportFrom) and node.level == 0
+                  and node.module):
+                root = node.module.split(".")[0]
+                if root not in stdlib_names:
+                    offenders.append(root)
         self.assertEqual(
             offenders, [],
             f"clients/_crucible_axi.py must remain stdlib-only (vendored, "
