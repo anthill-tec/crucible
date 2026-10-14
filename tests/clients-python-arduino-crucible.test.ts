@@ -251,10 +251,20 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
  * tests pinning events.length===3) — never change those, add calls to this
  * filtered helper instead.
  */
-async function nonLifecycleEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
+async function nonLifecycleEvents(
+  baseUrl: string,
+  key: string,
+): Promise<Array<{ id: string; kind?: string }>> {
   const res = await fetch(`${baseUrl}/api/v2/events?project=${key}`);
   const body = (await res.json()) as { events: Array<{ id: string; kind?: string }> };
   return body.events.filter((e) => e.kind !== "lifecycle");
+}
+
+/** The outcome of every `pre-merge-gate` milestone the project holds. */
+async function gateOutcomes(baseUrl: string, key: string): Promise<unknown[]> {
+  const res = await fetch(`${baseUrl}/api/v2/projects/${key}/milestones?type=pre-merge-gate`);
+  const body = (await res.json()) as { milestones: Array<{ outcome?: unknown }> };
+  return body.milestones.map((m) => m.outcome);
 }
 
 /**
@@ -1891,7 +1901,10 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
 
     expect(res.code).toBe(0);
     expect(res.stdout).toContain("ok: true");
-    const events = await nonLifecycleEvents(baseUrl, key);
+    // The gate also posts its one pre-merge-gate outcome milestone; the run
+    // count below is of RUN events, so it excludes milestones.
+    expect(await gateOutcomes(baseUrl, key)).toEqual(["pass"]);
+    const events = (await nonLifecycleEvents(baseUrl, key)).filter((e) => e.kind !== "milestone");
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.tier).toBe("regression");
@@ -1923,7 +1936,11 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
     );
 
     expect(res.code).not.toBe(0);
-    const events = await nonLifecycleEvents(baseUrl, key);
+    // A gate its compile step aborted still posts its one pre-merge-gate
+    // outcome milestone; the run count below is of RUN events, so it excludes
+    // milestones.
+    expect(await gateOutcomes(baseUrl, key)).toEqual(["fail"]);
+    const events = (await nonLifecycleEvents(baseUrl, key)).filter((e) => e.kind !== "milestone");
     // Positive: the check step DID run and ingest its failure (proves the
     // gate actually executed the compile step, not a no-op stub that just
     // exits non-zero without touching either sub-step). Bound: exactly one
