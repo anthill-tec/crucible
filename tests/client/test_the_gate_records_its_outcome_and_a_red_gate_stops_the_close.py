@@ -244,6 +244,14 @@ _PY_TEST_FAIL = (
 )
 
 
+# arduino's fake `make`: exits 0 and writes NO report. The census module's
+# stock fake `make` writes its own passing `TEST-DetectorProbe.xml` on every
+# `make junit`, which the arduino client sums beside the fixture's own report,
+# so it is replaced in BOTH arduino bin dirs: the only report the gate reads is
+# the one `_write_native_fixture` wrote.
+_SILENT_MAKE_BODY = "#!/usr/bin/env python3\nimport sys\n\nsys.exit(0)\n"
+
+
 def _overwrite_fake_tool(bin_dir, name, body):
     path = Path(bin_dir) / name
     path.write_text(body)
@@ -255,10 +263,13 @@ def _overwrite_fake_tool(bin_dir, name, body):
 def _fail_bin_dir_for(client_key):
     """A copy of the census module's standard PASSING fake-tool dir, with the
     ONE tool that produces this client's suite result overwritten to report a
-    failure. `arduino` needs no override here — its native suite result comes
-    from a JUnit file THIS test writes directly into the project fixture
-    (`_write_native_fixture`), never from `make`/`arduino-cli`."""
+    failure. `arduino`'s native suite result comes from a JUnit file THIS test
+    writes directly into the project fixture (`_write_native_fixture`), never
+    from `make`/`arduino-cli`, so its `make` is silenced instead
+    (`_SILENT_MAKE_BODY`)."""
     bin_dir = _build_fake_bin_dir()
+    if client_key == "arduino":
+        _overwrite_fake_tool(bin_dir, "make", _SILENT_MAKE_BODY)
     if client_key == "bun":
         _overwrite_fake_tool(bin_dir, "bun", _FAIL_BUN_BODY)
     elif client_key == "rust":
@@ -470,6 +481,8 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
 
         pass_bin = _build_fake_bin_dir()
+        if client_key == "arduino":
+            _overwrite_fake_tool(pass_bin, "make", _SILENT_MAKE_BODY)
         cls._scratch_dirs.append(pass_bin)
         fail_bin = _fail_bin_dir_for(client_key)
         cls._scratch_dirs.append(fail_bin)
