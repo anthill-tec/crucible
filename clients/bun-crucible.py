@@ -86,6 +86,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 DEFAULT_JUNIT = "junit.xml"
@@ -292,6 +293,27 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     byte-identical for the §S2c failure-marrying parser. CR-CRU-017 §S4: a
     signal trap raising through the read reaps the runner before it propagates."""
     return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
+
+
+@contextlib.contextmanager
+def _run_scoped_tmpdir(env):
+    """A test-family runner's environment with `TMPDIR` pointed at ONE fresh
+    directory under the system temp root, removed once the runner has exited
+    \u2014 on a pass, a failure, a run with no report and a trapped signal alike.
+
+    Bun hands a child spawned without an explicit `env` the environment as it
+    stood when bun started, so a `TMPDIR` the test preload sets never reaches
+    it; exported here, before the runner starts, every child of the run
+    inherits it, and whatever the run leaves under it goes with it."""
+    path = tempfile.mkdtemp(prefix="bun-crucible-run-")
+    try:
+        yield dict(env, TMPDIR=path)
+    finally:
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            print(f"[crucible] WARN: could not remove the run's temp root "
+                  f"{path}: {e}", file=sys.stderr)
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
@@ -1198,8 +1220,10 @@ def cmd_test(args, tier=None):
         # envelope. The shared check is scoped to `unit` by the tier it is
         # handed, so an untiered `bun test` measures and warns about nothing.
         try:
-            with _axi().ChildRunTiming() as timing, _abandon_trap(run_id):
-                result = _run_logged(cmd, package_dir, env, log_path, narrator)
+            with _axi().ChildRunTiming() as timing, _abandon_trap(run_id), \
+                    _run_scoped_tmpdir(env) as run_env:
+                result = _run_logged(cmd, package_dir, run_env, log_path,
+                                     narrator)
         except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned("test", project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
@@ -1346,8 +1370,9 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                                                   release=release)
             run_warnings = preflight_warnings + run_warnings
         try:
-            with _abandon_trap(run_id):
-                result = _run_logged(cmd, package_dir, env, log_path, narrator)
+            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
+                result = _run_logged(cmd, package_dir, run_env, log_path,
+                                     narrator)
         except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)

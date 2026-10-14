@@ -6891,6 +6891,51 @@ def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
     return None, [run_lifecycle_unavailable_warning(error)]
 
 
+# How long an interrupted runner's process group is given to exit on SIGTERM
+# before what is left of it is sent SIGKILL.
+RUNNER_GROUP_GRACE_SECONDS = 2.0
+_RUNNER_GROUP_POLL_SECONDS = 0.05
+
+
+def _signal_runner_group(pgid, signum):
+    """Send `signum` to every process in the runner's group. Returns False when
+    no process is left in it (the group is already down), True otherwise;
+    signal 0 is therefore the liveness probe."""
+    try:
+        os.killpg(pgid, signum)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _take_down_runner_group(proc):
+    """Take an interrupted runner's whole tree down: SIGTERM to its process
+    group (the runner leads it, in a session of its own), SIGKILL to whatever
+    is still in it after `RUNNER_GROUP_GRACE_SECONDS`, and the runner reaped.
+
+    SIGINT/SIGTERM are blocked for the span, so a second Ctrl-C cannot cut
+    the takedown in half and leave part of the tree alive; a signal that
+    arrives meanwhile is delivered once the group is down."""
+    pgid = proc.pid
+    blocked = signal.pthread_sigmask(signal.SIG_BLOCK,
+                                     {signal.SIGINT, signal.SIGTERM})
+    try:
+        deadline = time.monotonic() + RUNNER_GROUP_GRACE_SECONDS
+        _signal_runner_group(pgid, signal.SIGTERM)
+        while time.monotonic() < deadline:
+            # Reap the runner as soon as it exits, so only a LIVE member
+            # keeps the group answering the probe.
+            proc.poll()
+            if not _signal_runner_group(pgid, 0):
+                break
+            time.sleep(_RUNNER_GROUP_POLL_SECONDS)
+        else:
+            _signal_runner_group(pgid, signal.SIGKILL)
+        proc.wait()
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+
+
 def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
     """Run `cmd`, streaming its combined stdout+stderr LIVE: every line goes to
     stderr and to `log_path` as the runner produces it, and to `narrator` for
@@ -6901,11 +6946,24 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
     neither a log nor a narrator there is nothing to tee, and the runner
     inherits stdio \u2014 unless the caller reads the capture anyway (`capture`: a
     no-report fallback that ingests the runner's own words), in which case the
-    run is teed exactly as above. An interruption of the read (a signal trap
-    raising through it) reaps the runner before it propagates, so no orphan is
-    left behind."""
+    run is teed exactly as above.
+
+    In both cases the runner starts in a session of its own, so its whole tree
+    is one process group. An interruption while it is live (a signal trap
+    raising, a `KeyboardInterrupt` with no trap installed, or any other
+    exception) takes that group down before it propagates
+    (`_take_down_runner_group`), so no descendant is left behind. A runner
+    that exits on its own is never signalled. The group no longer receives a
+    terminal's Ctrl-C directly; the client does, and takes it down."""
     if not log_path and narrator is None and not capture:
-        return subprocess.run(cmd, cwd=cwd, env=env)
+        with subprocess.Popen(cmd, cwd=cwd, env=env,
+                              start_new_session=True) as proc:
+            try:
+                returncode = proc.wait()
+            except BaseException:
+                _take_down_runner_group(proc)
+                raise
+        return subprocess.CompletedProcess(cmd, returncode)
     lines = []
     with contextlib.ExitStack() as stack:
         log = None
@@ -6918,7 +6976,7 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
         proc = stack.enter_context(subprocess.Popen(
             cmd, cwd=cwd, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            bufsize=1,
+            bufsize=1, start_new_session=True,
         ))
         stream = proc.stdout
         assert stream is not None  # stdout=PIPE always yields a stream
@@ -6936,8 +6994,7 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
                 if narrator is not None:
                     narrator.observe(line)
         except BaseException:
-            proc.kill()
-            proc.wait()
+            _take_down_runner_group(proc)
             raise
         returncode = proc.wait()
     out = "".join(lines)
