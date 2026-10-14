@@ -5,9 +5,10 @@
 // LIVE code (comments blanked, strings kept — a file is free to NAME the
 // path in prose without tripping this) for the live-store path being built
 // from this checkout's own root (`process.cwd()` or `import.meta.dir`) and
-// joined to `data/crucible.db`, then classifies every place that built
-// identifier is handed to `copyFileSync`, to a `sqlite3 … .backup` command,
-// or to `new Database(...)` / `Store.open(...)`.
+// joined to `data/crucible.db` — inline, or bound by `const`/`let`/`var` or a
+// later assignment, directly or through aliases — then classifies every place
+// that path is handed to `copyFileSync` or `readFileSync` (a manual copy), to
+// a `sqlite3 … .backup` command, or to `new Database(...)` / `Store.open(...)`.
 //
 // ── What it finds today, measured against this tree ──────────────────────
 //
@@ -68,39 +69,79 @@ function blankCommentsOnly(text: string): string {
 }
 
 /**
- * Finds every `const NAME = join(process.cwd(), "data", "crucible.db")` (or
- * `path.join(import.meta.dir, "..", "data", "crucible.db")`, or the single
- * literal `"data/crucible.db"` in either base) declaration — the live-store
- * path, built from THIS CHECKOUT'S OWN ROOT, under whatever name a file gave
- * it. Deliberately narrow: a `join(someScratchDir, "data", "crucible.db")`
+ * The live-store path EXPRESSION: `join(process.cwd(), "data", "crucible.db")`
+ * (or `path.join(import.meta.dir, "..", "data", "crucible.db")`, or the single
+ * literal `"data/crucible.db"` in either base) — built from THIS CHECKOUT'S OWN
+ * ROOT. Deliberately narrow: a `join(someScratchDir, "data", "crucible.db")`
  * built under an unrelated fixture directory (several resolver tests do
- * exactly this, on purpose, to test resolution itself) is NOT the live
- * store and must not be flagged — only `process.cwd()`/`import.meta.dir`
- * name this checkout's own root.
+ * exactly this, on purpose, to test resolution itself) is NOT the live store
+ * and must not be flagged — only `process.cwd()`/`import.meta.dir` name this
+ * checkout's own root.
  */
-const LIVE_PATH_DECL =
-  /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*[\w.]+)?\s*=\s*(?:path\.)?join\(\s*(?:process\.cwd\(\)|import\.meta\.dir)\s*(?:,\s*["']\.\.["']\s*)*,\s*(?:["']data["']\s*,\s*["']crucible\.db["']|["']data\/crucible\.db["'])\s*\)\s*;/g;
+const LIVE_PATH_EXPR =
+  String.raw`(?:path\.)?join\(\s*(?:process\.cwd\(\)|import\.meta\.dir)\s*(?:,\s*["']\.\.["']\s*)*,\s*(?:["']data["']\s*,\s*["']crucible\.db["']|["']data\/crucible\.db["'])\s*\)`;
 
-function copyFormDetected(liveCode: string, name: string): boolean {
-  return new RegExp(`\\bcopyFileSync\\(\\s*${name}\\b`).test(liveCode);
+const IDENT = String.raw`[A-Za-z_$][\w$]*`;
+
+/** A binding or assignment of `rhs` to a name — `const`, `let`, `var`, or a
+ *  later bare assignment (`live = …`), with an optional type annotation. The
+ *  `=` is never part of `==`, `!=`, `<=`, `>=` or `=>`. */
+function bindingOf(rhs: string): RegExp {
+  return new RegExp(
+    String.raw`(?:\b(?:const|let|var)\s+|(?<![\w$.!=<>]\s*))(${IDENT})\s*(?::\s*[\w.]+)?\s*=(?![=>])\s*(?:${rhs})\s*(?=[;,)\n]|$)`,
+    "gm",
+  );
 }
 
-function openFormDetected(liveCode: string, name: string): boolean {
-  return new RegExp(`(?:\\bnew\\s+Database\\(|\\bStore\\.open\\()\\s*${name}\\b`).test(liveCode);
+/** Every name the live-store path reaches in `liveCode`: each name bound to the
+ *  path expression itself, then — to a fixed point — each name bound to one of
+ *  those (an alias, or a chain of them). */
+function liveStoreNames(liveCode: string): Set<string> {
+  const names = new Set<string>();
+  for (const hit of liveCode.matchAll(bindingOf(LIVE_PATH_EXPR))) names.add(hit[1]!);
+  let grew = names.size > 0;
+  while (grew) {
+    grew = false;
+    const known = [...names].map((name) => `${name.replace(/\$/g, "\\$")}\\b`).join("|");
+    for (const hit of liveCode.matchAll(bindingOf(`(?:${known})`))) {
+      if (!names.has(hit[1]!)) {
+        names.add(hit[1]!);
+        grew = true;
+      }
+    }
+  }
+  return names;
 }
 
-/** `sqlite3 … .backup`, readonly or not: the identifier and `.backup` both
+/** The pattern for one reference to the live store: a name it reaches, or the
+ *  path expression written inline. */
+function liveReference(names: Set<string>): string {
+  const named = [...names].map((name) => `\\b${name.replace(/\$/g, "\\$")}\\b`);
+  return `(?:${[...named, LIVE_PATH_EXPR].join("|")})`;
+}
+
+/** COPY: `copyFileSync(<live>, …)`, or the live store's bytes read with
+ *  `readFileSync(<live>)` — a manual copy, wherever they are written. */
+function copyFormDetected(liveCode: string, ref: string): boolean {
+  return new RegExp(String.raw`\b(?:copyFileSync|readFileSync)\(\s*${ref}`).test(liveCode);
+}
+
+function openFormDetected(liveCode: string, ref: string): boolean {
+  return new RegExp(String.raw`(?:\bnew\s+Database\(|\bStore\.open\()\s*${ref}`).test(liveCode);
+}
+
+/** `sqlite3 … .backup`, readonly or not: the reference and `.backup` both
  *  land within the SAME command array, which always starts with the literal
  *  `"sqlite3"` — so every occurrence of that literal anchors the window this
- *  checks, rather than windowing around the identifier (which a file may use
+ *  checks, rather than windowing around the reference (which a file may use
  *  many times for unrelated reasons, e.g. `existsSync`/`statSync`). */
-function backupFormDetected(liveCode: string, name: string): boolean {
-  const nameRe = new RegExp(`\\b${name}\\b`);
+function backupFormDetected(liveCode: string, ref: string): boolean {
+  const refRe = new RegExp(ref);
   const sqliteLiteral = /["']sqlite3["']/g;
   let hit: RegExpExecArray | null;
   while ((hit = sqliteLiteral.exec(liveCode))) {
     const window = liveCode.slice(hit.index, hit.index + 300);
-    if (nameRe.test(window) && window.includes(".backup")) return true;
+    if (refRe.test(window) && window.includes(".backup")) return true;
   }
   return false;
 }
@@ -110,17 +151,12 @@ function backupFormDetected(liveCode: string, name: string): boolean {
  *  live-store path from this checkout's own root. */
 function scanLiveStoreAccess(text: string): string[] {
   const liveCode = blankCommentsOnly(text);
-  const names = new Set<string>();
-  LIVE_PATH_DECL.lastIndex = 0;
-  let decl: RegExpExecArray | null;
-  while ((decl = LIVE_PATH_DECL.exec(liveCode))) names.add(decl[1]!);
-
+  if (!new RegExp(LIVE_PATH_EXPR).test(liveCode)) return [];
+  const ref = liveReference(liveStoreNames(liveCode));
   const forms = new Set<string>();
-  for (const name of names) {
-    if (copyFormDetected(liveCode, name)) forms.add("copies");
-    if (backupFormDetected(liveCode, name)) forms.add("backs up");
-    if (openFormDetected(liveCode, name)) forms.add("opens");
-  }
+  if (copyFormDetected(liveCode, ref)) forms.add("copies");
+  if (backupFormDetected(liveCode, ref)) forms.add("backs up");
+  if (openFormDetected(liveCode, ref)) forms.add("opens");
   return [...forms].sort();
 }
 
