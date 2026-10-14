@@ -346,6 +346,14 @@ block_after = _env_int("FAKE_BLOCK_AFTER_INDEX", "0")
 release_file = os.environ.get("FAKE_RELEASE_FILE")
 marker = os.environ.get("FAKE_MARKER_LINE")
 no_report = os.environ.get("FAKE_NO_REPORT") == "1"
+# CR-CRU-186 \u00a7S4 fixture \u2014 a SECOND starvation shape: the runner writes a
+# report that EXISTS but holds ZERO results (no testcases), with a
+# caller-controlled exit code (default 1 \u2014 the \"exited non-zero\" shape \u00a7S4
+# is about; a caller proving the UNCHANGED exit-0 pin sets FAKE_EXIT_CODE=0).
+# Inert unless FAKE_ZERO_REPORT=1, so every pre-existing fake runner that
+# never sets it is byte-for-byte unchanged.
+zero_report = os.environ.get("FAKE_ZERO_REPORT") == "1"
+zero_report_exit_code = _env_int("FAKE_EXIT_CODE", "1")
 
 # \u00a7S3 fixture \u2014 a long-lived GRANDCHILD this runner starts on its own
 # (never the client's direct child), to prove a group-kill reaches it. It
@@ -418,6 +426,15 @@ for a in sys.argv[1:]:
 # failing (a real \"a failure\" run), instead of the always-clean suite below.
 # 0 (the default) is byte-for-byte the pre-existing always-passing behaviour.
 fail_count = _env_int("FAKE_FAIL_COUNT", "0")
+if zero_report:
+    if outfile and not no_report:
+        d = os.path.dirname(outfile)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(outfile, "w") as f:
+            f.write('<?xml version="1.0"?><testsuites><testsuite name="narration.test.ts" '
+                    'tests="0" failures="0"></testsuite></testsuites>')
+    sys.exit(zero_report_exit_code)
 sys.stdout.write("narration.test.ts:\\n")
 sys.stdout.flush()
 cases = []
@@ -452,6 +469,15 @@ if "test-compile" in args:
 dirs = [a.split("=", 1)[1] for a in args
         if a.startswith("-Dsurefire.reportsDirectory=")]
 dirs = dirs or [os.path.join("target", "surefire-reports")]
+if zero_report:
+    if not no_report:
+        for d in dirs:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "TEST-com.acme.LiveZeroTest.xml"), "w") as f:
+                f.write('<?xml version="1.0"?><testsuite name="com.acme.LiveZeroTest" '
+                        'tests="0" failures="0"></testsuite>')
+    sys.stdout.write("[INFO] BUILD SUCCESS\\n")
+    sys.exit(zero_report_exit_code)
 classes = ["com.acme.LiveCase%dTest" % i for i in range(1, total + 1)]
 if not no_report:
     for d in dirs:
@@ -480,6 +506,14 @@ if os.environ.get("FAKE_ZERO_DISCOVERY") == "1":
     sys.stderr.write("\\n----------------------------------------------------------------------\\n"
                      "Ran 0 tests in 0.000s\\n\\nNO TESTS RAN\\n")
     sys.exit(5)
+if zero_report:
+    if outdir and not no_report:
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, "TEST-fake_module.FakeCase.xml"), "w") as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\\n<testsuite '
+                    'name="fake_module.FakeCase" tests="0" errors="0" failures="0" '
+                    'skipped="0"></testsuite>\\n')
+    sys.exit(zero_report_exit_code)
 cases = []
 for i in range(1, total + 1):
     maybe_block(i)
@@ -509,6 +543,14 @@ for i, a in enumerate(args):
     if a == "--output-path" and i + 1 < len(args):
         lcov = args[i + 1]
 verdict = os.environ.get("FAKE_CARGO_VERDICT", "PASS")
+if zero_report:
+    if not no_report:
+        junit_dir = os.path.join(os.getcwd(), "target", "nextest", profile)
+        os.makedirs(junit_dir, exist_ok=True)
+        with open(os.path.join(junit_dir, "junit.xml"), "w") as f:
+            f.write('<?xml version="1.0"?><testsuites><testsuite name="fake-crate" '
+                    'tests="0" failures="0"></testsuite></testsuites>')
+    sys.exit(zero_report_exit_code)
 sys.stdout.write("    Starting %d tests across 1 binary (run ID: deadbeef, nextest "
                  "profile: %s)\\n" % (total, profile))
 sys.stdout.flush()
@@ -537,6 +579,12 @@ sys.exit(0)
 
 FAKE_NATIVE_RUNNER = _PROLOGUE + """
 reports_dir = os.environ.get("REPORTS_DIR") or "reports"
+if zero_report:
+    if not no_report:
+        os.makedirs(reports_dir, exist_ok=True)
+        with open(os.path.join(reports_dir, "TEST-native.xml"), "w") as f:
+            f.write('<?xml version="1.0"?><testsuite name="native" tests="0" failures="0"></testsuite>')
+    sys.exit(zero_report_exit_code)
 cases = []
 for i in range(1, total + 1):
     maybe_block(i)
@@ -562,6 +610,76 @@ def write_fake_bun(project_dir, n_declared):
         f.write(lines + "\n")
     return _write_executable(os.path.join(project_dir, "fake_bun.py"),
                              FAKE_BUN.format(python=sys.executable))
+
+
+# CR-CRU-186 \u00a7S4 \u2014 the `bun-crucible.py e2e` shape: a DECLARED RAW-report
+# target (`test:e2e`, this repo's own declaration), run via `bun run <script>`.
+# `FAKE_BUN_E2E` is faithful to `bun run` the one way this scenario needs: it
+# reads the invoked script's body out of the fixture's OWN `package.json` and
+# executes it, so a run dispatched THROUGH the declared `test:e2e` script
+# actually reaches the fake Playwright named there (adapted from the proven
+# pattern in `test_bun_crucible_agent_report_isolation.py`'s `_FAKE_BUN_TEMPLATE`).
+FAKE_BUN_E2E_BODY = """
+import json
+import os
+import shlex
+import subprocess
+import sys
+
+argv = sys.argv[1:]
+
+if argv[:1] == ["run"] and len(argv) > 1:
+    script = argv[1]
+    try:
+        with open(os.path.join(os.getcwd(), "package.json")) as handle:
+            scripts = (json.load(handle) or {}).get("scripts") or {}
+    except OSError:
+        scripts = {}
+    body = scripts.get(script)
+    if body is None:
+        sys.stderr.write("error: Script not found %s\\n" % script)
+        sys.exit(1)
+    command = " ".join([body] + [shlex.quote(a) for a in argv[2:]])
+    sys.exit(subprocess.run(command, shell=True, cwd=os.getcwd()).returncode)
+
+sys.exit(1)
+"""
+
+# The fake Playwright: writes its RAW report to the path the declared env var
+# names (only when BOTH the path and FAKE_E2E_RAW_CONTENT are given \u2014 the
+# \"exits before writing anything\" shape leaves FAKE_E2E_RAW_CONTENT unset), and
+# exits with FAKE_E2E_EXIT_CODE (default 0 \u2014 a caller proving the \u00a7S4 failure
+# shape sets it non-zero).
+FAKE_PLAYWRIGHT_BODY = """
+import os
+import sys
+
+outfile = os.environ.get("PLAYWRIGHT_JSON_OUTPUT_NAME")
+content = os.environ.get("FAKE_E2E_RAW_CONTENT", "")
+if outfile and content:
+    directory = os.path.dirname(outfile)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(outfile, "w") as handle:
+        handle.write(content)
+sys.exit(int(os.environ.get("FAKE_E2E_EXIT_CODE", "0")))
+"""
+
+
+def write_fake_bun_e2e(project_dir):
+    """A `bun` stand-in that answers `bun run <script>` by executing the
+    declared script's OWN body \u2014 the e2e route is a declared RAW-report
+    target, never `bun test`'s own flag contract."""
+    return _write_executable(os.path.join(project_dir, "fake_bun_e2e.py"),
+                             f"#!{sys.executable}\n" + FAKE_BUN_E2E_BODY)
+
+
+def write_fake_playwright(project_dir):
+    """Stands in for `bunx playwright test`: writes its JSON report only when
+    handed content (the \u00a7S4 \"exited before writing anything\" case leaves it
+    unwritten), and exits with a caller-controlled code."""
+    return _write_executable(os.path.join(project_dir, "fake_playwright.py"),
+                             f"#!{sys.executable}\n" + FAKE_PLAYWRIGHT_BODY)
 
 
 def write_fake_mvnw(maven_dir):
