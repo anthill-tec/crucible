@@ -60,9 +60,11 @@ import type {
   CycleStatus,
   GateDecision,
   GateDecisionAction,
+  GateMilestoneFields,
   LivenessConfig,
   PackageRef,
   Plan,
+  PlanMerge,
   Project,
   QueueEntry,
   QueueLifecycle,
@@ -138,6 +140,13 @@ interface V2Body {
   // CR-CRU-081 §S3 — the opt-in that lets a re-post CORRECT an already-held
   // release's provenance instead of replaying it.
   repairProvenance?: unknown;
+  // A `pre-merge-gate` milestone's verdict, counts and failing tests, and a
+  // `cr-merged` milestone's reason for closing over a gate that was not green.
+  outcome?: unknown;
+  passed?: unknown;
+  failed?: unknown;
+  failingTests?: unknown;
+  acceptedFailingGateReason?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
   userApproved?: unknown;
@@ -1698,6 +1707,39 @@ function epochParam(url: URL, name: string): number | undefined {
  * has to clear (`typeof === "string" && length > 0`), applied to each of the
  * three coordinates, because a half-identified artifact identifies nothing.
  */
+/** A non-empty string, or nothing: the never-coerce rule for a free-text field. */
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** A count: a finite non-negative integer, or nothing. */
+function countOf(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * A `pre-merge-gate` milestone's verdict, counts and failing tests, carried
+ * only when the verdict is a literal `pass`/`fail` and both counts are
+ * well-formed: a half-stated verdict states nothing. `failingTests` keeps its
+ * non-empty string members and is carried only when something failed.
+ */
+function gateMilestoneFields(body: V2Body): GateMilestoneFields | undefined {
+  const passed = countOf(body.passed);
+  const failed = countOf(body.failed);
+  if ((body.outcome !== "pass" && body.outcome !== "fail") || passed === undefined || failed === undefined) {
+    return undefined;
+  }
+  const failingTests = Array.isArray(body.failingTests)
+    ? body.failingTests.filter((t: unknown): t is string => typeof t === "string" && t.length > 0)
+    : undefined;
+  return {
+    outcome: body.outcome,
+    passed,
+    failed,
+    ...(failed > 0 && failingTests !== undefined ? { failingTests } : {}),
+  };
+}
+
 function isPackageRef(entry: unknown): entry is PackageRef {
   if (typeof entry !== "object" || entry === null) return false;
   const { registry, name, version } = entry as Record<string, unknown>;
@@ -1795,7 +1837,11 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // accident gets. The route carries the flag; deciding what a repair means
   // stays in the store, next to the dedup it is the exception to.
   const repairProvenance = body.repairProvenance === true;
+  const gate = gateMilestoneFields(body);
+  const acceptedFailingGateReason = nonEmptyString(body.acceptedFailingGateReason);
   const written = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+    ...(gate !== undefined ? { gate } : {}),
+    ...(acceptedFailingGateReason !== undefined ? { acceptedFailingGateReason } : {}),
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
@@ -2245,16 +2291,25 @@ async function handlePlanClose(
   if (body.status !== "closed") {
     return fail(400, `status must be "closed" to close a plan`, { help: hints.closedPlan });
   }
-  let merge: { commit: string } | undefined;
+  let merge: PlanMerge | undefined;
   if (body.merge !== undefined) {
-    const commit =
+    const stated =
       typeof body.merge === "object" && body.merge !== null
-        ? (body.merge as { commit?: unknown }).commit
-        : undefined;
+        ? (body.merge as { commit?: unknown; acceptedFailingGateReason?: unknown })
+        : {};
+    const commit = stated.commit;
     if (typeof commit !== "string" || commit.length === 0) {
       return fail(400, "merge.commit must be a non-empty string", { help: hints.closedPlan });
     }
-    merge = { commit };
+    // The reason a CR closes over a pre-merge gate that was not green: OPTIONAL,
+    // and when stated it must say something: an empty reason is no reason.
+    const reason = stated.acceptedFailingGateReason;
+    if (reason !== undefined && (typeof reason !== "string" || reason.length === 0)) {
+      return fail(400, "merge.acceptedFailingGateReason must be a non-empty string", {
+        help: hints.closedPlan,
+      });
+    }
+    merge = { commit, ...(reason !== undefined ? { acceptedFailingGateReason: reason } : {}) };
   }
   const plan = store.closePlan(pk.key, planId, merge);
   if ("error" in plan) {
@@ -2575,7 +2630,38 @@ function handleProjectHistory(store: Store, key: string, req: Request, url: URL)
   if (store.getProject(key) === null) {
     return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
-  return reply(req, url, { ok: true, releases: projectHistory(store, key) });
+  return reply(req, url, {
+    ok: true,
+    releases: projectHistory(store, key),
+    acceptedFailingGates: acceptedFailingGates(store.listPlans(key)),
+  });
+}
+
+/** A CR that closed over a pre-merge gate that was not green, and why. */
+interface HistoryAcceptedFailingGate {
+  cr: string;
+  planId: number;
+  commit: string;
+  reason: string;
+  closedAt?: number;
+}
+
+/**
+ * Every CR the project closed over a red pre-merge gate, oldest close first,
+ * with the reason its closer gave. Project-wide rather than per release row: a
+ * CR no release holds yet closed over its gate all the same.
+ */
+function acceptedFailingGates(plans: Plan[]): HistoryAcceptedFailingGate[] {
+  return plans
+    .filter((plan) => plan.status === "closed" && plan.merge?.acceptedFailingGateReason !== undefined)
+    .map((plan) => ({
+      cr: plan.cr,
+      planId: plan.planId,
+      commit: plan.merge!.commit,
+      reason: plan.merge!.acceptedFailingGateReason!,
+      ...(plan.closedAt !== undefined ? { closedAt: plan.closedAt } : {}),
+    }))
+    .sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0));
 }
 
 function projectHistory(store: Store, key: string): HistoryRelease[] {

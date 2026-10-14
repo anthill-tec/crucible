@@ -2204,7 +2204,7 @@ def cmd_docker_e2e_gate(args):
     instrumentation only masks timing races), brings docker down (always), ingests
     junit. Thin wrapper over smoke-test with profile=e2e + docker forced on.
 
-    NOT part of the per-cycle or default pre-merge gate. Run it when gap-analysis
+    NOT part of the per-cycle or default pre-merge gate. Run it when the gap analysis
     flags NaiApp boot / connector registration / Bridge / provider wiring (only
     real infra surfaces those wiring gaps), and at pre-release as the catch-all.
     Reuses the pre-merge-gate --all-features build unless --clean is passed.
@@ -3213,6 +3213,7 @@ def main():
                              "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_cr_close_gate_arg(cc)
     _add_workflow_agent_arg(
         cc, extra=" The same id posts the closing cr-merged milestone (§S5).")
     _add_project_dir_arg(cc)
@@ -3481,7 +3482,9 @@ def main():
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
     sys.exit(_axi().run_verb(
         args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
+        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+        ops_fn=_ops,
+        project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
 
 
 if __name__ == "__main__":

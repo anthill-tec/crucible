@@ -945,6 +945,7 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
     if board_help is not None and not ok:
         result_fields = {**result_fields, "help": board_help}
         warnings.append(unknown_project_warning())
+    note_emitted_run_counts(result_fields)
     axi = axi_object(verb, ok, result_fields, context, warnings)
     if fmt == AXI_FORMAT_JSON:
         envelope = json.dumps(axi, ensure_ascii=False) + "\n"
@@ -2439,7 +2440,7 @@ def _hard_stop_context(args, project_key_fn, agent_id=None):
         return {}
 
 
-def run_verb(func, args, project_key_fn=None):
+def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
     typed hard stop — an undeclared agent identity (§S5), an unresolvable
     cycle list (CR-CRU-107 §S2), a tier with no declared target
@@ -2450,11 +2451,16 @@ def run_verb(func, args, project_key_fn=None):
     CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
     tier statement starts from `none` here: an invocation may never inherit
     what an earlier one in the same process put on the board. Nor may it
-    inherit an unknown-project refusal an earlier one was handed."""
+    inherit an unknown-project refusal an earlier one was handed.
+
+    A `pre-merge-gate` that RAN (it returned, pass or fail) then posts its
+    one outcome milestone (`record_gate_outcome`), through the client's own
+    `ops_fn()` and project dir. A gate that a hard stop refused before its
+    runner started ran nothing, so it records nothing."""
     forget_ingested_run()
     forget_unknown_project_refusal()
     try:
-        return func(args)
+        code = func(args)
     except AgentIdentityRequired:
         return emit_agent_identity_hard_stop(
             getattr(args, "cmd", None), _hard_stop_context(args, project_key_fn))
@@ -2480,6 +2486,10 @@ def run_verb(func, args, project_key_fn=None):
         return emit_bracket_abandoned(
             getattr(args, "cmd", None), abandoned,
             _hard_stop_context(args, project_key_fn, abandoned.agent_id))
+    if (getattr(args, "cmd", None) == GATE_VERB and ops_fn is not None
+            and project_dir_fn is not None):
+        record_gate_outcome(args, code, project_dir_fn(args), ops_fn())
+    return code
 
 
 def fleet_context(cr=None):
@@ -3703,6 +3713,106 @@ def cmd_cycle_add(args, project_dir, ops):
     return 0 if ok else 1
 
 
+# The flag that closes a CR over a gate that was not green, and its help.
+ACCEPT_FAILING_GATE_HELP = (
+    "Close the CR even though its last pre-merge-gate did not pass (or it has "
+    "none): REASON is required, is stored on the plan, and is shown on the "
+    "cr-merged milestone and in History. Without it a red or missing gate "
+    "refuses the close.")
+ACCEPT_FAILING_GATE_UNUSED_CODE = "accept-failing-gate-unused"
+
+
+def add_cr_close_gate_arg(p):
+    """Declare `--accept-failing-gate` on `cr-close`: the ONE declaration site
+    for the whole fleet, on the `add_plan_file_release_arg` precedent."""
+    p.add_argument("--accept-failing-gate", metavar="REASON",
+                   help=ACCEPT_FAILING_GATE_HELP)
+
+
+def latest_gate_milestone(ops, project_key, cr):
+    """`(record, error)`: the CR's most recent `pre-merge-gate` milestone (None
+    when it has none), or the board's error when the read was not answered."""
+    resp = ops.get(f"/api/v2/projects/{project_key}/milestones"
+                   f"?type={GATE_MILESTONE_TYPE}")
+    if not resp.get("ok"):
+        return None, resp.get("error") or "the board did not answer"
+    mine = [m for m in resp.get("milestones") or []
+            if isinstance(m, dict) and m.get("label") == cr]
+    if not mine:
+        return None, None
+    return max(mine, key=lambda m: m.get("timestamp") or 0), None
+
+
+def _gate_refusal_text(cr, gate):
+    """The refusal's `(error, help)` for a CR whose last gate was not a pass,
+    or that has no gate result at all."""
+    accept = (f"or close over it deliberately: cr-close --commit <sha> --cr {cr} "
+              f'--accept-failing-gate "<reason>"')
+    if gate is None:
+        return (f"cr-close refused: {cr} has no recorded pre-merge-gate result, "
+                f"so nothing says its suite is green; nothing was closed",
+                [f"run pre-merge-gate --agent <agentId> --cycle <id> for {cr}, "
+                 f"then re-run cr-close", accept])
+    cycle = (gate.get("context") or {}).get("cycleId")
+    failing = gate.get("failingTests") or []
+    named = f"; failing: {', '.join(str(t) for t in failing)}" if failing else ""
+    return (f"cr-close refused: the last pre-merge-gate for {cr} (milestone "
+            f"{gate.get('id')}, cycle {cycle}) did not pass: outcome "
+            f"{gate.get('outcome')}, {gate.get('failed')} failed, "
+            f"{gate.get('passed')} passed{named}; nothing was closed",
+            [f"fix the {gate.get('failed')} failing test(s), re-run pre-merge-gate "
+             f"--agent <agentId> --cycle {cycle if cycle is not None else '<id>'}, "
+             f"then cr-close", accept])
+
+
+def gate_close_verdict(args, cr, project_dir, ops):
+    """Decide whether `cr-close` may close `cr`, from its most recent
+    `pre-merge-gate` milestone. Returns `(accepted_reason, warnings, refused)`:
+    `refused` is the exit code of an already-emitted refusal (nothing closed),
+    else None and the close proceeds. A green gate closes as before; a red or
+    missing one closes only with `--accept-failing-gate <reason>`, whose reason
+    is returned to be recorded. A reason given over a GREEN gate overrides
+    nothing, so it is not recorded and a warning says so."""
+    reason = getattr(args, "accept_failing_gate", None)
+    context = ops.context(project_dir, cr=cr)
+    if reason is not None and not reason.strip():
+        error = "cr-close refused: --accept-failing-gate needs a non-empty reason"
+        ops.emit("cr-close", False,
+                 {"commit": args.commit, "cr": cr, "error": error,
+                  "help": ['cr-close --commit <sha> --accept-failing-gate "<reason>"']},
+                 context, [], f"[crucible] ERROR: {error}")
+        return None, [], 1
+    gate, read_error = latest_gate_milestone(ops, ops.project_key(project_dir), cr)
+    if read_error is not None:
+        error = (f"cr-close refused: could not read {cr}'s pre-merge-gate result "
+                 f"({read_error}); nothing was closed")
+        ops.emit("cr-close", False,
+                 {"commit": args.commit, "cr": cr, "error": error,
+                  "help": [f"check the Crucible server is reachable at {ops.base_url}, "
+                            f"then re-run cr-close"]},
+                 context, [], f"[crucible] ERROR: {error}")
+        return None, [], 1
+    green = gate is not None and gate.get("outcome") == GATE_OUTCOME_PASS
+    if green:
+        if reason is None:
+            return None, [], None
+        return None, [{"code": ACCEPT_FAILING_GATE_UNUSED_CODE,
+                       "detail": (f"{cr}'s last pre-merge-gate passed, so there was "
+                                  f"no failing gate to accept; the reason was not "
+                                  f"recorded")}], None
+    if reason is not None:
+        return reason, [], None
+    error, help_steps = _gate_refusal_text(cr, gate)
+    fields = {"commit": args.commit, "cr": cr, "error": error}
+    if gate is not None:
+        fields["gate"] = {key: gate.get(key) for key in
+                          ("id", "outcome", "passed", "failed", "failingTests")
+                          if gate.get(key) is not None}
+    fields["help"] = help_steps
+    ops.emit("cr-close", False, fields, context, [], f"[crucible] ERROR: {error}")
+    return None, [], 1
+
+
 def cmd_cr_close(args, project_dir, ops):
     """§S4c — PATCH the resolved OPEN plan closed, then post the `cr-merged`
     milestone.
@@ -3737,28 +3847,44 @@ def cmd_cr_close(args, project_dir, ops):
                  ops.context(project_dir), [], legacy)
         return 1
     plan = open_plans[0]
-    resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
-                     {"status": "closed", "merge": {"commit": args.commit},
-                      "agentId": agent_id})
-    ok = resp.get("ok", False)
     cr_label = plan.get("cr")
+    accepted, warnings, refused = gate_close_verdict(args, cr_label, project_dir, ops)
+    if refused is not None:
+        return refused
+    merge = {"commit": args.commit}
+    if accepted is not None:
+        merge["acceptedFailingGateReason"] = accepted
+    resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
+                     {"status": "closed", "merge": merge, "agentId": agent_id})
+    ok = resp.get("ok", False)
     legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
               f"commit={args.commit}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    ops.emit("cr-close", bool(ok),
-             {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
-              "help": HELP_STEPS["cr-close"]},
-             ops.context(project_dir, cr=cr_label), [], legacy)
+    result_fields = {"plan": plan["planId"], "cr": cr_label, "commit": args.commit}
+    if accepted is not None:
+        result_fields["acceptedFailingGateReason"] = accepted
+    result_fields["help"] = HELP_STEPS["cr-close"]
+    ops.emit("cr-close", bool(ok), result_fields,
+             ops.context(project_dir, cr=cr_label), warnings, legacy)
     if not ok:
         return 1
     # §S4c / AC 141 — a SUCCESSFUL close emits a cr-merged milestone marker
     # (label=CR id, the merge commit, env auto-context). Withheld on a failed
     # close: the CR is not actually merged, so no marker fires.
-    ms_resp = ops.post_milestone(
-        project_dir, agent_id, "cr-merged",
-        label=cr_label, commit=args.commit,
-        context=fleet_context(cr=cr_label) or None,
-    )
+    # A close over a gate that was not green says so on the marker too, with
+    # the reason, through the shared builder that carries a type's own fields.
+    if accepted is not None:
+        ms_resp = post_milestone(
+            ops.project_key(project_dir), agent_id, "cr-merged", ops.post,
+            label=cr_label, commit=args.commit,
+            context=fleet_context(cr=cr_label) or None,
+            extra={"acceptedFailingGateReason": accepted})
+    else:
+        ms_resp = ops.post_milestone(
+            project_dir, agent_id, "cr-merged",
+            label=cr_label, commit=args.commit,
+            context=fleet_context(cr=cr_label) or None,
+        )
     print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
           + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
           file=sys.stderr)
@@ -5629,6 +5755,12 @@ _ingested_compile = False
 # the claim above is module state: the ingest and the envelope are one exit.
 _refused_ingest_runs = set()
 _refused_ingest_warnings = []
+# The run ingests this invocation FILED, as the board answered each one
+# (`{event, run, cycleId}`), and the `run` counts its last envelope stated: what
+# a gate's outcome milestone is built from once the gate has finished
+# (`record_gate_outcome`). Module state for the reason the tier claim is.
+_filed_runs = []
+_emitted_run_counts = None
 
 
 def forget_ingested_run():
@@ -5636,10 +5768,13 @@ def forget_ingested_run():
     verb dispatch (`run_verb`), so an envelope can only ever state the ingest
     of the invocation it belongs to."""
     global _ingested_run_tier, _ingested_compile
+    global _emitted_run_counts
     _ingested_run_tier = AXI_UNSET
     _ingested_compile = False
     _refused_ingest_runs.clear()
     _refused_ingest_warnings.clear()
+    _filed_runs.clear()
+    _emitted_run_counts = None
 
 
 def take_refused_ingest_warnings():
@@ -5697,6 +5832,8 @@ def post_ingest(post_fn, path, payload, *, release=None):
                     run_id,
                     f"the board refused the ingest that carried it ({error})")
                 _refused_ingest_warnings.append(refused)
+            if path in RUN_INGEST_PATHS:
+                _note_filed_run(resp)
     except RunAbandoned as abandoned:
         abandoned.run_id = run_id
         if refused is not None:
@@ -5704,6 +5841,31 @@ def post_ingest(post_fn, path, payload, *, release=None):
             abandoned.warnings = [refused]
         raise
     return resp
+
+
+def _note_filed_run(resp):
+    """Remember one run ingest the board FILED: its event id, the counts it
+    answered with and the cycle it stamped. A refused or unanswered ingest
+    filed nothing, so it is not remembered."""
+    if not isinstance(resp, dict) or not resp.get("ok") or not resp.get("event"):
+        return
+    context = resp.get("context")
+    run = resp.get("run")
+    _filed_runs.append({"event": resp.get("event"),
+                        "run": run if isinstance(run, dict) else {},
+                        "cycleId": (context.get("cycleId")
+                                    if isinstance(context, dict) else None)})
+
+
+def note_emitted_run_counts(result_fields):
+    """Remember the `run` counts an envelope states, so a gate's outcome is
+    read off the very document the gate printed (its totals cover a suite a
+    sibling client ran, which this process never ingested itself)."""
+    global _emitted_run_counts
+    run = (result_fields or {}).get("run")
+    if (isinstance(run, dict) and isinstance(run.get("passed"), int)
+            and isinstance(run.get("failed"), int)):
+        _emitted_run_counts = {"passed": run["passed"], "failed": run["failed"]}
 
 
 def ingested_tier():
@@ -7319,7 +7481,7 @@ def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
 def post_milestone(project_key, agent_id, mtype, post_fn,
                    label=None, commit=None, context=None,
                    released_at=None, crs=None, packages=None,
-                   repair_provenance=False):
+                   repair_provenance=False, extra=None):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
     OMITTED rather than sent as nulls.
 
@@ -7355,7 +7517,137 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
         payload["repairProvenance"] = True
     if context:
         payload["context"] = context
+    # A type's own fields (a gate's verdict and counts, a close's override
+    # reason) ride verbatim beside the generic ones; absent when not given.
+    if extra:
+        payload.update(extra)
     return post_fn("/api/v2/milestones", payload)
+
+
+# The gate verb, and the milestone type its outcome is recorded under: the
+# record `cr-close` reads before it will close a CR.
+GATE_VERB = "pre-merge-gate"
+GATE_MILESTONE_TYPE = "pre-merge-gate"
+GATE_OUTCOME_PASS = "pass"
+GATE_OUTCOME_FAIL = "fail"
+
+
+def head_commit(project_dir):
+    """The HEAD commit sha of the repo at `project_dir`, or None when it is not
+    a git checkout (or git is absent): a gate outside a repo has no head commit
+    to record, and its milestone then carries none."""
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project_dir,
+                                capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"[crucible] no head commit at {project_dir}: {exc}", file=sys.stderr)
+        return None
+    return result.stdout.strip() or None
+
+
+def _gate_cycle_id(args, filed_runs, ops, project_key):
+    """The cycle a gate ran under: its `--cycle`, else the cycle the board
+    stamped on a run it filed, else the agent's registered binding. None when
+    none of the three names one (a release gate, or a gate between CRs)."""
+    cycle_id = getattr(args, "cycle", None)
+    if cycle_id is not None:
+        return cycle_id
+    for run in filed_runs:
+        if run.get("cycleId") is not None:
+            return run["cycleId"]
+    known, bound = _bound_cycle_id(ops.get(f"/api/v2/agents?project={project_key}"),
+                                   getattr(args, "agent", None))
+    return bound if known else None
+
+
+def _cycle_cr(ops, project_key, cycle_id):
+    """The CR whose plan holds `cycle_id`, read off the project's plans; None
+    when the board does not answer or holds no such cycle."""
+    resp = ops.get(plans_path(project_key))
+    for plan in (resp.get("plans") if resp.get("ok") else None) or []:
+        if not isinstance(plan, dict):
+            continue
+        for cycle in plan.get("cycles") or []:
+            if isinstance(cycle, dict) and cycle.get("id") == cycle_id:
+                return plan.get("cr")
+    return None
+
+
+def _gate_counts(filed_runs):
+    """`(passed, failed)` for the gate: the totals its own envelope stated,
+    else the sum of the runs it filed."""
+    if _emitted_run_counts is not None:
+        return _emitted_run_counts["passed"], _emitted_run_counts["failed"]
+    passed = sum(int(run["run"].get("passed") or 0) for run in filed_runs)
+    failed = sum(int(run["run"].get("failed") or 0) for run in filed_runs)
+    return passed, failed
+
+
+def _failing_tests(ops, filed_runs):
+    """Every failing test of the runs the gate filed, named `suite > test`,
+    read back from the board's own parse of each failing run."""
+    names = []
+    for run in filed_runs:
+        if not run["run"].get("failed"):
+            continue
+        resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(run['event']))}")
+        event = resp.get("event") if resp.get("ok") else None
+        for suite in (event or {}).get("tree") or []:
+            for leaf in suite.get("children") or []:
+                if leaf.get("status") == "fail":
+                    names.append(f"{suite.get('name')} > {leaf.get('name')}")
+    return names
+
+
+def record_gate_outcome(args, code, project_dir, ops):
+    """Post the ONE `pre-merge-gate` milestone a finished gate owes, pass or
+    fail, a gate stopped by its fail-fast step included: the CR its cycle's plan
+    belongs to (`label`, and `context.cr`), the head commit, the cycle, the
+    outcome, the passed/failed counts and, on a failure, the failing tests.
+
+    It runs AFTER the gate's own envelope, so it reports on stderr only and
+    never on stdout. The gate's identity bracket has already closed, so it
+    opens the same kind of identity for the one post and removes it again only
+    when it created it. A gate with no `--agent` has no caller to post as."""
+    agent_id = getattr(args, "agent", None)
+    if not agent_id:
+        print("[crucible] pre-merge-gate: no --agent, so no pre-merge-gate "
+              "milestone was posted and cr-close will find no result",
+              file=sys.stderr)
+        return None
+    project_key = ops.project_key(project_dir)
+    filed_runs = list(_filed_runs)
+    cycle_id = _gate_cycle_id(args, filed_runs, ops, project_key)
+    cr = _cycle_cr(ops, project_key, cycle_id) if cycle_id is not None else None
+    passed, failed = _gate_counts(filed_runs)
+    # A gate that exited non-zero did not pass, and nor did one whose suite
+    # failed tests though its exit was 0 (a gate that keeps going past test
+    # failures to finish its coverage run exits 0).
+    fields = {"outcome": GATE_OUTCOME_FAIL if code or failed else GATE_OUTCOME_PASS,
+              "passed": passed, "failed": failed}
+    if failed:
+        fields["failingTests"] = _failing_tests(ops, filed_runs)
+    context = fleet_context(cr=cr)
+    if cycle_id is not None:
+        context["cycleId"] = cycle_id
+    identity = GatedRunIdentity(agent_id)
+    identity.observe(ops.post(identity.PATH, identity.open_payload(
+        project_key, message="posting the pre-merge-gate outcome")))
+    try:
+        resp = post_milestone(project_key, agent_id, GATE_MILESTONE_TYPE, ops.post,
+                              label=cr, commit=head_commit(project_dir),
+                              context=context or None, extra=fields)
+    finally:
+        if identity.should_remove:
+            ops.post(AGENT_UNREGISTER_PATH, {"agentId": agent_id,
+                                             "projectKey": project_key,
+                                             "silent": True})
+    print(f"pre-merge-gate milestone: ok={resp.get('ok', False)} "
+          f"outcome={fields['outcome']} cr={cr} cycle={cycle_id} "
+          f"passed={passed} failed={failed}"
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    return resp
 
 
 def add_plan_file_release_arg(p):

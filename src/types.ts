@@ -317,6 +317,28 @@ export interface RunEvent {
    */
   packages?: PackageRef[];
   /**
+   * A `pre-merge-gate` milestone's verdict: `pass` when the gate exited
+   * green, `fail` otherwise (a failing suite, or a step that aborted it).
+   * ABSENT on every other milestone type and every other event kind.
+   */
+  outcome?: GateOutcome;
+  /**
+   * A `pre-merge-gate` milestone's counts, named as `RunSummary` names them.
+   * Top-level, not a `summary`: a milestone is a record, not a run.
+   */
+  passed?: number;
+  failed?: number;
+  /**
+   * A `pre-merge-gate` milestone's failing tests, each named `suite > test`.
+   * PRESENT only when `failed > 0` — a green gate carries no such key at all.
+   */
+  failingTests?: string[];
+  /**
+   * A `cr-merged` milestone's record that the CR closed over a gate that was
+   * not green, and the reason its closer gave. ABSENT on an ordinary close.
+   */
+  acceptedFailingGateReason?: string;
+  /**
    * CR-CRU-017 §S1 — the RUN's start instant, carried from the open run onto
    * the event that CLOSED it. Absent on a single-shot ingest (no `runId`, no
    * lifecycle) and on every pre-017 row.
@@ -431,6 +453,27 @@ export interface CommitBoundary {
   closedAt: number;
 }
 
+/** A `pre-merge-gate` milestone's verdict. */
+export type GateOutcome = "pass" | "fail";
+
+/** What a `pre-merge-gate` milestone records about the gate that posted it. */
+export interface GateMilestoneFields {
+  outcome: GateOutcome;
+  passed: number;
+  failed: number;
+  /** Present only when `failed > 0`. */
+  failingTests?: string[];
+}
+
+/**
+ * A closed plan's merge: the commit it landed as, and (only when the CR
+ * closed over a gate that was not green) the reason its closer gave.
+ */
+export interface PlanMerge {
+  commit: string;
+  acceptedFailingGateReason?: string;
+}
+
 export interface Plan {
   planId: number;
   projectKey: string;
@@ -453,7 +496,7 @@ export interface Plan {
   // one-open-plan-per-cr rule treats it as not-open, so the cr can refile.
   status: "open" | "closed" | "aborted";
   cycles: PlanCycle[];
-  merge?: { commit: string };
+  merge?: PlanMerge;
   closedAt?: number;
   commitBoundary?: CommitBoundary;
   // CR-CRU-165 S2b (additive) - an abort's record; absent on every plan

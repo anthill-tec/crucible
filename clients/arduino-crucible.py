@@ -1532,6 +1532,7 @@ def main():
                              "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_cr_close_gate_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
 
     cad = sub.add_parser("cycle-add", parents=[common],
@@ -1740,7 +1741,8 @@ def main():
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
     sys.exit(_axi().run_verb(
-        args.func, args, lambda a: _project_key(_project_dir(a))) or 0)
+        args.func, args, lambda a: _project_key(_project_dir(a)),
+        ops_fn=_ops, project_dir_fn=_project_dir) or 0)
 
 
 if __name__ == "__main__":
