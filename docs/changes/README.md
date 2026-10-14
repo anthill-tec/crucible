@@ -172,6 +172,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-184](CR-CRU-184-a-test-run-interrupted-before-its-runner-starts-leaves-nothing-behind.md) | a test run interrupted outside its runner leaves nothing behind | fix | PENDING | 181 | 8 (0.4.0) |
 | [CR-CRU-185](CR-CRU-185-a-run-under-a-key-no-project-holds-is-refused.md) | a run under a key no project holds is refused, by every client | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-186](CR-CRU-186-a-test-run-leaves-nothing-behind.md) | a test run leaves nothing behind | fix | PENDING | 184 | 8 (0.4.0) |
+| [CR-CRU-188](CR-CRU-188-a-migration-proof-does-not-read-an-aged-live-store.md) | a migration proof does not read an aged live store | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-187](CR-CRU-187-a-release-drafts-its-notes-from-the-board.md) | a release drafts its notes from the board | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-182](CR-CRU-182-a-phone-tap-on-a-history-cycle-line-opens-its-runs.md) | a phone tap on a history cycle line opens its runs, not `→ Runs` | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-183](CR-CRU-183-finish-refuses-a-release-with-no-notes.md) | `finish` refuses a release with no notes, and its report skips voided CRs | fix | PENDING | — | 8 (0.4.0) |
