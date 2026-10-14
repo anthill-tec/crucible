@@ -877,14 +877,15 @@ def _claim_output(written_path, own_dir, name):
 def cmd_auto_ingest(args):
     """Detect: junit XML present → ingest tests. Absent → cargo check stderr → ingest compile."""
     project_dir = _resolve_project_dir(args.project_dir)
-    # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is
-    # the furthest of any from the run that produced the report, so an
-    # unattributed store here is the hardest to notice. Best-effort, on both
-    # channels, before either ingest branch below POSTs.
+    # The run context both branches file under, carrying `--cycle` when given.
+    filing_context = _axi().cycle_context(_run_context(), getattr(args, "cycle", None))
+    # CR-CRU-094 §S3 — this verb's ingest is the furthest of any from the run
+    # that produced the report, so an unattributed store here is the hardest to
+    # notice. Before either ingest branch below POSTs.
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
-        context=_run_context())
+        context=filing_context)
     _clean_stale_junit(project_dir)
     ci = f"{project_dir}/target/nextest/ci/junit.xml"
     default = f"{project_dir}/target/nextest/default/junit.xml"
@@ -895,7 +896,7 @@ def cmd_auto_ingest(args):
         # an earlier run left in `target/nextest/<profile>/`, so it cannot know
         # that run's tier by construction and states none.
         resp = _ingest_junit_axi(project_dir, args.agent, junit_path,
-                                 context=_run_context())
+                                 context=filing_context)
         _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
                          preflight_warnings)
         s = resp.get("run", {}) or {}
@@ -915,9 +916,8 @@ def cmd_auto_ingest(args):
         "errors": result.stderr,
         "agentId": args.agent,
     }
-    context = _run_context()
-    if context:
-        payload["context"] = context
+    if filing_context:
+        payload["context"] = filing_context
     resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
     # CR-CRU-058 §S1/§S3 — this branch used to end in TWO unguarded stdout
     # prints and no emitter at all: the last path in the fleet putting a
@@ -1166,9 +1166,10 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
 
 
 def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_id=None,
-                         release=None):
+                         release=None, cycle_id=None):
     """Helper: ingest rustc / clippy stderr to /api/v2/runs/compile. `run_id` is
-    the OPEN run a test verb's compile fallback closes."""
+    the OPEN run a test verb's compile fallback closes; `cycle_id` a `--cycle`
+    the result is filed under."""
     err_count = stderr_text.count("error[E") + stderr_text.count("error: ")
     warn_count = stderr_text.count("warning:")
     payload = {
@@ -1177,7 +1178,7 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
         "errors": stderr_text,
         "agentId": agent_id,
     }
-    context = _run_context()
+    context = _axi().cycle_context(_run_context(), cycle_id)
     if context:
         payload["context"] = context
     if run_id:
@@ -1390,7 +1391,8 @@ def cmd_check(args):
     # §S2/§S13/§S15 — the compile gate returns the §S1 envelope on BOTH clean and
     # error compile; a failing check ingests the rustc errors (with run context).
     if args.agent and not ok:
-        _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="check")
+        _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="check",
+                             cycle_id=getattr(args, "cycle", None))
     legacy = f"check: ok={ok} exit={result.returncode}"
     _emit_axi("check", ok,
               {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
@@ -1411,6 +1413,12 @@ def cmd_clippy(args):
         cmd += ["--", "-D", "warnings"]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    # `clippy` files a lint result, so it makes the pre-flight every filing
+    # verb makes, before cargo spawns.
+    cycle = getattr(args, "cycle", None)
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent, cycle_id=cycle,
+        context=_run_context())
     # §S3 — the human narration is interactive-only (stderr); stdout carries the
     # §S1 envelope ALONE (this is the CR-CRU-046 deferral, now closed).
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
@@ -1420,10 +1428,11 @@ def cmd_clippy(args):
     print(f"[crucible] cargo clippy exit={result.returncode} "
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     ok = result.returncode == 0
-    warnings = []
+    warnings = list(preflight_warnings)
     rc = result.returncode
     if args.agent:
-        ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="clippy")
+        ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr,
+                                         kind="clippy", cycle_id=cycle)
         if ingest_rc != 0:
             warnings.append(_axi().ingest_failed_warning("clippy", _base_url()))
         rc = ingest_rc
@@ -1444,18 +1453,24 @@ def cmd_workspace_clippy(args):
     on its own (one-pass debt discovery / hotfix verification without the coverage
     run). Same invocation, same ingest."""
     project_dir = _resolve_project_dir(args.project_dir)
-    gate = _clippy_workspace_gate(project_dir, args.agent)
+    # It files a lint result, so it makes the pre-flight before cargo spawns.
+    cycle = getattr(args, "cycle", None)
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent, cycle_id=cycle,
+        context=_run_context())
+    gate = _clippy_workspace_gate(project_dir, args.agent, cycle_id=cycle)
     ok = gate["exit"] == 0
     _emit_axi("workspace-clippy", ok,
               {"exit": gate["exit"], "errors": gate["errors"], "lints": gate["lints"],
                "help": _clippy_help(ok, gate["errors"], gate["lints"], "the workspace")},
-              _axi_context(project_dir, agent_id=args.agent), gate["warnings"],
+              _axi_context(project_dir, agent_id=args.agent),
+              list(preflight_warnings) + gate["warnings"],
               f"workspace-clippy: ok={ok} exit={gate['exit']} "
               f"errors={gate['errors']} warnings={gate['lints']}")
     return gate["exit"]
 
 
-def _clippy_workspace_gate(project_dir, agent):
+def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     """Workspace `cargo clippy --all-targets --all-features -- -D warnings` gate step.
 
     Runs as the FIRST, fail-fast step of the pre-merge gate (before the expensive
@@ -1470,6 +1485,7 @@ def _clippy_workspace_gate(project_dir, agent):
     verbs (`workspace-clippy` standalone, and `pre-merge-gate`'s fail-fast step 0),
     and each must put exactly ONE document on stdout. It returns the measured
     state — `{exit, errors, lints, warnings}` — and its caller emits.
+    `cycle_id` is a `--cycle` the lint result is filed under.
     """
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
@@ -1483,7 +1499,8 @@ def _clippy_workspace_gate(project_dir, agent):
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     warnings = []
     if agent:
-        if _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy") != 0:
+        if _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
+                                cycle_id=cycle_id) != 0:
             warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
@@ -1571,6 +1588,7 @@ def cmd_smoke_test(args):
     parse junit → /api/v2/runs with `codec: junit`. NO coverage.
     """
     project_dir = _resolve_project_dir(args.project_dir)
+    _refuse_unattributed(args, project_dir)
     # The gate-lock and disk-guard refusals come FIRST, outside the identity
     # bracket, as `cmd_workspace_regression` orders them: a run refused
     # before it starts opens no identity, so it posts nothing.
@@ -1605,12 +1623,23 @@ def _smoke_test(args, verb):
     """The smoke run, refusals then body, for `docker-e2e-gate` (CR-CRU-058
     §S1): `verb` names the envelope this run belongs to, so the wrapper's stdout
     carries ONE document under its OWN verb rather than the inner verb's. It
-    opens no gated identity, so its narration observes none."""
+    opens no gated identity, so its narration observes none, and its
+    `--cycle` rides the run's context instead."""
     project_dir = _resolve_project_dir(args.project_dir)
+    _refuse_unattributed(args, project_dir)
     refused = _smoke_refusal(args, verb, project_dir)
     if refused is not None:
         return refused
     return _smoke_run(args, verb, project_dir)
+
+
+def _refuse_unattributed(args, project_dir):
+    """The run-attribution refusal, before anything a run does: the gate lock,
+    `cargo clean`, the docker bring-up and the runner itself."""
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), getattr(args, "agent", None),
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
 
 
 def _smoke_refusal(args, verb, project_dir):
@@ -1703,11 +1732,15 @@ def _smoke_run(args, verb, project_dir, identity=None):
         tier = _smoke_run_tier(verb, args.profile)
         # §S1 — the release this run is filed under (None: a cycle's run).
         release = getattr(args, "release", None)
+        # A gated identity carries `--cycle` as its binding; without one (the
+        # docker-e2e-gate) the run's own context carries it.
+        context = _axi().cycle_context(
+            _run_context(), None if identity is not None else getattr(args, "cycle", None))
         narrator, run_id, run_warnings = None, None, []
         if args.agent:
             narrator = _narrator(project_dir, args.agent, identity)
             run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                              context=_run_context(),
+                                              context=context,
                                               release=release)
             # §S1 — this body makes no pre-flight, so a release run's note
             # rides ahead of the run's own warnings, where the pre-flight's
@@ -1762,7 +1795,6 @@ def _smoke_run(args, verb, project_dir, identity=None):
             # assumed from a path.
             "tier": tier,
         }
-        context = _run_context()
         if context:
             payload["context"] = context
         # The runId of the OPEN run this ingest closes; absent, single-shot.
@@ -1823,6 +1855,7 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
     document under the GATE's own verb, not the inner one's.
     """
     project_dir = _resolve_project_dir(args.project_dir)
+    _refuse_unattributed(args, project_dir)
     # crucible OWNS the gate-lock FILE: refuse to start if one is already present
     # (no double-runs), else create it + auto-remove on exit/kill.
     if not _acquire_gate_lock(project_dir, getattr(args, "agent", None)):
@@ -2141,8 +2174,15 @@ def cmd_pre_merge_gate(args):
     default; pass `--skip-clippy` only for a deliberate bypass.
     """
     project_dir = _resolve_project_dir(args.project_dir)
+    # The gate files from its first step on (clippy files a lint result), so an
+    # unattributed gate is refused before that step.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     if not getattr(args, "skip_clippy", False):
-        gate = _clippy_workspace_gate(project_dir, args.agent)
+        gate = _clippy_workspace_gate(project_dir, args.agent,
+                                      cycle_id=getattr(args, "cycle", None))
         if gate["exit"] != 0:
             print("[crucible] pre-merge gate FAILED at the clippy -D warnings step — "
                   "skipped the coverage regression. Fix the lints first "
@@ -2224,6 +2264,8 @@ def cmd_docker_e2e_gate(args):
         # CR-CRU-064 §S6 — thread the caller's disk-guard floor through; without
         # this `_smoke_test` fell back to an unconditional 80 for this verb.
         min_free_g=getattr(args, "min_free_g", 80),
+        cycle=getattr(args, "cycle", None),
+        release=getattr(args, "release", None),
     )
     # §S1 — same one-document rule as pre-merge-gate: the shared smoke body
     # emits under `docker-e2e-gate`, the verb the caller actually invoked.
@@ -2721,6 +2763,7 @@ def _add_regression_tier_args(p):
                         "free /home is still below this (default: 80).")
     p.add_argument("--keep-target", action="store_true",
                    help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).")
+    _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
     _add_reports_arg(p)
 
@@ -2869,6 +2912,7 @@ def main():
         "--features",
         help="Comma-separated feature flags (e.g. test-support)",
     )
+    _axi().add_filing_cycle_arg(a)
     _add_project_dir_arg(a)
     a.set_defaults(func=cmd_auto_ingest)
 
@@ -2925,6 +2969,7 @@ def main():
     c.add_argument("--features", help="Comma-separated feature flags")
     c.add_argument("--tests", action="store_true", help="Add --tests flag (check tests too)")
     c.add_argument("--agent", help="If set, ingest stderr as compile errors")
+    _axi().add_filing_cycle_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
 
@@ -2943,6 +2988,7 @@ def main():
         help="Append -- -D warnings (turn warnings into errors)",
     )
     cl.add_argument("--agent", help="If set, ingest stderr as compile errors")
+    _axi().add_filing_cycle_arg(cl)
     _add_project_dir_arg(cl)
     cl.set_defaults(func=cmd_clippy)
 
@@ -2952,6 +2998,7 @@ def main():
              "pre-merge gate's fail-fast step 1, standalone. With --agent: ingest.",
     )
     wcl.add_argument("--agent", help="If set, ingest stderr as compile errors")
+    _axi().add_filing_cycle_arg(wcl)
     _add_project_dir_arg(wcl)
     wcl.set_defaults(func=cmd_workspace_clippy)
 
@@ -3152,6 +3199,8 @@ def main():
         "--min-free-g", type=int, default=80,
         help="Disk-guard floor in GB before the gate (default: 80).",
     )
+    _add_gate_cycle_arg(e2e)
+    _add_run_release_arg(e2e)
     _add_project_dir_arg(e2e)
     e2e.set_defaults(func=cmd_docker_e2e_gate)
 
