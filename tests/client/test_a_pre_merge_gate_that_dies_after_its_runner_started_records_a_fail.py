@@ -13,7 +13,7 @@ uncaught traceback instead of the `ok:false` envelope.
 SCOPE NOTE for the orchestrator: all five clients' `main()` dispatch
 `pre-merge-gate` through this exact call --
 `_axi().run_verb(args.func, args, ..., ops_fn=_ops, project_dir_fn=...)` --
-confirmed identical (grepped directly, cited per client below). `run_verb`
+confirmed identical (grepped directly, cited by symbol below). `run_verb`
 and `record_gate_outcome` are therefore the ONE shared mechanism backing all
 five, with no per-client divergence in this path (unlike, say,
 `cmd_pre_merge_gate`'s own per-client fail-fast step). This file drives that
@@ -28,11 +28,10 @@ REPLACED -- it is the function under test, called for real, with a REAL
 `ClientOps` (`python-crucible.py::_ops()`) whose own `_post`/`_get` are
 patched to RECORD instead of reach the network -- never a fake `run_verb`.
 
-  arduino-crucible.py:1755  sys.exit(_axi().run_verb(
-  bun-crucible.py:2829      sys.exit(_axi().run_verb(
-  mvn-crucible.py:2808      sys.exit(_axi().run_verb(
-  python-crucible.py:2078   sys.exit(_axi().run_verb(
-  rust-crucible.py:3532     sys.exit(_axi().run_verb(
+  Each of `arduino-crucible.py`, `bun-crucible.py`, `mvn-crucible.py`,
+  `python-crucible.py` and `rust-crucible.py`: its `main()` ends in
+  `sys.exit(_axi().run_verb(args.func, args, ..., ops_fn=_ops,
+  project_dir_fn=...))`.
 
 The "hard stop before the runner started still records none" half of this
 behaviour ALREADY holds, unchanged (every typed-hard-stop `except` clause
