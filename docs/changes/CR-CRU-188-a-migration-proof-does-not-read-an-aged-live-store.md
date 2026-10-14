@@ -87,6 +87,12 @@ most recent `pre-merge-gate` milestone.
       exit non-zero before the runner starts, naming the active cycle id in `help[]`. With
       `--cycle <id>`, the run proceeds and is stored under that cycle. With no active cycle, the run
       proceeds and warns `no-cycle` as today. A `--release` run is never refused.
+- [ ] **Every verb that files a run.** The same refusal, before anything is run or filed, for every
+      verb that files a run or a compile/lint result: `regression`, the tier verbs, `check`,
+      `compile` (mvn's included, which gains `--cycle`), `auto-ingest`, rust's `smoke-test` and
+      `docker-e2e-gate`, and each gate's own first step (the compile, typecheck or clippy step a
+      `pre-merge-gate` runs before its suites), proved by a step that would FAIL and file. One case
+      per verb per client that has it, each through the real client.
 - [ ] **The gate records its outcome.** For EACH of the five clients, a passing and a failing
       `pre-merge-gate --cycle <id>` each post exactly one `pre-merge-gate` milestone under that
       cycle, carrying the CR, the outcome, the counts, the failing tests (on a failure) and the head
@@ -95,7 +101,8 @@ most recent `pre-merge-gate` milestone.
       `cr-close` on a CR whose last `pre-merge-gate` failed exits non-zero, closes nothing, and names
       the run and its failing count. The same holds for a CR with no gate result.
 - [ ] **An accepted failure is recorded.** `cr-close --accept-failing-gate "<reason>"` closes the CR,
-      and the plan, the `cr-merged` milestone and History each carry the reason.
+      and the plan, the `cr-merged` milestone and History each carry the reason; the History page
+      shows it on the CR's row (DOM).
 - [ ] **A green gate closes as today.** `cr-close` on a CR whose last `pre-merge-gate` passed closes
       exactly as it does now.
 - [ ] **No new CR literals.** No CR-shaped literal is added under `clients/`, `src/` or test comments,
