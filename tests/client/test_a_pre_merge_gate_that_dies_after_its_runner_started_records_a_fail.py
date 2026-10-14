@@ -129,7 +129,7 @@ class GateDiedAfterItsRunnerStartedRecordsAFailTest(unittest.TestCase):
         return axi.run_verb(
             func, args,
             project_key_fn=lambda a: self.module._project_key(str(self.project_dir)),
-            ops_fn=lambda a: self.module._ops(),
+            ops_fn=self.module._ops,
             project_dir_fn=lambda a: str(self.project_dir))
 
     def test_oserror_after_the_runner_started_still_posts_a_fail_milestone(self):
