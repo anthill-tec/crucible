@@ -1,6 +1,6 @@
 # CR-CRU-186 — a test run leaves nothing behind
 
-**Type** fix (patch CR) · **Points** 5 (set at filing, 2026-10-14) · **Wave** 8 (0.4.0) ·
+**Type** fix (patch CR) · **Points** 5 (confirmed at gap analysis, 2026-10-14) · **Wave** 8 (0.4.0) ·
 **Depends on** CR-CRU-184 · **Status** PENDING — filed 2026-10-14 (user ruling: a patch CR placed
 next in wave 8, after the setup/teardown leak review)
 
@@ -53,23 +53,37 @@ database directory when the run ends (global teardown).
 
 The bun test preload (`tests/helpers/isolated-store-preload.ts`, wired in `bunfig.toml`) creates one
 directory per test run, points `TMPDIR` at it before any suite loads, and removes it when the run
-exits. Child processes (spawned clients, Playwright and its test server) inherit `TMPDIR`. The
-python client suite gets the same through its runner entry point. A test that forgets its cleanup
-then leaves nothing in the system temp root.
+exits. The per-run directory lives under the system temp root, so a path a test checks against
+that root still matches. Child processes (spawned clients, Playwright and its test server) inherit
+`TMPDIR`. A test that forgets its cleanup then leaves nothing in the system temp root.
+
+The python client suite left nothing in either measured run, so it gets no backstop. A test that
+writes to a hard-coded `/tmp` path bypasses `TMPDIR`; the guard in the acceptance criteria catches it.
 
 ### §S3 — an interrupted runner takes its whole tree down
 
-`run_streamed` starts the runner in a new session (its own process group). On an interrupt (the
-abandon trap from CR-CRU-184) or any exception while the runner is live, it signals the whole group
+`run_streamed` starts the runner in a new session (its own process group), in BOTH of its branches:
+the teed one (`Popen`) and the inherited-stdio one (`subprocess.run`, used when there is no log, no
+narrator and no capture). On an interrupt (the abandon trap from CR-CRU-184, or a `KeyboardInterrupt`
+when no trap is installed) or any exception while the runner is live, it signals the whole group
 (SIGTERM, then SIGKILL after a short grace) and reaps it. A runner that exits on its own is
-unaffected. The compile, check and docker helpers that call `subprocess.run` directly are not
+unaffected.
+
+A runner in its own session no longer receives a terminal's Ctrl-C directly. The client, which does
+receive it, takes the group down, so a Ctrl-C still stops the whole tree with or without `--agent`.
+A client killed by SIGKILL cannot clean up; that is a non-goal. The compile, check and docker helpers that call `subprocess.run` directly are not
 interrupted runs, and are a non-goal.
 
 ### §S4 — a runner that ran nothing is a failure
 
-When a test-family verb's runner exits non-zero and its report holds zero results (no report, or a
-report with `total: 0`), the verb exits non-zero with `ok: false`. The envelope names the runner's
-exit code and the tail of its output. The run is aborted, not filed as an empty pass. A runner that
+A runner that exits without writing a report is already handled: the verb aborts its run and reports
+`no_report_warning` with the runner's exit code and output tail. That exit is unchanged, including
+bun `test`'s deliberate exception, which files a synthetic compile failure instead.
+
+The gap is a report that EXISTS but holds zero results while the runner exited non-zero, which is
+what Playwright writes when it cannot start. That case now takes the same no-report exit: `ok: false`,
+non-zero, the `no_report_warning` naming the runner's exit code and output tail, and the run aborted
+(`no_report_left_open_warnings` when the abort is refused), never filed as `total: 0`. A runner that
 exits 0 with zero results keeps today's behaviour.
 
 ## Acceptance criteria
@@ -89,11 +103,17 @@ exits 0 with zero results keeps today's behaviour.
       that starts a long-lived grandchild, SIGTERM to the client during the runner leaves no
       descendant process alive after the client exits (checked by pid), and the exit is 143. A
       runner that exits on its own leaves its normal exit unchanged.
+- [ ] **Both branches, and Ctrl-C without an agent.** The same grandchild check holds for
+      `run_streamed`'s inherited-stdio branch, and for SIGINT delivered to a client run WITHOUT
+      `--agent` (no trap installed).
 - [ ] **An e2e that never ran fails.** `bun-crucible.py e2e` against a project whose Playwright
-      exits 1 before running anything (e.g. its port is taken) exits non-zero with `ok: false`, an
-      envelope naming the runner's exit code, and the run aborted, never filed as `total: 0`. The
-      same holds for `test` in EACH of the five clients with a fake runner that exits non-zero and
-      writes no results.
+      exits 1 before running anything (e.g. its port is taken) exits non-zero with `ok: false`, the
+      `no_report_warning` naming the runner's exit code, and the run aborted, never filed as
+      `total: 0`. The same holds for `test` in EACH of the five clients with a fake runner that
+      exits non-zero and writes a report holding zero results.
+- [ ] **Existing exits unchanged.** Every existing no-report and abort test passes unchanged,
+      including bun `test`'s synthetic compile failure for a missing JUnit report, and a runner
+      that exits 0 with zero results.
 - [ ] **No new CR literals.** No CR-shaped literal is added under `clients/`, `src/` or `tests/`
       comments, and the citation tripwire's pins are unchanged.
 
