@@ -205,6 +205,121 @@ describe("no gate test reads live data: the guard allows none", () => {
     expect(scanLiveStoreAccess(viaStoreOpen)).toEqual(["opens"]);
   });
 
+  test("the live-store path built INLINE, bound to no name, is caught in every form", () => {
+    const copied = plantFixtureText(
+      [
+        'import { copyFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'copyFileSync(join(process.cwd(), "data", "crucible.db"), "/tmp/live-store-guard-out.db");',
+      ].join("\n"),
+    );
+    const backedUp = plantFixtureText(
+      [
+        'import { join } from "node:path";',
+        "Bun.spawnSync([\"sqlite3\", join(process.cwd(), \"data\", \"crucible.db\"), `.backup '/tmp/live-store-guard-in.db'`]);",
+      ].join("\n"),
+    );
+    const opened = plantFixtureText(
+      [
+        'import { Database } from "bun:sqlite";',
+        'import { join } from "node:path";',
+        'const db = new Database(join(import.meta.dir, "..", "data", "crucible.db"));',
+      ].join("\n"),
+    );
+    expect(scanLiveStoreAccess(copied)).toEqual(["copies"]);
+    expect(scanLiveStoreAccess(backedUp)).toEqual(["backs up"]);
+    expect(scanLiveStoreAccess(opened)).toEqual(["opens"]);
+  });
+
+  test("the live-store path bound by `let` or `var`, or assigned after its declaration, is caught like a `const` binding", () => {
+    const viaLet = plantFixtureText(
+      [
+        'import { copyFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'let live = join(process.cwd(), "data", "crucible.db");',
+        'copyFileSync(live, "/tmp/live-store-guard-let.db");',
+      ].join("\n"),
+    );
+    const viaVar = plantFixtureText(
+      [
+        'import { Store } from "../src/store.ts";',
+        'import { join } from "node:path";',
+        'var live: string = join(process.cwd(), "data/crucible.db");',
+        "const store = Store.open(live);",
+      ].join("\n"),
+    );
+    const assignedLater = plantFixtureText(
+      [
+        'import { join } from "node:path";',
+        "let live: string;",
+        'live = join(process.cwd(), "data", "crucible.db");',
+        "Bun.spawnSync([\"sqlite3\", live, `.backup '/tmp/live-store-guard-late.db'`]);",
+      ].join("\n"),
+    );
+    expect(scanLiveStoreAccess(viaLet)).toEqual(["copies"]);
+    expect(scanLiveStoreAccess(viaVar)).toEqual(["opens"]);
+    expect(scanLiveStoreAccess(assignedLater)).toEqual(["backs up"]);
+  });
+
+  test("a manual copy of the live store — its bytes read with readFileSync and written elsewhere — is caught as the COPY form", () => {
+    const named = plantFixtureText(
+      [
+        'import { readFileSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const live = join(process.cwd(), "data", "crucible.db");',
+        'writeFileSync("/tmp/live-store-guard-manual.db", readFileSync(live));',
+      ].join("\n"),
+    );
+    const inline = plantFixtureText(
+      [
+        'import { readFileSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const bytes = readFileSync(join(process.cwd(), "data", "crucible.db"));',
+        'writeFileSync("/tmp/live-store-guard-manual-inline.db", bytes);',
+      ].join("\n"),
+    );
+    expect(scanLiveStoreAccess(named)).toEqual(["copies"]);
+    expect(scanLiveStoreAccess(inline)).toEqual(["copies"]);
+  });
+
+  test("the live-store path reached through an alias, or a chain of aliases, is caught in every form", () => {
+    const aliased = plantFixtureText(
+      [
+        'import { copyFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const live = join(process.cwd(), "data", "crucible.db");',
+        "const source = live;",
+        'copyFileSync(source, "/tmp/live-store-guard-alias.db");',
+      ].join("\n"),
+    );
+    const chained = plantFixtureText(
+      [
+        'import { Database } from "bun:sqlite";',
+        'import { join } from "node:path";',
+        'const live = join(process.cwd(), "data", "crucible.db");',
+        "let first = live;",
+        "var second: string = first;",
+        "const db = new Database(second);",
+      ].join("\n"),
+    );
+    expect(scanLiveStoreAccess(aliased)).toEqual(["copies"]);
+    expect(scanLiveStoreAccess(chained)).toEqual(["opens"]);
+  });
+
+  test("an alias of an UNRELATED fixture path, and a readFileSync of one, are not flagged", () => {
+    const planted = plantFixtureText(
+      [
+        'import { copyFileSync, readFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'const scratch = join("/tmp/some-fixture-root", "data", "crucible.db");',
+        "const source = scratch;",
+        'copyFileSync(source, "/tmp/elsewhere.db");',
+        "const bytes = readFileSync(scratch);",
+      ].join("\n"),
+    );
+    expect(scanLiveStoreAccess(planted)).toEqual([]);
+  });
+
   test("a file that only NAMES data/crucible.db in prose, never building the path from this checkout's own root, is not flagged (no false positive)", () => {
     const planted = plantFixtureText(
       [
