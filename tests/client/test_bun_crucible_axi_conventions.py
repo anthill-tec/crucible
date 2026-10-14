@@ -695,6 +695,8 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
 
     def test_cr_close_help_is_present_and_nonempty(self):
         plans = self._open_plan()
+        # cr-close closes only over a green pre-merge-gate result: the board holds one.
+        plans["milestones"] = [{"type": "pre-merge-gate", "label": plans["plans"][0]["cr"], "outcome": "pass", "passed": 1, "failed": 0, "timestamp": 1}]
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}):

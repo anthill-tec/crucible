@@ -444,7 +444,10 @@ class CrCloseEnvelopeTest(_BaseEnvelopeTest):
 
     def test_cr_close_emits_toon_envelope_with_plan_cr_commit_and_wave_context(self):
         os.environ["WORKFLOW_WAVE"] = "4"
-        with mock.patch.object(self.module, "_get", return_value=self._open_plan()), \
+        board = self._open_plan()
+        # cr-close closes only over a green pre-merge-gate result: the board holds one.
+        board["milestones"] = [{"type": "pre-merge-gate", "label": self.CR_ID, "outcome": "pass", "passed": 1, "failed": 0, "timestamp": 1}]
+        with mock.patch.object(self.module, "_get", return_value=board), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [

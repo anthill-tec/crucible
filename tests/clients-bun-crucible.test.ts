@@ -1804,6 +1804,17 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
       });
     }
 
+    // cr-close closes only over a green pre-merge-gate result: the board holds one.
+    const gated = await fetch(`${baseUrl}/api/v2/milestones`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectKey: key, agentId: "test-agent", type: "pre-merge-gate",
+        label: (await getPlans(baseUrl, key))[0]!.cr, outcome: "pass", passed: 1, failed: 0,
+      }),
+    });
+    expect(gated.status).toBe(201);
+
     // CR-CRU-044 §S5 — cr-close POSTs a cr-merged milestone, so it needs a
     // DECLARED identity; there is no fabricated fallback any more.
     const res = await runScript(

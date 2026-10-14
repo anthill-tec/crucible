@@ -566,7 +566,10 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             with self.subTest(client=f"{client}-success-posts-milestone"):
                 module = _load_client_module(client)
                 plan = {"planId": 3, "cr": "CR-CRU-054", "status": "open"}
+                # cr-close closes only over a green pre-merge-gate result: the board holds one.
+                board = {"ok": True, "milestones": [{"type": "pre-merge-gate", "label": plan["cr"], "outcome": "pass", "passed": 1, "failed": 0, "timestamp": 1}]}
                 with mock.patch.object(module, "_agent_id", return_value="A1"), \
+                        mock.patch.object(module, "_get", return_value=board), \
                         mock.patch.object(module, "_open_plans", return_value=[plan]), \
                         mock.patch.object(module, "_plans_path", return_value="/api/v2/projects/pk/plans"), \
                         mock.patch.object(

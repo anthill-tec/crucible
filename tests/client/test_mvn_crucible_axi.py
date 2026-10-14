@@ -521,6 +521,8 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
         plans = _open_plans_response([
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
+        # cr-close closes only over a green pre-merge-gate result: the board holds one.
+        plans["milestones"] = [{"type": "pre-merge-gate", "label": plans["plans"][0]["cr"], "outcome": "pass", "passed": 1, "failed": 0, "timestamp": 1}]
         code, out, _err, _p, _g, _pa = self._run(
             ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, patch_return={"ok": True})
